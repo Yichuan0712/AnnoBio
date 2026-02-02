@@ -1,0 +1,13 @@
+# Node
+node_modules/
+dist/
+out/
+.vite/
+
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
