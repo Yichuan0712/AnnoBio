@@ -1,8 +1,170 @@
+/* Theme: light (default) */
+:root {
+  --bg: #f5f5f5;
+  --bg-bar: #fff;
+  --bg-canvas: #e8e9ea;
+  --grid-color: rgba(0, 0, 0, 0.06);
+  --text: #1a1a1a;
+  --text-muted: #666;
+  --border: #e0e0e0;
+  --hover: #e8e8e8;
+  --shadow: rgba(0, 0, 0, 0.08);
+}
+
+/* Theme: dark */
+html.dark {
+  --bg: #1a1a1a;
+  --bg-bar: #252525;
+  --bg-canvas: #1e1e1e;
+  --grid-color: rgba(255, 255, 255, 0.04);
+  --text: #f0f0f0;
+  --text-muted: #aaa;
+  --border: #404040;
+  --hover: #333;
+  --shadow: rgba(0, 0, 0, 0.3);
+}
+
 body {
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
     sans-serif;
-  margin: auto;
-  max-width: 38rem;
-  padding: 2rem;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Top menu bar (square) */
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 0 0 12px;
+  height: 30px;
+  background: var(--bg-bar);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+
+.top-bar .menu-item {
+  -webkit-app-region: no-drag;
+  position: relative;
+  padding: 0 12px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.top-bar .menu-item:hover {
+  background: var(--hover);
+}
+
+.top-bar .menu-item.has-submenu::after {
+  content: '';
+  margin-left: 4px;
+  border: 4px solid transparent;
+  border-top-color: currentColor;
+  border-bottom: none;
+  vertical-align: middle;
+}
+
+.menu-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 180px;
+  margin-top: 0;
+  padding: 0;
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-top: none;
+  box-shadow: 0 2px 8px var(--shadow);
+  z-index: 100;
+}
+
+.menu-item:hover > .menu-dropdown,
+.menu-dropdown:hover {
+  display: block;
+}
+
+.menu-dropdown .menu-option {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text);
+  background: none;
+  border: none;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.menu-dropdown .menu-option:hover {
+  background: var(--hover);
+}
+
+.menu-dropdown .menu-option.disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.menu-option.has-submenu {
+  position: relative;
+  justify-content: space-between;
+}
+
+.menu-option.has-submenu::after {
+  content: '';
+  border: 4px solid transparent;
+  border-left-color: currentColor;
+  border-right: none;
+}
+
+.submenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  min-width: 120px;
+  margin-left: 0;
+  padding: 0;
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-left: none;
+  box-shadow: 2px 0 8px var(--shadow);
+  z-index: 101;
+}
+
+.menu-option.has-submenu:hover > .submenu,
+.submenu:hover {
+  display: block;
+}
+
+/* Workflow canvas (node-based editor surface) */
+.workflow-canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background-color: var(--bg-canvas);
+  background-image:
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+  background-size: 24px 24px;
 }

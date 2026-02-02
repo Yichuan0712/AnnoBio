@@ -5,36 +5,76 @@
 
 import './index.css';
 
-async function checkBackend() {
-  const el = document.getElementById('backend-status');
+const THEME_KEY = 'app-display-mode';
+const THEME_LIGHT = 'light';
+const THEME_DARK = 'dark';
 
-  try {
-    const r = await fetch('http://127.0.0.1:8000/health');
-    const data = await r.json();
-    el.textContent = 'Backend OK: ' + JSON.stringify(data, null, 2);
-  } catch (e) {
-    el.textContent = 'Backend FAILED: ' + (e?.message || String(e));
+function getStoredTheme() {
+  return localStorage.getItem(THEME_KEY) || THEME_LIGHT;
+}
+
+function setTheme(mode) {
+  const html = document.documentElement;
+  if (mode === THEME_DARK) {
+    html.classList.add('dark');
+  } else {
+    html.classList.remove('dark');
   }
+  localStorage.setItem(THEME_KEY, mode);
+}
+
+function buildTopBar(root) {
+  const bar = document.createElement('nav');
+  bar.className = 'top-bar';
+
+  const fileBtn = document.createElement('button');
+  fileBtn.className = 'menu-item has-submenu';
+  fileBtn.type = 'button';
+  fileBtn.textContent = 'File';
+  const fileDrop = document.createElement('div');
+  fileDrop.className = 'menu-dropdown';
+  fileDrop.innerHTML = `
+    <button type="button" class="menu-option">New project...</button>
+    <button type="button" class="menu-option">Open project...</button>
+  `;
+  fileBtn.appendChild(fileDrop);
+  bar.appendChild(fileBtn);
+
+  const settingsBtn = document.createElement('button');
+  settingsBtn.className = 'menu-item has-submenu';
+  settingsBtn.type = 'button';
+  settingsBtn.textContent = 'Settings';
+  const settingsDrop = document.createElement('div');
+  settingsDrop.className = 'menu-dropdown';
+  const displayModeOpt = document.createElement('button');
+  displayModeOpt.type = 'button';
+  displayModeOpt.className = 'menu-option has-submenu';
+  displayModeOpt.textContent = 'Display mode';
+  const submenu = document.createElement('div');
+  submenu.className = 'submenu';
+  submenu.innerHTML = `
+    <button type="button" class="menu-option" data-mode="light">Light</button>
+    <button type="button" class="menu-option" data-mode="dark">Dark</button>
+  `;
+  submenu.querySelector('[data-mode="light"]').addEventListener('click', () => setTheme(THEME_LIGHT));
+  submenu.querySelector('[data-mode="dark"]').addEventListener('click', () => setTheme(THEME_DARK));
+  displayModeOpt.appendChild(submenu);
+  settingsDrop.appendChild(displayModeOpt);
+  settingsBtn.appendChild(settingsDrop);
+  bar.appendChild(settingsBtn);
+
+  root.insertBefore(bar, root.firstChild);
 }
 
 window.addEventListener('DOMContentLoaded', () => {
   const root = document.getElementById('app') || document.body;
+  setTheme(getStoredTheme());
 
-  const wrap = document.createElement('div');
-  wrap.style.padding = '16px';
-  wrap.style.fontFamily = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial';
-  wrap.innerHTML = `
-    <h2 style="margin: 0 0 12px;">Electron + Python backend</h2>
-    <button id="btn" style="padding: 8px 12px; cursor: pointer;">Check /health</button>
-    <pre id="backend-status" style="margin-top: 12px; background: rgba(0,0,0,0.06); padding: 12px; border-radius: 8px;">Not checked</pre>
-    <p style="opacity: 0.7; margin-top: 10px;">
-      If this shows {"ok": true}, Electron ⇄ Python is working.
-    </p>
-  `;
-  root.appendChild(wrap);
+  window.electronAPI?.onSetTheme?.(setTheme);
 
-  document.getElementById('btn').addEventListener('click', checkBackend);
+  buildTopBar(root);
 
-  // 启动后自动检查一次（可删）
-  checkBackend();
+  const canvas = document.createElement('div');
+  canvas.className = 'workflow-canvas';
+  root.appendChild(canvas);
 });
