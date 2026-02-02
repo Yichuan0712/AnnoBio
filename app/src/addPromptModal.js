@@ -68,7 +68,7 @@ export function openAddPromptModal() {
     row.innerHTML = `
       <div class="prompt-field-header">
         <input type="text" class="prompt-field-name" placeholder="Field name" value="${escapeHtml(field.name)}" aria-label="Field name" />
-        <button type="button" class="prompt-field-remove" aria-label="Remove field">×</button>
+        <button type="button" class="prompt-field-remove" aria-label="Remove field">Delete field</button>
       </div>
       <textarea class="prompt-field-content" placeholder="Enter content for this field..." rows="3" aria-label="Field content">${escapeHtml(field.content)}</textarea>
     `;

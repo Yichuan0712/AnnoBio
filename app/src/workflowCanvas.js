@@ -177,7 +177,7 @@ export function buildWorkflowCanvas(root) {
           <div class="prompt-detail-field-edit-row">
             <div class="prompt-detail-field-edit-header">
               <input type="text" class="prompt-detail-input prompt-detail-field-name-inp" value="${escapeHtml(f.name || '')}" placeholder="Field name" />
-              <button type="button" class="prompt-field-remove prompt-detail-field-delete" aria-label="Remove field">×</button>
+              <button type="button" class="prompt-field-remove prompt-detail-field-delete" aria-label="Remove field">Delete field</button>
             </div>
             <div class="prompt-detail-row">
               <label class="prompt-detail-label">Content</label>
@@ -210,7 +210,7 @@ export function buildWorkflowCanvas(root) {
           <div class="prompt-detail-field-edit-row">
             <div class="prompt-detail-field-edit-header">
               <input type="text" class="prompt-detail-input prompt-detail-field-name-inp" value="" placeholder="Field name" />
-              <button type="button" class="prompt-field-remove prompt-detail-field-delete" aria-label="Remove field">×</button>
+              <button type="button" class="prompt-field-remove prompt-detail-field-delete" aria-label="Remove field">Delete field</button>
             </div>
             <div class="prompt-detail-row">
               <label class="prompt-detail-label">Content</label>
