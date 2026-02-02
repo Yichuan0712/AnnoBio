@@ -23,8 +23,20 @@ export function openAddPromptModal() {
         <div class="prompt-main">
           <p class="prompt-hint">Add named fields and enter your prompt content. You can add or remove fields.</p>
           <div class="prompt-fields"></div>
-          <div class="prompt-actions">
+          <div class="prompt-add-field-wrap">
             <button type="button" class="btn btn-secondary prompt-add-field">+ Add field</button>
+          </div>
+          <div class="dataset-meta-wrap prompt-meta-wrap">
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="prompt-name-input">Prompt name</label>
+              <input type="text" id="prompt-name-input" class="dataset-meta-input" placeholder="Prompt name" />
+            </div>
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="prompt-note-input">Prompt notes</label>
+              <textarea id="prompt-note-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="This prompt has no notes"></textarea>
+            </div>
+          </div>
+          <div class="prompt-actions">
             <button type="button" class="btn btn-secondary prompt-generate-node">Add this prompt</button>
           </div>
         </div>
@@ -111,7 +123,16 @@ export function openAddPromptModal() {
   });
 
   overlay.querySelector('.prompt-generate-node').addEventListener('click', () => {
-    // TODO: add this prompt (no-op for now)
+    syncFieldsFromDOM();
+    const nameInput = overlay.querySelector('#prompt-name-input');
+    const noteInput = overlay.querySelector('#prompt-note-input');
+    const name = (nameInput?.value ?? '').trim() || '';
+    const note = (noteInput?.value ?? '').trim();
+    const fieldsPayload = fields.map((f) => ({ name: f.name, content: f.content }));
+    document.dispatchEvent(
+      new CustomEvent('workflow:add-prompt-node', { detail: { name, note, fields: fieldsPayload } })
+    );
+    close();
   });
 
   renderFields();
@@ -120,9 +141,6 @@ export function openAddPromptModal() {
     overlay.remove();
     document.body.style.overflow = '';
   };
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close();
-  });
   overlay.querySelector('.modal-close').addEventListener('click', close);
 
   document.body.style.overflow = 'hidden';

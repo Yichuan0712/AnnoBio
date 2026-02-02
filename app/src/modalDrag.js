@@ -1,0 +1,73 @@
+/**
+ * Makes all modal panels draggable by header and resizable by corner handle.
+ */
+function ensureResizeHandle(panel) {
+  if (panel.querySelector('.modal-resize-handle')) return;
+  const h = document.createElement('div');
+  h.className = 'modal-resize-handle';
+  h.setAttribute('aria-label', 'Resize');
+  panel.appendChild(h);
+}
+
+export function initModalDrag() {
+  const observer = new MutationObserver((list) => {
+    list.forEach((m) => {
+      m.addedNodes.forEach((node) => {
+        if (node.nodeType !== 1) return;
+        const overlay = node.classList?.contains('modal-overlay') ? node : node.querySelector?.('.modal-overlay');
+        overlay?.querySelectorAll?.('.modal-panel').forEach(ensureResizeHandle);
+      });
+    });
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  document.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const panel = e.target.closest('.modal-panel');
+    if (!panel) return;
+
+    if (e.target.closest('.modal-resize-handle')) {
+      e.preventDefault();
+      const rect = panel.getBoundingClientRect();
+      const startX = e.clientX, startY = e.clientY, startW = rect.width, startH = rect.height;
+      panel.style.width = startW + 'px';
+      panel.style.height = startH + 'px';
+      const onMove = (e2) => {
+        const w = Math.max(280, Math.min(window.innerWidth * 0.9, startW + e2.clientX - startX));
+        const h = Math.max(200, Math.min(window.innerHeight * 0.9, startH + e2.clientY - startY));
+        panel.style.width = w + 'px';
+        panel.style.height = h + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp, { once: true });
+      return;
+    }
+
+    const header = e.target.closest('.modal-header');
+    if (!header || e.target.closest('.modal-close')) return;
+    e.preventDefault();
+    const rect = panel.getBoundingClientRect();
+    let x = e.clientX, y = e.clientY, left = rect.left, top = rect.top;
+    panel.style.position = 'fixed';
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+    panel.style.transform = 'none';
+    panel.style.margin = '0';
+    const onMove = (e2) => {
+      const dx = e2.clientX - x, dy = e2.clientY - y;
+      left += dx; top += dy; x = e2.clientX; y = e2.clientY;
+      panel.style.left = left + 'px';
+      panel.style.top = top + 'px';
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp, { once: true });
+  });
+}

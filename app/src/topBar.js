@@ -6,9 +6,9 @@ import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void }} options
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, openAddAgentModal: () => void, openCredentialsModal: () => void }} options
  */
-export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal }) {
+export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openAddAgentModal, openCredentialsModal }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -35,9 +35,11 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal }) {
   addDrop.innerHTML = `
     <button type="button" class="menu-option" data-action="new-prompt">New prompt...</button>
     <button type="button" class="menu-option" data-action="new-dataset">New dataset...</button>
+    <button type="button" class="menu-option" data-action="new-agent">New agent...</button>
   `;
   addDrop.querySelector('[data-action="new-prompt"]').addEventListener('click', openAddPromptModal);
   addDrop.querySelector('[data-action="new-dataset"]').addEventListener('click', openAddDatasetModal);
+  addDrop.querySelector('[data-action="new-agent"]').addEventListener('click', openAddAgentModal);
   addMenuBtn.appendChild(addDrop);
   bar.appendChild(addMenuBtn);
 
@@ -47,6 +49,13 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal }) {
   settingsBtn.textContent = 'Settings';
   const settingsDrop = document.createElement('div');
   settingsDrop.className = 'menu-dropdown';
+  const credentialsOpt = document.createElement('button');
+  credentialsOpt.type = 'button';
+  credentialsOpt.className = 'menu-option';
+  credentialsOpt.setAttribute('data-action', 'my-credentials');
+  credentialsOpt.textContent = 'My credentials...';
+  credentialsOpt.addEventListener('click', openCredentialsModal);
+  settingsDrop.appendChild(credentialsOpt);
   const displayModeOpt = document.createElement('button');
   displayModeOpt.type = 'button';
   displayModeOpt.className = 'menu-option has-submenu';

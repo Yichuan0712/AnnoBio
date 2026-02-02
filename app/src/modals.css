@@ -10,6 +10,7 @@
 }
 
 .modal-panel {
+  position: relative;
   background: var(--bg-bar);
   border: 1px solid var(--border);
   box-shadow: 0 8px 32px var(--shadow);
@@ -20,12 +21,27 @@
   flex-direction: column;
 }
 
+.modal-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--border) 50%);
+  border-radius: 0 0 4px 0;
+}
+.modal-resize-handle:hover {
+  background: linear-gradient(135deg, transparent 50%, var(--text-muted) 50%);
+}
+
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
+  cursor: move;
 }
 
 .modal-title {
@@ -68,7 +84,605 @@
 
 .modal-body--dataset {
   min-height: 280px;
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+  padding: 0;
 }
+
+.dataset-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+  border-right: 1px solid var(--border);
+}
+
+.dataset-preview-wrap {
+  flex: 1;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+}
+
+.dataset-preview-title {
+  margin: 0;
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.dataset-preview {
+  flex: 1;
+  padding: 12px;
+  font-size: 12px;
+  overflow: auto;
+  color: var(--text);
+}
+
+.dataset-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.dataset-preview-table th,
+.dataset-preview-table td {
+  padding: 4px 8px;
+  text-align: left;
+  border: 1px solid var(--border);
+}
+
+.dataset-preview-table th {
+  font-weight: 600;
+  background: var(--hover);
+  color: var(--text);
+}
+
+.dataset-preview-table td {
+  color: var(--text);
+}
+
+.dataset-preview-cap {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.dataset-import {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dataset-filename {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.dataset-file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.dataset-file-info-placeholder {
+  color: var(--text-muted);
+}
+
+.dataset-file-info-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.dataset-file-info-label {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 72px;
+}
+
+.dataset-file-info-value {
+  color: var(--text);
+  word-break: break-all;
+}
+
+.dataset-headers-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dataset-headers-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.dataset-headers-list {
+  font-size: 13px;
+  color: var(--text-muted);
+  min-height: 24px;
+}
+
+.dataset-headers-list--loaded {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text);
+}
+
+.dataset-header-tag {
+  padding: 4px 10px;
+  font-size: 12px;
+  background: var(--hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.dataset-meta-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dataset-meta-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dataset-meta-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.dataset-meta-input {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: inherit;
+}
+
+.dataset-meta-input::placeholder {
+  color: var(--text-muted);
+}
+
+.dataset-meta-textarea {
+  resize: vertical;
+  min-height: 60px;
+  box-sizing: border-box;
+}
+
+.dataset-add-btn {
+  margin-top: 4px;
+}
+
+.dataset-preview-file-info {
+  padding: 12px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  min-height: 0;
+}
+
+.dataset-preview-file-info--filled {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dataset-preview-file-info .dataset-file-info-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.dataset-preview-file-info .dataset-file-info-label {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 72px;
+}
+
+.dataset-preview-file-info .dataset-file-info-value {
+  color: var(--text);
+  word-break: break-all;
+}
+
+/* My credentials modal */
+.modal-panel--credentials {
+  min-width: 560px;
+  max-width: 90vw;
+}
+
+.modal-body--credentials {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-height: 280px;
+}
+
+.credentials-section-title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.credentials-table-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.credentials-table-scroll {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.credentials-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.credentials-table th,
+.credentials-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.credentials-table th {
+  font-weight: 600;
+  background: var(--hover);
+  color: var(--text);
+  position: sticky;
+  top: 0;
+}
+
+.credentials-table td {
+  color: var(--text);
+}
+
+.credentials-table-empty td {
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+}
+
+.credentials-add {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.credentials-add-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.credentials-add-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.credentials-add-field--grow {
+  flex: 1;
+  min-width: 180px;
+}
+
+.credentials-add-field--btn {
+  flex-shrink: 0;
+}
+
+.credentials-select {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: inherit;
+  min-width: 160px;
+}
+
+.credentials-add-btn {
+  white-space: nowrap;
+}
+
+/* Add a new agent modal */
+.modal-panel--agent {
+  min-width: 400px;
+  max-width: 90vw;
+}
+
+.modal-body--agent {
+  min-height: 120px;
+}
+
+.agent-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.agent-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-form-field .credentials-select {
+  min-width: 100%;
+  max-width: 320px;
+}
+
+.agent-form-actions {
+  padding-top: 8px;
+}
+
+.agent-add-btn {
+  margin-top: 0;
+}
+
+/* Prompt details modal (double-click node): view only until Edit → Save/Cancel */
+.modal-panel--prompt-detail {
+  min-width: 440px;
+  max-width: 520px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.prompt-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.prompt-detail-card {
+  padding: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.prompt-detail-view,
+.prompt-detail-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Only one mode visible at a time (view vs edit) */
+.prompt-detail-edit {
+  display: none;
+}
+
+.prompt-detail-footer-edit {
+  display: none;
+}
+
+.modal-panel--prompt-detail[data-prompt-detail-mode="edit"] .prompt-detail-view {
+  display: none;
+}
+
+.modal-panel--prompt-detail[data-prompt-detail-mode="edit"] .prompt-detail-edit {
+  display: flex;
+}
+
+.modal-panel--prompt-detail[data-prompt-detail-mode="edit"] .prompt-detail-btn-edit {
+  display: none !important;
+}
+
+.modal-panel--prompt-detail[data-prompt-detail-mode="edit"] .prompt-detail-footer-edit {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+}
+
+.prompt-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prompt-detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.prompt-detail-name-value {
+  font-size: 14px;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.prompt-detail-notes-value {
+  font-size: 13px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.prompt-detail-placeholder {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.prompt-detail-input {
+  padding: 8px 10px;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+}
+
+.prompt-detail-textarea {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+
+.prompt-detail-fields-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.prompt-detail-fields-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.prompt-detail-fields-edit-btns {
+  display: none !important;
+}
+
+.prompt-detail-fields-wrap[data-prompt-fields-mode="edit"] .prompt-detail-fields-btn-edit {
+  display: none !important;
+}
+
+.prompt-detail-fields-wrap[data-prompt-fields-mode="edit"] .prompt-detail-fields-edit-btns {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+}
+
+.prompt-detail-fields-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.prompt-detail-fields-edit {
+  display: none;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.prompt-detail-fields-wrap[data-prompt-fields-mode="edit"] .prompt-detail-fields-view {
+  display: none !important;
+}
+
+.prompt-detail-fields-wrap[data-prompt-fields-mode="edit"] .prompt-detail-fields-edit {
+  display: flex !important;
+}
+
+.prompt-detail-field-edit-row {
+  padding: 12px;
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prompt-detail-field-edit-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prompt-detail-field-edit-header .prompt-detail-field-name-inp {
+  flex: 1;
+  min-width: 0;
+}
+
+.prompt-detail-fields-add-row {
+  align-self: flex-start;
+}
+
+.prompt-detail-section-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.prompt-detail-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.prompt-detail-card .prompt-detail-footer,
+.prompt-detail-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
 
 .modal-panel--prompt .modal-body {
   display: flex;
@@ -89,8 +703,8 @@
 }
 
 .prompt-preview-wrap {
-  width: 280px;
-  min-width: 200px;
+  flex: 1;
+  min-width: 320px;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -247,8 +861,6 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
 }
 
 .btn {
@@ -257,6 +869,16 @@
   font-family: inherit;
   cursor: pointer;
   border: 1px solid var(--border);
+}
+
+.btn-primary {
+  color: #fff;
+  background: var(--accent, #2563eb);
+  border-color: var(--accent, #2563eb);
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
 }
 
 .btn-secondary {
