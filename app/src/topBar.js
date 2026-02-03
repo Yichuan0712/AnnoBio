@@ -6,9 +6,10 @@ import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, openAddAgentModal: () => void, openCredentialsModal: () => void }} options
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, openAddAgentModal: () => void, openCredentialsModal: () => void, onNewProject: () => void, onOpenProject: () => void }} options
+ * @returns {{ setAddMenuEnabled: (enabled: boolean) => void }}
  */
-export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openAddAgentModal, openCredentialsModal }) {
+export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openAddAgentModal, openCredentialsModal, onNewProject, onOpenProject }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -20,9 +21,10 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   fileDrop.className = 'menu-dropdown';
   fileDrop.innerHTML = `
     <button type="button" class="menu-option" data-action="new-project">New project...</button>
-    <button type="button" class="menu-option">Open project...</button>
+    <button type="button" class="menu-option" data-action="open-project">Open project...</button>
   `;
-  fileDrop.querySelector('[data-action="new-project"]').addEventListener('click', openAddPromptModal);
+  fileDrop.querySelector('[data-action="new-project"]').addEventListener('click', () => onNewProject?.());
+  fileDrop.querySelector('[data-action="open-project"]').addEventListener('click', () => onOpenProject?.());
   fileBtn.appendChild(fileDrop);
   bar.appendChild(fileBtn);
 
@@ -33,15 +35,20 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   const addDrop = document.createElement('div');
   addDrop.className = 'menu-dropdown';
   addDrop.innerHTML = `
-    <button type="button" class="menu-option" data-action="new-prompt">New prompt...</button>
-    <button type="button" class="menu-option" data-action="new-dataset">New dataset...</button>
-    <button type="button" class="menu-option" data-action="new-agent">New agent...</button>
+    <button type="button" class="menu-option menu-option--add" data-action="new-prompt" disabled>New prompt...</button>
+    <button type="button" class="menu-option menu-option--add" data-action="new-dataset" disabled>New dataset...</button>
+    <button type="button" class="menu-option menu-option--add" data-action="new-agent" disabled>New agent...</button>
   `;
-  addDrop.querySelector('[data-action="new-prompt"]').addEventListener('click', openAddPromptModal);
-  addDrop.querySelector('[data-action="new-dataset"]').addEventListener('click', openAddDatasetModal);
-  addDrop.querySelector('[data-action="new-agent"]').addEventListener('click', openAddAgentModal);
+  const addOptions = addDrop.querySelectorAll('.menu-option--add');
+  addDrop.querySelector('[data-action="new-prompt"]').addEventListener('click', () => { if (!addOptions[0].disabled) openAddPromptModal(); });
+  addDrop.querySelector('[data-action="new-dataset"]').addEventListener('click', () => { if (!addOptions[1].disabled) openAddDatasetModal(); });
+  addDrop.querySelector('[data-action="new-agent"]').addEventListener('click', () => { if (!addOptions[2].disabled) openAddAgentModal(); });
   addMenuBtn.appendChild(addDrop);
   bar.appendChild(addMenuBtn);
+
+  function setAddMenuEnabled(enabled) {
+    addOptions.forEach((el) => { el.disabled = !enabled; });
+  }
 
   const settingsBtn = document.createElement('button');
   settingsBtn.className = 'menu-item has-submenu';
@@ -74,4 +81,5 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   bar.appendChild(settingsBtn);
 
   root.insertBefore(bar, root.firstChild);
+  return { setAddMenuEnabled };
 }

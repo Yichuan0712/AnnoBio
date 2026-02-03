@@ -23,6 +23,48 @@ window.addEventListener('DOMContentLoaded', () => {
 
   window.electronAPI?.onSetTheme?.(setTheme);
 
-  buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openAddAgentModal, openCredentialsModal });
-  buildWorkflowCanvas(root);
+  const canvasAPI = buildWorkflowCanvas(root);
+  let currentProjectPath = null;
+
+  const onNewProject = async () => {
+    const api = window.electronAPI;
+    if (!api?.showNewProjectDialog) return;
+    const path = await api.showNewProjectDialog();
+    if (!path) return;
+    currentProjectPath = path;
+    const state = canvasAPI.getCanvasState();
+    await api.saveProject(path, state);
+    topBarAPI.setAddMenuEnabled(true);
+  };
+
+  const onOpenProject = async () => {
+    const api = window.electronAPI;
+    if (!api?.showOpenProjectDialog || !api?.loadProject) return;
+    const path = await api.showOpenProjectDialog();
+    if (!path) return;
+    const state = await api.loadProject(path);
+    canvasAPI.loadCanvasState(state);
+    currentProjectPath = path;
+    topBarAPI.setAddMenuEnabled(true);
+  };
+
+  const topBarAPI = buildTopBar(root, {
+    openAddPromptModal,
+    openAddDatasetModal,
+    openAddAgentModal,
+    openCredentialsModal,
+    onNewProject,
+    onOpenProject,
+  });
+  topBarAPI.setAddMenuEnabled(false);
+
+  let saveTimeout = null;
+  canvasAPI.setOnCanvasChange(() => {
+    if (!currentProjectPath || !window.electronAPI?.saveProject) return;
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(async () => {
+      const state = canvasAPI.getCanvasState();
+      await window.electronAPI.saveProject(currentProjectPath, state);
+    }, 400);
+  });
 });

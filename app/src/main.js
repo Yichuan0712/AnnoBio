@@ -1,5 +1,6 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import started from 'electron-squirrel-startup';
 import { spawn } from 'node:child_process';
 
@@ -92,6 +93,34 @@ const createWindow = () => {
   // Open the DevTools.
   mainWindow.webContents.openDevTools();
 };
+
+// Project file IPC
+ipcMain.handle('project:new-dialog', async () => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'New project',
+    defaultPath: 'project.json',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  return canceled ? null : filePath;
+});
+
+ipcMain.handle('project:open-dialog', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Open project',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+    properties: ['openFile'],
+  });
+  return canceled || !filePaths?.length ? null : filePaths[0];
+});
+
+ipcMain.handle('project:save', async (_e, filePath, state) => {
+  await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
+});
+
+ipcMain.handle('project:load', async (_e, filePath) => {
+  const raw = await fs.readFile(filePath, 'utf-8');
+  return JSON.parse(raw);
+});
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.

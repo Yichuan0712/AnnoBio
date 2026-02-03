@@ -14,27 +14,27 @@ export function buildWorkflowCanvas(root) {
   let nodeCount = 0;
   const STAGGER = 36;
 
-  function fieldsToViewHtml(fieldsList) {
-    if (!fieldsList || fieldsList.length === 0) return '<p class="prompt-detail-placeholder">No fields.</p>';
-    return fieldsList
+  function sectionsToViewHtml(sectionsList) {
+    if (!sectionsList || sectionsList.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
+    return sectionsList
       .map(
-        (f) => `
+        (s) => `
           <div class="preview-field-block">
             <div class="preview-field-divider">
               <span class="preview-field-line" aria-hidden="true"></span>
-              <span class="preview-field-name">${escapeHtml(f.name || 'Unnamed')}</span>
+              <span class="preview-field-name">${escapeHtml(s.name || 'Unnamed')}</span>
             </div>
-            <div class="preview-field-content">${escapeHtml(f.content || '')}</div>
+            <div class="preview-field-content">${escapeHtml(s.content || '')}</div>
           </div>
         `
       )
       .join('');
   }
 
-  function openPromptDetailModal({ name = '', note = '', fields = [], node: sourceNode = null }) {
+  function openPromptDetailModal({ name = '', note = '', sections = [], node: sourceNode = null }) {
     const displayName = (name && name.trim()) ? name.trim() : 'Prompt';
     const noteTrimmed = (note || '').trim();
-    const fieldsViewHtml = fieldsToViewHtml(fields);
+    const sectionsViewHtml = sectionsToViewHtml(sections);
 
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -54,8 +54,8 @@ export function buildWorkflowCanvas(root) {
                 <span class="prompt-detail-name-value">${escapeHtml(displayName)}</span>
               </div>
               <div class="prompt-detail-row">
-                <span class="prompt-detail-label">Prompt notes</span>
-                <div class="prompt-detail-notes-value">${noteTrimmed ? escapeHtml(noteTrimmed) : '<span class="prompt-detail-placeholder">No notes.</span>'}</div>
+                <span class="prompt-detail-label">Prompt description</span>
+                <div class="prompt-detail-notes-value">${noteTrimmed ? escapeHtml(noteTrimmed) : '<span class="prompt-detail-placeholder">No description.</span>'}</div>
               </div>
             </div>
             <div class="prompt-detail-edit">
@@ -64,28 +64,28 @@ export function buildWorkflowCanvas(root) {
                 <input type="text" id="prompt-detail-name-inp" class="prompt-detail-input" />
               </div>
               <div class="prompt-detail-row">
-                <label class="prompt-detail-label" for="prompt-detail-notes-inp">Prompt notes</label>
+                <label class="prompt-detail-label" for="prompt-detail-notes-inp">Prompt description</label>
                 <textarea id="prompt-detail-notes-inp" class="prompt-detail-textarea" rows="3"></textarea>
               </div>
             </div>
             <div class="prompt-detail-footer">
               <button type="button" class="btn btn-secondary prompt-detail-btn-edit">Edit</button>
               <div class="prompt-detail-footer-edit">
-                <button type="button" class="btn btn-secondary prompt-detail-btn-cancel">Cancel</button>
                 <button type="button" class="btn btn-secondary prompt-detail-btn-save">Save</button>
+                <button type="button" class="btn btn-secondary prompt-detail-btn-cancel">Cancel</button>
               </div>
             </div>
           </div>
-          <div class="prompt-detail-fields-wrap" data-prompt-fields-mode="view">
-            <h3 class="prompt-detail-section-title">Fields</h3>
-            <div class="prompt-detail-fields-view">${fieldsViewHtml}</div>
-            <div class="prompt-detail-fields-edit"></div>
-            <div class="prompt-detail-fields-footer">
-              <button type="button" class="btn btn-secondary prompt-detail-fields-btn-edit">Edit</button>
-              <div class="prompt-detail-fields-edit-btns">
-                <button type="button" class="btn btn-secondary prompt-detail-fields-btn-cancel">Cancel</button>
-                <button type="button" class="btn btn-secondary prompt-detail-fields-btn-save-node">Save to this node</button>
-                <button type="button" class="btn btn-secondary prompt-detail-fields-btn-save-new">Save as new node</button>
+          <div class="prompt-detail-sections-wrap" data-prompt-sections-mode="view">
+            <h3 class="prompt-detail-section-title">Sections</h3>
+            <div class="prompt-detail-sections-view">${sectionsViewHtml}</div>
+            <div class="prompt-detail-sections-edit"></div>
+            <div class="prompt-detail-sections-footer">
+              <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
+              <div class="prompt-detail-sections-edit-btns">
+                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-save-node">Save to this node</button>
+                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-save-new">Save as new node</button>
+                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-cancel">Cancel</button>
               </div>
             </div>
           </div>
@@ -147,41 +147,42 @@ export function buildWorkflowCanvas(root) {
       const newNote = (notesInp.value || '').trim();
       applyToNode(newName, newNote);
       nameValueEl.textContent = newName;
-      notesValueEl.innerHTML = newNote ? escapeHtml(newNote) : '<span class="prompt-detail-placeholder">No notes.</span>';
+      notesValueEl.innerHTML = newNote ? escapeHtml(newNote) : '<span class="prompt-detail-placeholder">No description.</span>';
       showView();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     });
 
-    let currentFields = Array.isArray(fields) ? fields.map((f) => ({ name: f.name || '', content: f.content || '' })) : [];
-    const fieldsWrap = overlay.querySelector('.prompt-detail-fields-wrap');
-    const fieldsView = overlay.querySelector('.prompt-detail-fields-view');
-    const fieldsEdit = overlay.querySelector('.prompt-detail-fields-edit');
-    const fieldsBtnEdit = overlay.querySelector('.prompt-detail-fields-btn-edit');
-    const fieldsEditBtns = overlay.querySelector('.prompt-detail-fields-edit-btns');
-    const fieldsBtnCancel = overlay.querySelector('.prompt-detail-fields-btn-cancel');
-    const fieldsBtnSaveNode = overlay.querySelector('.prompt-detail-fields-btn-save-node');
-    const fieldsBtnSaveNew = overlay.querySelector('.prompt-detail-fields-btn-save-new');
+    let currentSections = Array.isArray(sections) ? sections.map((s) => ({ name: s.name || '', content: s.content || '' })) : [];
+    const sectionsWrap = overlay.querySelector('.prompt-detail-sections-wrap');
+    const sectionsView = overlay.querySelector('.prompt-detail-sections-view');
+    const sectionsEdit = overlay.querySelector('.prompt-detail-sections-edit');
+    const sectionsBtnEdit = overlay.querySelector('.prompt-detail-sections-btn-edit');
+    const sectionsEditBtns = overlay.querySelector('.prompt-detail-sections-edit-btns');
+    const sectionsBtnCancel = overlay.querySelector('.prompt-detail-sections-btn-cancel');
+    const sectionsBtnSaveNode = overlay.querySelector('.prompt-detail-sections-btn-save-node');
+    const sectionsBtnSaveNew = overlay.querySelector('.prompt-detail-sections-btn-save-new');
 
-    function getFieldsFromEditContainer() {
-      const rows = fieldsEdit.querySelectorAll('.prompt-detail-field-edit-row');
+    function getSectionsFromEditContainer() {
+      const rows = sectionsEdit.querySelectorAll('.prompt-detail-section-edit-row');
       return Array.from(rows).map((row) => ({
-        name: (row.querySelector('.prompt-detail-field-name-inp')?.value ?? '').trim(),
-        content: row.querySelector('.prompt-detail-field-content-inp')?.value ?? '',
+        name: (row.querySelector('.prompt-detail-section-name-inp')?.value ?? '').trim(),
+        content: row.querySelector('.prompt-detail-section-content-inp')?.value ?? '',
       }));
     }
 
-    function buildFieldsEditContent(fieldsList) {
-      const list = Array.isArray(fieldsList) && fieldsList.length ? fieldsList : [{ name: '', content: '' }];
+    function buildSectionsEditContent(sectionsList) {
+      const list = Array.isArray(sectionsList) && sectionsList.length ? sectionsList : [{ name: '', content: '' }];
       return list
         .map(
-          (f) => `
-          <div class="prompt-detail-field-edit-row">
-            <div class="prompt-detail-field-edit-header">
-              <input type="text" class="prompt-detail-input prompt-detail-field-name-inp" value="${escapeHtml(f.name || '')}" placeholder="Field name" />
-              <button type="button" class="prompt-field-remove prompt-detail-field-delete" aria-label="Remove field">Delete field</button>
+          (s) => `
+          <div class="prompt-detail-section-edit-row">
+            <div class="prompt-detail-section-edit-header">
+              <input type="text" class="prompt-detail-input prompt-detail-section-name-inp" value="${escapeHtml(s.name || '')}" placeholder="Section name" />
+              <button type="button" class="prompt-field-remove prompt-detail-section-delete" aria-label="Remove section">Delete section</button>
             </div>
             <div class="prompt-detail-row">
               <label class="prompt-detail-label">Content</label>
-              <textarea class="prompt-detail-textarea prompt-detail-field-content-inp" rows="2" placeholder="Content">${escapeHtml(f.content || '')}</textarea>
+              <textarea class="prompt-detail-textarea prompt-detail-section-content-inp" rows="2" placeholder="Content">${escapeHtml(s.content || '')}</textarea>
             </div>
           </div>
         `
@@ -189,66 +190,67 @@ export function buildWorkflowCanvas(root) {
         .join('');
     }
 
-    function showFieldsView() {
-      fieldsWrap.setAttribute('data-prompt-fields-mode', 'view');
+    function showSectionsView() {
+      sectionsWrap.setAttribute('data-prompt-sections-mode', 'view');
     }
 
-    function showFieldsEdit() {
-      let list = currentFields;
+    function showSectionsEdit() {
+      let list = currentSections;
       if (sourceNode) {
         try {
-          list = JSON.parse(sourceNode.dataset.promptFields || '[]');
+          list = JSON.parse(sourceNode.dataset.promptSections || sourceNode.dataset.promptFields || '[]');
         } catch (_) {}
       }
       if (!list.length) list = [{ name: '', content: '' }];
-      fieldsEdit.innerHTML =
-        buildFieldsEditContent(list) +
-        `<button type="button" class="btn btn-secondary prompt-detail-fields-add-row">+ Add field</button>`;
-      fieldsEdit.querySelector('.prompt-detail-fields-add-row').addEventListener('click', () => {
-        const addBtn = fieldsEdit.querySelector('.prompt-detail-fields-add-row');
+      sectionsEdit.innerHTML =
+        buildSectionsEditContent(list) +
+        `<button type="button" class="btn btn-secondary prompt-detail-sections-add-row">+ Add section</button>`;
+      sectionsEdit.querySelector('.prompt-detail-sections-add-row').addEventListener('click', () => {
+        const addBtn = sectionsEdit.querySelector('.prompt-detail-sections-add-row');
         const newHtml = `
-          <div class="prompt-detail-field-edit-row">
-            <div class="prompt-detail-field-edit-header">
-              <input type="text" class="prompt-detail-input prompt-detail-field-name-inp" value="" placeholder="Field name" />
-              <button type="button" class="prompt-field-remove prompt-detail-field-delete" aria-label="Remove field">Delete field</button>
+          <div class="prompt-detail-section-edit-row">
+            <div class="prompt-detail-section-edit-header">
+              <input type="text" class="prompt-detail-input prompt-detail-section-name-inp" value="" placeholder="Section name" />
+              <button type="button" class="prompt-field-remove prompt-detail-section-delete" aria-label="Remove section">Delete section</button>
             </div>
             <div class="prompt-detail-row">
               <label class="prompt-detail-label">Content</label>
-              <textarea class="prompt-detail-textarea prompt-detail-field-content-inp" rows="2" placeholder="Content"></textarea>
+              <textarea class="prompt-detail-textarea prompt-detail-section-content-inp" rows="2" placeholder="Content"></textarea>
             </div>
           </div>`;
         if (addBtn) addBtn.insertAdjacentHTML('beforebegin', newHtml);
       });
-      fieldsEdit.addEventListener('click', (e) => {
-        const delBtn = e.target.closest('.prompt-detail-field-delete');
+      sectionsEdit.addEventListener('click', (e) => {
+        const delBtn = e.target.closest('.prompt-detail-section-delete');
         if (!delBtn) return;
-        const row = delBtn.closest('.prompt-detail-field-edit-row');
+        const row = delBtn.closest('.prompt-detail-section-edit-row');
         if (!row) return;
-        const rows = fieldsEdit.querySelectorAll('.prompt-detail-field-edit-row');
+        const rows = sectionsEdit.querySelectorAll('.prompt-detail-section-edit-row');
         if (rows.length <= 1) return;
         row.remove();
       });
-      fieldsWrap.setAttribute('data-prompt-fields-mode', 'edit');
+      sectionsWrap.setAttribute('data-prompt-sections-mode', 'edit');
     }
 
-    fieldsBtnEdit.addEventListener('click', () => {
-      showFieldsEdit();
+    sectionsBtnEdit.addEventListener('click', () => {
+      showSectionsEdit();
     });
-    fieldsBtnCancel.addEventListener('click', () => {
-      showFieldsView();
+    sectionsBtnCancel.addEventListener('click', () => {
+      showSectionsView();
     });
-    fieldsBtnSaveNode.addEventListener('click', () => {
-      const newFields = getFieldsFromEditContainer().filter((f) => f.name || f.content);
-      currentFields = newFields;
+    sectionsBtnSaveNode.addEventListener('click', () => {
+      const newSections = getSectionsFromEditContainer().filter((s) => s.name || s.content);
+      currentSections = newSections;
       if (sourceNode) {
-        sourceNode.dataset.promptFields = JSON.stringify(newFields);
+        sourceNode.dataset.promptSections = JSON.stringify(newSections);
       }
-      fieldsView.innerHTML = fieldsToViewHtml(newFields.length ? newFields : []);
-      showFieldsView();
+      sectionsView.innerHTML = sectionsToViewHtml(newSections.length ? newSections : []);
+      showSectionsView();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     });
-    fieldsBtnSaveNew.addEventListener('click', () => {
+    sectionsBtnSaveNew.addEventListener('click', () => {
       // TODO: save as new node
-      showFieldsView();
+      showSectionsView();
     });
 
     overlay.querySelector('.modal-close').addEventListener('click', () => {
@@ -259,17 +261,28 @@ export function buildWorkflowCanvas(root) {
     document.body.appendChild(overlay);
   }
 
-  function createPromptNode({ name = '', note = '', fields = [] }) {
+  function createPromptNode({ name = '', note = '', sections = [], outputFormat, left, top }) {
     const title = (name && name.trim()) ? name.trim() : 'Prompt';
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--prompt';
     node.setAttribute('role', 'article');
     node.setAttribute('aria-label', `Prompt node: ${title}`);
-    node.dataset.promptFields = JSON.stringify(fields);
+    node.dataset.promptSections = JSON.stringify(sections);
     node.dataset.promptName = name;
     node.dataset.promptNote = note;
-    const x = 80 + (nodeCount % 5) * (280 + STAGGER);
-    const y = 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
+    let ofList = outputFormat?.fields ?? (Array.isArray(outputFormat) ? outputFormat : []);
+    if (!ofList.length && outputFormat?.columns?.length) {
+      ofList = outputFormat.columns.map((key) => ({
+        key: key || '',
+        type: 'str',
+        examples: (outputFormat.examples || []).map((r) => r[key]).filter((v) => v != null && v !== ''),
+      }));
+    }
+    ofList = ofList.map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [] }));
+    node.dataset.promptOutputFormat = JSON.stringify(ofList);
+    node.dataset.promptOutputReturnShape = outputFormat?.returnShape ?? 'single';
+    const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
+    const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
     node.style.left = `${x}px`;
     node.style.top = `${y}px`;
@@ -290,20 +303,21 @@ export function buildWorkflowCanvas(root) {
       e.stopPropagation();
       e.preventDefault();
       node.remove();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     });
 
     node.addEventListener('dblclick', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
       e.preventDefault();
       e.stopPropagation();
-      let fieldsData = [];
+      let sectionsData = [];
       try {
-        fieldsData = JSON.parse(node.dataset.promptFields || '[]');
+        sectionsData = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
       } catch (_) {}
       openPromptDetailModal({
         name: node.dataset.promptName || '',
         note: node.dataset.promptNote || '',
-        fields: fieldsData,
+        sections: sectionsData,
         node,
       });
     });
@@ -338,6 +352,7 @@ export function buildWorkflowCanvas(root) {
     function onPointerUp() {
       node.classList.remove('workflow-node--dragging');
       document.removeEventListener('pointermove', onPointerMove);
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
 
     node.addEventListener('pointerdown', onPointerDown);
@@ -351,9 +366,59 @@ export function buildWorkflowCanvas(root) {
   }
 
   document.addEventListener('workflow:add-prompt-node', (e) => {
-    const { name = '', note = '', fields = [] } = e.detail || {};
-    createPromptNode({ name, note, fields });
+    const { name = '', note = '', sections = [], outputFormat } = e.detail || {};
+    createPromptNode({ name, note, sections, outputFormat });
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
+  function getCanvasState() {
+    const nodes = Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt')).map((node) => {
+      let sections = [];
+      let outputFormat = [];
+      try {
+        sections = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
+      } catch (_) {}
+      try {
+        const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
+        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [] }));
+        const returnShape = node.dataset.promptOutputReturnShape || 'single';
+        outputFormat = { returnShape, fields };
+      } catch (_) {
+        outputFormat = { returnShape: 'single', fields: [] };
+      }
+      return {
+        left: parseFloat(node.style.left) || 0,
+        top: parseFloat(node.style.top) || 0,
+        name: node.dataset.promptName || '',
+        note: node.dataset.promptNote || '',
+        sections: Array.isArray(sections) ? sections : [],
+        outputFormat,
+      };
+    });
+    return { version: 1, nodes };
+  }
+
+  function loadCanvasState(state) {
+    const list = state?.nodes;
+    if (!Array.isArray(list)) return;
+    nodesLayer.innerHTML = '';
+    nodeCount = list.length;
+    list.forEach((n) => {
+      createPromptNode({
+        name: n.name || '',
+        note: n.note || '',
+        sections: n.sections || n.fields || [],
+        outputFormat: n.outputFormat,
+        left: n.left,
+        top: n.top,
+      });
+    });
+  }
+
+  function setOnCanvasChange(fn) {
+    document.addEventListener('workflow:canvas-changed', fn);
+  }
+
   root.appendChild(canvas);
+  return { getCanvasState, loadCanvasState, setOnCanvasChange };
 }
