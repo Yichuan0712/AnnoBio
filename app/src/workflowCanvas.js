@@ -851,6 +851,7 @@ export function buildWorkflowCanvas(root) {
       const dy = e.clientY - dragStartY;
       node.style.left = `${nodeStartLeft + dx}px`;
       node.style.top = `${nodeStartTop + dy}px`;
+      updateEdges();
     }
 
     function onPointerUp() {
