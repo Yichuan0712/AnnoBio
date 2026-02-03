@@ -455,8 +455,8 @@
 
 /* Prompt details modal (double-click node): view only until Edit → Save/Cancel */
 .modal-panel--prompt-detail {
-  min-width: 520px;
-  max-width: 640px;
+  min-width: 1200px;
+  max-width: 96vw;
   max-height: 85vh;
   display: flex;
   flex-direction: column;
@@ -464,10 +464,33 @@
 
 .prompt-detail-body {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 20px;
   overflow: hidden;
   min-height: 0;
+}
+
+.prompt-detail-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.prompt-detail-col--left {
+  flex: 0 1 44%;
+  max-width: 680px;
+}
+
+.prompt-detail-col--right {
+  flex: 1 1 56%;
+  min-width: 280px;
+}
+
+.prompt-detail-col--left .prompt-detail-card {
+  flex-shrink: 0;
 }
 
 .prompt-detail-card {
@@ -629,6 +652,67 @@
 }
 
 .prompt-detail-sections-wrap[data-prompt-sections-mode="edit"] .prompt-detail-sections-edit {
+  display: flex !important;
+}
+
+/* Output schema block (same pattern as Sections) */
+.prompt-detail-schema-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.prompt-detail-schema-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.prompt-detail-schema-edit-btns {
+  display: none !important;
+}
+
+.prompt-detail-schema-wrap[data-prompt-schema-mode="edit"] .prompt-detail-schema-btn-edit {
+  display: none !important;
+}
+
+.prompt-detail-schema-wrap[data-prompt-schema-mode="edit"] .prompt-detail-schema-edit-btns {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+}
+
+.prompt-detail-schema-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.prompt-detail-schema-edit {
+  display: none;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.prompt-detail-schema-wrap[data-prompt-schema-mode="edit"] .prompt-detail-schema-view {
+  display: none !important;
+}
+
+.prompt-detail-schema-wrap[data-prompt-schema-mode="edit"] .prompt-detail-schema-edit {
   display: flex !important;
 }
 

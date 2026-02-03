@@ -70,7 +70,7 @@ export function openAddPromptModal() {
           </div>
         </div>
         <div class="prompt-preview-wrap">
-          <h3 class="prompt-preview-title">Overall prompt</h3>
+          <h3 class="prompt-preview-title">Prompt sections</h3>
           <div class="prompt-preview" aria-readonly="true"></div>
         </div>
         <div class="prompt-schema-preview-wrap">
