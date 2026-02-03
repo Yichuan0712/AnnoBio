@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   showNewProjectDialog: () => ipcRenderer.invoke('project:new-dialog'),
   showOpenProjectDialog: () => ipcRenderer.invoke('project:open-dialog'),
+  showSaveAsProjectDialog: (defaultPath) => ipcRenderer.invoke('project:save-as-dialog', defaultPath),
   saveProject: (filePath, state) => ipcRenderer.invoke('project:save', filePath, state),
   loadProject: (filePath) => ipcRenderer.invoke('project:load', filePath),
 });

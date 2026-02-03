@@ -15,15 +15,78 @@ export function buildWorkflowCanvas(root) {
   const contentInner = document.createElement('div');
   contentInner.className = 'workflow-canvas__inner';
 
+  const edgesLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  edgesLayer.setAttribute('class', 'workflow-canvas__edges');
+  edgesLayer.setAttribute('width', '100%');
+  edgesLayer.setAttribute('height', '100%');
+  edgesLayer.setAttribute('preserveAspectRatio', 'none');
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+  marker.setAttribute('id', 'workflow-arrow');
+  marker.setAttribute('markerWidth', '10');
+  marker.setAttribute('markerHeight', '8');
+  marker.setAttribute('refX', '9');
+  marker.setAttribute('refY', '4');
+  marker.setAttribute('orient', 'auto');
+  const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  arrowPath.setAttribute('d', 'M0,0 L10,4 L0,8 Z');
+  arrowPath.setAttribute('fill', 'currentColor');
+  marker.appendChild(arrowPath);
+  defs.appendChild(marker);
+  edgesLayer.appendChild(defs);
+
   const nodesLayer = document.createElement('div');
   nodesLayer.className = 'workflow-canvas__nodes';
 
+  contentInner.appendChild(edgesLayer);
   contentInner.appendChild(nodesLayer);
   scrollWrapper.appendChild(contentInner);
   canvas.appendChild(scrollWrapper);
 
   let nodeCount = 0;
   const STAGGER = 36;
+  let connections = [];
+
+  function getNodeList() {
+    return Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'));
+  }
+
+  function getNodeIndex(node) {
+    return getNodeList().indexOf(node);
+  }
+
+  function updateEdges() {
+    const list = getNodeList();
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    connections.forEach(({ from: fromIdx, to: toIdx }) => {
+      const fromNode = list[fromIdx];
+      const toNode = list[toIdx];
+      if (!fromNode || !toNode) return;
+      const x1 = parseFloat(fromNode.style.left) || 0;
+      const y1 = parseFloat(fromNode.style.top) || 0;
+      const w1 = fromNode.offsetWidth || 0;
+      const h1 = fromNode.offsetHeight || 0;
+      const x2 = parseFloat(toNode.style.left) || 0;
+      const y2 = parseFloat(toNode.style.top) || 0;
+      const h2 = toNode.offsetHeight || 0;
+      const startX = x1 + w1;
+      const startY = y1 + h1 / 2;
+      const endX = x2;
+      const endY = y2 + h2 / 2;
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', String(startX));
+      line.setAttribute('y1', String(startY));
+      line.setAttribute('x2', String(endX));
+      line.setAttribute('y2', String(endY));
+      line.setAttribute('stroke', 'var(--text-muted)');
+      line.setAttribute('stroke-width', '2');
+      line.setAttribute('marker-end', 'url(#workflow-arrow)');
+      g.appendChild(line);
+    });
+    const existing = edgesLayer.querySelector('g');
+    if (existing) existing.remove();
+    edgesLayer.appendChild(g);
+  }
 
   function updateContentSize() {
     const nodes = nodesLayer.querySelectorAll('.workflow-node--prompt');
@@ -736,8 +799,11 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      const idx = getNodeIndex(node);
+      removeConnectionsInvolvingIndex(idx);
       node.remove();
       updateContentSize();
+      updateEdges();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     });
 
@@ -791,6 +857,7 @@ export function buildWorkflowCanvas(root) {
       node.classList.remove('workflow-node--dragging');
       document.removeEventListener('pointermove', onPointerMove);
       updateContentSize();
+      updateEdges();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
 
@@ -806,6 +873,14 @@ export function buildWorkflowCanvas(root) {
     return node;
   }
 
+  function removeConnectionsInvolvingIndex(idx) {
+    connections = connections.filter((c) => c.from !== idx && c.to !== idx);
+    connections = connections.map((c) => ({
+      from: c.from > idx ? c.from - 1 : c.from,
+      to: c.to > idx ? c.to - 1 : c.to,
+    }));
+  }
+
   function showNodeContextMenu(clientX, clientY, node) {
     const existing = document.querySelector('.workflow-node-context-menu');
     if (existing) existing.remove();
@@ -814,13 +889,52 @@ export function buildWorkflowCanvas(root) {
     menu.className = 'workflow-node-context-menu';
     menu.setAttribute('role', 'menu');
     menu.innerHTML = `
-      <button type="button" class="workflow-node-context-item" data-action="placeholder-1" role="menuitem">Action 1 (placeholder)</button>
+      <button type="button" class="workflow-node-context-item" data-action="duplicate" role="menuitem">Duplicate this prompt</button>
+      <button type="button" class="workflow-node-context-item" data-action="new-version" role="menuitem">Manually add new version of this prompt</button>
       <button type="button" class="workflow-node-context-item" data-action="placeholder-2" role="menuitem">Action 2 (placeholder)</button>
       <button type="button" class="workflow-node-context-item" data-action="placeholder-3" role="menuitem">Action 3 (placeholder)</button>
     `;
 
-    const placeholders = {
-      'placeholder-1': () => { /* TODO */ },
+    function duplicateNode() {
+      const left = parseFloat(node.style.left) || 0;
+      const top = parseFloat(node.style.top) || 0;
+      const width = node.offsetWidth || 280;
+      const offset = 40;
+      let sections = [];
+      let outputFormat = { returnShape: 'single', fields: [] };
+      try {
+        sections = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
+      } catch (_) {}
+      try {
+        const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
+        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [] }));
+        outputFormat = { returnShape: node.dataset.promptOutputReturnShape || 'single', fields };
+      } catch (_) {}
+      const newNode = createPromptNode({
+        name: node.dataset.promptName || '',
+        note: node.dataset.promptNote || '',
+        sections: Array.isArray(sections) ? sections : [],
+        outputFormat,
+        left: left + width + offset,
+        top,
+      });
+      updateContentSize();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      return newNode;
+    }
+
+    const actions = {
+      duplicate: duplicateNode,
+      'new-version': () => {
+        const fromIdx = getNodeIndex(node);
+        const newNode = duplicateNode();
+        if (newNode) {
+          const toIdx = getNodeIndex(newNode);
+          connections.push({ from: fromIdx, to: toIdx });
+          updateEdges();
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        }
+      },
       'placeholder-2': () => { /* TODO */ },
       'placeholder-3': () => { /* TODO */ },
     };
@@ -829,7 +943,7 @@ export function buildWorkflowCanvas(root) {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const action = btn.getAttribute('data-action');
-        if (placeholders[action]) placeholders[action]();
+        if (actions[action]) actions[action]();
         menu.remove();
       });
     });
@@ -892,7 +1006,7 @@ export function buildWorkflowCanvas(root) {
         outputFormat,
       };
     });
-    return { version: 1, nodes };
+    return { version: 1, nodes, connections: connections.slice() };
   }
 
   function loadCanvasState(state) {
@@ -900,6 +1014,7 @@ export function buildWorkflowCanvas(root) {
     if (!Array.isArray(list)) return;
     nodesLayer.innerHTML = '';
     nodeCount = list.length;
+    connections = Array.isArray(state.connections) ? state.connections.slice() : [];
     list.forEach((n) => {
       createPromptNode({
         name: n.name || '',
@@ -911,6 +1026,7 @@ export function buildWorkflowCanvas(root) {
       });
     });
     updateContentSize();
+    updateEdges();
   }
 
   function setOnCanvasChange(fn) {

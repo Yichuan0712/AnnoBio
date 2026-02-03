@@ -3,6 +3,21 @@
  * Node.js integration is disabled (recommended).
  */
 
+function showError(msg, err) {
+  const root = document.getElementById('app') || document.body;
+  if (root && !root.querySelector('.renderer-error-box')) {
+    const box = document.createElement('div');
+    box.className = 'renderer-error-box';
+    box.style.cssText = 'padding:20px;font-family:system-ui;color:#c00;white-space:pre-wrap;background:#fff;margin:8px;border:1px solid #c00;';
+    box.textContent = msg + (err ? '\n\n' + (err.stack || err.message || err) : '');
+    root.insertBefore(box, root.firstChild);
+  }
+  console.error(msg, err);
+}
+
+window.addEventListener('error', (e) => { showError('Uncaught error: ' + (e.message || e), e.error); });
+window.addEventListener('unhandledrejection', (e) => { showError('Unhandled promise rejection', e.reason); });
+
 import './index.css';
 import './topBar.css';
 import './workflowCanvas.css';
@@ -16,15 +31,26 @@ import { openAddAgentModal } from './addAgentModal.js';
 import { openCredentialsModal } from './credentialsModal.js';
 import { initModalDrag } from './modalDrag.js';
 
-window.addEventListener('DOMContentLoaded', () => {
+function showInitError(err) {
   const root = document.getElementById('app') || document.body;
-  setTheme(getStoredTheme());
-  initModalDrag();
+  root.innerHTML = `<div style="padding:20px;font-family:system-ui;color:#c00;white-space:pre-wrap;">Init error:\n${err?.message || err}\n\n${err?.stack || ''}</div>`;
+  console.error('Init error', err);
+}
 
-  window.electronAPI?.onSetTheme?.(setTheme);
+window.addEventListener('DOMContentLoaded', () => {
+  let root;
+  try {
+    root = document.getElementById('app') || document.body;
+    const loadingEl = root.querySelector('.app-loading');
+    if (loadingEl) loadingEl.remove();
 
-  const canvasAPI = buildWorkflowCanvas(root);
-  let currentProjectPath = null;
+    setTheme(getStoredTheme());
+    initModalDrag();
+
+    window.electronAPI?.onSetTheme?.(setTheme);
+
+    const canvasAPI = buildWorkflowCanvas(root);
+    let currentProjectPath = null;
 
   const onNewProject = async () => {
     const api = window.electronAPI;
@@ -48,6 +74,17 @@ window.addEventListener('DOMContentLoaded', () => {
     topBarAPI.setAddMenuEnabled(true);
   };
 
+  const onSaveAsProject = async () => {
+    const api = window.electronAPI;
+    if (!api?.showSaveAsProjectDialog || !api?.saveProject) return;
+    const path = await api.showSaveAsProjectDialog(currentProjectPath || undefined);
+    if (!path) return;
+    const state = canvasAPI.getCanvasState();
+    await api.saveProject(path, state);
+    currentProjectPath = path;
+    topBarAPI.setAddMenuEnabled(true);
+  };
+
   const topBarAPI = buildTopBar(root, {
     openAddPromptModal,
     openAddDatasetModal,
@@ -55,6 +92,7 @@ window.addEventListener('DOMContentLoaded', () => {
     openCredentialsModal,
     onNewProject,
     onOpenProject,
+    onSaveAsProject,
   });
   topBarAPI.setAddMenuEnabled(false);
 
@@ -67,4 +105,7 @@ window.addEventListener('DOMContentLoaded', () => {
       await window.electronAPI.saveProject(currentProjectPath, state);
     }, 400);
   });
+  } catch (err) {
+    showInitError(err);
+  }
 });

@@ -119,6 +119,15 @@ ipcMain.handle('project:open-dialog', async () => {
   return canceled || !filePaths?.length ? null : filePaths[0];
 });
 
+ipcMain.handle('project:save-as-dialog', async (_e, defaultPath) => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Save project as',
+    defaultPath: defaultPath || 'project.json',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  return canceled ? null : filePath;
+});
+
 ipcMain.handle('project:save', async (_e, filePath, state) => {
   await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
 });

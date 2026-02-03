@@ -1,14 +1,14 @@
 /* Base: theme variables, layout */
 :root {
-  --bg: #f5f5f5;
-  --bg-bar: #fff;
-  --bg-canvas: #e8e9ea;
-  --grid-color: rgba(0, 0, 0, 0.06);
+  --bg: #e2e4e6;
+  --bg-bar: #f2f3f5;
+  --bg-canvas: #d4d8dc;
+  --grid-color: rgba(0, 0, 0, 0.08);
   --text: #1a1a1a;
-  --text-muted: #666;
-  --border: #e0e0e0;
-  --hover: #e8e8e8;
-  --shadow: rgba(0, 0, 0, 0.08);
+  --text-muted: #4a4d52;
+  --border: #b8bcc2;
+  --hover: #d8dce0;
+  --shadow: rgba(0, 0, 0, 0.12);
 }
 
 html.dark {

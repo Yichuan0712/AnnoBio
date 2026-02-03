@@ -6,10 +6,10 @@ import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, openAddAgentModal: () => void, openCredentialsModal: () => void, onNewProject: () => void, onOpenProject: () => void }} options
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, openAddAgentModal: () => void, openCredentialsModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void }} options
  * @returns {{ setAddMenuEnabled: (enabled: boolean) => void }}
  */
-export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openAddAgentModal, openCredentialsModal, onNewProject, onOpenProject }) {
+export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openAddAgentModal, openCredentialsModal, onNewProject, onOpenProject, onSaveAsProject }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -22,9 +22,11 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   fileDrop.innerHTML = `
     <button type="button" class="menu-option" data-action="new-project">New project...</button>
     <button type="button" class="menu-option" data-action="open-project">Open project...</button>
+    <button type="button" class="menu-option" data-action="save-as-project">Save as...</button>
   `;
   fileDrop.querySelector('[data-action="new-project"]').addEventListener('click', () => onNewProject?.());
   fileDrop.querySelector('[data-action="open-project"]').addEventListener('click', () => onOpenProject?.());
+  fileDrop.querySelector('[data-action="save-as-project"]').addEventListener('click', () => onSaveAsProject?.());
   fileBtn.appendChild(fileDrop);
   bar.appendChild(fileBtn);
 
