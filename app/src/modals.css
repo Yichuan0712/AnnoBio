@@ -650,7 +650,7 @@
 }
 
 .prompt-detail-fields-add-row {
-  align-self: flex-start;
+  align-self: flex-end;
 }
 
 .prompt-detail-section-title {
@@ -819,6 +819,11 @@
   overflow-y: auto;
 }
 
+.prompt-add-field-wrap {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .prompt-field {
   display: flex;
   flex-direction: column;
@@ -889,6 +894,7 @@
 .prompt-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
 }
 
