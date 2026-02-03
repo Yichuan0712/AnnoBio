@@ -73,6 +73,21 @@ export function openAddPromptModal() {
           <h3 class="prompt-preview-title">Overall prompt</h3>
           <div class="prompt-preview" aria-readonly="true"></div>
         </div>
+        <div class="prompt-schema-preview-wrap">
+          <h3 class="prompt-schema-preview-title">Output schema</h3>
+          <div class="prompt-schema-preview-table-wrap">
+            <table class="prompt-schema-preview-table" aria-readonly="true">
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>Description</th>
+                  <th>Examples</th>
+                </tr>
+              </thead>
+              <tbody class="prompt-schema-preview-tbody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -89,7 +104,11 @@ export function openAddPromptModal() {
 
   overlay.querySelector('.prompt-btn-next').addEventListener('click', () => goToStep(2));
   overlay.querySelector('.prompt-btn-back-from-2').addEventListener('click', () => goToStep(1));
-  overlay.querySelector('.prompt-btn-next-to-3').addEventListener('click', () => goToStep(3));
+  overlay.querySelector('.prompt-btn-next-to-3').addEventListener('click', () => {
+    syncOutputFormatFromDOM();
+    updateSchemaPreview();
+    goToStep(3);
+  });
   overlay.querySelector('.prompt-btn-back').addEventListener('click', () => goToStep(2));
 
   const OUTPUT_TYPES = [
@@ -131,6 +150,46 @@ export function openAddPromptModal() {
       const examples = Array.from(exampleInputs).map((inp) => (inp?.value ?? '').trim());
       return { key, type, description, examples };
     });
+  }
+
+  const SCHEMA_PREVIEW_MAX_CHARS = 30;
+
+  function truncateForSchema(str) {
+    const s = String(str ?? '').trim();
+    return s.length > SCHEMA_PREVIEW_MAX_CHARS ? s.slice(0, SCHEMA_PREVIEW_MAX_CHARS) + '…' : s;
+  }
+
+  function formatExamplesForPreview(examples, type) {
+    if (!Array.isArray(examples) || examples.length === 0) return '';
+    const isStr = type === 'str';
+    const isListStr = type === 'list_str';
+    if (type === 'list_str' || type === 'list_float') {
+      return examples.map((arr) => {
+        if (!Array.isArray(arr)) return '[]';
+        if (isListStr) return '[' + arr.map((el) => '"' + String(el ?? '').replace(/"/g, '\\"') + '"').join(', ') + ']';
+        return '[' + arr.join(', ') + ']';
+      }).join('; ');
+    }
+    if (isStr) return examples.map((ex) => '"' + String(ex ?? '').replace(/"/g, '\\"') + '"').join(', ');
+    return examples.join(', ');
+  }
+
+  function updateSchemaPreview(syncFromDOM = false) {
+    const tbody = overlay.querySelector('.prompt-schema-preview-tbody');
+    if (!tbody) return;
+    if (syncFromDOM) syncOutputFormatFromDOM();
+    tbody.innerHTML = outputFields.map((f) => {
+      const nameRaw = (f.key || '').trim();
+      const descRaw = (f.description ?? '').trim();
+      const exRaw = formatExamplesForPreview(f.examples, f.type || 'str');
+      const name = escapeHtml(truncateForSchema(nameRaw));
+      const desc = escapeHtml(truncateForSchema(descRaw));
+      const ex = escapeHtml(truncateForSchema(exRaw));
+      const nameTitle = nameRaw ? escapeHtml(nameRaw) : '';
+      const descTitle = descRaw ? escapeHtml(descRaw) : '';
+      const exTitle = exRaw ? escapeHtml(exRaw) : '';
+      return `<tr><td title="${nameTitle}">${name}</td><td title="${descTitle}">${desc}</td><td title="${exTitle}">${ex}</td></tr>`;
+    }).join('');
   }
 
   function renderOneExampleScalar(type, ex, fieldIdx, exIdx) {
@@ -284,12 +343,26 @@ export function openAddPromptModal() {
         renderOutputFormat();
       });
     });
+    updateSchemaPreview();
   }
 
   overlay.querySelector('.prompt-output-add-key').addEventListener('click', () => {
     outputFields.push({ key: '', type: 'str', description: '', examples: [] });
     renderOutputFormat();
   });
+
+  let schemaPreviewDebounce = null;
+  const formatWrap = overlay.querySelector('.prompt-output-format-wrap');
+  if (formatWrap) {
+    formatWrap.addEventListener('input', () => {
+      clearTimeout(schemaPreviewDebounce);
+      schemaPreviewDebounce = setTimeout(() => updateSchemaPreview(true), 120);
+    });
+    formatWrap.addEventListener('change', () => {
+      clearTimeout(schemaPreviewDebounce);
+      updateSchemaPreview(true);
+    });
+  }
 
   function syncSectionsFromDOM() {
     const rows = container.querySelectorAll('.prompt-section');
