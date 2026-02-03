@@ -712,6 +712,8 @@
   gap: 12px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .prompt-step .prompt-sections {
@@ -767,6 +769,8 @@
 .prompt-output-format-wrap {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -775,7 +779,9 @@
 .prompt-output-keys-list {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -790,6 +796,8 @@
 
 .prompt-output-key-block.prompt-field {
   gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .prompt-output-description-wrap {
