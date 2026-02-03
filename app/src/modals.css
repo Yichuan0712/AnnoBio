@@ -79,6 +79,10 @@
 .modal-panel--prompt {
   min-width: min(920px, 92vw);
   max-width: 92vw;
+  max-height: 98vh;
+  min-height: 70vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-panel--dataset {
@@ -457,17 +461,19 @@
 .modal-panel--prompt-detail {
   min-width: min(1200px, 96vw);
   max-width: 96vw;
-  max-height: 85vh;
+  max-height: 98vh;
+  min-height: 70vh;
   display: flex;
   flex-direction: column;
 }
 
-.prompt-detail-body {
+.modal-panel--prompt-detail .modal-body.prompt-detail-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: row;
   gap: 20px;
   overflow: hidden;
-  min-height: 0;
 }
 
 .prompt-detail-col {
@@ -491,6 +497,9 @@
 
 .prompt-detail-col--left .prompt-detail-card {
   flex-shrink: 0;
+  max-height: 26vh;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .prompt-detail-card {
@@ -738,7 +747,7 @@
 }
 
 .prompt-detail-sections-add-row {
-  align-self: flex-end;
+  align-self: flex-start;
 }
 
 .prompt-detail-section-title {
@@ -773,10 +782,11 @@
 
 
 .modal-panel--prompt .modal-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: row;
   gap: 0;
-  min-height: 280px;
   padding: 0;
 }
 
@@ -800,8 +810,48 @@
   overflow: hidden;
 }
 
-.prompt-step .prompt-sections {
+/* Step 1: sections list + Add section in one scrollable block, actions at bottom */
+.prompt-step-1-scroll {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.prompt-step-1-scroll .prompt-sections {
+  flex: 0 0 auto;
+}
+
+.prompt-step-1 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+/* Step 2: keys list + Add field in one scrollable block, actions at bottom */
+.prompt-step-2-format-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prompt-step-2-format-scroll .prompt-output-keys-list {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.prompt-step-2 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+.prompt-step-3 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
 }
 
 .modal-panel--prompt[data-add-prompt-step="1"] .prompt-step-1 {
@@ -823,6 +873,10 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
+}
+
+.prompt-step-2 .prompt-output-return-shape-wrap {
+  flex-shrink: 0;
 }
 
 .prompt-output-return-shape-wrap {

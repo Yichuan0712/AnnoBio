@@ -24,9 +24,11 @@ export function openAddPromptModal() {
           <div class="prompt-step prompt-step-1">
             <p class="prompt-step-label">Step 1 of 3 — Sections</p>
             <p class="prompt-hint">Add named sections and enter your prompt content. You can add or remove sections.</p>
-            <div class="prompt-sections"></div>
-            <div class="prompt-add-section-wrap">
-              <button type="button" class="btn btn-secondary prompt-add-section">+ Add section</button>
+            <div class="prompt-step-scroll prompt-step-1-scroll">
+              <div class="prompt-sections"></div>
+              <div class="prompt-add-section-wrap">
+                <button type="button" class="btn btn-secondary prompt-add-section">+ Add section</button>
+              </div>
             </div>
             <div class="prompt-actions">
               <button type="button" class="btn btn-secondary prompt-btn-next">Next</button>
@@ -41,9 +43,11 @@ export function openAddPromptModal() {
               <label class="prompt-output-return-shape-option"><input type="radio" name="prompt-output-return-shape" value="table" checked /> Table of fields (multiple rows)</label>
             </div>
             <div class="prompt-output-format-wrap">
-              <div class="prompt-output-keys-list"></div>
-              <div class="prompt-output-format-actions">
-                <button type="button" class="btn btn-secondary prompt-output-add-key">+ Add field</button>
+              <div class="prompt-step-scroll prompt-step-2-format-scroll">
+                <div class="prompt-output-keys-list"></div>
+                <div class="prompt-output-format-actions">
+                  <button type="button" class="btn btn-secondary prompt-output-add-key">+ Add field</button>
+                </div>
               </div>
             </div>
             <div class="prompt-actions">

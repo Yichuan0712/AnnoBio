@@ -741,7 +741,64 @@ export function buildWorkflowCanvas(root) {
     }
 
     node.addEventListener('pointerdown', onPointerDown);
+
+    node.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showNodeContextMenu(e.clientX, e.clientY, node);
+    });
+
     return node;
+  }
+
+  function showNodeContextMenu(clientX, clientY, node) {
+    const existing = document.querySelector('.workflow-node-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.className = 'workflow-node-context-menu';
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML = `
+      <button type="button" class="workflow-node-context-item" data-action="placeholder-1" role="menuitem">Action 1 (placeholder)</button>
+      <button type="button" class="workflow-node-context-item" data-action="placeholder-2" role="menuitem">Action 2 (placeholder)</button>
+      <button type="button" class="workflow-node-context-item" data-action="placeholder-3" role="menuitem">Action 3 (placeholder)</button>
+    `;
+
+    const placeholders = {
+      'placeholder-1': () => { /* TODO */ },
+      'placeholder-2': () => { /* TODO */ },
+      'placeholder-3': () => { /* TODO */ },
+    };
+
+    menu.querySelectorAll('.workflow-node-context-item').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = btn.getAttribute('data-action');
+        if (placeholders[action]) placeholders[action]();
+        menu.remove();
+      });
+    });
+
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    const padding = 8;
+    let left = clientX;
+    let top = clientY;
+    if (left + rect.width + padding > window.innerWidth) left = window.innerWidth - rect.width - padding;
+    if (top + rect.height + padding > window.innerHeight) top = window.innerHeight - rect.height - padding;
+    if (left < padding) left = padding;
+    if (top < padding) top = padding;
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+
+    const close = () => {
+      menu.remove();
+      document.removeEventListener('click', close);
+      document.removeEventListener('contextmenu', close);
+    };
+    requestAnimationFrame(() => document.addEventListener('click', close, { once: true }));
+    document.addEventListener('contextmenu', close, { once: true });
   }
 
   function escapeHtml(str) {
