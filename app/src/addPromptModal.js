@@ -14,30 +14,40 @@ export function openAddPromptModal() {
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'new-project-title');
   overlay.innerHTML = `
-    <div class="modal-panel modal-panel--prompt">
+    <div class="modal-panel modal-panel--prompt" data-add-prompt-step="1">
       <div class="modal-header">
         <h2 id="new-project-title" class="modal-title">Add a new prompt</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body">
         <div class="prompt-main">
-          <p class="prompt-hint">Add named fields and enter your prompt content. You can add or remove fields.</p>
-          <div class="prompt-fields"></div>
-          <div class="prompt-add-field-wrap">
-            <button type="button" class="btn btn-secondary prompt-add-field">+ Add field</button>
-          </div>
-          <div class="dataset-meta-wrap prompt-meta-wrap">
-            <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="prompt-name-input">Prompt name</label>
-              <input type="text" id="prompt-name-input" class="dataset-meta-input" placeholder="Prompt name" />
+          <div class="prompt-step prompt-step-1">
+            <p class="prompt-step-label">Step 1 of 2 — Fields</p>
+            <p class="prompt-hint">Add named fields and enter your prompt content. You can add or remove fields.</p>
+            <div class="prompt-fields"></div>
+            <div class="prompt-add-field-wrap">
+              <button type="button" class="btn btn-secondary prompt-add-field">+ Add field</button>
             </div>
-            <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="prompt-note-input">Prompt notes</label>
-              <textarea id="prompt-note-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="This prompt has no notes"></textarea>
+            <div class="prompt-actions">
+              <button type="button" class="btn btn-secondary prompt-btn-next">Next</button>
             </div>
           </div>
-          <div class="prompt-actions">
-            <button type="button" class="btn btn-secondary prompt-generate-node">Add this prompt</button>
+          <div class="prompt-step prompt-step-2">
+            <p class="prompt-step-label">Step 2 of 2 — Name & notes</p>
+            <div class="dataset-meta-wrap prompt-meta-wrap">
+              <div class="dataset-meta-field">
+                <label class="dataset-meta-label" for="prompt-name-input">Prompt name</label>
+                <input type="text" id="prompt-name-input" class="dataset-meta-input" placeholder="Prompt name" />
+              </div>
+              <div class="dataset-meta-field">
+                <label class="dataset-meta-label" for="prompt-note-input">Prompt notes</label>
+                <textarea id="prompt-note-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="This prompt has no notes"></textarea>
+              </div>
+            </div>
+            <div class="prompt-actions">
+              <button type="button" class="btn btn-secondary prompt-btn-back">Back</button>
+              <button type="button" class="btn btn-secondary prompt-generate-node">Add this prompt</button>
+            </div>
           </div>
         </div>
         <div class="prompt-preview-wrap">
@@ -48,10 +58,18 @@ export function openAddPromptModal() {
     </div>
   `;
 
+  const panel = overlay.querySelector('.modal-panel--prompt');
   const container = overlay.querySelector('.prompt-fields');
   const addBtn = overlay.querySelector('.prompt-add-field');
   const previewEl = overlay.querySelector('.prompt-preview');
   let fields = [{ name: '', content: '' }];
+
+  function goToStep(step) {
+    panel.setAttribute('data-add-prompt-step', String(step));
+  }
+
+  overlay.querySelector('.prompt-btn-next').addEventListener('click', () => goToStep(2));
+  overlay.querySelector('.prompt-btn-back').addEventListener('click', () => goToStep(1));
 
   function syncFieldsFromDOM() {
     const rows = container.querySelectorAll('.prompt-field');
