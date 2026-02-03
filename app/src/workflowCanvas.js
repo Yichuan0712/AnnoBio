@@ -3,16 +3,49 @@
  * Listens for workflow:add-prompt-node to add prompt nodes.
  */
 
+const MIN_CONTENT_PADDING = 200;
+
 export function buildWorkflowCanvas(root) {
   const canvas = document.createElement('div');
   canvas.className = 'workflow-canvas';
 
+  const scrollWrapper = document.createElement('div');
+  scrollWrapper.className = 'workflow-canvas__scroll';
+
+  const contentInner = document.createElement('div');
+  contentInner.className = 'workflow-canvas__inner';
+
   const nodesLayer = document.createElement('div');
   nodesLayer.className = 'workflow-canvas__nodes';
-  canvas.appendChild(nodesLayer);
+
+  contentInner.appendChild(nodesLayer);
+  scrollWrapper.appendChild(contentInner);
+  canvas.appendChild(scrollWrapper);
 
   let nodeCount = 0;
   const STAGGER = 36;
+
+  function updateContentSize() {
+    const nodes = nodesLayer.querySelectorAll('.workflow-node--prompt');
+    const minW = scrollWrapper.clientWidth || 800;
+    const minH = scrollWrapper.clientHeight || 600;
+    let maxRight = 0;
+    let maxBottom = 0;
+    nodes.forEach((n) => {
+      const left = parseFloat(n.style.left) || 0;
+      const top = parseFloat(n.style.top) || 0;
+      maxRight = Math.max(maxRight, left + (n.offsetWidth || 0));
+      maxBottom = Math.max(maxBottom, top + (n.offsetHeight || 0));
+    });
+    const width = Math.max(minW, maxRight + MIN_CONTENT_PADDING);
+    const height = Math.max(minH, maxBottom + MIN_CONTENT_PADDING);
+    contentInner.style.width = `${width}px`;
+    contentInner.style.height = `${height}px`;
+    nodesLayer.style.width = `${width}px`;
+    nodesLayer.style.minHeight = `${height}px`;
+  }
+
+  requestAnimationFrame(() => updateContentSize());
 
   function sectionsToViewHtml(sectionsList) {
     if (!sectionsList || sectionsList.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
@@ -297,6 +330,7 @@ export function buildWorkflowCanvas(root) {
       e.stopPropagation();
       e.preventDefault();
       node.remove();
+      updateContentSize();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     });
 
@@ -326,11 +360,14 @@ export function buildWorkflowCanvas(root) {
       if (e.target.closest('.workflow-node__delete')) return;
       e.preventDefault();
       const rect = node.getBoundingClientRect();
-      const parentRect = nodesLayer.getBoundingClientRect();
+      const scrollContainer = nodesLayer.parentElement?.parentElement;
+      const parentRect = scrollContainer ? scrollContainer.getBoundingClientRect() : nodesLayer.getBoundingClientRect();
+      const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
+      const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
-      nodeStartLeft = rect.left - parentRect.left + nodesLayer.scrollLeft;
-      nodeStartTop = rect.top - parentRect.top + nodesLayer.scrollTop;
+      nodeStartLeft = rect.left - parentRect.left + scrollLeft;
+      nodeStartTop = rect.top - parentRect.top + scrollTop;
       node.classList.add('workflow-node--dragging');
       document.addEventListener('pointermove', onPointerMove);
       document.addEventListener('pointerup', onPointerUp, { once: true });
@@ -346,6 +383,7 @@ export function buildWorkflowCanvas(root) {
     function onPointerUp() {
       node.classList.remove('workflow-node--dragging');
       document.removeEventListener('pointermove', onPointerMove);
+      updateContentSize();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
 
@@ -362,6 +400,7 @@ export function buildWorkflowCanvas(root) {
   document.addEventListener('workflow:add-prompt-node', (e) => {
     const { name = '', note = '', sections = [], outputFormat } = e.detail || {};
     createPromptNode({ name, note, sections, outputFormat });
+    updateContentSize();
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
@@ -407,6 +446,7 @@ export function buildWorkflowCanvas(root) {
         top: n.top,
       });
     });
+    updateContentSize();
   }
 
   function setOnCanvasChange(fn) {
