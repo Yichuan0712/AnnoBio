@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, screen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import started from 'electron-squirrel-startup';
@@ -70,9 +70,15 @@ function stopPythonBackend() {
 }
 
 const createWindow = () => {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+  const width = Math.max(640, Math.min(1920, Math.round(screenWidth * 0.85)));
+  const height = Math.max(480, Math.min(1080, Math.round(screenHeight * 0.88)));
   const mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width,
+    height,
+    minWidth: 640,
+    minHeight: 480,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },

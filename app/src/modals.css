@@ -14,9 +14,9 @@
   background: var(--bg-bar);
   border: 1px solid var(--border);
   box-shadow: 0 8px 32px var(--shadow);
-  min-width: 360px;
-  max-width: 90vw;
-  max-height: 80vh;
+  min-width: min(360px, 92vw);
+  max-width: 92vw;
+  max-height: 85vh;
   display: flex;
   flex-direction: column;
 }
@@ -77,13 +77,13 @@
 }
 
 .modal-panel--prompt {
-  min-width: 920px;
-  max-width: 90vw;
+  min-width: min(920px, 92vw);
+  max-width: 92vw;
 }
 
 .modal-panel--dataset {
-  min-width: 640px;
-  max-width: 90vw;
+  min-width: min(640px, 92vw);
+  max-width: 92vw;
 }
 
 .modal-body--dataset {
@@ -310,8 +310,8 @@
 
 /* My credentials modal */
 .modal-panel--credentials {
-  min-width: 560px;
-  max-width: 90vw;
+  min-width: min(560px, 92vw);
+  max-width: 92vw;
 }
 
 .modal-body--credentials {
@@ -420,8 +420,8 @@
 
 /* Add a new agent modal */
 .modal-panel--agent {
-  min-width: 400px;
-  max-width: 90vw;
+  min-width: min(400px, 92vw);
+  max-width: 92vw;
 }
 
 .modal-body--agent {
@@ -455,7 +455,7 @@
 
 /* Prompt details modal (double-click node): view only until Edit → Save/Cancel */
 .modal-panel--prompt-detail {
-  min-width: 1200px;
+  min-width: min(1200px, 96vw);
   max-width: 96vw;
   max-height: 85vh;
   display: flex;
@@ -481,12 +481,12 @@
 
 .prompt-detail-col--left {
   flex: 0 1 44%;
-  max-width: 680px;
+  max-width: min(680px, 44vw);
 }
 
 .prompt-detail-col--right {
   flex: 1 1 56%;
-  min-width: 280px;
+  min-width: min(280px, 35vw);
 }
 
 .prompt-detail-col--left .prompt-detail-card {
