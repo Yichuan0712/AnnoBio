@@ -73,6 +73,11 @@ export function buildWorkflowCanvas(root) {
 
   const SCHEMA_PREVIEW_MAX_CHARS = 30;
 
+  function escapeAttr(str) {
+    const s = String(str ?? '');
+    return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  }
+
   function truncateForSchema(str) {
     const s = String(str ?? '').trim();
     return s.length > SCHEMA_PREVIEW_MAX_CHARS ? s.slice(0, SCHEMA_PREVIEW_MAX_CHARS) + '…' : s;
@@ -101,10 +106,10 @@ export function buildWorkflowCanvas(root) {
       const name = escapeHtml(truncateForSchema(nameRaw));
       const desc = escapeHtml(truncateForSchema(descRaw));
       const ex = escapeHtml(truncateForSchema(exRaw));
-      const nameTitle = escapeHtml(nameRaw);
-      const descTitle = escapeHtml(descRaw);
-      const exTitle = escapeHtml(exRaw);
-      return `<tr><td title="${nameTitle}">${name}</td><td title="${descTitle}">${desc}</td><td title="${exTitle}">${ex}</td></tr>`;
+      const nameFull = escapeAttr(nameRaw);
+      const descFull = escapeAttr(descRaw);
+      const exFull = escapeAttr(exRaw);
+      return `<tr><td class="prompt-detail-schema-cell" data-fulltext="${nameFull}">${name}</td><td class="prompt-detail-schema-cell" data-fulltext="${descFull}">${desc}</td><td class="prompt-detail-schema-cell" data-fulltext="${exFull}">${ex}</td></tr>`;
     }).join('');
     return `<div class="prompt-schema-preview-table-wrap">
   <table class="prompt-schema-preview-table" aria-readonly="true">
@@ -366,6 +371,55 @@ export function buildWorkflowCanvas(root) {
     const schemaWrap = overlay.querySelector('.prompt-detail-schema-wrap');
     const schemaView = overlay.querySelector('.prompt-detail-schema-view');
     const schemaEdit = overlay.querySelector('.prompt-detail-schema-edit');
+
+    const schemaTooltip = document.createElement('div');
+    schemaTooltip.className = 'prompt-detail-schema-tooltip';
+    schemaTooltip.setAttribute('role', 'tooltip');
+    schemaTooltip.hidden = true;
+    overlay.appendChild(schemaTooltip);
+
+    function decodeAttr(s) {
+      if (s == null) return '';
+      return String(s)
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
+    }
+    schemaWrap.addEventListener('mouseover', (e) => {
+      const cell = e.target.closest('.prompt-detail-schema-cell');
+      if (!cell) {
+        schemaTooltip.hidden = true;
+        return;
+      }
+      const raw = cell.getAttribute('data-fulltext');
+      if (raw == null || raw === '') {
+        schemaTooltip.hidden = true;
+        return;
+      }
+      schemaTooltip.textContent = decodeAttr(raw);
+      schemaTooltip.hidden = false;
+    });
+    schemaWrap.addEventListener('mouseout', (e) => {
+      if (!e.relatedTarget || !schemaWrap.contains(e.relatedTarget)) {
+        schemaTooltip.hidden = true;
+      }
+    });
+    schemaWrap.addEventListener('mousemove', (e) => {
+      if (schemaTooltip.hidden) return;
+      const gap = 10;
+      let left = e.clientX + gap;
+      let top = e.clientY + gap;
+      schemaTooltip.style.left = `${left}px`;
+      schemaTooltip.style.top = `${top}px`;
+      const rect = schemaTooltip.getBoundingClientRect();
+      if (rect.right > window.innerWidth) left = e.clientX - rect.width - gap;
+      if (rect.bottom > window.innerHeight) top = e.clientY - rect.height - gap;
+      if (left < gap) left = gap;
+      if (top < gap) top = gap;
+      schemaTooltip.style.left = `${left}px`;
+      schemaTooltip.style.top = `${top}px`;
+    });
     const schemaBtnEdit = overlay.querySelector('.prompt-detail-schema-btn-edit');
     const schemaEditBtns = overlay.querySelector('.prompt-detail-schema-edit-btns');
     const schemaBtnCancel = overlay.querySelector('.prompt-detail-schema-btn-cancel');

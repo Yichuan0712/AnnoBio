@@ -1221,6 +1221,28 @@
   cursor: default;
 }
 
+/* Custom tooltip for prompt detail schema table (full text on hover) */
+.prompt-detail-schema-tooltip {
+  position: fixed;
+  z-index: 3000;
+  max-width: min(400px, 90vw);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--shadow);
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
+}
+
+.prompt-detail-schema-wrap {
+  position: relative;
+}
+
 .prompt-schema-wrap {
   width: 380px;
   min-width: 340px;

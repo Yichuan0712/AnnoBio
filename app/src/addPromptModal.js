@@ -158,6 +158,11 @@ export function openAddPromptModal() {
 
   const SCHEMA_PREVIEW_MAX_CHARS = 30;
 
+  function escapeAttr(str) {
+    const s = String(str ?? '');
+    return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  }
+
   function truncateForSchema(str) {
     const s = String(str ?? '').trim();
     return s.length > SCHEMA_PREVIEW_MAX_CHARS ? s.slice(0, SCHEMA_PREVIEW_MAX_CHARS) + '…' : s;
@@ -189,11 +194,73 @@ export function openAddPromptModal() {
       const name = escapeHtml(truncateForSchema(nameRaw));
       const desc = escapeHtml(truncateForSchema(descRaw));
       const ex = escapeHtml(truncateForSchema(exRaw));
-      const nameTitle = nameRaw ? escapeHtml(nameRaw) : '';
-      const descTitle = descRaw ? escapeHtml(descRaw) : '';
-      const exTitle = exRaw ? escapeHtml(exRaw) : '';
-      return `<tr><td title="${nameTitle}">${name}</td><td title="${descTitle}">${desc}</td><td title="${exTitle}">${ex}</td></tr>`;
+      const nameFull = escapeAttr(nameRaw);
+      const descFull = escapeAttr(descRaw);
+      const exFull = escapeAttr(exRaw);
+      return `<tr><td class="prompt-detail-schema-cell" data-fulltext="${nameFull}">${name}</td><td class="prompt-detail-schema-cell" data-fulltext="${descFull}">${desc}</td><td class="prompt-detail-schema-cell" data-fulltext="${exFull}">${ex}</td></tr>`;
     }).join('');
+  }
+
+  function decodeAttr(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>');
+  }
+
+  function initSchemaPreviewTooltip() {
+    const schemaWrap = overlay.querySelector('.prompt-schema-preview-wrap');
+    if (!schemaWrap) return;
+    let tooltip = overlay.querySelector('.prompt-detail-schema-tooltip');
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.className = 'prompt-detail-schema-tooltip';
+      tooltip.setAttribute('role', 'tooltip');
+      tooltip.hidden = true;
+      overlay.appendChild(tooltip);
+    }
+    const showTooltip = (e) => {
+      const cell = e.target.closest('.prompt-detail-schema-cell');
+      if (!cell) {
+        tooltip.hidden = true;
+        return;
+      }
+      const raw = cell.getAttribute('data-fulltext');
+      if (raw == null || raw === '') {
+        tooltip.hidden = true;
+        return;
+      }
+      tooltip.textContent = decodeAttr(raw);
+      tooltip.hidden = false;
+    };
+    const hideTooltip = (e) => {
+      if (!e.relatedTarget || !schemaWrap.contains(e.relatedTarget)) {
+        tooltip.hidden = true;
+      }
+    };
+    const moveTooltip = (e) => {
+      if (tooltip.hidden) return;
+      const gap = 10;
+      let left = e.clientX + gap;
+      let top = e.clientY + gap;
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+      const rect = tooltip.getBoundingClientRect();
+      if (rect.right > window.innerWidth) left = e.clientX - rect.width - gap;
+      if (rect.bottom > window.innerHeight) top = e.clientY - rect.height - gap;
+      if (left < gap) left = gap;
+      if (top < gap) top = gap;
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+    };
+    schemaWrap.removeEventListener('mouseover', showTooltip);
+    schemaWrap.removeEventListener('mouseout', hideTooltip);
+    schemaWrap.removeEventListener('mousemove', moveTooltip);
+    schemaWrap.addEventListener('mouseover', showTooltip);
+    schemaWrap.addEventListener('mouseout', hideTooltip);
+    schemaWrap.addEventListener('mousemove', moveTooltip);
   }
 
   function renderOneExampleScalar(type, ex, fieldIdx, exIdx) {
@@ -473,4 +540,5 @@ export function openAddPromptModal() {
 
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
+  initSchemaPreviewTooltip();
 }
