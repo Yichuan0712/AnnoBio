@@ -83,8 +83,7 @@ export function buildWorkflowCanvas(root) {
             <div class="prompt-detail-sections-footer">
               <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
               <div class="prompt-detail-sections-edit-btns">
-                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-save-node">Save to this node</button>
-                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-save-new">Save as new node</button>
+                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-save-node">Save</button>
                 <button type="button" class="btn btn-secondary prompt-detail-sections-btn-cancel">Cancel</button>
               </div>
             </div>
@@ -160,7 +159,6 @@ export function buildWorkflowCanvas(root) {
     const sectionsEditBtns = overlay.querySelector('.prompt-detail-sections-edit-btns');
     const sectionsBtnCancel = overlay.querySelector('.prompt-detail-sections-btn-cancel');
     const sectionsBtnSaveNode = overlay.querySelector('.prompt-detail-sections-btn-save-node');
-    const sectionsBtnSaveNew = overlay.querySelector('.prompt-detail-sections-btn-save-new');
 
     function getSectionsFromEditContainer() {
       const rows = sectionsEdit.querySelectorAll('.prompt-detail-section-edit-row');
@@ -247,10 +245,6 @@ export function buildWorkflowCanvas(root) {
       sectionsView.innerHTML = sectionsToViewHtml(newSections.length ? newSections : []);
       showSectionsView();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    });
-    sectionsBtnSaveNew.addEventListener('click', () => {
-      // TODO: save as new node
-      showSectionsView();
     });
 
     overlay.querySelector('.modal-close').addEventListener('click', () => {
