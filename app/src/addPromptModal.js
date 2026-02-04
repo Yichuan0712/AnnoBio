@@ -19,7 +19,7 @@ export function openAddPromptModal(workflowCanvasApi) {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--prompt" data-add-prompt-step="1">
       <div class="modal-header">
-        <h2 id="new-project-title" class="modal-title">Add a new prompt</h2>
+        <h2 id="new-project-title" class="modal-title">Create a new prompt</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body">
@@ -30,7 +30,7 @@ export function openAddPromptModal(workflowCanvasApi) {
             <div class="prompt-step-scroll prompt-step-1-scroll">
               <div class="prompt-sections"></div>
               <div class="prompt-add-section-wrap">
-                <button type="button" class="btn btn-secondary prompt-add-section">+ Add section</button>
+                <button type="button" class="btn btn-secondary prompt-add-section">+ Create section</button>
               </div>
             </div>
             <div class="prompt-actions">
@@ -49,7 +49,7 @@ export function openAddPromptModal(workflowCanvasApi) {
               <div class="prompt-step-scroll prompt-step-2-format-scroll">
                 <div class="prompt-output-keys-list"></div>
                 <div class="prompt-output-format-actions">
-                  <button type="button" class="btn btn-secondary prompt-output-add-key">+ Add field</button>
+                  <button type="button" class="btn btn-secondary prompt-output-add-key">+ Create field</button>
                 </div>
               </div>
             </div>
@@ -73,7 +73,7 @@ export function openAddPromptModal(workflowCanvasApi) {
             </div>
             <div class="prompt-actions">
               <button type="button" class="btn btn-secondary prompt-btn-back">Back</button>
-              <button type="button" class="btn btn-secondary prompt-generate-node">Add this prompt</button>
+              <button type="button" class="btn btn-secondary prompt-generate-node">Create this prompt</button>
             </div>
           </div>
         </div>
@@ -310,7 +310,7 @@ export function openAddPromptModal(workflowCanvasApi) {
     return `<div class="prompt-output-list-example-row" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">
         ${listInner}
         <div class="prompt-output-list-example-actions">
-          <button type="button" class="btn btn-secondary prompt-output-add-list-element" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">+ Add item</button>
+          <button type="button" class="btn btn-secondary prompt-output-add-list-element" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">+ Create item</button>
           <button type="button" class="prompt-field-remove prompt-output-del-example" aria-label="Remove example" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">×</button>
         </div>
       </div>`;
@@ -359,7 +359,7 @@ export function openAddPromptModal(workflowCanvasApi) {
         });
       }
       html += `</div>
-          <button type="button" class="btn btn-secondary prompt-output-add-example" data-key-index="${fieldIdx}">+ Add example</button>
+          <button type="button" class="btn btn-secondary prompt-output-add-example" data-key-index="${fieldIdx}">+ Create example</button>
         </div>
       </div>`;
     });

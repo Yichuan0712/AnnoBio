@@ -5,6 +5,9 @@
  */
 
 const MIN_CONTENT_PADDING = 200;
+/** Minimum canvas content size (width, height) so there is plenty of room to work and zoom. */
+const MIN_CANVAS_WIDTH = 4000;
+const MIN_CANVAS_HEIGHT = 2600;
 
 /** Edge type for prompt → prompt (e.g. "new version" link). Add more types here as needed. */
 const EDGE_TYPE_PROMPT_TO_PROMPT = 'prompt-to-prompt';
@@ -22,6 +25,12 @@ export function buildWorkflowCanvas(root) {
 
   const scrollWrapper = document.createElement('div');
   scrollWrapper.className = 'workflow-canvas__scroll';
+
+  const zoomOuter = document.createElement('div');
+  zoomOuter.className = 'workflow-canvas__zoom-outer';
+
+  const scaleWrapper = document.createElement('div');
+  scaleWrapper.className = 'workflow-canvas__scale';
 
   const contentInner = document.createElement('div');
   contentInner.className = 'workflow-canvas__inner';
@@ -51,8 +60,49 @@ export function buildWorkflowCanvas(root) {
 
   contentInner.appendChild(edgesLayer);
   contentInner.appendChild(nodesLayer);
-  scrollWrapper.appendChild(contentInner);
+  scaleWrapper.appendChild(contentInner);
+  zoomOuter.appendChild(scaleWrapper);
+  scrollWrapper.appendChild(zoomOuter);
   canvas.appendChild(scrollWrapper);
+
+  let panStartScrollLeft = 0;
+  let panStartScrollTop = 0;
+  let panStartClientX = 0;
+  let panStartClientY = 0;
+
+  function onPanMove(e) {
+    scrollWrapper.scrollLeft = panStartScrollLeft + (panStartClientX - e.clientX);
+    scrollWrapper.scrollTop = panStartScrollTop + (panStartClientY - e.clientY);
+  }
+  function onPanEnd() {
+    scrollWrapper.classList.remove('workflow-canvas__scroll--panning');
+    document.removeEventListener('pointermove', onPanMove);
+    document.removeEventListener('pointerup', onPanEnd);
+    document.removeEventListener('pointercancel', onPanEnd);
+  }
+  scrollWrapper.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('.workflow-node') || e.target.closest('.workflow-canvas__zoom-toolbar')) return;
+    e.preventDefault();
+    panStartScrollLeft = scrollWrapper.scrollLeft;
+    panStartScrollTop = scrollWrapper.scrollTop;
+    panStartClientX = e.clientX;
+    panStartClientY = e.clientY;
+    scrollWrapper.classList.add('workflow-canvas__scroll--panning');
+    document.addEventListener('pointermove', onPanMove);
+    document.addEventListener('pointerup', onPanEnd, { once: true });
+    document.addEventListener('pointercancel', onPanEnd, { once: true });
+  });
+
+  let zoomLevel = 1;
+  const MIN_ZOOM = 0.5;
+  const MAX_ZOOM = 2;
+  const ZOOM_STEP = 0.05;
+
+  function applyZoom() {
+    scaleWrapper.style.transformOrigin = '0 0';
+    scaleWrapper.style.transform = `scale(${zoomLevel})`;
+  }
 
   let nodeCount = 0;
   const STAGGER = 36;
@@ -370,9 +420,11 @@ export function buildWorkflowCanvas(root) {
   edgesLayer.addEventListener('click', onEdgesLayerClick);
 
   function updateContentSize() {
-    const nodes = nodesLayer.querySelectorAll('.workflow-node--prompt');
-    const minW = scrollWrapper.clientWidth || 800;
-    const minH = scrollWrapper.clientHeight || 600;
+    const nodes = nodesLayer.querySelectorAll('.workflow-node');
+    const viewportW = scrollWrapper.clientWidth || 800;
+    const viewportH = scrollWrapper.clientHeight || 600;
+    const minW = Math.max(viewportW, MIN_CANVAS_WIDTH);
+    const minH = Math.max(viewportH, MIN_CANVAS_HEIGHT);
     let maxRight = 0;
     let maxBottom = 0;
     nodes.forEach((n) => {
@@ -387,9 +439,54 @@ export function buildWorkflowCanvas(root) {
     contentInner.style.height = `${height}px`;
     nodesLayer.style.width = `${width}px`;
     nodesLayer.style.minHeight = `${height}px`;
+    scaleWrapper.style.width = `${width}px`;
+    scaleWrapper.style.height = `${height}px`;
+    zoomOuter.style.width = `${width * zoomLevel}px`;
+    zoomOuter.style.height = `${height * zoomLevel}px`;
   }
 
-  requestAnimationFrame(() => updateContentSize());
+  const zoomToolbar = document.createElement('div');
+  zoomToolbar.className = 'workflow-canvas__zoom-toolbar';
+  zoomToolbar.setAttribute('role', 'toolbar');
+  zoomToolbar.setAttribute('aria-label', 'Canvas zoom');
+  zoomToolbar.innerHTML = `
+    <button type="button" class="workflow-canvas__zoom-btn" data-zoom="out" aria-label="Zoom out">−</button>
+    <span class="workflow-canvas__zoom-label" aria-live="polite">100%</span>
+    <button type="button" class="workflow-canvas__zoom-btn" data-zoom="in" aria-label="Zoom in">+</button>
+  `;
+  const zoomLabelEl = zoomToolbar.querySelector('.workflow-canvas__zoom-label');
+  function updateZoomLabel() {
+    zoomLabelEl.textContent = Math.round(zoomLevel * 100) + '%';
+  }
+  zoomToolbar.querySelector('[data-zoom="out"]').addEventListener('click', () => {
+    zoomLevel = Math.max(MIN_ZOOM, zoomLevel - ZOOM_STEP);
+    applyZoom();
+    updateContentSize();
+    updateZoomLabel();
+  });
+  zoomToolbar.querySelector('[data-zoom="in"]').addEventListener('click', () => {
+    zoomLevel = Math.min(MAX_ZOOM, zoomLevel + ZOOM_STEP);
+    applyZoom();
+    updateContentSize();
+    updateZoomLabel();
+  });
+  canvas.appendChild(zoomToolbar);
+
+  scrollWrapper.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+    zoomLevel = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomLevel + delta));
+    applyZoom();
+    updateContentSize();
+    updateZoomLabel();
+  }, { passive: false });
+
+  requestAnimationFrame(() => {
+    applyZoom();
+    updateContentSize();
+    updateZoomLabel();
+  });
 
   function sectionsToViewHtml(sectionsList) {
     if (!sectionsList || sectionsList.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
@@ -689,7 +786,7 @@ export function buildWorkflowCanvas(root) {
       if (!list.length) list = [{ name: '', content: '' }];
       sectionsEdit.innerHTML =
         buildSectionsEditContent(list) +
-        `<button type="button" class="btn btn-secondary prompt-detail-sections-add-row">+ Add section</button>`;
+        `<button type="button" class="btn btn-secondary prompt-detail-sections-add-row">+ Create section</button>`;
       sectionsEdit.querySelector('.prompt-detail-sections-add-row').addEventListener('click', () => {
         const addBtn = sectionsEdit.querySelector('.prompt-detail-sections-add-row');
         const newHtml = `
@@ -860,7 +957,7 @@ export function buildWorkflowCanvas(root) {
       }
       const lineBlocks = parts.map((p) => `<div class="prompt-output-list-line">${p}</div>`).join('');
       const listInner = `<div class="prompt-output-list-elements prompt-output-list-elements--stacked"><span class="prompt-output-list-bracket">[</span>${lineBlocks}<span class="prompt-output-list-bracket">]</span></div>`;
-      return `<div class="prompt-output-list-example-row" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">${listInner}<div class="prompt-output-list-example-actions"><button type="button" class="btn btn-secondary prompt-output-add-list-element" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">+ Add item</button><button type="button" class="prompt-field-remove prompt-output-del-example" aria-label="Remove example" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">×</button></div></div>`;
+      return `<div class="prompt-output-list-example-row" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">${listInner}<div class="prompt-output-list-example-actions"><button type="button" class="btn btn-secondary prompt-output-add-list-element" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">+ Create item</button><button type="button" class="prompt-field-remove prompt-output-del-example" aria-label="Remove example" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">×</button></div></div>`;
     }
 
     function buildSchemaFieldBlockDetail(item, fieldIdx) {
@@ -900,7 +997,7 @@ export function buildWorkflowCanvas(root) {
         <div class="prompt-output-examples-wrap">
           <p class="prompt-output-examples-label">Examples for this field:</p>
           <div class="prompt-output-examples-list">${examplesHtml}</div>
-          <button type="button" class="btn btn-secondary prompt-output-add-example" data-key-index="${fieldIdx}">+ Add example</button>
+          <button type="button" class="btn btn-secondary prompt-output-add-example" data-key-index="${fieldIdx}">+ Create example</button>
         </div>
       </div>`;
     }
@@ -961,7 +1058,7 @@ export function buildWorkflowCanvas(root) {
         <div class="prompt-output-format-wrap">
           <div class="prompt-detail-schema-keys-list">${currentSchemaFields.map((item, i) => buildSchemaFieldBlockDetail(item, i)).join('')}</div>
           <div class="prompt-output-format-actions">
-            <button type="button" class="btn btn-secondary prompt-detail-schema-add-key">+ Add field</button>
+            <button type="button" class="btn btn-secondary prompt-detail-schema-add-key">+ Create field</button>
           </div>
         </div>
       `;
@@ -1292,7 +1389,7 @@ export function buildWorkflowCanvas(root) {
     if (!hasNote) node.classList.add('workflow-node--no-body');
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="5" height="5" rx="0.5"/><rect x="8" y="1" width="5" height="5" rx="0.5"/><rect x="1" y="8" width="5" height="5" rx="0.5"/><rect x="8" y="8" width="5" height="5" rx="0.5"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="12" height="12" rx="0.5"/><line x1="1" y1="4" x2="13" y2="4"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="1" y1="10" x2="13" y2="10"/><line x1="4.5" y1="1" x2="4.5" y2="13"/><line x1="8" y1="1" x2="8" y2="13"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
@@ -1345,6 +1442,13 @@ export function buildWorkflowCanvas(root) {
     }
     node.addEventListener('pointerdown', onPointerDown);
 
+    node.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showNodeContextMenu(e.clientX, e.clientY, node);
+    });
+
     return node;
   }
 
@@ -1356,15 +1460,20 @@ export function buildWorkflowCanvas(root) {
     const existing = document.querySelector('.workflow-node-context-menu');
     if (existing) existing.remove();
 
+    const isDataset = node.dataset.nodeType === 'dataset';
     const menu = document.createElement('div');
     menu.className = 'workflow-node-context-menu';
     menu.setAttribute('role', 'menu');
-    menu.innerHTML = `
-      <button type="button" class="workflow-node-context-item" data-action="duplicate" role="menuitem">Duplicate this prompt</button>
-      <button type="button" class="workflow-node-context-item" data-action="new-version" role="menuitem">Manually add new version of this prompt</button>
-      <button type="button" class="workflow-node-context-item" data-action="placeholder-2" role="menuitem">Action 2 (placeholder)</button>
-      <button type="button" class="workflow-node-context-item" data-action="placeholder-3" role="menuitem">Action 3 (placeholder)</button>
-    `;
+    if (isDataset) {
+      menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item" data-action="sample-as-subset" role="menuitem">Sample as subset</button>
+      `;
+    } else {
+      menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item" data-action="duplicate" role="menuitem">Duplicate this prompt</button>
+        <button type="button" class="workflow-node-context-item" data-action="new-version" role="menuitem">Add new version of this prompt</button>
+      `;
+    }
 
     function duplicateNode(isNewVersion = false) {
       const left = parseFloat(node.style.left) || 0;
@@ -1409,8 +1518,7 @@ export function buildWorkflowCanvas(root) {
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         }
       },
-      'placeholder-2': () => { /* TODO */ },
-      'placeholder-3': () => { /* TODO */ },
+      'sample-as-subset': () => { /* TODO: sample dataset and create subset */ },
     };
 
     menu.querySelectorAll('.workflow-node-context-item').forEach((btn) => {

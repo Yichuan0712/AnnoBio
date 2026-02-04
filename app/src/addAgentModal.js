@@ -10,7 +10,7 @@ export function openAddAgentModal() {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--agent">
       <div class="modal-header">
-        <h2 id="new-agent-title" class="modal-title">Add a new agent</h2>
+        <h2 id="new-agent-title" class="modal-title">Create a new agent</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body modal-body--agent">
@@ -34,7 +34,7 @@ export function openAddAgentModal() {
             </select>
           </div>
           <div class="agent-form-actions">
-            <button type="button" class="btn btn-secondary agent-add-btn">Add this agent</button>
+            <button type="button" class="btn btn-secondary agent-add-btn">Create this agent</button>
           </div>
         </div>
       </div>

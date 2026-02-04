@@ -44,7 +44,7 @@ export function openAddDatasetModal() {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--dataset">
       <div class="modal-header">
-        <h2 id="new-dataset-title" class="modal-title">Add a new dataset</h2>
+        <h2 id="new-dataset-title" class="modal-title">Create a new dataset</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body modal-body--dataset">
@@ -65,7 +65,7 @@ export function openAddDatasetModal() {
             </div>
           </div>
           <div class="dataset-main-footer">
-            <button type="button" class="btn btn-secondary dataset-add-btn">Add this dataset</button>
+            <button type="button" class="btn btn-secondary dataset-add-btn">Create this dataset</button>
           </div>
         </div>
         <div class="dataset-preview-wrap">

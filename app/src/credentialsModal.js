@@ -34,7 +34,7 @@ export function openCredentialsModal() {
           </div>
         </div>
         <div class="credentials-add">
-          <h3 class="credentials-section-title">Add credential</h3>
+          <h3 class="credentials-section-title">Create credential</h3>
           <div class="credentials-add-row">
             <div class="credentials-add-field">
               <label class="dataset-meta-label" for="credentials-llm-select">LLM</label>
@@ -51,7 +51,7 @@ export function openCredentialsModal() {
             </div>
             <div class="credentials-add-field credentials-add-field--btn">
               <label class="dataset-meta-label" aria-hidden="true">&nbsp;</label>
-              <button type="button" class="btn btn-secondary credentials-add-btn">Add to table</button>
+              <button type="button" class="btn btn-secondary credentials-add-btn">Create and add to table</button>
             </div>
           </div>
         </div>

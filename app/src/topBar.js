@@ -33,7 +33,7 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   const addMenuBtn = document.createElement('button');
   addMenuBtn.className = 'menu-item has-submenu';
   addMenuBtn.type = 'button';
-  addMenuBtn.textContent = 'Add';
+  addMenuBtn.textContent = 'Create';
   const addDrop = document.createElement('div');
   addDrop.className = 'menu-dropdown';
   addDrop.innerHTML = `
