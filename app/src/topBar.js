@@ -38,7 +38,7 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   addDrop.className = 'menu-dropdown';
   addDrop.innerHTML = `
     <button type="button" class="menu-option menu-option--add" data-action="new-prompt" disabled>New prompt...</button>
-    <button type="button" class="menu-option menu-option--add" data-action="new-dataset" disabled>New dataset...</button>
+    <button type="button" class="menu-option menu-option--add" data-action="new-dataset" disabled>New source dataset...</button>
     <button type="button" class="menu-option menu-option--add" data-action="new-agent" disabled>New agent...</button>
   `;
   const addOptions = addDrop.querySelectorAll('.menu-option--add');

@@ -1,5 +1,5 @@
 /**
- * "Add a new dataset" modal: import CSV/TSV file, show parsed headers.
+ * "Add a new source dataset" modal: import CSV/TSV file, show parsed headers.
  */
 
 function parseCsvLine(line) {
@@ -36,7 +36,7 @@ function parseTsvLine(line) {
 const MAX_PREVIEW_ROWS = 10;
 const MAX_CELL_CHARS = 30;
 
-export function openAddDatasetModal() {
+export function openAddDatasetModal(workflowCanvasApi) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -44,7 +44,7 @@ export function openAddDatasetModal() {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--dataset">
       <div class="modal-header">
-        <h2 id="new-dataset-title" class="modal-title">Create a new dataset</h2>
+        <h2 id="new-dataset-title" class="modal-title">Create a new source dataset</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body modal-body--dataset">
@@ -56,16 +56,17 @@ export function openAddDatasetModal() {
           </div>
           <div class="dataset-meta-wrap">
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="dataset-name-input">Dataset name</label>
+              <label class="dataset-meta-label" for="dataset-name-input">Source dataset name</label>
               <input type="text" id="dataset-name-input" class="dataset-meta-input" placeholder="File name" />
             </div>
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="dataset-notes-input">Dataset notes</label>
-              <textarea id="dataset-notes-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="This dataset has no notes"></textarea>
+              <label class="dataset-meta-label" for="dataset-notes-input">Source dataset description</label>
+              <textarea id="dataset-notes-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="Source dataset description (required)"></textarea>
             </div>
+            <div class="prompt-form-error" role="alert" aria-live="polite" hidden></div>
           </div>
           <div class="dataset-main-footer">
-            <button type="button" class="btn btn-secondary dataset-add-btn">Create this dataset</button>
+            <button type="button" class="btn btn-secondary dataset-add-btn">Create this source dataset</button>
           </div>
         </div>
         <div class="dataset-preview-wrap">
@@ -83,6 +84,11 @@ export function openAddDatasetModal() {
   const nameInput = overlay.querySelector('#dataset-name-input');
   const notesInput = overlay.querySelector('#dataset-notes-input');
   const addBtn = overlay.querySelector('.dataset-add-btn');
+  const formErrorEl = overlay.querySelector('.prompt-form-error');
+
+  let fileImported = false;
+  /** @type {{ headers: string[], rows: string[][] } | null} */
+  let parsedDatasetContent = null;
 
   function formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
@@ -105,10 +111,14 @@ export function openAddDatasetModal() {
     const isCsv = name.endsWith('.csv');
     const isTsv = name.endsWith('.tsv');
     if (!isCsv && !isTsv) {
+      fileImported = false;
+      parsedDatasetContent = null;
       filenameEl.textContent = 'Please choose a .csv or .tsv file.';
       previewEl.textContent = 'No file imported yet.';
       return;
     }
+    fileImported = false;
+    parsedDatasetContent = null;
     filenameEl.textContent = file.name;
     nameInput.value = file.name;
     const reader = new FileReader();
@@ -121,9 +131,15 @@ export function openAddDatasetModal() {
       const headers = parseLine(headerLine).filter((c) => c.length > 0);
 
       if (headers.length === 0) {
+        fileImported = false;
+        parsedDatasetContent = null;
         previewEl.textContent = 'No columns found in first line.';
         return;
       }
+      fileImported = true;
+      const allDataLines = lines.slice(1);
+      const allRows = allDataLines.map((line) => parseLine(line));
+      parsedDatasetContent = { headers, rows: allRows };
       function truncate(str) {
         const s = String(str ?? '');
         return s.length > MAX_CELL_CHARS ? s.slice(0, MAX_CELL_CHARS) + '…' : s;
@@ -165,6 +181,8 @@ export function openAddDatasetModal() {
       }
     };
     reader.onerror = () => {
+      fileImported = false;
+      parsedDatasetContent = null;
       filenameEl.textContent = 'Failed to read file.';
       previewEl.textContent = 'No file imported yet.';
     };
@@ -172,10 +190,47 @@ export function openAddDatasetModal() {
   });
 
   addBtn.addEventListener('click', () => {
-    const name = (nameInput.value || '').trim() || 'Dataset';
-    const notes = (notesInput.value || '').trim() || '';
+    if (formErrorEl) formErrorEl.hidden = true;
+    const name = (nameInput.value || '').trim();
+    const notes = (notesInput.value || '').trim();
+    if (!name) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Source dataset name is required.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
+    const isNameUsed = workflowCanvasApi?.isDatasetNameAlreadyUsed?.(name);
+    if (isNameUsed) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'This source dataset name is already used on the canvas. Please choose another.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
+    if (!notes) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Source dataset description is required.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
+    if (!fileImported) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Please import a CSV or TSV file first.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
     document.dispatchEvent(
-      new CustomEvent('workflow:add-dataset-node', { detail: { name, notes } })
+      new CustomEvent('workflow:add-dataset-node', {
+        detail: {
+          name,
+          notes,
+          headers: parsedDatasetContent?.headers ?? [],
+          rows: parsedDatasetContent?.rows ?? [],
+        },
+      })
     );
     close();
   });
