@@ -1171,6 +1171,7 @@ export function buildWorkflowCanvas(root) {
     if (!hasNote) node.classList.add('workflow-node--no-body');
     node.innerHTML = `
       <div class="workflow-node__header">
+        <span class="workflow-node__icon workflow-node__icon--prompt" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="4" x2="12" y2="4"/><line x1="2" y1="7" x2="12" y2="7"/><line x1="2" y1="10" x2="8" y2="10"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
@@ -1256,6 +1257,93 @@ export function buildWorkflowCanvas(root) {
       e.stopPropagation();
       showNodeContextMenu(e.clientX, e.clientY, node);
     });
+
+    return node;
+  }
+
+  const DATASET_BORDER_COLORS = ['#2563eb', '#16a34a', '#ca8a04', '#c026d3', '#0891b2', '#dc2626', '#65a30d', '#7c3aed'];
+
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, colorIndex: givenColorIndex }) {
+    const nodeId = givenNodeId || generateNodeId();
+    const title = (name && name.trim()) ? name.trim() : 'Dataset';
+    const node = document.createElement('div');
+    node.className = 'workflow-node workflow-node--dataset';
+    node.setAttribute('role', 'article');
+    node.setAttribute('aria-label', `Dataset node: ${title}`);
+    node.dataset.nodeId = nodeId;
+    node.dataset.datasetName = name;
+    node.dataset.datasetNote = notes;
+    node.dataset.nodeType = 'dataset';
+    let colorIndex = givenColorIndex;
+    if (typeof colorIndex !== 'number' || colorIndex < 0) {
+      const existingCount = nodesLayer.querySelectorAll('.workflow-node--dataset').length;
+      colorIndex = existingCount % DATASET_BORDER_COLORS.length;
+    }
+    colorIndex = colorIndex % DATASET_BORDER_COLORS.length;
+    node.dataset.datasetColorIndex = String(colorIndex);
+    node.style.borderColor = DATASET_BORDER_COLORS[colorIndex];
+    const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
+    const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
+    nodeCount += 1;
+    node.style.left = `${x}px`;
+    node.style.top = `${y}px`;
+    const notesTrimmed = (notes || '').trim();
+    const hasNote = notesTrimmed.length > 0;
+    if (!hasNote) node.classList.add('workflow-node--no-body');
+    node.innerHTML = `
+      <div class="workflow-node__header">
+        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="5" height="5" rx="0.5"/><rect x="8" y="1" width="5" height="5" rx="0.5"/><rect x="1" y="8" width="5" height="5" rx="0.5"/><rect x="8" y="8" width="5" height="5" rx="0.5"/></svg></span>
+        <span class="workflow-node__title">${escapeHtml(title)}</span>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+      </div>
+      ${hasNote ? `<div class="workflow-node__body"><span class="workflow-node__note">${escapeHtml(notesTrimmed)}</span></div>` : ''}
+    `;
+    nodesLayer.appendChild(node);
+
+    const deleteBtn = node.querySelector('.workflow-node__delete');
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      removeConnectionsInvolvingNodeId(nodeId);
+      node.remove();
+      updateContentSize();
+      updateEdges();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    });
+
+    let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
+    function onPointerDown(e) {
+      if (e.button !== 0) return;
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      const rect = node.getBoundingClientRect();
+      const scrollContainer = nodesLayer.parentElement?.parentElement;
+      const parentRect = scrollContainer ? scrollContainer.getBoundingClientRect() : nodesLayer.getBoundingClientRect();
+      const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
+      const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      nodeStartLeft = rect.left - parentRect.left + scrollLeft;
+      nodeStartTop = rect.top - parentRect.top + scrollTop;
+      node.classList.add('workflow-node--dragging');
+      document.addEventListener('pointermove', onPointerMove);
+      document.addEventListener('pointerup', onPointerUp, { once: true });
+    }
+    function onPointerMove(e) {
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      node.style.left = `${nodeStartLeft + dx}px`;
+      node.style.top = `${nodeStartTop + dy}px`;
+      updateEdges();
+    }
+    function onPointerUp() {
+      node.classList.remove('workflow-node--dragging');
+      document.removeEventListener('pointermove', onPointerMove);
+      updateContentSize();
+      updateEdges();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    }
+    node.addEventListener('pointerdown', onPointerDown);
 
     return node;
   }
@@ -1368,8 +1456,29 @@ export function buildWorkflowCanvas(root) {
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
+  document.addEventListener('workflow:add-dataset-node', (e) => {
+    const { name = '', notes = '' } = e.detail || {};
+    createDatasetNode({ name, notes });
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  });
+
   function getCanvasState() {
-    const nodes = Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt')).map((node) => {
+    const nodeEls = Array.from(nodesLayer.querySelectorAll('.workflow-node'));
+    const nodes = nodeEls.map((node) => {
+      const left = parseFloat(node.style.left) || 0;
+      const top = parseFloat(node.style.top) || 0;
+      const nodeId = node.dataset.nodeId || '';
+      if (node.classList.contains('workflow-node--dataset')) {
+        return {
+          type: 'dataset',
+          nodeId,
+          left,
+          top,
+          name: node.dataset.datasetName || '',
+          note: node.dataset.datasetNote || '',
+        };
+      }
       let sections = [];
       let outputFormat = [];
       try {
@@ -1384,9 +1493,10 @@ export function buildWorkflowCanvas(root) {
         outputFormat = { returnShape: 'single', fields: [] };
       }
       return {
-        nodeId: node.dataset.nodeId || '',
-        left: parseFloat(node.style.left) || 0,
-        top: parseFloat(node.style.top) || 0,
+        type: 'prompt',
+        nodeId,
+        left,
+        top,
         name: node.dataset.promptName || '',
         note: node.dataset.promptNote || '',
         sections: Array.isArray(sections) ? sections : [],
@@ -1400,19 +1510,31 @@ export function buildWorkflowCanvas(root) {
     const list = state?.nodes;
     if (!Array.isArray(list)) return;
     nodesLayer.innerHTML = '';
-    nodeCount = list.length;
+    nodeCount = 0;
     const createdNodes = [];
     list.forEach((n) => {
-      const node = createPromptNode({
-        name: n.name || '',
-        note: n.note || '',
-        sections: n.sections || n.fields || [],
-        outputFormat: n.outputFormat,
-        left: n.left,
-        top: n.top,
-        nodeId: n.nodeId || n.id,
-      });
-      createdNodes.push(node);
+      if (n.type === 'dataset') {
+        const node = createDatasetNode({
+          name: n.name || '',
+          notes: n.note || '',
+          left: n.left,
+          top: n.top,
+          nodeId: n.nodeId || n.id,
+          colorIndex: n.colorIndex,
+        });
+        createdNodes.push(node);
+      } else {
+        const node = createPromptNode({
+          name: n.name || '',
+          note: n.note || '',
+          sections: n.sections || n.fields || [],
+          outputFormat: n.outputFormat,
+          left: n.left,
+          top: n.top,
+          nodeId: n.nodeId || n.id,
+        });
+        createdNodes.push(node);
+      }
     });
     // Normalize connections: support old { from, to } indices and new { fromId, toId, type }
     const rawConnections = Array.isArray(state.connections) ? state.connections : [];

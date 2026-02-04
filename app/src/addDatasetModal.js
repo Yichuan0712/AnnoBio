@@ -172,10 +172,11 @@ export function openAddDatasetModal() {
   });
 
   addBtn.addEventListener('click', () => {
-    const name = (nameInput.value || '').trim() || nameInput.placeholder;
+    const name = (nameInput.value || '').trim() || 'Dataset';
     const notes = (notesInput.value || '').trim() || '';
-    // TODO: persist dataset (name, notes, file/headers) and close
-    console.log('Add dataset:', { name, notes });
+    document.dispatchEvent(
+      new CustomEvent('workflow:add-dataset-node', { detail: { name, notes } })
+    );
     close();
   });
 
