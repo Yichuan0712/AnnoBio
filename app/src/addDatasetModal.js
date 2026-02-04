@@ -54,10 +54,6 @@ export function openAddDatasetModal() {
             <button type="button" class="btn btn-secondary dataset-import-btn">Import file (CSV / TSV)</button>
             <span class="dataset-filename" aria-live="polite"></span>
           </div>
-          <div class="dataset-headers-wrap">
-            <h3 class="dataset-headers-title">Columns</h3>
-            <div class="dataset-headers-list" aria-live="polite">No file imported yet.</div>
-          </div>
           <div class="dataset-meta-wrap">
             <div class="dataset-meta-field">
               <label class="dataset-meta-label" for="dataset-name-input">Dataset name</label>
@@ -67,11 +63,12 @@ export function openAddDatasetModal() {
               <label class="dataset-meta-label" for="dataset-notes-input">Dataset notes</label>
               <textarea id="dataset-notes-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="This dataset has no notes"></textarea>
             </div>
+          </div>
+          <div class="dataset-main-footer">
             <button type="button" class="btn btn-secondary dataset-add-btn">Add this dataset</button>
           </div>
         </div>
         <div class="dataset-preview-wrap">
-          <div class="dataset-preview-file-info" aria-live="polite"></div>
           <h3 class="dataset-preview-title">Preview</h3>
           <div class="dataset-preview" aria-live="polite">No file imported yet.</div>
         </div>
@@ -82,8 +79,6 @@ export function openAddDatasetModal() {
   const fileInput = overlay.querySelector('#dataset-file-input');
   const importBtn = overlay.querySelector('.dataset-import-btn');
   const filenameEl = overlay.querySelector('.dataset-filename');
-  const previewFileInfoEl = overlay.querySelector('.dataset-preview-file-info');
-  const headersListEl = overlay.querySelector('.dataset-headers-list');
   const previewEl = overlay.querySelector('.dataset-preview');
   const nameInput = overlay.querySelector('#dataset-name-input');
   const notesInput = overlay.querySelector('#dataset-notes-input');
@@ -93,11 +88,6 @@ export function openAddDatasetModal() {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  }
-
-  function formatDate(ms) {
-    const d = new Date(ms);
-    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   }
 
   importBtn.addEventListener('click', () => fileInput.click());
@@ -116,8 +106,6 @@ export function openAddDatasetModal() {
     const isTsv = name.endsWith('.tsv');
     if (!isCsv && !isTsv) {
       filenameEl.textContent = 'Please choose a .csv or .tsv file.';
-      previewFileInfoEl.innerHTML = '';
-      headersListEl.textContent = 'No file imported yet.';
       previewEl.textContent = 'No file imported yet.';
       return;
     }
@@ -132,27 +120,10 @@ export function openAddDatasetModal() {
       const headerLine = lines[0] ?? '';
       const headers = parseLine(headerLine).filter((c) => c.length > 0);
 
-      const rowCount = Math.max(0, lines.length - 1);
-      previewFileInfoEl.innerHTML = `
-        <div class="dataset-file-info-row"><span class="dataset-file-info-label">Rows</span><span class="dataset-file-info-value">${rowCount.toLocaleString()}</span></div>
-        <div class="dataset-file-info-row"><span class="dataset-file-info-label">File size</span><span class="dataset-file-info-value">${formatSize(file.size)}</span></div>
-        <div class="dataset-file-info-row"><span class="dataset-file-info-label">Modified</span><span class="dataset-file-info-value">${formatDate(file.lastModified)}</span></div>
-      `;
-      previewFileInfoEl.classList.add('dataset-preview-file-info--filled');
-
       if (headers.length === 0) {
-        headersListEl.textContent = 'No columns found in first line.';
         previewEl.textContent = 'No columns found in first line.';
         return;
       }
-      headersListEl.innerHTML = '';
-      headersListEl.classList.add('dataset-headers-list--loaded');
-      headers.forEach((h) => {
-        const span = document.createElement('span');
-        span.className = 'dataset-header-tag';
-        span.textContent = h;
-        headersListEl.appendChild(span);
-      });
       function truncate(str) {
         const s = String(str ?? '');
         return s.length > MAX_CELL_CHARS ? s.slice(0, MAX_CELL_CHARS) + '…' : s;
@@ -188,15 +159,13 @@ export function openAddDatasetModal() {
       if (lines.length - 1 > MAX_PREVIEW_ROWS) {
         const cap = document.createElement('p');
         cap.className = 'dataset-preview-cap';
-        cap.textContent = `Showing first ${MAX_PREVIEW_ROWS} rows.`;
+        const totalRows = lines.length - 1;
+        cap.textContent = `Showing first ${MAX_PREVIEW_ROWS} rows. (${totalRows.toLocaleString()} rows in total.)`;
         previewEl.appendChild(cap);
       }
     };
     reader.onerror = () => {
       filenameEl.textContent = 'Failed to read file.';
-      previewFileInfoEl.innerHTML = '';
-      previewFileInfoEl.classList.remove('dataset-preview-file-info--filled');
-      headersListEl.textContent = 'No file imported yet.';
       previewEl.textContent = 'No file imported yet.';
     };
     reader.readAsText(file, 'UTF-8');

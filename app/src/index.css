@@ -1,14 +1,14 @@
-/* Base: theme variables, layout */
+/* Base: theme variables, layout — light mode: higher contrast, clearer separation */
 :root {
-  --bg: #e2e4e6;
-  --bg-bar: #f2f3f5;
-  --bg-canvas: #d4d8dc;
-  --grid-color: rgba(0, 0, 0, 0.08);
-  --text: #1a1a1a;
-  --text-muted: #4a4d52;
-  --border: #b8bcc2;
-  --hover: #d8dce0;
-  --shadow: rgba(0, 0, 0, 0.12);
+  --bg: #eceef1;
+  --bg-bar: #ffffff;
+  --bg-canvas: #e2e5e9;
+  --grid-color: rgba(0, 0, 0, 0.1);
+  --text: #0f1114;
+  --text-muted: #4d5259;
+  --border: #a8adb5;
+  --hover: #dce0e5;
+  --shadow: rgba(0, 0, 0, 0.14);
 }
 
 html.dark {

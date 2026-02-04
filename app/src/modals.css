@@ -86,21 +86,27 @@
 }
 
 .modal-panel--dataset {
-  min-width: min(640px, 92vw);
+  min-width: min(960px, 92vw);
   max-width: 92vw;
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-body--dataset {
+  flex: 1;
   min-height: 280px;
   display: flex;
   flex-direction: row;
   gap: 0;
   padding: 0;
+  overflow: hidden;
 }
 
 .dataset-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -277,37 +283,35 @@
   box-sizing: border-box;
 }
 
-.dataset-add-btn {
-  margin-top: 4px;
+.dataset-main-footer {
+  margin-top: auto;
+  padding-top: 16px;
+  display: flex;
+  justify-content: flex-end;
 }
 
-.dataset-preview-file-info {
-  padding: 12px 16px;
-  font-size: 13px;
-  border-bottom: 1px solid var(--border);
+.dataset-add-btn {
+  margin-top: 0;
+}
+
+.dataset-file-info-wrap {
   min-height: 0;
 }
 
-.dataset-preview-file-info--filled {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.dataset-preview-file-info .dataset-file-info-row {
+.dataset-file-info--filled .dataset-file-info-row {
   display: flex;
   align-items: baseline;
   gap: 10px;
 }
 
-.dataset-preview-file-info .dataset-file-info-label {
+.dataset-file-info--filled .dataset-file-info-label {
   flex-shrink: 0;
   font-weight: 600;
   color: var(--text-muted);
   min-width: 72px;
 }
 
-.dataset-preview-file-info .dataset-file-info-value {
+.dataset-file-info--filled .dataset-file-info-value {
   color: var(--text);
   word-break: break-all;
 }
@@ -457,12 +461,121 @@
   margin-top: 0;
 }
 
+/* Edge detail modal (version link): two-column diff view (GitHub style) */
+.modal-panel--edge-detail {
+  min-width: min(900px, 96vw);
+  max-width: 96vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-body--diff {
+  padding: 0;
+  min-height: 200px;
+  overflow: auto;
+}
+
+.prompt-diff-view {
+  width: 100%;
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.prompt-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.prompt-diff-table thead th {
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--hover);
+}
+
+.prompt-diff-table .diff-col-old-num { width: 2.5em; }
+.prompt-diff-table .diff-col-old-content { width: 47%; }
+.prompt-diff-table .diff-col-new-num { width: 2.5em; }
+.prompt-diff-table .diff-col-new-content { width: 47%; }
+
+.prompt-diff-table .diff-th-old {
+  border-right: 1px solid var(--border);
+}
+
+.prompt-diff-table .diff-th-new {
+}
+
+.prompt-diff-table .diff-line-num {
+  width: 2.5em;
+  min-width: 2.5em;
+  padding: 0 8px;
+  text-align: right;
+  color: var(--text-muted);
+  user-select: none;
+  border-right: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.prompt-diff-table .diff-line-content {
+  padding: 0 10px;
+  word-break: break-all;
+  white-space: pre-wrap;
+  vertical-align: top;
+  border-right: 1px solid var(--border);
+}
+
+.prompt-diff-table .diff-old-content {
+  min-width: 0;
+}
+
+.prompt-diff-table .diff-new-content {
+  min-width: 0;
+}
+
+.prompt-diff-table .diff-new-num,
+.prompt-diff-table .diff-new-content {
+  border-right: none;
+}
+
+/* Old column (left half) */
+.prompt-diff-table .diff-old-num {
+  background: var(--hover);
+}
+
+.prompt-diff-table .diff-remove .diff-old-num,
+.prompt-diff-table .diff-remove .diff-old-content {
+  background: rgba(255, 150, 150, 0.25);
+}
+
+.prompt-diff-table .diff-remove .diff-old-num {
+  color: var(--text);
+}
+
+/* New column (right half) */
+.prompt-diff-table .diff-new-num {
+  background: var(--hover);
+}
+
+.prompt-diff-table .diff-add .diff-new-num,
+.prompt-diff-table .diff-add .diff-new-content {
+  background: rgba(150, 220, 150, 0.25);
+}
+
+.prompt-diff-table .diff-add .diff-new-num {
+  color: var(--text);
+}
+
 /* Prompt details modal (double-click node): view only until Edit → Save/Cancel */
 .modal-panel--prompt-detail {
-  min-width: min(1200px, 96vw);
+  min-width: min(720px, 90vw);
   max-width: 96vw;
   max-height: 98vh;
-  min-height: 70vh;
+  min-height: min(400px, 60vh);
   display: flex;
   flex-direction: column;
 }
@@ -618,9 +731,10 @@
 
 .prompt-detail-sections-footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding-top: 12px;
   margin-top: 12px;
   border-top: 1px solid var(--border);
@@ -679,9 +793,10 @@
 
 .prompt-detail-schema-footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding-top: 12px;
   margin-top: 12px;
   border-top: 1px solid var(--border);
@@ -771,6 +886,7 @@
 .prompt-detail-card .prompt-detail-footer,
 .prompt-detail-footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
   gap: 10px;
@@ -953,6 +1069,25 @@
 .prompt-output-description-inp {
   resize: vertical;
   min-height: 48px;
+}
+
+.prompt-output-allow-none-wrap {
+  display: flex;
+  align-items: center;
+  margin-top: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.prompt-output-allow-none-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  margin: 0;
 }
 
 .prompt-output-examples-wrap {
@@ -1158,8 +1293,8 @@
 }
 
 .prompt-schema-preview-wrap {
-  width: 280px;
-  min-width: 240px;
+  width: 420px;
+  min-width: 360px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1176,6 +1311,38 @@
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.prompt-schema-preview-return-shape {
+  margin: 0;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+
+.prompt-schema-meta {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.prompt-schema-return-shape {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.prompt-schema-allow-none-hint,
+.prompt-schema-preview-allow-none-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.prompt-schema-meta-label {
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 6px;
 }
 
 .prompt-schema-preview-table-wrap {
@@ -1488,6 +1655,21 @@
 .prompt-field-content::placeholder {
   color: var(--text-muted);
 }
+
+.prompt-form-error,
+.prompt-detail-inline-error {
+  font-size: 12px;
+  color: #c00;
+  margin: 0;
+  padding: 6px 0;
+}
+
+.prompt-detail-footer .prompt-detail-inline-error,
+.prompt-detail-sections-footer .prompt-detail-inline-error,
+.prompt-detail-schema-footer .prompt-detail-inline-error {
+  flex-basis: 100%;
+}
+
 
 .prompt-actions {
   display: flex;

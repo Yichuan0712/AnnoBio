@@ -86,7 +86,7 @@ window.addEventListener('DOMContentLoaded', () => {
   };
 
   const topBarAPI = buildTopBar(root, {
-    openAddPromptModal,
+    openAddPromptModal: () => openAddPromptModal(canvasAPI),
     openAddDatasetModal,
     openAddAgentModal,
     openCredentialsModal,

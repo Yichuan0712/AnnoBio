@@ -8,7 +8,10 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-export function openAddPromptModal() {
+/**
+ * @param {{ isPromptNameAlreadyUsed?: (name: string, excludeNodeId?: string | null) => boolean } | undefined } workflowCanvasApi - canvas API for name uniqueness check
+ */
+export function openAddPromptModal(workflowCanvasApi) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -60,12 +63,13 @@ export function openAddPromptModal() {
             <div class="dataset-meta-wrap prompt-meta-wrap">
               <div class="dataset-meta-field">
                 <label class="dataset-meta-label" for="prompt-name-input">Prompt name</label>
-                <input type="text" id="prompt-name-input" class="dataset-meta-input" placeholder="Prompt name" />
+                <input type="text" id="prompt-name-input" class="dataset-meta-input" placeholder="Prompt name (required)" />
               </div>
               <div class="dataset-meta-field">
                 <label class="dataset-meta-label" for="prompt-note-input">Prompt description</label>
-                <textarea id="prompt-note-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="This prompt has no description"></textarea>
+                <textarea id="prompt-note-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="Prompt description (required)"></textarea>
               </div>
+              <div class="prompt-form-error" role="alert" aria-live="polite" hidden></div>
             </div>
             <div class="prompt-actions">
               <button type="button" class="btn btn-secondary prompt-btn-back">Back</button>
@@ -79,6 +83,7 @@ export function openAddPromptModal() {
         </div>
         <div class="prompt-schema-preview-wrap">
           <h3 class="prompt-schema-preview-title">Output schema</h3>
+          <p class="prompt-schema-preview-return-shape"><span class="prompt-schema-meta-label">Return shape:</span> <span class="prompt-schema-preview-return-shape-value">Table of fields (multiple rows)</span></p>
           <div class="prompt-schema-preview-table-wrap">
             <table class="prompt-schema-preview-table" aria-readonly="true">
               <thead>
@@ -122,14 +127,15 @@ export function openAddPromptModal() {
     { value: 'list_float', label: 'List of number' },
   ];
 
-  // Step 2: each item = { key, type, description, examples }; at least one field
-  let outputFields = [{ key: '', type: 'str', description: '', examples: [] }];
+  // Step 2: each item = { key, type, description, examples, allowNone }; at least one field
+  let outputFields = [{ key: '', type: 'str', description: '', examples: [], allowNone: false }];
   let outputReturnShape = 'table'; // 'single' | 'table'
   const outputKeysListEl = overlay.querySelector('.prompt-output-keys-list');
   const returnShapeRadios = overlay.querySelectorAll('input[name="prompt-output-return-shape"]');
   returnShapeRadios.forEach((r) => {
     r.addEventListener('change', () => {
       outputReturnShape = overlay.querySelector('input[name="prompt-output-return-shape"]:checked')?.value || 'table';
+      updateSchemaPreview();
     });
   });
 
@@ -142,17 +148,19 @@ export function openAddPromptModal() {
       const type = (typeSel?.value ?? 'str') || 'str';
       const descInp = block.querySelector('.prompt-output-description-inp');
       const description = (descInp?.value ?? '').trim() || '';
+      const allowNoneInp = block.querySelector('.prompt-output-allow-none-inp');
+      const allowNone = !!(allowNoneInp && allowNoneInp.checked);
       const isList = type === 'list_str' || type === 'list_float';
       if (isList) {
         const exampleRows = block.querySelectorAll('.prompt-output-list-example-row');
         const examples = Array.from(exampleRows).map((row) =>
           Array.from(row.querySelectorAll('.prompt-output-list-element-inp')).map((inp) => (inp?.value ?? '').trim())
         );
-        return { key, type, description, examples };
+        return { key, type, description, examples, allowNone };
       }
       const exampleInputs = block.querySelectorAll('.prompt-output-example-inp');
       const examples = Array.from(exampleInputs).map((inp) => (inp?.value ?? '').trim());
-      return { key, type, description, examples };
+      return { key, type, description, examples, allowNone };
     });
   }
 
@@ -185,8 +193,12 @@ export function openAddPromptModal() {
 
   function updateSchemaPreview(syncFromDOM = false) {
     const tbody = overlay.querySelector('.prompt-schema-preview-tbody');
+    const returnShapeEl = overlay.querySelector('.prompt-schema-preview-return-shape-value');
     if (!tbody) return;
     if (syncFromDOM) syncOutputFormatFromDOM();
+    if (returnShapeEl) {
+      returnShapeEl.textContent = outputReturnShape === 'single' ? 'Single row of fields' : 'Table of fields (multiple rows)';
+    }
     tbody.innerHTML = outputFields.map((f) => {
       const nameRaw = (f.key || '').trim();
       const descRaw = (f.description ?? '').trim();
@@ -306,7 +318,7 @@ export function openAddPromptModal() {
 
   function renderOutputFormat() {
     if (outputFields.length === 0) {
-      outputFields = [{ key: '', type: 'str', description: '', examples: [] }];
+      outputFields = [{ key: '', type: 'str', description: '', examples: [], allowNone: false }];
     }
     let html = '';
     outputFields.forEach((item, fieldIdx) => {
@@ -316,15 +328,19 @@ export function openAddPromptModal() {
       const examples = Array.isArray(item.examples) ? item.examples : [];
       const isList = type === 'list_str' || type === 'list_float';
       const typeOptions = OUTPUT_TYPES.map((t) => `<option value="${t.value}" ${t.value === type ? 'selected' : ''}>${escapeHtml(t.label)}</option>`).join('');
+      const allowNoneChecked = item.allowNone === true ? ' checked' : '';
       html += `<div class="prompt-output-key-block prompt-field" data-key-index="${fieldIdx}">
         <div class="prompt-field-header">
-          <input type="text" class="prompt-field-name prompt-output-key-inp" value="${keyEsc}" placeholder="Field name" data-key-index="${fieldIdx}" aria-label="Field name" />
+          <input type="text" class="prompt-field-name prompt-output-key-inp" value="${keyEsc}" placeholder="Field name (required)" data-key-index="${fieldIdx}" aria-label="Field name" />
           <select class="prompt-output-type-select dataset-meta-input" data-key-index="${fieldIdx}" aria-label="Type">${typeOptions}</select>
           <button type="button" class="prompt-field-remove prompt-output-del-key" aria-label="Remove field" data-key-index="${fieldIdx}">Delete field</button>
         </div>
         <div class="prompt-output-description-wrap">
           <label class="prompt-output-description-label">Description</label>
-          <textarea class="prompt-output-description-inp dataset-meta-input" rows="2" placeholder="Description for this field (optional)" data-key-index="${fieldIdx}" aria-label="Field description">${descEsc}</textarea>
+          <textarea class="prompt-output-description-inp dataset-meta-input" rows="2" placeholder="Description (required)" data-key-index="${fieldIdx}" aria-label="Field description">${descEsc}</textarea>
+        </div>
+        <div class="prompt-output-allow-none-wrap">
+          <label class="prompt-output-allow-none-label"><input type="checkbox" class="prompt-output-allow-none-inp" data-key-index="${fieldIdx}" aria-label="Allow None"${allowNoneChecked} /> Allow None</label>
         </div>
         <div class="prompt-output-examples-wrap">
           <p class="prompt-output-examples-label">Examples for this field:</p>
@@ -418,7 +434,7 @@ export function openAddPromptModal() {
   }
 
   overlay.querySelector('.prompt-output-add-key').addEventListener('click', () => {
-    outputFields.push({ key: '', type: 'str', description: '', examples: [] });
+    outputFields.push({ key: '', type: 'str', description: '', examples: [], allowNone: false });
     renderOutputFormat();
   });
 
@@ -449,10 +465,10 @@ export function openAddPromptModal() {
     row.className = 'prompt-section';
     row.innerHTML = `
       <div class="prompt-section-header">
-        <input type="text" class="prompt-section-name" placeholder="Section name" value="${escapeHtml(section.name)}" aria-label="Section name" />
+        <input type="text" class="prompt-section-name" placeholder="Section name (required)" value="${escapeHtml(section.name)}" aria-label="Section name" />
         <button type="button" class="prompt-section-remove" aria-label="Remove section">Delete section</button>
       </div>
-      <textarea class="prompt-section-content" placeholder="Enter content for this section..." rows="3" aria-label="Section content">${escapeHtml(section.content)}</textarea>
+      <textarea class="prompt-section-content" placeholder="Content (required)" rows="3" aria-label="Section content">${escapeHtml(section.content)}</textarea>
     `;
     row.querySelector('.prompt-section-remove').addEventListener('click', () => {
       syncSectionsFromDOM();
@@ -504,26 +520,110 @@ export function openAddPromptModal() {
     renderSections(true);
   });
 
+  function hasDuplicateSectionNames(sectionsList) {
+    const names = sectionsList.map((s) => (s.name || '').trim().toLowerCase());
+    return names.length !== new Set(names).size;
+  }
+
+  function hasDuplicateFieldNames(fieldsList) {
+    const keys = fieldsList.map((o) => (o.key || '').trim().toLowerCase());
+    return keys.length !== new Set(keys).size;
+  }
+
   overlay.querySelector('.prompt-generate-node').addEventListener('click', () => {
     syncSectionsFromDOM();
     if (outputKeysListEl.querySelectorAll('.prompt-output-key-block').length) syncOutputFormatFromDOM();
-    outputReturnShape = overlay.querySelector('input[name="prompt-output-return-shape"]:checked')?.value || 'table';
-    const nameInput = overlay.querySelector('#prompt-name-input');
-    const noteInput = overlay.querySelector('#prompt-note-input');
-    const name = (nameInput?.value ?? '').trim() || '';
-    const note = (noteInput?.value ?? '').trim();
     const sectionsPayload = sections.map((s) => ({ name: s.name, content: s.content }));
+    const formErrorEl = overlay.querySelector('.prompt-form-error');
+    if (formErrorEl) formErrorEl.hidden = true;
+    const sectionsWithBoth = sectionsPayload.filter((s) => (s.name || '').trim() && (s.content ?? '').trim());
+    const hasPartialSection = sectionsPayload.some((s) => {
+      const n = (s.name || '').trim();
+      const c = (s.content ?? '').trim();
+      return (n || c) && (!n || !c);
+    });
+    if (hasPartialSection) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Section name and content are required for each section.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
+    if (sectionsWithBoth.length === 0) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'At least one section with name and content is required.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
+    if (hasDuplicateSectionNames(sectionsWithBoth)) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Section names must be unique within this prompt. Please fix duplicate section names.';
+        formErrorEl.hidden = false;
+      } else alert('Section names must be unique within this prompt. Please fix duplicate section names.');
+      return;
+    }
     const outputFormat = {
-      returnShape: outputReturnShape,
+      returnShape: overlay.querySelector('input[name="prompt-output-return-shape"]:checked')?.value || 'table',
       fields: outputFields.map((o) => ({
         key: o.key || '',
         type: o.type || 'str',
         description: (o.description ?? '').trim() || '',
         examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
+        allowNone: o.allowNone === true,
       })),
     };
+    const missingFieldName = outputFormat.fields.some((f) => !(f.key ?? '').trim());
+    if (missingFieldName) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Field name is required for all fields.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
+    if (hasDuplicateFieldNames(outputFormat.fields)) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Field names must be unique within this prompt. Please fix duplicate field names.';
+        formErrorEl.hidden = false;
+      } else alert('Field names must be unique within this prompt. Please fix duplicate field names.');
+      return;
+    }
+    const missingFieldDesc = outputFormat.fields.some((f) => !(f.description ?? '').trim());
+    if (missingFieldDesc) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Field description is required for all fields.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
+    outputReturnShape = outputFormat.returnShape;
+    const nameInput = overlay.querySelector('#prompt-name-input');
+    const noteInput = overlay.querySelector('#prompt-note-input');
+    const name = (nameInput?.value ?? '').trim();
+    const note = (noteInput?.value ?? '').trim();
+    if (!name) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Prompt name is required.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
+    if (!note) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'Prompt description is required.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
+    if (workflowCanvasApi?.isPromptNameAlreadyUsed?.(name)) {
+      if (formErrorEl) {
+        formErrorEl.textContent = 'This prompt name is already used on the canvas. Please choose another.';
+        formErrorEl.hidden = false;
+      }
+      return;
+    }
     document.dispatchEvent(
-      new CustomEvent('workflow:add-prompt-node', { detail: { name, note, sections: sectionsPayload, outputFormat } })
+      new CustomEvent('workflow:add-prompt-node', { detail: { name, note, sections: sectionsWithBoth, outputFormat } })
     );
     close();
   });

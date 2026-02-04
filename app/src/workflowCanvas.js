@@ -1,9 +1,20 @@
 /**
  * Workflow canvas (node-based editor surface).
  * Listens for workflow:add-prompt-node to add prompt nodes.
+ * Edges use stable node ids and a type field for future extensibility.
  */
 
 const MIN_CONTENT_PADDING = 200;
+
+/** Edge type for prompt → prompt (e.g. "new version" link). Add more types here as needed. */
+const EDGE_TYPE_PROMPT_TO_PROMPT = 'prompt-to-prompt';
+
+/** Invisible stroke width for edge hit area (px). */
+const EDGE_HIT_STROKE_WIDTH = 16;
+
+function generateNodeId() {
+  return 'n_' + Date.now() + '_' + (Math.random() * 1e9 | 0);
+}
 
 export function buildWorkflowCanvas(root) {
   const canvas = document.createElement('div');
@@ -45,34 +56,107 @@ export function buildWorkflowCanvas(root) {
 
   let nodeCount = 0;
   const STAGGER = 36;
+  /** @type {{ fromId: string, toId: string, type: string }[]} */
   let connections = [];
 
   function getNodeList() {
     return Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'));
   }
 
+  function getNodeById(nodeId) {
+    if (!nodeId) return null;
+    return nodesLayer.querySelector(`[data-node-id="${nodeId}"]`) || null;
+  }
+
   function getNodeIndex(node) {
     return getNodeList().indexOf(node);
   }
 
-  function updateEdges() {
-    const list = getNodeList();
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    connections.forEach(({ from: fromIdx, to: toIdx }) => {
-      const fromNode = list[fromIdx];
-      const toNode = list[toIdx];
-      if (!fromNode || !toNode) return;
-      const x1 = parseFloat(fromNode.style.left) || 0;
-      const y1 = parseFloat(fromNode.style.top) || 0;
-      const w1 = fromNode.offsetWidth || 0;
-      const h1 = fromNode.offsetHeight || 0;
-      const x2 = parseFloat(toNode.style.left) || 0;
-      const y2 = parseFloat(toNode.style.top) || 0;
-      const h2 = toNode.offsetHeight || 0;
+  /**
+   * Check if a prompt name is already used on the canvas (case-insensitive).
+   * Empty string is considered "used" so multiple empty names are not allowed.
+   * @param {string} nameToCheck - name to check (will be trimmed and lowercased)
+   * @param {string|null} [excludeNodeId=null] - node id to exclude (e.g. when editing that node)
+   * @returns {boolean}
+   */
+  function isPromptNameAlreadyUsed(nameToCheck, excludeNodeId = null) {
+    const normalized = (nameToCheck || '').trim().toLowerCase();
+    const nodes = getNodeList();
+    for (const n of nodes) {
+      if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
+      const existing = (n.dataset.promptName || '').trim().toLowerCase();
+      if (existing === normalized) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Strip trailing " (Copy N)" or " vN" from a name so we can reuse the root for next number.
+   * @param {string} name
+   * @returns {string}
+   */
+  function stripCopyOrVersionSuffix(name) {
+    const s = (name || '').trim();
+    const copyMatch = s.match(/^(.*)\s+\(Copy\s+\d+\)$/);
+    if (copyMatch) return stripCopyOrVersionSuffix(copyMatch[1].trim());
+    const versionMatch = s.match(/^(.*)\s+v(\d+)$/);
+    if (versionMatch) return stripCopyOrVersionSuffix(versionMatch[1].trim());
+    return s || 'Prompt';
+  }
+
+  /**
+   * Find a unique prompt name by appending suffix. Used for duplicate / new version.
+   * Strips existing " (Copy N)" / " vN" from base so we get "Name (Copy 2)" not "Name (Copy 1) (Copy 1)".
+   * @param {string} baseName - base name (e.g. from source node)
+   * @param {boolean} isNewVersion - true for "Name v1", false for "Name (Copy 1)"
+   * @returns {string}
+   */
+  function findUniquePromptName(baseName, isNewVersion) {
+    const base = stripCopyOrVersionSuffix(baseName || '');
+    let n = 1;
+    let candidate;
+    do {
+      candidate = isNewVersion ? `${base} v${n}` : `${base} (Copy ${n})`;
+      n++;
+    } while (isPromptNameAlreadyUsed(candidate));
+    return candidate;
+  }
+
+  /**
+   * Draw a single edge into SVG group g. Override per edge type for different visuals/anchors.
+   * @param {SVGGElement} g
+   * @param {{ fromId: string, toId: string, type: string }} edge
+   * @param {number} edgeIndex - index in connections (for data-edge-index / future click)
+   */
+  function renderEdge(g, edge, edgeIndex) {
+    const fromNode = getNodeById(edge.fromId);
+    const toNode = getNodeById(edge.toId);
+    if (!fromNode || !toNode) return;
+
+    const x1 = parseFloat(fromNode.style.left) || 0;
+    const y1 = parseFloat(fromNode.style.top) || 0;
+    const w1 = fromNode.offsetWidth || 0;
+    const h1 = fromNode.offsetHeight || 0;
+    const x2 = parseFloat(toNode.style.left) || 0;
+    const y2 = parseFloat(toNode.style.top) || 0;
+    const h2 = toNode.offsetHeight || 0;
+
+    if (edge.type === EDGE_TYPE_PROMPT_TO_PROMPT) {
       const startX = x1 + w1;
       const startY = y1 + h1 / 2;
       const endX = x2;
       const endY = y2 + h2 / 2;
+      // Hit area: invisible wide stroke (drawn first, behind visible line)
+      const hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      hitLine.setAttribute('x1', String(startX));
+      hitLine.setAttribute('y1', String(startY));
+      hitLine.setAttribute('x2', String(endX));
+      hitLine.setAttribute('y2', String(endY));
+      hitLine.setAttribute('stroke', 'transparent');
+      hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
+      hitLine.setAttribute('data-edge-type', edge.type);
+      hitLine.setAttribute('data-edge-index', String(edgeIndex));
+      g.appendChild(hitLine);
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('x1', String(startX));
       line.setAttribute('y1', String(startY));
@@ -81,12 +165,209 @@ export function buildWorkflowCanvas(root) {
       line.setAttribute('stroke', 'var(--text-muted)');
       line.setAttribute('stroke-width', '2');
       line.setAttribute('marker-end', 'url(#workflow-arrow)');
+      line.setAttribute('data-edge-type', edge.type);
+      line.setAttribute('data-edge-index', String(edgeIndex));
       g.appendChild(line);
-    });
+    } else {
+      // Unknown type: draw same as prompt-to-prompt for now; add branches for new types later.
+      const startX = x1 + w1;
+      const startY = y1 + h1 / 2;
+      const endX = x2;
+      const endY = y2 + h2 / 2;
+      const hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      hitLine.setAttribute('x1', String(startX));
+      hitLine.setAttribute('y1', String(startY));
+      hitLine.setAttribute('x2', String(endX));
+      hitLine.setAttribute('y2', String(endY));
+      hitLine.setAttribute('stroke', 'transparent');
+      hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
+      hitLine.setAttribute('data-edge-type', edge.type || '');
+      hitLine.setAttribute('data-edge-index', String(edgeIndex));
+      g.appendChild(hitLine);
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', String(startX));
+      line.setAttribute('y1', String(startY));
+      line.setAttribute('x2', String(endX));
+      line.setAttribute('y2', String(endY));
+      line.setAttribute('stroke', 'var(--text-muted)');
+      line.setAttribute('stroke-width', '2');
+      line.setAttribute('marker-end', 'url(#workflow-arrow)');
+      line.setAttribute('data-edge-type', edge.type || '');
+      line.setAttribute('data-edge-index', String(edgeIndex));
+      g.appendChild(line);
+    }
+  }
+
+  function updateEdges() {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('pointer-events', 'none');
+    connections.forEach((edge, i) => renderEdge(g, edge, i));
     const existing = edgesLayer.querySelector('g');
     if (existing) existing.remove();
     edgesLayer.appendChild(g);
   }
+
+  function getPromptDataFromNode(node) {
+    if (!node) return null;
+    let sections = [];
+    let outputFormat = { returnShape: 'single', fields: [] };
+    try {
+      sections = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
+    } catch (_) {}
+    try {
+      const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
+      const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
+      outputFormat = { returnShape: node.dataset.promptOutputReturnShape || 'single', fields };
+    } catch (_) {}
+    return {
+      name: node.dataset.promptName || '',
+      note: node.dataset.promptNote || '',
+      sections: Array.isArray(sections) ? sections : [],
+      outputFormat,
+    };
+  }
+
+  function serializePromptToDiffText(data) {
+    const lines = [];
+    lines.push('Name: ' + (data.name || '').trim());
+    lines.push('Description: ' + (data.note || '').trim());
+    lines.push('');
+    const sections = data.sections || [];
+    if (sections.length === 0) {
+      lines.push('## Sections');
+      lines.push('(none)');
+      lines.push('');
+    } else {
+      sections.forEach((s) => {
+        lines.push('## Section: ' + (s.name || '').trim());
+        lines.push((s.content || '').trim());
+        lines.push('');
+      });
+    }
+    lines.push('## Output schema');
+    const of = data.outputFormat || {};
+    lines.push('Return shape: ' + (of.returnShape || 'single'));
+    const fields = of.fields || [];
+    if (fields.length === 0) {
+      lines.push('(no fields)');
+    } else {
+      fields.forEach((f) => {
+        const ex = Array.isArray(f.examples) ? f.examples : [];
+        const type = f.type || 'str';
+        const allowNone = f.allowNone === true ? 'yes' : 'no';
+        const exStr = ex.map((e) => {
+          if (Array.isArray(e)) {
+            return type === 'list_str'
+              ? '[' + e.map((el) => '"' + String(el ?? '').replace(/"/g, '\\"') + '"').join(', ') + ']'
+              : '[' + e.join(', ') + ']';
+          }
+          return type === 'str' ? '"' + String(e ?? '').replace(/"/g, '\\"') + '"' : String(e);
+        }).join('; ');
+        lines.push('Field: ' + (f.key || '').trim() + ' | ' + type + ' | ' + (f.description || '').trim() + ' | Allow None: ' + allowNone + ' | ' + exStr);
+      });
+    }
+    return lines.join('\n');
+  }
+
+  /** Line-based LCS diff. Returns { type: 'remove'|'add'|'unchanged', line, oldNum?, newNum? }[]. */
+  function lineDiff(oldText, newText) {
+    const a = (oldText || '').split('\n');
+    const b = (newText || '').split('\n');
+    const m = a.length;
+    const n = b.length;
+    const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+    const result = [];
+    let i = m;
+    let j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+        result.unshift({ type: 'unchanged', line: a[i - 1], oldNum: i, newNum: j });
+        i--;
+        j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        result.unshift({ type: 'add', line: b[j - 1], newNum: j });
+        j--;
+      } else {
+        result.unshift({ type: 'remove', line: a[i - 1], oldNum: i });
+        i--;
+      }
+    }
+    return result;
+  }
+
+  function openEdgeDetailModal(edge, edgeIndex) {
+    const fromNode = getNodeById(edge.fromId);
+    const toNode = getNodeById(edge.toId);
+    const fromData = fromNode ? getPromptDataFromNode(fromNode) : null;
+    const toData = toNode ? getPromptDataFromNode(toNode) : null;
+    const fromName = (fromData && fromData.name.trim()) || 'Prompt';
+    const toName = (toData && toData.name.trim()) || 'Prompt';
+
+    let bodyHtml;
+    if (!fromData || !toData) {
+      bodyHtml = '<p class="prompt-detail-placeholder">One or both nodes are missing. Cannot compare.</p>';
+    } else {
+      const oldText = serializePromptToDiffText(fromData);
+      const newText = serializePromptToDiffText(toData);
+      const diffLines = lineDiff(oldText, newText);
+      bodyHtml = '<div class="prompt-diff-view"><table class="prompt-diff-table"><colgroup><col class="diff-col-old-num"><col class="diff-col-old-content"><col class="diff-col-new-num"><col class="diff-col-new-content"></colgroup><thead><tr><th colspan="2" class="diff-th-old">Old</th><th colspan="2" class="diff-th-new">New</th></tr></thead><tbody>' +
+        diffLines.map((item) => {
+          const cls = 'diff-line diff-' + item.type;
+          const oldNum = item.type === 'add' ? '' : (item.oldNum || '');
+          const newNum = item.type === 'remove' ? '' : (item.newNum || '');
+          const lineEsc = escapeHtml(item.line || ' ');
+          const oldCell = item.type === 'add' ? '<td class="diff-line-num diff-old-num"></td><td class="diff-line-content diff-old-content"></td>' : '<td class="diff-line-num diff-old-num">' + oldNum + '</td><td class="diff-line-content diff-old-content">' + lineEsc + '</td>';
+          const newCell = item.type === 'remove' ? '<td class="diff-line-num diff-new-num"></td><td class="diff-line-content diff-new-content"></td>' : '<td class="diff-line-num diff-new-num">' + newNum + '</td><td class="diff-line-content diff-new-content">' + lineEsc + '</td>';
+          return '<tr class="' + cls + '">' + oldCell + newCell + '</tr>';
+        }).join('') +
+        '</tbody></table></div>';
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'edge-detail-title');
+    overlay.innerHTML = `
+      <div class="modal-panel modal-panel--edge-detail">
+        <div class="modal-header">
+          <h2 id="edge-detail-title" class="modal-title">Compare versions: ${escapeHtml(fromName)} → ${escapeHtml(toName)}</h2>
+          <button type="button" class="modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body modal-body--diff">
+          ${bodyHtml}
+        </div>
+      </div>
+    `;
+    overlay.querySelector('.modal-close').addEventListener('click', () => {
+      overlay.remove();
+      document.body.style.overflow = '';
+    });
+    document.body.style.overflow = 'hidden';
+    document.body.appendChild(overlay);
+  }
+
+  function onEdgesLayerClick(e) {
+    const lineEl = e.target && (e.target.tagName === 'line' || e.target.localName === 'line') ? e.target : null;
+    if (!lineEl) return;
+    const edgeType = lineEl.getAttribute('data-edge-type');
+    const indexStr = lineEl.getAttribute('data-edge-index');
+    if (edgeType === EDGE_TYPE_PROMPT_TO_PROMPT && indexStr !== null) {
+      const edgeIndex = parseInt(indexStr, 10);
+      const edge = connections[edgeIndex];
+      if (edge) {
+        e.preventDefault();
+        e.stopPropagation();
+        openEdgeDetailModal(edge, edgeIndex);
+      }
+    }
+  }
+
+  edgesLayer.addEventListener('click', onEdgesLayerClick);
 
   function updateContentSize() {
     const nodes = nodesLayer.querySelectorAll('.workflow-node--prompt');
@@ -166,17 +447,18 @@ export function buildWorkflowCanvas(root) {
       const nameRaw = (f.key || '').trim() || 'Unnamed field';
       const descRaw = (f.description ?? '').trim();
       const exRaw = formatSchemaExamplesForView(f.examples || [], f.type || 'str');
+      const allowNone = f.allowNone === true;
       const name = escapeHtml(truncateForSchema(nameRaw));
       const desc = escapeHtml(truncateForSchema(descRaw));
       const ex = escapeHtml(truncateForSchema(exRaw));
       const nameFull = escapeAttr(nameRaw);
       const descFull = escapeAttr(descRaw);
       const exFull = escapeAttr(exRaw);
-      return `<tr><td class="prompt-detail-schema-cell" data-fulltext="${nameFull}">${name}</td><td class="prompt-detail-schema-cell" data-fulltext="${descFull}">${desc}</td><td class="prompt-detail-schema-cell" data-fulltext="${exFull}">${ex}</td></tr>`;
+      return `<tr><td class="prompt-detail-schema-cell" data-fulltext="${nameFull}">${name}</td><td class="prompt-detail-schema-cell" data-fulltext="${descFull}">${desc}</td><td class="prompt-detail-schema-cell" data-fulltext="${exFull}">${ex}</td><td>${allowNone ? 'Yes' : 'No'}</td></tr>`;
     }).join('');
     return `<div class="prompt-schema-preview-table-wrap">
   <table class="prompt-schema-preview-table" aria-readonly="true">
-    <thead><tr><th>Field</th><th>Description</th><th>Examples</th></tr></thead>
+    <thead><tr><th>Field</th><th>Description</th><th>Examples</th><th>Allow None</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
 </div>`;
@@ -191,7 +473,7 @@ export function buildWorkflowCanvas(root) {
     if (sourceNode) {
       try {
         const raw = JSON.parse(sourceNode.dataset.promptOutputFormat || '[]');
-        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [] }));
+        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
         outputFormat = { returnShape: sourceNode.dataset.promptOutputReturnShape || 'table', fields };
       } catch (_) {}
     }
@@ -223,14 +505,15 @@ export function buildWorkflowCanvas(root) {
               <div class="prompt-detail-edit">
                 <div class="prompt-detail-row">
                   <label class="prompt-detail-label" for="prompt-detail-name-inp">Prompt name</label>
-                  <input type="text" id="prompt-detail-name-inp" class="prompt-detail-input" />
+                  <input type="text" id="prompt-detail-name-inp" class="prompt-detail-input" placeholder="Prompt name (required)" />
                 </div>
                 <div class="prompt-detail-row">
                   <label class="prompt-detail-label" for="prompt-detail-notes-inp">Prompt description</label>
-                  <textarea id="prompt-detail-notes-inp" class="prompt-detail-textarea" rows="3"></textarea>
+                  <textarea id="prompt-detail-notes-inp" class="prompt-detail-textarea" rows="3" placeholder="Prompt description (required)"></textarea>
                 </div>
               </div>
               <div class="prompt-detail-footer">
+                <div class="prompt-detail-inline-error" id="prompt-detail-name-error" role="alert" aria-live="polite" hidden></div>
                 <button type="button" class="btn btn-secondary prompt-detail-btn-edit">Edit</button>
                 <div class="prompt-detail-footer-edit">
                   <button type="button" class="btn btn-secondary prompt-detail-btn-save">Save</button>
@@ -243,6 +526,7 @@ export function buildWorkflowCanvas(root) {
               <div class="prompt-detail-schema-view">${schemaViewHtml}</div>
               <div class="prompt-detail-schema-edit"></div>
               <div class="prompt-detail-schema-footer">
+                <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
                 <button type="button" class="btn btn-secondary prompt-detail-schema-btn-edit">Edit</button>
                 <div class="prompt-detail-schema-edit-btns">
                   <button type="button" class="btn btn-secondary prompt-detail-schema-btn-save">Save</button>
@@ -257,6 +541,7 @@ export function buildWorkflowCanvas(root) {
               <div class="prompt-detail-sections-view">${sectionsViewHtml}</div>
               <div class="prompt-detail-sections-edit"></div>
               <div class="prompt-detail-sections-footer">
+                <div class="prompt-detail-inline-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
                 <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
                 <div class="prompt-detail-sections-edit-btns">
                   <button type="button" class="btn btn-secondary prompt-detail-sections-btn-save-node">Save</button>
@@ -316,11 +601,36 @@ export function buildWorkflowCanvas(root) {
       panel.setAttribute('data-prompt-detail-mode', 'edit');
     }
 
+    const nameErrorEl = overlay.querySelector('#prompt-detail-name-error');
+
     btnEdit.addEventListener('click', showEdit);
     btnCancel.addEventListener('click', () => showView());
     btnSave.addEventListener('click', () => {
-      const newName = (nameInp.value || '').trim() || 'Prompt';
+      const newNameRaw = (nameInp.value || '').trim();
+      const newName = newNameRaw || 'Prompt';
       const newNote = (notesInp.value || '').trim();
+      if (nameErrorEl) nameErrorEl.hidden = true;
+      if (!newNameRaw) {
+        if (nameErrorEl) {
+          nameErrorEl.textContent = 'Prompt name is required.';
+          nameErrorEl.hidden = false;
+        }
+        return;
+      }
+      if (!newNote) {
+        if (nameErrorEl) {
+          nameErrorEl.textContent = 'Prompt description is required.';
+          nameErrorEl.hidden = false;
+        }
+        return;
+      }
+      if (isPromptNameAlreadyUsed(newName, sourceNode?.dataset?.nodeId ?? null)) {
+        if (nameErrorEl) {
+          nameErrorEl.textContent = 'This prompt name is already used on the canvas. Please choose another.';
+          nameErrorEl.hidden = false;
+        }
+        return;
+      }
       applyToNode(newName, newNote);
       nameValueEl.textContent = newName;
       notesValueEl.innerHTML = newNote ? escapeHtml(newNote) : '<span class="prompt-detail-placeholder">No description.</span>';
@@ -352,12 +662,12 @@ export function buildWorkflowCanvas(root) {
           (s) => `
           <div class="prompt-detail-section-edit-row">
             <div class="prompt-detail-section-edit-header">
-              <input type="text" class="prompt-detail-input prompt-detail-section-name-inp" value="${escapeHtml(s.name || '')}" placeholder="Section name" />
+              <input type="text" class="prompt-detail-input prompt-detail-section-name-inp" value="${escapeHtml(s.name || '')}" placeholder="Section name (required)" />
               <button type="button" class="prompt-field-remove prompt-detail-section-delete" aria-label="Remove section">Delete section</button>
             </div>
             <div class="prompt-detail-row">
               <label class="prompt-detail-label">Content</label>
-              <textarea class="prompt-detail-textarea prompt-detail-section-content-inp" rows="2" placeholder="Content">${escapeHtml(s.content || '')}</textarea>
+              <textarea class="prompt-detail-textarea prompt-detail-section-content-inp" rows="2" placeholder="Content (required)">${escapeHtml(s.content || '')}</textarea>
             </div>
           </div>
         `
@@ -390,7 +700,7 @@ export function buildWorkflowCanvas(root) {
             </div>
             <div class="prompt-detail-row">
               <label class="prompt-detail-label">Content</label>
-              <textarea class="prompt-detail-textarea prompt-detail-section-content-inp" rows="2" placeholder="Content"></textarea>
+              <textarea class="prompt-detail-textarea prompt-detail-section-content-inp" rows="2" placeholder="Content (required)"></textarea>
             </div>
           </div>`;
         if (addBtn) addBtn.insertAdjacentHTML('beforebegin', newHtml);
@@ -413,8 +723,38 @@ export function buildWorkflowCanvas(root) {
     sectionsBtnCancel.addEventListener('click', () => {
       showSectionsView();
     });
+    function hasDuplicateSectionNames(sectionsList) {
+      const names = sectionsList.map((s) => (s.name || '').trim().toLowerCase());
+      return names.length !== new Set(names).size;
+    }
+
     sectionsBtnSaveNode.addEventListener('click', () => {
-      const newSections = getSectionsFromEditContainer().filter((s) => s.name || s.content);
+      const sectionsErrorEl = overlay.querySelector('#prompt-detail-sections-error');
+      if (sectionsErrorEl) sectionsErrorEl.hidden = true;
+      const allSections = getSectionsFromEditContainer();
+      const newSections = allSections.filter((s) => (s.name || '').trim() || (s.content ?? '').trim());
+      const hasPartialSection = newSections.some((s) => !(s.name || '').trim() || !(s.content ?? '').trim());
+      if (hasPartialSection) {
+        if (sectionsErrorEl) {
+          sectionsErrorEl.textContent = 'Section name and content are required for each section.';
+          sectionsErrorEl.hidden = false;
+        }
+        return;
+      }
+      if (newSections.length === 0) {
+        if (sectionsErrorEl) {
+          sectionsErrorEl.textContent = 'At least one section with name and content is required.';
+          sectionsErrorEl.hidden = false;
+        }
+        return;
+      }
+      if (hasDuplicateSectionNames(newSections)) {
+        if (sectionsErrorEl) {
+          sectionsErrorEl.textContent = 'Section names must be unique within this prompt. Please fix duplicate section names.';
+          sectionsErrorEl.hidden = false;
+        } else alert('Section names must be unique within this prompt. Please fix duplicate section names.');
+        return;
+      }
       currentSections = newSections;
       if (sourceNode) {
         sourceNode.dataset.promptSections = JSON.stringify(newSections);
@@ -429,6 +769,7 @@ export function buildWorkflowCanvas(root) {
       type: o.type || 'str',
       description: o.description ?? '',
       examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
+      allowNone: o.allowNone === true,
     }));
     let currentSchemaReturnShape = outputFormat.returnShape || 'table';
     const schemaWrap = overlay.querySelector('.prompt-detail-schema-wrap');
@@ -527,6 +868,8 @@ export function buildWorkflowCanvas(root) {
       const descEsc = escapeHtml(item.description ?? '');
       const type = item.type || 'str';
       const examples = Array.isArray(item.examples) ? item.examples : [];
+      const allowNone = item.allowNone === true;
+      const allowNoneChecked = allowNone ? ' checked' : '';
       const isList = type === 'list_str' || type === 'list_float';
       const typeOptions = OUTPUT_TYPES.map((t) => `<option value="${t.value}" ${t.value === type ? 'selected' : ''}>${escapeHtml(t.label)}</option>`).join('');
       let examplesHtml = '';
@@ -543,13 +886,16 @@ export function buildWorkflowCanvas(root) {
       }
       return `<div class="prompt-output-key-block prompt-field" data-key-index="${fieldIdx}">
         <div class="prompt-field-header">
-          <input type="text" class="prompt-field-name prompt-output-key-inp" value="${keyEsc}" placeholder="Field name" data-key-index="${fieldIdx}" />
+          <input type="text" class="prompt-field-name prompt-output-key-inp" value="${keyEsc}" placeholder="Field name (required)" data-key-index="${fieldIdx}" />
           <select class="prompt-output-type-select dataset-meta-input" data-key-index="${fieldIdx}">${typeOptions}</select>
           <button type="button" class="prompt-field-remove prompt-output-del-key" aria-label="Remove field" data-key-index="${fieldIdx}">Delete field</button>
         </div>
         <div class="prompt-output-description-wrap">
           <label class="prompt-output-description-label">Description</label>
-          <textarea class="prompt-output-description-inp dataset-meta-input" rows="2" placeholder="Description for this field (optional)" data-key-index="${fieldIdx}">${descEsc}</textarea>
+          <textarea class="prompt-output-description-inp dataset-meta-input" rows="2" placeholder="Description (required)" data-key-index="${fieldIdx}">${descEsc}</textarea>
+        </div>
+        <div class="prompt-output-allow-none-wrap">
+          <label class="prompt-output-allow-none-label"><input type="checkbox" class="prompt-output-allow-none-inp" data-key-index="${fieldIdx}" aria-label="Allow None"${allowNoneChecked} /> Allow None</label>
         </div>
         <div class="prompt-output-examples-wrap">
           <p class="prompt-output-examples-label">Examples for this field:</p>
@@ -570,17 +916,19 @@ export function buildWorkflowCanvas(root) {
         const type = (typeSel?.value ?? 'str') || 'str';
         const descInp = block.querySelector('.prompt-output-description-inp');
         const description = (descInp?.value ?? '').trim() || '';
+        const allowNoneInp = block.querySelector('.prompt-output-allow-none-inp');
+        const allowNone = !!(allowNoneInp && allowNoneInp.checked);
         const isList = type === 'list_str' || type === 'list_float';
         if (isList) {
           const exampleRows = block.querySelectorAll('.prompt-output-list-example-row');
           const examples = Array.from(exampleRows).map((row) =>
             Array.from(row.querySelectorAll('.prompt-output-list-element-inp')).map((inp) => (inp?.value ?? '').trim())
           );
-          return { key, type, description, examples };
+          return { key, type, description, examples, allowNone };
         }
         const exampleInputs = block.querySelectorAll('.prompt-output-example-inp');
         const examples = Array.from(exampleInputs).map((inp) => (inp?.value ?? '').trim());
-        return { key, type, description, examples };
+        return { key, type, description, examples, allowNone };
       });
       return { returnShape, fields };
     }
@@ -598,11 +946,12 @@ export function buildWorkflowCanvas(root) {
             type: o.type || 'str',
             description: o.description ?? '',
             examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
+            allowNone: o.allowNone === true,
           }));
           currentSchemaReturnShape = sourceNode.dataset.promptOutputReturnShape || 'table';
         } catch (_) {}
       }
-      if (currentSchemaFields.length === 0) currentSchemaFields = [{ key: '', type: 'str', description: '', examples: [] }];
+      if (currentSchemaFields.length === 0) currentSchemaFields = [{ key: '', type: 'str', description: '', examples: [], allowNone: false }];
       schemaEdit.innerHTML = `
         <div class="prompt-output-return-shape-wrap">
           <span class="prompt-output-return-shape-label">Return shape:</span>
@@ -620,7 +969,7 @@ export function buildWorkflowCanvas(root) {
 
       function reRenderSchemaFields() {
         const { returnShape, fields } = getSchemaFromEditContainer();
-        currentSchemaFields = fields.length ? fields : [{ key: '', type: 'str', description: '', examples: [] }];
+        currentSchemaFields = fields.length ? fields : [{ key: '', type: 'str', description: '', examples: [], allowNone: false }];
         currentSchemaReturnShape = returnShape;
         keysListEl.innerHTML = currentSchemaFields.map((item, i) => buildSchemaFieldBlockDetail(item, i)).join('');
         bindSchemaKeyEvents();
@@ -722,7 +1071,7 @@ export function buildWorkflowCanvas(root) {
 
       bindSchemaKeyEvents();
       schemaEdit.querySelector('.prompt-detail-schema-add-key').addEventListener('click', () => {
-        currentSchemaFields.push({ key: '', type: 'str', description: '', examples: [] });
+        currentSchemaFields.push({ key: '', type: 'str', description: '', examples: [], allowNone: false });
         keysListEl.innerHTML = currentSchemaFields.map((item, idx) => buildSchemaFieldBlockDetail(item, idx)).join('');
         bindSchemaKeyEvents();
       });
@@ -731,6 +1080,11 @@ export function buildWorkflowCanvas(root) {
 
     schemaBtnEdit.addEventListener('click', showSchemaEdit);
     schemaBtnCancel.addEventListener('click', showSchemaView);
+    function hasDuplicateFieldNames(fieldsList) {
+      const keys = fieldsList.map((o) => (o.key || '').trim().toLowerCase());
+      return keys.length !== new Set(keys).size;
+    }
+
     schemaBtnSave.addEventListener('click', () => {
       const { returnShape, fields } = getSchemaFromEditContainer();
       const normalized = fields.map((o) => ({
@@ -738,8 +1092,35 @@ export function buildWorkflowCanvas(root) {
         type: o.type || 'str',
         description: (o.description ?? '').trim() || '',
         examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
+        allowNone: o.allowNone === true,
       }));
-      currentSchemaFields = normalized.length ? normalized : [{ key: '', type: 'str', description: '', examples: [] }];
+      const fieldsToSave = normalized.length ? normalized : [{ key: '', type: 'str', description: '', examples: [], allowNone: false }];
+      const schemaErrorEl = overlay.querySelector('#prompt-detail-schema-error');
+      if (schemaErrorEl) schemaErrorEl.hidden = true;
+      const missingFieldName = fieldsToSave.some((f) => !(f.key ?? '').trim());
+      if (missingFieldName) {
+        if (schemaErrorEl) {
+          schemaErrorEl.textContent = 'Field name is required for all fields.';
+          schemaErrorEl.hidden = false;
+        }
+        return;
+      }
+      const missingFieldDesc = fieldsToSave.some((f) => !(f.description ?? '').trim());
+      if (missingFieldDesc) {
+        if (schemaErrorEl) {
+          schemaErrorEl.textContent = 'Field description is required for all fields.';
+          schemaErrorEl.hidden = false;
+        }
+        return;
+      }
+      if (hasDuplicateFieldNames(fieldsToSave)) {
+        if (schemaErrorEl) {
+          schemaErrorEl.textContent = 'Field names must be unique within this prompt. Please fix duplicate field names.';
+          schemaErrorEl.hidden = false;
+        } else alert('Field names must be unique within this prompt. Please fix duplicate field names.');
+        return;
+      }
+      currentSchemaFields = fieldsToSave;
       currentSchemaReturnShape = returnShape;
       if (sourceNode) {
         sourceNode.dataset.promptOutputFormat = JSON.stringify(currentSchemaFields);
@@ -758,12 +1139,14 @@ export function buildWorkflowCanvas(root) {
     document.body.appendChild(overlay);
   }
 
-  function createPromptNode({ name = '', note = '', sections = [], outputFormat, left, top }) {
+  function createPromptNode({ name = '', note = '', sections = [], outputFormat, left, top, nodeId: givenNodeId }) {
+    const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Prompt';
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--prompt';
     node.setAttribute('role', 'article');
     node.setAttribute('aria-label', `Prompt node: ${title}`);
+    node.dataset.nodeId = nodeId;
     node.dataset.promptSections = JSON.stringify(sections);
     node.dataset.promptName = name;
     node.dataset.promptNote = note;
@@ -775,7 +1158,7 @@ export function buildWorkflowCanvas(root) {
         examples: (outputFormat.examples || []).map((r) => r[key]).filter((v) => v != null && v !== ''),
       }));
     }
-    ofList = ofList.map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [] }));
+    ofList = ofList.map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
     node.dataset.promptOutputFormat = JSON.stringify(ofList);
     node.dataset.promptOutputReturnShape = outputFormat?.returnShape ?? 'single';
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
@@ -799,39 +1182,24 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const idx = getNodeIndex(node);
-      removeConnectionsInvolvingIndex(idx);
+      removeConnectionsInvolvingNodeId(nodeId);
       node.remove();
       updateContentSize();
       updateEdges();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     });
 
-    node.addEventListener('dblclick', (e) => {
-      if (e.target.closest('.workflow-node__delete')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      let sectionsData = [];
-      try {
-        sectionsData = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
-      } catch (_) {}
-      openPromptDetailModal({
-        name: node.dataset.promptName || '',
-        note: node.dataset.promptNote || '',
-        sections: sectionsData,
-        node,
-      });
-    });
-
     let dragStartX = 0;
     let dragStartY = 0;
     let nodeStartLeft = 0;
     let nodeStartTop = 0;
+    let lastInteractionWasDrag = false;
 
     function onPointerDown(e) {
       if (e.button !== 0) return;
       if (e.target.closest('.workflow-node__delete')) return;
       e.preventDefault();
+      lastInteractionWasDrag = false;
       const rect = node.getBoundingClientRect();
       const scrollContainer = nodesLayer.parentElement?.parentElement;
       const parentRect = scrollContainer ? scrollContainer.getBoundingClientRect() : nodesLayer.getBoundingClientRect();
@@ -847,6 +1215,7 @@ export function buildWorkflowCanvas(root) {
     }
 
     function onPointerMove(e) {
+      lastInteractionWasDrag = true;
       const dx = e.clientX - dragStartX;
       const dy = e.clientY - dragStartY;
       node.style.left = `${nodeStartLeft + dx}px`;
@@ -864,6 +1233,23 @@ export function buildWorkflowCanvas(root) {
 
     node.addEventListener('pointerdown', onPointerDown);
 
+    node.addEventListener('click', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      if (lastInteractionWasDrag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      let sectionsData = [];
+      try {
+        sectionsData = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
+      } catch (_) {}
+      openPromptDetailModal({
+        name: node.dataset.promptName || '',
+        note: node.dataset.promptNote || '',
+        sections: sectionsData,
+        node,
+      });
+    });
+
     node.addEventListener('contextmenu', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
       e.preventDefault();
@@ -874,12 +1260,8 @@ export function buildWorkflowCanvas(root) {
     return node;
   }
 
-  function removeConnectionsInvolvingIndex(idx) {
-    connections = connections.filter((c) => c.from !== idx && c.to !== idx);
-    connections = connections.map((c) => ({
-      from: c.from > idx ? c.from - 1 : c.from,
-      to: c.to > idx ? c.to - 1 : c.to,
-    }));
+  function removeConnectionsInvolvingNodeId(id) {
+    connections = connections.filter((c) => c.fromId !== id && c.toId !== id);
   }
 
   function showNodeContextMenu(clientX, clientY, node) {
@@ -896,7 +1278,7 @@ export function buildWorkflowCanvas(root) {
       <button type="button" class="workflow-node-context-item" data-action="placeholder-3" role="menuitem">Action 3 (placeholder)</button>
     `;
 
-    function duplicateNode() {
+    function duplicateNode(isNewVersion = false) {
       const left = parseFloat(node.style.left) || 0;
       const top = parseFloat(node.style.top) || 0;
       const width = node.offsetWidth || 280;
@@ -908,11 +1290,12 @@ export function buildWorkflowCanvas(root) {
       } catch (_) {}
       try {
         const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
-        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [] }));
+        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
         outputFormat = { returnShape: node.dataset.promptOutputReturnShape || 'single', fields };
       } catch (_) {}
+      const uniqueName = findUniquePromptName(node.dataset.promptName || '', isNewVersion);
       const newNode = createPromptNode({
-        name: node.dataset.promptName || '',
+        name: uniqueName,
         note: node.dataset.promptNote || '',
         sections: Array.isArray(sections) ? sections : [],
         outputFormat,
@@ -925,13 +1308,15 @@ export function buildWorkflowCanvas(root) {
     }
 
     const actions = {
-      duplicate: duplicateNode,
+      duplicate: () => duplicateNode(false),
       'new-version': () => {
-        const fromIdx = getNodeIndex(node);
-        const newNode = duplicateNode();
+        const newNode = duplicateNode(true);
         if (newNode) {
-          const toIdx = getNodeIndex(newNode);
-          connections.push({ from: fromIdx, to: toIdx });
+          connections.push({
+            fromId: node.dataset.nodeId,
+            toId: newNode.dataset.nodeId,
+            type: EDGE_TYPE_PROMPT_TO_PROMPT,
+          });
           updateEdges();
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         }
@@ -999,6 +1384,7 @@ export function buildWorkflowCanvas(root) {
         outputFormat = { returnShape: 'single', fields: [] };
       }
       return {
+        nodeId: node.dataset.nodeId || '',
         left: parseFloat(node.style.left) || 0,
         top: parseFloat(node.style.top) || 0,
         name: node.dataset.promptName || '',
@@ -1007,7 +1393,7 @@ export function buildWorkflowCanvas(root) {
         outputFormat,
       };
     });
-    return { version: 1, nodes, connections: connections.slice() };
+    return { version: 2, nodes, connections: connections.slice() };
   }
 
   function loadCanvasState(state) {
@@ -1015,17 +1401,38 @@ export function buildWorkflowCanvas(root) {
     if (!Array.isArray(list)) return;
     nodesLayer.innerHTML = '';
     nodeCount = list.length;
-    connections = Array.isArray(state.connections) ? state.connections.slice() : [];
+    const createdNodes = [];
     list.forEach((n) => {
-      createPromptNode({
+      const node = createPromptNode({
         name: n.name || '',
         note: n.note || '',
         sections: n.sections || n.fields || [],
         outputFormat: n.outputFormat,
         left: n.left,
         top: n.top,
+        nodeId: n.nodeId || n.id,
       });
+      createdNodes.push(node);
     });
+    // Normalize connections: support old { from, to } indices and new { fromId, toId, type }
+    const rawConnections = Array.isArray(state.connections) ? state.connections : [];
+    connections = rawConnections.map((c) => {
+      if (c.fromId != null && c.toId != null) {
+        return { fromId: c.fromId, toId: c.toId, type: c.type || EDGE_TYPE_PROMPT_TO_PROMPT };
+      }
+      if (typeof c.from === 'number' && typeof c.to === 'number') {
+        const fromNode = createdNodes[c.from];
+        const toNode = createdNodes[c.to];
+        if (fromNode?.dataset?.nodeId && toNode?.dataset?.nodeId) {
+          return {
+            fromId: fromNode.dataset.nodeId,
+            toId: toNode.dataset.nodeId,
+            type: EDGE_TYPE_PROMPT_TO_PROMPT,
+          };
+        }
+      }
+      return null;
+    }).filter(Boolean);
     updateContentSize();
     updateEdges();
   }
@@ -1035,5 +1442,5 @@ export function buildWorkflowCanvas(root) {
   }
 
   root.appendChild(canvas);
-  return { getCanvasState, loadCanvasState, setOnCanvasChange };
+  return { getCanvasState, loadCanvasState, setOnCanvasChange, isPromptNameAlreadyUsed };
 }

@@ -29,9 +29,17 @@
   top: 0;
   width: 100%;
   height: 100%;
-  pointer-events: none;
   z-index: 0;
   color: var(--text-muted);
+}
+
+.workflow-canvas__edges line {
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.workflow-canvas__edges > g {
+  pointer-events: none;
 }
 
 .workflow-canvas__nodes {
