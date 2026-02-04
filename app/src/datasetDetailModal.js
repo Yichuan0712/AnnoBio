@@ -115,6 +115,7 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
   const nextPageBtn = overlay.querySelector('.dataset-detail-next-page');
   const pageInp = overlay.querySelector('#dataset-detail-page-inp');
   const pageOfSpan = overlay.querySelector('.dataset-detail-page-of');
+  const btnCreateSampler = overlay.querySelector('.dataset-detail-btn-create-sampler');
 
   let currentPage = 1;
   let rowsPerPage = 25;
@@ -313,6 +314,13 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     showView();
   });
+
+  if (btnCreateSampler) {
+    btnCreateSampler.addEventListener('click', () => {
+      const colorIndex = node?.dataset?.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined;
+      document.dispatchEvent(new CustomEvent('workflow:add-sampler-node', { detail: { sourceNodeId: nodeId, colorIndex } }));
+    });
+  }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
 
