@@ -48,7 +48,7 @@
   padding: 6px 10px;
   background: var(--bg-bar);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 0;
   box-shadow: 0 2px 8px var(--shadow);
 }
 
@@ -64,7 +64,7 @@
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 0;
   cursor: pointer;
   font-family: inherit;
 }
@@ -196,7 +196,7 @@
   color: var(--text-muted);
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: 0;
   cursor: pointer;
 }
 
@@ -233,7 +233,7 @@
   padding: 4px 0;
   background: var(--bg-bar);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 0;
   box-shadow: 0 4px 16px var(--shadow);
 }
 
@@ -256,9 +256,9 @@
 }
 
 .workflow-node-context-item:first-child {
-  border-radius: 4px 4px 0 0;
+  border-radius: 0;
 }
 
 .workflow-node-context-item:last-child {
-  border-radius: 0 0 4px 4px;
+  border-radius: 0;
 }
