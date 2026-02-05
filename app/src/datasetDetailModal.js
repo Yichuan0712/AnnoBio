@@ -1,6 +1,6 @@
 /**
  * Source dataset detail modal: edit name/description (left), full data preview with pagination (right).
- * @param {{ node: HTMLElement, getDatasetContent: () => { headers: string[], rows: string[][] }, isDatasetNameAlreadyUsed?: (name: string, excludeNodeId?: string | null) => boolean }} options
+ * @param {{ node: HTMLElement, getDatasetContent: () => { headers: string[], rows: string[][] }, isDatasetNameAlreadyUsed?: (name: string, excludeNodeId?: string | null) => boolean, isSamplerNameAlreadyUsedForSource?: (name: string, sourceNodeId: string, excludeNodeId?: string | null) => boolean }} options
  */
 
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -17,7 +17,7 @@ function truncate(str, max = MAX_CELL_CHARS) {
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
-export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameAlreadyUsed }) {
+export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameAlreadyUsed, isSamplerNameAlreadyUsedForSource }) {
   const nodeId = node?.dataset?.nodeId ?? '';
   const name = (node?.dataset?.datasetName ?? '').trim() || 'Source dataset';
   const note = (node?.dataset?.datasetNote ?? '').trim();
@@ -66,7 +66,65 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
           </div>
           <div class="dataset-detail-sampler-card">
             <h3 class="dataset-detail-sampler-title">Working dataset sampler</h3>
-            <div class="dataset-detail-sampler-body"></div>
+            <div class="dataset-detail-sampler-body">
+              <div class="dataset-detail-row">
+                <label class="dataset-detail-label" for="sampler-name-inp">Sampler name</label>
+                <input type="text" id="sampler-name-inp" class="dataset-detail-input dataset-meta-input" placeholder="Sampler name (required)" />
+              </div>
+              <div class="dataset-detail-row">
+                <span class="dataset-detail-label">Sampling</span>
+                <div class="sampler-radio-group">
+                  <label class="sampler-radio-label"><input type="radio" name="sampler-replacement" value="with-replacement" /> With replacement</label>
+                  <label class="sampler-radio-label"><input type="radio" name="sampler-replacement" value="without-replacement" checked /> Without replacement</label>
+                  <label class="sampler-radio-label"><input type="radio" name="sampler-replacement" value="specify-rows" /> Specify rows</label>
+                </div>
+              </div>
+              <div class="sampler-size-wrap">
+              <div class="dataset-detail-row">
+                <span class="dataset-detail-label">Sample size</span>
+                <div class="sampler-radio-group">
+                  <label class="sampler-radio-label"><input type="radio" name="sampler-size-type" value="rows" checked /> Rows</label>
+                  <label class="sampler-radio-label"><input type="radio" name="sampler-size-type" value="ratio" /> Ratio</label>
+                </div>
+              </div>
+              <div class="dataset-detail-row sampler-size-rows-wrap">
+                <label class="dataset-detail-label" for="sampler-rows-inp">Rows</label>
+                <input type="number" id="sampler-rows-inp" class="dataset-detail-input dataset-meta-input" min="1" placeholder="Required when using rows" />
+              </div>
+              <div class="dataset-detail-row sampler-size-ratio-wrap" style="display: none;">
+                <label class="dataset-detail-label" for="sampler-ratio-select">Ratio</label>
+                <select id="sampler-ratio-select" class="dataset-detail-input dataset-meta-input">
+                  <option value="10">10%</option>
+                  <option value="25">25%</option>
+                  <option value="50" selected>50%</option>
+                  <option value="75">75%</option>
+                  <option value="100">100%</option>
+                </select>
+              </div>
+              </div>
+              <div class="sampler-specify-rows-wrap" style="display: none;">
+                <div class="dataset-detail-row sampler-row-spec-block">
+                  <span class="dataset-detail-label">Add row</span>
+                  <div class="sampler-row-spec-add-row">
+                    <input type="number" id="sampler-add-number-inp" class="dataset-detail-input dataset-meta-input sampler-add-number-inp" min="1" placeholder="1" aria-label="Row number (1-based)" />
+                    <button type="button" class="btn btn-secondary sampler-add-number-btn">Add</button>
+                  </div>
+                </div>
+                <div class="dataset-detail-row sampler-row-spec-block">
+                  <span class="dataset-detail-label">Add range</span>
+                  <div class="sampler-row-spec-add-row">
+                    <input type="number" id="sampler-add-range-from" class="dataset-detail-input dataset-meta-input sampler-add-range-inp" min="1" placeholder="From" aria-label="From row" />
+                    <span class="sampler-row-spec-to-label">to</span>
+                    <input type="number" id="sampler-add-range-to" class="dataset-detail-input dataset-meta-input sampler-add-range-inp" min="1" placeholder="To" aria-label="To row" />
+                    <button type="button" class="btn btn-secondary sampler-add-range-btn">Add range</button>
+                  </div>
+                </div>
+                <div class="dataset-detail-row">
+                  <div class="sampler-row-spec-list" role="list" aria-label="Selected row numbers and ranges"></div>
+                </div>
+              </div>
+              <div class="prompt-form-error sampler-form-error" role="alert" aria-live="polite" hidden></div>
+            </div>
             <div class="dataset-detail-sampler-footer">
               <button type="button" class="btn btn-secondary dataset-detail-btn-create-sampler">Create sampler</button>
             </div>
@@ -74,7 +132,11 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
         </div>
         <div class="dataset-detail-col dataset-detail-col--right">
           <div class="dataset-preview-wrap dataset-detail-preview-area">
-            <h3 class="dataset-preview-title">Preview</h3>
+            <div class="dataset-detail-preview-search-wrap">
+              <span class="dataset-detail-label dataset-detail-preview-caption">Source dataset preview</span>
+              <label class="dataset-detail-search-label" for="dataset-detail-preview-search">Search</label>
+              <input type="text" id="dataset-detail-preview-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in preview" />
+            </div>
             <div class="dataset-preview">
               <div class="dataset-detail-preview-inner"></div>
             </div>
@@ -116,10 +178,56 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
   const pageInp = overlay.querySelector('#dataset-detail-page-inp');
   const pageOfSpan = overlay.querySelector('.dataset-detail-page-of');
   const btnCreateSampler = overlay.querySelector('.dataset-detail-btn-create-sampler');
+  const samplerNameInp = overlay.querySelector('#sampler-name-inp');
+  const samplerRowsInp = overlay.querySelector('#sampler-rows-inp');
+  const samplerRatioSelect = overlay.querySelector('#sampler-ratio-select');
+  const samplerSizeWrap = overlay.querySelector('.sampler-size-wrap');
+  const samplerSizeRowsWrap = overlay.querySelector('.sampler-size-rows-wrap');
+  const samplerSizeRatioWrap = overlay.querySelector('.sampler-size-ratio-wrap');
+  const samplerSpecifyRowsWrap = overlay.querySelector('.sampler-specify-rows-wrap');
+  const samplerRowSpecList = overlay.querySelector('.sampler-row-spec-list');
+  const samplerAddNumberInp = overlay.querySelector('#sampler-add-number-inp');
+  const samplerAddNumberBtn = overlay.querySelector('.sampler-add-number-btn');
+  const samplerAddRangeFrom = overlay.querySelector('#sampler-add-range-from');
+  const samplerAddRangeTo = overlay.querySelector('#sampler-add-range-to');
+  const samplerAddRangeBtn = overlay.querySelector('.sampler-add-range-btn');
+  const samplerFormErrorEl = overlay.querySelector('.sampler-form-error');
+
+  const rowSpecItems = [];
+  function renderRowSpecList() {
+    if (!samplerRowSpecList) return;
+    samplerRowSpecList.innerHTML = '';
+    rowSpecItems.forEach((item, idx) => {
+      const chip = document.createElement('span');
+      chip.className = 'sampler-row-spec-chip';
+      chip.setAttribute('role', 'listitem');
+      if (item.type === 'single') {
+        chip.textContent = String(item.value);
+      } else {
+        chip.textContent = `${item.from}–${item.to}`;
+      }
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'sampler-row-spec-chip-remove';
+      remove.setAttribute('aria-label', 'Remove');
+      remove.textContent = '×';
+      remove.addEventListener('click', () => {
+        rowSpecItems.splice(idx, 1);
+        renderRowSpecList();
+      });
+      chip.appendChild(remove);
+      samplerRowSpecList.appendChild(chip);
+    });
+  }
+  function buildRowSpecString() {
+    return rowSpecItems.map((item) => (item.type === 'single' ? String(item.value) : `${item.from}-${item.to}`)).join(' ');
+  }
+  const previewSearchInp = overlay.querySelector('#dataset-detail-preview-search');
 
   let currentPage = 1;
   let rowsPerPage = 25;
   let totalPages = 1;
+  let previewSearchQuery = '';
 
   function getContent() {
     const content = getDatasetContent();
@@ -144,13 +252,21 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
       if (pageOfSpan) pageOfSpan.textContent = '/ 1';
       return;
     }
-    totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage));
+    const searchLower = (previewSearchQuery || '').trim().toLowerCase();
+    const filteredIndices = searchLower
+      ? rows.map((row, i) => (row.some((cell) => String(cell ?? '').toLowerCase().includes(searchLower)) ? i : -1)).filter((i) => i >= 0)
+      : rows.map((_, i) => i);
+    const filteredTotal = filteredIndices.length;
+    totalPages = Math.max(1, Math.ceil(filteredTotal / rowsPerPage));
     currentPage = Math.min(currentPage, totalPages);
     const start = (currentPage - 1) * rowsPerPage;
-    const end = Math.min(start + rowsPerPage, totalRows);
-    const pageRows = rows.slice(start, end);
+    const end = Math.min(start + rowsPerPage, filteredTotal);
+    const pageIndices = filteredIndices.slice(start, end);
+    const pageRows = pageIndices.map((i) => rows[i]);
 
-    paginationInfo.textContent = `Showing ${start + 1}–${end} of ${totalRows.toLocaleString()} rows`;
+    paginationInfo.textContent = filteredTotal === totalRows
+      ? `Showing ${start + 1}–${end} of ${totalRows.toLocaleString()} rows`
+      : `Showing ${start + 1}–${end} of ${filteredTotal.toLocaleString()} (filtered from ${totalRows.toLocaleString()}) rows`;
 
     const table = document.createElement('table');
     table.className = 'dataset-preview-table dataset-detail-preview-table';
@@ -171,10 +287,11 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
     table.appendChild(thead);
     const tbody = document.createElement('tbody');
     pageRows.forEach((row, rowIdx) => {
+      const originalRowNum = pageIndices[rowIdx] + 1;
       const tr = document.createElement('tr');
       const tdRowNum = document.createElement('td');
       tdRowNum.className = 'dataset-detail-preview-row-num';
-      tdRowNum.textContent = String(start + rowIdx + 1);
+      tdRowNum.textContent = String(originalRowNum);
       tr.appendChild(tdRowNum);
       headers.forEach((_, i) => {
         const td = document.createElement('td');
@@ -247,6 +364,13 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
     currentPage = 1;
     renderPreview();
   });
+  if (previewSearchInp) {
+    previewSearchInp.addEventListener('input', () => {
+      previewSearchQuery = (previewSearchInp.value || '').trim();
+      currentPage = 1;
+      renderPreview();
+    });
+  }
   if (prevPageBtn) {
     prevPageBtn.addEventListener('click', () => {
       if (currentPage > 1) {
@@ -315,10 +439,105 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
     showView();
   });
 
+  function updateSamplerModeVisibility() {
+    const samplingType = overlay.querySelector('input[name="sampler-replacement"]:checked')?.value || 'without-replacement';
+    const isSpecifyRows = samplingType === 'specify-rows';
+    if (samplerSizeWrap) samplerSizeWrap.style.display = isSpecifyRows ? 'none' : '';
+    if (samplerSpecifyRowsWrap) samplerSpecifyRowsWrap.style.display = isSpecifyRows ? 'flex' : 'none';
+  }
+  overlay.querySelectorAll('input[name="sampler-replacement"]').forEach((radio) => {
+    radio.addEventListener('change', updateSamplerModeVisibility);
+  });
+  updateSamplerModeVisibility();
+
+  overlay.querySelectorAll('input[name="sampler-size-type"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      const isRows = overlay.querySelector('input[name="sampler-size-type"]:checked')?.value === 'rows';
+      if (samplerSizeRowsWrap) samplerSizeRowsWrap.style.display = isRows ? '' : 'none';
+      if (samplerSizeRatioWrap) samplerSizeRatioWrap.style.display = isRows ? 'none' : '';
+    });
+  });
+  if (samplerSizeRatioWrap) samplerSizeRatioWrap.style.display = 'none';
+
+  function addSingleRow() {
+    if (!samplerAddNumberInp) return;
+    const n = parseInt(samplerAddNumberInp.value, 10);
+    if (!Number.isFinite(n) || n < 1) return;
+    rowSpecItems.push({ type: 'single', value: n });
+    renderRowSpecList();
+    samplerAddNumberInp.value = '';
+    samplerAddNumberInp.focus();
+  }
+  if (samplerAddNumberBtn && samplerAddNumberInp) {
+    samplerAddNumberBtn.addEventListener('click', addSingleRow);
+    samplerAddNumberInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addSingleRow(); } });
+  }
+  if (samplerAddRangeBtn && samplerAddRangeFrom && samplerAddRangeTo) {
+    samplerAddRangeBtn.addEventListener('click', () => {
+      const from = parseInt(samplerAddRangeFrom.value, 10);
+      const to = parseInt(samplerAddRangeTo.value, 10);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from < 1 || to < 1) return;
+      const low = Math.min(from, to);
+      const high = Math.max(from, to);
+      rowSpecItems.push({ type: 'range', from: low, to: high });
+      renderRowSpecList();
+      samplerAddRangeFrom.value = '';
+      samplerAddRangeTo.value = '';
+    });
+  }
+
   if (btnCreateSampler) {
     btnCreateSampler.addEventListener('click', () => {
+      if (samplerFormErrorEl) samplerFormErrorEl.hidden = true;
+      const name = (samplerNameInp?.value || '').trim();
+      const samplingType = overlay.querySelector('input[name="sampler-replacement"]:checked')?.value || 'without-replacement';
+      const isSpecifyRows = samplingType === 'specify-rows';
+      const rowSpec = isSpecifyRows ? buildRowSpecString() : '';
+      const sampleSizeType = overlay.querySelector('input[name="sampler-size-type"]:checked')?.value || 'rows';
+      const rowsValue = samplerRowsInp?.value != null ? samplerRowsInp.value.trim() : '';
+      const rowsNum = sampleSizeType === 'rows' ? parseInt(rowsValue, 10) : NaN;
+      const sampleSize = sampleSizeType === 'rows' ? (Number.isFinite(rowsNum) && rowsNum >= 1 ? rowsNum : 0) : (parseInt(samplerRatioSelect?.value, 10) || 50);
+
+      if (!name) {
+        if (samplerFormErrorEl) {
+          samplerFormErrorEl.textContent = 'Sampler name is required.';
+          samplerFormErrorEl.hidden = false;
+        }
+        return;
+      }
+      if (isSpecifyRows) {
+        if (rowSpecItems.length === 0) {
+          if (samplerFormErrorEl) {
+            samplerFormErrorEl.textContent = 'Add at least one row number or range.';
+            samplerFormErrorEl.hidden = false;
+          }
+          return;
+        }
+      } else if (sampleSizeType === 'rows' && (!Number.isFinite(rowsNum) || rowsNum < 1)) {
+        if (samplerFormErrorEl) {
+          samplerFormErrorEl.textContent = 'Sample size (rows) is required. Enter at least 1 row.';
+          samplerFormErrorEl.hidden = false;
+        }
+        return;
+      }
+      if (isSamplerNameAlreadyUsedForSource?.(name, nodeId, null)) {
+        if (samplerFormErrorEl) {
+          samplerFormErrorEl.textContent = 'This sampler name is already used for this source dataset. Please choose another.';
+          samplerFormErrorEl.hidden = false;
+        }
+        return;
+      }
+
       const colorIndex = node?.dataset?.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined;
-      document.dispatchEvent(new CustomEvent('workflow:add-sampler-node', { detail: { sourceNodeId: nodeId, colorIndex } }));
+      const detail = { sourceNodeId: nodeId, colorIndex, name, samplingType };
+      if (isSpecifyRows) {
+        detail.rowSpec = rowSpec;
+      } else {
+        detail.sampleSizeType = sampleSizeType;
+        detail.sampleSize = sampleSize;
+      }
+      document.dispatchEvent(new CustomEvent('workflow:add-sampler-node', { detail }));
+      close();
     });
   }
 

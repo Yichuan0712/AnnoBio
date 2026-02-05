@@ -6,6 +6,8 @@
 
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { openPromptDetailModal } from './promptDetailModal.js';
+import { openSamplerDetailModal } from './samplerDetailModal.js';
+import { openWorkingDatasetDetailModal } from './workingDatasetDetailModal.js';
 
 const MIN_CONTENT_PADDING = 200;
 /** Minimum canvas content size (width, height) so there is plenty of room to work and zoom. */
@@ -16,9 +18,16 @@ const MIN_CANVAS_HEIGHT = 2600;
 const EDGE_TYPE_PROMPT_TO_PROMPT = 'prompt-to-prompt';
 /** Edge type for source dataset → sampler. */
 const EDGE_TYPE_DATASET_TO_SAMPLER = 'dataset-to-sampler';
+/** Edge type for sampler → subset. */
+const EDGE_TYPE_SAMPLER_TO_SUBSET = 'sampler-to-subset';
+/** Edge type for subset → subset (e.g. "version of" link). */
+const EDGE_TYPE_SUBSET_TO_SUBSET = 'subset-to-subset';
 
 /** Invisible stroke width for edge hit area (px). */
 const EDGE_HIT_STROKE_WIDTH = 16;
+
+/** Horizontal gap when placing a new node to the right of its parent (source → sampler, sampler → subset, duplicate prompt). */
+const NEW_NODE_OFFSET = 40;
 
 function generateNodeId() {
   return 'n_' + Date.now() + '_' + (Math.random() * 1e9 | 0);
@@ -116,6 +125,8 @@ export function buildWorkflowCanvas(root) {
 
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content for preview/detail */
   const datasetContentByNodeId = new Map();
+  /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> working dataset (subset) content */
+  const subsetContentByNodeId = new Map();
 
   function getNodeList() {
     return Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'));
@@ -124,6 +135,31 @@ export function buildWorkflowCanvas(root) {
   function getNodeById(nodeId) {
     if (!nodeId) return null;
     return nodesLayer.querySelector(`[data-node-id="${nodeId}"]`) || null;
+  }
+
+  /**
+   * Generate next working dataset name: SourceName_SamplerName_N (N increments per sampler).
+   * @param {string} samplerNodeId
+   * @returns {string}
+   */
+  function findNextWorkingDatasetName(samplerNodeId) {
+    const samplerNode = getNodeById(samplerNodeId);
+    const sourceNode = samplerNode?.dataset?.sourceNodeId ? getNodeById(samplerNode.dataset.sourceNodeId) : null;
+    const sourceName = (sourceNode?.dataset?.datasetName ?? '').trim() || 'Source';
+    const samplerName = (samplerNode?.dataset?.samplerName ?? '').trim() || 'Sampler';
+    const base = `${sourceName}_${samplerName}`;
+    const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
+    let maxN = 0;
+    const prefix = base + '_';
+    for (const n of subsetNodes) {
+      if (n.dataset.samplerNodeId !== samplerNodeId) continue;
+      const name = (n.dataset.subsetName || '').trim();
+      if (!name.startsWith(prefix)) continue;
+      const numStr = name.slice(prefix.length);
+      const num = parseInt(numStr, 10);
+      if (Number.isFinite(num) && num >= 1 && String(num) === numStr.trim()) maxN = Math.max(maxN, num);
+    }
+    return `${base}_${maxN + 1}`;
   }
 
   function getNodeIndex(node) {
@@ -166,6 +202,85 @@ export function buildWorkflowCanvas(root) {
   }
 
   /**
+   * Check if a sampler name is already used for the same source dataset (case-insensitive).
+   * @param {string} nameToCheck
+   * @param {string} sourceNodeId - source dataset node id
+   * @param {string|null} [excludeNodeId=null] - sampler node id to exclude (e.g. when editing)
+   * @returns {boolean}
+   */
+  function isSamplerNameAlreadyUsedForSource(nameToCheck, sourceNodeId, excludeNodeId = null) {
+    const normalized = (nameToCheck || '').trim().toLowerCase();
+    if (!normalized) return true;
+    const samplerNodes = nodesLayer.querySelectorAll('.workflow-node--sampler');
+    for (const n of samplerNodes) {
+      if (n.dataset.sourceNodeId !== sourceNodeId) continue;
+      if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
+      const existing = (n.dataset.samplerName || '').trim().toLowerCase();
+      if (existing === normalized) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Parse row spec string (1-based) into sorted unique 0-based indices. Supports "1, 3, 5-10, 15".
+   * @param {string} text
+   * @param {number} totalRows - max row count (1-based), indices > totalRows are skipped
+   * @returns {number[]}
+   */
+  function parseRowSpec(text, totalRows) {
+    const seen = new Set();
+    const parts = (text || '').split(/[\s,]+/).filter(Boolean);
+    for (const part of parts) {
+      const dash = part.indexOf('-');
+      if (dash === -1) {
+        const num = parseInt(part, 10);
+        if (Number.isFinite(num) && num >= 1 && num <= totalRows) seen.add(num - 1);
+      } else {
+        const a = parseInt(part.slice(0, dash), 10);
+        const b = parseInt(part.slice(dash + 1), 10);
+        if (Number.isFinite(a) && Number.isFinite(b) && a >= 1 && b >= 1) {
+          const low = Math.min(a, b);
+          const high = Math.min(Math.max(a, b), totalRows);
+          for (let r = Math.max(1, low); r <= high; r++) seen.add(r - 1);
+        }
+      }
+    }
+    return Array.from(seen).sort((x, y) => x - y);
+  }
+
+  /**
+   * Sample rows from source data per sampler settings.
+   * @param {string[][]} sourceRows
+   * @param {number} sampleSize - row count or percentage (1-100)
+   * @param {string} sampleSizeType - 'rows' | 'ratio'
+   * @param {string} samplingType - 'with-replacement' | 'without-replacement'
+   * @returns {string[][]}
+   */
+  function sampleRows(sourceRows, sampleSize, sampleSizeType, samplingType) {
+    const n = sourceRows.length;
+    if (n === 0) return [];
+    let count = sampleSizeType === 'rows' ? Math.max(0, Math.floor(sampleSize)) : Math.max(0, Math.floor((n * sampleSize) / 100));
+    count = Math.min(count, n);
+    if (count === 0) return [];
+
+    if (samplingType === 'without-replacement') {
+      const indices = Array.from({ length: n }, (_, i) => i);
+      for (let i = n - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+      }
+      return indices.slice(0, count).map((i) => sourceRows[i].slice());
+    }
+
+    const result = [];
+    for (let k = 0; k < count; k++) {
+      const i = Math.floor(Math.random() * n);
+      result.push(sourceRows[i].slice());
+    }
+    return result;
+  }
+
+  /**
    * Strip trailing " (Copy N)" or " vN" from a name so we can reuse the root for next number.
    * @param {string} name
    * @returns {string}
@@ -182,13 +297,14 @@ export function buildWorkflowCanvas(root) {
   /**
    * Find a unique prompt name by appending suffix. Used for duplicate / new version.
    * Strips existing " (Copy N)" / " vN" from base so we get "Name (Copy 2)" not "Name (Copy 1) (Copy 1)".
+   * New version starts at v2 (current prompt is implicitly v1), consistent with dataset version naming.
    * @param {string} baseName - base name (e.g. from source node)
-   * @param {boolean} isNewVersion - true for "Name v1", false for "Name (Copy 1)"
+   * @param {boolean} isNewVersion - true for "Name v2", false for "Name (Copy 1)"
    * @returns {string}
    */
   function findUniquePromptName(baseName, isNewVersion) {
     const base = stripCopyOrVersionSuffix(baseName || '');
-    let n = 1;
+    let n = isNewVersion ? 2 : 1;
     let candidate;
     do {
       candidate = isNewVersion ? `${base} v${n}` : `${base} (Copy ${n})`;
@@ -231,6 +347,7 @@ export function buildWorkflowCanvas(root) {
       hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
       hitLine.setAttribute('data-edge-type', edge.type);
       hitLine.setAttribute('data-edge-index', String(edgeIndex));
+      hitLine.setAttribute('pointer-events', 'stroke');
       g.appendChild(hitLine);
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('x1', String(startX));
@@ -242,6 +359,7 @@ export function buildWorkflowCanvas(root) {
       line.setAttribute('marker-end', 'url(#workflow-arrow)');
       line.setAttribute('data-edge-type', edge.type);
       line.setAttribute('data-edge-index', String(edgeIndex));
+      line.setAttribute('pointer-events', 'none');
       g.appendChild(line);
     } else {
       // Unknown type: draw same as prompt-to-prompt for now; add branches for new types later.
@@ -258,6 +376,7 @@ export function buildWorkflowCanvas(root) {
       hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
       hitLine.setAttribute('data-edge-type', edge.type || '');
       hitLine.setAttribute('data-edge-index', String(edgeIndex));
+      hitLine.setAttribute('pointer-events', 'stroke');
       g.appendChild(hitLine);
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('x1', String(startX));
@@ -269,13 +388,14 @@ export function buildWorkflowCanvas(root) {
       line.setAttribute('marker-end', 'url(#workflow-arrow)');
       line.setAttribute('data-edge-type', edge.type || '');
       line.setAttribute('data-edge-index', String(edgeIndex));
+      line.setAttribute('pointer-events', 'none');
       g.appendChild(line);
     }
   }
 
   function updateEdges() {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.setAttribute('pointer-events', 'none');
+    g.setAttribute('pointer-events', 'auto');
     connections.forEach((edge, i) => renderEdge(g, edge, i));
     const existing = edgesLayer.querySelector('g');
     if (existing) existing.remove();
@@ -426,19 +546,83 @@ export function buildWorkflowCanvas(root) {
     document.body.appendChild(overlay);
   }
 
+  function serializeSubsetToDiffText(content) {
+    if (!content) return '(no data)';
+    const headers = content.headers || [];
+    const rows = content.rows || [];
+    const lines = [];
+    lines.push('Headers: ' + headers.join(', ') || '(none)');
+    rows.forEach((row, i) => {
+      const cells = Array.isArray(row) ? row : [];
+      lines.push('Row ' + (i + 1) + ': ' + cells.join(', '));
+    });
+    if (rows.length === 0) lines.push('(no rows)');
+    return lines.join('\n');
+  }
+
+  function openSubsetEdgeDetailModal(edge) {
+    const fromNode = getNodeById(edge.fromId);
+    const toNode = getNodeById(edge.toId);
+    const fromContent = subsetContentByNodeId.get(edge.fromId) || null;
+    const toContent = subsetContentByNodeId.get(edge.toId) || null;
+    const fromName = (fromNode?.dataset?.subsetName ?? '').trim() || 'Working dataset';
+    const toName = (toNode?.dataset?.subsetName ?? '').trim() || 'Working dataset';
+
+    const oldText = serializeSubsetToDiffText(fromContent);
+    const newText = serializeSubsetToDiffText(toContent);
+    const diffLines = lineDiff(oldText, newText);
+    const bodyHtml = '<div class="prompt-diff-view"><table class="prompt-diff-table"><colgroup><col class="diff-col-old-num"><col class="diff-col-old-content"><col class="diff-col-new-num"><col class="diff-col-new-content"></colgroup><thead><tr><th colspan="2" class="diff-th-old">Old</th><th colspan="2" class="diff-th-new">New</th></tr></thead><tbody>' +
+      diffLines.map((item) => {
+        const cls = 'diff-line diff-' + item.type;
+        const oldNum = item.type === 'add' ? '' : (item.oldNum || '');
+        const newNum = item.type === 'remove' ? '' : (item.newNum || '');
+        const lineEsc = escapeHtml(item.line || ' ');
+        const oldCell = item.type === 'add' ? '<td class="diff-line-num diff-old-num"></td><td class="diff-line-content diff-old-content"></td>' : '<td class="diff-line-num diff-old-num">' + oldNum + '</td><td class="diff-line-content diff-old-content">' + lineEsc + '</td>';
+        const newCell = item.type === 'remove' ? '<td class="diff-line-num diff-new-num"></td><td class="diff-line-content diff-new-content"></td>' : '<td class="diff-line-num diff-new-num">' + newNum + '</td><td class="diff-line-content diff-new-content">' + lineEsc + '</td>';
+        return '<tr class="' + cls + '">' + oldCell + newCell + '</tr>';
+      }).join('') +
+      '</tbody></table></div>';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'edge-detail-title');
+    overlay.innerHTML = `
+      <div class="modal-panel modal-panel--edge-detail">
+        <div class="modal-header">
+          <h2 id="edge-detail-title" class="modal-title">Compare versions: ${escapeHtml(fromName)} → ${escapeHtml(toName)}</h2>
+          <button type="button" class="modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body modal-body--diff">
+          ${bodyHtml}
+        </div>
+      </div>
+    `;
+    overlay.querySelector('.modal-close').addEventListener('click', () => {
+      overlay.remove();
+      document.body.style.overflow = '';
+    });
+    document.body.style.overflow = 'hidden';
+    document.body.appendChild(overlay);
+  }
+
   function onEdgesLayerClick(e) {
     const lineEl = e.target && (e.target.tagName === 'line' || e.target.localName === 'line') ? e.target : null;
     if (!lineEl) return;
     const edgeType = lineEl.getAttribute('data-edge-type');
     const indexStr = lineEl.getAttribute('data-edge-index');
-    if (edgeType === EDGE_TYPE_PROMPT_TO_PROMPT && indexStr !== null) {
-      const edgeIndex = parseInt(indexStr, 10);
-      const edge = connections[edgeIndex];
-      if (edge) {
-        e.preventDefault();
-        e.stopPropagation();
-        openEdgeDetailModal(edge, edgeIndex);
-      }
+    if (indexStr === null) return;
+    const edgeIndex = parseInt(indexStr, 10);
+    const edge = connections[edgeIndex];
+    if (!edge) return;
+    if (edgeType === EDGE_TYPE_PROMPT_TO_PROMPT) {
+      e.preventDefault();
+      e.stopPropagation();
+      openEdgeDetailModal(edge, edgeIndex);
+    } else if (edgeType === EDGE_TYPE_SUBSET_TO_SUBSET) {
+      e.preventDefault();
+      e.stopPropagation();
+      openSubsetEdgeDetailModal(edge);
     }
   }
 
@@ -667,7 +851,7 @@ export function buildWorkflowCanvas(root) {
     if (!hasNote) node.classList.add('workflow-node--no-body');
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="12" height="12" rx="0.5"/><line x1="1" y1="4" x2="13" y2="4"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="1" y1="10" x2="13" y2="10"/><line x1="4.5" y1="1" x2="4.5" y2="13"/><line x1="8" y1="1" x2="8" y2="13"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><ellipse cx="7" cy="2.8" rx="4" ry="1.2"/><ellipse cx="7" cy="11.2" rx="4" ry="1.2"/><line x1="3" y1="2.8" x2="3" y2="11.2"/><line x1="11" y1="2.8" x2="11" y2="11.2"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
@@ -737,6 +921,7 @@ export function buildWorkflowCanvas(root) {
         node,
         getDatasetContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
         isDatasetNameAlreadyUsed,
+        isSamplerNameAlreadyUsedForSource,
       });
     });
 
@@ -750,7 +935,7 @@ export function buildWorkflowCanvas(root) {
     return node;
   }
 
-  function createSamplerNode({ name = '', notes = '', left, top, nodeId: givenNodeId, sourceNodeId = '', colorIndex: givenColorIndex }) {
+  function createSamplerNode({ name = '', notes = '', left, top, nodeId: givenNodeId, sourceNodeId = '', colorIndex: givenColorIndex, samplingType = 'without-replacement', sampleSizeType = 'rows', sampleSize = 100, rowSpec = '' }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Sampler';
     const node = document.createElement('div');
@@ -761,6 +946,13 @@ export function buildWorkflowCanvas(root) {
     node.dataset.samplerName = name;
     node.dataset.samplerNote = notes;
     node.dataset.nodeType = 'sampler';
+    node.dataset.samplerSamplingType = samplingType;
+    if (samplingType === 'specify-rows') {
+      node.dataset.samplerRowSpec = (rowSpec || '').trim();
+    } else {
+      node.dataset.samplerSampleSizeType = sampleSizeType;
+      node.dataset.samplerSampleSize = String(sampleSize);
+    }
     if (sourceNodeId) node.dataset.sourceNodeId = sourceNodeId;
     let colorIndex = typeof givenColorIndex === 'number' && givenColorIndex >= 0 ? givenColorIndex : 0;
     colorIndex = colorIndex % DATASET_BORDER_COLORS.length;
@@ -828,6 +1020,125 @@ export function buildWorkflowCanvas(root) {
     }
     node.addEventListener('pointerdown', onPointerDown);
 
+    node.addEventListener('click', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      if (lastInteractionWasDrag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openSamplerDetailModal({ node });
+    });
+
+    node.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showNodeContextMenu(e.clientX, e.clientY, node);
+    });
+
+    return node;
+  }
+
+  function createSubsetNode({ name = '', left, top, nodeId: givenNodeId, samplerNodeId = '', colorIndex: givenColorIndex, headers, rows }) {
+    const nodeId = givenNodeId || generateNodeId();
+    const title = (name && name.trim()) ? name.trim() : 'Working dataset';
+    const node = document.createElement('div');
+    node.className = 'workflow-node workflow-node--subset workflow-node--no-body';
+    node.setAttribute('role', 'article');
+    node.setAttribute('aria-label', `Working dataset node: ${title}`);
+    node.dataset.nodeId = nodeId;
+    node.dataset.subsetName = name;
+    node.dataset.nodeType = 'subset';
+    if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
+    let colorIndex = typeof givenColorIndex === 'number' && givenColorIndex >= 0 ? givenColorIndex : 0;
+    colorIndex = colorIndex % DATASET_BORDER_COLORS.length;
+    node.dataset.subsetColorIndex = String(colorIndex);
+    node.style.borderColor = DATASET_BORDER_COLORS[colorIndex];
+    if (Array.isArray(headers) && Array.isArray(rows)) subsetContentByNodeId.set(nodeId, { headers: headers.slice(), rows: rows.map((r) => r.slice()) });
+    const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
+    const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
+    nodeCount += 1;
+    node.style.left = `${x}px`;
+    node.style.top = `${y}px`;
+    node.innerHTML = `
+      <div class="workflow-node__header">
+        <span class="workflow-node__icon workflow-node__icon--subset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="12" height="12" rx="0.5"/><line x1="1" y1="4" x2="13" y2="4"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="1" y1="10" x2="13" y2="10"/><line x1="4.5" y1="1" x2="4.5" y2="13"/><line x1="8" y1="1" x2="8" y2="13"/></svg></span>
+        <span class="workflow-node__title">${escapeHtml(title)}</span>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+      </div>
+    `;
+    nodesLayer.appendChild(node);
+
+    const deleteBtn = node.querySelector('.workflow-node__delete');
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      removeConnectionsInvolvingNodeId(nodeId);
+      subsetContentByNodeId.delete(nodeId);
+      node.remove();
+      updateContentSize();
+      updateEdges();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    });
+
+    let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
+    let lastInteractionWasDrag = false;
+    function onPointerDown(e) {
+      if (e.button !== 0) return;
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      lastInteractionWasDrag = false;
+      const rect = node.getBoundingClientRect();
+      const scrollContainer = nodesLayer.parentElement?.parentElement;
+      const parentRect = scrollContainer ? scrollContainer.getBoundingClientRect() : nodesLayer.getBoundingClientRect();
+      const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
+      const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      nodeStartLeft = rect.left - parentRect.left + scrollLeft;
+      nodeStartTop = rect.top - parentRect.top + scrollTop;
+      node.classList.add('workflow-node--dragging');
+      document.addEventListener('pointermove', onPointerMove);
+      document.addEventListener('pointerup', onPointerUp, { once: true });
+    }
+    function onPointerMove(e) {
+      lastInteractionWasDrag = true;
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      node.style.left = `${nodeStartLeft + dx}px`;
+      node.style.top = `${nodeStartTop + dy}px`;
+      updateEdges();
+    }
+    function onPointerUp() {
+      node.classList.remove('workflow-node--dragging');
+      document.removeEventListener('pointermove', onPointerMove);
+      updateContentSize();
+      updateEdges();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    }
+    node.addEventListener('pointerdown', onPointerDown);
+
+    node.addEventListener('click', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      if (lastInteractionWasDrag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openWorkingDatasetDetailModal({
+        node,
+        getContent: () => subsetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
+        saveContent: (content) => {
+          subsetContentByNodeId.set(node.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        },
+      });
+    });
+
+    node.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showNodeContextMenu(e.clientX, e.clientY, node);
+    });
+
     return node;
   }
 
@@ -835,17 +1146,52 @@ export function buildWorkflowCanvas(root) {
     connections = connections.filter((c) => c.fromId !== id && c.toId !== id);
   }
 
+  /**
+   * Given current working dataset name, return a unique name for a new version (e.g. "MySet" -> "MySet_v2", "MySet_v2" -> "MySet_v3").
+   * @param {string} baseName - current subset name
+   * @param {string} [excludeNodeId] - node id to exclude when scanning existing names
+   * @returns {string}
+   */
+  function findNextWorkingDatasetVersionName(baseName, excludeNodeId) {
+    const raw = (baseName || 'Working dataset').trim() || 'Working dataset';
+    const base = raw.replace(/_v\d+$/, '') || raw;
+    const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
+    let nextV = 2;
+    const versionPrefix = base + '_v';
+    for (const n of subsetNodes) {
+      if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
+      const name = (n.dataset.subsetName || '').trim();
+      if (name === base) {
+        nextV = Math.max(nextV, 2);
+        continue;
+      }
+      if (!name.startsWith(versionPrefix)) continue;
+      const numStr = name.slice(versionPrefix.length);
+      const num = parseInt(numStr, 10);
+      if (Number.isFinite(num) && num >= 1 && String(num) === numStr.trim()) nextV = Math.max(nextV, num + 1);
+    }
+    return `${base}_v${nextV}`;
+  }
+
   function showNodeContextMenu(clientX, clientY, node) {
     const existing = document.querySelector('.workflow-node-context-menu');
     if (existing) existing.remove();
 
     const isDataset = node.dataset.nodeType === 'dataset';
+    const isSampler = node.dataset.nodeType === 'sampler';
+    const isSubset = node.dataset.nodeType === 'subset';
+    if (isDataset) return;
+
     const menu = document.createElement('div');
     menu.className = 'workflow-node-context-menu';
     menu.setAttribute('role', 'menu');
-    if (isDataset) {
+    if (isSampler) {
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item" data-action="sample-as-working-set" role="menuitem">Sample as working dataset</button>
+        <button type="button" class="workflow-node-context-item" data-action="create-working-dataset" role="menuitem">Create working dataset</button>
+      `;
+    } else if (isSubset) {
+      menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item" data-action="add-version-of-dataset" role="menuitem">Add version of dataset</button>
       `;
     } else {
       menu.innerHTML = `
@@ -858,7 +1204,6 @@ export function buildWorkflowCanvas(root) {
       const left = parseFloat(node.style.left) || 0;
       const top = parseFloat(node.style.top) || 0;
       const width = node.offsetWidth || 280;
-      const offset = 40;
       let sections = [];
       let outputFormat = { returnShape: 'single', fields: [] };
       try {
@@ -875,7 +1220,7 @@ export function buildWorkflowCanvas(root) {
         note: node.dataset.promptNote || '',
         sections: Array.isArray(sections) ? sections : [],
         outputFormat,
-        left: left + width + offset,
+        left: left + width + NEW_NODE_OFFSET,
         top,
       });
       updateContentSize();
@@ -897,12 +1242,41 @@ export function buildWorkflowCanvas(root) {
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         }
       },
-      'sample-as-working-set': () => {
-        openDatasetDetailModal({
-          node,
-          getDatasetContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
-          isDatasetNameAlreadyUsed,
+      'create-working-dataset': () => {
+        const samplerNodeId = node.dataset.nodeId || '';
+        const colorIndex = node.dataset.samplerColorIndex != null ? parseInt(node.dataset.samplerColorIndex, 10) : undefined;
+        document.dispatchEvent(new CustomEvent('workflow:add-subset-node', { detail: { samplerNodeId, colorIndex } }));
+      },
+      'add-version-of-dataset': () => {
+        const left = parseFloat(node.style.left) || 0;
+        const top = parseFloat(node.style.top) || 0;
+        const width = node.offsetWidth || 280;
+        const currentName = (node.dataset.subsetName || '').trim() || 'Working dataset';
+        const versionName = findNextWorkingDatasetVersionName(currentName, node.dataset.nodeId);
+        const content = subsetContentByNodeId.get(node.dataset.nodeId);
+        const headers = content?.headers ? content.headers.slice() : [];
+        const rows = content?.rows ? content.rows.map((r) => r.slice()) : [];
+        const samplerNodeId = node.dataset.samplerNodeId || '';
+        const colorIndex = node.dataset.subsetColorIndex != null ? parseInt(node.dataset.subsetColorIndex, 10) : 0;
+        const newNode = createSubsetNode({
+          name: versionName,
+          left: left + width + NEW_NODE_OFFSET,
+          top,
+          samplerNodeId,
+          colorIndex,
+          headers,
+          rows,
         });
+        if (newNode?.dataset?.nodeId) {
+          connections.push({
+            fromId: node.dataset.nodeId,
+            toId: newNode.dataset.nodeId,
+            type: EDGE_TYPE_SUBSET_TO_SUBSET,
+          });
+          updateEdges();
+        }
+        updateContentSize();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       },
     };
 
@@ -957,13 +1331,59 @@ export function buildWorkflowCanvas(root) {
   });
 
   document.addEventListener('workflow:add-sampler-node', (e) => {
-    const { sourceNodeId = '', colorIndex } = e.detail || {};
-    const newNode = createSamplerNode({ name: 'Sampler', notes: '', sourceNodeId, colorIndex });
+    const { sourceNodeId = '', colorIndex, name = 'Sampler', samplingType = 'without-replacement', sampleSizeType = 'rows', sampleSize = 100, rowSpec = '' } = e.detail || {};
+    let left, top;
+    const sourceNode = sourceNodeId ? getNodeById(sourceNodeId) : null;
+    if (sourceNode) {
+      left = (parseFloat(sourceNode.style.left) || 0) + (sourceNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+      top = parseFloat(sourceNode.style.top) || 0;
+    }
+    const newNode = createSamplerNode({ name, notes: '', left, top, sourceNodeId, colorIndex, samplingType, sampleSizeType, sampleSize, rowSpec });
     if (sourceNodeId && newNode?.dataset?.nodeId) {
       connections.push({
         fromId: sourceNodeId,
         toId: newNode.dataset.nodeId,
         type: EDGE_TYPE_DATASET_TO_SAMPLER,
+      });
+      updateEdges();
+    }
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  });
+
+  document.addEventListener('workflow:add-subset-node', (e) => {
+    const { samplerNodeId = '', colorIndex } = e.detail || {};
+    let left, top;
+    let headers = [];
+    let rows = [];
+    const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
+    if (samplerNode) {
+      left = (parseFloat(samplerNode.style.left) || 0) + (samplerNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+      top = parseFloat(samplerNode.style.top) || 0;
+      const sourceNodeId = samplerNode.dataset.sourceNodeId;
+      const sourceContent = sourceNodeId ? datasetContentByNodeId.get(sourceNodeId) : null;
+      if (sourceContent?.headers?.length && Array.isArray(sourceContent.rows)) {
+        headers = sourceContent.headers.slice();
+        const samplingType = samplerNode.dataset.samplerSamplingType || 'without-replacement';
+        if (samplingType === 'specify-rows') {
+          const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
+          const totalRows = sourceContent.rows.length;
+          const indices = parseRowSpec(rowSpec, totalRows);
+          rows = indices.map((i) => sourceContent.rows[i].slice());
+        } else {
+          const sampleSize = parseInt(samplerNode.dataset.samplerSampleSize, 10) || 100;
+          const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'rows';
+          rows = sampleRows(sourceContent.rows, sampleSize, sampleSizeType, samplingType);
+        }
+      }
+    }
+    const name = samplerNodeId ? findNextWorkingDatasetName(samplerNodeId) : 'Working dataset';
+    const newNode = createSubsetNode({ name, left, top, samplerNodeId, colorIndex, headers, rows });
+    if (samplerNodeId && newNode?.dataset?.nodeId) {
+      connections.push({
+        fromId: samplerNodeId,
+        toId: newNode.dataset.nodeId,
+        type: EDGE_TYPE_SAMPLER_TO_SUBSET,
       });
       updateEdges();
     }
@@ -991,7 +1411,8 @@ export function buildWorkflowCanvas(root) {
         };
       }
       if (node.classList.contains('workflow-node--sampler')) {
-        return {
+        const samplingType = node.dataset.samplerSamplingType || 'without-replacement';
+        const out = {
           type: 'sampler',
           nodeId,
           left,
@@ -1000,6 +1421,27 @@ export function buildWorkflowCanvas(root) {
           note: node.dataset.samplerNote || '',
           sourceNodeId: node.dataset.sourceNodeId || '',
           colorIndex: node.dataset.samplerColorIndex != null ? parseInt(node.dataset.samplerColorIndex, 10) : undefined,
+          samplingType,
+        };
+        if (samplingType === 'specify-rows') {
+          out.rowSpec = (node.dataset.samplerRowSpec || '').trim();
+        } else {
+          out.sampleSizeType = node.dataset.samplerSampleSizeType || 'rows';
+          out.sampleSize = node.dataset.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
+        }
+        return out;
+      }
+      if (node.classList.contains('workflow-node--subset')) {
+        const subsetContent = subsetContentByNodeId.get(nodeId);
+        return {
+          type: 'subset',
+          nodeId,
+          left,
+          top,
+          name: node.dataset.subsetName || '',
+          samplerNodeId: node.dataset.samplerNodeId || '',
+          colorIndex: node.dataset.subsetColorIndex != null ? parseInt(node.dataset.subsetColorIndex, 10) : undefined,
+          subsetContent: subsetContent ? { headers: subsetContent.headers, rows: subsetContent.rows } : undefined,
         };
       }
       let sections = [];
@@ -1050,6 +1492,7 @@ export function buildWorkflowCanvas(root) {
         });
         createdNodes.push(node);
       } else if (n.type === 'sampler') {
+        const samplingType = n.samplingType || 'without-replacement';
         const node = createSamplerNode({
           name: n.name || '',
           notes: n.note || '',
@@ -1058,6 +1501,23 @@ export function buildWorkflowCanvas(root) {
           nodeId: n.nodeId || n.id,
           sourceNodeId: n.sourceNodeId || '',
           colorIndex: n.colorIndex,
+          samplingType,
+          sampleSizeType: n.sampleSizeType || 'rows',
+          sampleSize: n.sampleSize != null ? n.sampleSize : 100,
+          rowSpec: (n.rowSpec || '').trim(),
+        });
+        createdNodes.push(node);
+      } else if (n.type === 'subset') {
+        const content = n.subsetContent;
+        const node = createSubsetNode({
+          name: n.name || '',
+          left: n.left,
+          top: n.top,
+          nodeId: n.nodeId || n.id,
+          samplerNodeId: n.samplerNodeId || '',
+          colorIndex: n.colorIndex,
+          headers: content?.headers,
+          rows: content?.rows,
         });
         createdNodes.push(node);
       } else {
