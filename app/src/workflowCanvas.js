@@ -5,7 +5,8 @@
  */
 
 import { openDatasetDetailModal } from './datasetDetailModal.js';
-import { openPromptDetailModal } from './promptDetailModal.js';
+import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
+import { openRunDetailModal } from './runDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openWorkingDatasetDetailModal } from './workingDatasetDetailModal.js';
 
@@ -1262,10 +1263,12 @@ export function buildWorkflowCanvas(root) {
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
+    let lastInteractionWasDrag = false;
     function onPointerDown(e) {
       if (e.button !== 0) return;
       if (e.target.closest('.workflow-node__delete')) return;
       e.preventDefault();
+      lastInteractionWasDrag = false;
       const rect = node.getBoundingClientRect();
       const swRect = scrollWrapper.getBoundingClientRect();
       const sl = scrollWrapper.scrollLeft;
@@ -1279,6 +1282,7 @@ export function buildWorkflowCanvas(root) {
       document.addEventListener('pointerup', onPointerUp, { once: true });
     }
     function onPointerMove(e) {
+      lastInteractionWasDrag = true;
       const dx = (e.clientX - dragStartX) / zoomLevel;
       const dy = (e.clientY - dragStartY) / zoomLevel;
       node.style.left = `${nodeStartLeft + dx}px`;
@@ -1293,6 +1297,42 @@ export function buildWorkflowCanvas(root) {
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
     node.addEventListener('pointerdown', onPointerDown);
+
+    node.addEventListener('click', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      if (lastInteractionWasDrag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const runNodeId = node.dataset.nodeId;
+      const promptEdge = connections.find((c) => c.toId === runNodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+      let sections = [];
+      if (promptEdge) {
+        const promptNode = getNodeById(promptEdge.fromId);
+        if (promptNode) {
+          try {
+            sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+          } catch (_) {}
+        }
+      }
+      const promptInputFields = extractInputFieldsFromSections(Array.isArray(sections) ? sections : []);
+      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+        const id = n.dataset.nodeId || '';
+        const content = subsetContentByNodeId.get(id);
+        const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+        const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+        return {
+          nodeId: id,
+          name: (n.dataset.subsetName || '').trim() || 'Working dataset',
+          headers: content?.headers ? content.headers.slice() : [],
+          color,
+        };
+      });
+      openRunDetailModal({
+        node,
+        getWorkingSets: () => workingSets,
+        getPromptInputFields: () => promptInputFields,
+      });
+    });
 
     return node;
   }

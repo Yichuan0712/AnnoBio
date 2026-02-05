@@ -9,6 +9,38 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+/** Extract unique input field names from prompt sections: single-brace placeholders {text} only; {{text}} does not count. */
+export function extractInputFieldsFromSections(sectionsList) {
+  if (!sectionsList || sectionsList.length === 0) return [];
+  const seen = new Set();
+  const names = [];
+  const re = /\{([^{}]+)\}/g;
+  for (const s of sectionsList) {
+    const content = s.content || '';
+    let m;
+    re.lastIndex = 0;
+    while ((m = re.exec(content)) !== null) {
+      const charBefore = m.index > 0 ? content[m.index - 1] : '';
+      const charAfter = m.index + m[0].length < content.length ? content[m.index + m[0].length] : '';
+      if (charBefore === '{' || charAfter === '}') continue;
+      const key = m[1].trim();
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        names.push(key);
+      }
+    }
+  }
+  return names;
+}
+
+function inputsToViewHtml(sectionsList) {
+  const fields = extractInputFieldsFromSections(sectionsList);
+  if (fields.length === 0) return '<p class="prompt-detail-placeholder">No inputs.</p>';
+  return fields
+    .map((key) => `<span class="prompt-detail-input-tag">${escapeHtml(key)}</span>`)
+    .join('');
+}
+
 function sectionsToViewHtml(sectionsList) {
   if (!sectionsList || sectionsList.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
   return sectionsList
@@ -95,6 +127,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       outputFormat = { returnShape: sourceNode.dataset.promptOutputReturnShape || 'table', fields };
     } catch (_) {}
   }
+  const inputsViewHtml = inputsToViewHtml(sections);
   const schemaViewHtml = schemaToViewHtml(outputFormat.fields, outputFormat.returnShape);
 
   const overlay = document.createElement('div');
@@ -118,6 +151,10 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
                 <div class="prompt-detail-row">
                   <span class="prompt-detail-label">Prompt description</span>
                   <div class="prompt-detail-notes-value">${noteTrimmed ? escapeHtml(noteTrimmed) : '<span class="prompt-detail-placeholder">No description.</span>'}</div>
+                </div>
+                <div class="prompt-detail-inputs-wrap">
+                  <h3 class="prompt-detail-section-title">PROMPT INPUTS</h3>
+                  <div class="prompt-detail-inputs-content">${inputsViewHtml}</div>
                 </div>
               </div>
               <div class="prompt-detail-edit">
@@ -374,6 +411,8 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       sourceNode.dataset.promptSections = JSON.stringify(newSections);
     }
     sectionsView.innerHTML = sectionsToViewHtml(newSections.length ? newSections : []);
+    const inputsContentEl = overlay.querySelector('.prompt-detail-inputs-content');
+    if (inputsContentEl) inputsContentEl.innerHTML = inputsToViewHtml(newSections);
     showSectionsView();
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });

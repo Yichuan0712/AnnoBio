@@ -41,6 +41,12 @@ export function initModalDrag() {
       const onUp = () => {
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
+        const stopNextClick = (e2) => {
+          e2.stopPropagation();
+          e2.preventDefault();
+          document.removeEventListener('click', stopNextClick, true);
+        };
+        document.addEventListener('click', stopNextClick, true);
       };
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp, { once: true });
@@ -66,6 +72,12 @@ export function initModalDrag() {
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
+      const stopNextClick = (e2) => {
+        e2.stopPropagation();
+        e2.preventDefault();
+        document.removeEventListener('click', stopNextClick, true);
+      };
+      document.addEventListener('click', stopNextClick, true);
     };
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp, { once: true });
