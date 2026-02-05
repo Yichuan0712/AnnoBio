@@ -848,14 +848,13 @@ export function buildWorkflowCanvas(root) {
       e.preventDefault();
       lastInteractionWasDrag = false;
       const rect = node.getBoundingClientRect();
-      const scrollContainer = nodesLayer.parentElement?.parentElement;
-      const parentRect = scrollContainer ? scrollContainer.getBoundingClientRect() : nodesLayer.getBoundingClientRect();
-      const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
-      const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+      const swRect = scrollWrapper.getBoundingClientRect();
+      const sl = scrollWrapper.scrollLeft;
+      const st = scrollWrapper.scrollTop;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
-      nodeStartLeft = rect.left - parentRect.left + scrollLeft;
-      nodeStartTop = rect.top - parentRect.top + scrollTop;
+      nodeStartLeft = (rect.left - swRect.left + sl) / zoomLevel;
+      nodeStartTop = (rect.top - swRect.top + st) / zoomLevel;
       node.classList.add('workflow-node--dragging');
       document.addEventListener('pointermove', onPointerMove);
       document.addEventListener('pointerup', onPointerUp, { once: true });
@@ -863,8 +862,8 @@ export function buildWorkflowCanvas(root) {
 
     function onPointerMove(e) {
       lastInteractionWasDrag = true;
-      const dx = e.clientX - dragStartX;
-      const dy = e.clientY - dragStartY;
+      const dx = (e.clientX - dragStartX) / zoomLevel;
+      const dy = (e.clientY - dragStartY) / zoomLevel;
       node.style.left = `${nodeStartLeft + dx}px`;
       node.style.top = `${nodeStartTop + dy}px`;
       updateEdges();
@@ -971,22 +970,21 @@ export function buildWorkflowCanvas(root) {
       e.preventDefault();
       lastInteractionWasDrag = false;
       const rect = node.getBoundingClientRect();
-      const scrollContainer = nodesLayer.parentElement?.parentElement;
-      const parentRect = scrollContainer ? scrollContainer.getBoundingClientRect() : nodesLayer.getBoundingClientRect();
-      const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
-      const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+      const swRect = scrollWrapper.getBoundingClientRect();
+      const sl = scrollWrapper.scrollLeft;
+      const st = scrollWrapper.scrollTop;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
-      nodeStartLeft = rect.left - parentRect.left + scrollLeft;
-      nodeStartTop = rect.top - parentRect.top + scrollTop;
+      nodeStartLeft = (rect.left - swRect.left + sl) / zoomLevel;
+      nodeStartTop = (rect.top - swRect.top + st) / zoomLevel;
       node.classList.add('workflow-node--dragging');
       document.addEventListener('pointermove', onPointerMove);
       document.addEventListener('pointerup', onPointerUp, { once: true });
     }
     function onPointerMove(e) {
       lastInteractionWasDrag = true;
-      const dx = e.clientX - dragStartX;
-      const dy = e.clientY - dragStartY;
+      const dx = (e.clientX - dragStartX) / zoomLevel;
+      const dy = (e.clientY - dragStartY) / zoomLevel;
       node.style.left = `${nodeStartLeft + dx}px`;
       node.style.top = `${nodeStartTop + dy}px`;
       updateEdges();
@@ -1079,22 +1077,21 @@ export function buildWorkflowCanvas(root) {
       e.preventDefault();
       lastInteractionWasDrag = false;
       const rect = node.getBoundingClientRect();
-      const scrollContainer = nodesLayer.parentElement?.parentElement;
-      const parentRect = scrollContainer ? scrollContainer.getBoundingClientRect() : nodesLayer.getBoundingClientRect();
-      const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
-      const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+      const swRect = scrollWrapper.getBoundingClientRect();
+      const sl = scrollWrapper.scrollLeft;
+      const st = scrollWrapper.scrollTop;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
-      nodeStartLeft = rect.left - parentRect.left + scrollLeft;
-      nodeStartTop = rect.top - parentRect.top + scrollTop;
+      nodeStartLeft = (rect.left - swRect.left + sl) / zoomLevel;
+      nodeStartTop = (rect.top - swRect.top + st) / zoomLevel;
       node.classList.add('workflow-node--dragging');
       document.addEventListener('pointermove', onPointerMove);
       document.addEventListener('pointerup', onPointerUp, { once: true });
     }
     function onPointerMove(e) {
       lastInteractionWasDrag = true;
-      const dx = e.clientX - dragStartX;
-      const dy = e.clientY - dragStartY;
+      const dx = (e.clientX - dragStartX) / zoomLevel;
+      const dy = (e.clientY - dragStartY) / zoomLevel;
       node.style.left = `${nodeStartLeft + dx}px`;
       node.style.top = `${nodeStartTop + dy}px`;
       updateEdges();
@@ -1176,22 +1173,21 @@ export function buildWorkflowCanvas(root) {
       e.preventDefault();
       lastInteractionWasDrag = false;
       const rect = node.getBoundingClientRect();
-      const scrollContainer = nodesLayer.parentElement?.parentElement;
-      const parentRect = scrollContainer ? scrollContainer.getBoundingClientRect() : nodesLayer.getBoundingClientRect();
-      const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
-      const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+      const swRect = scrollWrapper.getBoundingClientRect();
+      const sl = scrollWrapper.scrollLeft;
+      const st = scrollWrapper.scrollTop;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
-      nodeStartLeft = rect.left - parentRect.left + scrollLeft;
-      nodeStartTop = rect.top - parentRect.top + scrollTop;
+      nodeStartLeft = (rect.left - swRect.left + sl) / zoomLevel;
+      nodeStartTop = (rect.top - swRect.top + st) / zoomLevel;
       node.classList.add('workflow-node--dragging');
       document.addEventListener('pointermove', onPointerMove);
       document.addEventListener('pointerup', onPointerUp, { once: true });
     }
     function onPointerMove(e) {
       lastInteractionWasDrag = true;
-      const dx = e.clientX - dragStartX;
-      const dy = e.clientY - dragStartY;
+      const dx = (e.clientX - dragStartX) / zoomLevel;
+      const dy = (e.clientY - dragStartY) / zoomLevel;
       node.style.left = `${nodeStartLeft + dx}px`;
       node.style.top = `${nodeStartTop + dy}px`;
       updateEdges();
