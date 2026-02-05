@@ -142,6 +142,13 @@
   z-index: 10;
 }
 
+/* Run node: half the default width */
+.workflow-node--run {
+  min-width: 100px;
+  max-width: 140px;
+  width: 140px;
+}
+
 .workflow-node__header {
   padding: 8px 12px;
   background: var(--hover);
