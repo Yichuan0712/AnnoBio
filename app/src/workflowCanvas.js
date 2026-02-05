@@ -705,6 +705,12 @@ export function buildWorkflowCanvas(root) {
       e.preventDefault();
       e.stopPropagation();
       openSubsetEdgeDetailModal(edge);
+    } else if (edgeType === EDGE_TYPE_DATASET_TO_SAMPLER || edgeType === EDGE_TYPE_SAMPLER_TO_SUBSET) {
+      e.preventDefault();
+      e.stopPropagation();
+      const samplerNodeId = edgeType === EDGE_TYPE_SAMPLER_TO_SUBSET ? edge.fromId : edge.toId;
+      const samplerNode = getNodeById(samplerNodeId);
+      if (samplerNode) openSamplerDetailModal({ node: samplerNode });
     }
   }
 
