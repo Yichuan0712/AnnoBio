@@ -957,8 +957,19 @@
 
 .sampler-row-spec-add-row .dataset-meta-input.sampler-add-number-inp,
 .sampler-row-spec-add-row .sampler-add-range-inp {
-  width: 4.5em;
   min-width: 0;
+  height: 34px;
+  min-height: 0;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+.sampler-row-spec-add-row .dataset-meta-input.sampler-add-number-inp {
+  width: 4.5em;
+}
+
+.sampler-row-spec-add-row .sampler-add-range-inp {
+  width: 5.5em;
 }
 
 .sampler-row-spec-to-label {
@@ -974,7 +985,7 @@
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  border-left: 1px solid var(--border);
+  border: 1px solid var(--border);
   border-radius: 0;
   padding: 0;
   overflow: hidden;
