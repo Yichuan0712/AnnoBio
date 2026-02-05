@@ -6,10 +6,10 @@ import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, openAddAgentModal: () => void, openCredentialsModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void }} options
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, openCredentialsModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void }} options
  * @returns {{ setAddMenuEnabled: (enabled: boolean) => void }}
  */
-export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openAddAgentModal, openCredentialsModal, onNewProject, onOpenProject, onSaveAsProject }) {
+export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openCredentialsModal, onNewProject, onOpenProject, onSaveAsProject }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -39,12 +39,10 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   addDrop.innerHTML = `
     <button type="button" class="menu-option menu-option--add" data-action="new-prompt" disabled>New prompt...</button>
     <button type="button" class="menu-option menu-option--add" data-action="new-dataset" disabled>New source dataset...</button>
-    <button type="button" class="menu-option menu-option--add" data-action="new-agent" disabled>New agent...</button>
   `;
   const addOptions = addDrop.querySelectorAll('.menu-option--add');
   addDrop.querySelector('[data-action="new-prompt"]').addEventListener('click', () => { if (!addOptions[0].disabled) openAddPromptModal(); });
   addDrop.querySelector('[data-action="new-dataset"]').addEventListener('click', () => { if (!addOptions[1].disabled) openAddDatasetModal(); });
-  addDrop.querySelector('[data-action="new-agent"]').addEventListener('click', () => { if (!addOptions[2].disabled) openAddAgentModal(); });
   addMenuBtn.appendChild(addDrop);
   bar.appendChild(addMenuBtn);
 
