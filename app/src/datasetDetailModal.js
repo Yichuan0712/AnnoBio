@@ -29,7 +29,7 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--dataset-detail" data-dataset-detail-mode="view">
       <div class="modal-header">
-        <h2 id="dataset-detail-title" class="modal-title">Source dataset details</h2>
+        <h2 id="dataset-detail-title" class="modal-title">Source dataset details: ${escapeHtml(name)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body dataset-detail-body">

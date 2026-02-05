@@ -138,7 +138,7 @@ export function buildWorkflowCanvas(root) {
   }
 
   /**
-   * Generate next working dataset name: SourceName_SamplerName_N (N increments per sampler).
+   * Generate next working dataset name: SourceName SamplerName N (N increments per sampler; spaces between parts).
    * @param {string} samplerNodeId
    * @returns {string}
    */
@@ -147,19 +147,19 @@ export function buildWorkflowCanvas(root) {
     const sourceNode = samplerNode?.dataset?.sourceNodeId ? getNodeById(samplerNode.dataset.sourceNodeId) : null;
     const sourceName = (sourceNode?.dataset?.datasetName ?? '').trim() || 'Source';
     const samplerName = (samplerNode?.dataset?.samplerName ?? '').trim() || 'Sampler';
-    const base = `${sourceName}_${samplerName}`;
+    const base = `${sourceName} ${samplerName}`;
     const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
     let maxN = 0;
-    const prefix = base + '_';
+    const prefix = base + ' ';
     for (const n of subsetNodes) {
       if (n.dataset.samplerNodeId !== samplerNodeId) continue;
       const name = (n.dataset.subsetName || '').trim();
       if (!name.startsWith(prefix)) continue;
-      const numStr = name.slice(prefix.length);
+      const numStr = name.slice(prefix.length).trim();
       const num = parseInt(numStr, 10);
-      if (Number.isFinite(num) && num >= 1 && String(num) === numStr.trim()) maxN = Math.max(maxN, num);
+      if (Number.isFinite(num) && num >= 1 && String(num) === numStr) maxN = Math.max(maxN, num);
     }
-    return `${base}_${maxN + 1}`;
+    return `${base} ${maxN + 1}`;
   }
 
   function getNodeIndex(node) {
@@ -196,6 +196,23 @@ export function buildWorkflowCanvas(root) {
     for (const n of datasetNodes) {
       if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
       const existing = (n.dataset.datasetName || '').trim().toLowerCase();
+      if (existing === normalized) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Check if a working dataset (subset) name is already used on the canvas (case-insensitive).
+   * @param {string} nameToCheck
+   * @param {string|null} [excludeNodeId=null] - node id to exclude
+   * @returns {boolean}
+   */
+  function isSubsetNameAlreadyUsed(nameToCheck, excludeNodeId = null) {
+    const normalized = (nameToCheck || '').trim().toLowerCase();
+    const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
+    for (const n of subsetNodes) {
+      if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
+      const existing = (n.dataset.subsetName || '').trim().toLowerCase();
       if (existing === normalized) return true;
     }
     return false;
@@ -295,21 +312,89 @@ export function buildWorkflowCanvas(root) {
   }
 
   /**
+   * Strip only trailing " (Copy N)" from a name; keep version suffix like " v2".
+   * Used when duplicating so "MySet v2" -> copy is "MySet v2 (Copy 1)".
+   * @param {string} name
+   * @returns {string}
+   */
+  function stripCopySuffixOnly(name) {
+    const s = (name || '').trim();
+    const copyMatch = s.match(/^(.*)\s+\(Copy\s+\d+\)$/);
+    if (copyMatch) return stripCopySuffixOnly(copyMatch[1].trim());
+    return s;
+  }
+
+  /**
+   * Strip only trailing " vN" (space + v + digits) from a name.
+   * Used for Add version: "MySet v2" -> "MySet", "MySet (Copy 1) v2" -> "MySet (Copy 1)".
+   * @param {string} name
+   * @returns {string}
+   */
+  function stripVersionSuffixOnly(name) {
+    const s = (name || '').trim();
+    const versionMatch = s.match(/^(.*)\s+v(\d+)$/);
+    if (versionMatch) return versionMatch[1].trim();
+    return s;
+  }
+
+  /**
    * Find a unique prompt name by appending suffix. Used for duplicate / new version.
-   * Strips existing " (Copy N)" / " vN" from base so we get "Name (Copy 2)" not "Name (Copy 1) (Copy 1)".
-   * New version starts at v2 (current prompt is implicitly v1), consistent with dataset version naming.
+   * Duplicate: strip only " (Copy N)" so "Name v2" -> "Name v2 (Copy 1)".
+   * New version: strip only trailing " vN" so "Name v2" -> "Name v3", "Name (Copy 1)" -> "Name (Copy 1) v2".
+   * Scans all prompt nodes (including current) so version number always increments.
    * @param {string} baseName - base name (e.g. from source node)
    * @param {boolean} isNewVersion - true for "Name v2", false for "Name (Copy 1)"
    * @returns {string}
    */
   function findUniquePromptName(baseName, isNewVersion) {
-    const base = stripCopyOrVersionSuffix(baseName || '');
+    if (isNewVersion) {
+      const raw = (baseName || '').trim() || 'Prompt';
+      const versionBase = stripVersionSuffixOnly(raw).trim() || 'Prompt';
+      const nodes = getNodeList();
+      let nextV = 2;
+      const versionPrefix = versionBase + ' v';
+      for (const n of nodes) {
+        const name = (n.dataset.promptName || '').trim();
+        const nBase = stripVersionSuffixOnly(name).trim();
+        if (nBase !== versionBase) continue;
+        if (name === versionBase) {
+          nextV = Math.max(nextV, 2);
+          continue;
+        }
+        if (!name.startsWith(versionPrefix)) continue;
+        const numStr = name.slice(versionPrefix.length).trim();
+        if (!/^\d+$/.test(numStr)) continue;
+        const num = parseInt(numStr, 10);
+        if (Number.isFinite(num) && num >= 1) nextV = Math.max(nextV, num + 1);
+      }
+      return `${versionBase} v${nextV}`;
+    }
+    const base = (stripCopySuffixOnly(baseName || '').trim() || 'Prompt');
+    let n = 1;
+    let candidate;
+    do {
+      candidate = `${base} (Copy ${n})`;
+      n++;
+    } while (isPromptNameAlreadyUsed(candidate));
+    return candidate;
+  }
+
+  /**
+   * Find a unique working dataset name (same pattern as prompt: duplicate = "Name (Copy 1)", version = "Name v2").
+   * Duplicate keeps version suffix so "MySet v2" -> "MySet v2 (Copy 1)"; only " (Copy N)" is stripped for the base.
+   * @param {string} baseName - current subset name
+   * @param {boolean} isNewVersion - true for "Name v2", false for "Name (Copy 1)" (or "Name v2 (Copy 1)")
+   * @returns {string}
+   */
+  function findUniqueWorkingDatasetName(baseName, isNewVersion) {
+    const raw = (baseName || '').trim() || 'Working dataset';
+    const base = isNewVersion ? (stripCopyOrVersionSuffix(raw).trim() || 'Working dataset') : (stripCopySuffixOnly(raw) || 'Working dataset');
     let n = isNewVersion ? 2 : 1;
     let candidate;
     do {
       candidate = isNewVersion ? `${base} v${n}` : `${base} (Copy ${n})`;
       n++;
-    } while (isPromptNameAlreadyUsed(candidate));
+    } while (isSubsetNameAlreadyUsed(candidate));
     return candidate;
   }
 
@@ -424,9 +509,6 @@ export function buildWorkflowCanvas(root) {
 
   function serializePromptToDiffText(data) {
     const lines = [];
-    lines.push('Name: ' + (data.name || '').trim());
-    lines.push('Description: ' + (data.note || '').trim());
-    lines.push('');
     const sections = data.sections || [];
     if (sections.length === 0) {
       lines.push('## Sections');
@@ -530,7 +612,7 @@ export function buildWorkflowCanvas(root) {
     overlay.innerHTML = `
       <div class="modal-panel modal-panel--edge-detail">
         <div class="modal-header">
-          <h2 id="edge-detail-title" class="modal-title">Compare versions: ${escapeHtml(fromName)} �?${escapeHtml(toName)}</h2>
+          <h2 id="edge-detail-title" class="modal-title">Compare versions: ${escapeHtml(fromName)} → ${escapeHtml(toName)}</h2>
           <button type="button" class="modal-close" aria-label="Close">×</button>
         </div>
         <div class="modal-body modal-body--diff">
@@ -1147,30 +1229,35 @@ export function buildWorkflowCanvas(root) {
   }
 
   /**
-   * Given current working dataset name, return a unique name for a new version (e.g. "MySet" -> "MySet_v2", "MySet_v2" -> "MySet_v3").
+   * Given current working dataset name, return a unique name for a new version.
+   * Only strips trailing " vN" to get version base; never strips " (Copy N)".
+   * So: "MySet v2" -> "MySet v3"; "MySet (Copy 1)" -> "MySet (Copy 1) v2".
+   * Scans all subset nodes (including current) so version number always increments.
    * @param {string} baseName - current subset name
-   * @param {string} [excludeNodeId] - node id to exclude when scanning existing names
+   * @param {string} [excludeNodeId] - unused; we count all nodes to get next version
    * @returns {string}
    */
   function findNextWorkingDatasetVersionName(baseName, excludeNodeId) {
     const raw = (baseName || 'Working dataset').trim() || 'Working dataset';
-    const base = raw.replace(/_v\d+$/, '') || raw;
+    const versionBase = stripVersionSuffixOnly(raw).trim() || 'Working dataset';
     const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
     let nextV = 2;
-    const versionPrefix = base + '_v';
+    const versionPrefix = versionBase + ' v';
     for (const n of subsetNodes) {
-      if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
       const name = (n.dataset.subsetName || '').trim();
-      if (name === base) {
+      const nBase = stripVersionSuffixOnly(name).trim();
+      if (nBase !== versionBase) continue;
+      if (name === versionBase) {
         nextV = Math.max(nextV, 2);
         continue;
       }
       if (!name.startsWith(versionPrefix)) continue;
-      const numStr = name.slice(versionPrefix.length);
+      const numStr = name.slice(versionPrefix.length).trim();
+      if (!/^\d+$/.test(numStr)) continue;
       const num = parseInt(numStr, 10);
-      if (Number.isFinite(num) && num >= 1 && String(num) === numStr.trim()) nextV = Math.max(nextV, num + 1);
+      if (Number.isFinite(num) && num >= 1) nextV = Math.max(nextV, num + 1);
     }
-    return `${base}_v${nextV}`;
+    return `${versionBase} v${nextV}`;
   }
 
   function showNodeContextMenu(clientX, clientY, node) {
@@ -1191,6 +1278,7 @@ export function buildWorkflowCanvas(root) {
       `;
     } else if (isSubset) {
       menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item" data-action="duplicate-working-dataset" role="menuitem">Duplicate this working dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="add-version-of-dataset" role="menuitem">Add version of dataset</button>
       `;
     } else {
@@ -1204,6 +1292,7 @@ export function buildWorkflowCanvas(root) {
       const left = parseFloat(node.style.left) || 0;
       const top = parseFloat(node.style.top) || 0;
       const width = node.offsetWidth || 280;
+      const height = node.offsetHeight || 80;
       let sections = [];
       let outputFormat = { returnShape: 'single', fields: [] };
       try {
@@ -1220,8 +1309,8 @@ export function buildWorkflowCanvas(root) {
         note: node.dataset.promptNote || '',
         sections: Array.isArray(sections) ? sections : [],
         outputFormat,
-        left: left + width + NEW_NODE_OFFSET,
-        top,
+        left: isNewVersion ? left + width + NEW_NODE_OFFSET : left,
+        top: isNewVersion ? top : top + height + NEW_NODE_OFFSET,
       });
       updateContentSize();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -1229,7 +1318,16 @@ export function buildWorkflowCanvas(root) {
     }
 
     const actions = {
-      duplicate: () => duplicateNode(false),
+      duplicate: () => {
+        const newNode = duplicateNode(false);
+        if (newNode) {
+          connections.filter((c) => c.toId === node.dataset.nodeId).forEach((c) => {
+            connections.push({ fromId: c.fromId, toId: newNode.dataset.nodeId, type: c.type });
+          });
+          updateEdges();
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        }
+      },
       'new-version': () => {
         const newNode = duplicateNode(true);
         if (newNode) {
@@ -1246,6 +1344,35 @@ export function buildWorkflowCanvas(root) {
         const samplerNodeId = node.dataset.nodeId || '';
         const colorIndex = node.dataset.samplerColorIndex != null ? parseInt(node.dataset.samplerColorIndex, 10) : undefined;
         document.dispatchEvent(new CustomEvent('workflow:add-subset-node', { detail: { samplerNodeId, colorIndex } }));
+      },
+      'duplicate-working-dataset': () => {
+        const left = parseFloat(node.style.left) || 0;
+        const top = parseFloat(node.style.top) || 0;
+        const height = node.offsetHeight || 80;
+        const currentName = (node.dataset.subsetName || '').trim() || 'Working dataset';
+        const newName = findUniqueWorkingDatasetName(currentName, false);
+        const content = subsetContentByNodeId.get(node.dataset.nodeId);
+        const headers = content?.headers ? content.headers.slice() : [];
+        const rows = content?.rows ? content.rows.map((r) => r.slice()) : [];
+        const samplerNodeId = node.dataset.samplerNodeId || '';
+        const colorIndex = node.dataset.subsetColorIndex != null ? parseInt(node.dataset.subsetColorIndex, 10) : 0;
+        const newNode = createSubsetNode({
+          name: newName,
+          left,
+          top: top + height + NEW_NODE_OFFSET,
+          samplerNodeId,
+          colorIndex,
+          headers,
+          rows,
+        });
+        if (newNode?.dataset?.nodeId) {
+          connections.filter((c) => c.toId === node.dataset.nodeId).forEach((c) => {
+            connections.push({ fromId: c.fromId, toId: newNode.dataset.nodeId, type: c.type });
+          });
+          updateEdges();
+        }
+        updateContentSize();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       },
       'add-version-of-dataset': () => {
         const left = parseFloat(node.style.left) || 0;
@@ -1316,6 +1443,32 @@ export function buildWorkflowCanvas(root) {
     return div.innerHTML;
   }
 
+  /**
+   * Show an in-app alert dialog (replaces window.alert). Appends to document.body.
+   * @param {string} message - Body text
+   * @param {string} [title='Message'] - Dialog title
+   */
+  function showAppAlert(message, title = 'Message') {
+    const overlay = document.createElement('div');
+    overlay.className = 'app-alert-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'app-alert-title');
+    overlay.innerHTML = `
+      <div class="app-alert-dialog">
+        <p id="app-alert-title" class="app-alert-dialog-title">${escapeHtml(title)}</p>
+        <p class="app-alert-dialog-message">${escapeHtml(message)}</p>
+        <div class="app-alert-dialog-btns">
+          <button type="button" class="btn btn-secondary app-alert-ok">OK</button>
+        </div>
+      </div>
+    `;
+    const remove = () => overlay.remove();
+    overlay.querySelector('.app-alert-ok').addEventListener('click', remove);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) remove(); });
+    document.body.appendChild(overlay);
+  }
+
   document.addEventListener('workflow:add-prompt-node', (e) => {
     const { name = '', note = '', sections = [], outputFormat } = e.detail || {};
     createPromptNode({ name, note, sections, outputFormat });
@@ -1373,6 +1526,27 @@ export function buildWorkflowCanvas(root) {
         } else {
           const sampleSize = parseInt(samplerNode.dataset.samplerSampleSize, 10) || 100;
           const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'rows';
+          const totalRows = sourceContent.rows.length;
+          const requestedCount = sampleSizeType === 'rows'
+            ? Math.max(0, Math.floor(sampleSize))
+            : Math.max(0, Math.floor((totalRows * sampleSize) / 100));
+          if (samplingType === 'without-replacement' && requestedCount > 0) {
+            let alreadyUsed = 0;
+            nodesLayer.querySelectorAll('.workflow-node--subset').forEach((subNode) => {
+              if ((subNode.dataset.samplerNodeId || '') === samplerNodeId) {
+                const content = subsetContentByNodeId.get(subNode.dataset.nodeId);
+                if (content?.rows?.length) alreadyUsed += content.rows.length;
+              }
+            });
+            const remaining = totalRows - alreadyUsed;
+            if (remaining < requestedCount) {
+              showAppAlert(
+                'Not enough remaining data to create a new working dataset when sampling without replacement.',
+                'Cannot create subset'
+              );
+              return;
+            }
+          }
           rows = sampleRows(sourceContent.rows, sampleSize, sampleSizeType, samplingType);
         }
       }

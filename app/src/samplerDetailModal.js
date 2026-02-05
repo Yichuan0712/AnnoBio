@@ -28,7 +28,7 @@ export function openSamplerDetailModal({ node }) {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--sampler-detail">
       <div class="modal-header">
-        <h2 id="sampler-detail-title" class="modal-title">Sampler details</h2>
+        <h2 id="sampler-detail-title" class="modal-title">Sampler details: ${escapeHtml(name)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body sampler-detail-body">

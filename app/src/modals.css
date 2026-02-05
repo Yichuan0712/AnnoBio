@@ -603,9 +603,10 @@
   color: var(--text);
 }
 
-/* Prompt details modal (double-click node): view only until Edit → Save/Cancel */
+/* Prompt details modal: fixed width so switching to edit (Output schema / Prompt sections) does not resize; wider for both columns */
 .modal-panel--prompt-detail {
-  min-width: min(720px, 90vw);
+  width: min(1200px, 94vw);
+  min-width: min(1200px, 94vw);
   max-width: 96vw;
   max-height: 98vh;
   min-height: min(400px, 60vh);
@@ -632,13 +633,13 @@
 }
 
 .prompt-detail-col--left {
-  flex: 0 1 44%;
-  max-width: min(680px, 44vw);
+  flex: 0 1 50%;
+  max-width: min(900px, 50vw);
 }
 
 .prompt-detail-col--right {
-  flex: 1 1 56%;
-  min-width: min(280px, 35vw);
+  flex: 1 1 50%;
+  min-width: min(320px, 38vw);
 }
 
 .prompt-detail-col--left .prompt-detail-card {
@@ -655,11 +656,14 @@
   border-radius: 0;
 }
 
+/* All edit panels: keep same width as before edit (min-width: 0, width: 100%) so layout does not jump */
 .prompt-detail-view,
 .prompt-detail-edit {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
+  width: 100%;
 }
 
 /* Only one mode visible at a time (view vs edit) */
@@ -803,6 +807,8 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
+  width: 100%;
 }
 
 .dataset-detail-edit {
@@ -1233,6 +1239,46 @@
   justify-content: flex-end;
 }
 
+/* App-level alert (replaces system alert); fixed overlay on body */
+.app-alert-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3000;
+}
+
+.app-alert-dialog {
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 16px 20px;
+  box-shadow: 0 4px 12px var(--shadow);
+  min-width: 280px;
+  max-width: min(400px, 90vw);
+}
+
+.app-alert-dialog-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.app-alert-dialog-message {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.app-alert-dialog-btns {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .working-dataset-edit-table {
   width: 100%;
   border-collapse: collapse;
@@ -1293,14 +1339,8 @@
   background: rgba(37, 99, 235, 0.12);
 }
 
-.working-dataset-edit-table th .dataset-detail-preview-row-num {
-  width: 1%;
-  min-width: 2.5em;
-  text-align: right;
-  color: var(--text-muted);
-  padding-right: 8px;
-}
-
+/* # column: same as Source dataset preview — right-aligned in cell */
+.working-dataset-edit-table th.dataset-detail-preview-row-num,
 .working-dataset-edit-table td.dataset-detail-preview-row-num {
   width: 1%;
   min-width: 2.5em;
@@ -1375,6 +1415,9 @@
   gap: 10px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: 16px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -1410,7 +1453,9 @@
 .prompt-detail-sections-view {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: auto;
 }
 
 .prompt-detail-sections-edit {
@@ -1419,7 +1464,10 @@
   gap: 14px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
   overflow-y: auto;
+  overflow-x: auto;
 }
 
 .prompt-detail-sections-wrap[data-prompt-sections-mode="edit"] .prompt-detail-sections-view {
@@ -1430,13 +1478,16 @@
   display: flex !important;
 }
 
-/* Output schema block (same pattern as Sections) */
+/* Output schema block: overflow hidden so edit content cannot push width */
 .prompt-detail-schema-wrap {
   display: flex;
   flex-direction: column;
   gap: 10px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: 16px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -1472,16 +1523,23 @@
 .prompt-detail-schema-view {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: auto;
 }
 
+/* Edit area: slightly narrower list like create flow; no horizontal scrollbar */
 .prompt-detail-schema-edit {
   display: none;
   flex-direction: column;
   gap: 14px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 640px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .prompt-detail-schema-wrap[data-prompt-schema-mode="edit"] .prompt-detail-schema-view {
@@ -1500,6 +1558,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 
 .prompt-detail-section-edit-header {
@@ -1676,10 +1735,31 @@
   flex: 1;
   min-height: 0;
   min-width: 0;
-  overflow: auto;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* Prompt detail: spacing between output schema field blocks; no horizontal scroll */
+.prompt-detail-schema-keys-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.prompt-detail-schema-keys-list .prompt-output-key-block.prompt-field {
+  min-width: 0;
+  flex-shrink: 0;
+  overflow: visible;
 }
 
 .prompt-output-keys-list {
@@ -1807,8 +1887,8 @@
 
 .prompt-output-type-select {
   flex: 0 1 auto;
-  min-width: 120px;
-  max-width: 160px;
+  min-width: 160px;
+  max-width: 240px;
 }
 
 .prompt-output-list-example-row {
@@ -2254,7 +2334,11 @@
 .prompt-field-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+
+.prompt-field-header .prompt-field-name {
+  min-width: 0;
 }
 
 .prompt-field-name {

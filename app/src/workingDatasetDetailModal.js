@@ -42,7 +42,7 @@ export function openWorkingDatasetDetailModal({ node, getContent, saveContent })
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--working-dataset-detail">
       <div class="modal-header">
-        <h2 id="working-dataset-detail-title" class="modal-title">Working dataset: ${escapeHtml(name)}</h2>
+        <h2 id="working-dataset-detail-title" class="modal-title">Working dataset details: ${escapeHtml(name)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body working-dataset-detail-body">
@@ -276,7 +276,7 @@ export function openWorkingDatasetDetailModal({ node, getContent, saveContent })
       <div class="working-dataset-save-dialog">
         <p id="wd-save-dialog-title" class="working-dataset-save-dialog-title">Save changes before closing?</p>
         <div class="working-dataset-save-dialog-btns">
-          <button type="button" class="btn btn-primary wd-save-dialog-save">Save</button>
+          <button type="button" class="btn btn-secondary wd-save-dialog-save">Save</button>
           <button type="button" class="btn btn-secondary wd-save-dialog-dont">Don't save</button>
           <button type="button" class="btn btn-secondary wd-save-dialog-cancel">Cancel</button>
         </div>
