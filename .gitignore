@@ -1,3 +1,6 @@
+# Editor / IDE
+*.code-workspace
+
 # Node
 node_modules/
 dist/
