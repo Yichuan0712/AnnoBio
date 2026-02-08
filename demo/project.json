@@ -1,0 +1,295 @@
+{
+  "version": 2,
+  "nodes": [
+    {
+      "type": "prompt",
+      "nodeId": "n_1770155640021_579279429",
+      "left": 79.0547,
+      "top": 348.977,
+      "name": "Phosphatase",
+      "note": "Test Phosphatase",
+      "sections": [
+        {
+          "name": "Persona",
+          "content": "You are a bioinformatics expert. We need your help to extract information from a scientific paper."
+        },
+        {
+          "name": "Context",
+          "content": "We retrieved the article titled **{title}** from PubMed and located the following passage:\n\n{excerpt}\n\nBased on the title and passage, you already have a general idea of the study. Your goal is to act as a human biologist and identify the most significant and well-supported phosphatase-substrate pairs."
+        },
+        {
+          "name": "Objective",
+          "content": "Please inspect the raw text and extract only the most significant phosphatase–substrate relationships as follows:\n\nIdentify the Primary Findings: Focus on the main conclusions of the paper."
+        },
+        {
+          "name": "Constraint",
+          "content": "Tier 1: Explicit Dephosphorylation Sites: Extract any pairs where a phosphatase and a specific amino acid on a substrate are explicitly mentioned as being dephosphorylated. This is the highest tier of evidence and should be prioritized.\nTier 2: Strong Indirect Evidence: If Tier 1 evidence is not available, look for strong indirect evidence where a phosphatase and substrate are clearly linked in the paper's primary findings (e.g., through knockdown, a functional assay, or an inhibitor study).\n\nExclude weaker or pathway-level associations:\n- Do not extract pairs that are only mentioned as being part of a signaling cascade or pathway role (e.g., “calcineurin–NFAT pathway” or “PP2A participates in MAPK signaling”) unless the text provides direct functional or biochemical evidence of dephosphorylation.\n- Exclude any pair inferred solely from pathway activation, inhibitor effects on phenotype, or generic signaling relationships without showing a measurable change in substrate phosphorylation state. These are considered pathway-level associations and should be discarded.\n\nKeep a pair only if both phosphatase and substrate are proteins encoded by genes in the UniProt database.\n- Exclude the pair if the phosphatase is lipid phosphatases (e.g., PTEN, SHIP2), nucleotide phosphatases (e.g., ALPL, ACP1), metabolites or sugar phosphatases (e.g., FBP1, G6PC), and RNA/DNA phosphatases (e.g., DUSP11, PIR1).\n- Exclude the pair if The substrate is a small molecule, lipid, nucleotide, or metabolite (e.g., ATP, ADP, AMP, PPi, β-GP, PtdIns3P, PtdIns(3,5)P₂).\n- Exclude Contextual Evidence: Do not extract pairs based solely on physical interaction or a signaling pathway role if there is no direct functional evidence of dephosphorylation. These pairs are too weak and are considered \"noise.\"\n\nExclude Reagent or Non-Physiological Phosphatases:\nIgnore any phosphatases mentioned only as experimental reagents, assay enzymes, or generic dephosphorylation tools. These include—but are not limited to—terms such as:\n- “alkaline phosphatase” (used for dephosphorylation assays) \n- “λ-phosphatase” (bacterial enzyme for removing Ser/Thr phosphorylation)\n- “acid phosphatase” (nonspecific reagent, unless explicitly referring to human ACP1 or ACP2) -\n- “calf intestinal alkaline phosphatase (CIP)”\n- “potato acid phosphatase (PAP)”)\nSuch mentions represent biochemical reagents and should not be treated as endogenous phosphatases or mapped to UniProt IDs.\n"
+        },
+        {
+          "name": "Workflow",
+          "content": "1. **Locate Evidence Sentences** Read the raw text carefully and find the sentences (or fragments) that describe phosphatases, their substrates.\n\n2. **Identify Distinct Phosphatase–Substrate Pairs** From those evidence sentences, extract each phosphatase and the substrate it dephosphorylates. If the *same phosphatases* dephosphorylate the *different site* on the *same substrate*, consolidate these into a single pair, listing all relevant sites for that pair.\n\n3. **Normalize Names** Whenever possible, use standardized identifiers: **gene names**, **protein names**, **EC numbers**, or **UniProt IDs**. Providing these identifiers from the source ensures other scientists can accurately look up the entry in UniProt.\n\n4. **Identify Dephosphosite and 5-Amino Acid Window (If Available)** \nIf the text explicitly provides the specific dephosphorylation site (e.g., \"Ser-287\", \"Tyr-493\") and/or a \"5 amino acid window around the dephosphosite (small letters)\" for that site, extract these. If the 5-amino acid window is not explicitly stated or derivable for a given dephosphosite, leave this field as `None`.\n\n5. **Record Evidence** Collect every supporting sentence you used for each pair.\n\n6. **Explain Your Reasoning** For every pair, briefly describe how you concluded that relationship (e.g., keyword cues, sentence structure, why a consolidation was made if applicable).\n\n7. **Organism** Extract the experimental organism for each pair as a **single string** (e.g., \"human\", \"mouse\", \"rat\", \"chicken\"). When multiple organisms are mentioned, select the organism most relevant to the evidence sentences for this pair. If the organism cannot be determined from the provided text, set `organism` to `\"human\"`.\n\n8. **Return a Single JSON Object** Return **only** one valid JSON with this exact structure, including the `dephosphosite` and `five_aa_window` fields, allowing `five_aa_window` to be `null` if the information is not explicitly available for that pair.\n"
+        }
+      ],
+      "outputFormat": {
+        "returnShape": "table",
+        "fields": [
+          {
+            "key": "reasoning",
+            "type": "str",
+            "description": "Brief justification explaining why this phosphatase–substrate relationship is included and which evidence tier it satisfies (Tier 1 explicit site-level dephosphorylation, or Tier 2 strong indirect evidence with phosphorylation-state change). Mention key cues (e.g., 'dephosphorylates', 'removes phosphate', knockdown causing sustained phosphorylation) and explain any consolidation across multiple sites if applicable. Also justify organism choice if multiple are mentioned or if defaulted.",
+            "examples": [
+              "Two sentences show PPM1D dephosphorylates RUNX2 at Ser301; both experiments were performed in human U2OS cells, so the organism is set to human.",
+              "Both an in-vitro assay and a hepatocyte study link PTPN1 to INSR; the figures specify mouse liver and primary mouse hepatocytes, so the organism is mouse.",
+              "The text states PP1 dephosphorylates Cdc25 at S287 but does not indicate the organism; per the rule, default to human."
+            ]
+          },
+          {
+            "key": "phosphatase",
+            "type": "str",
+            "description": "Normalized gene symbol (preferred) or canonical protein name for the endogenous protein phosphatase enzyme that dephosphorylates the substrate. Must be a protein-coding gene present in UniProt. Exclude reagent enzymes (e.g., lambda-phosphatase, CIP, alkaline phosphatase used as tools) and exclude non-protein-phosphatases such as lipid phosphatases (e.g., PTEN, SHIP2), nucleotide/metabolite/sugar phosphatases, and RNA/DNA phosphatases per prompt rules.",
+            "examples": [
+              "PPM1D",
+              "PTPN1",
+              "PP1"
+            ]
+          },
+          {
+            "key": "substrate",
+            "type": "str",
+            "description": "Normalized gene symbol (preferred) or canonical protein name for the protein substrate whose phosphorylation is reduced by the phosphatase. Must be a protein encoded by a UniProt-listed gene. Exclude substrates that are small molecules, lipids, nucleotides, metabolites, or other non-protein entities.",
+            "examples": [
+              "RUNX2",
+              "INSR",
+              "Cdc25"
+            ]
+          },
+          {
+            "key": "dephosphosite",
+            "type": "str",
+            "description": "Specific dephosphorylation residue on the substrate explicitly stated in the excerpt (e.g., 'Ser301', 'Thr287', 'Tyr493'). Required only for Tier 1 evidence. If the text does not explicitly name a site, set to null. If multiple sites are explicitly dephosphorylated by the same phosphatase on the same substrate, consolidate in the same pair and list all sites in this field as a single semicolon-separated string (e.g., 'Ser301; Thr305') to preserve the required schema without adding new fields.",
+            "examples": [
+              "Ser301",
+              "Ser287"
+            ]
+          },
+          {
+            "key": "five_aa_window",
+            "type": "str",
+            "description": "Five–amino-acid sequence window around the dephosphosite if the excerpt explicitly provides it (often shown as a short motif or lowercase sequence). Do not infer or derive from external knowledge; if not explicitly present in the text, set to null.",
+            "examples": []
+          },
+          {
+            "key": "organism",
+            "type": "str",
+            "description": "Single-string organism label most relevant to the evidence sentences for this pair (e.g., 'human', 'mouse', 'rat', 'chicken'). If multiple organisms are mentioned, choose the one tied to the experiments supporting the pair. If organism cannot be determined from the provided text, default to 'human' as instructed.",
+            "examples": [
+              "human",
+              "mouse",
+              "human"
+            ]
+          },
+          {
+            "key": "evidence_texts",
+            "type": "list_str",
+            "description": "List of verbatim sentences or minimal fragments from the provided title and passage that directly support the phosphatase–substrate relationship and its tier classification. Include every sentence used for support, focusing on statements indicating dephosphorylation or measurable changes in substrate phosphorylation state. Do not include unrelated pathway background.",
+            "examples": [
+              [
+                "Western-blot analysis revealed that PPM1D selectively removed the phosphate group from RUNX2 at Ser301 in human U2OS cells.",
+                "In a recombinant phosphatase assay using lysates from human cells, GST-PPM1D reduced the phospho-signal of RUNX2 by 70 %."
+              ],
+              [
+                "PTPN1 dephosphorylated the insulin receptor in vitro using extracts prepared from mouse liver.",
+                "Knockdown of Ptpn1 in primary mouse hepatocytes led to sustained tyrosine phosphorylation of INSR after insulin stimulation."
+              ],
+              [
+                "At the time of mitotic entry, 14-3-3 is removed from Cdc25 and S287 is dephosphorylated by protein phosphatase 1 (PP1)."
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "dataset",
+      "nodeId": "n_1770580635114_728511060",
+      "left": 49.5,
+      "top": 109,
+      "name": "Three papers",
+      "note": "Sample dataset",
+      "colorIndex": 1,
+      "datasetContent": {
+        "headers": [
+          "PMID",
+          "Title",
+          "Abstract",
+          "MeSH"
+        ],
+        "rows": [
+          [
+            "16287083",
+            "Oxidation and inactivation of low molecular weight protein tyrosine phosphatase by the anticancer drug Aplidin.",
+            "\"The marine plitidepsin Aplidin derived from the Mediterranean tunicate Aplidium albicans is a strong apoptotic inducer with promising antitumor activity. However, little is known about the mechanism of action of the molecule. In this article, we report that Aplidin is cytotoxic for NIH3T3 cells and that its action is exerted through the production of reactive oxygen species (ROS). Rotenone, but not other selective inhibitors of ROS production, blocks the induction of ROS, suggesting the involvement of the mitochondrial respiratory chain in Aplidin action. The intracellular rise of redox potential caused by Aplidin inactivates several molecular targets. Among these targets, we focused our attention on protein tyrosine phosphatases (PTPs). In agreement with the well-characterized effect of ROS-mediated PTP oxidation, due to the presence of a cysteine residue in their catalytic site, we found that Aplidin induces a strong decrease in PTP activity. In particular, since the expression of low molecular weight-PTP (LMW-PTP) is strongly associated with tumor onset and progression, we investigated the effect of Aplidin on this enzyme. Our data show that LMW-PTP is oxidized and inactivated during Aplidin treatment, thus causing a hyper-phosphorylation of its substrate beta-catenin. These findings demonstrate that, at least in part, the antitumoral activity of Aplidin could be due to the direct inhibition of LMW-PTP and its related oncogenic potential.\"",
+            "\"Animals, Depsipeptides, Disease Progression, Electron Transport, Fibroblasts, Mice, Molecular Weight, Oxidation-Reduction, Peptides, Cyclic, Phosphorylation, Protein-Tyrosine Kinases, Reactive Oxygen Species\""
+          ],
+          [
+            "16415345",
+            "Contact inhibition of hepatocyte growth regulated by functional association of the c-Met/hepatocyte growth factor receptor and LAR protein-tyrosine phosphatase.",
+            "\"Contact inhibition, the inhibition of cell proliferation by tight cell-cell contact is a fundamental characteristic of normal cells. Using primary cultured hepatocytes, we investigated the mechanisms of contact inhibition that decrease the mitogenic activity of hepatocyte growth factor (HGF), focusing on the regulation of c-Met/HGF-receptor activation. In hepatocytes cultured at a sparse cell density, HGF stimulation induced prolonged c-Met tyrosine phosphorylation for over 5 h and a marked mitogenic response. In contrast, HGF stimulation induced transient c-Met tyrosine phosphorylation in <3 h and failed to induce mitogenic response in hepatocytes cultured at a confluent cell density. Treatment of the confluent cells with HGF plus orthovanadate, a broad spectrum protein-tyrosine phosphatase inhibitor, however, prolonged c-Met tyrosine phosphorylation for over 5 h and permitted the subsequent mitogenic response. The mitogenic response to HGF was associated with the duration of c-Met tyrosine phosphorylation even in the sparse cells. We found that the activity and expression of the protein-tyrosine phosphatase LAR increased following HGF stimulation specifically in confluent hepatocytes and not in sparse hepatocytes. LAR and c-Met were associated, and purified LAR dephosphorylated tyrosine-phosphorylated c-Met in in vitro phosphatase reactions. Furthermore, antisense oligonucleotides specific for LAR mRNA suppressed the expression of LAR, allowed prolonged c-Met tyrosine phosphorylation, and led to acquisition of a mitogenic response in hepatocytes even under the confluent condition. Thus functional association of LAR and c-Met underlies the inhibition of c-Met-mediated mitogenic signaling through the dephosphorylation of c-Met, which specifically occurs under the confluent condition.\"",
+            "\"Animals, Blotting, Western, Cell Culture Techniques, Cells, Cultured, Contact Inhibition, DNA, Extracellular Signal-Regulated MAP Kinases, Gene Expression Regulation, Hepatocyte Growth Factor, Hepatocytes, Immunohistochemistry, Male, Mitosis, Phosphorylation, Precipitin Tests, Protein Tyrosine Phosphatases, Proto-Oncogene Proteins c-met, RNA, Messenger, Rats, Rats, Sprague-Dawley, Reverse Transcriptase Polymerase Chain Reaction, Time Factors\""
+          ],
+          [
+            "17197020",
+            "Identification of tyrosines in the putative regulatory site of the Ca2+ channel TRPV6.",
+            "\"In HEK293 cells, transfected with the Ca2+ channel protein TRPV6, Ca2+ influx is increased and TRPV6 is tyrosine phosphorylated following addition of the tyrosine phosphatase inhibitor N,N-dimethyl-hydroxamido hydroxovanadate to cells. This effect of DMHV is enhanced by co-transfection of cells with the tyrosine kinase Src and the tyrosine phosphatase 1B. It is abolished when cells had been treated with PP1, an inhibitor of Src family tyrosine kinases. PTP1B interacts with the N-terminal domain of TRPV6 within a region of amino acids 1-191 as shown by co-immunoprecipitation, bimolecular fluorescence complementation and the yeast 2-hybrid system. Point mutation of both tyrosines 161 and 162 in the TRPV6 protein abolishes the DMHV-effect on Ca2+ influx and tyrosine phosphorylation by Src. Single mutations of Y161 or Y162 shows that each of both tyrosines alone is sufficient for the DMHV-effect. We conclude that phosphorylation/dephosphorylation of tyrosines in position 161 and 162 is essential for regulation of Ca2+ influx through TRPV6 Ca2+ channels in HEK293 cells.\"",
+            "\"Amino Acid Sequence, Calcium Channels, Cells, Cultured, Humans, Point Mutation, Protein Tyrosine Phosphatases, TRPV Cation Channels, Transfection, Two-Hybrid System Techniques, Tyrosine, Vanadates, src-Family Kinases\""
+          ]
+        ]
+      }
+    },
+    {
+      "type": "sampler",
+      "nodeId": "n_1770580680489_306033151",
+      "left": 319,
+      "top": 130,
+      "name": "Copy",
+      "note": "",
+      "sourceNodeId": "n_1770580635114_728511060",
+      "colorIndex": 1,
+      "samplingType": "specify-rows",
+      "rowSpec": "1-3"
+    },
+    {
+      "type": "subset",
+      "nodeId": "n_1770581088586_718621726",
+      "left": 605.5,
+      "top": 57.5,
+      "name": "Three papers Copy 1",
+      "samplerNodeId": "n_1770580680489_306033151",
+      "colorIndex": 0,
+      "subsetContent": {
+        "headers": [
+          "PMID",
+          "Title",
+          "Abstract",
+          "MeSH"
+        ],
+        "rows": [
+          [
+            "16287083",
+            "Oxidation and inactivation of low molecular weight protein tyrosine phosphatase by the anticancer drug Aplidin.",
+            "\"The marine plitidepsin Aplidin derived from the Mediterranean tunicate Aplidium albicans is a strong apoptotic inducer with promising antitumor activity. However, little is known about the mechanism of action of the molecule. In this article, we report that Aplidin is cytotoxic for NIH3T3 cells and that its action is exerted through the production of reactive oxygen species (ROS). Rotenone, but not other selective inhibitors of ROS production, blocks the induction of ROS, suggesting the involvement of the mitochondrial respiratory chain in Aplidin action. The intracellular rise of redox potential caused by Aplidin inactivates several molecular targets. Among these targets, we focused our attention on protein tyrosine phosphatases (PTPs). In agreement with the well-characterized effect of ROS-mediated PTP oxidation, due to the presence of a cysteine residue in their catalytic site, we found that Aplidin induces a strong decrease in PTP activity. In particular, since the expression of low molecular weight-PTP (LMW-PTP) is strongly associated with tumor onset and progression, we investigated the effect of Aplidin on this enzyme. Our data show that LMW-PTP is oxidized and inactivated during Aplidin treatment, thus causing a hyper-phosphorylation of its substrate beta-catenin. These findings demonstrate that, at least in part, the antitumoral activity of Aplidin could be due to the direct inhibition of LMW-PTP and its related oncogenic potential.\"",
+            "\"Animals, Depsipeptides, Disease Progression, Electron Transport, Fibroblasts, Mice, Molecular Weight, Oxidation-Reduction, Peptides, Cyclic, Phosphorylation, Protein-Tyrosine Kinases, Reactive Oxygen Species\""
+          ],
+          [
+            "16415345",
+            "Contact inhibition of hepatocyte growth regulated by functional association of the c-Met/hepatocyte growth factor receptor and LAR protein-tyrosine phosphatase.",
+            "\"Contact inhibition, the inhibition of cell proliferation by tight cell-cell contact is a fundamental characteristic of normal cells. Using primary cultured hepatocytes, we investigated the mechanisms of contact inhibition that decrease the mitogenic activity of hepatocyte growth factor (HGF), focusing on the regulation of c-Met/HGF-receptor activation. In hepatocytes cultured at a sparse cell density, HGF stimulation induced prolonged c-Met tyrosine phosphorylation for over 5 h and a marked mitogenic response. In contrast, HGF stimulation induced transient c-Met tyrosine phosphorylation in <3 h and failed to induce mitogenic response in hepatocytes cultured at a confluent cell density. Treatment of the confluent cells with HGF plus orthovanadate, a broad spectrum protein-tyrosine phosphatase inhibitor, however, prolonged c-Met tyrosine phosphorylation for over 5 h and permitted the subsequent mitogenic response. The mitogenic response to HGF was associated with the duration of c-Met tyrosine phosphorylation even in the sparse cells. We found that the activity and expression of the protein-tyrosine phosphatase LAR increased following HGF stimulation specifically in confluent hepatocytes and not in sparse hepatocytes. LAR and c-Met were associated, and purified LAR dephosphorylated tyrosine-phosphorylated c-Met in in vitro phosphatase reactions. Furthermore, antisense oligonucleotides specific for LAR mRNA suppressed the expression of LAR, allowed prolonged c-Met tyrosine phosphorylation, and led to acquisition of a mitogenic response in hepatocytes even under the confluent condition. Thus functional association of LAR and c-Met underlies the inhibition of c-Met-mediated mitogenic signaling through the dephosphorylation of c-Met, which specifically occurs under the confluent condition.\"",
+            "\"Animals, Blotting, Western, Cell Culture Techniques, Cells, Cultured, Contact Inhibition, DNA, Extracellular Signal-Regulated MAP Kinases, Gene Expression Regulation, Hepatocyte Growth Factor, Hepatocytes, Immunohistochemistry, Male, Mitosis, Phosphorylation, Precipitin Tests, Protein Tyrosine Phosphatases, Proto-Oncogene Proteins c-met, RNA, Messenger, Rats, Rats, Sprague-Dawley, Reverse Transcriptase Polymerase Chain Reaction, Time Factors\""
+          ],
+          [
+            "17197020",
+            "Identification of tyrosines in the putative regulatory site of the Ca2+ channel TRPV6.",
+            "\"In HEK293 cells, transfected with the Ca2+ channel protein TRPV6, Ca2+ influx is increased and TRPV6 is tyrosine phosphorylated following addition of the tyrosine phosphatase inhibitor N,N-dimethyl-hydroxamido hydroxovanadate to cells. This effect of DMHV is enhanced by co-transfection of cells with the tyrosine kinase Src and the tyrosine phosphatase 1B. It is abolished when cells had been treated with PP1, an inhibitor of Src family tyrosine kinases. PTP1B interacts with the N-terminal domain of TRPV6 within a region of amino acids 1-191 as shown by co-immunoprecipitation, bimolecular fluorescence complementation and the yeast 2-hybrid system. Point mutation of both tyrosines 161 and 162 in the TRPV6 protein abolishes the DMHV-effect on Ca2+ influx and tyrosine phosphorylation by Src. Single mutations of Y161 or Y162 shows that each of both tyrosines alone is sufficient for the DMHV-effect. We conclude that phosphorylation/dephosphorylation of tyrosines in position 161 and 162 is essential for regulation of Ca2+ influx through TRPV6 Ca2+ channels in HEK293 cells.\"",
+            "\"Amino Acid Sequence, Calcium Channels, Cells, Cultured, Humans, Point Mutation, Protein Tyrosine Phosphatases, TRPV Cation Channels, Transfection, Two-Hybrid System Techniques, Tyrosine, Vanadates, src-Family Kinases\""
+          ]
+        ]
+      }
+    },
+    {
+      "type": "subset",
+      "nodeId": "n_1770581093514_260841869",
+      "left": 604,
+      "top": 129.5,
+      "name": "Three papers Copy 2",
+      "samplerNodeId": "n_1770580680489_306033151",
+      "colorIndex": 1,
+      "subsetContent": {
+        "headers": [
+          "PMID",
+          "Title",
+          "Abstract",
+          "MeSH"
+        ],
+        "rows": [
+          [
+            "16287083",
+            "Oxidation and inactivation of low molecular weight protein tyrosine phosphatase by the anticancer drug Aplidin.",
+            "\"The marine plitidepsin Aplidin derived from the Mediterranean tunicate Aplidium albicans is a strong apoptotic inducer with promising antitumor activity. However, little is known about the mechanism of action of the molecule. In this article, we report that Aplidin is cytotoxic for NIH3T3 cells and that its action is exerted through the production of reactive oxygen species (ROS). Rotenone, but not other selective inhibitors of ROS production, blocks the induction of ROS, suggesting the involvement of the mitochondrial respiratory chain in Aplidin action. The intracellular rise of redox potential caused by Aplidin inactivates several molecular targets. Among these targets, we focused our attention on protein tyrosine phosphatases (PTPs). In agreement with the well-characterized effect of ROS-mediated PTP oxidation, due to the presence of a cysteine residue in their catalytic site, we found that Aplidin induces a strong decrease in PTP activity. In particular, since the expression of low molecular weight-PTP (LMW-PTP) is strongly associated with tumor onset and progression, we investigated the effect of Aplidin on this enzyme. Our data show that LMW-PTP is oxidized and inactivated during Aplidin treatment, thus causing a hyper-phosphorylation of its substrate beta-catenin. These findings demonstrate that, at least in part, the antitumoral activity of Aplidin could be due to the direct inhibition of LMW-PTP and its related oncogenic potential.\"",
+            "\"Animals, Depsipeptides, Disease Progression, Electron Transport, Fibroblasts, Mice, Molecular Weight, Oxidation-Reduction, Peptides, Cyclic, Phosphorylation, Protein-Tyrosine Kinases, Reactive Oxygen Species\""
+          ],
+          [
+            "16415345",
+            "Contact inhibition of hepatocyte growth regulated by functional association of the c-Met/hepatocyte growth factor receptor and LAR protein-tyrosine phosphatase.",
+            "\"Contact inhibition, the inhibition of cell proliferation by tight cell-cell contact is a fundamental characteristic of normal cells. Using primary cultured hepatocytes, we investigated the mechanisms of contact inhibition that decrease the mitogenic activity of hepatocyte growth factor (HGF), focusing on the regulation of c-Met/HGF-receptor activation. In hepatocytes cultured at a sparse cell density, HGF stimulation induced prolonged c-Met tyrosine phosphorylation for over 5 h and a marked mitogenic response. In contrast, HGF stimulation induced transient c-Met tyrosine phosphorylation in <3 h and failed to induce mitogenic response in hepatocytes cultured at a confluent cell density. Treatment of the confluent cells with HGF plus orthovanadate, a broad spectrum protein-tyrosine phosphatase inhibitor, however, prolonged c-Met tyrosine phosphorylation for over 5 h and permitted the subsequent mitogenic response. The mitogenic response to HGF was associated with the duration of c-Met tyrosine phosphorylation even in the sparse cells. We found that the activity and expression of the protein-tyrosine phosphatase LAR increased following HGF stimulation specifically in confluent hepatocytes and not in sparse hepatocytes. LAR and c-Met were associated, and purified LAR dephosphorylated tyrosine-phosphorylated c-Met in in vitro phosphatase reactions. Furthermore, antisense oligonucleotides specific for LAR mRNA suppressed the expression of LAR, allowed prolonged c-Met tyrosine phosphorylation, and led to acquisition of a mitogenic response in hepatocytes even under the confluent condition. Thus functional association of LAR and c-Met underlies the inhibition of c-Met-mediated mitogenic signaling through the dephosphorylation of c-Met, which specifically occurs under the confluent condition.\"",
+            "\"Animals, Blotting, Western, Cell Culture Techniques, Cells, Cultured, Contact Inhibition, DNA, Extracellular Signal-Regulated MAP Kinases, Gene Expression Regulation, Hepatocyte Growth Factor, Hepatocytes, Immunohistochemistry, Male, Mitosis, Phosphorylation, Precipitin Tests, Protein Tyrosine Phosphatases, Proto-Oncogene Proteins c-met, RNA, Messenger, Rats, Rats, Sprague-Dawley, Reverse Transcriptase Polymerase Chain Reaction, Time Factors\""
+          ],
+          [
+            "17197020",
+            "Identification of tyrosines in the putative regulatory site of the Ca2+ channel TRPV6.",
+            "\"In HEK293 cells, transfected with the Ca2+ channel protein TRPV6, Ca2+ influx is increased and TRPV6 is tyrosine phosphorylated following addition of the tyrosine phosphatase inhibitor N,N-dimethyl-hydroxamido hydroxovanadate to cells. This effect of DMHV is enhanced by co-transfection of cells with the tyrosine kinase Src and the tyrosine phosphatase 1B. It is abolished when cells had been treated with PP1, an inhibitor of Src family tyrosine kinases. PTP1B interacts with the N-terminal domain of TRPV6 within a region of amino acids 1-191 as shown by co-immunoprecipitation, bimolecular fluorescence complementation and the yeast 2-hybrid system. Point mutation of both tyrosines 161 and 162 in the TRPV6 protein abolishes the DMHV-effect on Ca2+ influx and tyrosine phosphorylation by Src. Single mutations of Y161 or Y162 shows that each of both tyrosines alone is sufficient for the DMHV-effect. We conclude that phosphorylation/dephosphorylation of tyrosines in position 161 and 162 is essential for regulation of Ca2+ influx through TRPV6 Ca2+ channels in HEK293 cells.\"",
+            "\"Amino Acid Sequence, Calcium Channels, Cells, Cultured, Humans, Point Mutation, Protein Tyrosine Phosphatases, TRPV Cation Channels, Transfection, Two-Hybrid System Techniques, Tyrosine, Vanadates, src-Family Kinases\""
+          ]
+        ]
+      }
+    },
+    {
+      "type": "subset",
+      "nodeId": "n_1770581097608_638624475",
+      "left": 607,
+      "top": 202.5,
+      "name": "Three papers Copy 3",
+      "samplerNodeId": "n_1770580680489_306033151",
+      "colorIndex": 2,
+      "subsetContent": {
+        "headers": [
+          "PMID",
+          "Title",
+          "Abstract",
+          "MeSH"
+        ],
+        "rows": [
+          [
+            "16287083",
+            "Oxidation and inactivation of low molecular weight protein tyrosine phosphatase by the anticancer drug Aplidin.",
+            "\"The marine plitidepsin Aplidin derived from the Mediterranean tunicate Aplidium albicans is a strong apoptotic inducer with promising antitumor activity. However, little is known about the mechanism of action of the molecule. In this article, we report that Aplidin is cytotoxic for NIH3T3 cells and that its action is exerted through the production of reactive oxygen species (ROS). Rotenone, but not other selective inhibitors of ROS production, blocks the induction of ROS, suggesting the involvement of the mitochondrial respiratory chain in Aplidin action. The intracellular rise of redox potential caused by Aplidin inactivates several molecular targets. Among these targets, we focused our attention on protein tyrosine phosphatases (PTPs). In agreement with the well-characterized effect of ROS-mediated PTP oxidation, due to the presence of a cysteine residue in their catalytic site, we found that Aplidin induces a strong decrease in PTP activity. In particular, since the expression of low molecular weight-PTP (LMW-PTP) is strongly associated with tumor onset and progression, we investigated the effect of Aplidin on this enzyme. Our data show that LMW-PTP is oxidized and inactivated during Aplidin treatment, thus causing a hyper-phosphorylation of its substrate beta-catenin. These findings demonstrate that, at least in part, the antitumoral activity of Aplidin could be due to the direct inhibition of LMW-PTP and its related oncogenic potential.\"",
+            "\"Animals, Depsipeptides, Disease Progression, Electron Transport, Fibroblasts, Mice, Molecular Weight, Oxidation-Reduction, Peptides, Cyclic, Phosphorylation, Protein-Tyrosine Kinases, Reactive Oxygen Species\""
+          ],
+          [
+            "16415345",
+            "Contact inhibition of hepatocyte growth regulated by functional association of the c-Met/hepatocyte growth factor receptor and LAR protein-tyrosine phosphatase.",
+            "\"Contact inhibition, the inhibition of cell proliferation by tight cell-cell contact is a fundamental characteristic of normal cells. Using primary cultured hepatocytes, we investigated the mechanisms of contact inhibition that decrease the mitogenic activity of hepatocyte growth factor (HGF), focusing on the regulation of c-Met/HGF-receptor activation. In hepatocytes cultured at a sparse cell density, HGF stimulation induced prolonged c-Met tyrosine phosphorylation for over 5 h and a marked mitogenic response. In contrast, HGF stimulation induced transient c-Met tyrosine phosphorylation in <3 h and failed to induce mitogenic response in hepatocytes cultured at a confluent cell density. Treatment of the confluent cells with HGF plus orthovanadate, a broad spectrum protein-tyrosine phosphatase inhibitor, however, prolonged c-Met tyrosine phosphorylation for over 5 h and permitted the subsequent mitogenic response. The mitogenic response to HGF was associated with the duration of c-Met tyrosine phosphorylation even in the sparse cells. We found that the activity and expression of the protein-tyrosine phosphatase LAR increased following HGF stimulation specifically in confluent hepatocytes and not in sparse hepatocytes. LAR and c-Met were associated, and purified LAR dephosphorylated tyrosine-phosphorylated c-Met in in vitro phosphatase reactions. Furthermore, antisense oligonucleotides specific for LAR mRNA suppressed the expression of LAR, allowed prolonged c-Met tyrosine phosphorylation, and led to acquisition of a mitogenic response in hepatocytes even under the confluent condition. Thus functional association of LAR and c-Met underlies the inhibition of c-Met-mediated mitogenic signaling through the dephosphorylation of c-Met, which specifically occurs under the confluent condition.\"",
+            "\"Animals, Blotting, Western, Cell Culture Techniques, Cells, Cultured, Contact Inhibition, DNA, Extracellular Signal-Regulated MAP Kinases, Gene Expression Regulation, Hepatocyte Growth Factor, Hepatocytes, Immunohistochemistry, Male, Mitosis, Phosphorylation, Precipitin Tests, Protein Tyrosine Phosphatases, Proto-Oncogene Proteins c-met, RNA, Messenger, Rats, Rats, Sprague-Dawley, Reverse Transcriptase Polymerase Chain Reaction, Time Factors\""
+          ],
+          [
+            "17197020",
+            "Identification of tyrosines in the putative regulatory site of the Ca2+ channel TRPV6.",
+            "\"In HEK293 cells, transfected with the Ca2+ channel protein TRPV6, Ca2+ influx is increased and TRPV6 is tyrosine phosphorylated following addition of the tyrosine phosphatase inhibitor N,N-dimethyl-hydroxamido hydroxovanadate to cells. This effect of DMHV is enhanced by co-transfection of cells with the tyrosine kinase Src and the tyrosine phosphatase 1B. It is abolished when cells had been treated with PP1, an inhibitor of Src family tyrosine kinases. PTP1B interacts with the N-terminal domain of TRPV6 within a region of amino acids 1-191 as shown by co-immunoprecipitation, bimolecular fluorescence complementation and the yeast 2-hybrid system. Point mutation of both tyrosines 161 and 162 in the TRPV6 protein abolishes the DMHV-effect on Ca2+ influx and tyrosine phosphorylation by Src. Single mutations of Y161 or Y162 shows that each of both tyrosines alone is sufficient for the DMHV-effect. We conclude that phosphorylation/dephosphorylation of tyrosines in position 161 and 162 is essential for regulation of Ca2+ influx through TRPV6 Ca2+ channels in HEK293 cells.\"",
+            "\"Amino Acid Sequence, Calcium Channels, Cells, Cultured, Humans, Point Mutation, Protein Tyrosine Phosphatases, TRPV Cation Channels, Transfection, Two-Hybrid System Techniques, Tyrosine, Vanadates, src-Family Kinases\""
+          ]
+        ]
+      }
+    }
+  ],
+  "connections": [
+    {
+      "fromId": "n_1770580635114_728511060",
+      "toId": "n_1770580680489_306033151",
+      "type": "dataset-to-sampler"
+    },
+    {
+      "fromId": "n_1770580680489_306033151",
+      "toId": "n_1770581088586_718621726",
+      "type": "sampler-to-subset"
+    },
+    {
+      "fromId": "n_1770580680489_306033151",
+      "toId": "n_1770581093514_260841869",
+      "type": "sampler-to-subset"
+    },
+    {
+      "fromId": "n_1770580680489_306033151",
+      "toId": "n_1770581097608_638624475",
+      "type": "sampler-to-subset"
+    }
+  ]
+}
