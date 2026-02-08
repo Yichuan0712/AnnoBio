@@ -1320,6 +1320,16 @@
   color: var(--text-muted);
 }
 
+.run-detail-llm-select {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: inherit;
+  min-width: 0;
+}
+
 .run-detail-ws-picker {
   position: relative;
 }

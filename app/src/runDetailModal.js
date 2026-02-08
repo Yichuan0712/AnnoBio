@@ -1,7 +1,9 @@
 /**
- * Run node detail modal: two-column layout. Left: select working dataset, map prompt inputs to columns.
+ * Run node detail modal: two-column layout. Left: select working dataset, select LLM (credential), map prompt inputs to columns.
  * @param {{ node: HTMLElement, getWorkingSets: () => Array<{ nodeId: string, name: string, headers: string[], color?: string }>, getPromptInputFields: () => string[] }} options
  */
+
+const API_BASE = 'http://localhost:8000';
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -14,6 +16,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields 
   const inputFields = getPromptInputFields ? getPromptInputFields() : [];
 
   let selectedNodeId = (node?.dataset?.runWorkingSetId || '').trim();
+  let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
   const inputToColumn = {};
 
   const overlay = document.createElement('div');
@@ -30,7 +33,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields 
         <div class="run-detail-col run-detail-col--left">
           <div class="run-detail-card">
             <div class="run-detail-row">
-              <label class="run-detail-label" for="run-detail-ws-picker">Working dataset</label>
+              <label class="run-detail-label" for="run-detail-ws-picker">WORKING DATASET</label>
               <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select working dataset">
                 <div class="run-detail-ws-trigger" tabindex="0">
                   <span class="run-detail-ws-trigger-color" id="run-detail-ws-trigger-color"></span>
@@ -43,6 +46,12 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields 
             <div class="run-detail-inputs-section" id="run-detail-inputs-section">
               <h3 class="run-detail-section-title">Map dataset columns to prompt inputs</h3>
               <div class="run-detail-mapping-wrap" id="run-detail-inputs-list"></div>
+            </div>
+            <div class="run-detail-row">
+              <label class="run-detail-label" for="run-detail-llm-select">MODEL FOR PROMPT</label>
+              <select id="run-detail-llm-select" class="run-detail-llm-select" aria-label="Select model for prompt">
+                <option value="">— Select model for prompt —</option>
+              </select>
             </div>
             <div class="run-detail-footer">
               <button type="button" class="btn btn-secondary run-detail-run-btn" disabled>Run</button>
@@ -60,6 +69,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields 
   const triggerColorEl = overlay.querySelector('#run-detail-ws-trigger-color');
   const triggerTextEl = overlay.querySelector('#run-detail-ws-trigger-text');
   const dropdownEl = overlay.querySelector('#run-detail-ws-dropdown');
+  const llmSelectEl = overlay.querySelector('#run-detail-llm-select');
   const inputsListEl = overlay.querySelector('#run-detail-inputs-list');
 
   function getSelectedWorkingSet() {
@@ -79,7 +89,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields 
     if (ws) {
       triggerColorEl.style.background = ws.color || 'transparent';
       triggerColorEl.style.display = ws.color ? '' : 'none';
-      triggerTextEl.textContent = ws.name || 'Working dataset';
+      triggerTextEl.textContent = ws.name || 'WORKING DATASET';
     } else {
       triggerColorEl.style.background = '';
       triggerColorEl.style.display = 'none';
@@ -121,7 +131,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields 
       option.className = 'run-detail-ws-option';
       option.setAttribute('role', 'option');
       option.setAttribute('aria-selected', ws.nodeId === selectedNodeId ? 'true' : 'false');
-      option.innerHTML = `<span class="run-detail-ws-option-color" style="background:${escapeHtml(ws.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(ws.name || 'Working dataset')}</span>`;
+      option.innerHTML = `<span class="run-detail-ws-option-color" style="background:${escapeHtml(ws.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(ws.name || 'WORKING DATASET')}</span>`;
       option.dataset.nodeId = ws.nodeId;
       option.addEventListener('click', () => selectWorkingSet(ws.nodeId));
       dropdownEl.appendChild(option);
@@ -211,9 +221,34 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields 
     }
   });
 
+  async function loadCredentialsAndPopulateLlm() {
+    const sel = llmSelectEl;
+    sel.innerHTML = '<option value="">— Select model for prompt —</option>';
+    try {
+      const res = await fetch(`${API_BASE}/api/credentials`);
+      if (!res.ok) return;
+      const list = await res.json();
+      list.forEach((c) => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name || c.llm || c.id;
+        sel.appendChild(opt);
+      });
+      if (selectedCredentialId) sel.value = selectedCredentialId;
+    } catch (e) {
+      console.error('Load credentials for LLM select:', e);
+    }
+  }
+
+  llmSelectEl.addEventListener('change', () => {
+    selectedCredentialId = (llmSelectEl.value || '').trim();
+    if (node) node.dataset.runCredentialId = selectedCredentialId || '';
+  });
+
   updateTriggerDisplay();
   updateRunNodeBorder();
   renderInputMappings();
+  loadCredentialsAndPopulateLlm();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
 }
