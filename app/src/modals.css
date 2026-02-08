@@ -351,15 +351,20 @@
 
 /* My credentials modal */
 .modal-panel--credentials {
-  min-width: min(560px, 92vw);
+  min-width: min(960px, 92vw);
   max-width: 92vw;
+  min-height: min(640px, 80vh);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-body--credentials {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 24px;
-  min-height: 280px;
+  min-height: 0;
 }
 
 .credentials-section-title {
@@ -406,12 +411,72 @@
 
 .credentials-table td {
   color: var(--text);
+  vertical-align: middle;
 }
 
 .credentials-table-empty td {
   color: var(--text-muted);
   font-style: italic;
   text-align: center;
+}
+
+.credentials-key-cell {
+  vertical-align: middle;
+  min-width: 280px;
+  max-width: 50vw;
+  overflow: visible;
+  word-break: break-all;
+  white-space: normal;
+}
+
+.credentials-key-cell .credentials-key-value {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  padding: 2px 0;
+  display: inline-block;
+  max-width: 100%;
+  overflow: visible;
+  word-break: break-all;
+  white-space: normal;
+}
+
+.credentials-name-cell {
+  max-width: 180px;
+}
+
+.credentials-rename-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.credentials-rename-inline .credentials-rename-input {
+  width: 100%;
+  min-width: 80px;
+  font-size: 13px;
+}
+
+.credentials-actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.credentials-test-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.credentials-test-hint.credentials-test-hint--success {
+  color: var(--success, #0a0);
+  font-weight: 500;
+}
+
+.credentials-test-hint.credentials-test-hint--error {
+  color: var(--error, #c00);
+  font-weight: 500;
 }
 
 .credentials-add {
@@ -457,6 +522,44 @@
 
 .credentials-add-btn {
   white-space: nowrap;
+}
+
+/* API key input with show/hide toggle */
+.credentials-api-key-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.credentials-api-key-wrap .credentials-api-key-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.credentials-api-key-wrap .credentials-api-key-input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.credentials-api-key-toggle {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--hover);
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+  min-width: 56px;
+}
+
+.credentials-api-key-toggle:hover {
+  color: var(--text);
+  background: var(--bg);
 }
 
 /* Add a new agent modal */

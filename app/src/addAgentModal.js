@@ -25,12 +25,12 @@ export function openAddAgentModal() {
             </select>
           </div>
           <div class="agent-form-field">
-            <label class="dataset-meta-label" for="agent-llm-select">LLM</label>
-            <select id="agent-llm-select" class="credentials-select" aria-label="Select LLM">
-              <option value="">Select an LLM...</option>
-              <option value="openai">OpenAI (GPT)</option>
-              <option value="anthropic">Anthropic (Claude)</option>
-              <option value="other">Other</option>
+            <label class="dataset-meta-label" for="agent-model-select">Model</label>
+            <select id="agent-model-select" class="credentials-select" aria-label="Select model">
+              <option value="">Select a model...</option>
+              <option value="gpt-5">gpt-5</option>
+              <option value="gpt-5-mini">gpt-5-mini</option>
+              <option value="gpt-5-nano">gpt-5-nano</option>
             </select>
           </div>
           <div class="agent-form-actions">
@@ -48,11 +48,11 @@ export function openAddAgentModal() {
   overlay.querySelector('.modal-close').addEventListener('click', close);
   overlay.querySelector('.agent-add-btn').addEventListener('click', () => {
     const typeSelect = overlay.querySelector('#agent-type-select');
-    const llmSelect = overlay.querySelector('#agent-llm-select');
+    const modelSelect = overlay.querySelector('#agent-model-select');
     const type = typeSelect.value;
-    const llm = llmSelect.value;
-    // TODO: add agent (type, llm) and close
-    console.log('Add agent:', { type, llm });
+    const model = modelSelect.value;
+    // TODO: add agent (type, model) and close
+    console.log('Add agent:', { type, model });
     close();
   });
 

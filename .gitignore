@@ -7,7 +7,12 @@ dist/
 out/
 .vite/
 
+# Env / secrets
+.env
+.env.*
+
 # Python
+.venv/
 backend/.venv/
 backend/data/
 __pycache__/
