@@ -7,6 +7,7 @@
   --text: #0f1114;
   --text-muted: #4d5259;
   --border: #a8adb5;
+  --node-border: #7a808a; /* light 模式节点描边更深 */
   --hover: #dce0e5;
   --shadow: rgba(0, 0, 0, 0.14);
 }
@@ -19,6 +20,7 @@ html.dark {
   --text: #f0f0f0;
   --text-muted: #aaa;
   --border: #404040;
+  --node-border: #404040;
   --hover: #333;
   --shadow: rgba(0, 0, 0, 0.3);
 }
