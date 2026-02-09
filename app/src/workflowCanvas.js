@@ -131,6 +131,66 @@ export function buildWorkflowCanvas(root) {
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> working dataset (subset) content */
   const subsetContentByNodeId = new Map();
 
+  /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
+  const pendingRuns = new Map();
+  const RUN_API_BASE = 'http://localhost:8000';
+  function registerPendingRun(nodeId, runId) {
+    if (nodeId && runId) pendingRuns.set(nodeId, runId);
+  }
+  function setRunNodeProgress(node, completed, total) {
+    const bar = node?.querySelector('.workflow-node__run-progress');
+    if (!bar) return;
+    const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+    bar.style.width = pct + '%';
+    bar.setAttribute('aria-valuenow', String(pct));
+  }
+
+  setInterval(async () => {
+    if (pendingRuns.size === 0) return;
+    for (const [nodeId, runId] of pendingRuns) {
+      try {
+        const res = await fetch(`${RUN_API_BASE}/api/run/result/${runId}`);
+        const data = await res.json().catch(() => ({}));
+        const node = getNodeById(nodeId);
+        if (!node) {
+          pendingRuns.delete(nodeId);
+          continue;
+        }
+        if (res.status === 202) {
+          const total = data.total || 0;
+          const completed = data.completed || 0;
+          const partialResults = data.results;
+          const outputFields = data.output_fields;
+          setRunNodeProgress(node, completed, total);
+          if (node.style.borderColor) {
+            const bar = node.querySelector('.workflow-node__run-progress');
+            if (bar && !bar.style.background) bar.style.background = node.style.borderColor;
+          }
+          if (Array.isArray(partialResults) && Array.isArray(outputFields)) {
+            node.dataset.runResults = JSON.stringify(partialResults);
+            node.dataset.runOutputFields = JSON.stringify(outputFields);
+            document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: partialResults, outputFields, isComplete: false } }));
+          }
+          continue;
+        }
+        if (res.status !== 200) continue;
+        if (data.status === 'done') {
+          setRunNodeProgress(node, data.results?.length ?? 0, data.results?.length ?? 1);
+          if (data.error) {
+            node.dataset.runResults = JSON.stringify([{ row_index: 0, output: null, error: data.error }]);
+            node.dataset.runOutputFields = JSON.stringify([]);
+            document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: [{ row_index: 0, output: null, error: data.error }], outputFields: [], isComplete: true } }));
+          } else if (data.results && data.output_fields) {
+            node.dataset.runResults = JSON.stringify(data.results);
+            node.dataset.runOutputFields = JSON.stringify(data.output_fields);
+            document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: data.results, outputFields: data.output_fields, isComplete: true } }));
+          }
+          pendingRuns.delete(nodeId);
+        }
+      } catch (_) {}
+    }
+  }, 2000);
+
   function getNodeList() {
     return Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'));
   }
@@ -407,6 +467,8 @@ export function buildWorkflowCanvas(root) {
    * @param {{ fromId: string, toId: string, type: string }} edge
    * @param {number} edgeIndex - index in connections (for data-edge-index / future click)
    */
+  const RUN_NODE_FALLBACK_HEIGHT = 40;
+
   function renderEdge(g, edge, edgeIndex) {
     const fromNode = getNodeById(edge.fromId);
     const toNode = getNodeById(edge.toId);
@@ -418,7 +480,8 @@ export function buildWorkflowCanvas(root) {
     const h1 = fromNode.offsetHeight || 0;
     const x2 = parseFloat(toNode.style.left) || 0;
     const y2 = parseFloat(toNode.style.top) || 0;
-    const h2 = toNode.offsetHeight || 0;
+    const isRunNode = toNode.classList.contains('workflow-node--run');
+    const h2 = isRunNode ? (toNode.offsetHeight || RUN_NODE_FALLBACK_HEIGHT) : (toNode.offsetHeight || 0);
 
     if (edge.type === EDGE_TYPE_PROMPT_TO_PROMPT) {
       const startX = x1 + w1;
@@ -450,11 +513,12 @@ export function buildWorkflowCanvas(root) {
       line.setAttribute('pointer-events', 'none');
       g.appendChild(line);
     } else {
-      // Unknown type: draw same as prompt-to-prompt for now; add branches for new types later.
+      // prompt-to-run: end at left-center of toNode; use fixed height for Run node so layout delay doesn't misplace the line
       const startX = x1 + w1;
       const startY = y1 + h1 / 2;
       const endX = x2;
-      const endY = y2 + h2 / 2;
+      const toHeight = isRunNode ? RUN_NODE_FALLBACK_HEIGHT : h2;
+      const endY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
       const hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       hitLine.setAttribute('x1', String(startX));
       hitLine.setAttribute('y1', String(startY));
@@ -1248,6 +1312,7 @@ export function buildWorkflowCanvas(root) {
         <span class="workflow-node__title">Run</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
+      <div class="workflow-node__run-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
     nodesLayer.appendChild(node);
 
@@ -1327,10 +1392,31 @@ export function buildWorkflowCanvas(root) {
           color,
         };
       });
+      const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+      function getSubsetContent(nodeId) {
+        const c = subsetContentByNodeId.get(nodeId);
+        return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+      }
+      function getPromptTemplate() {
+        if (!promptNode) return { sections: [], outputSchema: { return_shape: 'single', fields: [] } };
+        let sec = [];
+        try {
+          sec = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+        } catch (_) {}
+        let fields = [];
+        try {
+          fields = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
+        } catch (_) {}
+        const returnShape = promptNode.dataset.promptOutputReturnShape || 'single';
+        return { sections: sec, outputSchema: { return_shape: returnShape, fields } };
+      }
       openRunDetailModal({
         node,
         getWorkingSets: () => workingSets,
         getPromptInputFields: () => promptInputFields,
+        getSubsetContent,
+        getPromptTemplate,
+        registerPendingRun,
       });
     });
 
@@ -1748,7 +1834,21 @@ export function buildWorkflowCanvas(root) {
         };
       }
       if (node.classList.contains('workflow-node--run')) {
-        return { type: 'run', nodeId, left, top };
+        const bar = node.querySelector('.workflow-node__run-progress');
+        const pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : 0;
+        const out = {
+          type: 'run',
+          nodeId,
+          left,
+          top,
+          runWorkingSetId: (node.dataset.runWorkingSetId || '').trim() || undefined,
+          runCredentialId: (node.dataset.runCredentialId || '').trim() || undefined,
+          runInputToColumn: node.dataset.runInputToColumn || undefined,
+          runResults: node.dataset.runResults || undefined,
+          runOutputFields: node.dataset.runOutputFields || undefined,
+        };
+        if (pct === 100) out.runProgress = 100;
+        return out;
       }
       let sections = [];
       let outputFormat = [];
@@ -1828,6 +1928,12 @@ export function buildWorkflowCanvas(root) {
         createdNodes.push(node);
       } else if (n.type === 'run') {
         const runNode = createRunNode({ left: n.left, top: n.top, nodeId: n.nodeId || n.id });
+        if (n.runWorkingSetId) runNode.dataset.runWorkingSetId = n.runWorkingSetId;
+        if (n.runCredentialId) runNode.dataset.runCredentialId = n.runCredentialId;
+        if (n.runInputToColumn) runNode.dataset.runInputToColumn = n.runInputToColumn;
+        if (n.runResults) runNode.dataset.runResults = n.runResults;
+        if (n.runOutputFields) runNode.dataset.runOutputFields = n.runOutputFields;
+        if (n.runProgress === 100) setRunNodeProgress(runNode, 100, 100);
         createdNodes.push(runNode);
       } else {
         const node = createPromptNode({
@@ -1840,6 +1946,19 @@ export function buildWorkflowCanvas(root) {
           nodeId: n.nodeId || n.id,
         });
         createdNodes.push(node);
+      }
+    });
+    // Apply Run node border color and progress bar color from selected working set (so it shows when loading from JSON)
+    createdNodes.forEach((runNode) => {
+      if (runNode.classList.contains('workflow-node--run') && runNode.dataset.runWorkingSetId) {
+        const wsNode = getNodeById(runNode.dataset.runWorkingSetId);
+        if (wsNode && wsNode.classList.contains('workflow-node--subset')) {
+          const colorIndex = wsNode.dataset.subsetColorIndex != null ? parseInt(wsNode.dataset.subsetColorIndex, 10) : 0;
+          const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+          runNode.style.borderColor = color;
+          const progressBar = runNode.querySelector('.workflow-node__run-progress');
+          if (progressBar) progressBar.style.background = color;
+        }
       }
     });
     // Normalize connections: support old { from, to } indices and new { fromId, toId, type }

@@ -1272,8 +1272,9 @@
   word-break: break-word;
 }
 
-/* Run detail modal (two-column: working set + input mapping | right TBD) */
+/* Run detail modal (two-column: working set + input mapping | right TBD) — 初始即占满最大宽度，避免生成结果后宽度变化 */
 .modal-panel--run-detail {
+  width: 96vw;
   min-width: min(1080px, 95vw);
   max-width: 96vw;
   max-height: 98vh;
@@ -1300,13 +1301,26 @@
 }
 
 .run-detail-col--left {
-  flex: 0 0 50%;
+  flex: 0 0 36%;
   min-width: 0;
+  max-width: 380px;
 }
 
 .run-detail-col--right {
   flex: 1 1 0;
-  min-width: 120px;
+  min-width: 160px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.run-detail-col--right > .run-detail-results-card {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .run-detail-card {
@@ -1571,6 +1585,111 @@
 .run-detail-column-select:focus {
   outline: none;
   border-color: var(--text-muted);
+}
+
+/* Run results card (right column) */
+.run-detail-results-card {
+  padding: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.run-detail-results-card .run-detail-results {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.run-detail-results .run-detail-section-title {
+  flex-shrink: 0;
+}
+
+.run-detail-results-note {
+  flex-shrink: 0;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.run-detail-results-generating {
+  color: var(--text-muted);
+}
+
+.run-detail-results-complete {
+  color: var(--text-muted);
+}
+
+.run-detail-results-incomplete {
+  color: var(--warning, #b8860b);
+}
+
+.run-detail-results-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.run-detail-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.run-detail-results-table th,
+.run-detail-results-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border: 1px solid var(--border);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.run-detail-results-table thead th {
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-bar);
+}
+
+.run-detail-results-table tbody tr:nth-child(even) {
+  background: var(--bg-bar);
+}
+
+.run-detail-results-table .run-detail-th--index,
+.run-detail-results-table .run-detail-td--index {
+  width: 2.5em;
+  max-width: 2.5em;
+  text-align: right;
+}
+
+.run-detail-results-table td[title] {
+  cursor: default;
+}
+
+.run-detail-results-table .run-detail-td--error {
+  color: var(--danger, #c00);
+  font-size: 12px;
+}
+
+.run-detail-error {
+  color: var(--danger, #c00);
+  font-size: 13px;
 }
 
 /* Working dataset detail modal (table view + edit) */

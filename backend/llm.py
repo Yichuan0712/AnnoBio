@@ -81,3 +81,15 @@ def chat(
     lc_messages = _messages_to_langchain(messages)
     response = llm.invoke(lc_messages)
     return (response.content or "").strip()
+
+
+def run_structured(provider: str, model: str, api_key: str, prompt: str, response_model: type, max_tokens: int = 8192):
+    """
+    Call LLM with structured output (Pydantic model). Returns the parsed object as dict.
+    Default max_tokens=8192 so long structured responses are not truncated (truncation breaks JSON parsing).
+    """
+    llm = get_chat_model(provider=provider, model=model, api_key=api_key, max_tokens=max_tokens)
+    structured_llm = llm.with_structured_output(response_model)
+    messages = [HumanMessage(content=prompt)]
+    result = structured_llm.invoke(messages)
+    return result.model_dump() if hasattr(result, "model_dump") else result.dict()
