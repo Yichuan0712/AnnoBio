@@ -62,16 +62,32 @@ export function buildWorkflowCanvas(root) {
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
   const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
   marker.setAttribute('id', 'workflow-arrow');
-  marker.setAttribute('markerWidth', '10');
-  marker.setAttribute('markerHeight', '8');
-  marker.setAttribute('refX', '9');
-  marker.setAttribute('refY', '4');
+  marker.setAttribute('markerUnits', 'userSpaceOnUse');
+  marker.setAttribute('markerWidth', '12');
+  marker.setAttribute('markerHeight', '10');
+  marker.setAttribute('refX', '11');
+  marker.setAttribute('refY', '5');
   marker.setAttribute('orient', 'auto');
   const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  arrowPath.setAttribute('d', 'M0,0 L10,4 L0,8 Z');
+  arrowPath.setAttribute('d', 'M0,0 L12,5 L0,10 Z');
   arrowPath.setAttribute('fill', 'currentColor');
   marker.appendChild(arrowPath);
   defs.appendChild(marker);
+
+  const markerHover = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+  markerHover.setAttribute('id', 'workflow-arrow-hover');
+  markerHover.setAttribute('markerUnits', 'userSpaceOnUse');
+  markerHover.setAttribute('markerWidth', '14');
+  markerHover.setAttribute('markerHeight', '11');
+  markerHover.setAttribute('refX', '13');
+  markerHover.setAttribute('refY', '5.5');
+  markerHover.setAttribute('orient', 'auto');
+  const arrowPathHover = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  arrowPathHover.setAttribute('d', 'M0,0 L14,5.5 L0,11 Z');
+  arrowPathHover.setAttribute('fill', 'currentColor');
+  markerHover.appendChild(arrowPathHover);
+  defs.appendChild(markerHover);
+
   edgesLayer.appendChild(defs);
 
   const nodesLayer = document.createElement('div');
@@ -127,6 +143,17 @@ export function buildWorkflowCanvas(root) {
   const STAGGER = 36;
   /** @type {{ fromId: string, toId: string, type: string }[]} */
   let connections = [];
+
+  /** Undo/redo: stacks of serialized canvas state */
+  const UNDO_MAX = 50;
+  const UNDO_DEBOUNCE_MS = 400;
+  let undoStack = [];
+  let redoStack = [];
+  let isUndoRedo = false;
+  let skipNextPush = false;
+  let undoDebounceTimer = null;
+  /** 上一次保存的完整状态（变更前），用于在下次变更时压入 undo */
+  let lastSavedState = null;
 
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content for preview/detail */
   const datasetContentByNodeId = new Map();
@@ -516,6 +543,7 @@ export function buildWorkflowCanvas(root) {
       hitLine.setAttribute('data-edge-type', edge.type);
       hitLine.setAttribute('data-edge-index', String(edgeIndex));
       hitLine.setAttribute('pointer-events', 'stroke');
+      hitLine.setAttribute('class', 'workflow-edge-hit');
       g.appendChild(hitLine);
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('x1', String(startX));
@@ -546,6 +574,7 @@ export function buildWorkflowCanvas(root) {
       hitLine.setAttribute('data-edge-type', edge.type || '');
       hitLine.setAttribute('data-edge-index', String(edgeIndex));
       hitLine.setAttribute('pointer-events', 'stroke');
+      hitLine.setAttribute('class', 'workflow-edge-hit');
       g.appendChild(hitLine);
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('x1', String(startX));
@@ -873,6 +902,21 @@ export function buildWorkflowCanvas(root) {
 
   edgesLayer.addEventListener('click', onEdgesLayerClick);
 
+  edgesLayer.addEventListener('mouseenter', (e) => {
+    const el = e.target;
+    if (el?.classList?.contains('workflow-edge-hit')) {
+      const visible = el.nextElementSibling;
+      if (visible) visible.setAttribute('marker-end', 'url(#workflow-arrow-hover)');
+    }
+  }, true);
+  edgesLayer.addEventListener('mouseleave', (e) => {
+    const el = e.target;
+    if (el?.classList?.contains('workflow-edge-hit')) {
+      const visible = el.nextElementSibling;
+      if (visible) visible.setAttribute('marker-end', 'url(#workflow-arrow)');
+    }
+  }, true);
+
   function updateContentSize() {
     const nodes = nodesLayer.querySelectorAll('.workflow-node');
     const viewportW = scrollWrapper.clientWidth || 800;
@@ -1031,7 +1075,7 @@ export function buildWorkflowCanvas(root) {
       document.removeEventListener('pointermove', onPointerMove);
       updateContentSize();
       updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      if (lastInteractionWasDrag) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
 
     node.addEventListener('pointerdown', onPointerDown);
@@ -1175,7 +1219,7 @@ export function buildWorkflowCanvas(root) {
       document.removeEventListener('pointermove', onPointerMove);
       updateContentSize();
       updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      if (lastInteractionWasDrag) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
     node.addEventListener('pointerdown', onPointerDown);
 
@@ -1281,7 +1325,7 @@ export function buildWorkflowCanvas(root) {
       document.removeEventListener('pointermove', onPointerMove);
       updateContentSize();
       updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      if (lastInteractionWasDrag) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
     node.addEventListener('pointerdown', onPointerDown);
 
@@ -1398,7 +1442,7 @@ export function buildWorkflowCanvas(root) {
       document.removeEventListener('pointermove', onPointerMove);
       updateContentSize();
       updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      if (lastInteractionWasDrag) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
     node.addEventListener('pointerdown', onPointerDown);
 
@@ -1494,9 +1538,22 @@ export function buildWorkflowCanvas(root) {
       document.removeEventListener('pointermove', onPointerMove);
       updateContentSize();
       updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      if (lastInteractionWasDrag) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
     node.addEventListener('pointerdown', onPointerDown);
+
+    node.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      let hasResults = false;
+      try {
+        const rr = JSON.parse(node.dataset.runResults || '[]');
+        hasResults = Array.isArray(rr) && rr.length > 0;
+      } catch (_) {}
+      if (!hasResults) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showNodeContextMenu(e.clientX, e.clientY, node);
+    });
 
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
@@ -1628,7 +1685,7 @@ export function buildWorkflowCanvas(root) {
       document.removeEventListener('pointermove', onPointerMove);
       updateContentSize();
       updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      if (lastInteractionWasDrag) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
     node.addEventListener('pointerdown', onPointerDown);
 
@@ -1678,11 +1735,25 @@ export function buildWorkflowCanvas(root) {
     const isDataset = node.dataset.nodeType === 'dataset';
     const isSampler = node.dataset.nodeType === 'sampler';
     const isSubset = node.dataset.nodeType === 'subset';
+    const isRun = node.dataset.nodeType === 'run';
+    let runHasResults = false;
+    if (isRun) {
+      try {
+        const rr = JSON.parse(node.dataset.runResults || '[]');
+        runHasResults = Array.isArray(rr) && rr.length > 0;
+      } catch (_) {}
+      if (!runHasResults) return;
+    }
 
     const menu = document.createElement('div');
     menu.className = 'workflow-node-context-menu';
     menu.setAttribute('role', 'menu');
-    if (isDataset) {
+    if (isRun) {
+      menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem">Save results to workspace</button>
+        <button type="button" class="workflow-node-context-item" data-action="assess-results" role="menuitem">Assess results</button>
+      `;
+    } else if (isDataset) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item" data-action="add-working-dataset-sampler" role="menuitem">Add a working dataset sampler...</button>
       `;
@@ -1733,6 +1804,47 @@ export function buildWorkflowCanvas(root) {
     }
 
     const actions = {
+      'save-results-to-workspace': () => {
+        if (node.dataset.nodeType !== 'run') return;
+        let results = [];
+        let outputFields = [];
+        try {
+          results = JSON.parse(node.dataset.runResults || '[]');
+          outputFields = JSON.parse(node.dataset.runOutputFields || '[]');
+        } catch (_) {}
+        if (!Array.isArray(results) || results.length === 0) return;
+        if (!Array.isArray(outputFields)) outputFields = [];
+        const runName = (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run';
+        const promptEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+        const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+        const promptName = (promptNode?.dataset?.promptName || promptNode?.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Prompt';
+        const baseName = `${promptName} ${runName}`.trim();
+        const datasetName = findUniqueDatasetExportName(baseName);
+        const description = `Exported from ${promptName} ${runName}.\nRun completed.`;
+        const headers = [...outputFields.map((f) => ((f && (f.display || f.key)) ? String(f.display || f.key).trim() || 'output' : 'output')), '[#]', '[E]'];
+        const rows = results.map((r) => {
+          const outputCells = r.error
+            ? outputFields.map(() => '')
+            : (outputFields || []).map((f) => {
+                const val = r.output && f && r.output[f.key];
+                if (val === null || val === undefined) return '—';
+                if (Array.isArray(val)) return val.join(', ');
+                return String(val);
+              });
+          const datasetRowCell = String((r.row_index ?? 0) + 1);
+          const errorCell = r.error != null ? String(r.error) : '';
+          return [...outputCells, datasetRowCell, errorCell];
+        });
+        document.dispatchEvent(
+          new CustomEvent('workflow:add-dataset-node', {
+            detail: { name: datasetName, notes: description, headers, rows },
+          })
+        );
+      },
+      'assess-results': () => {
+        if (node.dataset.nodeType !== 'run') return;
+        document.dispatchEvent(new CustomEvent('workflow:add-assessment-node', { detail: { runNodeId: node.dataset.nodeId } }));
+      },
       'add-working-dataset-sampler': () => {
         openDatasetDetailModal({
           node,
@@ -2274,12 +2386,112 @@ export function buildWorkflowCanvas(root) {
     }).filter(Boolean);
     updateContentSize();
     updateEdges();
+    if (!isUndoRedo) {
+      try {
+        lastSavedState = JSON.parse(JSON.stringify(getCanvasState()));
+      } catch (_) {}
+    }
   }
+
+  function pushUndoState() {
+    if (isUndoRedo || skipNextPush) return;
+    try {
+      const currentState = getCanvasState();
+      const currentSnapshot = JSON.parse(JSON.stringify(currentState));
+      /* 压入的是“变更前”的状态，即上一次保存的 lastSavedState */
+      if (lastSavedState != null) {
+        if (undoStack.length >= UNDO_MAX) undoStack.shift();
+        undoStack.push(lastSavedState);
+        redoStack.length = 0;
+      }
+      lastSavedState = currentSnapshot;
+      updateUndoRedoButtons();
+    } catch (_) {}
+  }
+
+  function performUndo() {
+    if (undoStack.length === 0) return;
+    try {
+      redoStack.push(JSON.parse(JSON.stringify(getCanvasState())));
+      const state = undoStack.pop();
+      isUndoRedo = true;
+      skipNextPush = true;
+      loadCanvasState(state);
+      lastSavedState = JSON.parse(JSON.stringify(state));
+      isUndoRedo = false;
+      updateUndoRedoButtons();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      if (undoDebounceTimer) clearTimeout(undoDebounceTimer);
+      undoDebounceTimer = setTimeout(() => { skipNextPush = false; undoDebounceTimer = null; }, UNDO_DEBOUNCE_MS + 50);
+    } catch (_) {}
+  }
+
+  function performRedo() {
+    if (redoStack.length === 0) return;
+    try {
+      undoStack.push(JSON.parse(JSON.stringify(getCanvasState())));
+      const state = redoStack.pop();
+      isUndoRedo = true;
+      skipNextPush = true;
+      loadCanvasState(state);
+      lastSavedState = JSON.parse(JSON.stringify(state));
+      isUndoRedo = false;
+      updateUndoRedoButtons();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      if (undoDebounceTimer) clearTimeout(undoDebounceTimer);
+      undoDebounceTimer = setTimeout(() => { skipNextPush = false; undoDebounceTimer = null; }, UNDO_DEBOUNCE_MS + 50);
+    } catch (_) {}
+  }
+
+  let onUndoRedoChange = null;
+  function updateUndoRedoButtons() {
+    onUndoRedoChange?.();
+  }
+  function setOnUndoRedoChange(fn) {
+    onUndoRedoChange = fn;
+  }
+
+  document.addEventListener('workflow:canvas-changed', () => {
+    if (isUndoRedo) return;
+    if (undoDebounceTimer) clearTimeout(undoDebounceTimer);
+    undoDebounceTimer = setTimeout(() => {
+      undoDebounceTimer = null;
+      pushUndoState();
+    }, UNDO_DEBOUNCE_MS);
+  });
+
+  /* 初始化：当前画布状态视为“变更前”，这样第一次用户操作后能正确压入 undo */
+  try {
+    lastSavedState = JSON.parse(JSON.stringify(getCanvasState()));
+  } catch (_) {}
+  requestAnimationFrame(() => {
+    try {
+      if (lastSavedState == null) lastSavedState = JSON.parse(JSON.stringify(getCanvasState()));
+    } catch (_) {}
+  });
 
   function setOnCanvasChange(fn) {
     document.addEventListener('workflow:canvas-changed', fn);
   }
 
+  function getCanUndo() {
+    return undoStack.length > 0;
+  }
+  function getCanRedo() {
+    return redoStack.length > 0;
+  }
+
   root.appendChild(canvas);
-  return { getCanvasState, loadCanvasState, setOnCanvasChange, isPromptNameAlreadyUsed, isDatasetNameAlreadyUsed };
+  return {
+    getCanvasState,
+    loadCanvasState,
+    setOnCanvasChange,
+    setOnUndoRedoChange,
+    isPromptNameAlreadyUsed,
+    isDatasetNameAlreadyUsed,
+    undo: performUndo,
+    redo: performRedo,
+    getCanUndo,
+    getCanRedo,
+  };
 }

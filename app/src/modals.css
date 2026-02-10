@@ -72,6 +72,66 @@
   background: var(--hover);
 }
 
+.modal-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.modal-header-actions .modal-maximize,
+.modal-header-actions .modal-close {
+  margin: 0;
+}
+
+.modal-maximize {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.modal-maximize:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.modal-overlay--maximized {
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+}
+
+.modal-overlay--maximized .modal-panel {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+}
+
+.modal-overlay--maximized .modal-header {
+  cursor: default;
+}
+
+.modal-overlay--maximized .modal-resize-handle {
+  display: none;
+}
+
 .modal-body {
   padding: 20px;
   min-height: 120px;
@@ -712,7 +772,7 @@
   min-width: min(1200px, 94vw);
   max-width: 96vw;
   max-height: 98vh;
-  min-height: min(400px, 60vh);
+  min-height: min(560px, 88vh);
   display: flex;
   flex-direction: column;
 }
@@ -736,7 +796,8 @@
 }
 
 .prompt-detail-col--left {
-  flex: 0 1 50%;
+  flex: 1 1 50%;
+  min-height: 0;
   max-width: min(900px, 50vw);
 }
 
@@ -746,17 +807,38 @@
 }
 
 .prompt-detail-col--left .prompt-detail-card {
-  flex-shrink: 0;
-  max-height: 26vh;
+  flex: 0 1 38%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.prompt-detail-col--left .prompt-detail-schema-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.prompt-detail-card {
+  padding: 16px 16px 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.prompt-detail-card .prompt-detail-view,
+.prompt-detail-card .prompt-detail-edit {
+  flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 
-.prompt-detail-card {
-  padding: 16px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0;
+.prompt-detail-card .prompt-detail-footer {
+  flex-shrink: 0;
+  margin-top: auto;
+  margin-bottom: 0;
+  padding: 12px 0 16px;
+  border-top: 1px solid var(--border);
 }
 
 /* All edit panels: keep same width as before edit (min-width: 0, width: 100%) so layout does not jump */

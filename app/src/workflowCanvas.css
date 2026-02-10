@@ -95,6 +95,14 @@
   color: var(--text-muted);
 }
 
+/* Arrow markers: fill via CSS variables so they follow theme. currentColor on the line does not propagate to markers in SVG. */
+#workflow-arrow path {
+  fill: var(--text-muted);
+}
+#workflow-arrow-hover path {
+  fill: var(--text);
+}
+
 .workflow-canvas__edges line {
   pointer-events: stroke;
   cursor: pointer;
@@ -102,6 +110,13 @@
 
 .workflow-canvas__edges > g {
   pointer-events: none;
+}
+
+/* Edge hover: visible line gets brighter + slightly thicker. Arrow brightness is via workflow-arrow-hover marker (see #workflow-arrow-hover path above). */
+.workflow-canvas__edges line.workflow-edge-hit:hover + line {
+  stroke: var(--text);
+  stroke-width: 3;
+  transition: stroke 0.15s ease, stroke-width 0.15s ease;
 }
 
 .workflow-canvas__nodes {
@@ -118,7 +133,7 @@
   pointer-events: auto;
 }
 
-/* Node (rectangular box, node-editor style) */
+/* Node (rectangular box, node-editor style). Hover: outer ring + lift shadow, no border change so it works with any node border color. */
 .workflow-node {
   position: absolute;
   min-width: 200px;
@@ -131,6 +146,11 @@
   user-select: none;
   display: flex;
   flex-direction: column;
+  transition: box-shadow 0.2s ease;
+}
+
+.workflow-node:hover {
+  box-shadow: 0 0 0 2px var(--text-muted), 0 8px 24px var(--shadow);
 }
 
 .workflow-node:active {

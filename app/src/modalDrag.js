@@ -25,6 +25,9 @@ export function initModalDrag() {
     if (e.button !== 0) return;
     const panel = e.target.closest('.modal-panel');
     if (!panel) return;
+    const overlay = panel.closest('.modal-overlay');
+    if (!overlay) return;
+    if (overlay.classList.contains('modal-overlay--maximized')) return;
 
     if (e.target.closest('.modal-resize-handle')) {
       e.preventDefault();
@@ -68,7 +71,7 @@ export function initModalDrag() {
     }
 
     const header = e.target.closest('.modal-header');
-    if (!header || e.target.closest('.modal-close')) return;
+    if (!header || e.target.closest('.modal-close') || e.target.closest('.modal-maximize') || e.target.closest('.modal-header-actions')) return;
     e.preventDefault();
     const rect = panel.getBoundingClientRect();
     let x = e.clientX, y = e.clientY, left = rect.left, top = rect.top;

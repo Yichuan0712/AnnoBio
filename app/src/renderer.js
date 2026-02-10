@@ -29,6 +29,7 @@ import { openAddPromptModal } from './addPromptModal.js';
 import { openAddDatasetModal } from './addDatasetModal.js';
 import { openCredentialsModal } from './credentialsModal.js';
 import { initModalDrag } from './modalDrag.js';
+import { initModalMaximize } from './modalMaximize.js';
 
 function showInitError(err) {
   const root = document.getElementById('app') || document.body;
@@ -45,10 +46,18 @@ window.addEventListener('DOMContentLoaded', () => {
 
     setTheme(getStoredTheme());
     initModalDrag();
+    initModalMaximize();
 
     window.electronAPI?.onSetTheme?.(setTheme);
 
-    const canvasAPI = buildWorkflowCanvas(root);
+    const appBody = document.createElement('div');
+    appBody.className = 'app-body';
+    const appMain = document.createElement('main');
+    appMain.className = 'app-main';
+    appBody.appendChild(appMain);
+    root.appendChild(appBody);
+
+    const canvasAPI = buildWorkflowCanvas(appMain);
     let currentProjectPath = null;
 
   const onNewProject = async () => {
@@ -91,8 +100,14 @@ window.addEventListener('DOMContentLoaded', () => {
     onNewProject,
     onOpenProject,
     onSaveAsProject,
+    undo: () => canvasAPI.undo?.(),
+    redo: () => canvasAPI.redo?.(),
+    getCanUndo: () => canvasAPI.getCanUndo?.() ?? false,
+    getCanRedo: () => canvasAPI.getCanRedo?.() ?? false,
   });
   topBarAPI.setAddMenuEnabled(false);
+
+  canvasAPI.setOnUndoRedoChange?.(() => topBarAPI.updateUndoRedoState?.());
 
   let saveTimeout = null;
   canvasAPI.setOnCanvasChange(() => {
