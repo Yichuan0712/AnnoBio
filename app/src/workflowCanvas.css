@@ -142,12 +142,47 @@
   z-index: 10;
 }
 
-/* Run node: half the default width; overflow hidden so progress bar is clipped to rounded corners */
+/* Run node: 较短但保证标题能显示全，方角 */
 .workflow-node--run {
-  min-width: 100px;
-  max-width: 140px;
-  width: 140px;
+  min-width: 88px;
+  max-width: 130px;
+  width: 130px;
   overflow: hidden;
+  border-radius: 0;
+}
+
+.workflow-node--run .workflow-node__header {
+  border-radius: 0;
+}
+
+/* Assessment node: 与 Run 外观类似，用于比较 result 与 ground truth */
+.workflow-node--assessment {
+  min-width: 88px;
+  max-width: 130px;
+  width: 130px;
+  overflow: hidden;
+  border-radius: 0;
+}
+
+.workflow-node--assessment .workflow-node__header {
+  border-radius: 0;
+}
+
+.workflow-node--assessment.workflow-node--no-body .workflow-node__header {
+  border-radius: 0;
+}
+
+/* Sampler node: 与 Run 一样，保证标题显示全，方角 */
+.workflow-node--sampler {
+  min-width: 88px;
+  max-width: 130px;
+  width: 130px;
+  overflow: hidden;
+  border-radius: 0;
+}
+
+.workflow-node--sampler .workflow-node__header {
+  border-radius: 0;
 }
 
 /* Run progress: bar at bottom fills left-to-right with working set color；右侧直角，不设圆角 */
@@ -176,6 +211,13 @@
 .workflow-node--no-body .workflow-node__header {
   border-bottom: none;
   border-radius: 8px;
+}
+
+/* Run/Sampler/Assessment 无 body 时内部也方角 */
+.workflow-node--run.workflow-node--no-body .workflow-node__header,
+.workflow-node--sampler.workflow-node--no-body .workflow-node__header,
+.workflow-node--assessment.workflow-node--no-body .workflow-node__header {
+  border-radius: 0;
 }
 
 .workflow-node__icon {
@@ -243,6 +285,23 @@
   word-break: break-word;
   margin: 0;
   padding: 0;
+}
+
+/* Subset 节点下方 sampler 描述：单行、省略号、小字 */
+.workflow-node__subset-desc {
+  padding: 4px 12px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.workflow-node__subset-desc .workflow-node__note {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Right-click context menu for prompt nodes */

@@ -1272,17 +1272,20 @@
   word-break: break-word;
 }
 
-/* Run detail modal (two-column: working set + input mapping | right TBD) — 初始即占满最大宽度，避免生成结果后宽度变化 */
+/* Run detail modal：略窄一些；min-height 与 source 典型内容高度一致（source 左侧卡片等会撑高，故用 85vh） */
 .modal-panel--run-detail {
-  width: 96vw;
-  min-width: min(1080px, 95vw);
-  max-width: 96vw;
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 88%;
   max-height: 98vh;
-  min-height: min(420px, 70vh);
+  min-height: min(520px, 85vh);
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
+/* 与 source dataset 一致：body 撑满面板，面板由 min-height 决定高度 */
+.modal-panel--run-detail .modal-body.run-detail-body,
 .run-detail-body {
   flex: 1;
   min-height: 0;
@@ -1613,6 +1616,53 @@
   flex-shrink: 0;
 }
 
+/* 状态与 Search 同一行：状态左对齐，Search 右对齐 */
+.run-detail-results-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.run-detail-results-note--inline {
+  font-size: 12px;
+  margin: 0;
+}
+
+/* Run results: 搜索框长度与其他页面一致 */
+.run-detail-results-search-wrap .dataset-detail-preview-search-inp {
+  max-width: 240px;
+}
+
+.run-detail-results-table-wrap {
+  min-height: 0;
+  overflow: auto;
+}
+
+.run-detail-results-toolbar {
+  flex-shrink: 0;
+}
+
+/* 分页在 footer 内、横线与 Save to workspace 上方 */
+.run-detail-results-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.run-detail-results-footer-actions {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
 .run-detail-results-note {
   flex-shrink: 0;
   margin: 8px 0 0;
@@ -1629,16 +1679,6 @@
 
 .run-detail-results-incomplete {
   color: var(--warning, #b8860b);
-}
-
-.run-detail-results-footer {
-  flex-shrink: 0;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
 }
 
 .run-detail-results-table {
@@ -1687,20 +1727,41 @@
   font-size: 12px;
 }
 
+/* [Error] 与 [From #] 系统列：背景与文字弱化，一眼区分 */
+.run-detail-results-table .run-detail-th--error-col,
+.run-detail-results-table .run-detail-th--dataset-row-col {
+  background: var(--hover, #f0f0f0);
+  color: var(--text-muted, #666);
+  font-weight: 600;
+  font-size: 11px;
+}
+.run-detail-results-table .run-detail-td--error-col,
+.run-detail-results-table .run-detail-td--dataset-row-col {
+  background: var(--hover, #f5f5f5);
+  color: var(--text-muted, #666);
+  font-size: 12px;
+}
+.run-detail-results-table .run-detail-td--error-col.run-detail-td--error {
+  color: var(--danger, #c00);
+}
+
 .run-detail-error {
   color: var(--danger, #c00);
   font-size: 13px;
 }
 
-/* Working dataset detail modal (table view + edit) */
+/* Working dataset detail modal (subset)：min-height 与 source 典型高度一致（source 有左侧卡片等撑高，故用 85vh） */
 .modal-panel--working-dataset-detail {
   min-width: min(720px, 94vw);
   max-width: 96vw;
-  max-height: 90vh;
+  max-height: 98vh;
+  min-height: min(520px, 85vh);
   display: flex;
   flex-direction: column;
 }
 
+/* 与 source dataset 一致：body 撑满面板，面板由 min-height 决定高度 */
+.modal-panel--working-dataset-detail .modal-body.working-dataset-detail-body,
 .working-dataset-detail-body {
   flex: 1;
   min-height: 0;
@@ -1875,12 +1936,13 @@
   background: rgba(37, 99, 235, 0.12);
 }
 
-/* # column: same as Source dataset preview — right-aligned in cell */
+/* # column: right-aligned，垂直居中避免偏高 */
 .working-dataset-edit-table th.dataset-detail-preview-row-num,
 .working-dataset-edit-table td.dataset-detail-preview-row-num {
   width: 1%;
   min-width: 2.5em;
   text-align: right;
+  vertical-align: middle;
   color: var(--text-muted);
 }
 

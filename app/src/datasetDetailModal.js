@@ -92,14 +92,8 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
                 <input type="number" id="sampler-rows-inp" class="dataset-detail-input dataset-meta-input" min="1" placeholder="Required when using rows" />
               </div>
               <div class="dataset-detail-row sampler-size-ratio-wrap" style="display: none;">
-                <label class="dataset-detail-label" for="sampler-ratio-select">Ratio</label>
-                <select id="sampler-ratio-select" class="dataset-detail-input dataset-meta-input">
-                  <option value="10">10%</option>
-                  <option value="25">25%</option>
-                  <option value="50" selected>50%</option>
-                  <option value="75">75%</option>
-                  <option value="100">100%</option>
-                </select>
+                <label class="dataset-detail-label" for="sampler-ratio-inp">Ratio (%)</label>
+                <input type="number" id="sampler-ratio-inp" class="dataset-detail-input dataset-meta-input" min="1" max="100" placeholder="1–100" aria-label="Ratio percentage (1–100)" />
               </div>
               </div>
               <div class="sampler-specify-rows-wrap" style="display: none;">
@@ -180,7 +174,7 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
   const btnCreateSampler = overlay.querySelector('.dataset-detail-btn-create-sampler');
   const samplerNameInp = overlay.querySelector('#sampler-name-inp');
   const samplerRowsInp = overlay.querySelector('#sampler-rows-inp');
-  const samplerRatioSelect = overlay.querySelector('#sampler-ratio-select');
+  const samplerRatioInp = overlay.querySelector('#sampler-ratio-inp');
   const samplerSizeWrap = overlay.querySelector('.sampler-size-wrap');
   const samplerSizeRowsWrap = overlay.querySelector('.sampler-size-rows-wrap');
   const samplerSizeRatioWrap = overlay.querySelector('.sampler-size-ratio-wrap');
@@ -496,7 +490,9 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
       const sampleSizeType = overlay.querySelector('input[name="sampler-size-type"]:checked')?.value || 'rows';
       const rowsValue = samplerRowsInp?.value != null ? samplerRowsInp.value.trim() : '';
       const rowsNum = sampleSizeType === 'rows' ? parseInt(rowsValue, 10) : NaN;
-      const sampleSize = sampleSizeType === 'rows' ? (Number.isFinite(rowsNum) && rowsNum >= 1 ? rowsNum : 0) : (parseInt(samplerRatioSelect?.value, 10) || 50);
+      const ratioValue = samplerRatioInp?.value != null ? samplerRatioInp.value.trim() : '';
+      const ratioNum = sampleSizeType === 'ratio' ? parseInt(ratioValue, 10) : NaN;
+      const sampleSize = sampleSizeType === 'rows' ? (Number.isFinite(rowsNum) && rowsNum >= 1 ? rowsNum : 0) : (Number.isFinite(ratioNum) && ratioNum >= 1 && ratioNum <= 100 ? ratioNum : 50);
 
       if (!name) {
         if (samplerFormErrorEl) {
@@ -516,6 +512,12 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
       } else if (sampleSizeType === 'rows' && (!Number.isFinite(rowsNum) || rowsNum < 1)) {
         if (samplerFormErrorEl) {
           samplerFormErrorEl.textContent = 'Sample size (rows) is required. Enter at least 1 row.';
+          samplerFormErrorEl.hidden = false;
+        }
+        return;
+      } else if (sampleSizeType === 'ratio' && (!Number.isFinite(ratioNum) || ratioNum < 1 || ratioNum > 100)) {
+        if (samplerFormErrorEl) {
+          samplerFormErrorEl.textContent = 'Ratio is required. Enter a number between 1 and 100.';
           samplerFormErrorEl.hidden = false;
         }
         return;

@@ -29,7 +29,21 @@ export function initModalDrag() {
     if (e.target.closest('.modal-resize-handle')) {
       e.preventDefault();
       const rect = panel.getBoundingClientRect();
-      const startX = e.clientX, startY = e.clientY, startW = rect.width, startH = rect.height;
+      let startW = rect.width;
+      let startH = rect.height;
+      /* Run detail：与 CSS 一致，避免首次按下时宽高跳动 */
+      if (panel.classList.contains('modal-panel--run-detail')) {
+        const maxW = window.innerWidth * 0.88;
+        const minW = Math.min(960, window.innerWidth * 0.85);
+        startW = Math.max(rect.width, minW);
+        startW = Math.min(startW, maxW);
+        const maxH = window.innerHeight * 0.98;
+        const minH = Math.min(520, window.innerHeight * 0.85);
+        startH = Math.max(rect.height, minH);
+        startH = Math.min(startH, maxH);
+      }
+      const startX = e.clientX;
+      const startY = e.clientY;
       panel.style.width = startW + 'px';
       panel.style.height = startH + 'px';
       const onMove = (e2) => {

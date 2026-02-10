@@ -50,6 +50,7 @@ function sectionsToViewHtml(sectionsList) {
             <div class="preview-field-divider">
               <span class="preview-field-line" aria-hidden="true"></span>
               <span class="preview-field-name">${escapeHtml(s.name || 'Unnamed')}</span>
+              <span class="preview-field-line" aria-hidden="true"></span>
             </div>
             <div class="preview-field-content">${escapeHtml(s.content || '')}</div>
           </div>
@@ -114,7 +115,7 @@ function schemaToViewHtml(fields, returnShape) {
 </div>`;
 }
 
-export function openPromptDetailModal({ name = '', note = '', sections = [], node: sourceNode = null, isPromptNameAlreadyUsed }) {
+export function openPromptDetailModal({ name = '', note = '', sections = [], node: sourceNode = null, isPromptNameAlreadyUsed, onRunPrompt }) {
   const displayName = (name && name.trim()) ? name.trim() : 'Prompt';
   const noteTrimmed = (note || '').trim();
   const sectionsViewHtml = sectionsToViewHtml(sections);
@@ -198,6 +199,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
               <div class="prompt-detail-sections-footer">
                 <div class="prompt-detail-inline-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
                 <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
+                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-run-prompt">Run prompt</button>
                 <div class="prompt-detail-sections-edit-btns">
                   <button type="button" class="btn btn-secondary prompt-detail-sections-btn-save-node">Save</button>
                   <button type="button" class="btn btn-secondary prompt-detail-sections-btn-cancel">Cancel</button>
@@ -371,6 +373,14 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
   sectionsBtnEdit.addEventListener('click', () => {
     showSectionsEdit();
   });
+  const sectionsBtnRunPrompt = overlay.querySelector('.prompt-detail-sections-btn-run-prompt');
+  if (sectionsBtnRunPrompt && typeof onRunPrompt === 'function') {
+    sectionsBtnRunPrompt.addEventListener('click', () => {
+      onRunPrompt();
+      overlay.remove();
+      document.body.style.overflow = '';
+    });
+  }
   sectionsBtnCancel.addEventListener('click', () => {
     showSectionsView();
   });

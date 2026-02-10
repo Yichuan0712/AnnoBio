@@ -5,6 +5,7 @@
 
 const API_BASE = 'http://localhost:8000';
 const MAX_CELL_CHARS = 40;
+const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -21,15 +22,43 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields, getSubsetContent, getPromptTemplate, registerPendingRun }) {
+/** Filter results by search query (match row #, error, or any output cell). */
+function filterResultsBySearch(results, outputFields, searchQuery) {
+  const q = (searchQuery || '').trim().toLowerCase();
+  if (!q) return results;
+  return results.filter((r) => {
+    if (String(r.row_index + 1).toLowerCase().includes(q)) return true;
+    if (r.error && String(r.error).toLowerCase().includes(q)) return true;
+    if (r.output && typeof r.output === 'object') {
+      for (const f of outputFields || []) {
+        const val = r.output[f.key];
+        if (val !== null && val !== undefined && String(val).toLowerCase().includes(q)) return true;
+        if (Array.isArray(val) && val.some((v) => String(v).toLowerCase().includes(q))) return true;
+      }
+    }
+    return false;
+  });
+}
+
+export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields, getSubsetContent, getPromptTemplate, registerPendingRun, getPromptName, getUniqueDatasetExportName }) {
   const workingSets = getWorkingSets ? getWorkingSets() : [];
   const inputFields = getPromptInputFields ? getPromptInputFields() : [];
   getSubsetContent = getSubsetContent || (() => ({ headers: [], rows: [] }));
   getPromptTemplate = getPromptTemplate || (() => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }));
   registerPendingRun = registerPendingRun || (() => {});
+  getPromptName = getPromptName || (() => '');
+  getUniqueDatasetExportName = getUniqueDatasetExportName || ((name) => name);
 
   let selectedNodeId = (node?.dataset?.runWorkingSetId || '').trim();
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
+  const resultsState = {
+    results: [],
+    outputFields: [],
+    status: 'complete',
+    searchQuery: '',
+    rowsPerPage: 25,
+    currentPage: 1,
+  };
   const inputToColumn = (() => {
     try {
       const raw = node?.dataset?.runInputToColumn;
@@ -41,6 +70,9 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     return {};
   })();
 
+  const runName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Run';
+  const titleText = `${runName} details`;
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -48,7 +80,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--run-detail">
       <div class="modal-header">
-        <h2 id="run-detail-title" class="modal-title">Run details</h2>
+        <h2 id="run-detail-title" class="modal-title">${escapeHtml(titleText)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body run-detail-body">
@@ -118,6 +150,14 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       th.textContent = f.display || f.key || '';
       headerRow.appendChild(th);
     });
+    const thDatasetRow = document.createElement('th');
+    thDatasetRow.className = 'run-detail-th run-detail-th--dataset-row-col';
+    thDatasetRow.textContent = '[#]';
+    headerRow.appendChild(thDatasetRow);
+    const thError = document.createElement('th');
+    thError.className = 'run-detail-th run-detail-th--error-col';
+    thError.textContent = '[E]';
+    headerRow.appendChild(thError);
     thead.appendChild(headerRow);
     tbl.appendChild(thead);
     const tbody = document.createElement('tbody');
@@ -128,37 +168,56 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       idxCell.textContent = String(r.row_index + 1);
       tr.appendChild(idxCell);
       if (r.error) {
-        const errCell = document.createElement('td');
-        errCell.className = 'run-detail-td run-detail-td--error';
-        errCell.setAttribute('colspan', String(Math.max(1, outputFields.length)));
-        errCell.textContent = truncate(r.error);
-        errCell.title = r.error ?? '';
-        tr.appendChild(errCell);
-      } else if (r.output && typeof r.output === 'object') {
-        outputFields.forEach((f) => {
-          const td = document.createElement('td');
-          td.className = 'run-detail-td';
-          const val = r.output[f.key];
-          if (val === null || val === undefined) {
-            td.textContent = '—';
-          } else if (Array.isArray(val)) {
-            const full = val.join(', ');
-            td.textContent = truncate(full);
-            td.title = full;
-          } else {
-            const full = String(val);
-            td.textContent = truncate(full);
-            td.title = full;
-          }
-          tr.appendChild(td);
-        });
-      } else {
         outputFields.forEach(() => {
           const td = document.createElement('td');
           td.className = 'run-detail-td';
-          td.textContent = '—';
+          td.textContent = '';
           tr.appendChild(td);
         });
+        const datasetRowCell = document.createElement('td');
+        datasetRowCell.className = 'run-detail-td run-detail-td--dataset-row-col';
+        datasetRowCell.textContent = String(r.row_index + 1);
+        tr.appendChild(datasetRowCell);
+        const errCell = document.createElement('td');
+        errCell.className = 'run-detail-td run-detail-td--error-col run-detail-td--error';
+        errCell.textContent = truncate(r.error);
+        errCell.title = r.error ?? '';
+        tr.appendChild(errCell);
+      } else {
+        if (r.output && typeof r.output === 'object') {
+          outputFields.forEach((f) => {
+            const td = document.createElement('td');
+            td.className = 'run-detail-td';
+            const val = r.output[f.key];
+            if (val === null || val === undefined) {
+              td.textContent = '—';
+            } else if (Array.isArray(val)) {
+              const full = val.join(', ');
+              td.textContent = truncate(full);
+              td.title = full;
+            } else {
+              const full = String(val);
+              td.textContent = truncate(full);
+              td.title = full;
+            }
+            tr.appendChild(td);
+          });
+        } else {
+          outputFields.forEach(() => {
+            const td = document.createElement('td');
+            td.className = 'run-detail-td';
+            td.textContent = '—';
+            tr.appendChild(td);
+          });
+        }
+        const datasetRowCell = document.createElement('td');
+        datasetRowCell.className = 'run-detail-td run-detail-td--dataset-row-col';
+        datasetRowCell.textContent = String(r.row_index + 1);
+        tr.appendChild(datasetRowCell);
+        const errCell = document.createElement('td');
+        errCell.className = 'run-detail-td run-detail-td--error-col';
+        errCell.textContent = '';
+        tr.appendChild(errCell);
       }
       tbody.appendChild(tr);
     });
@@ -166,47 +225,191 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     return tbl;
   }
 
+  function getStatusNoteText(status, hasResults) {
+    if (!hasResults) return '';
+    if (status === 'generating') return 'Results are still generating…';
+    if (status === 'complete') return 'Results complete.';
+    if (status === 'incomplete') return 'Last run did not complete. Please run again.';
+    return '';
+  }
+
   /** status: 'generating' | 'complete' | 'incomplete' */
-  function fillResultsWrap(wrap, results, outputFields, status) {
-    wrap.innerHTML = '';
+  function fillResultsWrap(card, results, outputFields, status) {
+    resultsState.results = results || [];
+    resultsState.outputFields = outputFields || [];
+    resultsState.status = status || 'complete';
+    const wrap = document.createElement('div');
+    wrap.className = 'run-detail-results';
     const title = document.createElement('h3');
     title.className = 'run-detail-section-title';
     title.textContent = 'Results';
     wrap.appendChild(title);
-    wrap.appendChild(buildResultsTable(results, outputFields));
-    if (status === 'generating') {
-      const note = document.createElement('p');
-      note.className = 'run-detail-results-note run-detail-results-generating';
-      note.textContent = 'Results are still generating…';
-      wrap.appendChild(note);
-    } else if (status === 'complete') {
-      const note = document.createElement('p');
-      note.className = 'run-detail-results-note run-detail-results-complete';
-      note.textContent = 'Results complete.';
-      wrap.appendChild(note);
-    } else if (status === 'incomplete') {
-      const note = document.createElement('p');
-      note.className = 'run-detail-results-note run-detail-results-incomplete';
-      note.textContent = 'Last run did not complete. Please run again.';
-      wrap.appendChild(note);
+    if (resultsState.results.length === 0) {
+      const placeholder = document.createElement('p');
+      placeholder.className = 'run-detail-placeholder';
+      placeholder.textContent = status === 'generating' ? 'Running… Results will appear below as they complete.' : 'Run to see results.';
+      wrap.appendChild(placeholder);
+    } else {
+      const topRow = document.createElement('div');
+      topRow.className = 'run-detail-results-top-row';
+      const statusNote = document.createElement('span');
+      statusNote.className = 'run-detail-results-note run-detail-results-note--inline';
+      if (status === 'generating') statusNote.classList.add('run-detail-results-generating');
+      else if (status === 'complete') statusNote.classList.add('run-detail-results-complete');
+      else if (status === 'incomplete') statusNote.classList.add('run-detail-results-incomplete');
+      statusNote.textContent = getStatusNoteText(status, true);
+      topRow.appendChild(statusNote);
+      const searchWrap = document.createElement('div');
+      searchWrap.className = 'dataset-detail-preview-search-wrap run-detail-results-search-wrap';
+      searchWrap.innerHTML = `
+        <label class="dataset-detail-search-label" for="run-detail-results-search">Search</label>
+        <input type="text" id="run-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" />
+      `;
+      topRow.appendChild(searchWrap);
+      wrap.appendChild(topRow);
+      const tableWrap = document.createElement('div');
+      tableWrap.className = 'run-detail-results-table-wrap';
+      wrap.appendChild(tableWrap);
+      const searchInp = wrap.querySelector('#run-detail-results-search');
+      const toolbar = document.createElement('div');
+      toolbar.className = 'dataset-detail-preview-toolbar run-detail-results-toolbar';
+      toolbar.innerHTML = `
+        <label class="dataset-detail-rows-label" for="run-detail-rows-per-page">Rows per page</label>
+        <select id="run-detail-rows-per-page" class="dataset-detail-rows-select" aria-label="Rows per page">
+          ${ROWS_PER_PAGE_OPTIONS.map((n) => `<option value="${n}" ${n === resultsState.rowsPerPage ? 'selected' : ''}>${n}</option>`).join('')}
+        </select>
+        <span class="dataset-detail-pagination-info run-detail-pagination-info" aria-live="polite"></span>
+        <label class="dataset-detail-page-label" for="run-detail-page-inp">Page</label>
+        <input type="number" id="run-detail-page-inp" class="dataset-detail-page-inp" min="1" value="1" aria-label="Page number" />
+        <span class="dataset-detail-page-of run-detail-page-of">/ 1</span>
+        <div class="dataset-detail-pagination-btns">
+          <button type="button" class="btn btn-secondary run-detail-prev-page" aria-label="Previous page">Previous</button>
+          <button type="button" class="btn btn-secondary run-detail-next-page" aria-label="Next page">Next</button>
+        </div>
+      `;
+      const rowsPerPageSelect = toolbar.querySelector('#run-detail-rows-per-page');
+      const paginationInfo = toolbar.querySelector('.run-detail-pagination-info');
+      const pageInp = toolbar.querySelector('#run-detail-page-inp');
+      const pageOfSpan = toolbar.querySelector('.run-detail-page-of');
+      const prevBtn = toolbar.querySelector('.run-detail-prev-page');
+      const nextBtn = toolbar.querySelector('.run-detail-next-page');
+
+      function updateResultsTable() {
+        const filtered = filterResultsBySearch(resultsState.results, resultsState.outputFields, resultsState.searchQuery);
+        const totalPages = Math.max(1, Math.ceil(filtered.length / resultsState.rowsPerPage));
+        resultsState.currentPage = Math.min(Math.max(1, resultsState.currentPage), totalPages);
+        const start = (resultsState.currentPage - 1) * resultsState.rowsPerPage;
+        const end = Math.min(start + resultsState.rowsPerPage, filtered.length);
+        const pageResults = filtered.slice(start, end);
+        tableWrap.innerHTML = '';
+        tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields));
+        const totalFiltered = filtered.length;
+        const totalRows = resultsState.results.length;
+        if (totalFiltered === 0) {
+          paginationInfo.textContent = totalRows === 0 ? '0 rows' : `0 rows (filtered from ${totalRows.toLocaleString()})`;
+        } else {
+          paginationInfo.textContent = totalFiltered === totalRows
+            ? `Showing ${start + 1}–${end} of ${totalRows.toLocaleString()} rows`
+            : `Showing ${start + 1}–${end} of ${totalFiltered.toLocaleString()} (filtered from ${totalRows.toLocaleString()}) rows`;
+        }
+        pageInp.value = String(resultsState.currentPage);
+        pageInp.max = String(totalPages);
+        pageOfSpan.textContent = `/ ${totalPages}`;
+        prevBtn.disabled = resultsState.currentPage <= 1;
+        nextBtn.disabled = resultsState.currentPage >= totalPages;
+      }
+
+      searchInp.addEventListener('input', () => {
+        resultsState.searchQuery = searchInp.value;
+        resultsState.currentPage = 1;
+        updateResultsTable();
+      });
+      rowsPerPageSelect.addEventListener('change', () => {
+        resultsState.rowsPerPage = Number(rowsPerPageSelect.value) || 25;
+        resultsState.currentPage = 1;
+        updateResultsTable();
+      });
+      pageInp.addEventListener('change', () => {
+        resultsState.currentPage = Math.max(1, parseInt(pageInp.value, 10) || 1);
+        updateResultsTable();
+      });
+      prevBtn.addEventListener('click', () => {
+        resultsState.currentPage = Math.max(1, resultsState.currentPage - 1);
+        updateResultsTable();
+      });
+      nextBtn.addEventListener('click', () => {
+        const totalPages = Math.max(1, Math.ceil(filterResultsBySearch(resultsState.results, resultsState.outputFields, resultsState.searchQuery).length / resultsState.rowsPerPage));
+        resultsState.currentPage = Math.min(totalPages, resultsState.currentPage + 1);
+        updateResultsTable();
+      });
+      wrap._updateResultsTable = updateResultsTable;
+      updateResultsTable();
+
+      const footer = document.createElement('div');
+      footer.className = 'run-detail-results-footer';
+      footer.appendChild(toolbar);
+      const footerActions = document.createElement('div');
+      footerActions.className = 'run-detail-results-footer-actions';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-secondary run-detail-save-to-workspace-btn';
+      btn.textContent = 'Save to workspace';
+      btn.addEventListener('click', () => {
+        const promptName = (getPromptName() || '').trim() || 'Prompt';
+        const baseName = `${promptName} ${runName}`.trim();
+        const datasetName = getUniqueDatasetExportName(baseName);
+        const statusLine = resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.';
+        const description = `Exported from ${promptName} ${runName}.\n${statusLine}`;
+        const outputFields = resultsState.outputFields || [];
+        const headers = [...outputFields.map((f) => (f.display || f.key || '').trim() || 'output'), '[#]', '[E]'];
+        const rows = (resultsState.results || []).map((r) => {
+          const outputCells = r.error
+            ? outputFields.map(() => '')
+            : outputFields.map((f) => {
+                const val = r.output && r.output[f.key];
+                if (val === null || val === undefined) return '—';
+                if (Array.isArray(val)) return val.join(', ');
+                return String(val);
+              });
+          const datasetRowCell = String(r.row_index + 1);
+          const errorCell = r.error != null ? String(r.error) : '';
+          return [...outputCells, datasetRowCell, errorCell];
+        });
+        document.dispatchEvent(
+          new CustomEvent('workflow:add-dataset-node', {
+            detail: { name: datasetName, notes: description, headers, rows },
+          })
+        );
+        closeModal();
+      });
+      footerActions.appendChild(btn);
+      const assessBtn = document.createElement('button');
+      assessBtn.type = 'button';
+      assessBtn.className = 'btn btn-secondary run-detail-assess-results-btn';
+      assessBtn.textContent = 'Assess results';
+      assessBtn.addEventListener('click', () => {
+        document.dispatchEvent(
+          new CustomEvent('workflow:add-assessment-node', { detail: { runNodeId: node?.dataset?.nodeId || '' } })
+        );
+      });
+      footerActions.appendChild(assessBtn);
+      footer.appendChild(footerActions);
+      card.appendChild(wrap);
+      card.appendChild(footer);
+      return;
     }
+    /* 无结果（未运行或运行中尚无数据）时不显示 Save to workspace，至少跑完一行后才显示 */
+    card.appendChild(wrap);
   }
 
   function renderResultsTable(results, outputFields, status) {
     const card = document.createElement('div');
     card.className = 'run-detail-results-card';
-    const wrap = document.createElement('div');
-    wrap.className = 'run-detail-results';
-    fillResultsWrap(wrap, results, outputFields, status);
-    card.appendChild(wrap);
-    const footer = document.createElement('div');
-    footer.className = 'run-detail-results-footer';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn btn-secondary run-detail-next-step-btn';
-    btn.textContent = 'Next step';
-    footer.appendChild(btn);
-    card.appendChild(footer);
+    fillResultsWrap(card, results, outputFields, status);
+    card._updateResults = () => {
+      const w = card.querySelector('.run-detail-results');
+      if (w && w._updateResultsTable) w._updateResultsTable();
+    };
     return card;
   }
 
@@ -368,9 +571,14 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     const isComplete = e.detail.isComplete !== false;
     if (!Array.isArray(results) || !Array.isArray(outputFields)) return;
     const status = isComplete ? 'complete' : 'generating';
-    const scrollWrap = rightCol.querySelector('.run-detail-results');
-    if (scrollWrap) {
-      fillResultsWrap(scrollWrap, results, outputFields, status);
+    const card = rightCol.querySelector('.run-detail-results-card');
+    if (card) {
+      card.innerHTML = '';
+      fillResultsWrap(card, results, outputFields, status);
+      card._updateResults = () => {
+        const w = card.querySelector('.run-detail-results');
+        if (w && w._updateResultsTable) w._updateResultsTable();
+      };
     } else {
       rightCol.innerHTML = '';
       rightCol.appendChild(renderResultsTable(results, outputFields, status));

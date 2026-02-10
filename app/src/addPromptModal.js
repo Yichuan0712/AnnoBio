@@ -494,6 +494,7 @@ export function openAddPromptModal(workflowCanvasApi) {
         <div class="preview-field-divider">
           <span class="preview-field-line" aria-hidden="true"></span>
           <span class="preview-field-name">${escapeHtml(s.name || 'Unnamed')}</span>
+          <span class="preview-field-line" aria-hidden="true"></span>
         </div>
         <div class="preview-field-content">${escapeHtml(s.content)}</div>
       </div>
