@@ -22,13 +22,18 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Filter results by search query (match row #, error, or any output cell). */
-function filterResultsBySearch(results, outputFields, searchQuery) {
+/** Filter results by search query (match row #, error, any output cell, or working row cells). */
+function filterResultsBySearch(results, outputFields, searchQuery, workingContent) {
   const q = (searchQuery || '').trim().toLowerCase();
   if (!q) return results;
+  const wsRows = (workingContent && workingContent.rows) || [];
   return results.filter((r) => {
     if (String(r.row_index + 1).toLowerCase().includes(q)) return true;
     if (r.error && String(r.error).toLowerCase().includes(q)) return true;
+    const wsRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
+    for (const val of wsRow) {
+      if (val !== null && val !== undefined && String(val).toLowerCase().includes(q)) return true;
+    }
     if (r.output && typeof r.output === 'object') {
       for (const f of outputFields || []) {
         const val = r.output[f.key];
@@ -54,10 +59,12 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   const resultsState = {
     results: [],
     outputFields: [],
+    workingContent: null,
     status: 'complete',
     searchQuery: '',
     rowsPerPage: 25,
     currentPage: 1,
+    bracketColsCollapsed: node?.dataset?.runBracketColsCollapsed !== '0',
   };
   const inputToColumn = (() => {
     try {
@@ -138,7 +145,12 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     return card;
   }
 
-  function buildResultsTable(results, outputFields) {
+  /** workingContent: { headers: string[], rows: any[][] }. Columns with [] at end; if bracketColsCollapsed, show as single "..." column (click to expand). */
+  function buildResultsTable(results, outputFields, workingContent, bracketColsCollapsed, onToggleCollapse) {
+    const wsHeaders = (workingContent && workingContent.headers) || [];
+    const wsRows = (workingContent && workingContent.rows) || [];
+    const collapsed = !!bracketColsCollapsed;
+    const hasBracketCols = wsHeaders.length >= 0;
     const tbl = document.createElement('table');
     tbl.className = 'run-detail-results-table';
     const thead = document.createElement('thead');
@@ -150,14 +162,27 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       th.textContent = f.display || f.key || '';
       headerRow.appendChild(th);
     });
-    const thDatasetRow = document.createElement('th');
-    thDatasetRow.className = 'run-detail-th run-detail-th--dataset-row-col';
-    thDatasetRow.textContent = '[#]';
-    headerRow.appendChild(thDatasetRow);
-    const thError = document.createElement('th');
-    thError.className = 'run-detail-th run-detail-th--error-col';
-    thError.textContent = '[E]';
-    headerRow.appendChild(thError);
+    if (hasBracketCols) {
+      const thBracket = document.createElement('th');
+      thBracket.className = 'run-detail-th run-detail-th--dataset-row-col run-detail-th--bracket-toggle';
+      thBracket.textContent = collapsed ? '...' : '[#]';
+      thBracket.title = collapsed ? 'Click to expand bracket columns' : 'Click to collapse bracket columns';
+      thBracket.setAttribute('role', 'button');
+      thBracket.setAttribute('tabindex', '0');
+      if (typeof onToggleCollapse === 'function') {
+        thBracket.addEventListener('click', onToggleCollapse);
+        thBracket.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleCollapse(); } });
+      }
+      headerRow.appendChild(thBracket);
+      if (!collapsed) {
+        wsHeaders.forEach((h) => {
+          const th = document.createElement('th');
+          th.className = 'run-detail-th run-detail-th--dataset-row-col';
+          th.textContent = `[${String(h ?? '').trim() || ' '}]`;
+          headerRow.appendChild(th);
+        });
+      }
+    }
     thead.appendChild(headerRow);
     tbl.appendChild(thead);
     const tbody = document.createElement('tbody');
@@ -170,19 +195,11 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       if (r.error) {
         outputFields.forEach(() => {
           const td = document.createElement('td');
-          td.className = 'run-detail-td';
-          td.textContent = '';
+          td.className = 'run-detail-td run-detail-td--error';
+          td.textContent = truncate(r.error);
+          td.title = r.error ?? '';
           tr.appendChild(td);
         });
-        const datasetRowCell = document.createElement('td');
-        datasetRowCell.className = 'run-detail-td run-detail-td--dataset-row-col';
-        datasetRowCell.textContent = String(r.row_index + 1);
-        tr.appendChild(datasetRowCell);
-        const errCell = document.createElement('td');
-        errCell.className = 'run-detail-td run-detail-td--error-col run-detail-td--error';
-        errCell.textContent = truncate(r.error);
-        errCell.title = r.error ?? '';
-        tr.appendChild(errCell);
       } else {
         if (r.output && typeof r.output === 'object') {
           outputFields.forEach((f) => {
@@ -210,14 +227,34 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
             tr.appendChild(td);
           });
         }
-        const datasetRowCell = document.createElement('td');
-        datasetRowCell.className = 'run-detail-td run-detail-td--dataset-row-col';
-        datasetRowCell.textContent = String(r.row_index + 1);
-        tr.appendChild(datasetRowCell);
-        const errCell = document.createElement('td');
-        errCell.className = 'run-detail-td run-detail-td--error-col';
-        errCell.textContent = '';
-        tr.appendChild(errCell);
+      }
+      if (hasBracketCols) {
+        if (collapsed) {
+          const td = document.createElement('td');
+          td.className = 'run-detail-td run-detail-td--dataset-row-col';
+          td.textContent = '...';
+          td.title = '...';
+          tr.appendChild(td);
+        } else {
+          const datasetRowCell = document.createElement('td');
+          datasetRowCell.className = 'run-detail-td run-detail-td--dataset-row-col';
+          datasetRowCell.textContent = String(r.row_index + 1);
+          tr.appendChild(datasetRowCell);
+          const wsRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
+          wsHeaders.forEach((_, i) => {
+            const td = document.createElement('td');
+            td.className = 'run-detail-td run-detail-td--dataset-row-col';
+            const val = wsRow[i];
+            if (val === null || val === undefined) {
+              td.textContent = '—';
+            } else {
+              const full = String(val);
+              td.textContent = truncate(full);
+              td.title = full;
+            }
+            tr.appendChild(td);
+          });
+        }
       }
       tbody.appendChild(tr);
     });
@@ -237,6 +274,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   function fillResultsWrap(card, results, outputFields, status) {
     resultsState.results = results || [];
     resultsState.outputFields = outputFields || [];
+    resultsState.workingContent = getSubsetContent(selectedNodeId) || null;
     resultsState.status = status || 'complete';
     const wrap = document.createElement('div');
     wrap.className = 'run-detail-results';
@@ -295,14 +333,19 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       const nextBtn = toolbar.querySelector('.run-detail-next-page');
 
       function updateResultsTable() {
-        const filtered = filterResultsBySearch(resultsState.results, resultsState.outputFields, resultsState.searchQuery);
+        const filtered = filterResultsBySearch(resultsState.results, resultsState.outputFields, resultsState.searchQuery, resultsState.workingContent);
         const totalPages = Math.max(1, Math.ceil(filtered.length / resultsState.rowsPerPage));
         resultsState.currentPage = Math.min(Math.max(1, resultsState.currentPage), totalPages);
         const start = (resultsState.currentPage - 1) * resultsState.rowsPerPage;
         const end = Math.min(start + resultsState.rowsPerPage, filtered.length);
         const pageResults = filtered.slice(start, end);
+        function onToggleBracketCollapse() {
+          resultsState.bracketColsCollapsed = !resultsState.bracketColsCollapsed;
+          if (node) node.dataset.runBracketColsCollapsed = resultsState.bracketColsCollapsed ? '1' : '0';
+          updateResultsTable();
+        }
         tableWrap.innerHTML = '';
-        tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields));
+        tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields, resultsState.workingContent, resultsState.bracketColsCollapsed, onToggleBracketCollapse));
         const totalFiltered = filtered.length;
         const totalRows = resultsState.results.length;
         if (totalFiltered === 0) {
@@ -338,7 +381,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         updateResultsTable();
       });
       nextBtn.addEventListener('click', () => {
-        const totalPages = Math.max(1, Math.ceil(filterResultsBySearch(resultsState.results, resultsState.outputFields, resultsState.searchQuery).length / resultsState.rowsPerPage));
+        const totalPages = Math.max(1, Math.ceil(filterResultsBySearch(resultsState.results, resultsState.outputFields, resultsState.searchQuery, resultsState.workingContent).length / resultsState.rowsPerPage));
         resultsState.currentPage = Math.min(totalPages, resultsState.currentPage + 1);
         updateResultsTable();
       });
@@ -350,21 +393,22 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       footer.appendChild(toolbar);
       const footerActions = document.createElement('div');
       footerActions.className = 'run-detail-results-footer-actions';
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'btn btn-secondary run-detail-save-to-workspace-btn';
-      btn.textContent = 'Save to workspace';
-      btn.addEventListener('click', () => {
+      function doSaveToWorkspace() {
         const promptName = (getPromptName() || '').trim() || 'Prompt';
         const baseName = `${promptName} ${runName}`.trim();
         const datasetName = getUniqueDatasetExportName(baseName);
         const statusLine = resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.';
-        const description = `Exported from ${promptName} ${runName}.\n${statusLine}`;
+        const ws = getSelectedWorkingSet();
+        const sourceDatasetLabel = (ws?.name || '').trim() || '—';
+        const description = `Exported from ${promptName} ${runName}.\nWorking dataset: ${sourceDatasetLabel}.\n${statusLine}`;
         const outputFields = resultsState.outputFields || [];
-        const headers = [...outputFields.map((f) => (f.display || f.key || '').trim() || 'output'), '[#]', '[E]'];
+        const wc = resultsState.workingContent || { headers: [], rows: [] };
+        const wsHeaders = wc.headers || [];
+        const wsRows = wc.rows || [];
+        const headers = [...outputFields.map((f) => (f.display || f.key || '').trim() || 'output'), '[#]', ...wsHeaders.map((h) => `[${String(h ?? '').trim() || ' '}]`)];
         const rows = (resultsState.results || []).map((r) => {
           const outputCells = r.error
-            ? outputFields.map(() => '')
+            ? outputFields.map(() => String(r.error))
             : outputFields.map((f) => {
                 const val = r.output && r.output[f.key];
                 if (val === null || val === undefined) return '—';
@@ -372,27 +416,37 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
                 return String(val);
               });
           const datasetRowCell = String(r.row_index + 1);
-          const errorCell = r.error != null ? String(r.error) : '';
-          return [...outputCells, datasetRowCell, errorCell];
+          const wsRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
+          const wsCells = wsHeaders.map((_, i) => (wsRow[i] !== null && wsRow[i] !== undefined ? String(wsRow[i]) : '—'));
+          return [...outputCells, datasetRowCell, ...wsCells];
         });
         document.dispatchEvent(
           new CustomEvent('workflow:add-dataset-node', {
-            detail: { name: datasetName, notes: description, headers, rows },
+            detail: { name: datasetName, notes: description, headers, rows, createSubsetChain: true },
           })
         );
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-secondary run-detail-save-to-workspace-btn';
+      btn.textContent = 'Save to workspace';
+      btn.addEventListener('click', () => {
+        doSaveToWorkspace();
         closeModal();
       });
       footerActions.appendChild(btn);
-      const assessBtn = document.createElement('button');
-      assessBtn.type = 'button';
-      assessBtn.className = 'btn btn-secondary run-detail-assess-results-btn';
-      assessBtn.textContent = 'Assess results';
-      assessBtn.addEventListener('click', () => {
+      const saveAndAssessBtn = document.createElement('button');
+      saveAndAssessBtn.type = 'button';
+      saveAndAssessBtn.className = 'btn btn-secondary run-detail-save-to-workspace-assess-btn';
+      saveAndAssessBtn.textContent = 'Save to workspace & assess';
+      saveAndAssessBtn.addEventListener('click', () => {
+        doSaveToWorkspace();
         document.dispatchEvent(
           new CustomEvent('workflow:add-assessment-node', { detail: { runNodeId: node?.dataset?.nodeId || '' } })
         );
+        closeModal();
       });
-      footerActions.appendChild(assessBtn);
+      footerActions.appendChild(saveAndAssessBtn);
       footer.appendChild(footerActions);
       card.appendChild(wrap);
       card.appendChild(footer);
@@ -413,7 +467,26 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     return card;
   }
 
+  function isRunCompleted() {
+    return node?.dataset?.runCompleted === '1';
+  }
+
+  function applyRunCompletedLock() {
+    if (!isRunCompleted()) return;
+    runBtn.disabled = true;
+    llmSelectEl.disabled = true;
+    pickerEl.classList.add('run-detail-ws-picker--locked');
+    pickerEl.setAttribute('aria-disabled', 'true');
+    inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
+    const leftCard = overlay.querySelector('.run-detail-col--left .run-detail-card');
+    if (leftCard) leftCard.classList.add('run-detail-card--locked');
+  }
+
   function updateRunButtonState() {
+    if (isRunCompleted()) {
+      runBtn.disabled = true;
+      return;
+    }
     runBtn.disabled = !(selectedNodeId && selectedCredentialId);
   }
 
@@ -541,6 +614,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
 
   triggerEl.addEventListener('click', (e) => {
     e.preventDefault();
+    if (isRunCompleted()) return;
     if (dropdownEl.hidden) {
       populateDropdown();
       openDropdown();
@@ -549,6 +623,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     }
   });
   triggerEl.addEventListener('keydown', (e) => {
+    if (isRunCompleted()) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       if (dropdownEl.hidden) {
@@ -569,6 +644,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     const results = e.detail.results;
     const outputFields = e.detail.outputFields;
     const isComplete = e.detail.isComplete !== false;
+    if (isComplete && node) node.dataset.runCompleted = '1';
     if (!Array.isArray(results) || !Array.isArray(outputFields)) return;
     const status = isComplete ? 'complete' : 'generating';
     const card = rightCol.querySelector('.run-detail-results-card');
@@ -583,6 +659,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       rightCol.innerHTML = '';
       rightCol.appendChild(renderResultsTable(results, outputFields, status));
     }
+    if (isComplete) applyRunCompletedLock();
   }
   function closeModal() {
     document.removeEventListener('workflow:run-results-updated', onRunResultsUpdated);
@@ -621,6 +698,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   });
 
   runBtn.addEventListener('click', async () => {
+    if (isRunCompleted()) return;
     if (!selectedNodeId || !selectedCredentialId) return;
     const content = getSubsetContent(selectedNodeId);
     const template = getPromptTemplate();
@@ -661,6 +739,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     if (node) {
       node.dataset.runResults = '';
       node.dataset.runOutputFields = '';
+      node.dataset.runCompleted = '';
       const bar = node.querySelector('.workflow-node__run-progress');
       if (bar) bar.style.width = '0%';
     }
@@ -714,6 +793,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   updateRunNodeBorder();
   renderInputMappings();
   updateRunButtonState();
+  applyRunCompletedLock();
   loadCredentialsAndPopulateLlm();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);

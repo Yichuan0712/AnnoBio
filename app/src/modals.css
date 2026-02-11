@@ -1442,8 +1442,46 @@
   min-width: 0;
 }
 
+.run-detail-card--locked {
+  background: var(--hover);
+  border-left: 4px solid var(--border);
+}
+.run-detail-card--locked .run-detail-label {
+  color: var(--text-muted);
+}
+.run-detail-card--locked .run-detail-ws-picker {
+  pointer-events: none;
+  opacity: 0.95;
+}
+.run-detail-card--locked .run-detail-ws-trigger {
+  background: var(--bg);
+  cursor: not-allowed;
+  color: var(--text);
+  border-color: var(--border);
+}
+.run-detail-card--locked .run-detail-inputs-section select,
+.run-detail-card--locked .run-detail-inputs-section input {
+  background: var(--bg);
+  cursor: not-allowed;
+  color: var(--text);
+  border-color: var(--border);
+}
+.run-detail-card--locked .run-detail-llm-select {
+  background: var(--bg);
+  cursor: not-allowed;
+  color: var(--text);
+  border-color: var(--border);
+}
+.run-detail-card--locked .run-detail-run-btn {
+  opacity: 0.8;
+  cursor: not-allowed;
+}
+
 .run-detail-ws-picker {
   position: relative;
+}
+.run-detail-ws-picker--locked {
+  pointer-events: none;
 }
 
 .run-detail-ws-trigger {
@@ -1453,7 +1491,7 @@
   font-size: 13px;
   padding: 8px 10px;
   color: var(--text);
-  background: var(--bg-bar);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 0;
   font-family: inherit;
@@ -1816,6 +1854,13 @@
   color: var(--text-muted, #666);
   font-weight: 600;
   font-size: 11px;
+}
+.run-detail-results-table .run-detail-th--bracket-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+.run-detail-results-table .run-detail-th--bracket-toggle:hover {
+  background: var(--hover-hover, #e8e8e8);
 }
 .run-detail-results-table .run-detail-td--error-col,
 .run-detail-results-table .run-detail-td--dataset-row-col {
