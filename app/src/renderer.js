@@ -69,6 +69,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const state = canvasAPI.getCanvasState();
     await api.saveProject(path, state);
     topBarAPI.setAddMenuEnabled(true);
+    topBarAPI.setSaveAsEnabled?.(true);
   };
 
   const onOpenProject = async () => {
@@ -80,6 +81,7 @@ window.addEventListener('DOMContentLoaded', () => {
     canvasAPI.loadCanvasState(state);
     currentProjectPath = path;
     topBarAPI.setAddMenuEnabled(true);
+    topBarAPI.setSaveAsEnabled?.(true);
   };
 
   const onSaveAsProject = async () => {
@@ -91,6 +93,7 @@ window.addEventListener('DOMContentLoaded', () => {
     await api.saveProject(path, state);
     currentProjectPath = path;
     topBarAPI.setAddMenuEnabled(true);
+    topBarAPI.setSaveAsEnabled?.(true);
   };
 
   const topBarAPI = buildTopBar(root, {

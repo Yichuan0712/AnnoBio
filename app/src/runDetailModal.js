@@ -398,31 +398,22 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         const baseName = `${promptName} ${runName}`.trim();
         const datasetName = getUniqueDatasetExportName(baseName);
         const statusLine = resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.';
-        const ws = getSelectedWorkingSet();
-        const sourceDatasetLabel = (ws?.name || '').trim() || '—';
-        const description = `Exported from ${promptName} ${runName}.\nWorking dataset: ${sourceDatasetLabel}.\n${statusLine}`;
+        const description = `Exported from ${promptName} ${runName}.\n${statusLine}`;
         const outputFields = resultsState.outputFields || [];
-        const wc = resultsState.workingContent || { headers: [], rows: [] };
-        const wsHeaders = wc.headers || [];
-        const wsRows = wc.rows || [];
-        const headers = [...outputFields.map((f) => (f.display || f.key || '').trim() || 'output'), '[#]', ...wsHeaders.map((h) => `[${String(h ?? '').trim() || ' '}]`)];
-        const rows = (resultsState.results || []).map((r) => {
-          const outputCells = r.error
+        const headers = outputFields.map((f) => (f.display || f.key || '').trim() || 'output');
+        const rows = (resultsState.results || []).map((r) =>
+          r.error
             ? outputFields.map(() => String(r.error))
             : outputFields.map((f) => {
                 const val = r.output && r.output[f.key];
                 if (val === null || val === undefined) return '—';
                 if (Array.isArray(val)) return val.join(', ');
                 return String(val);
-              });
-          const datasetRowCell = String(r.row_index + 1);
-          const wsRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
-          const wsCells = wsHeaders.map((_, i) => (wsRow[i] !== null && wsRow[i] !== undefined ? String(wsRow[i]) : '—'));
-          return [...outputCells, datasetRowCell, ...wsCells];
-        });
+              })
+        );
         document.dispatchEvent(
           new CustomEvent('workflow:add-dataset-node', {
-            detail: { name: datasetName, notes: description, headers, rows, createSubsetChain: true },
+            detail: { name: datasetName, notes: description, headers, rows },
           })
         );
       }
@@ -435,18 +426,17 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         closeModal();
       });
       footerActions.appendChild(btn);
-      const saveAndAssessBtn = document.createElement('button');
-      saveAndAssessBtn.type = 'button';
-      saveAndAssessBtn.className = 'btn btn-secondary run-detail-save-to-workspace-assess-btn';
-      saveAndAssessBtn.textContent = 'Save to workspace & assess';
-      saveAndAssessBtn.addEventListener('click', () => {
-        doSaveToWorkspace();
+      const saveAndScoreBtn = document.createElement('button');
+      saveAndScoreBtn.type = 'button';
+      saveAndScoreBtn.className = 'btn btn-secondary run-detail-save-to-workspace-score-btn';
+      saveAndScoreBtn.textContent = 'Score';
+      saveAndScoreBtn.addEventListener('click', () => {
         document.dispatchEvent(
-          new CustomEvent('workflow:add-assessment-node', { detail: { runNodeId: node?.dataset?.nodeId || '' } })
+          new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node?.dataset?.nodeId || '' } })
         );
         closeModal();
       });
-      footerActions.appendChild(saveAndAssessBtn);
+      footerActions.appendChild(saveAndScoreBtn);
       footer.appendChild(footerActions);
       card.appendChild(wrap);
       card.appendChild(footer);

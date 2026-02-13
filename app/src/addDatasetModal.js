@@ -50,9 +50,12 @@ export function openAddDatasetModal(workflowCanvasApi) {
       <div class="modal-body modal-body--dataset">
         <div class="dataset-main">
           <div class="dataset-import">
-            <input type="file" id="dataset-file-input" accept=".csv,.tsv,text/csv,text/tab-separated-values" hidden />
-            <button type="button" class="btn btn-secondary dataset-import-btn">Import file (CSV / TSV)</button>
-            <span class="dataset-filename" aria-live="polite"></span>
+            <h3 class="dataset-import-title">File import</h3>
+            <div class="dataset-import-actions">
+              <input type="file" id="dataset-file-input" accept=".csv,.tsv,text/csv,text/tab-separated-values" hidden />
+              <button type="button" class="btn btn-secondary dataset-import-btn">Import file (CSV / TSV)</button>
+              <span class="dataset-filename" aria-live="polite"></span>
+            </div>
           </div>
           <div class="dataset-meta-wrap">
             <div class="dataset-meta-field">

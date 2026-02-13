@@ -138,6 +138,7 @@
   position: absolute;
   min-width: 200px;
   max-width: 280px;
+  max-height: 220px;
   background: var(--bg-bar);
   border: 1px solid var(--node-border);
   border-radius: 8px;
@@ -147,6 +148,7 @@
   display: flex;
   flex-direction: column;
   transition: box-shadow 0.2s ease;
+  overflow: hidden;
 }
 
 .workflow-node:hover {
@@ -175,8 +177,8 @@
   border-radius: 0;
 }
 
-/* Assessment node: 与 Run 外观类似，用于比较 result 与 ground truth */
-.workflow-node--assessment {
+/* Score node: 与 Run 外观类似，用于比较 result 与 ground truth */
+.workflow-node--score {
   min-width: 88px;
   max-width: 130px;
   width: 130px;
@@ -184,11 +186,28 @@
   border-radius: 0;
 }
 
-.workflow-node--assessment .workflow-node__header {
+.workflow-node--score .workflow-node__header {
   border-radius: 0;
 }
 
-.workflow-node--assessment.workflow-node--no-body .workflow-node__header {
+.workflow-node--score.workflow-node--no-body .workflow-node__header {
+  border-radius: 0;
+}
+
+/* Review node: 接在 Score 后，用于 LLM 根据结果分析 prompt 问题并给出修改意见 */
+.workflow-node--prompt-review {
+  min-width: 88px;
+  max-width: 140px;
+  width: 140px;
+  overflow: hidden;
+  border-radius: 0;
+}
+
+.workflow-node--prompt-review .workflow-node__header {
+  border-radius: 0;
+}
+
+.workflow-node--prompt-review.workflow-node--no-body .workflow-node__header {
   border-radius: 0;
 }
 
@@ -233,10 +252,11 @@
   border-radius: 8px;
 }
 
-/* Run/Sampler/Assessment 无 body 时内部也方角 */
+/* Run/Sampler/Score/Review 无 body 时内部也方角 */
 .workflow-node--run.workflow-node--no-body .workflow-node__header,
 .workflow-node--sampler.workflow-node--no-body .workflow-node__header,
-.workflow-node--assessment.workflow-node--no-body .workflow-node__header {
+.workflow-node--score.workflow-node--no-body .workflow-node__header,
+.workflow-node--prompt-review.workflow-node--no-body .workflow-node__header {
   border-radius: 0;
 }
 
@@ -287,27 +307,29 @@
   background: var(--bg-bar);
 }
 
+/* Dataset / Prompt 节点 description：沿用原来换行（pre-wrap），超过 3 行则第 4 行显示 ... */
 .workflow-node__body {
   padding: 8px 12px 10px;
   font-size: 12px;
   color: var(--text-muted);
   min-height: 28px;
-  max-height: 72px;
   overflow: hidden;
-  white-space: pre-wrap;
-  word-break: break-word;
   line-height: 1.35;
 }
 
-.workflow-node__note {
-  display: block;
+.workflow-node__body .workflow-node__note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
   padding: 0;
 }
 
-/* Subset 节点下方 sampler 描述：单行、省略号、小字 */
+/* Subset 节点下方 sampler 描述：单行、省略号、小字（沿用原来） */
 .workflow-node__subset-desc {
   padding: 4px 12px 8px;
   font-size: 11px;

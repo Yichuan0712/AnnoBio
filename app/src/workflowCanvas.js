@@ -8,6 +8,7 @@ import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal } from './runDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
+import { openScoreDetailModal } from './scoreDetailModal.js';
 import { openWorkingDatasetDetailModal } from './workingDatasetDetailModal.js';
 
 const MIN_CONTENT_PADDING = 200;
@@ -25,8 +26,43 @@ const EDGE_TYPE_SAMPLER_TO_SUBSET = 'sampler-to-subset';
 const EDGE_TYPE_SUBSET_TO_SUBSET = 'subset-to-subset';
 /** Edge type for prompt → run (run/test this prompt). */
 const EDGE_TYPE_PROMPT_TO_RUN = 'prompt-to-run';
-/** Edge type for run → assessment (compare result with ground truth). */
-const EDGE_TYPE_RUN_TO_ASSESSMENT = 'run-to-assessment';
+/** Edge type for run → score (compare result with ground truth). */
+const EDGE_TYPE_RUN_TO_SCORE = 'run-to-score';
+/** Edge type for score → prompt review (LLM analyzes results and suggests prompt changes). */
+const EDGE_TYPE_SCORE_TO_PROMPT_REVIEW = 'score-to-prompt-review';
+
+/** Normalize score mapping to rules: [ { outputKey, gtColumns: string[], matchType } ]. Migrate from old groups/flat format. */
+function normalizeScoreMappingToRules(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return [];
+  const first = arr[0];
+  if (first && typeof first === 'object' && Array.isArray(first.gtColumns)) {
+    return arr.map((r) => ({
+      outputKey: r.outputKey || '',
+      gtColumns: Array.isArray(r.gtColumns) ? r.gtColumns.filter(Boolean) : [],
+      matchType: r.matchType || 'exact',
+    })).filter((r) => r.outputKey || r.gtColumns.length > 0);
+  }
+  const pairs = [];
+  if (first && first.outputKey !== undefined && !first.rules) {
+    arr.forEach((r) => {
+      pairs.push({ outputKey: r.outputKey || '', gtColumn: r.gtColumn || '', matchType: r.matchType || 'exact' });
+    });
+  } else if (first && first.rules) {
+    arr.forEach((g) => {
+      (g.rules || []).forEach((r) => {
+        pairs.push({ outputKey: r.outputKey || '', gtColumn: r.gtColumn || '', matchType: r.matchType || 'exact' });
+      });
+    });
+  } else {
+    return [];
+  }
+  const byKey = {};
+  pairs.forEach((p) => {
+    if (!byKey[p.outputKey]) byKey[p.outputKey] = { outputKey: p.outputKey, gtColumns: [], matchType: p.matchType || 'exact' };
+    if (p.gtColumn && !byKey[p.outputKey].gtColumns.includes(p.gtColumn)) byKey[p.outputKey].gtColumns.push(p.gtColumn);
+  });
+  return Object.values(byKey).filter((r) => r.outputKey || r.gtColumns.length > 0);
+}
 
 /** Invisible stroke width for edge hit area (px). */
 const EDGE_HIT_STROKE_WIDTH = 16;
@@ -524,9 +560,10 @@ export function buildWorkflowCanvas(root) {
     const x2 = parseFloat(toNode.style.left) || 0;
     const y2 = parseFloat(toNode.style.top) || 0;
     const isRunNode = toNode.classList.contains('workflow-node--run');
-    const isAssessmentNode = toNode.classList.contains('workflow-node--assessment');
-    const isRunOrAssessment = isRunNode || isAssessmentNode;
-    const h2 = isRunOrAssessment ? (toNode.offsetHeight || RUN_NODE_FALLBACK_HEIGHT) : (toNode.offsetHeight || 0);
+    const isScoreNode = toNode.classList.contains('workflow-node--score');
+    const isPromptReviewNode = toNode.classList.contains('workflow-node--prompt-review');
+    const isRunOrScore = isRunNode || isScoreNode || isPromptReviewNode;
+    const h2 = isRunOrScore ? (toNode.offsetHeight || RUN_NODE_FALLBACK_HEIGHT) : (toNode.offsetHeight || 0);
 
     if (edge.type === EDGE_TYPE_PROMPT_TO_PROMPT) {
       const startX = x1 + w1;
@@ -559,11 +596,11 @@ export function buildWorkflowCanvas(root) {
       line.setAttribute('pointer-events', 'none');
       g.appendChild(line);
     } else {
-      // prompt-to-run / run-to-assessment: end at left-center of toNode; use fixed height for Run/Assessment so layout delay doesn't misplace the line
+      // prompt-to-run / run-to-score: end at left-center of toNode; use fixed height for Run/Score so layout delay doesn't misplace the line
       const startX = x1 + w1;
       const startY = y1 + h1 / 2;
       const endX = x2;
-      const toHeight = isRunOrAssessment ? RUN_NODE_FALLBACK_HEIGHT : h2;
+      const toHeight = isRunOrScore ? RUN_NODE_FALLBACK_HEIGHT : h2;
       const endY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
       const hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       hitLine.setAttribute('x1', String(startX));
@@ -831,6 +868,7 @@ export function buildWorkflowCanvas(root) {
             subsetContentByNodeId.set(subsetNode.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           },
+          isSubsetNameAlreadyUsed,
         });
       }
     } else if (edgeType === EDGE_TYPE_DATASET_TO_SAMPLER) {
@@ -838,6 +876,72 @@ export function buildWorkflowCanvas(root) {
       e.stopPropagation();
       const samplerNode = getNodeById(edge.toId);
       if (samplerNode) openSamplerDetailModal({ node: samplerNode });
+    } else if (edgeType === EDGE_TYPE_RUN_TO_SCORE) {
+      e.preventDefault();
+      e.stopPropagation();
+      const scoreNode = getNodeById(edge.toId);
+      if (scoreNode && scoreNode.classList.contains('workflow-node--score')) {
+        const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+          const id = n.dataset.nodeId || '';
+          const content = subsetContentByNodeId.get(id);
+          const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+          const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+          return {
+            nodeId: id,
+            name: (n.dataset.subsetName || '').trim() || 'Working dataset',
+            headers: content?.headers ? content.headers.slice() : [],
+            color,
+          };
+        });
+        const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+        const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+        function getRunResultColumns() {
+          if (!runNode) return [];
+          const cols = [];
+          cols.push({ key: '#', label: '#' });
+          let outputFields = [];
+          try {
+            const raw = runNode.dataset.runOutputFields || '[]';
+            const arr = JSON.parse(raw);
+            outputFields = Array.isArray(arr) ? arr : [];
+          } catch (_) {}
+          outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+          const wsId = (runNode.dataset.runWorkingSetId || '').trim();
+          const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
+          const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
+          cols.push({ key: '[#]', label: '[#]' });
+          wsHeaders.forEach((h) => {
+            const headerText = String(h ?? '').trim() || ' ';
+            cols.push({ key: `[${headerText}]`, label: `[${headerText}]` });
+          });
+          return cols;
+        }
+        function getGroundTruthHeaders(wsNodeId) {
+          const c = subsetContentByNodeId.get(wsNodeId || '');
+          return (c && c.headers) ? c.headers.slice() : [];
+        }
+        function getRunResults() {
+          if (!runNode) return { results: [], outputFields: [] };
+          let results = [];
+          let outputFields = [];
+          try {
+            results = JSON.parse(runNode.dataset.runResults || '[]');
+            outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+          } catch (_) {}
+          return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
+        }
+        function getRunWorkingSetContent() {
+          const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
+          const c = wsId ? subsetContentByNodeId.get(wsId) : null;
+          return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+        }
+        function getGroundTruthContent(wsNodeId) {
+          const c = subsetContentByNodeId.get(wsNodeId || '');
+          if (!c) return { headers: [], rows: [] };
+          return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
+        }
+        openScoreDetailModal({ node: scoreNode, getWorkingSets: () => workingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent });
+      }
     } else if (edgeType === EDGE_TYPE_PROMPT_TO_RUN) {
       e.preventDefault();
       e.stopPropagation();
@@ -1370,7 +1474,7 @@ export function buildWorkflowCanvas(root) {
     return `${name} · ${typeLabel}, ${sizeLabel}`;
   }
 
-  function createSubsetNode({ name = '', left, top, nodeId: givenNodeId, samplerNodeId = '', colorIndex: givenColorIndex, headers, rows }) {
+  function createSubsetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', colorIndex: givenColorIndex, headers, rows }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Working dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -1381,6 +1485,7 @@ export function buildWorkflowCanvas(root) {
     node.setAttribute('aria-label', `Working dataset node: ${title}`);
     node.dataset.nodeId = nodeId;
     node.dataset.subsetName = name;
+    if (notes !== undefined && notes !== null) node.dataset.subsetNote = String(notes);
     node.dataset.nodeType = 'subset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
     const subsetCount = nodesLayer.querySelectorAll('.workflow-node--subset').length;
@@ -1465,6 +1570,7 @@ export function buildWorkflowCanvas(root) {
           subsetContentByNodeId.set(node.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         },
+        isSubsetNameAlreadyUsed,
       });
     });
 
@@ -1627,14 +1733,15 @@ export function buildWorkflowCanvas(root) {
     return node;
   }
 
-  function createAssessmentNode({ left, top, nodeId: givenNodeId }) {
+  function createScoreNode({ left, top, nodeId: givenNodeId, title: givenTitle }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
-    node.className = 'workflow-node workflow-node--assessment workflow-node--no-body';
+    node.className = 'workflow-node workflow-node--score workflow-node--no-body';
     node.setAttribute('role', 'article');
-    node.setAttribute('aria-label', 'Assess node');
+    node.setAttribute('aria-label', 'Score node');
     node.dataset.nodeId = nodeId;
-    node.dataset.nodeType = 'assessment';
+    node.dataset.nodeType = 'score';
+    const scoreTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Score';
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
@@ -1642,8 +1749,148 @@ export function buildWorkflowCanvas(root) {
     node.style.top = `${y}px`;
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--assessment" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8v4M6 5v7M9 3v9M12 6v6"/></svg></span>
-        <span class="workflow-node__title">Assess</span>
+        <span class="workflow-node__icon workflow-node__icon--score" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8v4M6 5v7M9 3v9M12 6v6"/></svg></span>
+        <span class="workflow-node__title">${escapeHtml(scoreTitle)}</span>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+      </div>
+    `;
+    nodesLayer.appendChild(node);
+
+    const deleteBtn = node.querySelector('.workflow-node__delete');
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      removeConnectionsInvolvingNodeId(nodeId);
+      node.remove();
+      updateContentSize();
+      updateEdges();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    });
+
+    let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
+    let lastInteractionWasDrag = false;
+    function onPointerDown(e) {
+      if (e.button !== 0) return;
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      lastInteractionWasDrag = false;
+      const rect = node.getBoundingClientRect();
+      const swRect = scrollWrapper.getBoundingClientRect();
+      const sl = scrollWrapper.scrollLeft;
+      const st = scrollWrapper.scrollTop;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      nodeStartLeft = (rect.left - swRect.left + sl) / zoomLevel;
+      nodeStartTop = (rect.top - swRect.top + st) / zoomLevel;
+      node.classList.add('workflow-node--dragging');
+      document.addEventListener('pointermove', onPointerMove);
+      document.addEventListener('pointerup', onPointerUp, { once: true });
+    }
+    function onPointerMove(e) {
+      lastInteractionWasDrag = true;
+      const dx = (e.clientX - dragStartX) / zoomLevel;
+      const dy = (e.clientY - dragStartY) / zoomLevel;
+      node.style.left = `${nodeStartLeft + dx}px`;
+      node.style.top = `${nodeStartTop + dy}px`;
+      updateEdges();
+    }
+    function onPointerUp() {
+      node.classList.remove('workflow-node--dragging');
+      document.removeEventListener('pointermove', onPointerMove);
+      updateContentSize();
+      updateEdges();
+      if (lastInteractionWasDrag) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    }
+    node.addEventListener('pointerdown', onPointerDown);
+
+    node.addEventListener('click', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      if (lastInteractionWasDrag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+        const id = n.dataset.nodeId || '';
+        const content = subsetContentByNodeId.get(id);
+        const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+        const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+        return {
+          nodeId: id,
+          name: (n.dataset.subsetName || '').trim() || 'Working dataset',
+          headers: content?.headers ? content.headers.slice() : [],
+          color,
+        };
+      });
+      const runEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+      const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+      function getRunResultColumns() {
+        if (!runNode) return [];
+        const cols = [];
+        cols.push({ key: '#', label: '#' });
+        let outputFields = [];
+        try {
+          const raw = runNode.dataset.runOutputFields || '[]';
+          const arr = JSON.parse(raw);
+          outputFields = Array.isArray(arr) ? arr : [];
+        } catch (_) {}
+        outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+        const wsId = (runNode.dataset.runWorkingSetId || '').trim();
+        const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
+        const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
+        cols.push({ key: '[#]', label: '[#]' });
+        wsHeaders.forEach((h) => {
+          const headerText = String(h ?? '').trim() || ' ';
+          cols.push({ key: `[${headerText}]`, label: `[${headerText}]` });
+        });
+        return cols;
+      }
+      function getGroundTruthHeaders(wsNodeId) {
+        const c = subsetContentByNodeId.get(wsNodeId || '');
+        return (c && c.headers) ? c.headers.slice() : [];
+      }
+      function getRunResults() {
+        if (!runNode) return { results: [], outputFields: [] };
+        let results = [];
+        let outputFields = [];
+        try {
+          results = JSON.parse(runNode.dataset.runResults || '[]');
+          outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+        } catch (_) {}
+        return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
+      }
+      function getRunWorkingSetContent() {
+        const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
+        const c = wsId ? subsetContentByNodeId.get(wsId) : null;
+        return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+      }
+      function getGroundTruthContent(wsNodeId) {
+        const c = subsetContentByNodeId.get(wsNodeId || '');
+        if (!c) return { headers: [], rows: [] };
+        return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
+      }
+      openScoreDetailModal({ node, getWorkingSets: () => workingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent });
+    });
+
+    return node;
+  }
+
+  function createPromptReviewNode({ left, top, nodeId: givenNodeId, title: givenTitle }) {
+    const nodeId = givenNodeId || generateNodeId();
+    const node = document.createElement('div');
+    node.className = 'workflow-node workflow-node--prompt-review workflow-node--no-body';
+    node.setAttribute('role', 'article');
+    node.setAttribute('aria-label', 'Review node');
+    node.dataset.nodeId = nodeId;
+    node.dataset.nodeType = 'promptReview';
+    const promptReviewTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Review';
+    const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
+    const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
+    nodeCount += 1;
+    node.style.left = `${x}px`;
+    node.style.top = `${y}px`;
+    node.innerHTML = `
+      <div class="workflow-node__header">
+        <span class="workflow-node__icon workflow-node__icon--prompt-review" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1v4M7 9v4M3 5h8M3 9h8"/><circle cx="7" cy="7" r="1.5"/></svg></span>
+        <span class="workflow-node__title">${escapeHtml(promptReviewTitle)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
     `;
@@ -1758,7 +2005,7 @@ export function buildWorkflowCanvas(root) {
     if (isRun) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem">Save results to workspace</button>
-        <button type="button" class="workflow-node-context-item" data-action="save-to-workspace-and-assess" role="menuitem">Save to workspace & assess</button>
+        <button type="button" class="workflow-node-context-item" data-action="save-to-workspace-and-score" role="menuitem">Score</button>
       `;
     } else if (isDataset) {
       menu.innerHTML = `
@@ -1821,10 +2068,6 @@ export function buildWorkflowCanvas(root) {
         } catch (_) {}
         if (!Array.isArray(results) || results.length === 0) return;
         if (!Array.isArray(outputFields)) outputFields = [];
-        const wsId = (node.dataset.runWorkingSetId || '').trim();
-        const wc = wsId ? subsetContentByNodeId.get(wsId) : null;
-        const wsHeaders = (wc && wc.headers) ? wc.headers.slice() : [];
-        const wsRows = (wc && wc.rows) ? wc.rows : [];
         const runName = (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run';
         const promptEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
         const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
@@ -1833,34 +2076,27 @@ export function buildWorkflowCanvas(root) {
         const datasetName = findUniqueDatasetExportName(baseName);
         const runCompleted = node.dataset.runCompleted === '1';
         const statusLine = runCompleted ? 'Run completed.' : 'Run incomplete.';
-        const wsNode = wsId ? getNodeById(wsId) : null;
-        const sourceDatasetLabel = (wsNode?.dataset?.subsetName || '').trim() || (wsNode?.querySelector('.workflow-node__title')?.textContent || '').trim() || '—';
-        const description = `Exported from ${promptName} ${runName}.\nWorking dataset: ${sourceDatasetLabel}.\n${statusLine}`;
-        const headers = [...outputFields.map((f) => ((f && (f.display || f.key)) ? String(f.display || f.key).trim() || 'output' : 'output')), '[#]', ...wsHeaders.map((h) => `[${String(h ?? '').trim() || ' '}]`)];
-        const rows = results.map((r) => {
-          const outputCells = r.error
+        const description = `Exported from ${promptName} ${runName}.\n${statusLine}`;
+        const headers = outputFields.map((f) => ((f && (f.display || f.key)) ? String(f.display || f.key).trim() || 'output' : 'output'));
+        const rows = results.map((r) =>
+          r.error
             ? outputFields.map(() => String(r.error))
             : (outputFields || []).map((f) => {
                 const val = r.output && f && r.output[f.key];
                 if (val === null || val === undefined) return '—';
                 if (Array.isArray(val)) return val.join(', ');
                 return String(val);
-              });
-          const datasetRowCell = String((r.row_index ?? 0) + 1);
-          const wsRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
-          const wsCells = wsHeaders.map((_, i) => (wsRow[i] !== null && wsRow[i] !== undefined ? String(wsRow[i]) : '—'));
-          return [...outputCells, datasetRowCell, ...wsCells];
-        });
+              })
+        );
         document.dispatchEvent(
           new CustomEvent('workflow:add-dataset-node', {
-            detail: { name: datasetName, notes: description, headers, rows, createSubsetChain: true },
+            detail: { name: datasetName, notes: description, headers, rows },
           })
         );
       },
-      'save-to-workspace-and-assess': () => {
+      'save-to-workspace-and-score': () => {
         if (node.dataset.nodeType !== 'run') return;
-        if (actions['save-results-to-workspace']) actions['save-results-to-workspace']();
-        document.dispatchEvent(new CustomEvent('workflow:add-assessment-node', { detail: { runNodeId: node.dataset.nodeId } }));
+        document.dispatchEvent(new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node.dataset.nodeId } }));
       },
       'add-working-dataset-sampler': () => {
         openDatasetDetailModal({
@@ -1932,8 +2168,11 @@ export function buildWorkflowCanvas(root) {
         const headers = content?.headers ? content.headers.slice() : [];
         const rows = content?.rows ? content.rows.map((r) => r.slice()) : [];
         const samplerNodeId = node.dataset.samplerNodeId || '';
+        const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
+        const notes = formatSamplerDescription(samplerNode);
         const newNode = createSubsetNode({
           name: newName,
+          notes,
           left,
           top: top + height + NEW_NODE_OFFSET,
           samplerNodeId,
@@ -1959,8 +2198,11 @@ export function buildWorkflowCanvas(root) {
         const headers = content?.headers ? content.headers.slice() : [];
         const rows = content?.rows ? content.rows.map((r) => r.slice()) : [];
         const samplerNodeId = node.dataset.samplerNodeId || '';
+        const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
+        const notes = formatSamplerDescription(samplerNode);
         const newNode = createSubsetNode({
           name: versionName,
+          notes,
           left: left + width + NEW_NODE_OFFSET,
           top,
           samplerNodeId,
@@ -2091,8 +2333,10 @@ export function buildWorkflowCanvas(root) {
     const subTop = samplerTop;
     const subsetHeaders = Array.isArray(headers) ? headers.slice() : [];
     const subsetRows = Array.isArray(rows) ? rows.map((r) => r.slice()) : [];
+    const subsetName = findNextWorkingDatasetName(samplerNode.dataset.nodeId);
     const subsetNode = createSubsetNode({
-      name: (name && name.trim()) ? name.trim() : 'Working dataset',
+      name: subsetName,
+      notes: formatSamplerDescription(samplerNode),
       samplerNodeId: samplerNode.dataset.nodeId,
       headers: subsetHeaders,
       rows: subsetRows,
@@ -2178,7 +2422,8 @@ export function buildWorkflowCanvas(root) {
       }
     }
     const name = samplerNodeId ? findNextWorkingDatasetName(samplerNodeId) : 'Working dataset';
-    const newNode = createSubsetNode({ name, left, top, samplerNodeId, headers, rows });
+    const notes = formatSamplerDescription(samplerNode || null);
+    const newNode = createSubsetNode({ name, notes, left, top, samplerNodeId, headers, rows });
     if (samplerNodeId && newNode?.dataset?.nodeId) {
       connections.push({
         fromId: samplerNodeId,
@@ -2191,18 +2436,45 @@ export function buildWorkflowCanvas(root) {
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
-  document.addEventListener('workflow:add-assessment-node', (e) => {
+  document.addEventListener('workflow:add-score-node', (e) => {
     const runNodeId = e.detail?.runNodeId || '';
     const runNode = runNodeId ? getNodeById(runNodeId) : null;
     if (!runNode || !runNode.classList.contains('workflow-node--run')) return;
     const left = (parseFloat(runNode.style.left) || 0) + (runNode.offsetWidth || 280) + NEW_NODE_OFFSET;
     const top = parseFloat(runNode.style.top) || 0;
-    const assessmentNode = createAssessmentNode({ left, top });
-    if (assessmentNode?.dataset?.nodeId) {
+    const existingScoreCount = connections.filter(
+      (c) => c.fromId === runNodeId && c.type === EDGE_TYPE_RUN_TO_SCORE
+    ).length;
+    const scoreTitle = `Score ${existingScoreCount + 1}`;
+    const scoreNode = createScoreNode({ left, top, title: scoreTitle });
+    if (scoreNode?.dataset?.nodeId) {
       connections.push({
         fromId: runNodeId,
-        toId: assessmentNode.dataset.nodeId,
-        type: EDGE_TYPE_RUN_TO_ASSESSMENT,
+        toId: scoreNode.dataset.nodeId,
+        type: EDGE_TYPE_RUN_TO_SCORE,
+      });
+      updateEdges();
+    }
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  });
+
+  document.addEventListener('workflow:add-prompt-review-node', (e) => {
+    const scoreNodeId = e.detail?.scoreNodeId || '';
+    const scoreNode = scoreNodeId ? getNodeById(scoreNodeId) : null;
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return;
+    const left = (parseFloat(scoreNode.style.left) || 0) + (scoreNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+    const top = parseFloat(scoreNode.style.top) || 0;
+    const existingCount = connections.filter(
+      (c) => c.fromId === scoreNodeId && c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW
+    ).length;
+    const promptReviewTitle = existingCount === 0 ? 'Review' : `Review ${existingCount + 1}`;
+    const promptReviewNode = createPromptReviewNode({ left, top, title: promptReviewTitle });
+    if (promptReviewNode?.dataset?.nodeId) {
+      connections.push({
+        fromId: scoreNodeId,
+        toId: promptReviewNode.dataset.nodeId,
+        type: EDGE_TYPE_SCORE_TO_PROMPT_REVIEW,
       });
       updateEdges();
     }
@@ -2258,6 +2530,7 @@ export function buildWorkflowCanvas(root) {
           left,
           top,
           name: node.dataset.subsetName || '',
+          note: node.dataset.subsetNote || '',
           samplerNodeId: node.dataset.samplerNodeId || '',
           colorIndex: node.dataset.subsetColorIndex != null ? parseInt(node.dataset.subsetColorIndex, 10) : undefined,
           subsetContent: subsetContent ? { headers: subsetContent.headers, rows: subsetContent.rows } : undefined,
@@ -2283,12 +2556,40 @@ export function buildWorkflowCanvas(root) {
         if (pct === 100) out.runProgress = 100;
         return out;
       }
-      if (node.classList.contains('workflow-node--assessment')) {
+      if (node.classList.contains('workflow-node--score')) {
+        const scoreName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Score';
+        const scoreGroundTruthId = (node.dataset.scoreGroundTruthId || '').trim() || undefined;
+        let scoreMapping;
+        try {
+          const raw = node.dataset.scoreMapping || '[]';
+          const arr = JSON.parse(raw);
+          const rules = normalizeScoreMappingToRules(Array.isArray(arr) ? arr : []);
+          scoreMapping = rules.length > 0 ? rules : undefined;
+        } catch (_) {}
+        const scoreResultComments = (node.dataset.scoreResultComments || '').trim();
+        let scoreResultCommentsObj;
+        try {
+          scoreResultCommentsObj = scoreResultComments ? JSON.parse(scoreResultComments) : undefined;
+        } catch (_) {}
         return {
-          type: 'assessment',
+          type: 'score',
           nodeId,
           left,
           top,
+          scoreName,
+          scoreGroundTruthId,
+          scoreMapping,
+          scoreResultComments: scoreResultCommentsObj,
+        };
+      }
+      if (node.classList.contains('workflow-node--prompt-review')) {
+        const promptReviewName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Review';
+        return {
+          type: 'promptReview',
+          nodeId,
+          left,
+          top,
+          promptReviewName,
         };
       }
       let sections = [];
@@ -2358,6 +2659,7 @@ export function buildWorkflowCanvas(root) {
         const content = n.subsetContent;
         const node = createSubsetNode({
           name: n.name || '',
+          notes: n.note || '',
           left: n.left,
           top: n.top,
           nodeId: n.nodeId || n.id,
@@ -2382,13 +2684,34 @@ export function buildWorkflowCanvas(root) {
         if (n.runCompleted) runNode.dataset.runCompleted = n.runCompleted;
         if (n.runProgress === 100) setRunNodeProgress(runNode, 100, 100);
         createdNodes.push(runNode);
-      } else if (n.type === 'assessment') {
-        const assessmentNode = createAssessmentNode({
+      } else if (n.type === 'assessment' || n.type === 'score') {
+        const scoreNode = createScoreNode({
           left: n.left,
           top: n.top,
           nodeId: n.nodeId || n.id,
+          title: n.scoreName || 'Score',
         });
-        createdNodes.push(assessmentNode);
+        if (n.scoreGroundTruthId) scoreNode.dataset.scoreGroundTruthId = n.scoreGroundTruthId;
+        if (Array.isArray(n.scoreMapping) && n.scoreMapping.length > 0) {
+          try {
+            const rules = normalizeScoreMappingToRules(n.scoreMapping);
+            scoreNode.dataset.scoreMapping = JSON.stringify(rules);
+          } catch (_) {}
+        }
+        if (n.scoreResultComments && typeof n.scoreResultComments === 'object') {
+          try {
+            scoreNode.dataset.scoreResultComments = JSON.stringify(n.scoreResultComments);
+          } catch (_) {}
+        }
+        createdNodes.push(scoreNode);
+      } else if (n.type === 'promptReview') {
+        const promptReviewNode = createPromptReviewNode({
+          left: n.left,
+          top: n.top,
+          nodeId: n.nodeId || n.id,
+          title: n.promptReviewName || 'Review',
+        });
+        createdNodes.push(promptReviewNode);
       } else {
         const node = createPromptNode({
           name: n.name || '',
@@ -2413,6 +2736,17 @@ export function buildWorkflowCanvas(root) {
           const progressBar = runNode.querySelector('.workflow-node__run-progress');
           if (progressBar) progressBar.style.background = color;
         }
+      }
+    });
+    // Apply Score node border color from selected ground truth working set (so it shows when loading from JSON)
+    nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => {
+      const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
+      if (!gtId) return;
+      const wsNode = getNodeById(gtId);
+      if (wsNode && wsNode.classList.contains('workflow-node--subset')) {
+        const colorIndex = wsNode.dataset.subsetColorIndex != null ? parseInt(wsNode.dataset.subsetColorIndex, 10) : 0;
+        const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+        scoreNode.style.borderColor = color;
       }
     });
     // Refresh subset node descriptions from sampler (in case load order made sampler missing at create time)
@@ -2441,7 +2775,10 @@ export function buildWorkflowCanvas(root) {
     const rawConnections = Array.isArray(state.connections) ? state.connections : [];
     connections = rawConnections.map((c) => {
       if (c.fromId != null && c.toId != null) {
-        return { fromId: c.fromId, toId: c.toId, type: c.type || EDGE_TYPE_PROMPT_TO_PROMPT };
+        let type = c.type || EDGE_TYPE_PROMPT_TO_PROMPT;
+        if (type === 'run-to-assessment') type = EDGE_TYPE_RUN_TO_SCORE;
+        if (type === 'score-to-prompt-review') type = EDGE_TYPE_SCORE_TO_PROMPT_REVIEW;
+        return { fromId: c.fromId, toId: c.toId, type };
       }
       if (typeof c.from === 'number' && typeof c.to === 'number') {
         const fromNode = createdNodes[c.from];

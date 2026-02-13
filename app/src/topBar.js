@@ -1,5 +1,5 @@
 /**
- * Top menu bar: File, Add, Settings.
+ * Top menu bar: File, Edit, Settings.
  */
 
 import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
@@ -22,11 +22,12 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   fileDrop.innerHTML = `
     <button type="button" class="menu-option" data-action="new-project">New project...</button>
     <button type="button" class="menu-option" data-action="open-project">Open project...</button>
-    <button type="button" class="menu-option" data-action="save-as-project">Save as...</button>
+    <button type="button" class="menu-option" data-action="save-as-project" disabled>Save as...</button>
   `;
   fileDrop.querySelector('[data-action="new-project"]').addEventListener('click', () => onNewProject?.());
   fileDrop.querySelector('[data-action="open-project"]').addEventListener('click', () => onOpenProject?.());
-  fileDrop.querySelector('[data-action="save-as-project"]').addEventListener('click', () => onSaveAsProject?.());
+  const saveAsOpt = fileDrop.querySelector('[data-action="save-as-project"]');
+  saveAsOpt.addEventListener('click', () => { if (!saveAsOpt.disabled) onSaveAsProject?.(); });
   fileBtn.appendChild(fileDrop);
   bar.appendChild(fileBtn);
 
@@ -39,11 +40,14 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   editDrop.innerHTML = `
     <button type="button" class="menu-option" data-action="undo">Undo</button>
     <button type="button" class="menu-option" data-action="redo">Redo</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt...</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new source dataset...</button>
   `;
   const undoOpt = editDrop.querySelector('[data-action="undo"]');
   const redoOpt = editDrop.querySelector('[data-action="redo"]');
+  const createPromptOpt = editDrop.querySelector('[data-action="new-prompt"]');
+  const createDatasetOpt = editDrop.querySelector('[data-action="new-dataset"]');
   function updateEditMenuState() {
-    /* 有 API 时根据栈更新禁用状态；无 API 或出错时保持可点，由画布侧 no-op */
     try {
       if (typeof getCanUndo === 'function') undoOpt.disabled = !getCanUndo();
       if (typeof getCanRedo === 'function') redoOpt.disabled = !getCanRedo();
@@ -64,27 +68,22 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
     e.stopPropagation();
     redo?.();
   });
+  createPromptOpt.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!createPromptOpt.disabled) openAddPromptModal();
+  });
+  createDatasetOpt.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!createDatasetOpt.disabled) openAddDatasetModal();
+  });
   editBtn.appendChild(editDrop);
   bar.appendChild(editBtn);
 
-  const addMenuBtn = document.createElement('button');
-  addMenuBtn.className = 'menu-item has-submenu';
-  addMenuBtn.type = 'button';
-  addMenuBtn.textContent = 'Create';
-  const addDrop = document.createElement('div');
-  addDrop.className = 'menu-dropdown';
-  addDrop.innerHTML = `
-    <button type="button" class="menu-option menu-option--add" data-action="new-prompt" disabled>New prompt...</button>
-    <button type="button" class="menu-option menu-option--add" data-action="new-dataset" disabled>New source dataset...</button>
-  `;
-  const addOptions = addDrop.querySelectorAll('.menu-option--add');
-  addDrop.querySelector('[data-action="new-prompt"]').addEventListener('click', () => { if (!addOptions[0].disabled) openAddPromptModal(); });
-  addDrop.querySelector('[data-action="new-dataset"]').addEventListener('click', () => { if (!addOptions[1].disabled) openAddDatasetModal(); });
-  addMenuBtn.appendChild(addDrop);
-  bar.appendChild(addMenuBtn);
-
   function setAddMenuEnabled(enabled) {
-    addOptions.forEach((el) => { el.disabled = !enabled; });
+    createPromptOpt.disabled = !enabled;
+    createDatasetOpt.disabled = !enabled;
   }
 
   const settingsBtn = document.createElement('button');
@@ -118,5 +117,10 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   bar.appendChild(settingsBtn);
 
   root.insertBefore(bar, root.firstChild);
-  return { setAddMenuEnabled, updateUndoRedoState: updateEditMenuState };
+
+  function setSaveAsEnabled(enabled) {
+    saveAsOpt.disabled = !enabled;
+  }
+
+  return { setAddMenuEnabled, setSaveAsEnabled, updateUndoRedoState: updateEditMenuState };
 }

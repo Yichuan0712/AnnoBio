@@ -3,13 +3,14 @@
  */
 
 const ICON_SIZE = 12;
+const ICON_DISPLAY_SIZE = 10;
 const ICON_STROKE = 1.5;
 
 function svgIcon(pathOrPaths, viewBox = `0 0 ${ICON_SIZE} ${ICON_SIZE}`) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', viewBox);
-  svg.setAttribute('width', String(ICON_SIZE));
-  svg.setAttribute('height', String(ICON_SIZE));
+  svg.setAttribute('width', String(ICON_DISPLAY_SIZE));
+  svg.setAttribute('height', String(ICON_DISPLAY_SIZE));
   svg.setAttribute('fill', 'none');
   svg.setAttribute('stroke', 'currentColor');
   svg.setAttribute('stroke-width', String(ICON_STROKE));
