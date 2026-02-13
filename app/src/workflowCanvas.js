@@ -8,6 +8,7 @@ import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal } from './runDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
+import { openReviewDetailModal } from './reviewDetailModal.js';
 import { openScoreDetailModal } from './scoreDetailModal.js';
 import { openWorkingDatasetDetailModal } from './workingDatasetDetailModal.js';
 
@@ -30,6 +31,7 @@ const EDGE_TYPE_PROMPT_TO_RUN = 'prompt-to-run';
 const EDGE_TYPE_RUN_TO_SCORE = 'run-to-score';
 /** Edge type for score → prompt review (LLM analyzes results and suggests prompt changes). */
 const EDGE_TYPE_SCORE_TO_PROMPT_REVIEW = 'score-to-prompt-review';
+const EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT = 'prompt-review-to-prompt';
 
 /** Normalize score mapping to rules: [ { outputKey, gtColumns: string[], matchType } ]. Migrate from old groups/flat format. */
 function normalizeScoreMappingToRules(arr) {
@@ -62,6 +64,100 @@ function normalizeScoreMappingToRules(arr) {
     if (p.gtColumn && !byKey[p.outputKey].gtColumns.includes(p.gtColumn)) byKey[p.outputKey].gtColumns.push(p.gtColumn);
   });
   return Object.values(byKey).filter((r) => r.outputKey || r.gtColumns.length > 0);
+}
+
+/** Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow). */
+function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
+  const toCompareStr = (v) => {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'string') return v.trim();
+    if (Array.isArray(v)) return v.map((x) => toCompareStr(x)).join(', ').trim();
+    return String(v).trim();
+  };
+  const getRunValue = (runResult, outputKey, rowIndex, runWs, outputFields) => {
+    if (outputKey === '#' || outputKey === '[#]') return toCompareStr(rowIndex);
+    const keyStr = String(outputKey || '').trim();
+    if (!keyStr) return '';
+    const isBracket = keyStr.startsWith('[') && keyStr.endsWith(']');
+    if (isBracket) {
+      const header = keyStr.slice(1, -1).trim();
+      const rows = runWs.rows || [];
+      const headers = runWs.headers || [];
+      const colIdx = headers.findIndex((h) => String(h).trim() === header);
+      if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
+      return '';
+    }
+    if (runResult?.output && typeof runResult.output === 'object' && keyStr in runResult.output) return toCompareStr(runResult.output[keyStr]);
+    return '';
+  };
+  const getGtValue = (gtContent, rowIndex, columnName) => {
+    const headers = gtContent.headers || [];
+    const rows = gtContent.rows || [];
+    const colIdx = headers.findIndex((h) => String(h).trim() === String(columnName).trim());
+    if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
+    return '';
+  };
+  const computeMatchPerRow = (rules, results, outputFields, runWs, gtContent) => {
+    const gtRows = gtContent.rows || [];
+    const matched = [];
+    const resultsByIndex = new Map();
+    (results || []).forEach((r) => resultsByIndex.set(r.row_index, r));
+    for (let i = 0; i < gtRows.length; i++) {
+      const runResult = resultsByIndex.get(i) || null;
+      let rowMatch = true;
+      for (const rule of rules) {
+        const runVal = getRunValue(runResult, rule.outputKey, i, runWs, outputFields);
+        const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, i, col));
+        if (!gtVals.some((g) => g === runVal)) { rowMatch = false; break; }
+      }
+      matched.push(rowMatch);
+    }
+    return { matched };
+  };
+
+  let rules = [];
+  try {
+    const raw = scoreNode.dataset.scoreMapping || '[]';
+    rules = normalizeScoreMappingToRules(JSON.parse(raw));
+  } catch (_) {}
+  let results = [];
+  let outputFields = [];
+  try {
+    results = JSON.parse(runNode.dataset.runResults || '[]');
+    outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+  } catch (_) {}
+  const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
+  const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
+  const runWs = runWsId ? subsetContentByNodeId.get(runWsId) : null;
+  const gtContent = gtId ? subsetContentByNodeId.get(gtId) : null;
+  const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
+  const gtSafe = gtContent ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
+  const { matched } = computeMatchPerRow(rules, results, outputFields, runWsSafe, gtSafe);
+  let comments = {};
+  try {
+    comments = JSON.parse(scoreNode.dataset.scoreResultComments || '{}');
+  } catch (_) {}
+  const gtRows = gtSafe.rows || [];
+  const resultsByIndex = new Map();
+  (results || []).forEach((r) => resultsByIndex.set(r.row_index, r));
+  const rows = [];
+  for (let i = 0; i < gtRows.length; i++) {
+    const runResult = resultsByIndex.get(i) || null;
+    const runOutput = runResult?.output && typeof runResult.output === 'object' ? runResult.output : {};
+    const expectedParts = [];
+    for (const rule of rules) {
+      const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtSafe, i, col));
+      expectedParts.push(`${rule.outputKey}: ${gtVals.join(' | ') || '—'}`);
+    }
+    rows.push({
+      row_index: i,
+      matched: matched[i] === true,
+      run_output: runOutput,
+      expected: expectedParts.join('; '),
+      comment: comments[String(i)] ?? null,
+    });
+  }
+  return rows;
 }
 
 /** Invisible stroke width for edge hit area (px). */
@@ -1867,7 +1963,32 @@ export function buildWorkflowCanvas(root) {
         if (!c) return { headers: [], rows: [] };
         return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
       }
-      openScoreDetailModal({ node, getWorkingSets: () => workingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent });
+      const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
+      const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+      function getReviewPayload() {
+        if (!promptNode || !runNode || !node) return null;
+        let sections = [];
+        try {
+          sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+        } catch (_) {}
+        if (!Array.isArray(sections) || sections.length === 0) return null;
+        const promptFullText = sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
+        let runResults = [];
+        let outputFields = [];
+        try {
+          runResults = JSON.parse(runNode.dataset.runResults || '[]');
+          outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+        } catch (_) {}
+        const comparison_rows = buildReviewComparisonRows(node, runNode, subsetContentByNodeId);
+        return {
+          prompt_sections: sections,
+          prompt_full_text: promptFullText,
+          run_results: runResults,
+          output_fields: outputFields,
+          comparison_rows,
+        };
+      }
+      openScoreDetailModal({ node, getWorkingSets: () => workingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload });
     });
 
     return node;
@@ -1889,7 +2010,7 @@ export function buildWorkflowCanvas(root) {
     node.style.top = `${y}px`;
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--prompt-review" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1v4M7 9v4M3 5h8M3 9h8"/><circle cx="7" cy="7" r="1.5"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--prompt-review" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="10" height="10" rx="1"/><path d="M4 7l2.5 2.5L10 4"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(promptReviewTitle)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
@@ -1942,6 +2063,61 @@ export function buildWorkflowCanvas(root) {
       if (lastInteractionWasDrag) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
     node.addEventListener('pointerdown', onPointerDown);
+
+    node.addEventListener('click', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      if (lastInteractionWasDrag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const scoreEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW);
+      const scoreNode = scoreEdge ? getNodeById(scoreEdge.fromId) : null;
+      const runEdge = scoreNode ? connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE) : null;
+      const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+      const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
+      const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+      function getPayload() {
+        if (!promptNode || !runNode || !scoreNode) return null;
+        let sections = [];
+        try {
+          sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+        } catch (_) {}
+        if (!Array.isArray(sections) || sections.length === 0) return null;
+        const promptFullText = sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
+        let runResults = [];
+        let outputFields = [];
+        try {
+          runResults = JSON.parse(runNode.dataset.runResults || '[]');
+          outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+        } catch (_) {}
+        const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId);
+        return {
+          prompt_sections: sections,
+          prompt_full_text: promptFullText,
+          run_results: runResults,
+          output_fields: outputFields,
+          comparison_rows,
+        };
+      }
+      function getReviewResult() {
+        if (!scoreNode) return null;
+        try {
+          const raw = scoreNode.dataset.reviewResult || '';
+          if (!raw.trim()) return null;
+          return JSON.parse(raw);
+        } catch (_) { return null; }
+      }
+      function updateReviewResult(updated) {
+        if (!scoreNode) return;
+        scoreNode.dataset.reviewResult = JSON.stringify(updated);
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      }
+      function onExportNewPrompt(sections) {
+        document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
+          detail: { sections, afterReviewNodeId: node.dataset.nodeId },
+        }));
+      }
+      openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt });
+    });
 
     return node;
   }
@@ -2482,6 +2658,67 @@ export function buildWorkflowCanvas(root) {
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
+  document.addEventListener('workflow:add-prompt-from-review', (e) => {
+    const { sections = [], afterReviewNodeId, afterScoreNodeId } = e.detail || {};
+    if (!Array.isArray(sections) || sections.length === 0) return;
+    let refNode = afterReviewNodeId ? getNodeById(afterReviewNodeId) : null;
+    if (!refNode && afterScoreNodeId) {
+      const reviewEdge = connections.find(
+        (c) => c.fromId === afterScoreNodeId && c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW
+      );
+      refNode = reviewEdge ? getNodeById(reviewEdge.toId) : null;
+    }
+    let outputFormat;
+    let scoreNode = null;
+    if (refNode) {
+      const scoreToReview = connections.find((c) => c.toId === refNode.dataset.nodeId && c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW);
+      scoreNode = scoreToReview ? getNodeById(scoreToReview.fromId) : null;
+    } else if (afterScoreNodeId) {
+      scoreNode = getNodeById(afterScoreNodeId);
+    }
+    if (scoreNode) {
+      const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+      const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+      const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
+      const sourcePromptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+      if (sourcePromptNode && sourcePromptNode.classList.contains('workflow-node--prompt')) {
+        try {
+          const fields = JSON.parse(sourcePromptNode.dataset.promptOutputFormat || '[]');
+          const returnShape = sourcePromptNode.dataset.promptOutputReturnShape || 'single';
+          outputFormat = { fields: Array.isArray(fields) ? fields : [], returnShape };
+        } catch (_) {}
+      }
+    }
+    const refLeft = refNode ? (parseFloat(refNode.style.left) || 0) : 0;
+    const refWidth = refNode ? (refNode.offsetWidth || 280) : 280;
+    const refTop = refNode ? (parseFloat(refNode.style.top) || 0) : 0;
+    const left = refNode ? refLeft + refWidth + NEW_NODE_OFFSET : undefined;
+    const top = refNode ? refTop : undefined;
+    const promptName = 'Prompt (from Review)';
+    const promptNote = 'Exported from Review.';
+    const newNode = createPromptNode({
+      name: promptName,
+      note: promptNote,
+      sections: sections.map((s) => ({ name: s.name || '', content: s.content || '' })),
+      outputFormat: outputFormat || undefined,
+      left,
+      top,
+    });
+    if (refNode && newNode?.dataset?.nodeId) {
+      const refHeight = refNode.offsetHeight || 80;
+      const newHeight = newNode.offsetHeight || 80;
+      newNode.style.top = `${refTop + refHeight / 2 - newHeight / 2}px`;
+      connections.push({
+        fromId: refNode.dataset.nodeId,
+        toId: newNode.dataset.nodeId,
+        type: EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT,
+      });
+      updateEdges();
+    }
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  });
+
   function getCanvasState() {
     const nodeEls = Array.from(nodesLayer.querySelectorAll('.workflow-node'));
     const nodes = nodeEls.map((node) => {
@@ -2571,6 +2808,7 @@ export function buildWorkflowCanvas(root) {
         try {
           scoreResultCommentsObj = scoreResultComments ? JSON.parse(scoreResultComments) : undefined;
         } catch (_) {}
+        const reviewResult = (node.dataset.reviewResult || '').trim();
         return {
           type: 'score',
           nodeId,
@@ -2580,6 +2818,7 @@ export function buildWorkflowCanvas(root) {
           scoreGroundTruthId,
           scoreMapping,
           scoreResultComments: scoreResultCommentsObj,
+          reviewResult: reviewResult || undefined,
         };
       }
       if (node.classList.contains('workflow-node--prompt-review')) {
@@ -2703,6 +2942,9 @@ export function buildWorkflowCanvas(root) {
             scoreNode.dataset.scoreResultComments = JSON.stringify(n.scoreResultComments);
           } catch (_) {}
         }
+        if (n.reviewResult && typeof n.reviewResult === 'string') {
+          scoreNode.dataset.reviewResult = n.reviewResult;
+        }
         createdNodes.push(scoreNode);
       } else if (n.type === 'promptReview') {
         const promptReviewNode = createPromptReviewNode({
@@ -2778,6 +3020,7 @@ export function buildWorkflowCanvas(root) {
         let type = c.type || EDGE_TYPE_PROMPT_TO_PROMPT;
         if (type === 'run-to-assessment') type = EDGE_TYPE_RUN_TO_SCORE;
         if (type === 'score-to-prompt-review') type = EDGE_TYPE_SCORE_TO_PROMPT_REVIEW;
+        if (type === 'prompt-review-to-prompt') type = EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT;
         return { fromId: c.fromId, toId: c.toId, type };
       }
       if (typeof c.from === 'number' && typeof c.to === 'number') {

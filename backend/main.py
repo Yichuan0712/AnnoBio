@@ -81,6 +81,35 @@ class RunRequest(BaseModel):
     run_node_id: str | None = Field(default=None, description="Frontend Run node id for correlation when polling")
 
 
+# ---------- Review (prompt analysis from score comparison) ----------
+class ReviewComparisonRow(BaseModel):
+    row_index: int
+    matched: bool
+    run_output: dict = Field(default_factory=dict, description="Model output for this row")
+    expected: str = Field(default="", description="Expected value(s) from ground truth")
+    comment: str | None = Field(default=None, description="User comment if any")
+
+
+class ReviewRequest(BaseModel):
+    credential_id: str
+    prompt_sections: list[dict] = Field(..., description="List of {name, content} for each section")
+    prompt_full_text: str = Field(default="", description="Full prompt as single string")
+    run_results: list[dict] = Field(default_factory=list, description="List of {row_index, output}")
+    output_fields: list[dict] = Field(default_factory=list, description="List of {key, display}")
+    comparison_rows: list[ReviewComparisonRow] = Field(default_factory=list, description="Per-row match result and context")
+
+
+class ReviewSuggestion(BaseModel):
+    section_index: int = Field(..., ge=0, description="0-based index of the section to change")
+    new_content: str = Field(..., description="Replacement content for that section")
+    reason: str = Field(..., description="Why this change is suggested")
+
+
+class ReviewResult(BaseModel):
+    summary: str = Field(..., description="Brief overall analysis")
+    suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete edit suggestions")
+
+
 def _sanitize_field_name(key: str) -> str:
     """Turn schema key into valid Pydantic field name (alphanumeric + underscore)."""
     s = re.sub(r"[^\w]", "_", str(key).strip())
@@ -425,3 +454,72 @@ def get_run_result(run_id: str):
     if job.get("error"):
         return {"status": "done", "error": job["error"], "results": None, "output_fields": None}
     return {"status": "done", "results": job["results"], "output_fields": job["output_fields"]}
+
+
+# ---------- Review: single-round prompt analysis from score comparison ----------
+def _build_review_analysis_prompt(body: ReviewRequest) -> str:
+    """Build the user message for the review LLM."""
+    lines = [
+        "You are helping improve a prompt used for structured LLM output. Below are the current prompt, the output schema, and per-row comparison of model output vs ground truth (matched or not, and any user comment).",
+        "",
+        "## Current prompt (full text)",
+        body.prompt_full_text or "(empty)",
+        "",
+        "## Sections (0-based index for reference)",
+    ]
+    for i, sec in enumerate(body.prompt_sections or []):
+        name = (sec.get("name") or "").strip() or "(unnamed)"
+        content = (sec.get("content") or "").strip() or "(empty)"
+        lines.append(f"--- Section index {i}: {name} ---")
+        lines.append(content)
+        lines.append("")
+    lines.append("## Comparison (rows that failed or have comments are most important)")
+    for row in body.comparison_rows or []:
+        status = "matched" if row.matched else "NOT MATCHED"
+        lines.append(f"Row {row.row_index} [{status}]")
+        lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
+        lines.append(f"  Expected: {row.expected}")
+        if row.comment:
+            lines.append(f"  User comment: {row.comment}")
+        lines.append("")
+    lines.append(
+        "Respond with a JSON object: {\"summary\": \"...\", \"suggestions\": [{\"section_index\": 0, \"new_content\": \"...\", \"reason\": \"...\"}, ...]}. "
+        "Section names above are only for you to identify which section to edit — do NOT include any section name or title in new_content. "
+        "new_content must be only the section body text (the content part). Use the exact 0-based section_index. "
+        "Make minimal changes so a diff is clear. reason explains why."
+    )
+    return "\n".join(lines)
+
+
+@app.post("/api/review/analyze", response_model=ReviewResult)
+def review_analyze(body: ReviewRequest):
+    """Single-round analysis: suggest prompt section edits from score comparison. Uses credential for LLM."""
+    items = _load_credentials()
+    cred = None
+    for item in items:
+        if item.get("id") == body.credential_id:
+            cred = item
+            break
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    model = cred.get("llm", "")
+    if model not in ALLOWED_MODELS:
+        raise HTTPException(status_code=400, detail=f"Unsupported model: {model}")
+    api_key = cred.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing API key")
+    provider = cred.get("provider", "openai")
+    prompt_text = _build_review_analysis_prompt(body)
+    try:
+        result = llm_run_structured(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            prompt=prompt_text,
+            response_model=ReviewResult,
+            max_tokens=8192,
+        )
+        return ReviewResult(**result) if isinstance(result, dict) else result
+    except Exception as e:
+        _safe_print(_HL + "[Review] Error: " + _R + str(e))
+        raise HTTPException(status_code=400, detail=str(e))

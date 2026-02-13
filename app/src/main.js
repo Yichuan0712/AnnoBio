@@ -44,10 +44,10 @@ function startPythonBackend() {
   const pythonExe = getPythonExe();
   const cwd = getBackendCwd();
 
-  // Start: python -m uvicorn main:app --port 8000
+  // Start: python -m uvicorn main:app --port 8000 --reload (reload so backend route changes apply without restarting the app)
   pyProc = spawn(
     pythonExe,
-    ['-m', 'uvicorn', 'main:app', '--port', String(BACKEND_PORT)],
+    ['-m', 'uvicorn', 'main:app', '--port', String(BACKEND_PORT), '--reload'],
     {
       cwd,
       env: { ...process.env, PYTHONUNBUFFERED: '1' },

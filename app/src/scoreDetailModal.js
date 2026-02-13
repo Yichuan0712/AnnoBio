@@ -1,8 +1,11 @@
 /**
  * Score detail modal: left = Working dataset as ground truth picker + field mapping table; right = results.
- * @param {{ node: HTMLElement, getWorkingSets?: () => Array<...>, getRunResultColumns?: () => Array<{ key: string, label: string }>, getGroundTruthHeaders?: (wsNodeId: string) => string[] }} options
+ * @param {{ node: HTMLElement, getWorkingSets?: () => Array<...>, getRunResultColumns?: () => Array<...>, getGroundTruthHeaders?: (wsNodeId: string) => string[], getReviewPayload?: () => { prompt_sections, prompt_full_text, run_results, output_fields, comparison_rows } | null }} options
  */
 
+import { openReviewResultModal } from './reviewDetailModal.js';
+
+const API_BASE = 'http://localhost:8000';
 const MATCH_TYPE_STRICT = { value: 'exact', label: 'Strict match' };
 
 function escapeHtml(str) {
@@ -16,13 +19,14 @@ function escapeAttr(str) {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent }) {
+export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload }) {
   getWorkingSets = getWorkingSets || (() => []);
   getRunResultColumns = getRunResultColumns || (() => []);
   getGroundTruthHeaders = getGroundTruthHeaders || (() => []);
   getRunResults = getRunResults || (() => ({ results: [], outputFields: [] }));
   getRunWorkingSetContent = getRunWorkingSetContent || (() => ({ headers: [], rows: [] }));
   getGroundTruthContent = getGroundTruthContent || (() => ({ headers: [], rows: [] }));
+  getReviewPayload = getReviewPayload || (() => null);
 
   const workingSets = getWorkingSets();
 
@@ -196,11 +200,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         </div>
         <div class="score-detail-col score-detail-col--right">
           <div class="score-detail-card score-detail-results-card" id="score-detail-results-card">
-            <div class="score-detail-results-head">
-              <h3 class="score-detail-section-title">Results</h3>
-              <button type="button" class="btn btn-secondary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node after this Score to analyze results with LLM">Add Review</button>
-            </div>
+            <h3 class="score-detail-section-title">Results</h3>
             <div id="score-detail-results-body"></div>
+            <div class="score-detail-llm-row">
+              <label class="run-detail-label" for="score-detail-llm-select">LLM</label>
+              <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select LLM"></select>
+            </div>
+            <div class="score-detail-results-actions">
+              <button type="button" class="btn btn-secondary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with selected LLM">Add Review</button>
+            </div>
           </div>
         </div>
       </div>
@@ -214,6 +222,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const dropdownEl = overlay.querySelector('#score-detail-gt-dropdown');
   const mappingWrap = overlay.querySelector('#score-detail-mapping-wrap');
   const addRuleBtn = overlay.querySelector('#score-detail-add-rule');
+  const llmSelect = overlay.querySelector('#score-detail-llm-select');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
   const resultsBody = overlay.querySelector('#score-detail-results-body');
 
@@ -464,10 +473,66 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     resultsBody.appendChild(table);
   }
 
-  addPromptReviewBtn.addEventListener('click', () => {
+  async function loadReviewCredentials() {
+    try {
+      const res = await fetch(`${API_BASE}/api/credentials`);
+      if (!res.ok) return;
+      const list = await res.json();
+      llmSelect.innerHTML = '<option value="">— Select —</option>' + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
+    } catch (_) {}
+    const payload = getReviewPayload();
+    addPromptReviewBtn.disabled = !payload || !payload.prompt_sections || payload.prompt_sections.length === 0;
+  }
+
+  addPromptReviewBtn.addEventListener('click', async () => {
     const scoreNodeId = node?.dataset?.nodeId || '';
     if (!scoreNodeId) return;
     document.dispatchEvent(new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } }));
+    const credentialId = (llmSelect?.value || '').trim();
+    const payload = getReviewPayload();
+    if (!credentialId || !payload || !payload.prompt_sections || !payload.prompt_sections.length) return;
+    addPromptReviewBtn.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/api/review/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          credential_id: credentialId,
+          prompt_sections: payload.prompt_sections,
+          prompt_full_text: payload.prompt_full_text || payload.prompt_sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n'),
+          run_results: payload.run_results || [],
+          output_fields: payload.output_fields || [],
+          comparison_rows: (payload.comparison_rows || []).map((r) => ({
+            row_index: r.row_index,
+            matched: r.matched,
+            run_output: r.run_output || {},
+            expected: r.expected || '',
+            comment: r.comment ?? null,
+          })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        openReviewResultModal({
+          summary: data.summary || '',
+          suggestions: data.suggestions || [],
+          promptSections: payload.prompt_sections,
+          promptFullText: payload.prompt_full_text || payload.prompt_sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n'),
+          scoreNode: node,
+          onExportNewPrompt: (sections) => {
+            document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
+              detail: { sections, afterScoreNodeId: node.dataset.nodeId },
+            }));
+          },
+        });
+        close();
+      } else {
+        alert(data.detail || res.statusText || 'Review request failed.');
+      }
+    } catch (e) {
+      alert(e?.message || 'Review request failed.');
+    }
+    addPromptReviewBtn.disabled = false;
   });
 
   addRuleBtn.addEventListener('click', () => {
@@ -557,6 +622,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   updateTriggerDisplay();
   updateScoreNodeBorder();
   renderRules();
+  loadReviewCredentials();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
 }
