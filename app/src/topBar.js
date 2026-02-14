@@ -40,6 +40,7 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   editDrop.innerHTML = `
     <button type="button" class="menu-option" data-action="undo">Undo</button>
     <button type="button" class="menu-option" data-action="redo">Redo</button>
+    <div class="menu-separator"></div>
     <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt...</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new source dataset...</button>
   `;

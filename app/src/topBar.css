@@ -88,6 +88,12 @@
   background: none;
 }
 
+.menu-dropdown .menu-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
+}
+
 .menu-dropdown .menu-option.disabled {
   color: var(--text-muted);
   cursor: default;
