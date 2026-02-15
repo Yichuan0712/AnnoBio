@@ -9,7 +9,7 @@ import { openRunDetailModal } from './runDetailModal.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
 import { openScoreDetailModal } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
-import { openWorkingDatasetDetailModal } from './workingDatasetDetailModal.js';
+import { openDatasetDetailModal } from './datasetDetailModal.js';
 
 const MIN_CONTENT_PADDING = 200;
 /** Minimum canvas content size (width, height) so there is plenty of room to work and zoom. */
@@ -967,14 +967,13 @@ export function buildWorkflowCanvas(root) {
       e.stopPropagation();
       const subsetNode = getNodeById(edge.toId);
       if (subsetNode && subsetNode.classList.contains('workflow-node--subset')) {
-        openWorkingDatasetDetailModal({
+        openDatasetDetailModal({
           node: subsetNode,
           getContent: () => subsetContentByNodeId.get(subsetNode.dataset.nodeId) || { headers: [], rows: [] },
           saveContent: (content) => {
             subsetContentByNodeId.set(subsetNode.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           },
-          isSubsetNameAlreadyUsed,
         });
       }
     } else if (edgeType === EDGE_TYPE_DATASET_TO_SAMPLER) {
@@ -1560,20 +1559,12 @@ export function buildWorkflowCanvas(root) {
       if (lastInteractionWasDrag) return;
       e.preventDefault();
       e.stopPropagation();
-      openWorkingDatasetDetailModal({
+      openDatasetDetailModal({
         node,
         getContent: () => subsetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
         saveContent: (content) => {
           subsetContentByNodeId.set(node.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-        },
-        isSubsetNameAlreadyUsed,
-        onSaveNote: (newNote) => {
-          const samplerNodeId = node.dataset.samplerNodeId;
-          const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
-          const bodyText = formatSamplerDescription(samplerNode) || (newNote || '').trim() || '';
-          const bodyEl = node.querySelector('.workflow-node__subset-desc');
-          if (bodyEl) bodyEl.innerHTML = bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>';
         },
       });
     });
@@ -2093,9 +2084,10 @@ export function buildWorkflowCanvas(root) {
       `;
     } else if (isSubset) {
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item" data-action="add-sampler" role="menuitem">Add a sampler...</button>
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="add-sampler" role="menuitem">Sample</button>
         <button type="button" class="workflow-node-context-item" data-action="duplicate-working-dataset" role="menuitem">Duplicate this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="add-version-of-dataset" role="menuitem">Add new version of this dataset</button>
+        <button type="button" class="workflow-node-context-item" data-action="edit-dataset-name-description" role="menuitem">Edit name & description</button>
       `;
     } else if (isSampler) {
       menu.innerHTML = `
@@ -2261,6 +2253,9 @@ export function buildWorkflowCanvas(root) {
       'edit-name-description': () => {
         openEditPromptNameModal(node);
       },
+      'edit-dataset-name-description': () => {
+        openEditDatasetNameModal(node);
+      },
       'duplicate-working-dataset': () => {
         const left = parseFloat(node.style.left) || 0;
         const top = parseFloat(node.style.top) || 0;
@@ -2381,7 +2376,6 @@ export function buildWorkflowCanvas(root) {
         <div class="modal-body">
           <div class="prompt-main">
             <div class="prompt-step prompt-step-1">
-              <p class="prompt-step-label">Name & description</p>
               <div class="dataset-meta-wrap prompt-meta-wrap">
                 <div class="dataset-meta-field">
                   <label class="dataset-meta-label" for="edit-prompt-name-input">Prompt name</label>
@@ -2470,6 +2464,111 @@ export function buildWorkflowCanvas(root) {
 
     nameInput?.addEventListener('input', clearError);
     noteInput?.addEventListener('input', clearError);
+
+    document.body.style.overflow = 'hidden';
+    document.body.appendChild(overlay);
+    nameInput?.focus();
+  }
+
+  /**
+   * Open modal to edit dataset (subset) node name and description (same layout as Add dataset step 1).
+   * @param {HTMLElement} node - The subset workflow node
+   */
+  function openEditDatasetNameModal(node) {
+    const currentName = (node.dataset.subsetName || '').trim() || '';
+    const currentNote = (node.dataset.subsetNote ?? '').trim() || '';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay modal-overlay--edit-dataset-name';
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'edit-dataset-name-title');
+    overlay.innerHTML = `
+      <div class="modal-panel modal-panel--dataset modal-panel--edit-dataset-name" data-add-dataset-step="1">
+        <div class="modal-header">
+          <h2 id="edit-dataset-name-title" class="modal-title">Edit name & description</h2>
+          <button type="button" class="modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body modal-body--dataset">
+          <div class="dataset-add-main">
+            <div class="dataset-add-step dataset-add-step-1">
+              <div class="dataset-meta-wrap prompt-meta-wrap">
+                <div class="dataset-meta-field">
+                  <label class="dataset-meta-label" for="edit-dataset-name-input">Dataset name</label>
+                  <input type="text" id="edit-dataset-name-input" class="dataset-meta-input" placeholder="My dataset" value="${escapeHtml(currentName)}" />
+                </div>
+                <div class="dataset-meta-field">
+                  <label class="dataset-meta-label" for="edit-dataset-notes-input">Dataset description</label>
+                  <textarea id="edit-dataset-notes-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="What this dataset is for">${escapeHtml(currentNote)}</textarea>
+                </div>
+              </div>
+              <div class="prompt-form-error prompt-modal-error edit-dataset-name-error" role="alert" aria-live="polite" hidden></div>
+              <div class="prompt-actions">
+                <button type="button" class="btn btn-secondary edit-dataset-name-cancel">Cancel</button>
+                <button type="button" class="btn btn-secondary edit-dataset-name-save">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    const nameInput = overlay.querySelector('#edit-dataset-name-input');
+    const notesInput = overlay.querySelector('#edit-dataset-notes-input');
+    const errorEl = overlay.querySelector('.edit-dataset-name-error');
+
+    function close() {
+      overlay.remove();
+      document.body.style.overflow = '';
+    }
+
+    function showError(msg) {
+      if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.hidden = false;
+      }
+    }
+
+    function clearError() {
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.hidden = true;
+      }
+    }
+
+    overlay.querySelector('.modal-close').addEventListener('click', close);
+    overlay.querySelector('.edit-dataset-name-cancel').addEventListener('click', close);
+    overlay.querySelector('.edit-dataset-name-save').addEventListener('click', () => {
+      const name = (nameInput?.value ?? '').trim();
+      const notes = (notesInput?.value ?? '').trim();
+      if (!name) {
+        showError('Dataset name is required.');
+        return;
+      }
+      if (!notes) {
+        showError('Dataset description is required.');
+        return;
+      }
+      if (isSubsetNameAlreadyUsed(name, node.dataset.nodeId || undefined)) {
+        showError('This dataset name is already used on the canvas. Please choose another.');
+        return;
+      }
+      node.dataset.subsetName = name;
+      node.dataset.subsetNote = notes;
+      const titleEl = node.querySelector('.workflow-node__title');
+      if (titleEl) titleEl.textContent = name;
+      if (node.getAttribute('aria-label') != null) node.setAttribute('aria-label', `Dataset node: ${name}`);
+      const samplerNodeId = node.dataset.samplerNodeId;
+      const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
+      const bodyText = formatSamplerDescription(samplerNode) || (notes || '').trim() || '';
+      const bodyEl = node.querySelector('.workflow-node__subset-desc');
+      if (bodyEl) bodyEl.innerHTML = bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>';
+      close();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    nameInput?.addEventListener('input', clearError);
+    notesInput?.addEventListener('input', clearError);
 
     document.body.style.overflow = 'hidden';
     document.body.appendChild(overlay);

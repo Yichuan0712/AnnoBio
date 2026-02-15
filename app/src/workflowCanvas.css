@@ -376,7 +376,8 @@
   background: var(--hover);
 }
 
-.workflow-node-context-item--run {
+.workflow-node-context-item--run,
+.workflow-node-context-item--sample {
   font-weight: 700;
 }
 

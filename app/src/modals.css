@@ -305,10 +305,27 @@
 .dataset-detail-preview-search-wrap {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 12px;
   padding: 8px 12px 10px;
   flex-shrink: 0;
+}
+
+.dataset-detail-preview-summary {
+  font-size: 12px;
+  color: var(--text);
+  margin-right: auto;
+}
+
+.dataset-detail-preview-search-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.modal-panel--working-dataset-detail .dataset-detail-preview-search-wrap {
+  margin-top: 16px;
 }
 
 .dataset-detail-preview-caption {
@@ -2849,72 +2866,49 @@
   font-size: 13px;
 }
 
-/* Dataset detail modal (subset)：min-height 与 source 典型高度一致（source 有左侧卡片等撑高，故用 85vh） */
+/* Dataset detail modal (subset): prompt/add style, preview only, no name/description edit */
 .modal-panel--working-dataset-detail {
   min-width: min(720px, 94vw);
   max-width: 96vw;
   max-height: 98vh;
-  min-height: min(520px, 85vh);
+  min-height: min(420px, 70vh);
   display: flex;
   flex-direction: column;
 }
 
-/* 与 source dataset 一致：body 两列布局，左 name/description，右表格 */
-.modal-panel--working-dataset-detail .modal-body.working-dataset-detail-body {
+/* Body: single column like prompt detail right side */
+.modal-panel--working-dataset-detail .modal-body.prompt-detail-body.working-dataset-detail-body {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: row;
-  gap: 20px;
+  padding: 0;
   overflow: hidden;
 }
 
-.modal-panel--working-dataset-detail .dataset-detail-edit {
-  display: none;
-}
-
-.modal-panel--working-dataset-detail[data-working-dataset-detail-mode="edit"] .dataset-detail-view {
-  display: none;
-}
-
-.modal-panel--working-dataset-detail[data-working-dataset-detail-mode="edit"] .dataset-detail-edit {
-  display: flex;
-}
-
-.modal-panel--working-dataset-detail[data-working-dataset-detail-mode="edit"] .wd-btn-edit {
-  display: none !important;
-}
-
-.modal-panel--working-dataset-detail[data-working-dataset-detail-mode="edit"] .dataset-detail-footer-edit {
-  display: flex !important;
-  align-items: center;
-}
-
-/* 左侧 name/description 卡片与右侧表格卡片等高 */
-.modal-panel--working-dataset-detail .dataset-detail-col--left {
+/* Full-width preview side (same structure as prompt detail side) */
+.modal-panel--working-dataset-detail .dataset-detail-preview-side.prompt-detail-side {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  background: var(--bg);
 }
 
-.modal-panel--working-dataset-detail .dataset-detail-col--left .dataset-detail-card {
+.modal-panel--working-dataset-detail .dataset-detail-preview-side .prompt-detail-side-scroll {
   flex: 1;
   min-height: 0;
-  max-height: none;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+  padding: 0 20px 20px;
 }
 
-/* 横线与 Edit 按钮与卡片底部对齐 */
-.modal-panel--working-dataset-detail .dataset-detail-col--left .dataset-detail-view,
-.modal-panel--working-dataset-detail .dataset-detail-col--left .dataset-detail-edit {
-  flex: 1;
-  min-height: 0;
-}
-.modal-panel--working-dataset-detail .dataset-detail-col--left .dataset-detail-card .dataset-detail-footer {
-  margin-top: auto;
+.modal-panel--working-dataset-detail .dataset-detail-preview-side .prompt-preview-title {
   flex-shrink: 0;
+  margin: 0 -20px;
+  padding: 12px 20px;
 }
 
 .working-dataset-detail-body {
@@ -2925,17 +2919,15 @@
   overflow: hidden;
 }
 
-/* 表格 + 分页 + 底部按钮整体放进带边框的卡片里 */
+/* Table container: no outer box, same flex layout */
 .working-dataset-detail-card {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding: 8px 16px 8px 16px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0;
+  padding: 0;
+  margin-top: 0;
 }
 
 .working-dataset-table-wrap {
@@ -3033,6 +3025,7 @@
 
 .working-dataset-edit-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
 }
@@ -3042,6 +3035,11 @@
   padding: 4px 6px;
   border: 1px solid var(--border);
   vertical-align: top;
+}
+
+/* Column headers: min width so columns are flexible, not fixed */
+.working-dataset-edit-table th.wd-header-th {
+  min-width: 80px;
 }
 
 .working-dataset-edit-table th .wd-header-inp,
@@ -3058,19 +3056,30 @@
   box-sizing: border-box;
 }
 
+/* Header input: show full title (no wrap), column grows to fit; match row background */
+.working-dataset-edit-table th .wd-header-inp {
+  white-space: nowrap;
+  min-width: 8em;
+  background: transparent;
+}
+
 .working-dataset-edit-table th .wd-header-inp:hover,
-.working-dataset-edit-table td .wd-cell-inp:hover {
+.working-dataset-edit-table td .wd-cell-inp:hover,
+.working-dataset-edit-table td .wd-cell-textarea:hover {
   border-color: var(--border);
 }
 
 .working-dataset-edit-table th .wd-header-inp:focus,
-.working-dataset-edit-table td .wd-cell-inp:focus {
+.working-dataset-edit-table td .wd-cell-inp:focus,
+.working-dataset-edit-table td .wd-cell-textarea:focus {
   outline: none;
   border-color: var(--text-muted);
 }
 
 .working-dataset-edit-table th {
-  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
+  font-weight: 600;
+  background: var(--hover);
+  color: var(--text);
 }
 
 .working-dataset-edit-table .wd-row-num-cell {
@@ -3080,15 +3089,81 @@
 
 .working-dataset-edit-table .wd-header-th {
   cursor: pointer;
+  position: relative;
+  padding-right: 12px;
 }
 
+.working-dataset-edit-table .wd-col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+body.wd-col-resizing,
+body.wd-row-resizing {
+  user-select: none;
+}
+
+body.wd-col-resizing {
+  cursor: col-resize;
+}
+
+body.wd-row-resizing {
+  cursor: row-resize;
+}
+
+/* Row/column selection: yellow, same as prompt page */
 .working-dataset-edit-table tr.wd-row-selected {
-  background: rgba(37, 99, 235, 0.12);
+  background: rgba(255, 193, 7, 0.25);
 }
 
 .working-dataset-edit-table th.wd-col-selected,
 .working-dataset-edit-table td.wd-col-selected {
-  background: rgba(37, 99, 235, 0.12);
+  background: rgba(255, 193, 7, 0.25);
+}
+
+.working-dataset-edit-table td .wd-cell-textarea {
+  width: 100%;
+  min-width: 60px;
+  min-height: 2.5em;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid transparent;
+  border-radius: 0;
+  font-family: inherit;
+  box-sizing: border-box;
+  resize: vertical;
+  display: block;
+  overflow-y: auto;
+}
+
+.working-dataset-edit-table td .wd-cell-textarea::-webkit-resizer {
+  display: none;
+}
+
+.working-dataset-edit-table td {
+  position: relative;
+}
+
+.working-dataset-edit-table .wd-row-resize-handle {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 2;
+}
+
+.working-dataset-edit-table tr.wd-row-selected td .wd-cell-textarea,
+.working-dataset-edit-table td.wd-col-selected .wd-cell-textarea {
+  background: transparent;
 }
 
 /* # column: right-aligned，垂直居中避免偏高 */
@@ -4318,6 +4393,10 @@
   max-width: 92vw;
 }
 
+.modal-panel--edit-prompt-name .modal-body {
+  padding-top: 6px;
+}
+
 .modal-panel--edit-prompt-name .prompt-main {
   display: flex;
   flex-direction: column;
@@ -4329,6 +4408,34 @@
 }
 
 .modal-panel--edit-prompt-name .prompt-step-1 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+
+/* Edit dataset name & description (from subset node context menu): same as Add dataset step 1 */
+.modal-panel--edit-dataset-name {
+  width: min(480px, 92vw);
+  min-width: min(400px, 92vw);
+  max-width: 92vw;
+  min-height: auto;
+}
+
+.modal-panel--edit-dataset-name .modal-body {
+  padding-top: 6px;
+}
+
+.modal-panel--edit-dataset-name .dataset-add-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-panel--edit-dataset-name .dataset-add-step-1 {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-panel--edit-dataset-name .dataset-add-step-1 .prompt-actions {
   margin-top: auto;
   flex-shrink: 0;
   justify-content: flex-end;
