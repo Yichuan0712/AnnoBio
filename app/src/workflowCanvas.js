@@ -387,7 +387,7 @@ export function buildWorkflowCanvas(root) {
     const samplerNode = getNodeById(samplerNodeId);
     const sourceNode = samplerNode?.dataset?.sourceNodeId ? getNodeById(samplerNode.dataset.sourceNodeId) : null;
     const sourceName = (sourceNode?.dataset?.subsetName ?? sourceNode?.dataset?.datasetName ?? '').trim() || 'Dataset';
-    const samplerName = (samplerNode?.dataset?.samplerName ?? '').trim() || 'Sampler';
+    const samplerName = (samplerNode?.dataset?.samplerName ?? '').trim() || 'Sample';
     const base = `${sourceName} ${samplerName}`;
     const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
     let maxN = 0;
@@ -487,30 +487,44 @@ export function buildWorkflowCanvas(root) {
   }
 
   /**
-   * Parse row spec string (1-based) into sorted unique 0-based indices. Supports "1, 3, 5-10, 15".
-   * @param {string} text
+   * Default name for a new sampler under the same source dataset: "Sample 1", "Sample 2", ...
+   * @param {string} sourceNodeId - source dataset node id
+   * @returns {string}
+   */
+  function getNextDefaultSamplerName(sourceNodeId) {
+    if (!sourceNodeId) return 'Sample 1';
+    let count = 0;
+    nodesLayer.querySelectorAll('.workflow-node--sampler').forEach((n) => {
+      if (n.dataset.sourceNodeId === sourceNodeId) count++;
+    });
+    return `Sample ${count + 1}`;
+  }
+
+  /**
+   * Parse row spec in order; duplicates and order are preserved (e.g. "1-2 1 2" → [0,1,0,1] → row1, row2, row1, row2).
+   * @param {string} text - e.g. "1 3 5-10 15"
    * @param {number} totalRows - max row count (1-based), indices > totalRows are skipped
-   * @returns {number[]}
+   * @returns {number[]} 0-based indices in spec order
    */
   function parseRowSpec(text, totalRows) {
-    const seen = new Set();
+    const indices = [];
     const parts = (text || '').split(/[\s,]+/).filter(Boolean);
     for (const part of parts) {
       const dash = part.indexOf('-');
       if (dash === -1) {
         const num = parseInt(part, 10);
-        if (Number.isFinite(num) && num >= 1 && num <= totalRows) seen.add(num - 1);
+        if (Number.isFinite(num) && num >= 1 && num <= totalRows) indices.push(num - 1);
       } else {
         const a = parseInt(part.slice(0, dash), 10);
         const b = parseInt(part.slice(dash + 1), 10);
         if (Number.isFinite(a) && Number.isFinite(b) && a >= 1 && b >= 1) {
           const low = Math.min(a, b);
           const high = Math.min(Math.max(a, b), totalRows);
-          for (let r = Math.max(1, low); r <= high; r++) seen.add(r - 1);
+          for (let r = Math.max(1, low); r <= high; r++) indices.push(r - 1);
         }
       }
     }
-    return Array.from(seen).sort((x, y) => x - y);
+    return indices;
   }
 
   /**
@@ -529,6 +543,7 @@ export function buildWorkflowCanvas(root) {
     if (count === 0) return [];
 
     if (samplingType === 'without-replacement') {
+      if (count >= n) return sourceRows.map((r) => r.slice());
       const indices = Array.from({ length: n }, (_, i) => i);
       for (let i = n - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -1354,7 +1369,7 @@ export function buildWorkflowCanvas(root) {
   /** 从 sampler 节点生成简短描述（用于 subset 节点下方） */
   function formatSamplerDescription(samplerNode) {
     if (!samplerNode || !samplerNode.dataset) return '';
-    const name = (samplerNode.dataset.samplerName || '').trim() || 'Sampler';
+    const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
     const type = samplerNode.dataset.samplerSamplingType || 'without-replacement';
     const typeLabel = type === 'with-replacement' ? 'with replacement' : type === 'specify-rows' ? 'specify rows' : 'without replacement';
     if (type === 'specify-rows') {
@@ -1369,11 +1384,11 @@ export function buildWorkflowCanvas(root) {
 
   function createSamplerNode({ name = '', notes = '', left, top, nodeId: givenNodeId, sourceNodeId = '', colorIndex: givenColorIndex, samplingType = 'without-replacement', sampleSizeType = 'rows', sampleSize = 100, rowSpec = '' }) {
     const nodeId = givenNodeId || generateNodeId();
-    const title = (name && name.trim()) ? name.trim() : 'Sampler';
+    const title = (name && name.trim()) ? name.trim() : 'Sample';
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--sampler workflow-node--no-body';
     node.setAttribute('role', 'article');
-    node.setAttribute('aria-label', `Sampler node: ${title}`);
+    node.setAttribute('aria-label', `Sample node: ${title}`);
     node.dataset.nodeId = nodeId;
     node.dataset.samplerName = name;
     node.dataset.samplerNote = notes;
@@ -2178,7 +2193,7 @@ export function buildWorkflowCanvas(root) {
         const left = (parseFloat(node.style.left) || 0) + (node.offsetWidth || 280) + NEW_NODE_OFFSET;
         const top = parseFloat(node.style.top) || 0;
         const newNode = createSamplerNode({
-          name: 'Sampler',
+          name: getNextDefaultSamplerName(sourceNodeId),
           notes: '',
           left,
           top,
@@ -2630,7 +2645,8 @@ export function buildWorkflowCanvas(root) {
   });
 
   document.addEventListener('workflow:add-sampler-node', (e) => {
-    const { sourceNodeId = '', colorIndex, name = 'Sampler', samplingType = 'without-replacement', sampleSizeType = 'rows', sampleSize = 100, rowSpec = '' } = e.detail || {};
+    const { sourceNodeId = '', colorIndex, name: nameParam, samplingType = 'without-replacement', sampleSizeType = 'rows', sampleSize = 100, rowSpec = '' } = e.detail || {};
+    const name = (nameParam && nameParam.trim()) ? nameParam.trim() : getNextDefaultSamplerName(sourceNodeId);
     let left, top;
     const sourceNode = sourceNodeId ? getNodeById(sourceNodeId) : null;
     if (sourceNode) {

@@ -164,11 +164,11 @@
   z-index: 10;
 }
 
-/* Run node: 较短但保证标题能显示全，方角 */
+/* Run node: 保证标题能显示全，略短于 dataset 节点，方角 */
 .workflow-node--run {
-  min-width: 88px;
-  max-width: 130px;
-  width: 130px;
+  min-width: 110px;
+  max-width: 176px;
+  width: 176px;
   overflow: hidden;
   border-radius: 0;
 }
@@ -177,11 +177,11 @@
   border-radius: 0;
 }
 
-/* Score node: 与 Run 外观类似，用于比较 result 与 ground truth */
+/* Score node: 与 Run 外观类似，略短于 dataset 节点 */
 .workflow-node--score {
-  min-width: 88px;
-  max-width: 130px;
-  width: 130px;
+  min-width: 110px;
+  max-width: 176px;
+  width: 176px;
   overflow: hidden;
   border-radius: 0;
 }
@@ -194,11 +194,11 @@
   border-radius: 0;
 }
 
-/* Review node: 接在 Score 后，用于 LLM 根据结果分析 prompt 问题并给出修改意见 */
+/* Review node: 接在 Score 后，略短于 dataset 节点 */
 .workflow-node--prompt-review {
-  min-width: 88px;
-  max-width: 140px;
-  width: 140px;
+  min-width: 110px;
+  max-width: 176px;
+  width: 176px;
   overflow: hidden;
   border-radius: 0;
 }
@@ -211,11 +211,11 @@
   border-radius: 0;
 }
 
-/* Sampler node: 与 Run 一样，保证标题显示全，方角 */
+/* Sample node: 与 Run 一样，略短于 dataset 节点，方角 */
 .workflow-node--sampler {
-  min-width: 88px;
-  max-width: 130px;
-  width: 130px;
+  min-width: 110px;
+  max-width: 176px;
+  width: 176px;
   overflow: hidden;
   border-radius: 0;
 }

@@ -1431,8 +1431,8 @@
   margin-top: 4px;
 }
 
-.sampler-row-spec-block .dataset-detail-label {
-  margin-bottom: 6px;
+.sampler-row-spec-block .dataset-meta-label {
+  margin-bottom: 2px;
 }
 
 .sampler-row-spec-add-row {
@@ -1606,70 +1606,62 @@
   flex-basis: 100%;
 }
 
-/* Sampler detail modal (read-only, click sampler node) */
+/* Sampler detail modal (edit-only, same format as Add dataset / Add prompt) */
 .modal-panel--sampler-detail {
-  min-width: min(360px, 92vw);
+  min-width: min(420px, 92vw);
   max-width: 96vw;
   display: flex;
   flex-direction: column;
 }
 
-.sampler-detail-body {
+.modal-body--sampler {
   flex: 1;
   min-height: 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
+  padding: 0;
+  padding-top: 10px;
+  overflow: hidden;
 }
 
-.sampler-detail-body .dataset-detail-card {
-  max-height: none;
+.sampler-main {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 20px 20px;
+  overflow-y: auto;
 }
 
-.sampler-detail-card {
-  padding: 10px 14px;
+.sampler-meta-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sampler-main .sampler-size-wrap {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  margin-bottom: 0;
 }
 
-.sampler-detail-card .sampler-detail-row {
-  gap: 4px;
+.sampler-main .sampler-size-wrap .dataset-meta-field {
+  margin-bottom: 0;
 }
 
-.sampler-detail-card .dataset-detail-footer {
+.sampler-main .sampler-actions.prompt-actions {
   margin-top: auto;
   flex-shrink: 0;
-}
-
-.modal-panel--sampler-detail .sampler-detail-edit.dataset-detail-edit {
-  display: none;
-}
-
-.modal-panel--sampler-detail .dataset-detail-footer-edit {
-  display: none;
-}
-
-.modal-panel--sampler-detail[data-sampler-detail-mode="edit"] .dataset-detail-view {
-  display: none;
-}
-
-.modal-panel--sampler-detail[data-sampler-detail-mode="edit"] .sampler-detail-edit.dataset-detail-edit {
-  display: flex;
-}
-
-.modal-panel--sampler-detail[data-sampler-detail-mode="edit"] .sampler-detail-btn-edit {
-  display: none !important;
-}
-
-.modal-panel--sampler-detail[data-sampler-detail-mode="edit"] .dataset-detail-footer-edit {
-  display: flex !important;
-  align-items: center;
   justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.modal-panel--sampler-detail .prompt-actions .btn {
+  box-sizing: border-box;
+  min-height: 36px;
+  line-height: 1.2;
 }
 
 /* Score detail modal: two-column layout (like Run detail) */
@@ -2335,12 +2327,6 @@
 .score-detail-mapping-empty {
   grid-column: 1 / -1;
   margin: 12px;
-}
-
-.sampler-detail-value {
-  font-size: 14px;
-  color: var(--text);
-  word-break: break-word;
 }
 
 /* Run detail modal：略窄一些；min-height 与 source 典型内容高度一致（source 左侧卡片等会撑高，故用 85vh） */

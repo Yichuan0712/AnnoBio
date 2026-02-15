@@ -34,103 +34,79 @@ function parseRowSpecToItems(spec) {
 export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource }) {
   const nodeId = node?.dataset?.nodeId ?? '';
   const sourceNodeId = (node?.dataset?.sourceNodeId ?? '').trim();
-  const name = (node?.dataset?.samplerName ?? '').trim() || 'Sampler';
+  const name = (node?.dataset?.samplerName ?? '').trim() || 'Sample';
   const samplingType = node?.dataset?.samplerSamplingType || 'without-replacement';
-  const isSpecifyRows = samplingType === 'specify-rows';
   const sampleSizeType = node?.dataset?.samplerSampleSizeType || 'rows';
   const sampleSize = node?.dataset?.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
   const rowSpec = (node?.dataset?.samplerRowSpec ?? '').trim();
   const rowSpecItems = parseRowSpecToItems(rowSpec);
-
-  const samplingLabel = isSpecifyRows ? 'Specify rows' : (samplingType === 'with-replacement' ? 'With replacement' : 'Without replacement');
-  const sizeLabel = isSpecifyRows ? (rowSpec || '(none)') : (sampleSizeType === 'rows' ? `${sampleSize} rows` : `${sampleSize}%`);
-  const sizeRowLabel = isSpecifyRows ? 'Row numbers' : 'Sample size';
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'sampler-detail-title');
   overlay.innerHTML = `
-    <div class="modal-panel modal-panel--sampler-detail" data-sampler-detail-mode="view">
+    <div class="modal-panel modal-panel--sampler-detail">
       <div class="modal-header">
-        <h2 id="sampler-detail-title" class="modal-title">Sampler details: ${escapeHtml(name)}</h2>
+        <h2 id="sampler-detail-title" class="modal-title">Sample: ${escapeHtml(name)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
-      <div class="modal-body sampler-detail-body">
-        <div class="dataset-detail-card sampler-detail-card">
-          <div class="dataset-detail-view">
-            <div class="dataset-detail-row sampler-detail-row">
-              <span class="dataset-detail-label">Sampler name</span>
-              <span class="sampler-detail-value" id="sampler-view-name">${escapeHtml(name)}</span>
+      <div class="modal-body modal-body--sampler">
+        <div class="sampler-main">
+          <div class="dataset-meta-wrap prompt-meta-wrap sampler-meta-wrap">
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="sampler-name-inp">Sample name</label>
+              <input type="text" id="sampler-name-inp" class="dataset-meta-input" placeholder="My sample" />
             </div>
-            <div class="dataset-detail-row sampler-detail-row">
-              <span class="dataset-detail-label">Sampling</span>
-              <span class="sampler-detail-value">${escapeHtml(samplingLabel)}</span>
-            </div>
-            <div class="dataset-detail-row sampler-detail-row">
-              <span class="dataset-detail-label">${escapeHtml(sizeRowLabel)}</span>
-              <span class="sampler-detail-value">${escapeHtml(sizeLabel)}</span>
-            </div>
-          </div>
-          <div class="dataset-detail-edit sampler-detail-edit">
-            <div class="dataset-detail-row">
-              <label class="dataset-detail-label" for="sampler-name-inp">Sampler name</label>
-              <input type="text" id="sampler-name-inp" class="dataset-detail-input dataset-meta-input" placeholder="Sampler name (required)" />
-            </div>
-            <div class="dataset-detail-row">
-              <span class="dataset-detail-label">Sampling</span>
+            <div class="dataset-meta-field">
+              <span class="dataset-meta-label">Sampling method</span>
               <div class="sampler-radio-group">
                 <label class="sampler-radio-label"><input type="radio" name="sampler-replacement" value="with-replacement" /> With replacement</label>
                 <label class="sampler-radio-label"><input type="radio" name="sampler-replacement" value="without-replacement" /> Without replacement</label>
                 <label class="sampler-radio-label"><input type="radio" name="sampler-replacement" value="specify-rows" /> Specify rows</label>
               </div>
             </div>
-            <div class="sampler-size-wrap">
-              <div class="dataset-detail-row">
-                <span class="dataset-detail-label">Sample size</span>
-                <div class="sampler-radio-group">
-                  <label class="sampler-radio-label"><input type="radio" name="sampler-size-type" value="rows" /> Rows</label>
-                  <label class="sampler-radio-label"><input type="radio" name="sampler-size-type" value="ratio" /> Ratio</label>
-                </div>
+            <div class="sampler-size-wrap dataset-meta-field">
+              <span class="dataset-meta-label">Sample size</span>
+              <div class="sampler-radio-group">
+                <label class="sampler-radio-label"><input type="radio" name="sampler-size-type" value="rows" /> Rows</label>
+                <label class="sampler-radio-label"><input type="radio" name="sampler-size-type" value="ratio" /> Ratio</label>
               </div>
-              <div class="dataset-detail-row sampler-size-rows-wrap">
-                <label class="dataset-detail-label" for="sampler-rows-inp">Rows</label>
-                <input type="number" id="sampler-rows-inp" class="dataset-detail-input dataset-meta-input" min="1" placeholder="Required when using rows" />
+              <div class="sampler-size-rows-wrap dataset-meta-field">
+                <label class="dataset-meta-label" for="sampler-rows-inp">Rows</label>
+                <input type="number" id="sampler-rows-inp" class="dataset-meta-input" min="1" placeholder="e.g. 100" />
               </div>
-              <div class="dataset-detail-row sampler-size-ratio-wrap" style="display: none;">
-                <label class="dataset-detail-label" for="sampler-ratio-inp">Ratio (%)</label>
-                <input type="number" id="sampler-ratio-inp" class="dataset-detail-input dataset-meta-input" min="1" max="100" placeholder="1–100" aria-label="Ratio percentage (1–100)" />
+              <div class="sampler-size-ratio-wrap dataset-meta-field" style="display: none;">
+                <label class="dataset-meta-label" for="sampler-ratio-inp">Ratio (%)</label>
+                <input type="number" id="sampler-ratio-inp" class="dataset-meta-input" min="1" max="100" placeholder="1–100" aria-label="Ratio percentage (1–100)" />
               </div>
             </div>
             <div class="sampler-specify-rows-wrap" style="display: none;">
-              <div class="dataset-detail-row sampler-row-spec-block">
-                <span class="dataset-detail-label">Add row</span>
+              <div class="dataset-meta-field sampler-row-spec-block">
+                <span class="dataset-meta-label">Add row</span>
                 <div class="sampler-row-spec-add-row">
-                  <input type="number" id="sampler-add-number-inp" class="dataset-detail-input dataset-meta-input sampler-add-number-inp" min="1" placeholder="1" aria-label="Row number (1-based)" />
+                  <input type="number" id="sampler-add-number-inp" class="dataset-meta-input sampler-add-number-inp" min="1" placeholder="#" aria-label="Row number (1-based)" />
                   <button type="button" class="btn btn-secondary sampler-add-number-btn">Add</button>
                 </div>
               </div>
-              <div class="dataset-detail-row sampler-row-spec-block">
-                <span class="dataset-detail-label">Add range</span>
+              <div class="dataset-meta-field sampler-row-spec-block">
+                <span class="dataset-meta-label">Add range</span>
                 <div class="sampler-row-spec-add-row">
-                  <input type="number" id="sampler-add-range-from" class="dataset-detail-input dataset-meta-input sampler-add-range-inp" min="1" placeholder="From" aria-label="From row" />
+                  <input type="number" id="sampler-add-range-from" class="dataset-meta-input sampler-add-range-inp" min="1" placeholder="From #" aria-label="From row" />
                   <span class="sampler-row-spec-to-label">to</span>
-                  <input type="number" id="sampler-add-range-to" class="dataset-detail-input dataset-meta-input sampler-add-range-inp" min="1" placeholder="To" aria-label="To row" />
+                  <input type="number" id="sampler-add-range-to" class="dataset-meta-input sampler-add-range-inp" min="1" placeholder="To #" aria-label="To row" />
                   <button type="button" class="btn btn-secondary sampler-add-range-btn">Add range</button>
                 </div>
               </div>
-              <div class="dataset-detail-row">
+              <div class="dataset-meta-field">
+                <span class="dataset-meta-label">Selected rows</span>
                 <div class="sampler-row-spec-list" role="list" aria-label="Selected row numbers and ranges"></div>
               </div>
             </div>
-            <div class="prompt-form-error sampler-form-error" role="alert" aria-live="polite" hidden></div>
           </div>
-          <div class="dataset-detail-footer">
-            <button type="button" class="btn btn-secondary sampler-detail-btn-edit">Edit</button>
-            <div class="dataset-detail-footer-edit">
-              <button type="button" class="btn btn-secondary dataset-detail-btn-save">Save</button>
-              <button type="button" class="btn btn-secondary dataset-detail-btn-cancel">Cancel</button>
-            </div>
+          <div class="prompt-form-error prompt-modal-error sampler-form-error" role="alert" aria-live="polite" hidden></div>
+          <div class="prompt-actions sampler-actions">
+            <button type="button" class="btn btn-secondary dataset-detail-btn-save">Save</button>
             <button type="button" class="btn btn-secondary sampler-detail-btn-create-subset">Create dataset</button>
           </div>
         </div>
@@ -138,9 +114,7 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
     </div>
   `;
 
-  const panel = overlay.querySelector('.modal-panel--sampler-detail');
   const titleEl = overlay.querySelector('#sampler-detail-title');
-  const viewNameEl = overlay.querySelector('#sampler-view-name');
   const nameInp = overlay.querySelector('#sampler-name-inp');
   const samplerRowsInp = overlay.querySelector('#sampler-rows-inp');
   const samplerRatioInp = overlay.querySelector('#sampler-ratio-inp');
@@ -155,10 +129,7 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
   const samplerAddRangeTo = overlay.querySelector('#sampler-add-range-to');
   const samplerAddRangeBtn = overlay.querySelector('.sampler-add-range-btn');
   const samplerFormErrorEl = overlay.querySelector('.sampler-form-error');
-  const btnEdit = overlay.querySelector('.sampler-detail-btn-edit');
-  const footerEdit = overlay.querySelector('.dataset-detail-footer-edit');
   const btnSave = overlay.querySelector('.dataset-detail-btn-save');
-  const btnCancel = overlay.querySelector('.dataset-detail-btn-cancel');
   const btnCreateSubset = overlay.querySelector('.sampler-detail-btn-create-subset');
 
   const editRowSpecItems = [];
@@ -191,10 +162,45 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
     return editRowSpecItems.map((item) => (item.type === 'single' ? String(item.value) : `${item.from}-${item.to}`)).join(' ');
   }
 
-  function showView() {
-    panel.setAttribute('data-sampler-detail-mode', 'view');
+  /** Current form state for dirty check (normalized). */
+  function getFormState() {
+    const samplingTypeVal = overlay.querySelector('input[name="sampler-replacement"]:checked')?.value || 'without-replacement';
+    const isSpecify = samplingTypeVal === 'specify-rows';
+    const sampleSizeTypeVal = overlay.querySelector('input[name="sampler-size-type"]:checked')?.value || 'rows';
+    const rowsVal = samplerRowsInp?.value != null ? samplerRowsInp.value.trim() : '';
+    const ratioVal = samplerRatioInp?.value != null ? samplerRatioInp.value.trim() : '';
+    const sizeNum = sampleSizeTypeVal === 'rows' ? parseInt(rowsVal, 10) : parseInt(ratioVal, 10);
+    const sampleSize = sampleSizeTypeVal === 'rows'
+      ? (Number.isFinite(sizeNum) && sizeNum >= 1 ? sizeNum : 100)
+      : (Number.isFinite(sizeNum) && sizeNum >= 1 && sizeNum <= 100 ? sizeNum : 100);
+    return {
+      name: (nameInp?.value || '').trim() || '',
+      samplingType: samplingTypeVal,
+      sampleSizeType: isSpecify ? 'rows' : sampleSizeTypeVal,
+      sampleSize: isSpecify ? 100 : sampleSize,
+      rowSpec: isSpecify ? buildRowSpecString() : '',
+    };
   }
-  function showEdit() {
+
+  function isDirty() {
+    const cur = getFormState();
+    const initialName = (node?.dataset?.samplerName ?? '').trim() || '';
+    const initialSt = node?.dataset?.samplerSamplingType || 'without-replacement';
+    const initialSst = node?.dataset?.samplerSampleSizeType || 'rows';
+    const initialSize = node?.dataset?.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
+    const initialRowSpec = (node?.dataset?.samplerRowSpec ?? '').trim();
+    if ((cur.name || 'Sample') !== (initialName || 'Sample')) return true;
+    if (cur.samplingType !== initialSt) return true;
+    if (initialSt === 'specify-rows') {
+      if (cur.rowSpec !== initialRowSpec) return true;
+    } else {
+      if (cur.sampleSizeType !== initialSst) return true;
+      if (String(cur.sampleSize) !== String(initialSize)) return true;
+    }
+    return false;
+  }
+
+  function populateForm() {
     nameInp.value = (node?.dataset?.samplerName ?? '').trim() || '';
     const st = node?.dataset?.samplerSamplingType || 'without-replacement';
     overlay.querySelector(`input[name="sampler-replacement"][value="${st}"]`)?.click();
@@ -208,7 +214,6 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
     renderRowSpecList();
     if (samplerFormErrorEl) samplerFormErrorEl.hidden = true;
     updateSamplerModeVisibility();
-    panel.setAttribute('data-sampler-detail-mode', 'edit');
   }
 
   function updateSamplerModeVisibility() {
@@ -228,9 +233,6 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
       if (samplerSizeRatioWrap) samplerSizeRatioWrap.style.display = isRows ? 'none' : '';
     });
   });
-
-  editRowSpecItems.push(...rowSpecItems.map((item) => ({ ...item })));
-  renderRowSpecList();
 
   function addSingleRow() {
     if (!samplerAddNumberInp) return;
@@ -259,9 +261,8 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
     });
   }
 
-  btnEdit.addEventListener('click', showEdit);
-  btnCancel.addEventListener('click', showView);
-  btnSave.addEventListener('click', () => {
+  /** Validate form and apply to node. Returns true if saved, false if validation failed (error shown). */
+  function performSave() {
     if (samplerFormErrorEl) samplerFormErrorEl.hidden = true;
     const newName = (nameInp?.value || '').trim();
     const samplingTypeVal = overlay.querySelector('input[name="sampler-replacement"]:checked')?.value || 'without-replacement';
@@ -278,38 +279,38 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
 
     if (!newName) {
       if (samplerFormErrorEl) {
-        samplerFormErrorEl.textContent = 'Sampler name is required.';
+        samplerFormErrorEl.textContent = 'Sample name is required.';
         samplerFormErrorEl.hidden = false;
       }
-      return;
+      return false;
     }
     if (isSpecifyRowsVal && editRowSpecItems.length === 0) {
       if (samplerFormErrorEl) {
         samplerFormErrorEl.textContent = 'Add at least one row number or range.';
         samplerFormErrorEl.hidden = false;
       }
-      return;
+      return false;
     }
     if (!isSpecifyRowsVal && sampleSizeTypeVal === 'rows' && (!Number.isFinite(rowsNum) || rowsNum < 1)) {
       if (samplerFormErrorEl) {
         samplerFormErrorEl.textContent = 'Sample size (rows) is required. Enter at least 1 row.';
         samplerFormErrorEl.hidden = false;
       }
-      return;
+      return false;
     }
     if (!isSpecifyRowsVal && sampleSizeTypeVal === 'ratio' && (!Number.isFinite(ratioNum) || ratioNum < 1 || ratioNum > 100)) {
       if (samplerFormErrorEl) {
         samplerFormErrorEl.textContent = 'Ratio is required. Enter a number between 1 and 100.';
         samplerFormErrorEl.hidden = false;
       }
-      return;
+      return false;
     }
     if (sourceNodeId && typeof isSamplerNameAlreadyUsedForSource === 'function' && isSamplerNameAlreadyUsedForSource(newName, sourceNodeId, nodeId)) {
       if (samplerFormErrorEl) {
-        samplerFormErrorEl.textContent = 'This sampler name is already used for this dataset. Please choose another.';
+        samplerFormErrorEl.textContent = 'This sample name is already used for this dataset. Please choose another.';
         samplerFormErrorEl.hidden = false;
       }
-      return;
+      return false;
     }
 
     if (node) {
@@ -325,30 +326,70 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
         delete node.dataset.samplerRowSpec;
       }
       const titleElNode = node.querySelector('.workflow-node__title');
-      if (titleElNode) titleElNode.textContent = newName || 'Sampler';
+      if (titleElNode) titleElNode.textContent = newName || 'Sample';
     }
-    if (viewNameEl) viewNameEl.textContent = newName || 'Sampler';
-    if (titleEl) titleEl.textContent = `Sampler details: ${newName || 'Sampler'}`;
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    showView();
+    return true;
+  }
+
+  btnSave.addEventListener('click', () => {
+    if (performSave()) close();
+  });
+
+  function requestClose() {
+    if (!isDirty()) {
+      close();
+      return;
+    }
+    const panel = overlay.querySelector('.modal-panel');
+    const saveDialog = document.createElement('div');
+    saveDialog.className = 'working-dataset-save-dialog-overlay';
+    saveDialog.setAttribute('role', 'dialog');
+    saveDialog.setAttribute('aria-labelledby', 'sampler-save-dialog-title');
+    saveDialog.innerHTML = `
+      <div class="working-dataset-save-dialog">
+        <p id="sampler-save-dialog-title" class="working-dataset-save-dialog-title">Save changes before closing?</p>
+        <div class="working-dataset-save-dialog-btns">
+          <button type="button" class="btn btn-secondary wd-save-dialog-save">Save</button>
+          <button type="button" class="btn btn-secondary wd-save-dialog-dont">Don't save</button>
+          <button type="button" class="btn btn-secondary wd-save-dialog-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+    const removeDialog = () => saveDialog.remove();
+    saveDialog.querySelector('.wd-save-dialog-save').addEventListener('click', () => {
+      removeDialog();
+      if (performSave()) close();
+    });
+    saveDialog.querySelector('.wd-save-dialog-dont').addEventListener('click', () => {
+      removeDialog();
+      close();
+    });
+    saveDialog.querySelector('.wd-save-dialog-cancel').addEventListener('click', removeDialog);
+    panel.appendChild(saveDialog);
+  }
+
+  overlay.querySelector('.modal-close').addEventListener('click', requestClose);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) requestClose();
   });
 
   if (btnCreateSubset) {
     btnCreateSubset.addEventListener('click', () => {
+      if (!performSave()) return;
       const samplerNodeId = node?.dataset?.nodeId ?? '';
       const colorIndex = node?.dataset?.samplerColorIndex != null ? parseInt(node.dataset.samplerColorIndex, 10) : undefined;
       document.dispatchEvent(new CustomEvent('workflow:add-subset-node', { detail: { samplerNodeId, colorIndex } }));
+      close();
     });
   }
-
-  overlay.querySelector('.modal-close').addEventListener('click', close);
 
   function close() {
     overlay.remove();
     document.body.style.overflow = '';
   }
 
-  updateSamplerModeVisibility();
+  populateForm();
   const sst = sampleSizeType;
   if (samplerSizeRowsWrap) samplerSizeRowsWrap.style.display = sst === 'rows' ? '' : 'none';
   if (samplerSizeRatioWrap) samplerSizeRatioWrap.style.display = sst === 'ratio' ? '' : 'none';

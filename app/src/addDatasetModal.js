@@ -101,7 +101,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
         </div>
         <div class="dataset-add-preview-wrap prompt-preview-wrap">
           <h3 class="prompt-preview-title">Dataset preview</h3>
-          <div class="dataset-preview prompt-preview" aria-live="polite">No file selected yet.</div>
+          <div class="dataset-preview prompt-preview prompt-preview--empty" aria-live="polite">No file selected yet.</div>
         </div>
       </div>
     </div>
@@ -201,6 +201,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       cap.textContent = `Showing first ${MAX_PREVIEW_ROWS} rows. (${totalRows.toLocaleString()} rows in total.)`;
       previewEl.appendChild(cap);
     }
+    previewEl.classList.remove('prompt-preview--empty');
   }
 
   function applyXlsxSheet(wb, sheetName, file) {
@@ -212,6 +213,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       parsedDatasetContent = null;
       setFileInfoPlaceholder('Sheet is empty.');
       previewEl.textContent = 'Sheet is empty.';
+      previewEl.classList.add('prompt-preview--empty');
       return;
     }
     const headerRow = arr[0];
@@ -219,6 +221,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
     if (headers.length === 0 || headers.every((h) => !h)) {
       setFileInfoPlaceholder('No columns in first row.');
       previewEl.textContent = 'No columns in first row.';
+      previewEl.classList.add('prompt-preview--empty');
       return;
     }
     const allRows = arr.slice(1).map((row) => headers.map((_, i) => (row && row[i] != null ? String(row[i]) : '')));
@@ -293,6 +296,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       filenameEl.textContent = 'Please choose a .csv, .tsv or .xlsx file.';
       setFileInfoPlaceholder('Please choose a .csv, .tsv or .xlsx file.');
       previewEl.textContent = 'No file selected yet.';
+      previewEl.classList.add('prompt-preview--empty');
       return;
     }
     fileImported = false;
@@ -313,6 +317,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
           if (sheetNames.length === 0) {
             setFileInfoPlaceholder('No sheets in workbook.');
             previewEl.textContent = 'No sheets in workbook.';
+            previewEl.classList.add('prompt-preview--empty');
             return;
           }
           if (sheetNames.length > 1) {
@@ -329,6 +334,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
           xlsxWorkbook = null;
           setFileInfoPlaceholder('Failed to parse XLSX.');
           previewEl.textContent = 'Failed to parse XLSX.';
+          previewEl.classList.add('prompt-preview--empty');
         }
       };
       reader.onerror = () => {
@@ -338,6 +344,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
         filenameEl.textContent = 'Failed to read file.';
         setFileInfoPlaceholder('Failed to read file.');
         previewEl.textContent = 'No file selected yet.';
+        previewEl.classList.add('prompt-preview--empty');
       };
       reader.readAsArrayBuffer(file);
       return;
@@ -357,6 +364,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
         parsedDatasetContent = null;
         setFileInfoPlaceholder('No columns found in first line.');
         previewEl.textContent = 'No columns found in first line.';
+        previewEl.classList.add('prompt-preview--empty');
         return;
       }
       fileImported = true;
@@ -374,6 +382,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       filenameEl.textContent = 'Failed to read file.';
       setFileInfoPlaceholder('Failed to read file.');
       previewEl.textContent = 'No file selected yet.';
+      previewEl.classList.add('prompt-preview--empty');
     };
     reader.readAsText(file, 'UTF-8');
   });
