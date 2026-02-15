@@ -1,5 +1,5 @@
 /**
- * Run node detail modal: two-column layout. Left: select working dataset, select LLM (credential), map prompt inputs to columns. Right: run results.
+ * Run node detail modal: two-column layout. Left: select dataset, select LLM (credential), map prompt inputs to columns. Right: run results.
  * @param {{ node: HTMLElement, getWorkingSets: () => Array<...>, getPromptInputFields: () => string[], getSubsetContent?: (nodeId: string) => ..., getPromptTemplate?: () => ..., registerPendingRun?: (nodeId: string, runId: string) => void }} options
  */
 
@@ -94,11 +94,11 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         <div class="run-detail-col run-detail-col--left">
           <div class="run-detail-card">
             <div class="run-detail-row">
-              <label class="run-detail-label" for="run-detail-ws-picker">WORKING DATASET</label>
-              <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select working dataset">
+              <label class="run-detail-label" for="run-detail-ws-picker">DATASET</label>
+              <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select dataset">
                 <div class="run-detail-ws-trigger" tabindex="0">
                   <span class="run-detail-ws-trigger-color" id="run-detail-ws-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="run-detail-ws-trigger-text">— Select working dataset —</span>
+                  <span class="run-detail-ws-trigger-text" id="run-detail-ws-trigger-text">— Select dataset —</span>
                   <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
                 </div>
                 <div class="run-detail-ws-dropdown" id="run-detail-ws-dropdown" role="listbox" hidden></div>
@@ -500,11 +500,11 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     if (ws) {
       triggerColorEl.style.background = ws.color || 'transparent';
       triggerColorEl.style.display = ws.color ? '' : 'none';
-      triggerTextEl.textContent = ws.name || 'WORKING DATASET';
+      triggerTextEl.textContent = ws.name || 'Dataset';
     } else {
       triggerColorEl.style.background = '';
       triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = '— Select working dataset —';
+      triggerTextEl.textContent = '— Select dataset —';
     }
   }
 
@@ -534,7 +534,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     emptyOption.className = 'run-detail-ws-option';
     emptyOption.setAttribute('role', 'option');
     emptyOption.setAttribute('aria-selected', !selectedNodeId ? 'true' : 'false');
-    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select working dataset —</span>';
+    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select dataset —</span>';
     emptyOption.dataset.nodeId = '';
     emptyOption.addEventListener('click', () => selectWorkingSet(''));
     dropdownEl.appendChild(emptyOption);
@@ -543,7 +543,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       option.className = 'run-detail-ws-option';
       option.setAttribute('role', 'option');
       option.setAttribute('aria-selected', ws.nodeId === selectedNodeId ? 'true' : 'false');
-      option.innerHTML = `<span class="run-detail-ws-option-color" style="background:${escapeHtml(ws.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(ws.name || 'WORKING DATASET')}</span>`;
+      option.innerHTML = `<span class="run-detail-ws-option-color" style="background:${escapeHtml(ws.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(ws.name || 'Dataset')}</span>`;
       option.dataset.nodeId = ws.nodeId;
       option.addEventListener('click', () => selectWorkingSet(ws.nodeId));
       dropdownEl.appendChild(option);
@@ -695,7 +695,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     const headers = content.headers || [];
     const rows = content.rows || [];
     if (rows.length === 0) {
-      rightCol.innerHTML = '<p class="run-detail-placeholder">Working dataset has no rows.</p>';
+      rightCol.innerHTML = '<p class="run-detail-placeholder">Dataset has no rows.</p>';
       return;
     }
     const templateText = (template.sections || []).map((s) => (s.content || '').trim()).filter(Boolean).join('\n\n');

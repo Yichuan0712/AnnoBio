@@ -1,15 +1,15 @@
-/* Base: theme variables, layout — light mode: higher contrast, clearer separation */
+/* Base: theme variables, layout — light mode: 柔和对比、层次清晰 */
 :root {
-  --bg: #eceef1;
-  --bg-bar: #ffffff;
-  --bg-canvas: #e2e5e9;
-  --grid-color: rgba(0, 0, 0, 0.1);
-  --text: #0f1114;
-  --text-muted: #4d5259;
-  --border: #a8adb5;
-  --node-border: #7a808a; /* light 模式节点描边更深 */
-  --hover: #dce0e5;
-  --shadow: rgba(0, 0, 0, 0.14);
+  --bg: #f0f2f5;
+  --bg-bar: #fafbfc;
+  --bg-canvas: #e8eaee;
+  --grid-color: rgba(0, 0, 0, 0.08);
+  --text: #1a1d21;
+  --text-muted: #5c636a;
+  --border: #c5c9cf;
+  --node-border: #8b9199;
+  --hover: #e4e7eb;
+  --shadow: rgba(0, 0, 0, 0.1);
 }
 
 html.dark {

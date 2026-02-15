@@ -138,30 +138,139 @@
 }
 
 .modal-panel--prompt {
-  min-width: min(920px, 92vw);
+  min-width: min(400px, 92vw);
   max-width: 92vw;
   max-height: 98vh;
   min-height: 70vh;
   display: flex;
   flex-direction: column;
+  transition: width 0.25s ease, min-width 0.25s ease;
 }
 
+/* Step width ratio 1 : 2 : 3 — gradually expand as user builds the prompt */
+.modal-panel--prompt[data-add-prompt-step="1"] {
+  width: min(400px, 92vw);
+  min-width: min(400px, 92vw);
+}
+
+.modal-panel--prompt[data-add-prompt-step="2"] {
+  width: min(800px, 92vw);
+  min-width: min(800px, 92vw);
+}
+
+.modal-panel--prompt[data-add-prompt-step="3"] {
+  width: min(1200px, 92vw);
+  min-width: min(1200px, 92vw);
+}
+
+/* Add dataset: same layout and style as Add prompt */
 .modal-panel--dataset {
-  min-width: min(960px, 92vw);
-  max-width: 92vw;
-  min-height: 420px;
+  min-height: 70vh;
+  max-height: 98vh;
   display: flex;
   flex-direction: column;
+  transition: width 0.25s ease, min-width 0.25s ease;
+}
+
+.modal-panel--dataset[data-add-dataset-step="1"] {
+  width: min(400px, 92vw);
+  min-width: min(400px, 92vw);
+}
+
+.modal-panel--dataset[data-add-dataset-step="2"] {
+  width: min(1000px, 92vw);
+  min-width: min(1000px, 92vw);
 }
 
 .modal-body--dataset {
   flex: 1;
-  min-height: 280px;
+  min-height: 0;
   display: flex;
   flex-direction: row;
   gap: 0;
   padding: 0;
   overflow: hidden;
+}
+
+/* Step 1: only main column */
+.modal-panel--dataset[data-add-dataset-step="1"] .dataset-add-preview-wrap {
+  display: none;
+}
+
+/* Step 2: left = same width as step 1 (400px), right = remaining (wider for table) */
+.modal-panel--dataset[data-add-dataset-step="2"] .dataset-add-main {
+  flex: 0 0 400px;
+  min-width: 400px;
+}
+
+.modal-panel--dataset[data-add-dataset-step="2"] .dataset-add-preview-wrap {
+  flex: 1 1 0;
+  min-width: 320px;
+}
+
+.dataset-add-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 6px 0 20px 0;
+  border-right: 1px solid var(--border);
+}
+
+.dataset-add-step {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 20px;
+}
+
+.modal-panel--dataset[data-add-dataset-step="1"] .dataset-add-step-1 {
+  display: flex;
+}
+
+.modal-panel--dataset[data-add-dataset-step="2"] .dataset-add-step-2 {
+  display: flex;
+}
+
+.dataset-add-step-1 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+
+.dataset-add-step2-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dataset-add-step-2 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+.dataset-add-preview-wrap {
+  flex: 1;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.dataset-add-preview-wrap .dataset-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .dataset-main {
@@ -284,6 +393,24 @@
   color: var(--text-muted);
 }
 
+.dataset-sheet-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.dataset-sheet-wrap .dataset-meta-label {
+  margin: 0;
+}
+
+.dataset-sheet-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 .dataset-file-info {
   display: flex;
   flex-direction: column;
@@ -314,6 +441,12 @@
 .dataset-file-info-value {
   color: var(--text);
   word-break: break-all;
+}
+
+.dataset-file-info-row--headers .dataset-file-info-value {
+  word-break: break-word;
+  max-height: 12em;
+  overflow-y: auto;
 }
 
 .dataset-headers-wrap {
@@ -387,6 +520,12 @@
   min-height: 60px;
   border-radius: 0;
   box-sizing: border-box;
+}
+
+/* Add-prompt modal: description textarea ~1/4 viewport height */
+.modal-panel--prompt .prompt-meta-wrap .dataset-meta-textarea,
+.modal-panel--dataset .prompt-meta-wrap .dataset-meta-textarea {
+  min-height: 25vh;
 }
 
 .dataset-main-footer {
@@ -779,13 +918,13 @@
   color: var(--text);
 }
 
-/* Prompt details modal: fixed width so switching to edit (Output schema / Prompt sections) does not resize; wider for both columns */
+/* Prompt details modal: same panel size as add prompt for consistency */
 .modal-panel--prompt-detail {
   width: min(1200px, 94vw);
   min-width: min(1200px, 94vw);
   max-width: 96vw;
   max-height: 98vh;
-  min-height: min(560px, 88vh);
+  min-height: 70vh;
   display: flex;
   flex-direction: column;
 }
@@ -795,41 +934,168 @@
   min-height: 0;
   display: flex;
   flex-direction: row;
-  gap: 20px;
+  gap: 0;
+  padding: 0;
   overflow: hidden;
 }
 
-.prompt-detail-col {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
+/* Left column: same structure as add prompt main */
+.prompt-detail-main {
   flex: 1;
-  overflow: hidden;
-}
-
-.prompt-detail-col--left {
-  flex: 1 1 50%;
-  min-height: 0;
-  max-width: min(900px, 50vw);
-}
-
-.prompt-detail-col--right {
-  flex: 1 1 50%;
-  min-width: min(320px, 38vw);
-}
-
-.prompt-detail-col--left .prompt-detail-card {
-  flex: 0 1 38%;
-  min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 0;
+  padding: 6px 0 20px 0;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+
+.prompt-detail-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 20px;
+}
+
+.prompt-detail-step .prompt-step-label {
+  margin: 0 -20px;
+}
+
+.prompt-detail-sections-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.prompt-detail-step .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+
+.modal-panel--prompt-detail .prompt-actions .btn,
+.modal-panel--prompt-detail .prompt-detail-schema-footer .btn {
+  box-sizing: border-box;
+  min-height: 36px;
+  line-height: 1.2;
+}
+
+/* Right column: same as add prompt preview (prompt-preview-wrap) */
+.prompt-detail-side.prompt-preview-wrap {
+  flex: 1 1 0;
+  min-width: 320px;
   overflow: hidden;
 }
 
-.prompt-detail-col--left .prompt-detail-schema-wrap {
-  flex: 1 1 0;
+.prompt-detail-side-scroll {
+  flex: 1;
   min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.prompt-detail-side .prompt-preview-title {
+  flex-shrink: 0;
+}
+
+.prompt-detail-side .prompt-preview-title:not(:first-of-type) {
+  border-top: 1px solid var(--border);
+}
+
+.prompt-detail-side .prompt-detail-inputs-content.prompt-preview {
+  flex: 1 1 0;
+  min-height: 100px;
+  padding: 16px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.prompt-detail-inputs-table-wrap {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.prompt-detail-inputs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--text);
+  table-layout: fixed;
+}
+
+.prompt-detail-inputs-table th:nth-child(1),
+.prompt-detail-inputs-table td:nth-child(1) {
+  width: 18%;
+}
+
+.prompt-detail-inputs-table th:nth-child(2),
+.prompt-detail-inputs-table td:nth-child(2) {
+  width: 22%;
+}
+
+.prompt-detail-inputs-table th:nth-child(3),
+.prompt-detail-inputs-table td:nth-child(3) {
+  width: 60%;
+}
+
+.prompt-detail-inputs-table th,
+.prompt-detail-inputs-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border: 1px solid var(--border);
+  vertical-align: top;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.prompt-detail-inputs-table th {
+  font-weight: 600;
+  background: var(--hover);
+  color: var(--text);
+}
+
+.prompt-detail-inputs-table .prompt-detail-inputs-cell-multi {
+  white-space: pre-line;
+  vertical-align: top;
+}
+
+.prompt-detail-inputs-table-wrap .prompt-detail-inputs-table tbody tr:hover td {
+  background: rgba(255, 193, 7, 0.25) !important;
+}
+
+.prompt-detail-side .prompt-detail-schema-wrap {
+  flex: 1 1 0;
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  padding: 12px 16px 20px;
+  background: transparent;
+  border: none;
+}
+
+.prompt-detail-side .prompt-detail-schema-view .prompt-schema-preview-table-wrap {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.prompt-detail-side .prompt-detail-schema-footer {
+  border-top: none;
 }
 
 .prompt-detail-card {
@@ -1359,6 +1625,34 @@
 .sampler-detail-card .dataset-detail-footer {
   margin-top: auto;
   flex-shrink: 0;
+}
+
+.modal-panel--sampler-detail .sampler-detail-edit.dataset-detail-edit {
+  display: none;
+}
+
+.modal-panel--sampler-detail .dataset-detail-footer-edit {
+  display: none;
+}
+
+.modal-panel--sampler-detail[data-sampler-detail-mode="edit"] .dataset-detail-view {
+  display: none;
+}
+
+.modal-panel--sampler-detail[data-sampler-detail-mode="edit"] .sampler-detail-edit.dataset-detail-edit {
+  display: flex;
+}
+
+.modal-panel--sampler-detail[data-sampler-detail-mode="edit"] .sampler-detail-btn-edit {
+  display: none !important;
+}
+
+.modal-panel--sampler-detail[data-sampler-detail-mode="edit"] .dataset-detail-footer-edit {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 /* Score detail modal: two-column layout (like Run detail) */
@@ -2555,7 +2849,7 @@
   font-size: 13px;
 }
 
-/* Working dataset detail modal (subset)：min-height 与 source 典型高度一致（source 有左侧卡片等撑高，故用 85vh） */
+/* Dataset detail modal (subset)：min-height 与 source 典型高度一致（source 有左侧卡片等撑高，故用 85vh） */
 .modal-panel--working-dataset-detail {
   min-width: min(720px, 94vw);
   max-width: 96vw;
@@ -2877,10 +3171,6 @@
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  padding: 16px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0;
 }
 
 .prompt-detail-sections-footer {
@@ -2914,7 +3204,27 @@
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
-  overflow-x: auto;
+  overflow-x: hidden;
+}
+
+.prompt-detail-sections-view .preview-field-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prompt-detail-sections-view .preview-field-content-line {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  border-radius: 2px;
+}
+
+.prompt-detail-sections-view .preview-field-content-line.prompt-detail-line-highlight {
+  background: rgba(255, 193, 7, 0.25);
+  outline: none;
 }
 
 .prompt-detail-sections-edit {
@@ -3110,8 +3420,8 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 20px;
+  gap: 0;
+  padding: 6px 0 20px 0;
   border-right: 1px solid var(--border);
 }
 
@@ -3123,10 +3433,17 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  padding: 0 20px;
 }
 
-/* Step 1: sections list + Add section in one scrollable block, actions at bottom */
-.prompt-step-1-scroll {
+/* Step 1: Name & description — actions at bottom */
+.prompt-step-1 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+/* Step 2: sections list + Add section in one scrollable block, actions at bottom */
+.prompt-step-2-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -3135,17 +3452,17 @@
   gap: 12px;
 }
 
-.prompt-step-1-scroll .prompt-sections {
+.prompt-step-2-scroll .prompt-sections {
   flex: 0 0 auto;
 }
 
-.prompt-step-1 .prompt-actions {
+.prompt-step-2 .prompt-actions {
   margin-top: auto;
   flex-shrink: 0;
 }
 
-/* Step 2: keys list + Add field in one scrollable block, actions at bottom */
-.prompt-step-2-format-scroll {
+/* Step 3: keys list + Add field in one scrollable block, actions at bottom */
+.prompt-step-3-format-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -3154,13 +3471,12 @@
   gap: 10px;
 }
 
-.prompt-step-2-format-scroll .prompt-output-keys-list {
-  flex: 0 0 auto;
+.prompt-step-3-format-scroll .prompt-output-keys-list {
+  flex: 1;
   min-height: 0;
 }
 
-.prompt-step-2 .prompt-actions {
-  margin-top: auto;
+.prompt-step-3 .prompt-output-return-shape-wrap {
   flex-shrink: 0;
 }
 
@@ -3182,11 +3498,14 @@
 }
 
 .prompt-step-label {
-  margin: 0;
-  font-size: 11px;
+  margin: 0 -20px;
+  padding: 6px 20px 12px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: var(--text-muted);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .prompt-step-2 .prompt-output-return-shape-wrap {
@@ -3257,7 +3576,109 @@
   overflow-x: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+}
+
+/* Output field card (same pattern as section card) */
+.prompt-output-field-card {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-height: 36px;
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.prompt-output-field-card:hover {
+  border-color: var(--text-muted);
+  box-shadow: 0 1px 3px var(--shadow);
+}
+
+.prompt-output-field-card-inner {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  transition: background 0.15s ease;
+}
+
+.prompt-output-field-card-inner:hover {
+  background: var(--hover);
+}
+
+.prompt-output-field-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-output-field-card-edit {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.prompt-output-field-card-edit:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.prompt-output-field-card-remove {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.prompt-output-field-card-remove:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.prompt-add-field-wrap {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.prompt-add-field-wrap .prompt-output-add-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.prompt-add-field-wrap .prompt-output-add-key:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: var(--hover);
 }
 
 .prompt-output-format-empty {
@@ -3460,7 +3881,7 @@
 }
 
 .prompt-output-list-element-label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-muted);
   flex-shrink: 0;
   min-width: 1.2em;
@@ -3512,6 +3933,44 @@
   border-left: 1px solid var(--border);
 }
 
+/* Step 1: one column only — Name & description; hide both preview panels */
+.modal-panel--prompt[data-add-prompt-step="1"] .prompt-preview-wrap,
+.modal-panel--prompt[data-add-prompt-step="1"] .prompt-schema-preview-wrap {
+  display: none;
+}
+
+/* Step 2: two columns — left (Sections), right (Prompt sections only); equal width */
+.modal-panel--prompt[data-add-prompt-step="2"] .prompt-schema-preview-wrap {
+  display: none;
+}
+
+.modal-panel--prompt[data-add-prompt-step="2"] .prompt-main,
+.modal-panel--prompt[data-add-prompt-step="2"] .prompt-preview-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.modal-panel--prompt[data-add-prompt-step="2"] .prompt-preview-wrap {
+  min-width: 0;
+}
+
+/* Step 3: three columns — left (Output schema input), Prompt sections, Output schema); equal width */
+.modal-panel--prompt[data-add-prompt-step="3"] .prompt-preview-wrap,
+.modal-panel--prompt[data-add-prompt-step="3"] .prompt-schema-preview-wrap {
+  display: flex;
+}
+
+.modal-panel--prompt[data-add-prompt-step="3"] .prompt-main,
+.modal-panel--prompt[data-add-prompt-step="3"] .prompt-preview-wrap,
+.modal-panel--prompt[data-add-prompt-step="3"] .prompt-schema-preview-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.modal-panel--prompt[data-add-prompt-step="3"] .prompt-schema-preview-wrap {
+  width: auto;
+}
+
 .prompt-schema-preview-wrap {
   width: 420px;
   min-width: 360px;
@@ -3528,7 +3987,7 @@
   padding: 12px 16px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -3536,7 +3995,7 @@
 .prompt-schema-preview-return-shape {
   margin: 0;
   padding: 8px 16px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
   border-bottom: 1px solid var(--border);
 }
@@ -3548,18 +4007,19 @@
 
 .prompt-schema-return-shape {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
 }
 
 .prompt-schema-allow-none-hint,
 .prompt-schema-preview-allow-none-hint {
   margin: 4px 0 0;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
 }
 
 .prompt-schema-meta-label {
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
   margin-right: 6px;
@@ -3575,7 +4035,7 @@
 .prompt-schema-preview-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
   table-layout: fixed;
 }
@@ -3600,8 +4060,8 @@
 
 .prompt-schema-preview-table th {
   font-weight: 600;
-  color: var(--text-muted);
-  background: var(--bg);
+  background: var(--hover);
+  color: var(--text);
 }
 
 .prompt-schema-preview-table td[title] {
@@ -3652,7 +4112,7 @@
 
 .prompt-schema-hint {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -3662,7 +4122,7 @@
   padding: 12px 16px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text);
   border-bottom: 1px solid var(--border);
 }
 
@@ -3676,6 +4136,10 @@
   overflow-x: hidden;
   user-select: text;
   -webkit-user-select: text;
+}
+
+.prompt-preview--empty {
+  color: var(--text-muted);
 }
 
 .preview-field-block {
@@ -3704,12 +4168,11 @@
 }
 
 .preview-field-name {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
-  opacity: 0.9;
   flex-shrink: 0;
 }
 
@@ -3732,7 +4195,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   overflow-y: auto;
 }
 
@@ -3741,71 +4204,446 @@
   justify-content: flex-start;
 }
 
-.prompt-section {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-}
-
-.prompt-section-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.prompt-section-name {
-  flex: 1;
-  padding: 8px 10px;
-  font-size: 13px;
-  color: var(--text);
-  background: var(--bg-bar);
-  border: 1px solid var(--border);
-  font-family: inherit;
-}
-
-.prompt-section-name::placeholder {
-  color: var(--text-muted);
-}
-
-.prompt-section-remove {
-  flex-shrink: 0;
+.prompt-add-section-wrap .prompt-add-section {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
+  min-height: 36px;
   padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.prompt-add-section-wrap .prompt-add-section:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* Section card: name only, edit + remove */
+.prompt-section-card {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-height: 36px;
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.prompt-section-card:hover {
+  border-color: var(--text-muted);
+  box-shadow: 0 1px 3px var(--shadow);
+}
+
+.prompt-section-card-inner {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  transition: background 0.15s ease;
+}
+
+.prompt-section-card-inner:hover {
+  background: var(--hover);
+}
+
+.prompt-section-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-section-card-edit {
+  flex-shrink: 0;
+  padding: 4px 10px;
   font-size: 12px;
   line-height: 1.2;
   color: var(--text-muted);
   background: none;
-  border: 1px solid transparent;
+  border: none;
+  border-left: 1px solid var(--border);
   cursor: pointer;
-  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
-.prompt-section-remove:hover {
+.prompt-section-card-edit:hover {
   color: var(--text);
   background: var(--hover);
-  border-color: var(--border);
 }
 
-.prompt-section-content {
-  width: 100%;
-  padding: 8px 10px;
-  font-size: 13px;
+.prompt-section-card-remove {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.prompt-section-card-remove:hover {
   color: var(--text);
-  background: var(--bg-bar);
-  border: 1px solid var(--border);
-  font-family: inherit;
-  resize: vertical;
-  min-height: 60px;
+  background: var(--hover);
+}
+
+/* Section editor modal (on top of add-prompt) */
+.modal-overlay--section-editor {
+  z-index: 1001;
+}
+
+.modal-panel--section-editor {
+  min-width: min(420px, 92vw);
+  max-width: 92vw;
+}
+
+/* Edit prompt name & description (from node click or context menu): same as Add prompt step 1 */
+.modal-panel--edit-prompt-name {
+  width: min(480px, 92vw);
+  min-width: min(400px, 92vw);
+  max-width: 92vw;
+}
+
+.modal-panel--edit-prompt-name .prompt-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-panel--edit-prompt-name .prompt-step-1 {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-panel--edit-prompt-name .prompt-step-1 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+
+/* Edit sections popup (prompt detail): same look as Add prompt step 2 left */
+.modal-panel--edit-sections {
+  width: min(480px, 92vw);
+  min-width: min(400px, 92vw);
+  max-width: 92vw;
+  max-height: 90vh;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-panel--edit-sections .modal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.modal-panel--edit-sections .prompt-main--edit-sections {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0 20px 0;
+  overflow: hidden;
+}
+
+.modal-panel--edit-sections .prompt-step-2 {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.modal-panel--edit-sections .prompt-step-2 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+
+.modal-panel--edit-sections .prompt-step-2 > .prompt-hint {
+  margin-top: 14px;
+}
+
+.modal-panel--edit-sections .prompt-sections--edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+/* Edit output schema popup: same structure as Add prompt step 3 left */
+.modal-panel--edit-schema {
+  width: min(560px, 92vw);
+  min-width: min(420px, 92vw);
+  max-width: 92vw;
+  max-height: 90vh;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-panel--edit-schema .modal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.modal-panel--edit-schema .prompt-main--edit-schema {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0 20px 0;
+  overflow: hidden;
+}
+
+.modal-panel--edit-schema .prompt-step-3 {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 20px;
+}
+
+.modal-panel--edit-schema .prompt-step-3 > .prompt-hint {
+  margin-top: 14px;
+}
+
+.modal-panel--edit-schema .edit-schema-form {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal-panel--edit-schema .prompt-step-3 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+
+.modal-panel--edit-schema .prompt-output-format-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.modal-panel--edit-schema .prompt-step-3-format-scroll .prompt-output-keys-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.modal-panel--field-editor {
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-panel--field-editor .modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.modal-panel--section-editor .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+}
+
+.modal-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.modal-panel--section-editor .section-editor-error {
+  margin: 0;
+}
+
+/* string/number 模式下 Examples：多行，每行一个输入 + Delete */
+.field-editor-examples-scalar {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field-editor-scalar-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-editor-scalar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.field-editor-scalar-input-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-editor-scalar-input-wrap .field-editor-scalar-inp,
+.field-editor-scalar-input-wrap .dataset-meta-input {
+  width: 100%;
   box-sizing: border-box;
 }
 
-.prompt-section-content::placeholder {
+.field-editor-scalar-del {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
   color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.field-editor-scalar-del:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.field-editor-examples-scalar .field-editor-add-scalar-row {
+  align-self: flex-start;
+}
+
+.field-editor-examples-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field-editor-examples-list .field-editor-add-list-row {
+  align-self: flex-start;
+}
+
+/* List examples: table-like form (one row per element) */
+.field-editor-list-example-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.field-editor-element-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-editor-element-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.field-editor-element-input-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-editor-element-input-wrap .field-editor-element-inp,
+.field-editor-element-input-wrap .dataset-meta-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.field-editor-del-element {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.field-editor-del-element:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.field-editor-list-example-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+/* 覆盖 .btn，与 Delete list 同风格小按钮 */
+.field-editor-list-example-actions .field-editor-add-element {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+}
+
+.field-editor-list-example-actions .field-editor-add-element:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.field-editor-del-example {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.field-editor-del-example:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.modal-panel--section-editor .btn {
+  color: var(--text);
+  background: var(--bg-bar);
+  border-color: var(--border);
+}
+
+.modal-panel--section-editor .btn:hover {
+  background: var(--hover);
+  border-color: var(--border);
 }
 
 /* Output schema key block reuses same look as section */
@@ -3849,7 +4687,7 @@
   align-items: center;
   justify-content: center;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.2;
   color: var(--text-muted);
   background: none;
@@ -3889,10 +4727,20 @@
   padding: 6px 0;
 }
 
+.prompt-modal-error {
+  flex-shrink: 0;
+  margin-bottom: 8px;
+}
+
 .prompt-detail-footer .prompt-detail-inline-error,
 .prompt-detail-sections-footer .prompt-detail-inline-error,
 .prompt-detail-schema-footer .prompt-detail-inline-error {
   flex-basis: 100%;
+}
+
+.prompt-detail-step .prompt-form-error.prompt-modal-error {
+  flex-shrink: 0;
+  order: -1;
 }
 
 

@@ -33,29 +33,96 @@ export function extractInputFieldsFromSections(sectionsList) {
   return names;
 }
 
+const PROMPT_INPUT_SENTENCE_MAX_LEN = 120;
+
+/**
+ * Get the line (sentence) containing the match at content[matchStart:matchEnd], trimmed and truncated.
+ */
+function getSentenceAround(content, matchStart, matchEnd) {
+  const lineStart = content.lastIndexOf('\n', matchStart - 1) + 1;
+  let lineEnd = content.indexOf('\n', matchEnd);
+  if (lineEnd === -1) lineEnd = content.length;
+  let sentence = content.slice(lineStart, lineEnd).trim();
+  if (sentence.length > PROMPT_INPUT_SENTENCE_MAX_LEN) {
+    sentence = sentence.slice(0, PROMPT_INPUT_SENTENCE_MAX_LEN) + '…';
+  }
+  return sentence;
+}
+
+/**
+ * Get one row per input key, with all occurrences: { key, sections: string, sentences: string }
+ * sections and sentences are newline-separated so multiple occurrences show in one table row.
+ */
+function getInputsWithSectionAndSentence(sectionsList) {
+  if (!sectionsList || sectionsList.length === 0) return [];
+  const re = /\{([^{}]+)\}/g;
+  const byKey = {}; // key -> { firstOrder, items: [{ sectionName, sentence }] }
+  let order = 0;
+  for (let i = 0; i < sectionsList.length; i++) {
+    const s = sectionsList[i];
+    const content = s.content || '';
+    const sectionName = (s.name || '').trim() || 'Unnamed';
+    let m;
+    re.lastIndex = 0;
+    while ((m = re.exec(content)) !== null) {
+      const charBefore = m.index > 0 ? content[m.index - 1] : '';
+      const charAfter = m.index + m[0].length < content.length ? content[m.index + m[0].length] : '';
+      if (charBefore === '{' || charAfter === '}') continue;
+      const key = m[1].trim();
+      if (!key) continue;
+      if (!byKey[key]) byKey[key] = { firstOrder: order++, items: [] };
+      const sentence = getSentenceAround(content, m.index, m.index + m[0].length);
+      byKey[key].items.push({ sectionName, sentence });
+    }
+  }
+  const keysOrdered = Object.keys(byKey).sort((a, b) => byKey[a].firstOrder - byKey[b].firstOrder);
+  return keysOrdered.map((key) => {
+    const items = byKey[key].items;
+    const sections = items.map((it) => it.sectionName).join('\n');
+    const sentences = items.map((it) => it.sentence).join('\n');
+    return { key, sections, sentences };
+  });
+}
+
 function inputsToViewHtml(sectionsList) {
-  const fields = extractInputFieldsFromSections(sectionsList);
-  if (fields.length === 0) return '<p class="prompt-detail-placeholder">No inputs.</p>';
-  return fields
-    .map((key) => `<span class="prompt-detail-input-tag">${escapeHtml(key)}</span>`)
+  const rows = getInputsWithSectionAndSentence(sectionsList);
+  if (rows.length === 0) return '<p class="prompt-detail-placeholder">No inputs.</p>';
+  const tbody = rows
+    .map(
+      (r) =>
+        `<tr><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sections)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences)}</td></tr>`
+    )
     .join('');
+  return `<div class="prompt-detail-inputs-table-wrap">
+  <table class="prompt-detail-inputs-table" aria-readonly="true">
+    <thead><tr><th>Input</th><th>Section</th><th>Sentence</th></tr></thead>
+    <tbody>${tbody}</tbody>
+  </table>
+</div>`;
 }
 
 function sectionsToViewHtml(sectionsList) {
   if (!sectionsList || sectionsList.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
   return sectionsList
-    .map(
-      (s) => `
+    .map((s) => {
+      const sectionName = s.name || 'Unnamed';
+      const content = s.content || '';
+      const lines = content.split('\n');
+      const lineEls =
+        lines.length > 0
+          ? lines.map((line) => `<div class="preview-field-content-line">${escapeHtml(line)}</div>`).join('')
+          : '<div class="preview-field-content-line"></div>';
+      return `
           <div class="preview-field-block">
             <div class="preview-field-divider">
               <span class="preview-field-line" aria-hidden="true"></span>
-              <span class="preview-field-name">${escapeHtml(s.name || 'Unnamed')}</span>
+              <span class="preview-field-name">${escapeHtml(sectionName)}</span>
               <span class="preview-field-line" aria-hidden="true"></span>
             </div>
-            <div class="preview-field-content">${escapeHtml(s.content || '')}</div>
+            <div class="preview-field-content">${lineEls}</div>
           </div>
-        `
-    )
+        `;
+    })
     .join('');
 }
 
@@ -142,67 +209,30 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
           <button type="button" class="modal-close" aria-label="Close">×</button>
         </div>
         <div class="modal-body prompt-detail-body">
-          <div class="prompt-detail-col prompt-detail-col--left">
-            <div class="prompt-detail-card">
-              <div class="prompt-detail-view">
-                <div class="prompt-detail-row">
-                  <span class="prompt-detail-label">Prompt name</span>
-                  <span class="prompt-detail-name-value">${escapeHtml(displayName)}</span>
-                </div>
-                <div class="prompt-detail-row">
-                  <span class="prompt-detail-label">Prompt description</span>
-                  <div class="prompt-detail-notes-value">${noteTrimmed ? escapeHtml(noteTrimmed) : '<span class="prompt-detail-placeholder">No description.</span>'}</div>
-                </div>
-                <div class="prompt-detail-inputs-wrap">
-                  <h3 class="prompt-detail-section-title">PROMPT INPUTS</h3>
-                  <div class="prompt-detail-inputs-content">${inputsViewHtml}</div>
+          <div class="prompt-detail-main">
+            <div class="prompt-detail-step">
+              <p class="prompt-step-label">Prompt sections</p>
+              <div class="prompt-detail-sections-scroll">
+                <div class="prompt-detail-sections-wrap">
+                  <div class="prompt-detail-sections-view">${sectionsViewHtml}</div>
                 </div>
               </div>
-              <div class="prompt-detail-edit">
-                <div class="prompt-detail-row">
-                  <label class="prompt-detail-label" for="prompt-detail-name-inp">Prompt name</label>
-                  <input type="text" id="prompt-detail-name-inp" class="prompt-detail-input" placeholder="Prompt name (required)" />
-                </div>
-                <div class="prompt-detail-row">
-                  <label class="prompt-detail-label" for="prompt-detail-notes-inp">Prompt description</label>
-                  <textarea id="prompt-detail-notes-inp" class="prompt-detail-textarea" rows="3" placeholder="Prompt description (required)"></textarea>
-                </div>
-              </div>
-              <div class="prompt-detail-footer">
-                <div class="prompt-detail-inline-error" id="prompt-detail-name-error" role="alert" aria-live="polite" hidden></div>
-                <button type="button" class="btn btn-secondary prompt-detail-btn-edit">Edit</button>
-                <div class="prompt-detail-footer-edit">
-                  <button type="button" class="btn btn-secondary prompt-detail-btn-save">Save</button>
-                  <button type="button" class="btn btn-secondary prompt-detail-btn-cancel">Cancel</button>
-                </div>
-              </div>
-            </div>
-            <div class="prompt-detail-schema-wrap" data-prompt-schema-mode="view">
-              <h3 class="prompt-detail-section-title">Output schema</h3>
-              <div class="prompt-detail-schema-view">${schemaViewHtml}</div>
-              <div class="prompt-detail-schema-edit"></div>
-              <div class="prompt-detail-schema-footer">
-                <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
-                <button type="button" class="btn btn-secondary prompt-detail-schema-btn-edit">Edit</button>
-                <div class="prompt-detail-schema-edit-btns">
-                  <button type="button" class="btn btn-secondary prompt-detail-schema-btn-save">Save</button>
-                  <button type="button" class="btn btn-secondary prompt-detail-schema-btn-cancel">Cancel</button>
-                </div>
+              <div class="prompt-form-error prompt-modal-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
+              <div class="prompt-actions">
+                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
               </div>
             </div>
           </div>
-          <div class="prompt-detail-col prompt-detail-col--right">
-            <div class="prompt-detail-sections-wrap" data-prompt-sections-mode="view">
-              <h3 class="prompt-detail-section-title">Prompt sections</h3>
-              <div class="prompt-detail-sections-view">${sectionsViewHtml}</div>
-              <div class="prompt-detail-sections-edit"></div>
-              <div class="prompt-detail-sections-footer">
-                <div class="prompt-detail-inline-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
-                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
-                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-run-prompt">Run prompt</button>
-                <div class="prompt-detail-sections-edit-btns">
-                  <button type="button" class="btn btn-secondary prompt-detail-sections-btn-save-node">Save</button>
-                  <button type="button" class="btn btn-secondary prompt-detail-sections-btn-cancel">Cancel</button>
+          <div class="prompt-detail-side prompt-preview-wrap">
+            <div class="prompt-detail-side-scroll">
+              <h3 class="prompt-preview-title">Prompt inputs</h3>
+              <div class="prompt-detail-inputs-content prompt-preview">${inputsViewHtml}</div>
+              <h3 class="prompt-preview-title">Output schema</h3>
+              <div class="prompt-detail-schema-wrap">
+                <div class="prompt-detail-schema-view">${schemaViewHtml}</div>
+                <div class="prompt-detail-schema-footer">
+                  <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
+                  <button type="button" class="btn btn-secondary prompt-detail-schema-btn-edit">Edit</button>
                 </div>
               </div>
             </div>
@@ -257,175 +287,283 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
 
   const nameErrorEl = overlay.querySelector('#prompt-detail-name-error');
 
-  btnEdit.addEventListener('click', showEdit);
-  btnCancel.addEventListener('click', () => showView());
-  btnSave.addEventListener('click', () => {
-    const newNameRaw = (nameInp.value || '').trim();
-    const newName = newNameRaw || 'Prompt';
-    const newNote = (notesInp.value || '').trim();
-    if (nameErrorEl) nameErrorEl.hidden = true;
-    if (!newNameRaw) {
-      if (nameErrorEl) {
-        nameErrorEl.textContent = 'Prompt name is required.';
-        nameErrorEl.hidden = false;
+  if (btnEdit) {
+    btnEdit.addEventListener('click', showEdit);
+    btnCancel.addEventListener('click', () => showView());
+    btnSave.addEventListener('click', () => {
+      const newNameRaw = (nameInp.value || '').trim();
+      const newName = newNameRaw || 'Prompt';
+      const newNote = (notesInp.value || '').trim();
+      if (nameErrorEl) nameErrorEl.hidden = true;
+      if (!newNameRaw) {
+        if (nameErrorEl) {
+          nameErrorEl.textContent = 'Prompt name is required.';
+          nameErrorEl.hidden = false;
+        }
+        return;
       }
-      return;
-    }
-    if (!newNote) {
-      if (nameErrorEl) {
-        nameErrorEl.textContent = 'Prompt description is required.';
-        nameErrorEl.hidden = false;
+      if (!newNote) {
+        if (nameErrorEl) {
+          nameErrorEl.textContent = 'Prompt description is required.';
+          nameErrorEl.hidden = false;
+        }
+        return;
       }
-      return;
-    }
-    if (typeof isPromptNameAlreadyUsed === 'function' && isPromptNameAlreadyUsed(newName, sourceNode?.dataset?.nodeId ?? null)) {
-      if (nameErrorEl) {
-        nameErrorEl.textContent = 'This prompt name is already used on the canvas. Please choose another.';
-        nameErrorEl.hidden = false;
+      if (typeof isPromptNameAlreadyUsed === 'function' && isPromptNameAlreadyUsed(newName, sourceNode?.dataset?.nodeId ?? null)) {
+        if (nameErrorEl) {
+          nameErrorEl.textContent = 'This prompt name is already used on the canvas. Please choose another.';
+          nameErrorEl.hidden = false;
+        }
+        return;
       }
-      return;
-    }
-    applyToNode(newName, newNote);
-    nameValueEl.textContent = newName;
-    notesValueEl.innerHTML = newNote ? escapeHtml(newNote) : '<span class="prompt-detail-placeholder">No description.</span>';
-    showView();
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-  });
+      applyToNode(newName, newNote);
+      nameValueEl.textContent = newName;
+      notesValueEl.innerHTML = newNote ? escapeHtml(newNote) : '<span class="prompt-detail-placeholder">No description.</span>';
+      showView();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    });
+  }
 
   let currentSections = Array.isArray(sections) ? sections.map((s) => ({ name: s.name || '', content: s.content || '' })) : [];
-  const sectionsWrap = overlay.querySelector('.prompt-detail-sections-wrap');
   const sectionsView = overlay.querySelector('.prompt-detail-sections-view');
-  const sectionsEdit = overlay.querySelector('.prompt-detail-sections-edit');
   const sectionsBtnEdit = overlay.querySelector('.prompt-detail-sections-btn-edit');
-  const sectionsBtnCancel = overlay.querySelector('.prompt-detail-sections-btn-cancel');
-  const sectionsBtnSaveNode = overlay.querySelector('.prompt-detail-sections-btn-save-node');
 
-  function getSectionsFromEditContainer() {
-    const rows = sectionsEdit.querySelectorAll('.prompt-detail-section-edit-row');
-    return Array.from(rows).map((row) => ({
-      name: (row.querySelector('.prompt-detail-section-name-inp')?.value ?? '').trim(),
-      content: row.querySelector('.prompt-detail-section-content-inp')?.value ?? '',
-    }));
-  }
-
-  function buildSectionsEditContent(sectionsList) {
-    const list = Array.isArray(sectionsList) && sectionsList.length ? sectionsList : [{ name: '', content: '' }];
-    return list
-      .map(
-        (s) => `
-          <div class="prompt-detail-section-edit-row">
-            <div class="prompt-detail-section-edit-header">
-              <input type="text" class="prompt-detail-input prompt-detail-section-name-inp" value="${escapeHtml(s.name || '')}" placeholder="Section name (required)" />
-              <button type="button" class="prompt-field-remove prompt-detail-section-delete" aria-label="Remove section">Delete section</button>
-            </div>
-            <div class="prompt-detail-row">
-              <label class="prompt-detail-label">Content</label>
-              <textarea class="prompt-detail-textarea prompt-detail-section-content-inp" rows="2" placeholder="Content (required)">${escapeHtml(s.content || '')}</textarea>
-            </div>
-          </div>
-        `
-      )
-      .join('');
-  }
-
-  function showSectionsView() {
-    sectionsWrap.setAttribute('data-prompt-sections-mode', 'view');
-  }
-
-  function showSectionsEdit() {
-    let list = currentSections;
-    if (sourceNode) {
-      try {
-        list = JSON.parse(sourceNode.dataset.promptSections || sourceNode.dataset.promptFields || '[]');
-      } catch (_) {}
-    }
-    if (!list.length) list = [{ name: '', content: '' }];
-    sectionsEdit.innerHTML =
-      buildSectionsEditContent(list) +
-      `<button type="button" class="btn btn-secondary prompt-detail-sections-add-row">+ Create section</button>`;
-    sectionsEdit.querySelector('.prompt-detail-sections-add-row').addEventListener('click', () => {
-      const addBtn = sectionsEdit.querySelector('.prompt-detail-sections-add-row');
-      const newHtml = `
-          <div class="prompt-detail-section-edit-row">
-            <div class="prompt-detail-section-edit-header">
-              <input type="text" class="prompt-detail-input prompt-detail-section-name-inp" value="" placeholder="Section name" />
-              <button type="button" class="prompt-field-remove prompt-detail-section-delete" aria-label="Remove section">Delete section</button>
-            </div>
-            <div class="prompt-detail-row">
-              <label class="prompt-detail-label">Content</label>
-              <textarea class="prompt-detail-textarea prompt-detail-section-content-inp" rows="2" placeholder="Content (required)"></textarea>
-            </div>
-          </div>`;
-      if (addBtn) addBtn.insertAdjacentHTML('beforebegin', newHtml);
-    });
-    sectionsEdit.addEventListener('click', (e) => {
-      const delBtn = e.target.closest('.prompt-detail-section-delete');
-      if (!delBtn) return;
-      const row = delBtn.closest('.prompt-detail-section-edit-row');
-      if (!row) return;
-      const rows = sectionsEdit.querySelectorAll('.prompt-detail-section-edit-row');
-      if (rows.length <= 1) return;
-      row.remove();
-    });
-    sectionsWrap.setAttribute('data-prompt-sections-mode', 'edit');
-  }
-
-  sectionsBtnEdit.addEventListener('click', () => {
-    showSectionsEdit();
-  });
-  const sectionsBtnRunPrompt = overlay.querySelector('.prompt-detail-sections-btn-run-prompt');
-  if (sectionsBtnRunPrompt && typeof onRunPrompt === 'function') {
-    sectionsBtnRunPrompt.addEventListener('click', () => {
-      onRunPrompt();
-      overlay.remove();
-      document.body.style.overflow = '';
-    });
-  }
-  sectionsBtnCancel.addEventListener('click', () => {
-    showSectionsView();
-  });
   function hasDuplicateSectionNames(sectionsList) {
-    const names = sectionsList.map((s) => (s.name || '').trim().toLowerCase());
+    const names = sectionsList.map((s) => (s.name || '').trim().toLowerCase()).filter(Boolean);
     return names.length !== new Set(names).size;
   }
 
-  sectionsBtnSaveNode.addEventListener('click', () => {
-    const sectionsErrorEl = overlay.querySelector('#prompt-detail-sections-error');
-    if (sectionsErrorEl) sectionsErrorEl.hidden = true;
-    const allSections = getSectionsFromEditContainer();
-    const newSections = allSections.filter((s) => (s.name || '').trim() || (s.content ?? '').trim());
-    const hasPartialSection = newSections.some((s) => !(s.name || '').trim() || !(s.content ?? '').trim());
-    if (hasPartialSection) {
-      if (sectionsErrorEl) {
-        sectionsErrorEl.textContent = 'Section name and content are required for each section.';
-        sectionsErrorEl.hidden = false;
+  function openSectionEditorForDetail(editSections, sectionIndex, onDone) {
+    const isEdit = sectionIndex !== null && sectionIndex >= 0;
+    const section = isEdit ? editSections[sectionIndex] : { name: '', content: '' };
+    const editorOverlay = document.createElement('div');
+    editorOverlay.className = 'modal-overlay modal-overlay--section-editor';
+    editorOverlay.setAttribute('aria-modal', 'true');
+    editorOverlay.innerHTML = `
+      <div class="modal-panel modal-panel--section-editor">
+        <div class="modal-header">
+          <h3 class="modal-title">${isEdit ? 'Edit section' : 'Add section'}</h3>
+          <button type="button" class="modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="dataset-meta-wrap">
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="section-editor-name">Section name</label>
+              <input type="text" id="section-editor-name" class="dataset-meta-input" value="${escapeHtml(section.name)}" aria-label="Section name" />
+            </div>
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="section-editor-content">Content</label>
+              <textarea id="section-editor-content" class="dataset-meta-input dataset-meta-textarea" rows="6" aria-label="Section content">${escapeHtml(section.content)}</textarea>
+            </div>
+          </div>
+          <div class="prompt-form-error section-editor-error" role="alert" aria-live="polite" hidden></div>
+          <div class="modal-footer-actions">
+            <button type="button" class="btn btn-secondary section-editor-cancel">Cancel</button>
+            <button type="button" class="btn btn-secondary section-editor-save">${isEdit ? 'Save' : 'Add section'}</button>
+          </div>
+        </div>
+      </div>
+    `;
+    const nameInput = editorOverlay.querySelector('#section-editor-name');
+    const contentInput = editorOverlay.querySelector('#section-editor-content');
+    const errorEl = editorOverlay.querySelector('.section-editor-error');
+
+    function close() {
+      editorOverlay.remove();
+    }
+
+    function showError(msg) {
+      if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.hidden = false;
       }
-      return;
     }
-    if (newSections.length === 0) {
-      if (sectionsErrorEl) {
-        sectionsErrorEl.textContent = 'At least one section with name and content is required.';
-        sectionsErrorEl.hidden = false;
+
+    function clearError() {
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.hidden = true;
       }
-      return;
     }
-    if (hasDuplicateSectionNames(newSections)) {
-      if (sectionsErrorEl) {
-        sectionsErrorEl.textContent = 'Section names must be unique within this prompt. Please fix duplicate section names.';
-        sectionsErrorEl.hidden = false;
-      } else alert('Section names must be unique within this prompt. Please fix duplicate section names.');
-      return;
+
+    function save() {
+      const name = (nameInput?.value ?? '').trim();
+      const content = (contentInput?.value ?? '').trim();
+      if (!name) {
+        showError('Please enter a section name.');
+        return;
+      }
+      if (!content) {
+        showError('Please enter section content.');
+        return;
+      }
+      const otherNames = editSections
+        .map((s, i) => (i === sectionIndex ? null : (s.name || '').trim().toLowerCase()))
+        .filter(Boolean);
+      if (otherNames.includes(name.toLowerCase())) {
+        showError('This section name is already used. Please choose another.');
+        return;
+      }
+      if (isEdit) {
+        editSections[sectionIndex] = { name, content };
+      } else {
+        editSections.push({ name, content });
+      }
+      close();
+      onDone();
     }
-    currentSections = newSections;
-    if (sourceNode) {
-      sourceNode.dataset.promptSections = JSON.stringify(newSections);
+
+    editorOverlay.querySelector('.modal-close').addEventListener('click', close);
+    editorOverlay.querySelector('.section-editor-cancel').addEventListener('click', close);
+    editorOverlay.querySelector('.section-editor-save').addEventListener('click', save);
+    nameInput?.addEventListener('input', clearError);
+    contentInput?.addEventListener('input', clearError);
+    editorOverlay.addEventListener('click', (e) => {
+      if (e.target === editorOverlay) close();
+    });
+
+    document.body.appendChild(editorOverlay);
+    nameInput?.focus();
+  }
+
+  function createSectionCardForDetail(section, index, editSections, containerEl, onRender) {
+    const card = document.createElement('div');
+    card.className = 'prompt-section-card';
+    const displayName = (section.name || '').trim() || 'Unnamed section';
+    const openEditor = () =>
+      openSectionEditorForDetail(editSections, index, () => onRender());
+    card.innerHTML = `
+      <div class="prompt-section-card-inner" tabindex="0" role="button">
+        <span class="prompt-section-card-name">${escapeHtml(displayName)}</span>
+      </div>
+      <button type="button" class="prompt-section-card-edit" aria-label="Edit section">Edit</button>
+      <button type="button" class="prompt-section-card-remove" aria-label="Remove section">Delete</button>
+    `;
+    const inner = card.querySelector('.prompt-section-card-inner');
+    const editBtn = card.querySelector('.prompt-section-card-edit');
+    const removeBtn = card.querySelector('.prompt-section-card-remove');
+    inner.addEventListener('click', openEditor);
+    inner.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openEditor();
+      }
+    });
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openEditor();
+    });
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      editSections.splice(index, 1);
+      onRender();
+    });
+    return card;
+  }
+
+  function openEditSectionsOverlay() {
+    const editSections = currentSections.map((s) => ({ name: s.name || '', content: s.content || '' }));
+    const editOverlay = document.createElement('div');
+    editOverlay.className = 'modal-overlay modal-overlay--edit-sections';
+    editOverlay.setAttribute('aria-modal', 'true');
+    editOverlay.innerHTML = `
+      <div class="modal-panel modal-panel--edit-sections">
+        <div class="modal-header">
+          <h2 class="modal-title">Edit sections</h2>
+          <button type="button" class="modal-close modal-close--edit-sections" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="prompt-main prompt-main--edit-sections">
+            <div class="prompt-step prompt-step-2" style="display: flex;">
+              <p class="prompt-hint">Choose a section to edit, add a new section, or delete one.</p>
+              <div class="prompt-step-scroll prompt-step-2-scroll">
+                <div class="prompt-sections prompt-sections--edit"></div>
+                <div class="prompt-add-section-wrap">
+                  <button type="button" class="btn btn-secondary prompt-add-section">+ Add a section</button>
+                </div>
+              </div>
+              <div class="prompt-form-error prompt-modal-error edit-sections-error" role="alert" aria-live="polite" hidden></div>
+              <div class="prompt-actions">
+                <button type="button" class="btn btn-secondary edit-sections-cancel">Cancel</button>
+                <button type="button" class="btn btn-secondary edit-sections-save">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    const container = editOverlay.querySelector('.prompt-sections--edit');
+    const addBtn = editOverlay.querySelector('.prompt-add-section');
+    const errorEl = editOverlay.querySelector('.edit-sections-error');
+
+    function renderSectionsList() {
+      container.innerHTML = '';
+      editSections.forEach((section, index) => container.appendChild(createSectionCardForDetail(section, index, editSections, container, renderSectionsList)));
     }
-    sectionsView.innerHTML = sectionsToViewHtml(newSections.length ? newSections : []);
-    const inputsContentEl = overlay.querySelector('.prompt-detail-inputs-content');
-    if (inputsContentEl) inputsContentEl.innerHTML = inputsToViewHtml(newSections);
-    showSectionsView();
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-  });
+
+    function close() {
+      editOverlay.remove();
+    }
+
+    function showError(msg) {
+      if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.hidden = false;
+      }
+    }
+
+    function clearError() {
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.hidden = true;
+      }
+    }
+
+    function save() {
+      const withContent = editSections.filter((s) => (s.name || '').trim() && (s.content ?? '').trim());
+      const hasPartial = editSections.some((s) => {
+        const n = (s.name || '').trim();
+        const c = (s.content ?? '').trim();
+        return (n || c) && (!n || !c);
+      });
+      if (hasPartial) {
+        showError('Section name and content are required for each section.');
+        return;
+      }
+      if (withContent.length === 0) {
+        showError('At least one section with name and content is required.');
+        return;
+      }
+      if (hasDuplicateSectionNames(withContent)) {
+        showError('Section names must be unique within this prompt. Please fix duplicate section names.');
+        return;
+      }
+      currentSections = withContent;
+      if (sourceNode) sourceNode.dataset.promptSections = JSON.stringify(currentSections);
+      sectionsView.innerHTML = sectionsToViewHtml(currentSections.length ? currentSections : []);
+      const inputsContentEl = overlay.querySelector('.prompt-detail-inputs-content');
+      if (inputsContentEl) inputsContentEl.innerHTML = inputsToViewHtml(currentSections);
+      close();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    }
+
+    editOverlay.querySelector('.modal-close--edit-sections').addEventListener('click', close);
+    editOverlay.querySelector('.edit-sections-cancel').addEventListener('click', close);
+    editOverlay.querySelector('.edit-sections-save').addEventListener('click', save);
+    addBtn.addEventListener('click', () => {
+      openSectionEditorForDetail(editSections, null, renderSectionsList);
+    });
+    editOverlay.addEventListener('click', (e) => {
+      if (e.target === editOverlay) close();
+    });
+
+    renderSectionsList();
+    document.body.appendChild(editOverlay);
+  }
+
+  if (sectionsBtnEdit) {
+    sectionsBtnEdit.addEventListener('click', () => openEditSectionsOverlay());
+  }
 
   let currentSchemaFields = (outputFormat.fields || []).map((o) => ({
     key: o.key || '',
@@ -437,7 +575,6 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
   let currentSchemaReturnShape = outputFormat.returnShape || 'table';
   const schemaWrap = overlay.querySelector('.prompt-detail-schema-wrap');
   const schemaView = overlay.querySelector('.prompt-detail-schema-view');
-  const schemaEdit = overlay.querySelector('.prompt-detail-schema-edit');
 
   const schemaTooltip = document.createElement('div');
   schemaTooltip.className = 'prompt-detail-schema-tooltip';
@@ -487,312 +624,546 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     schemaTooltip.style.left = `${left}px`;
     schemaTooltip.style.top = `${top}px`;
   });
-  const schemaBtnEdit = overlay.querySelector('.prompt-detail-schema-btn-edit');
-  const schemaEditBtns = overlay.querySelector('.prompt-detail-schema-edit-btns');
-  const schemaBtnCancel = overlay.querySelector('.prompt-detail-schema-btn-cancel');
-  const schemaBtnSave = overlay.querySelector('.prompt-detail-schema-btn-save');
 
-  function renderOneExampleScalarDetail(type, ex, fieldIdx, exIdx) {
-    const valEsc = escapeHtml(typeof ex === 'string' ? ex : String(ex ?? ''));
-    if (type === 'float') {
-      return `<input type="number" step="any" class="prompt-field-name prompt-output-example-inp" value="${valEsc}" placeholder="" data-field-index="${fieldIdx}" data-ex-index="${exIdx}" />`;
+  const inputsContent = overlay.querySelector('.prompt-detail-inputs-content');
+  if (inputsContent && sectionsView) {
+    function clearLineHighlight() {
+      sectionsView.querySelectorAll('.preview-field-content-line.prompt-detail-line-highlight').forEach((el) => el.classList.remove('prompt-detail-line-highlight'));
     }
-    return `<textarea class="prompt-field-name prompt-output-example-inp prompt-output-example-textarea" rows="2" placeholder="" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">${valEsc}</textarea>`;
-  }
-
-  function renderOneExampleListDetail(type, elements, fieldIdx, exIdx) {
-    const elList = Array.isArray(elements) ? elements : [];
-    const isListStr = type === 'list_str';
-    const commaSpan = '<span class="prompt-output-list-comma">,</span>';
-    const makeEl = (el, elIdx) => {
-      const raw = isListStr ? (typeof el === 'string' ? el : '') : (typeof el === 'number' ? el : (el != null && el !== '' ? Number(el) : ''));
-      const v = escapeHtml(String(raw ?? ''));
-      const inp = isListStr
-        ? `<textarea class="prompt-field-name prompt-output-list-element-inp prompt-output-list-element-textarea" rows="2" placeholder="" data-field-index="${fieldIdx}" data-ex-index="${exIdx}" data-el-index="${elIdx}">${v}</textarea>`
-        : `<input type="number" step="any" class="prompt-field-name prompt-output-list-element-inp" value="${v}" placeholder="" data-field-index="${fieldIdx}" data-ex-index="${exIdx}" data-el-index="${elIdx}" />`;
-      const quoteWrap = isListStr ? `<span class="prompt-output-list-quote">"</span>${inp}<span class="prompt-output-list-quote">"</span>` : inp;
-      return `<span class="prompt-output-list-element-wrap">${quoteWrap}${commaSpan}<button type="button" class="prompt-output-del-list-element" aria-label="Remove item" data-field-index="${fieldIdx}" data-ex-index="${exIdx}" data-el-index="${elIdx}">×</button></span>`;
-    };
-    let parts = elList.map((el, elIdx) => makeEl(el, elIdx));
-    if (parts.length === 0) {
-      const inp0 = isListStr
-        ? '<textarea class="prompt-field-name prompt-output-list-element-inp prompt-output-list-element-textarea" rows="2" placeholder="" data-field-index="' + fieldIdx + '" data-ex-index="' + exIdx + '" data-el-index="0"></textarea>'
-        : '<input type="number" step="any" class="prompt-field-name prompt-output-list-element-inp" placeholder="" data-field-index="' + fieldIdx + '" data-ex-index="' + exIdx + '" data-el-index="0" />';
-      const quoteWrap0 = isListStr ? '<span class="prompt-output-list-quote">"</span>' + inp0 + '<span class="prompt-output-list-quote">"</span>' : inp0;
-      parts = [`<span class="prompt-output-list-element-wrap">${quoteWrap0}${commaSpan}<button type="button" class="prompt-output-del-list-element" aria-label="Remove item" data-field-index="${fieldIdx}" data-ex-index="${exIdx}" data-el-index="0">×</button></span>`];
+    function sentenceMatchesLine(sentence, lineText) {
+      const s = (sentence || '').trim();
+      const l = (lineText || '').trim();
+      if (s === l) return true;
+      if (s.endsWith('…') && l.startsWith(s.slice(0, -1))) return true;
+      if (l.startsWith(s)) return true;
+      return false;
     }
-    const lineBlocks = parts.map((p) => `<div class="prompt-output-list-line">${p}</div>`).join('');
-    const listInner = `<div class="prompt-output-list-elements prompt-output-list-elements--stacked"><span class="prompt-output-list-bracket">[</span>${lineBlocks}<span class="prompt-output-list-bracket">]</span></div>`;
-    return `<div class="prompt-output-list-example-row" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">${listInner}<div class="prompt-output-list-example-actions"><button type="button" class="btn btn-secondary prompt-output-add-list-element" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">+ Create item</button><button type="button" class="prompt-field-remove prompt-output-del-example" aria-label="Remove example" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">×</button></div></div>`;
-  }
-
-  function buildSchemaFieldBlockDetail(item, fieldIdx) {
-    const keyEsc = escapeHtml(item.key || '');
-    const descEsc = escapeHtml(item.description ?? '');
-    const type = item.type || 'str';
-    const examples = Array.isArray(item.examples) ? item.examples : [];
-    const allowNone = item.allowNone === true;
-    const allowNoneChecked = allowNone ? ' checked' : '';
-    const isList = type === 'list_str' || type === 'list_float';
-    const typeOptions = OUTPUT_TYPES.map((t) => `<option value="${t.value}" ${t.value === type ? 'selected' : ''}>${escapeHtml(t.label)}</option>`).join('');
-    let examplesHtml = '';
-    if (isList) {
-      examples.forEach((ex, exIdx) => {
-        const arr = Array.isArray(ex) ? ex : [];
-        examplesHtml += renderOneExampleListDetail(type, arr, fieldIdx, exIdx);
-      });
-      if (examples.length === 0) examplesHtml += renderOneExampleListDetail(type, [], fieldIdx, 0);
-    } else {
-      examples.forEach((ex, exIdx) => {
-        examplesHtml += `<div class="prompt-output-example-row">${renderOneExampleScalarDetail(type, ex, fieldIdx, exIdx)}<button type="button" class="prompt-field-remove prompt-output-del-example" aria-label="Remove example" data-field-index="${fieldIdx}" data-ex-index="${exIdx}">×</button></div>`;
+    function highlightSentencesForRow(row) {
+      const sectionCell = row.querySelector('td:nth-child(2)');
+      const sentenceCell = row.querySelector('td:nth-child(3)');
+      if (!sectionCell || !sentenceCell) return;
+      const sectionNames = (sectionCell.textContent || '').split('\n').map((s) => s.trim());
+      const sentences = (sentenceCell.textContent || '').split('\n').map((s) => s.trim());
+      clearLineHighlight();
+      sectionsView.querySelectorAll('.preview-field-block').forEach((block) => {
+        const nameEl = block.querySelector('.preview-field-name');
+        const name = (nameEl ? (nameEl.textContent || '').trim() : '') || 'Unnamed';
+        const lineEls = block.querySelectorAll('.preview-field-content-line');
+        sectionNames.forEach((sec, i) => {
+          if (sec !== name) return;
+          const sentence = sentences[i];
+          if (sentence == null) return;
+          lineEls.forEach((lineEl) => {
+            const lineText = (lineEl.textContent || '').trim();
+            if (sentenceMatchesLine(sentence, lineText)) lineEl.classList.add('prompt-detail-line-highlight');
+          });
+        });
       });
     }
-    return `<div class="prompt-output-key-block prompt-field" data-key-index="${fieldIdx}">
-        <div class="prompt-field-header">
-          <input type="text" class="prompt-field-name prompt-output-key-inp" value="${keyEsc}" placeholder="Field name (required)" data-key-index="${fieldIdx}" />
-          <select class="prompt-output-type-select dataset-meta-input" data-key-index="${fieldIdx}">${typeOptions}</select>
-          <button type="button" class="prompt-field-remove prompt-output-del-key" aria-label="Remove field" data-key-index="${fieldIdx}">Delete field</button>
-        </div>
-        <div class="prompt-output-description-wrap">
-          <label class="prompt-output-description-label">Description</label>
-          <textarea class="prompt-output-description-inp dataset-meta-input" rows="2" placeholder="Description (required)" data-key-index="${fieldIdx}">${descEsc}</textarea>
-        </div>
-        <div class="prompt-output-allow-none-wrap">
-          <label class="prompt-output-allow-none-label"><input type="checkbox" class="prompt-output-allow-none-inp" data-key-index="${fieldIdx}" aria-label="Allow None"${allowNoneChecked} /> Allow None</label>
-        </div>
-        <div class="prompt-output-examples-wrap">
-          <p class="prompt-output-examples-label">Examples for this field:</p>
-          <div class="prompt-output-examples-list">${examplesHtml}</div>
-          <button type="button" class="btn btn-secondary prompt-output-add-example" data-key-index="${fieldIdx}">+ Create example</button>
-        </div>
-      </div>`;
-  }
-
-  function getSchemaFromEditContainer() {
-    const returnShapeEl = schemaEdit.querySelector('input[name="prompt-detail-schema-return-shape"]:checked');
-    const returnShape = (returnShapeEl?.value || 'table') === 'single' ? 'single' : 'table';
-    const blocks = schemaEdit.querySelectorAll('.prompt-output-key-block');
-    const fields = Array.from(blocks).map((block) => {
-      const fieldInp = block.querySelector('.prompt-output-key-inp');
-      const key = (fieldInp?.value ?? '').trim() || '';
-      const typeSel = block.querySelector('.prompt-output-type-select');
-      const type = (typeSel?.value ?? 'str') || 'str';
-      const descInp = block.querySelector('.prompt-output-description-inp');
-      const description = (descInp?.value ?? '').trim() || '';
-      const allowNoneInp = block.querySelector('.prompt-output-allow-none-inp');
-      const allowNone = !!(allowNoneInp && allowNoneInp.checked);
-      const isList = type === 'list_str' || type === 'list_float';
-      if (isList) {
-        const exampleRows = block.querySelectorAll('.prompt-output-list-example-row');
-        const examples = Array.from(exampleRows).map((row) =>
-          Array.from(row.querySelectorAll('.prompt-output-list-element-inp')).map((inp) => (inp?.value ?? '').trim())
-        );
-        return { key, type, description, examples, allowNone };
-      }
-      const exampleInputs = block.querySelectorAll('.prompt-output-example-inp');
-      const examples = Array.from(exampleInputs).map((inp) => (inp?.value ?? '').trim());
-      return { key, type, description, examples, allowNone };
+    inputsContent.addEventListener('mouseover', (e) => {
+      const row = e.target.closest('.prompt-detail-inputs-table tbody tr');
+      if (row) highlightSentencesForRow(row);
+      else clearLineHighlight();
     });
-    return { returnShape, fields };
+    inputsContent.addEventListener('mouseout', (e) => {
+      const row = e.target.closest('.prompt-detail-inputs-table tbody tr');
+      const related = e.relatedTarget;
+      if (row && related && row.contains(related)) return;
+      if (related && inputsContent.contains(related) && related.closest('.prompt-detail-inputs-table tbody tr')) return;
+      clearLineHighlight();
+    });
   }
 
-  function showSchemaView() {
-    schemaWrap.setAttribute('data-prompt-schema-mode', 'view');
+  const schemaBtnEdit = overlay.querySelector('.prompt-detail-schema-btn-edit');
+
+  /* Field editor modal helpers (same as Add prompt step 3) */
+  function renderFieldEditorScalarRow(typeVal, value, rowIdx) {
+    const isFloat = typeVal === 'float';
+    const v = value != null ? (isFloat ? Number(value) : String(value)) : '';
+    const valAttr = isFloat ? ` value="${escapeHtml(String(v))}"` : '';
+    const inp = isFloat
+      ? `<input type="number" step="any" class="dataset-meta-input field-editor-scalar-inp" data-row-index="${rowIdx}"${valAttr} aria-label="Example" />`
+      : `<input type="text" class="dataset-meta-input field-editor-scalar-inp" value="${escapeHtml(String(v))}" data-row-index="${rowIdx}" aria-label="Example" />`;
+    return `<div class="field-editor-scalar-row" data-row-index="${rowIdx}"><div class="field-editor-scalar-input-wrap">${inp}</div><button type="button" class="field-editor-scalar-del" aria-label="Remove">Delete</button></div>`;
   }
 
-  function showSchemaEdit() {
-    if (sourceNode) {
-      try {
-        const raw = JSON.parse(sourceNode.dataset.promptOutputFormat || '[]');
-        currentSchemaFields = (Array.isArray(raw) ? raw : []).map((o) => ({
-          key: o.key || '',
-          type: o.type || 'str',
-          description: o.description ?? '',
-          examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
-          allowNone: o.allowNone === true,
-        }));
-        currentSchemaReturnShape = sourceNode.dataset.promptOutputReturnShape || 'table';
-      } catch (_) {}
-    }
-    if (currentSchemaFields.length === 0) currentSchemaFields = [{ key: '', type: 'str', description: '', examples: [], allowNone: false }];
-    schemaEdit.innerHTML = `
-        <div class="prompt-output-return-shape-wrap">
-          <span class="prompt-output-return-shape-label">Return shape:</span>
-          <label class="prompt-output-return-shape-option"><input type="radio" name="prompt-detail-schema-return-shape" value="single" ${currentSchemaReturnShape === 'single' ? 'checked' : ''} /> Single row of fields</label>
-          <label class="prompt-output-return-shape-option"><input type="radio" name="prompt-detail-schema-return-shape" value="table" ${currentSchemaReturnShape === 'table' ? 'checked' : ''} /> Table of fields (multiple rows)</label>
+  function renderFieldEditorListRow(typeVal, elements, exIdx) {
+    const elList = Array.isArray(elements) ? elements : [];
+    const isListStr = typeVal === 'list_str';
+    const makeElementRow = (val, elIdx) => {
+      const v = escapeHtml(typeof val === 'string' ? val : String(val ?? ''));
+      const inp = isListStr
+        ? `<textarea class="dataset-meta-input dataset-meta-textarea field-editor-element-inp" rows="1" data-el-index="${elIdx}">${v}</textarea>`
+        : `<input type="number" step="any" class="dataset-meta-input field-editor-element-inp" value="${v}" data-el-index="${elIdx}" />`;
+      return `<div class="field-editor-element-row"><div class="field-editor-element-input-wrap">${inp}</div><button type="button" class="field-editor-del-element" aria-label="Remove">Delete</button></div>`;
+    };
+    const rows = elList.length > 0 ? elList.map((el, i) => makeElementRow(el, i)) : [makeElementRow('', 0)];
+    const rowsHtml = rows.join('');
+    return `<div class="field-editor-list-example-block" data-ex-index="${exIdx}"><div class="field-editor-element-rows">${rowsHtml}</div><div class="field-editor-list-example-actions"><button type="button" class="btn btn-secondary field-editor-add-element" data-ex-index="${exIdx}">+ Add element</button><button type="button" class="field-editor-del-example" aria-label="Remove list example" data-ex-index="${exIdx}">Delete list</button></div></div>`;
+  }
+
+  function openFieldEditorForDetail(editSchemaFields, fieldIndex, onDone) {
+    const isEdit = fieldIndex !== null && fieldIndex >= 0;
+    const field = isEdit ? editSchemaFields[fieldIndex] : { key: '', type: 'str', description: '', examples: [], allowNone: false };
+    const type = field.type || 'str';
+    const isListType = type === 'list_str' || type === 'list_float';
+    const typeOptions = OUTPUT_TYPES.map((t) => `<option value="${t.value}" ${t.value === type ? 'selected' : ''}>${escapeHtml(t.label)}</option>`).join('');
+    const editorOverlay = document.createElement('div');
+    editorOverlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--field-editor';
+    editorOverlay.setAttribute('aria-modal', 'true');
+    editorOverlay.innerHTML = `
+      <div class="modal-panel modal-panel--section-editor modal-panel--field-editor">
+        <div class="modal-header">
+          <h3 class="modal-title">${isEdit ? 'Edit field' : 'Add field'}</h3>
+          <button type="button" class="modal-close" aria-label="Close">×</button>
         </div>
-        <div class="prompt-output-format-wrap">
-          <div class="prompt-detail-schema-keys-list">${currentSchemaFields.map((item, i) => buildSchemaFieldBlockDetail(item, i)).join('')}</div>
-          <div class="prompt-output-format-actions">
-            <button type="button" class="btn btn-secondary prompt-detail-schema-add-key">+ Create field</button>
+        <div class="modal-body">
+          <div class="dataset-meta-wrap">
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="field-editor-key">Field name</label>
+              <input type="text" id="field-editor-key" class="dataset-meta-input" value="${escapeHtml(field.key || '')}" aria-label="Field name" />
+            </div>
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="field-editor-type">Type</label>
+              <select id="field-editor-type" class="dataset-meta-input" aria-label="Type">${typeOptions}</select>
+            </div>
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="field-editor-desc">Description</label>
+              <textarea id="field-editor-desc" class="dataset-meta-input dataset-meta-textarea" rows="3" aria-label="Field description">${escapeHtml(field.description ?? '')}</textarea>
+            </div>
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label"><input type="checkbox" id="field-editor-allow-none" ${field.allowNone ? 'checked' : ''} aria-label="Allow None" /> Allow None</label>
+            </div>
+            <div class="dataset-meta-field field-editor-examples-wrap">
+              <label class="dataset-meta-label">Examples</label>
+              <div id="field-editor-examples-scalar" class="field-editor-examples-scalar" style="${isListType ? 'display:none' : ''}">
+                <div class="field-editor-scalar-rows"></div>
+                <button type="button" class="btn btn-secondary field-editor-add-scalar-row">+ Add example</button>
+              </div>
+              <div id="field-editor-examples-list" class="field-editor-examples-list prompt-output-examples-wrap" style="${isListType ? '' : 'display:none'}">
+                <div class="prompt-output-examples-list field-editor-list-rows"></div>
+                <button type="button" class="btn btn-secondary field-editor-add-list-row">+ Add list example</button>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-form-error section-editor-error field-editor-error" role="alert" aria-live="polite" hidden></div>
+          <div class="modal-footer-actions">
+            <button type="button" class="btn btn-secondary section-editor-cancel">Cancel</button>
+            <button type="button" class="btn btn-secondary section-editor-save">${isEdit ? 'Save' : 'Add field'}</button>
           </div>
         </div>
-      `;
-    const keysListEl = schemaEdit.querySelector('.prompt-detail-schema-keys-list');
+      </div>
+    `;
+    const keyInput = editorOverlay.querySelector('#field-editor-key');
+    const typeSelect = editorOverlay.querySelector('#field-editor-type');
+    const descInput = editorOverlay.querySelector('#field-editor-desc');
+    const allowNoneInput = editorOverlay.querySelector('#field-editor-allow-none');
+    const examplesScalarWrap = editorOverlay.querySelector('#field-editor-examples-scalar');
+    const examplesListWrap = editorOverlay.querySelector('#field-editor-examples-list');
+    const scalarRowsContainer = editorOverlay.querySelector('.field-editor-scalar-rows');
+    const addScalarRowBtn = editorOverlay.querySelector('.field-editor-add-scalar-row');
+    const listRowsContainer = editorOverlay.querySelector('.field-editor-list-rows');
+    const addListRowBtn = editorOverlay.querySelector('.field-editor-add-list-row');
+    const errorEl = editorOverlay.querySelector('.field-editor-error');
 
-    function reRenderSchemaFields() {
-      const { returnShape, fields } = getSchemaFromEditContainer();
-      currentSchemaFields = fields.length ? fields : [{ key: '', type: 'str', description: '', examples: [], allowNone: false }];
-      currentSchemaReturnShape = returnShape;
-      keysListEl.innerHTML = currentSchemaFields.map((item, i) => buildSchemaFieldBlockDetail(item, i)).join('');
-      bindSchemaKeyEvents();
+    function close() {
+      editorOverlay.remove();
     }
 
-    function bindSchemaKeyEvents() {
-      schemaEdit.querySelectorAll('.prompt-output-del-key').forEach((btn) => {
-        btn.replaceWith(btn.cloneNode(true));
-      });
-      schemaEdit.querySelectorAll('.prompt-output-del-key').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const { fields } = getSchemaFromEditContainer();
-          if (fields.length <= 1) return;
-          const i = parseInt(btn.getAttribute('data-key-index'), 10);
-          currentSchemaFields = fields.filter((_, idx) => idx !== i);
-          keysListEl.innerHTML = currentSchemaFields.map((item, idx) => buildSchemaFieldBlockDetail(item, idx)).join('');
-          bindSchemaKeyEvents();
+    function showError(msg) {
+      if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.hidden = false;
+      }
+    }
+
+    function getCurrentType() {
+      return (typeSelect?.value ?? 'str') || 'str';
+    }
+
+    function readScalarExamplesFromDOM() {
+      const typeVal = getCurrentType();
+      const isFloat = typeVal === 'float';
+      const rows = scalarRowsContainer.querySelectorAll('.field-editor-scalar-row');
+      return Array.from(rows)
+        .map((row) => {
+          const inp = row.querySelector('.field-editor-scalar-inp');
+          const raw = (inp?.value ?? '').trim();
+          return isFloat ? (raw === '' ? null : Number(raw)) : raw;
+        })
+        .filter((v) => v !== null && v !== '');
+    }
+
+    function buildScalarExamplesUI(typeVal, examples) {
+      const list = Array.isArray(examples) ? examples : [];
+      scalarRowsContainer.innerHTML = '';
+      if (list.length === 0) {
+        scalarRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorScalarRow(typeVal, '', 0));
+      } else {
+        list.forEach((val, i) => {
+          scalarRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorScalarRow(typeVal, val, i));
         });
-      });
-      schemaEdit.querySelectorAll('.prompt-output-add-example').forEach((btn) => {
-        btn.replaceWith(btn.cloneNode(true));
-      });
-      schemaEdit.querySelectorAll('.prompt-output-add-example').forEach((btn) => {
+      }
+      wireScalarExampleEvents(typeVal);
+    }
+
+    function wireScalarExampleEvents(typeVal) {
+      scalarRowsContainer.querySelectorAll('.field-editor-scalar-del').forEach((btn) => btn.replaceWith(btn.cloneNode(true)));
+      scalarRowsContainer.querySelectorAll('.field-editor-scalar-del').forEach((btn) => {
         btn.addEventListener('click', () => {
-          const { fields } = getSchemaFromEditContainer();
-          const fieldIdx = parseInt(btn.getAttribute('data-key-index'), 10);
-          if (!fields[fieldIdx]) return;
-          if (!Array.isArray(fields[fieldIdx].examples)) fields[fieldIdx].examples = [];
-          const isList = fields[fieldIdx].type === 'list_str' || fields[fieldIdx].type === 'list_float';
-          fields[fieldIdx].examples.push(isList ? [] : '');
-          currentSchemaFields = fields;
-          keysListEl.innerHTML = currentSchemaFields.map((item, idx) => buildSchemaFieldBlockDetail(item, idx)).join('');
-          bindSchemaKeyEvents();
-        });
-      });
-      schemaEdit.querySelectorAll('.prompt-output-del-example').forEach((btn) => {
-        btn.replaceWith(btn.cloneNode(true));
-      });
-      schemaEdit.querySelectorAll('.prompt-output-del-example').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const { fields } = getSchemaFromEditContainer();
-          const fieldIdx = parseInt(btn.getAttribute('data-field-index'), 10);
-          const exIdx = parseInt(btn.getAttribute('data-ex-index'), 10);
-          if (fields[fieldIdx]?.examples?.length) {
-            fields[fieldIdx].examples.splice(exIdx, 1);
-            currentSchemaFields = fields;
-            keysListEl.innerHTML = currentSchemaFields.map((item, idx) => buildSchemaFieldBlockDetail(item, idx)).join('');
-            bindSchemaKeyEvents();
-          }
-        });
-      });
-      schemaEdit.querySelectorAll('.prompt-output-type-select').forEach((sel) => {
-        sel.replaceWith(sel.cloneNode(true));
-      });
-      schemaEdit.querySelectorAll('.prompt-output-type-select').forEach((sel) => {
-        sel.addEventListener('change', () => {
-          const { fields } = getSchemaFromEditContainer();
-          currentSchemaFields = fields;
-          keysListEl.innerHTML = currentSchemaFields.map((item, idx) => buildSchemaFieldBlockDetail(item, idx)).join('');
-          bindSchemaKeyEvents();
-        });
-      });
-      schemaEdit.querySelectorAll('.prompt-output-add-list-element').forEach((btn) => {
-        btn.replaceWith(btn.cloneNode(true));
-      });
-      schemaEdit.querySelectorAll('.prompt-output-add-list-element').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const { fields } = getSchemaFromEditContainer();
-          const fieldIdx = parseInt(btn.getAttribute('data-field-index'), 10);
-          const exIdx = parseInt(btn.getAttribute('data-ex-index'), 10);
-          const item = fields[fieldIdx];
-          if (item?.examples && Array.isArray(item.examples[exIdx])) {
-            item.examples[exIdx].push('');
-            currentSchemaFields = fields;
-            keysListEl.innerHTML = currentSchemaFields.map((it, idx) => buildSchemaFieldBlockDetail(it, idx)).join('');
-            bindSchemaKeyEvents();
-          }
-        });
-      });
-      schemaEdit.querySelectorAll('.prompt-output-del-list-element').forEach((btn) => {
-        btn.replaceWith(btn.cloneNode(true));
-      });
-      schemaEdit.querySelectorAll('.prompt-output-del-list-element').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const { fields } = getSchemaFromEditContainer();
-          const fieldIdx = parseInt(btn.getAttribute('data-field-index'), 10);
-          const exIdx = parseInt(btn.getAttribute('data-ex-index'), 10);
-          const elIdx = parseInt(btn.getAttribute('data-el-index'), 10);
-          const item = fields[fieldIdx];
-          if (item?.examples?.[exIdx]?.length > 1) {
-            item.examples[exIdx].splice(elIdx, 1);
-            currentSchemaFields = fields;
-            keysListEl.innerHTML = currentSchemaFields.map((it, idx) => buildSchemaFieldBlockDetail(it, idx)).join('');
-            bindSchemaKeyEvents();
-          }
+          const row = btn.closest('.field-editor-scalar-row');
+          const rows = scalarRowsContainer.querySelectorAll('.field-editor-scalar-row');
+          if (rows.length > 1 && row) row.remove();
+          reindexScalarRows();
+          wireScalarExampleEvents(getCurrentType());
         });
       });
     }
 
-    bindSchemaKeyEvents();
-    schemaEdit.querySelector('.prompt-detail-schema-add-key').addEventListener('click', () => {
-      currentSchemaFields.push({ key: '', type: 'str', description: '', examples: [], allowNone: false });
-      keysListEl.innerHTML = currentSchemaFields.map((item, idx) => buildSchemaFieldBlockDetail(item, idx)).join('');
-      bindSchemaKeyEvents();
+    function reindexScalarRows() {
+      scalarRowsContainer.querySelectorAll('.field-editor-scalar-row').forEach((row, i) => {
+        row.setAttribute('data-row-index', String(i));
+        const inp = row.querySelector('.field-editor-scalar-inp');
+        if (inp) inp.setAttribute('data-row-index', String(i));
+      });
+    }
+
+    function readListExamplesFromDOM() {
+      const blocks = listRowsContainer.querySelectorAll('.field-editor-list-example-block');
+      return Array.from(blocks).map((block) =>
+        Array.from(block.querySelectorAll('.field-editor-element-inp')).map((inp) => (inp?.value ?? '').trim())
+      );
+    }
+
+    function buildListExamplesUI(typeVal, examples) {
+      const list = Array.isArray(examples) ? examples : [];
+      listRowsContainer.innerHTML = '';
+      if (list.length === 0) {
+        listRowsContainer.innerHTML = renderFieldEditorListRow(typeVal, [], 0);
+      } else {
+        list.forEach((arr, exIdx) => {
+          listRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorListRow(typeVal, arr, exIdx));
+        });
+      }
+      wireListExampleEvents(typeVal);
+    }
+
+    function wireListExampleEvents(typeVal) {
+      listRowsContainer.querySelectorAll('.field-editor-add-element').forEach((btn) => btn.replaceWith(btn.cloneNode(true)));
+      listRowsContainer.querySelectorAll('.field-editor-del-example').forEach((btn) => btn.replaceWith(btn.cloneNode(true)));
+      listRowsContainer.querySelectorAll('.field-editor-del-element').forEach((btn) => btn.replaceWith(btn.cloneNode(true)));
+      listRowsContainer.querySelectorAll('.field-editor-add-element').forEach((btn) => {
+        const exIdx = btn.getAttribute('data-ex-index');
+        btn.addEventListener('click', () => {
+          const block = listRowsContainer.querySelector(`.field-editor-list-example-block[data-ex-index="${exIdx}"]`);
+          const container = block?.querySelector('.field-editor-element-rows');
+          if (!container) return;
+          const isListStr = typeVal === 'list_str';
+          const elIdx = container.querySelectorAll('.field-editor-element-row').length;
+          const inp = isListStr
+            ? `<textarea class="dataset-meta-input dataset-meta-textarea field-editor-element-inp" rows="1" data-el-index="${elIdx}"></textarea>`
+            : `<input type="number" step="any" class="dataset-meta-input field-editor-element-inp" data-el-index="${elIdx}" />`;
+          const row = `<div class="field-editor-element-row"><div class="field-editor-element-input-wrap">${inp}</div><button type="button" class="field-editor-del-element" aria-label="Remove">Delete</button></div>`;
+          container.insertAdjacentHTML('beforeend', row);
+          wireListExampleEvents(typeVal);
+        });
+      });
+      listRowsContainer.querySelectorAll('.field-editor-del-example').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const block = listRowsContainer.querySelector(`.field-editor-list-example-block[data-ex-index="${btn.getAttribute('data-ex-index')}"]`);
+          if (block && listRowsContainer.querySelectorAll('.field-editor-list-example-block').length > 1) {
+            block.remove();
+            reindexListRows();
+            wireListExampleEvents(getCurrentType());
+          }
+        });
+      });
+      listRowsContainer.querySelectorAll('.field-editor-del-element').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const row = btn.closest('.field-editor-element-row');
+          const block = row?.closest('.field-editor-list-example-block');
+          const rows = block?.querySelectorAll('.field-editor-element-row') || [];
+          if (rows.length > 1 && row) row.remove();
+        });
+      });
+    }
+
+    function reindexListRows() {
+      listRowsContainer.querySelectorAll('.field-editor-list-example-block').forEach((block, i) => {
+        block.setAttribute('data-ex-index', String(i));
+        block.querySelector('.field-editor-add-element')?.setAttribute('data-ex-index', String(i));
+        block.querySelector('.field-editor-del-example')?.setAttribute('data-ex-index', String(i));
+      });
+    }
+
+    if (isListType) {
+      buildListExamplesUI(type, field.examples || []);
+    } else {
+      buildScalarExamplesUI(type, field.examples || []);
+    }
+
+    addScalarRowBtn.addEventListener('click', () => {
+      const typeVal = getCurrentType();
+      const nextIdx = scalarRowsContainer.querySelectorAll('.field-editor-scalar-row').length;
+      scalarRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorScalarRow(typeVal, '', nextIdx));
+      reindexScalarRows();
+      wireScalarExampleEvents(typeVal);
     });
-    schemaWrap.setAttribute('data-prompt-schema-mode', 'edit');
+
+    addListRowBtn.addEventListener('click', () => {
+      const typeVal = getCurrentType();
+      const nextIdx = listRowsContainer.querySelectorAll('.field-editor-list-example-block').length;
+      listRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorListRow(typeVal, [], nextIdx));
+      wireListExampleEvents(typeVal);
+    });
+
+    typeSelect.addEventListener('change', () => {
+      const typeVal = getCurrentType();
+      const nowList = typeVal === 'list_str' || typeVal === 'list_float';
+      if (nowList) {
+        const prevList = examplesListWrap.style.display !== 'none';
+        let examples = prevList ? readListExamplesFromDOM() : readScalarExamplesFromDOM().map((v) => (Array.isArray(v) ? v : [v]));
+        examplesScalarWrap.style.display = 'none';
+        examplesListWrap.style.display = '';
+        buildListExamplesUI(typeVal, examples);
+      } else {
+        const prevList = examplesListWrap.style.display !== 'none';
+        let scalarExamples = prevList
+          ? readListExamplesFromDOM().map((arr) => (Array.isArray(arr) && arr.length ? (typeVal === 'float' ? arr[0] : arr.join(', ')) : ''))
+          : readScalarExamplesFromDOM();
+        examplesListWrap.style.display = 'none';
+        examplesScalarWrap.style.display = '';
+        buildScalarExamplesUI(typeVal, scalarExamples.length ? scalarExamples : []);
+      }
+    });
+
+    function save() {
+      const key = (keyInput?.value ?? '').trim();
+      const typeVal = getCurrentType();
+      const description = (descInput?.value ?? '').trim();
+      const allowNone = !!(allowNoneInput && allowNoneInput.checked);
+      const isList = typeVal === 'list_str' || typeVal === 'list_float';
+      const examples = isList ? readListExamplesFromDOM() : readScalarExamplesFromDOM();
+      if (!key) {
+        showError('Please enter a field name.');
+        return;
+      }
+      if (!description) {
+        showError('Please enter a field description.');
+        return;
+      }
+      const otherKeys = editSchemaFields
+        .map((o, i) => (i === fieldIndex ? null : (o.key || '').trim().toLowerCase()))
+        .filter(Boolean);
+      if (otherKeys.includes(key.toLowerCase())) {
+        showError('This field name is already used. Please choose another.');
+        return;
+      }
+      const payload = { key, type: typeVal, description, examples, allowNone };
+      if (isEdit) {
+        editSchemaFields[fieldIndex] = payload;
+      } else {
+        editSchemaFields.push(payload);
+      }
+      close();
+      onDone();
+    }
+
+    editorOverlay.querySelector('.modal-close').addEventListener('click', close);
+    editorOverlay.querySelector('.section-editor-cancel').addEventListener('click', close);
+    editorOverlay.querySelector('.section-editor-save').addEventListener('click', save);
+    editorOverlay.addEventListener('click', (e) => {
+      if (e.target === editorOverlay) close();
+    });
+
+    document.body.appendChild(editorOverlay);
+    keyInput?.focus();
   }
 
-  schemaBtnEdit.addEventListener('click', showSchemaEdit);
-  schemaBtnCancel.addEventListener('click', showSchemaView);
   function hasDuplicateFieldNames(fieldsList) {
     const keys = fieldsList.map((o) => (o.key || '').trim().toLowerCase());
     return keys.length !== new Set(keys).size;
   }
 
-  schemaBtnSave.addEventListener('click', () => {
-    const { returnShape, fields } = getSchemaFromEditContainer();
-    const normalized = fields.map((o) => ({
+  function createFieldCardForDetail(field, index, editSchemaFields, onRender) {
+    const card = document.createElement('div');
+    card.className = 'prompt-output-field-card';
+    const displayName = (field.key || '').trim() || 'Unnamed field';
+    const openEditor = () =>
+      openFieldEditorForDetail(editSchemaFields, index, onRender);
+    card.innerHTML = `
+      <div class="prompt-output-field-card-inner" tabindex="0" role="button">
+        <span class="prompt-output-field-card-name">${escapeHtml(displayName)}</span>
+      </div>
+      <button type="button" class="prompt-output-field-card-edit" aria-label="Edit field">Edit</button>
+      <button type="button" class="prompt-output-field-card-remove" aria-label="Remove field">Delete</button>
+    `;
+    const inner = card.querySelector('.prompt-output-field-card-inner');
+    const editBtn = card.querySelector('.prompt-output-field-card-edit');
+    const removeBtn = card.querySelector('.prompt-output-field-card-remove');
+    inner.addEventListener('click', openEditor);
+    inner.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openEditor();
+      }
+    });
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openEditor();
+    });
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      editSchemaFields.splice(index, 1);
+      onRender();
+    });
+    return card;
+  }
+
+  function openEditSchemaOverlay() {
+    const editSchemaFields = currentSchemaFields.map((o) => ({
       key: o.key || '',
       type: o.type || 'str',
-      description: (o.description ?? '').trim() || '',
+      description: o.description ?? '',
       examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
       allowNone: o.allowNone === true,
     }));
-    const fieldsToSave = normalized.length ? normalized : [{ key: '', type: 'str', description: '', examples: [], allowNone: false }];
-    const schemaErrorEl = overlay.querySelector('#prompt-detail-schema-error');
-    if (schemaErrorEl) schemaErrorEl.hidden = true;
-    const missingFieldName = fieldsToSave.some((f) => !(f.key ?? '').trim());
-    if (missingFieldName) {
-      if (schemaErrorEl) {
-        schemaErrorEl.textContent = 'Field name is required for all fields.';
-        schemaErrorEl.hidden = false;
+    let editSchemaReturnShape = currentSchemaReturnShape;
+    const schemaOverlay = document.createElement('div');
+    schemaOverlay.className = 'modal-overlay modal-overlay--edit-schema';
+    schemaOverlay.setAttribute('aria-modal', 'true');
+    schemaOverlay.innerHTML = `
+      <div class="modal-panel modal-panel--edit-schema">
+        <div class="modal-header">
+          <h2 class="modal-title">Edit output schema</h2>
+          <button type="button" class="modal-close modal-close--edit-schema" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="prompt-main prompt-main--edit-schema">
+            <div class="prompt-step prompt-step-3" style="display: flex;">
+              <p class="prompt-hint">The LLM will return items with these fields. Add a field, then add example values for that field.</p>
+              <div class="edit-schema-form">
+                <div class="prompt-output-return-shape-wrap">
+                  <span class="prompt-output-return-shape-label">Return shape:</span>
+                  <label class="prompt-output-return-shape-option"><input type="radio" name="prompt-detail-schema-return-shape" value="single" /> Single row</label>
+                  <label class="prompt-output-return-shape-option"><input type="radio" name="prompt-detail-schema-return-shape" value="table" /> Multiple rows</label>
+                </div>
+                <div class="prompt-output-format-wrap">
+                  <div class="prompt-step-3-format-scroll">
+                    <div class="prompt-output-keys-list"></div>
+                  </div>
+                  <div class="prompt-add-field-wrap">
+                    <button type="button" class="btn btn-secondary prompt-output-add-key">+ Add a field</button>
+                  </div>
+                </div>
+              </div>
+              <div class="prompt-form-error prompt-modal-error edit-schema-error" role="alert" aria-live="polite" hidden></div>
+              <div class="prompt-actions">
+                <button type="button" class="btn btn-secondary edit-schema-cancel">Cancel</button>
+                <button type="button" class="btn btn-secondary edit-schema-save">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    const formContainer = schemaOverlay.querySelector('.edit-schema-form');
+    const keysListEl = formContainer.querySelector('.prompt-output-keys-list');
+    const returnShapeSingle = formContainer.querySelector('input[name="prompt-detail-schema-return-shape"][value="single"]');
+    const returnShapeTable = formContainer.querySelector('input[name="prompt-detail-schema-return-shape"][value="table"]');
+    if (editSchemaReturnShape === 'single') {
+      if (returnShapeSingle) returnShapeSingle.checked = true;
+    } else {
+      if (returnShapeTable) returnShapeTable.checked = true;
+    }
+    const errorEl = schemaOverlay.querySelector('.edit-schema-error');
+
+    function renderSchemaCards() {
+      keysListEl.innerHTML = '';
+      editSchemaFields.forEach((field, index) => {
+        keysListEl.appendChild(createFieldCardForDetail(field, index, editSchemaFields, renderSchemaCards));
+      });
+    }
+
+    const addFieldBtn = formContainer.querySelector('.prompt-output-add-key');
+    if (addFieldBtn) {
+      addFieldBtn.addEventListener('click', () => {
+        openFieldEditorForDetail(editSchemaFields, null, renderSchemaCards);
+      });
+    }
+
+    function close() {
+      schemaOverlay.remove();
+    }
+
+    function showError(msg) {
+      if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.hidden = false;
       }
-      return;
     }
-    const missingFieldDesc = fieldsToSave.some((f) => !(f.description ?? '').trim());
-    if (missingFieldDesc) {
-      if (schemaErrorEl) {
-        schemaErrorEl.textContent = 'Field description is required for all fields.';
-        schemaErrorEl.hidden = false;
+
+    function clearError() {
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.hidden = true;
       }
-      return;
     }
-    if (hasDuplicateFieldNames(fieldsToSave)) {
-      if (schemaErrorEl) {
-        schemaErrorEl.textContent = 'Field names must be unique within this prompt. Please fix duplicate field names.';
-        schemaErrorEl.hidden = false;
-      } else alert('Field names must be unique within this prompt. Please fix duplicate field names.');
-      return;
-    }
-    currentSchemaFields = fieldsToSave;
-    currentSchemaReturnShape = returnShape;
-    if (sourceNode) {
-      sourceNode.dataset.promptOutputFormat = JSON.stringify(currentSchemaFields);
-      sourceNode.dataset.promptOutputReturnShape = currentSchemaReturnShape;
-    }
-    schemaView.innerHTML = schemaToViewHtml(currentSchemaFields, currentSchemaReturnShape);
-    showSchemaView();
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-  });
+
+    schemaOverlay.querySelector('.modal-close--edit-schema').addEventListener('click', close);
+    schemaOverlay.querySelector('.edit-schema-cancel').addEventListener('click', close);
+    schemaOverlay.querySelector('.edit-schema-save').addEventListener('click', () => {
+      const returnShapeEl = formContainer.querySelector('input[name="prompt-detail-schema-return-shape"]:checked');
+      const returnShape = (returnShapeEl?.value || 'table') === 'single' ? 'single' : 'table';
+      const fieldsToSave = editSchemaFields.length
+        ? editSchemaFields.map((o) => ({
+            key: o.key || '',
+            type: o.type || 'str',
+            description: (o.description ?? '').trim() || '',
+            examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
+            allowNone: o.allowNone === true,
+          }))
+        : [];
+      clearError();
+      if (fieldsToSave.length === 0) {
+        showError('Add at least one field.');
+        return;
+      }
+      const missingFieldName = fieldsToSave.some((f) => !(f.key ?? '').trim());
+      if (missingFieldName) {
+        showError('Field name is required for all fields.');
+        return;
+      }
+      const missingFieldDesc = fieldsToSave.some((f) => !(f.description ?? '').trim());
+      if (missingFieldDesc) {
+        showError('Field description is required for all fields.');
+        return;
+      }
+      if (hasDuplicateFieldNames(fieldsToSave)) {
+        showError('Field names must be unique within this prompt. Please fix duplicate field names.');
+        return;
+      }
+      currentSchemaFields = fieldsToSave;
+      currentSchemaReturnShape = returnShape;
+      if (sourceNode) {
+        sourceNode.dataset.promptOutputFormat = JSON.stringify(currentSchemaFields);
+        sourceNode.dataset.promptOutputReturnShape = currentSchemaReturnShape;
+      }
+      schemaView.innerHTML = schemaToViewHtml(currentSchemaFields, currentSchemaReturnShape);
+      close();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    });
+    schemaOverlay.addEventListener('click', (e) => {
+      if (e.target === schemaOverlay) close();
+    });
+
+    renderSchemaCards();
+    document.body.appendChild(schemaOverlay);
+  }
+
+  if (schemaBtnEdit) {
+    schemaBtnEdit.addEventListener('click', () => openEditSchemaOverlay());
+  }
 
   overlay.querySelector('.modal-close').addEventListener('click', () => {
     overlay.remove();

@@ -1,6 +1,10 @@
 /**
- * "Add a new source dataset" modal: import CSV/TSV file, show parsed headers.
+ * "Add a new dataset" modal: two steps.
+ * Step 1: Name & description.
+ * Step 2: Left = upload CSV/TSV/XLSX, Right = preview.
  */
+
+import * as XLSX from 'xlsx';
 
 function parseCsvLine(line) {
   line = String(line ?? '').trim();
@@ -42,62 +46,229 @@ export function openAddDatasetModal(workflowCanvasApi) {
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'new-dataset-title');
   overlay.innerHTML = `
-    <div class="modal-panel modal-panel--dataset">
+    <div class="modal-panel modal-panel--dataset" data-add-dataset-step="1">
       <div class="modal-header">
-        <h2 id="new-dataset-title" class="modal-title">Create a new source dataset</h2>
+        <h2 id="new-dataset-title" class="modal-title">Create a new dataset</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body modal-body--dataset">
-        <div class="dataset-main">
-          <div class="dataset-import">
-            <h3 class="dataset-import-title">File import</h3>
-            <div class="dataset-import-actions">
-              <input type="file" id="dataset-file-input" accept=".csv,.tsv,text/csv,text/tab-separated-values" hidden />
-              <button type="button" class="btn btn-secondary dataset-import-btn">Import file (CSV / TSV)</button>
-              <span class="dataset-filename" aria-live="polite"></span>
+        <div class="dataset-add-main">
+          <div class="dataset-add-step dataset-add-step-1">
+            <p class="prompt-step-label">Step 1 of 2 — Name & description</p>
+            <div class="dataset-meta-wrap prompt-meta-wrap">
+              <div class="dataset-meta-field">
+                <label class="dataset-meta-label" for="dataset-name-input">Dataset name</label>
+                <input type="text" id="dataset-name-input" class="dataset-meta-input" placeholder="My dataset" />
+              </div>
+              <div class="dataset-meta-field">
+                <label class="dataset-meta-label" for="dataset-notes-input">Dataset description</label>
+                <textarea id="dataset-notes-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="What this dataset is for"></textarea>
+              </div>
+            </div>
+            <div class="prompt-form-error prompt-modal-error dataset-add-error" role="alert" aria-live="polite" hidden></div>
+            <div class="prompt-actions">
+              <button type="button" class="btn btn-secondary dataset-add-btn-next">Next</button>
             </div>
           </div>
-          <div class="dataset-meta-wrap">
-            <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="dataset-name-input">Source dataset name</label>
-              <input type="text" id="dataset-name-input" class="dataset-meta-input" placeholder="File name" />
+          <div class="dataset-add-step dataset-add-step-2">
+            <p class="prompt-step-label">Step 2 of 2 — Upload file</p>
+            <div class="dataset-add-step2-scroll">
+              <div class="dataset-add-step2-left">
+                <div class="dataset-import">
+                  <h3 class="dataset-import-title">Select file</h3>
+                  <div class="dataset-import-actions">
+                    <input type="file" id="dataset-file-input" accept=".csv,.tsv,.xlsx,.xls,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden />
+                    <button type="button" class="btn btn-secondary dataset-import-btn">Choose CSV / TSV / XLSX file</button>
+                    <span class="dataset-filename" aria-live="polite"></span>
+                  </div>
+                  <div class="dataset-sheet-wrap" id="dataset-sheet-wrap" style="display:none">
+                    <label class="dataset-meta-label" for="dataset-sheet-select">Sheet</label>
+                    <p class="dataset-sheet-hint" id="dataset-sheet-hint">This file has multiple sheets. Select which sheet to import.</p>
+                    <select id="dataset-sheet-select" class="dataset-meta-input" aria-label="Select sheet"></select>
+                  </div>
+                  <div class="dataset-file-info" id="dataset-file-info" aria-live="polite">
+                    <span class="dataset-file-info-placeholder">No file selected.</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="dataset-notes-input">Source dataset description</label>
-              <textarea id="dataset-notes-input" class="dataset-meta-input dataset-meta-textarea" rows="3" placeholder="Source dataset description (required)"></textarea>
+            <div class="prompt-form-error prompt-modal-error dataset-add-error" role="alert" aria-live="polite" hidden></div>
+            <div class="prompt-actions">
+              <button type="button" class="btn btn-secondary dataset-add-btn-back">Back</button>
+              <button type="button" class="btn btn-secondary dataset-add-btn">Create this dataset</button>
             </div>
-            <div class="prompt-form-error" role="alert" aria-live="polite" hidden></div>
-          </div>
-          <div class="dataset-main-footer">
-            <button type="button" class="btn btn-secondary dataset-add-btn">Create this source dataset</button>
           </div>
         </div>
-        <div class="dataset-preview-wrap">
-          <h3 class="dataset-preview-title">Preview</h3>
-          <div class="dataset-preview" aria-live="polite">No file imported yet.</div>
+        <div class="dataset-add-preview-wrap prompt-preview-wrap">
+          <h3 class="prompt-preview-title">Dataset preview</h3>
+          <div class="dataset-preview prompt-preview" aria-live="polite">No file selected yet.</div>
         </div>
       </div>
     </div>
   `;
 
+  const panel = overlay.querySelector('.modal-panel--dataset');
   const fileInput = overlay.querySelector('#dataset-file-input');
   const importBtn = overlay.querySelector('.dataset-import-btn');
   const filenameEl = overlay.querySelector('.dataset-filename');
-  const previewEl = overlay.querySelector('.dataset-preview');
+  const sheetWrap = overlay.querySelector('#dataset-sheet-wrap');
+  const sheetSelect = overlay.querySelector('#dataset-sheet-select');
+  const fileInfoEl = overlay.querySelector('#dataset-file-info');
+  const previewEl = overlay.querySelector('.dataset-add-preview-wrap .dataset-preview');
   const nameInput = overlay.querySelector('#dataset-name-input');
   const notesInput = overlay.querySelector('#dataset-notes-input');
+  const nextBtn = overlay.querySelector('.dataset-add-btn-next');
+  const backBtn = overlay.querySelector('.dataset-add-btn-back');
   const addBtn = overlay.querySelector('.dataset-add-btn');
-  const formErrorEl = overlay.querySelector('.prompt-form-error');
+  const formErrorEls = overlay.querySelectorAll('.dataset-add-error');
 
   let fileImported = false;
   /** @type {{ headers: string[], rows: string[][] } | null} */
   let parsedDatasetContent = null;
+  /** @type {import('xlsx').WorkBook | null} */
+  let xlsxWorkbook = null;
 
   function formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
+
+  function setFileInfoPlaceholder(msg) {
+    if (!fileInfoEl) return;
+    fileInfoEl.className = 'dataset-file-info';
+    fileInfoEl.innerHTML = `<span class="dataset-file-info-placeholder">${escapeHtml(msg || 'No file selected.')}</span>`;
+  }
+
+  function formatDate(ms) {
+    if (ms == null || Number.isNaN(ms)) return '—';
+    const d = new Date(ms);
+    return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+  }
+
+  function setFileInfo(file, format, numColumns, numRows, headers) {
+    if (!fileInfoEl) return;
+    const delimiter = format === 'TSV' ? 'Tab' : (format === 'XLSX' ? '—' : 'Comma');
+    const headersLabel = (headers || []).map((h) => escapeHtml(String(h))).join(', ');
+    fileInfoEl.className = 'dataset-file-info dataset-file-info--filled';
+    fileInfoEl.innerHTML = `
+      <div class="dataset-file-info-row"><span class="dataset-file-info-label">File size</span><span class="dataset-file-info-value">${escapeHtml(formatSize(file.size))}</span></div>
+      <div class="dataset-file-info-row"><span class="dataset-file-info-label">Format</span><span class="dataset-file-info-value">${escapeHtml(format)}</span></div>
+      <div class="dataset-file-info-row"><span class="dataset-file-info-label">Delimiter</span><span class="dataset-file-info-value">${escapeHtml(delimiter)}</span></div>
+      <div class="dataset-file-info-row"><span class="dataset-file-info-label">Encoding</span><span class="dataset-file-info-value">UTF-8</span></div>
+      <div class="dataset-file-info-row"><span class="dataset-file-info-label">Columns</span><span class="dataset-file-info-value">${String(numColumns)}</span></div>
+      <div class="dataset-file-info-row"><span class="dataset-file-info-label">Rows</span><span class="dataset-file-info-value">${numRows.toLocaleString()}</span></div>
+      <div class="dataset-file-info-row"><span class="dataset-file-info-label">Modified</span><span class="dataset-file-info-value">${escapeHtml(formatDate(file.lastModified))}</span></div>
+      <div class="dataset-file-info-row dataset-file-info-row--headers"><span class="dataset-file-info-label">Headers</span><span class="dataset-file-info-value">${headersLabel}</span></div>
+    `;
+  }
+
+  function truncate(str) {
+    const s = String(str ?? '');
+    return s.length > MAX_CELL_CHARS ? s.slice(0, MAX_CELL_CHARS) + '…' : s;
+  }
+
+  function renderPreviewTable(headers, rows, totalRows) {
+    previewEl.innerHTML = '';
+    const table = document.createElement('table');
+    table.className = 'dataset-preview-table';
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    headers.forEach((h) => {
+      const th = document.createElement('th');
+      th.textContent = truncate(h);
+      th.title = h;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    rows.forEach((row) => {
+      const tr = document.createElement('tr');
+      headers.forEach((_, i) => {
+        const td = document.createElement('td');
+        td.textContent = truncate(row[i]);
+        td.title = row[i] ?? '';
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    previewEl.appendChild(table);
+    if (totalRows > MAX_PREVIEW_ROWS) {
+      const cap = document.createElement('p');
+      cap.className = 'dataset-preview-cap';
+      cap.textContent = `Showing first ${MAX_PREVIEW_ROWS} rows. (${totalRows.toLocaleString()} rows in total.)`;
+      previewEl.appendChild(cap);
+    }
+  }
+
+  function applyXlsxSheet(wb, sheetName, file) {
+    const sheet = wb.Sheets[sheetName];
+    if (!sheet) return;
+    const arr = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (!arr || arr.length === 0) {
+      fileImported = false;
+      parsedDatasetContent = null;
+      setFileInfoPlaceholder('Sheet is empty.');
+      previewEl.textContent = 'Sheet is empty.';
+      return;
+    }
+    const headerRow = arr[0];
+    const headers = (headerRow || []).map((c) => String(c ?? '').trim());
+    if (headers.length === 0 || headers.every((h) => !h)) {
+      setFileInfoPlaceholder('No columns in first row.');
+      previewEl.textContent = 'No columns in first row.';
+      return;
+    }
+    const allRows = arr.slice(1).map((row) => headers.map((_, i) => (row && row[i] != null ? String(row[i]) : '')));
+    fileImported = true;
+    parsedDatasetContent = { headers, rows: allRows };
+    setFileInfo(file, 'XLSX', headers.length, allRows.length, headers);
+    const previewRows = allRows.slice(0, MAX_PREVIEW_ROWS);
+    renderPreviewTable(headers, previewRows, allRows.length);
+  }
+
+  function showError(msg) {
+    formErrorEls.forEach((el) => {
+      if (el) {
+        el.textContent = msg;
+        el.hidden = false;
+      }
+    });
+  }
+
+  function hideError() {
+    formErrorEls.forEach((el) => {
+      if (el) el.hidden = true;
+    });
+  }
+
+  function goToStep(step) {
+    panel.setAttribute('data-add-dataset-step', String(step));
+  }
+
+  nextBtn.addEventListener('click', () => {
+    hideError();
+    const name = (nameInput.value || '').trim();
+    const notes = (notesInput.value || '').trim();
+    if (!name) {
+      showError('Dataset name is required.');
+      return;
+    }
+    if (!notes) {
+      showError('Dataset description is required.');
+      return;
+    }
+    const isNameUsed = workflowCanvasApi?.isDatasetNameAlreadyUsed?.(name);
+    if (isNameUsed) {
+      showError('This dataset name is already used on the canvas. Please choose another.');
+      return;
+    }
+    goToStep(2);
+  });
+
+  backBtn.addEventListener('click', () => goToStep(1));
 
   importBtn.addEventListener('click', () => fileInput.click());
 
@@ -113,17 +284,65 @@ export function openAddDatasetModal(workflowCanvasApi) {
     const name = file.name.toLowerCase();
     const isCsv = name.endsWith('.csv');
     const isTsv = name.endsWith('.tsv');
-    if (!isCsv && !isTsv) {
+    const isXlsx = name.endsWith('.xlsx') || name.endsWith('.xls');
+    if (!isCsv && !isTsv && !isXlsx) {
       fileImported = false;
       parsedDatasetContent = null;
-      filenameEl.textContent = 'Please choose a .csv or .tsv file.';
-      previewEl.textContent = 'No file imported yet.';
+      xlsxWorkbook = null;
+      if (sheetWrap) sheetWrap.style.display = 'none';
+      filenameEl.textContent = 'Please choose a .csv, .tsv or .xlsx file.';
+      setFileInfoPlaceholder('Please choose a .csv, .tsv or .xlsx file.');
+      previewEl.textContent = 'No file selected yet.';
       return;
     }
     fileImported = false;
     parsedDatasetContent = null;
+    xlsxWorkbook = null;
+    if (sheetWrap) sheetWrap.style.display = 'none';
     filenameEl.textContent = file.name;
-    nameInput.value = file.name;
+    setFileInfoPlaceholder('Loading…');
+
+    if (isXlsx) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = new Uint8Array(reader.result);
+          const wb = XLSX.read(data, { type: 'array' });
+          xlsxWorkbook = wb;
+          const sheetNames = wb.SheetNames || [];
+          if (sheetNames.length === 0) {
+            setFileInfoPlaceholder('No sheets in workbook.');
+            previewEl.textContent = 'No sheets in workbook.';
+            return;
+          }
+          if (sheetNames.length > 1) {
+            sheetWrap.style.display = '';
+            sheetSelect.innerHTML = sheetNames.map((s, i) => `<option value="${escapeHtml(s)}" ${i === 0 ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+            sheetSelect.onchange = () => {
+              if (xlsxWorkbook) applyXlsxSheet(xlsxWorkbook, sheetSelect.value, file);
+            };
+          }
+          applyXlsxSheet(wb, sheetNames[0], file);
+        } catch (err) {
+          fileImported = false;
+          parsedDatasetContent = null;
+          xlsxWorkbook = null;
+          setFileInfoPlaceholder('Failed to parse XLSX.');
+          previewEl.textContent = 'Failed to parse XLSX.';
+        }
+      };
+      reader.onerror = () => {
+        fileImported = false;
+        parsedDatasetContent = null;
+        xlsxWorkbook = null;
+        filenameEl.textContent = 'Failed to read file.';
+        setFileInfoPlaceholder('Failed to read file.');
+        previewEl.textContent = 'No file selected yet.';
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       let text = reader.result;
@@ -136,6 +355,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       if (headers.length === 0) {
         fileImported = false;
         parsedDatasetContent = null;
+        setFileInfoPlaceholder('No columns found in first line.');
         previewEl.textContent = 'No columns found in first line.';
         return;
       }
@@ -143,95 +363,47 @@ export function openAddDatasetModal(workflowCanvasApi) {
       const allDataLines = lines.slice(1);
       const allRows = allDataLines.map((line) => parseLine(line));
       parsedDatasetContent = { headers, rows: allRows };
-      function truncate(str) {
-        const s = String(str ?? '');
-        return s.length > MAX_CELL_CHARS ? s.slice(0, MAX_CELL_CHARS) + '…' : s;
-      }
+      setFileInfo(file, isTsv ? 'TSV' : 'CSV', headers.length, allRows.length, headers);
       const dataLines = lines.slice(1, 1 + MAX_PREVIEW_ROWS);
       const rows = dataLines.map((line) => parseLine(line));
-      previewEl.innerHTML = '';
-      const table = document.createElement('table');
-      table.className = 'dataset-preview-table';
-      const thead = document.createElement('thead');
-      const headerRow = document.createElement('tr');
-      headers.forEach((h) => {
-        const th = document.createElement('th');
-        th.textContent = truncate(h);
-        th.title = h;
-        headerRow.appendChild(th);
-      });
-      thead.appendChild(headerRow);
-      table.appendChild(thead);
-      const tbody = document.createElement('tbody');
-      rows.forEach((row) => {
-        const tr = document.createElement('tr');
-        headers.forEach((_, i) => {
-          const td = document.createElement('td');
-          td.textContent = truncate(row[i]);
-          td.title = row[i] ?? '';
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      });
-      table.appendChild(tbody);
-      previewEl.appendChild(table);
-      if (lines.length - 1 > MAX_PREVIEW_ROWS) {
-        const cap = document.createElement('p');
-        cap.className = 'dataset-preview-cap';
-        const totalRows = lines.length - 1;
-        cap.textContent = `Showing first ${MAX_PREVIEW_ROWS} rows. (${totalRows.toLocaleString()} rows in total.)`;
-        previewEl.appendChild(cap);
-      }
+      renderPreviewTable(headers, rows, allRows.length);
     };
     reader.onerror = () => {
       fileImported = false;
       parsedDatasetContent = null;
       filenameEl.textContent = 'Failed to read file.';
-      previewEl.textContent = 'No file imported yet.';
+      setFileInfoPlaceholder('Failed to read file.');
+      previewEl.textContent = 'No file selected yet.';
     };
     reader.readAsText(file, 'UTF-8');
   });
 
   addBtn.addEventListener('click', () => {
-    if (formErrorEl) formErrorEl.hidden = true;
+    hideError();
     const name = (nameInput.value || '').trim();
     const notes = (notesInput.value || '').trim();
     if (!name) {
-      if (formErrorEl) {
-        formErrorEl.textContent = 'Source dataset name is required.';
-        formErrorEl.hidden = false;
-      }
+      showError('Dataset name is required.');
+      return;
+    }
+    if (!notes) {
+      showError('Dataset description is required.');
       return;
     }
     const isNameUsed = workflowCanvasApi?.isDatasetNameAlreadyUsed?.(name);
     if (isNameUsed) {
-      if (formErrorEl) {
-        formErrorEl.textContent = 'This source dataset name is already used on the canvas. Please choose another.';
-        formErrorEl.hidden = false;
-      }
+      showError('This dataset name is already used on the canvas. Please choose another.');
       return;
     }
-    if (!notes) {
-      if (formErrorEl) {
-        formErrorEl.textContent = 'Source dataset description is required.';
-        formErrorEl.hidden = false;
-      }
-      return;
-    }
-    if (!fileImported) {
-      if (formErrorEl) {
-        formErrorEl.textContent = 'Please import a CSV or TSV file first.';
-        formErrorEl.hidden = false;
-      }
-      return;
-    }
+    const headers = fileImported && parsedDatasetContent?.headers ? parsedDatasetContent.headers : [];
+    const rows = fileImported && parsedDatasetContent?.rows ? parsedDatasetContent.rows : [];
     document.dispatchEvent(
       new CustomEvent('workflow:add-dataset-node', {
         detail: {
           name,
           notes,
-          headers: parsedDatasetContent?.headers ?? [],
-          rows: parsedDatasetContent?.rows ?? [],
+          headers,
+          rows,
         },
       })
     );

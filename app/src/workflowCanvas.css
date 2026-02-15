@@ -307,7 +307,7 @@
   background: var(--bg-bar);
 }
 
-/* Dataset / Prompt 节点 description：沿用原来换行（pre-wrap），超过 3 行则第 4 行显示 ... */
+/* Dataset / Prompt 节点 description：换行显示，不省略 */
 .workflow-node__body {
   padding: 8px 12px 10px;
   font-size: 12px;
@@ -318,11 +318,6 @@
 }
 
 .workflow-node__body .workflow-node__note {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
@@ -344,6 +339,11 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.workflow-node__note-placeholder {
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 /* Right-click context menu for prompt nodes */
@@ -374,6 +374,10 @@
 
 .workflow-node-context-item:hover {
   background: var(--hover);
+}
+
+.workflow-node-context-item--run {
+  font-weight: 700;
 }
 
 .workflow-node-context-item:first-child {

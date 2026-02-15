@@ -1,5 +1,6 @@
 # Editor / IDE
 *.code-workspace
+.cursor/
 
 # Node
 node_modules/

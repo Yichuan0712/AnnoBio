@@ -1,6 +1,6 @@
 /**
- * Working dataset detail modal: name/description (left), table view and editor (right).
- * @param {{ node: HTMLElement, getContent: () => { headers: string[], rows: string[][] }, saveContent: (content: { headers: string[], rows: string[][] }) => void, isSubsetNameAlreadyUsed?: (name: string, excludeNodeId?: string | null) => boolean }} options
+ * Dataset detail modal: name/description (left), table view and editor (right).
+ * @param {{ node: HTMLElement, getContent: () => { headers: string[], rows: string[][] }, saveContent: (content: { headers: string[], rows: string[][] }) => void, isSubsetNameAlreadyUsed?: (name: string, excludeNodeId?: string | null) => boolean, onSaveNote?: (newNote: string) => void }} options
  */
 
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -11,8 +11,8 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-export function openWorkingDatasetDetailModal({ node, getContent, saveContent, isSubsetNameAlreadyUsed }) {
-  const name = (node?.dataset?.subsetName ?? '').trim() || 'Working dataset';
+export function openWorkingDatasetDetailModal({ node, getContent, saveContent, isSubsetNameAlreadyUsed, onSaveNote }) {
+  const name = (node?.dataset?.subsetName ?? '').trim() || 'Dataset';
   const note = (node?.dataset?.subsetNote ?? '').trim();
 
   let headers = [];
@@ -43,7 +43,7 @@ export function openWorkingDatasetDetailModal({ node, getContent, saveContent, i
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--working-dataset-detail" data-working-dataset-detail-mode="view">
       <div class="modal-header">
-        <h2 id="working-dataset-detail-title" class="modal-title">Working dataset details: ${escapeHtml(name)}</h2>
+        <h2 id="working-dataset-detail-title" class="modal-title">Dataset details: ${escapeHtml(name)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body working-dataset-detail-body dataset-detail-body">
@@ -51,22 +51,22 @@ export function openWorkingDatasetDetailModal({ node, getContent, saveContent, i
           <div class="dataset-detail-card">
             <div class="dataset-detail-view">
               <div class="dataset-detail-row">
-                <span class="dataset-detail-label">Working dataset name</span>
+                <span class="dataset-detail-label">Dataset name</span>
                 <span class="dataset-detail-name-value wd-name-value">${escapeHtml(name)}</span>
               </div>
               <div class="dataset-detail-row">
-                <span class="dataset-detail-label">Working dataset description</span>
+                <span class="dataset-detail-label">Dataset description</span>
                 <div class="dataset-detail-notes-value wd-notes-value">${note ? escapeHtml(note) : '<span class="prompt-detail-placeholder">No description.</span>'}</div>
               </div>
             </div>
             <div class="dataset-detail-edit">
               <div class="dataset-detail-row">
-                <label class="dataset-detail-label" for="wd-name-inp">Working dataset name</label>
-                <input type="text" id="wd-name-inp" class="dataset-detail-input" placeholder="Working dataset name (required)" />
+                <label class="dataset-detail-label" for="wd-name-inp">Dataset name</label>
+                <input type="text" id="wd-name-inp" class="dataset-detail-input" placeholder="Dataset name (required)" />
               </div>
               <div class="dataset-detail-row">
-                <label class="dataset-detail-label" for="wd-notes-inp">Working dataset description</label>
-                <textarea id="wd-notes-inp" class="dataset-detail-textarea" rows="3" placeholder="Working dataset description (optional)"></textarea>
+                <label class="dataset-detail-label" for="wd-notes-inp">Dataset description</label>
+                <textarea id="wd-notes-inp" class="dataset-detail-textarea" rows="3" placeholder="Dataset description (optional)"></textarea>
               </div>
             </div>
             <div class="dataset-detail-footer">
@@ -82,7 +82,7 @@ export function openWorkingDatasetDetailModal({ node, getContent, saveContent, i
         <div class="dataset-detail-col dataset-detail-col--right">
         <div class="working-dataset-detail-card">
           <div class="dataset-detail-preview-search-wrap working-dataset-search-wrap">
-            <span class="dataset-detail-label dataset-detail-preview-caption">Working dataset preview</span>
+            <span class="dataset-detail-label dataset-detail-preview-caption">Dataset preview</span>
             <label class="dataset-detail-search-label" for="wd-preview-search">Search</label>
             <input type="text" id="wd-preview-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" />
           </div>
@@ -147,8 +147,9 @@ export function openWorkingDatasetDetailModal({ node, getContent, saveContent, i
     node.dataset.subsetName = newName;
     node.dataset.subsetNote = newNote || '';
     const nodeTitleEl = node.querySelector('.workflow-node__title');
-    if (nodeTitleEl) nodeTitleEl.textContent = (newName && newName.trim()) ? newName.trim() : 'Working dataset';
-    if (titleEl) titleEl.textContent = `Working dataset details: ${(newName && newName.trim()) ? newName.trim() : 'Working dataset'}`;
+    if (nodeTitleEl) nodeTitleEl.textContent = (newName && newName.trim()) ? newName.trim() : 'Dataset';
+    if (titleEl) titleEl.textContent = `Dataset details: ${(newName && newName.trim()) ? newName.trim() : 'Dataset'}`;
+    onSaveNote?.(newNote || '');
   }
 
   function showMetaView() {
@@ -170,7 +171,7 @@ export function openWorkingDatasetDetailModal({ node, getContent, saveContent, i
     if (wdNameErrorEl) wdNameErrorEl.hidden = true;
     if (!newName) {
       if (wdNameErrorEl) {
-        wdNameErrorEl.textContent = 'Working dataset name is required.';
+        wdNameErrorEl.textContent = 'Dataset name is required.';
         wdNameErrorEl.hidden = false;
       }
       return;
@@ -178,7 +179,7 @@ export function openWorkingDatasetDetailModal({ node, getContent, saveContent, i
     const nameUsed = isSubsetNameAlreadyUsed?.(newName, node?.dataset?.nodeId);
     if (nameUsed) {
       if (wdNameErrorEl) {
-        wdNameErrorEl.textContent = 'This working dataset name is already used on the canvas. Please choose another.';
+        wdNameErrorEl.textContent = 'This dataset name is already used on the canvas. Please choose another.';
         wdNameErrorEl.hidden = false;
       }
       return;

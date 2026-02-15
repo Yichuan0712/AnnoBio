@@ -65,7 +65,7 @@ export function openDatasetDetailModal({ node, getDatasetContent, isDatasetNameA
             </div>
           </div>
           <div class="dataset-detail-sampler-card">
-            <h3 class="dataset-detail-sampler-title">Working dataset sampler</h3>
+            <h3 class="dataset-detail-sampler-title">Dataset sampler</h3>
             <div class="dataset-detail-sampler-body">
               <div class="dataset-detail-row">
                 <label class="dataset-detail-label" for="sampler-name-inp">Sampler name</label>

@@ -1,5 +1,5 @@
 /**
- * Score detail modal: left = Working dataset as ground truth picker + field mapping table; right = results.
+ * Score detail modal: left = Dataset as ground truth picker + field mapping table; right = results.
  * @param {{ node: HTMLElement, getWorkingSets?: () => Array<...>, getRunResultColumns?: () => Array<...>, getGroundTruthHeaders?: (wsNodeId: string) => string[], getReviewPayload?: () => { prompt_sections, prompt_full_text, run_results, output_fields, comparison_rows } | null }} options
  */
 
@@ -115,30 +115,55 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return '';
   }
 
-  /** Returns { matched: boolean[], total, matchedCount }. */
+  /**
+   * Check if run row i (by content) matches GT row j for all rules.
+   */
+  function runRowMatchesGtRow(runRowIndex, gtRowIndex, rules, resultsByIndex, runWs, outputFields, gtContent) {
+    const runResult = resultsByIndex.get(runRowIndex) || null;
+    for (const rule of rules) {
+      const runVal = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
+      const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
+      if (!gtVals.some((g) => g === runVal)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Match run rows to GT rows by content (one-to-one), not by row index.
+   * Returns { matched: boolean[], runToGt: number[], total, matchedCount }.
+   * runToGt[i] = GT row index matched to run row i, or -1 if none.
+   */
   function computeMatchPerRow(rules, results, outputFields, runWs, gtContent) {
     const gtRows = gtContent.rows || [];
-    const matched = [];
     const resultsByIndex = new Map();
     (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
-    for (let i = 0; i < gtRows.length; i++) {
-      const runResult = resultsByIndex.get(i) || null;
-      let rowMatch = true;
-      for (const rule of rules) {
-        const runVal = getRunValue(runResult, rule.outputKey, i, runWs, outputFields);
-        const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, i, col));
-        const rulePass = gtVals.some((g) => g === runVal);
-        if (!rulePass) {
-          rowMatch = false;
+    const runCount = runWs?.rows?.length ?? 0;
+    const gtCount = gtRows.length;
+    const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
+    const gtUsed = new Array(gtCount).fill(false);
+
+    for (let i = 0; i < runCount; i++) {
+      for (let j = 0; j < gtCount; j++) {
+        if (gtUsed[j]) continue;
+        if (runRowMatchesGtRow(i, j, rules, resultsByIndex, runWs, outputFields, gtContent)) {
+          runToGt[i] = j;
+          gtUsed[j] = true;
           break;
         }
       }
-      matched.push(rowMatch);
     }
+
+    const matched = [];
+    const maxRow = Math.max(runCount, gtCount);
+    for (let i = 0; i < maxRow; i++) {
+      matched.push(i < runCount && runToGt[i] >= 0);
+    }
+    const matchedCount = runToGt.slice(0, runCount).filter((j) => j >= 0).length;
     return {
       matched,
-      total: gtRows.length,
-      matchedCount: matched.filter(Boolean).length,
+      runToGt,
+      total: runCount,
+      matchedCount,
     };
   }
 
@@ -178,7 +203,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
             <div class="score-detail-block score-detail-block--gt">
               <div class="run-detail-row">
                 <label class="run-detail-label" for="score-detail-gt-picker">Ground truth</label>
-                <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select working dataset as ground truth">
+                <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select dataset as ground truth">
                   <div class="run-detail-ws-trigger" tabindex="0">
                     <span class="run-detail-ws-trigger-color" id="score-detail-gt-trigger-color"></span>
                     <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">— Select —</span>
@@ -242,7 +267,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (ws) {
       triggerColorEl.style.background = ws.color || 'transparent';
       triggerColorEl.style.display = ws.color ? '' : 'none';
-      triggerTextEl.textContent = ws.name || 'Working dataset';
+      triggerTextEl.textContent = ws.name || 'Dataset';
     } else {
       triggerColorEl.style.background = '';
       triggerColorEl.style.display = 'none';
@@ -266,7 +291,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!selectedNodeId) {
       const p = document.createElement('p');
       p.className = 'score-detail-placeholder';
-      p.textContent = 'Select a working dataset as ground truth, then add rules.';
+      p.textContent = 'Select a dataset as ground truth, then add rules.';
       mappingWrap.appendChild(p);
       return;
     }
@@ -276,7 +301,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const p = document.createElement('p');
       p.className = 'score-detail-placeholder';
       p.textContent = runColumns.length === 0
-        ? 'No run connected or run has no result columns (run once with a working dataset to see columns).'
+        ? 'No run connected or run has no result columns (run once with a dataset to see columns).'
         : 'Ground truth dataset has no columns.';
       mappingWrap.appendChild(p);
       return;
@@ -406,12 +431,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       return;
     }
 
-    const { matched, total, matchedCount } = computeMatchPerRow(rules, results, outputFields, runWs, gtContent);
+    const { matched, runToGt, total, matchedCount } = computeMatchPerRow(rules, results, outputFields, runWs, gtContent);
 
     const summary = document.createElement('p');
     summary.className = 'score-detail-results-summary';
-    const runOnlyCount = maxRunRow > maxGtRow ? maxRunRow - maxGtRow : 0;
-    summary.textContent = `${matchedCount} of ${total} rows matched` + (runOnlyCount > 0 ? ` · ${runOnlyCount} run row(s) without GT` : '');
+    const runOnlyCount = total > 0 ? total - matchedCount : 0;
+    const unmatchedGtCount = gtRows.length - matchedCount;
+    summary.textContent = `${matchedCount} of ${total} run rows matched` +
+      (runOnlyCount > 0 ? ` · ${runOnlyCount} run row(s) without match` : '') +
+      (unmatchedGtCount > 0 ? ` · ${unmatchedGtCount} GT row(s) without match` : '');
     resultsBody.appendChild(summary);
     const table = document.createElement('div');
     table.className = 'score-detail-results-table-wrap';
@@ -436,19 +464,21 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
     for (let i = 0; i <= maxRow; i++) {
       const runResult = resultsByIndex.get(i) || null;
-      const hasGt = i < gtRows.length;
-      const isMatch = hasGt && runResult && (matched[i] === true);
-      const hasRunNoGt = runResult && !hasGt;
-      const rowClass = isMatch ? 'score-detail-results-tr--match' : (hasRunNoGt ? 'score-detail-results-tr--run-only' : 'score-detail-results-tr--unmatch');
+      const hasRun = runResult != null;
+      const gtDisplayIndex = (runToGt && i < runToGt.length && runToGt[i] >= 0) ? runToGt[i] : i;
+      const hasGt = gtDisplayIndex < gtRows.length;
+      const isMatch = hasRun && (matched[i] === true);
+      const hasRunNoMatch = hasRun && !isMatch;
+      const rowClass = isMatch ? 'score-detail-results-tr--match' : (hasRunNoMatch ? 'score-detail-results-tr--run-only' : 'score-detail-results-tr--unmatch');
       let tr = `<tr class="score-detail-results-tr ${rowClass}"><td class="score-detail-results-td score-detail-results-td--idx">${i + 1}</td>`;
       for (const rule of rules) {
         const runVal = getRunValue(runResult, rule.outputKey, i, runWs, outputFields);
-        const gtVals = hasGt ? (rule.gtColumns || []).map((col) => getGtValue(gtContent, i, col)) : [];
+        const gtVals = hasGt ? (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtDisplayIndex, col)) : [];
         const gtDisplay = gtVals.length === 0 ? (hasGt ? '—' : '—') : gtVals.join(' | ');
         tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
         tr += `<td class="score-detail-results-td score-detail-results-td--gt" title="${escapeAttr(gtDisplay)}">${escapeHtml(cellText(gtDisplay, 30))}</td>`;
       }
-      tr += `<td class="score-detail-results-td score-detail-results-td--match" aria-label="${isMatch ? 'Matched' : hasRunNoGt ? 'Run only (no GT)' : 'Not matched'}">${isMatch ? '✓' : '✗'}</td>`;
+      tr += `<td class="score-detail-results-td score-detail-results-td--match" aria-label="${isMatch ? 'Matched' : hasRunNoMatch ? 'Run row without match' : 'Not matched'}">${isMatch ? '✓' : '✗'}</td>`;
       tr += '<td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
@@ -568,7 +598,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     emptyOption.className = 'run-detail-ws-option';
     emptyOption.setAttribute('role', 'option');
     emptyOption.setAttribute('aria-selected', !selectedNodeId ? 'true' : 'false');
-    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select working dataset —</span>';
+    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select dataset —</span>';
     emptyOption.dataset.nodeId = '';
     emptyOption.addEventListener('click', () => selectGroundTruth(''));
     dropdownEl.appendChild(emptyOption);
@@ -577,7 +607,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       option.className = 'run-detail-ws-option';
       option.setAttribute('role', 'option');
       option.setAttribute('aria-selected', ws.nodeId === selectedNodeId ? 'true' : 'false');
-      option.innerHTML = `<span class="run-detail-ws-option-color" style="background:${escapeHtml(ws.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(ws.name || 'Working dataset')}</span>`;
+      option.innerHTML = `<span class="run-detail-ws-option-color" style="background:${escapeHtml(ws.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(ws.name || 'Dataset')}</span>`;
       option.dataset.nodeId = ws.nodeId;
       option.addEventListener('click', () => selectGroundTruth(ws.nodeId));
       dropdownEl.appendChild(option);

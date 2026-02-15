@@ -42,7 +42,7 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
     <button type="button" class="menu-option" data-action="redo">Redo</button>
     <div class="menu-separator"></div>
     <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt...</button>
-    <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new source dataset...</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new dataset...</button>
   `;
   const undoOpt = editDrop.querySelector('[data-action="undo"]');
   const redoOpt = editDrop.querySelector('[data-action="redo"]');
