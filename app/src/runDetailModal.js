@@ -45,7 +45,7 @@ function filterResultsBySearch(results, outputFields, searchQuery, workingConten
   });
 }
 
-export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields, getSubsetContent, getPromptTemplate, registerPendingRun, getPromptName, getUniqueDatasetExportName }) {
+export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields, getSubsetContent, getPromptTemplate, registerPendingRun, getPromptName, getUniqueDatasetExportName, isRunNameAlreadyUsedForPrompt }) {
   const workingSets = getWorkingSets ? getWorkingSets() : [];
   const inputFields = getPromptInputFields ? getPromptInputFields() : [];
   getSubsetContent = getSubsetContent || (() => ({ headers: [], rows: [] }));
@@ -53,9 +53,11 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   registerPendingRun = registerPendingRun || (() => {});
   getPromptName = getPromptName || (() => '');
   getUniqueDatasetExportName = getUniqueDatasetExportName || ((name) => name);
+  isRunNameAlreadyUsedForPrompt = isRunNameAlreadyUsedForPrompt || (() => false);
 
   let selectedNodeId = (node?.dataset?.runWorkingSetId || '').trim();
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
+  let runName = (node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent?.trim() || 'Run').trim() || 'Run';
   const resultsState = {
     results: [],
     outputFields: [],
@@ -77,7 +79,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     return {};
   })();
 
-  const runName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Run';
   const titleText = `${runName} details`;
 
   const overlay = document.createElement('div');
@@ -90,11 +91,16 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         <h2 id="run-detail-title" class="modal-title">${escapeHtml(titleText)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
-      <div class="modal-body run-detail-body">
-        <div class="run-detail-col run-detail-col--left">
-          <div class="run-detail-card">
-            <div class="run-detail-row">
-              <label class="run-detail-label" for="run-detail-ws-picker">DATASET</label>
+      <div class="modal-body run-detail-body modal-body--run">
+        <div class="run-detail-main">
+          <p class="run-detail-main-label">Run settings</p>
+          <div class="dataset-meta-wrap run-detail-meta-wrap">
+            <div class="dataset-meta-field run-detail-name-field">
+              <label class="dataset-meta-label" for="run-detail-name-inp">Run name</label>
+              <input type="text" id="run-detail-name-inp" class="dataset-meta-input" value="" placeholder="Run name" aria-label="Run name">
+            </div>
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="run-detail-ws-picker">Dataset</label>
               <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select dataset">
                 <div class="run-detail-ws-trigger" tabindex="0">
                   <span class="run-detail-ws-trigger-color" id="run-detail-ws-trigger-color"></span>
@@ -104,27 +110,32 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
                 <div class="run-detail-ws-dropdown" id="run-detail-ws-dropdown" role="listbox" hidden></div>
               </div>
             </div>
-            <div class="run-detail-inputs-section" id="run-detail-inputs-section">
-              <h3 class="run-detail-section-title">Map dataset columns to prompt inputs</h3>
+            <div class="run-detail-inputs-section dataset-meta-field" id="run-detail-inputs-section">
+              <span class="dataset-meta-label run-detail-section-label">Map dataset columns to prompt inputs</span>
               <div class="run-detail-mapping-wrap" id="run-detail-inputs-list"></div>
             </div>
-            <div class="run-detail-row">
-              <label class="run-detail-label" for="run-detail-llm-select">MODEL FOR PROMPT</label>
-              <select id="run-detail-llm-select" class="run-detail-llm-select" aria-label="Select model for prompt">
-                <option value="">— Select model for prompt —</option>
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="run-detail-llm-select">Model for prompt</label>
+              <select id="run-detail-llm-select" class="run-detail-llm-select dataset-meta-input" aria-label="Select model for prompt">
+                <option value="">— Select model —</option>
               </select>
             </div>
-            <div class="run-detail-footer">
-              <button type="button" class="btn btn-secondary run-detail-run-btn" disabled>Run</button>
-            </div>
+          </div>
+          <div class="prompt-form-error prompt-modal-error run-detail-form-error" id="run-detail-form-error" role="alert" aria-live="polite" hidden></div>
+          <div class="prompt-actions run-detail-actions">
+            <button type="button" class="btn btn-secondary run-detail-run-btn" disabled>Run</button>
           </div>
         </div>
-        <div class="run-detail-col run-detail-col--right">
+        <div class="run-detail-preview-wrap">
+          <h3 class="run-detail-preview-title">Results</h3>
+          <div class="run-detail-preview-content"></div>
         </div>
       </div>
     </div>
   `;
 
+  const runNameInp = overlay.querySelector('#run-detail-name-inp');
+  runNameInp.value = runName;
   const pickerEl = overlay.querySelector('#run-detail-ws-picker');
   const triggerEl = overlay.querySelector('.run-detail-ws-trigger');
   const triggerColorEl = overlay.querySelector('#run-detail-ws-trigger-color');
@@ -133,14 +144,51 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   const llmSelectEl = overlay.querySelector('#run-detail-llm-select');
   const inputsListEl = overlay.querySelector('#run-detail-inputs-list');
   const runBtn = overlay.querySelector('.run-detail-run-btn');
-  const rightCol = overlay.querySelector('.run-detail-col--right');
+  const rightCol = overlay.querySelector('.run-detail-preview-content');
+  const runDetailPanel = overlay.querySelector('.modal-panel--run-detail');
+  const modalTitleEl = overlay.querySelector('#run-detail-title');
+
+  const runDetailFormErrorEl = overlay.querySelector('#run-detail-form-error');
+
+  /** 展开右半部分：panel 变宽并显示右侧结果区（与 add prompt 从 step1 到 step2 一致，带动画） */
+  function expandRightPanel() {
+    if (runDetailPanel && !runDetailPanel.classList.contains('run-detail-panel--expanded')) {
+      runDetailPanel.classList.add('run-detail-panel--expanded');
+    }
+  }
+
+  /** Validate run name and apply to node. If showError is true and name is duplicate, shows error above Run button. Returns false if duplicate. */
+  function applyRunName(showError = false) {
+    const raw = (runNameInp.value || '').trim();
+    const newName = raw || 'Run';
+    if (runDetailFormErrorEl) {
+      runDetailFormErrorEl.hidden = true;
+      runDetailFormErrorEl.textContent = '';
+    }
+    if (isRunNameAlreadyUsedForPrompt(newName, node?.dataset?.nodeId)) {
+      if (showError && runDetailFormErrorEl) {
+        runDetailFormErrorEl.textContent = 'A run with this name already exists under the same prompt. Please use a different name.';
+        runDetailFormErrorEl.hidden = false;
+      }
+      runNameInp.focus();
+      return false;
+    }
+    runName = newName;
+    if (node) {
+      node.dataset.runName = newName;
+      const titleEl = node.querySelector('.workflow-node__title');
+      if (titleEl) titleEl.textContent = newName;
+    }
+    if (modalTitleEl) modalTitleEl.textContent = `${runName} details`;
+    return true;
+  }
 
   function renderResultsEmptyCard() {
     const card = document.createElement('div');
     card.className = 'run-detail-results-card';
     const wrap = document.createElement('div');
     wrap.className = 'run-detail-results';
-    wrap.innerHTML = '<h3 class="run-detail-section-title">Results</h3><p class="run-detail-placeholder">Run to see results.</p>';
+    wrap.innerHTML = '<p class="run-detail-placeholder">Run to see results.</p>';
     card.appendChild(wrap);
     return card;
   }
@@ -165,8 +213,8 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     if (hasBracketCols) {
       const thBracket = document.createElement('th');
       thBracket.className = 'run-detail-th run-detail-th--dataset-row-col run-detail-th--bracket-toggle';
-      thBracket.textContent = collapsed ? '...' : '[#]';
-      thBracket.title = collapsed ? 'Click to expand bracket columns' : 'Click to collapse bracket columns';
+      thBracket.textContent = collapsed ? '...' : 'Input: #';
+      thBracket.title = collapsed ? 'Click to expand. These columns show the corresponding input dataset rows.' : 'Click to collapse. These columns show the corresponding input dataset rows.';
       thBracket.setAttribute('role', 'button');
       thBracket.setAttribute('tabindex', '0');
       if (typeof onToggleCollapse === 'function') {
@@ -178,7 +226,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         wsHeaders.forEach((h) => {
           const th = document.createElement('th');
           th.className = 'run-detail-th run-detail-th--dataset-row-col';
-          th.textContent = `[${String(h ?? '').trim() || ' '}]`;
+          th.textContent = `Input: ${String(h ?? '').trim() || ' '}`;
           headerRow.appendChild(th);
         });
       }
@@ -278,10 +326,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     resultsState.status = status || 'complete';
     const wrap = document.createElement('div');
     wrap.className = 'run-detail-results';
-    const title = document.createElement('h3');
-    title.className = 'run-detail-section-title';
-    title.textContent = 'Results';
-    wrap.appendChild(title);
     if (resultsState.results.length === 0) {
       const placeholder = document.createElement('p');
       placeholder.className = 'run-detail-placeholder';
@@ -400,17 +444,28 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         const statusLine = resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.';
         const description = `Exported from ${promptName} ${runName}.\n${statusLine}`;
         const outputFields = resultsState.outputFields || [];
-        const headers = outputFields.map((f) => (f.display || f.key || '').trim() || 'output');
-        const rows = (resultsState.results || []).map((r) =>
-          r.error
+        const workingContent = resultsState.workingContent || { headers: [], rows: [] };
+        const wsHeaders = workingContent.headers || [];
+        const wsRows = workingContent.rows || [];
+        const outputHeaders = outputFields.map((f) => (f.display || f.key || '').trim() || 'output');
+        const inputHeaders = wsHeaders.map((h) => 'Input: ' + String(h ?? '').trim() || ' ');
+        const headers = [...outputHeaders, ...inputHeaders];
+        const rows = (resultsState.results || []).map((r) => {
+          const outputPart = r.error
             ? outputFields.map(() => String(r.error))
             : outputFields.map((f) => {
                 const val = r.output && r.output[f.key];
                 if (val === null || val === undefined) return '—';
                 if (Array.isArray(val)) return val.join(', ');
                 return String(val);
-              })
-        );
+              });
+          const inputRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
+          const inputPart = wsHeaders.map((_, i) => {
+            const v = inputRow[i];
+            return v === null || v === undefined ? '—' : String(v);
+          });
+          return [...outputPart, ...inputPart];
+        });
         document.dispatchEvent(
           new CustomEvent('workflow:add-dataset-node', {
             detail: { name: datasetName, notes: description, headers, rows },
@@ -464,12 +519,15 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   function applyRunCompletedLock() {
     if (!isRunCompleted()) return;
     runBtn.disabled = true;
+    runBtn.textContent = 'Run completed';
+    runBtn.setAttribute('aria-label', 'Run completed');
     llmSelectEl.disabled = true;
+    if (runNameInp) runNameInp.disabled = true;
     pickerEl.classList.add('run-detail-ws-picker--locked');
     pickerEl.setAttribute('aria-disabled', 'true');
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
-    const leftCard = overlay.querySelector('.run-detail-col--left .run-detail-card');
-    if (leftCard) leftCard.classList.add('run-detail-card--locked');
+    const leftMain = overlay.querySelector('.run-detail-main');
+    if (leftMain) leftMain.classList.add('run-detail-main--locked');
   }
 
   function updateRunButtonState() {
@@ -581,7 +639,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
           </select>
         </span>
         <span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span>
-        <span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell"><span class="prompt-detail-input-tag">${escapeHtml(inputName)}</span></span>
+        <span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}</span>
       `;
       const sel = row.querySelector('.run-detail-column-select');
       sel.addEventListener('change', () => {
@@ -662,6 +720,16 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     if (e.target === overlay) closeModal();
   });
 
+  runNameInp.addEventListener('blur', () => {
+    applyRunName(false);
+  });
+  runNameInp.addEventListener('input', () => {
+    if (runDetailFormErrorEl) {
+      runDetailFormErrorEl.hidden = true;
+      runDetailFormErrorEl.textContent = '';
+    }
+  });
+
   async function loadCredentialsAndPopulateLlm() {
     const sel = llmSelectEl;
     sel.innerHTML = '<option value="">— Select model for prompt —</option>';
@@ -689,6 +757,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
 
   runBtn.addEventListener('click', async () => {
     if (isRunCompleted()) return;
+    if (!applyRunName(true)) return;
     if (!selectedNodeId || !selectedCredentialId) return;
     const content = getSubsetContent(selectedNodeId);
     const template = getPromptTemplate();
@@ -696,11 +765,13 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     const rows = content.rows || [];
     if (rows.length === 0) {
       rightCol.innerHTML = '<p class="run-detail-placeholder">Dataset has no rows.</p>';
+      expandRightPanel();
       return;
     }
     const templateText = (template.sections || []).map((s) => (s.content || '').trim()).filter(Boolean).join('\n\n');
     if (!templateText) {
       rightCol.innerHTML = '<p class="run-detail-placeholder">Prompt has no content.</p>';
+      expandRightPanel();
       return;
     }
     const prompts = rows.map((row) => {
@@ -724,6 +795,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     };
     if (outputSchema.fields.length === 0) {
       rightCol.innerHTML = '<p class="run-detail-placeholder">Prompt output schema has no fields. Add fields in the Prompt node.</p>';
+      expandRightPanel();
       return;
     }
     if (node) {
@@ -738,6 +810,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     if (pRunning) pRunning.textContent = 'Running… Results will appear below as they complete.';
     rightCol.innerHTML = '';
     rightCol.appendChild(cardRunning);
+    expandRightPanel();
     runBtn.disabled = true;
     try {
       const res = await fetch(`${API_BASE}/api/run`, {
@@ -759,6 +832,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       }
       if (!res.ok) {
         rightCol.innerHTML = '<p class="run-detail-error">' + escapeHtml(data.detail || res.statusText || 'Request failed') + '</p>';
+        expandRightPanel();
         updateRunButtonState();
         return;
       }
@@ -774,6 +848,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       }
     } catch (e) {
       rightCol.innerHTML = '<p class="run-detail-error">' + escapeHtml(String(e.message || e)) + '</p>';
+      expandRightPanel();
     } finally {
       updateRunButtonState();
     }
@@ -788,7 +863,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
 
-  // Show Results card immediately: restore saved results or placeholder
+  // Show Results card immediately: restore saved results or placeholder; expand right panel only if run had been started (has results or we will show placeholder)
   rightCol.innerHTML = '';
   try {
     const savedResults = node?.dataset?.runResults;
@@ -801,6 +876,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         const isRunComplete = progressBar?.getAttribute('aria-valuenow') === '100';
         const status = isRunComplete ? 'complete' : 'incomplete';
         rightCol.appendChild(renderResultsTable(results, outputFields, status));
+        expandRightPanel();
       } else {
         rightCol.appendChild(renderResultsEmptyCard());
       }

@@ -65,6 +65,82 @@ function normalizeScoreMappingToRules(arr) {
   return Object.values(byKey).filter((r) => r.outputKey || r.gtColumns.length > 0);
 }
 
+function ensureScoreGroupOps(data, children) {
+  const n = (children || []).length;
+  const len = Math.max(0, n - 1);
+  if (Array.isArray(data.ops) && data.ops.length >= len) {
+    return data.ops.slice(0, len).map((o) => o === 'OR' ? 'OR' : 'AND');
+  }
+  const defaultOp = data.op === 'OR' ? 'OR' : 'AND';
+  return Array(len).fill(defaultOp);
+}
+
+/** Parse scoreMapping to tree root (group). Legacy array -> root with AND group of rules. */
+function parseScoreMappingToTree(data) {
+  if (!data) return { type: 'group', ops: [], children: [] };
+  if (data.type === 'group' && Array.isArray(data.children)) {
+    const children = data.children.map((c) => (c && c.type === 'group')
+      ? normalizeScoreGroupChild(c)
+      : normalizeScoreChild(c));
+    const ops = ensureScoreGroupOps(data, children);
+    return { type: 'group', ops, children };
+  }
+  const rules = normalizeScoreMappingToRules(Array.isArray(data) ? data : []);
+  const children = rules.map((r) => ({ type: 'rule', outputKey: r.outputKey || '', gtColumns: (r.gtColumns || []).slice(), matchType: r.matchType || 'exact' }));
+  const ops = Array(Math.max(0, children.length - 1)).fill('AND');
+  return { type: 'group', ops, children };
+}
+
+function normalizeScoreGroupChild(c) {
+  const children = (c.children || []).map((ch) => (ch && ch.type === 'group') ? normalizeScoreGroupChild(ch) : normalizeScoreChild(ch));
+  const ops = ensureScoreGroupOps(c, children);
+  return { type: 'group', ops, children };
+}
+
+function normalizeScoreChild(c) {
+  if (!c || c.type === 'rule') {
+    return {
+      type: 'rule',
+      outputKey: (c && c.outputKey) || '',
+      gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
+      matchType: (c && c.matchType) || 'exact',
+    };
+  }
+  return normalizeScoreGroupChild(c);
+}
+
+/** Flatten tree to array of rules (depth-first) for expected display. */
+function flattenScoreTreeToRules(node) {
+  if (!node) return [];
+  if (node.type === 'rule') return [node];
+  if (node.type === 'group' && Array.isArray(node.children)) {
+    return node.children.flatMap(flattenScoreTreeToRules);
+  }
+  return [];
+}
+
+/** Evaluate tree node for run row i vs GT row j. */
+function evaluateScoreNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, getRunValue, getGtValue) {
+  if (!node) return false;
+  if (node.type === 'rule') {
+    const runResult = resultsByIndex.get(runRowIndex) || null;
+    const runVal = getRunValue(runResult, node.outputKey, runRowIndex, runWs, outputFields);
+    const gtVals = (node.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
+    return gtVals.some((g) => g === runVal);
+  }
+  if (node.type === 'group' && Array.isArray(node.children)) {
+    if (node.children.length === 0) return false;
+    const ops = node.ops || Array(Math.max(0, node.children.length - 1)).fill('AND');
+    let r = evaluateScoreNode(node.children[0], runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, getRunValue, getGtValue);
+    for (let i = 1; i < node.children.length; i++) {
+      const next = evaluateScoreNode(node.children[i], runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, getRunValue, getGtValue);
+      r = (ops[i - 1] === 'OR') ? (r || next) : (r && next);
+    }
+    return r;
+  }
+  return false;
+}
+
 /** Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow). */
 function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
   const toCompareStr = (v) => {
@@ -96,16 +172,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
     return '';
   };
-  const runRowMatchesGtRow = (runRowIndex, gtRowIndex, rules, resultsByIndex, runWs, outputFields, gtContent) => {
-    const runResult = resultsByIndex.get(runRowIndex) || null;
-    for (const rule of rules) {
-      const runVal = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
-      const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
-      if (!gtVals.some((g) => g === runVal)) return false;
-    }
-    return true;
-  };
-  const computeMatchPerRow = (rules, results, outputFields, runWs, gtContent) => {
+  const computeMatchPerRowTree = (root, results, outputFields, runWs, gtContent) => {
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
     (results || []).forEach((r) => resultsByIndex.set(r.row_index, r));
@@ -116,7 +183,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     for (let i = 0; i < runCount; i++) {
       for (let j = 0; j < gtCount; j++) {
         if (gtUsed[j]) continue;
-        if (runRowMatchesGtRow(i, j, rules, resultsByIndex, runWs, outputFields, gtContent)) {
+        if (evaluateScoreNode(root, i, j, resultsByIndex, runWs, outputFields, gtContent, getRunValue, getGtValue)) {
           runToGt[i] = j;
           gtUsed[j] = true;
           break;
@@ -128,10 +195,11 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     return { matched, runToGt };
   };
 
-  let rules = [];
+  let scoreRoot = { type: 'group', op: 'AND', children: [] };
   try {
     const raw = scoreNode.dataset.scoreMapping || '[]';
-    rules = normalizeScoreMappingToRules(JSON.parse(raw));
+    const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    scoreRoot = parseScoreMappingToTree(data);
   } catch (_) {}
   let results = [];
   let outputFields = [];
@@ -145,7 +213,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
   const gtContent = gtId ? subsetContentByNodeId.get(gtId) : null;
   const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
   const gtSafe = gtContent ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
-  const { matched, runToGt } = computeMatchPerRow(rules, results, outputFields, runWsSafe, gtSafe);
+  const { matched, runToGt } = computeMatchPerRowTree(scoreRoot, results, outputFields, runWsSafe, gtSafe);
   let comments = {};
   try {
     comments = JSON.parse(scoreNode.dataset.scoreResultComments || '{}');
@@ -160,7 +228,8 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     const gtRowIndex = runToGt && runToGt[i] >= 0 ? runToGt[i] : -1;
     const expectedParts = [];
     if (gtRowIndex >= 0) {
-      for (const rule of rules) {
+      const rulesFlat = flattenScoreTreeToRules(scoreRoot);
+      for (const rule of rulesFlat) {
         const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtSafe, gtRowIndex, col));
         expectedParts.push(`${rule.outputKey}: ${gtVals.join(' | ') || '—'}`);
       }
@@ -498,6 +567,28 @@ export function buildWorkflowCanvas(root) {
       if (n.dataset.sourceNodeId === sourceNodeId) count++;
     });
     return `Sample ${count + 1}`;
+  }
+
+  /**
+   * Check if a run name is already used by another run under the same prompt (case-insensitive).
+   * @param {string} nameToCheck
+   * @param {string|null} [excludeRunNodeId=null] - run node id to exclude (the one being edited)
+   * @returns {boolean}
+   */
+  function isRunNameAlreadyUsedForPrompt(nameToCheck, excludeRunNodeId = null) {
+    const normalized = (nameToCheck || '').trim().toLowerCase();
+    if (!normalized) return true;
+    const promptEdge = connections.find((c) => c.toId === excludeRunNodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+    if (!promptEdge) return false;
+    const promptNodeId = promptEdge.fromId;
+    const runEdges = connections.filter((c) => c.fromId === promptNodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+    for (const e of runEdges) {
+      if (e.toId === excludeRunNodeId) continue;
+      const runNode = getNodeById(e.toId);
+      const existing = (runNode?.dataset?.runName ?? runNode?.querySelector?.('.workflow-node__title')?.textContent ?? '').trim() || 'Run';
+      if (existing.toLowerCase() === normalized) return true;
+    }
+    return false;
   }
 
   /**
@@ -1029,10 +1120,10 @@ export function buildWorkflowCanvas(root) {
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
           const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
-          cols.push({ key: '[#]', label: '[#]' });
+          cols.push({ key: '[#]', label: 'Input: #' });
           wsHeaders.forEach((h) => {
             const headerText = String(h ?? '').trim() || ' ';
-            cols.push({ key: `[${headerText}]`, label: `[${headerText}]` });
+            cols.push({ key: `[${headerText}]`, label: `Input: ${headerText}` });
           });
           return cols;
         }
@@ -1121,6 +1212,7 @@ export function buildWorkflowCanvas(root) {
           return (promptNode.dataset.promptName || '').trim() || (promptNode.querySelector('.workflow-node__title')?.textContent?.trim() || '');
         },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
+        isRunNameAlreadyUsedForPrompt,
       });
     }
   }
@@ -1603,6 +1695,7 @@ export function buildWorkflowCanvas(root) {
     node.dataset.nodeId = nodeId;
     node.dataset.nodeType = 'run';
     const runTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Run';
+    node.dataset.runName = runTitle;
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
@@ -1737,6 +1830,7 @@ export function buildWorkflowCanvas(root) {
           return (promptNode.dataset.promptName || '').trim() || (promptNode.querySelector('.workflow-node__title')?.textContent?.trim() || '');
         },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
+        isRunNameAlreadyUsedForPrompt,
       });
     });
 
@@ -1846,10 +1940,10 @@ export function buildWorkflowCanvas(root) {
         const wsId = (runNode.dataset.runWorkingSetId || '').trim();
         const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
         const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
-        cols.push({ key: '[#]', label: '[#]' });
+        cols.push({ key: '[#]', label: 'Input: #' });
         wsHeaders.forEach((h) => {
           const headerText = String(h ?? '').trim() || ' ';
-          cols.push({ key: `[${headerText}]`, label: `[${headerText}]` });
+          cols.push({ key: `[${headerText}]`, label: `Input: ${headerText}` });
         });
         return cols;
       }
@@ -2094,8 +2188,8 @@ export function buildWorkflowCanvas(root) {
     menu.setAttribute('role', 'menu');
     if (isRun) {
       menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--score" data-action="save-to-workspace-and-score" role="menuitem">Score</button>
         <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem">Save results to workspace</button>
-        <button type="button" class="workflow-node-context-item" data-action="save-to-workspace-and-score" role="menuitem">Score</button>
       `;
     } else if (isSubset) {
       menu.innerHTML = `
@@ -2879,7 +2973,7 @@ export function buildWorkflowCanvas(root) {
       if (node.classList.contains('workflow-node--run')) {
         const bar = node.querySelector('.workflow-node__run-progress');
         const pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : 0;
-        const runName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Run';
+        const runName = (node.dataset.runName || '').trim() || node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Run';
         const out = {
           type: 'run',
           nodeId,
@@ -2902,9 +2996,10 @@ export function buildWorkflowCanvas(root) {
         let scoreMapping;
         try {
           const raw = node.dataset.scoreMapping || '[]';
-          const arr = JSON.parse(raw);
-          const rules = normalizeScoreMappingToRules(Array.isArray(arr) ? arr : []);
-          scoreMapping = rules.length > 0 ? rules : undefined;
+          const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          const tree = parseScoreMappingToTree(data);
+          const hasRules = (tree.type === 'group' && tree.children && tree.children.length > 0) || flattenScoreTreeToRules(tree).length > 0;
+          scoreMapping = hasRules ? tree : undefined;
         } catch (_) {}
         const scoreResultComments = (node.dataset.scoreResultComments || '').trim();
         let scoreResultCommentsObj;
@@ -3005,6 +3100,7 @@ export function buildWorkflowCanvas(root) {
           nodeId: n.nodeId || n.id,
           title: n.runName || 'Run',
         });
+        if (n.runName) runNode.dataset.runName = n.runName;
         if (n.runWorkingSetId) runNode.dataset.runWorkingSetId = n.runWorkingSetId;
         if (n.runCredentialId) runNode.dataset.runCredentialId = n.runCredentialId;
         if (n.runInputToColumn) runNode.dataset.runInputToColumn = n.runInputToColumn;
@@ -3021,10 +3117,11 @@ export function buildWorkflowCanvas(root) {
           title: n.scoreName || 'Score',
         });
         if (n.scoreGroundTruthId) scoreNode.dataset.scoreGroundTruthId = n.scoreGroundTruthId;
-        if (Array.isArray(n.scoreMapping) && n.scoreMapping.length > 0) {
+        if (n.scoreMapping != null) {
           try {
-            const rules = normalizeScoreMappingToRules(n.scoreMapping);
-            scoreNode.dataset.scoreMapping = JSON.stringify(rules);
+            const tree = parseScoreMappingToTree(n.scoreMapping);
+            const hasRules = (tree.type === 'group' && tree.children && tree.children.length > 0) || flattenScoreTreeToRules(tree).length > 0;
+            if (hasRules) scoreNode.dataset.scoreMapping = JSON.stringify(tree);
           } catch (_) {}
         }
         if (n.scoreResultComments && typeof n.scoreResultComments === 'object') {

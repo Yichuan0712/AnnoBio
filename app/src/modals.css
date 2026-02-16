@@ -1484,7 +1484,6 @@
   gap: 8px;
   flex-wrap: wrap;
   padding: 6px 12px;
-  border-top: 1px solid var(--border);
   flex-shrink: 0;
   background: var(--bg);
   font-size: 11px;
@@ -1664,7 +1663,7 @@
   line-height: 1.2;
 }
 
-/* Score detail modal: two-column layout (like Run detail) */
+/* Score detail modal: layout aligned with Run detail (main + preview-wrap) */
 .modal-panel--score-detail {
   width: 88%;
   min-width: min(960px, 85%);
@@ -1677,46 +1676,459 @@
 }
 
 .modal-panel--score-detail .modal-body.score-detail-body,
-.score-detail-body {
+.modal-body--score {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: row;
-  gap: 20px;
+  gap: 0;
+  padding: 0;
   overflow: hidden;
 }
 
-.score-detail-col {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.score-detail-col--left {
+.score-detail-main {
   flex: 1 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-}
-
-.score-detail-col--left > .score-detail-card {
-  flex: 1 1 0;
-  min-height: 0;
-}
-
-.score-detail-col--right {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+  gap: 12px;
+  padding: 0 20px 20px 20px;
+  border-right: 1px solid var(--border);
   overflow: hidden;
 }
 
-.score-detail-col--right > .score-detail-results-card {
+.modal-panel--score-detail.score-detail-panel--expanded .score-detail-main {
+  flex: 0 0 36%;
+  max-width: 380px;
+}
+
+.score-detail-main-label {
+  margin: 0 -20px;
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.score-detail-meta-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0;
+  gap: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.score-detail-rules-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.score-detail-rules-label {
+  display: block;
+}
+
+.score-detail-rules-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.score-detail-rules-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.score-detail-rules-list {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.score-detail-add-rule-wrap {
+  display: flex;
+  justify-content: flex-start;
+  flex-shrink: 0;
+  padding-top: 8px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.score-detail-add-rule-wrap .score-detail-add-rule {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding-left: 14px;
+  padding-right: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.score-detail-add-rule-wrap .score-detail-add-rule:hover:not(:disabled) {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: var(--hover);
+}
+
+.score-detail-add-rule:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.score-detail-add-rule-wrap .score-detail-add-group {
+  min-height: 36px;
+  padding-left: 14px;
+  padding-right: 14px;
+  font-size: 13px;
+}
+
+/* Rules tree: flat list */
+.score-rules-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.score-rules-tree--flat {
+  gap: 8px;
+}
+
+.score-tree-row--flat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+}
+
+.score-tree-row--flat .score-tree-op-toggle {
+  flex-shrink: 0;
+}
+
+.score-tree-row-card {
+  flex: 1;
+  min-width: 0;
+}
+
+
+.score-tree-add-rule-box {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 2px dashed var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.score-tree-add-rule-box:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+
+.score-tree-row {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+}
+
+.score-tree-row[data-depth="0"] {
+  padding-left: 0;
+}
+
+/* Nested levels: indent only (no vertical line) */
+.score-tree-row[data-depth="1"],
+.score-tree-row[data-depth="2"],
+.score-tree-row[data-depth="3"] {
+  padding-left: 12px;
+  margin-left: 0;
+}
+
+.score-tree-row--rule {
+  padding-left: 0;
+}
+
+.score-tree-row--rule[data-depth="1"],
+.score-tree-row--rule[data-depth="2"],
+.score-tree-row--rule[data-depth="3"] {
+  padding-left: 12px;
+}
+
+.score-tree-row--rule .score-rule-card {
+  flex: 1;
+  min-width: 0;
+}
+
+/* AND/OR row in the left column of each branch */
+.score-tree-branch-op {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.score-tree-op-toggle {
+  min-width: 44px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.score-tree-op-toggle:hover {
+  border-color: var(--text-muted);
+  background: var(--hover);
+}
+
+.score-tree-branch-delete {
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.score-tree-branch-delete:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* AND/OR on the left of each branch; content (rules, nested branches) on the right */
+.score-tree-branch {
+  margin-left: 12px;
+  padding-left: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0;
+  margin-bottom: 4px;
+}
+
+.score-tree-child-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.score-tree-child-op {
+  flex-shrink: 0;
+  width: 72px;
+  padding: 4px 0 0 0;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+}
+
+.score-tree-child-node {
+  flex: 1;
+  min-width: 0;
+}
+
+.score-tree-branch-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 4px;
+}
+
+.score-tree-branch--root {
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.score-tree-branch .score-tree-group {
+  margin-left: 0;
+}
+
+.score-tree-branch .score-tree-branch {
+  margin-left: 12px;
+  padding-left: 0;
+}
+
+.score-tree-branch-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+  margin-bottom: 4px;
+}
+
+.score-tree-add-rule,
+.score-tree-add-group {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+/* Rule card (like prompt-section-card in Add section) */
+.score-rule-card {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-height: 36px;
+  overflow: hidden;
+}
+
+.score-rule-card:hover {
+  border-color: var(--text-muted);
+  box-shadow: 0 1px 3px var(--shadow);
+}
+
+.score-rule-card-inner {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.score-rule-card-inner:hover {
+  background: var(--hover);
+}
+
+.score-rule-card-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* AND/OR 与卡片合并：在卡片最左侧 */
+.score-rule-card-op {
+  flex-shrink: 0;
+  min-width: 48px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.score-rule-card-op:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.score-rule-card-promote {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.score-rule-card-promote:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.score-rule-card-add {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.score-rule-card-add:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.score-rule-card-remove {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.score-rule-card-remove:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* Score right column: Results (like run-detail-preview-wrap) */
+.score-detail-preview-wrap {
+  flex: 1 1 0;
+  min-width: 320px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.score-detail-preview-title {
+  margin: 0;
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.score-detail-preview-content {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 20px;
+  overflow: hidden;
+}
+
+.score-detail-preview-wrap > .score-detail-results-card {
   flex: 1 1 0;
   min-height: 0;
   display: flex;
@@ -1985,10 +2397,104 @@
   color: var(--text);
 }
 
-#score-detail-results-body {
+.score-detail-results-card #score-detail-results-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+.rule-editor-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.rule-editor-field-group {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.rule-editor-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.rule-editor-checkbox {
+  width: 16px;
+  height: 16px;
+}
+
+.modal-body--group-editor {
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.score-group-editor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.score-group-editor-actions .score-tree-add-rule-box {
+  width: 100%;
+}
+
+.rule-editor-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.rule-editor-option {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.rule-editor-option:hover {
+  background: var(--hover);
+  border-color: var(--text-muted);
+}
+
+.rule-editor-option--selected {
+  background: var(--bg-bar);
+  border-color: var(--text-muted);
+  font-weight: 600;
+}
+
+.rule-editor-option:focus {
+  outline: none;
+  border-color: var(--text-muted);
+}
+
+.rule-editor-match-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.rule-editor-selected-label {
+  display: block;
+  margin-top: 10px;
+  margin-bottom: 4px;
 }
 
 .score-detail-results-summary {
@@ -2330,69 +2836,134 @@
 }
 
 /* Run detail modal：略窄一些；min-height 与 source 典型内容高度一致（source 左侧卡片等会撑高，故用 85vh） */
+/* Run detail：与 Add prompt 一致，一开始只显示左半部分（窄 panel），Run 开始后 panel 变宽并显示右半部分（带动画） */
 .modal-panel--run-detail {
-  width: 88%;
-  min-width: min(960px, 85%);
-  max-width: 88%;
+  width: min(400px, 92vw);
+  min-width: min(400px, 92vw);
+  max-width: 92vw;
   max-height: 98vh;
   min-height: min(520px, 85vh);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  transition: width 0.35s ease-out, min-width 0.35s ease-out;
+}
+.modal-panel--run-detail.run-detail-panel--expanded {
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
 }
 
-/* 与 source dataset 一致：body 撑满面板，面板由 min-height 决定高度 */
 .modal-panel--run-detail .modal-body.run-detail-body,
-.run-detail-body {
+.modal-body--run {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: row;
-  gap: 20px;
+  gap: 0;
+  padding: 0;
   overflow: hidden;
 }
 
-.run-detail-col {
+.run-detail-main {
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  min-width: 0;
+  gap: 12px;
+  padding: 0 20px 20px 20px;
+  border-right: 1px solid var(--border);
   overflow: hidden;
 }
-
-.run-detail-col--left {
+.modal-panel--run-detail.run-detail-panel--expanded .run-detail-main {
   flex: 0 0 36%;
-  min-width: 0;
   max-width: 380px;
 }
 
-.run-detail-col--right {
-  flex: 1 1 0;
-  min-width: 160px;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+.run-detail-main-label {
+  margin: 0 -20px;
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
-.run-detail-col--right > .run-detail-results-card {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.run-detail-card {
-  padding: 16px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+.run-detail-main .run-detail-meta-wrap {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  padding: 0;
+  gap: 12px;
+}
+
+.run-detail-main .run-detail-form-error.prompt-modal-error {
+  flex-shrink: 0;
+  margin: 0 0 8px 0;
+}
+.run-detail-main .prompt-actions.run-detail-actions {
+  flex-shrink: 0;
+  padding: 12px 0 0 0;
+  margin-top: auto;
+  justify-content: flex-end;
+}
+
+/* 未展开时隐藏右半部分（与 add prompt step1 的 prompt-preview-wrap 一致） */
+.run-detail-preview-wrap {
+  display: none;
+  flex: 1 1 0;
+  min-width: 320px;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+.modal-panel--run-detail.run-detail-panel--expanded .run-detail-preview-wrap {
+  display: flex;
+}
+
+.run-detail-preview-title {
+  margin: 0;
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.run-detail-preview-content {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 20px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.run-detail-preview-wrap > .run-detail-results-card {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.run-detail-meta-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+
+.modal-panel--run-detail .prompt-actions .btn {
+  box-sizing: border-box;
+  min-height: 36px;
+  line-height: 1.2;
 }
 
 .run-detail-row {
@@ -2402,52 +2973,52 @@
 }
 
 .run-detail-label {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
 }
 
 .run-detail-llm-select {
-  padding: 8px 10px;
-  font-size: 13px;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  font-family: inherit;
   min-width: 0;
 }
-
-.run-detail-card--locked {
-  background: var(--hover);
-  border-left: 4px solid var(--border);
+/* 锁定后 select 被 disabled，浏览器会改色；强制与未锁定时一致 */
+.run-detail-llm-select:disabled,
+.run-detail-main--locked .run-detail-llm-select {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+  opacity: 1;
+  cursor: not-allowed;
 }
-.run-detail-card--locked .run-detail-label {
+
+.run-detail-main--locked {
+  cursor: not-allowed;
+}
+.run-detail-main--locked .run-detail-label {
   color: var(--text-muted);
 }
-.run-detail-card--locked .run-detail-ws-picker {
+.run-detail-main--locked .run-detail-name-field .dataset-meta-input {
+  cursor: not-allowed;
+}
+.run-detail-main--locked .run-detail-ws-picker {
   pointer-events: none;
   opacity: 0.95;
+  cursor: not-allowed;
 }
-.run-detail-card--locked .run-detail-ws-trigger {
+.run-detail-main--locked .run-detail-ws-trigger {
   background: var(--bg);
   cursor: not-allowed;
   color: var(--text);
   border-color: var(--border);
 }
-.run-detail-card--locked .run-detail-inputs-section select,
-.run-detail-card--locked .run-detail-inputs-section input {
+.run-detail-main--locked .run-detail-inputs-section select,
+.run-detail-main--locked .run-detail-inputs-section input {
   background: var(--bg);
   cursor: not-allowed;
   color: var(--text);
   border-color: var(--border);
 }
-.run-detail-card--locked .run-detail-llm-select {
-  background: var(--bg);
-  cursor: not-allowed;
-  color: var(--text);
-  border-color: var(--border);
-}
-.run-detail-card--locked .run-detail-run-btn {
+.run-detail-main--locked .run-detail-run-btn {
   opacity: 0.8;
   cursor: not-allowed;
 }
@@ -2471,7 +3042,8 @@
   border-radius: 0;
   font-family: inherit;
   cursor: pointer;
-  min-height: 20px;
+  min-height: 36px;
+  box-sizing: border-box;
 }
 
 .run-detail-ws-trigger:focus {
@@ -2556,33 +3128,24 @@
   font-family: inherit;
 }
 
+.run-detail-section-label {
+  display: block;
+  margin-bottom: 2px;
+}
+
 .run-detail-section-title {
   margin: 0 0 10px 0;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--text-muted);
 }
 
-.run-detail-footer {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-  padding-top: 12px;
-  margin-top: 12px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
 .run-detail-inputs-section {
-  margin-top: 4px;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  gap: 6px;
 }
 
 .run-detail-inputs-section .run-detail-mapping-wrap {
@@ -2618,12 +3181,10 @@
 }
 
 .run-detail-mapping-head {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  background: var(--bg);
+  color: var(--text);
+  background: var(--hover);
   border-bottom: 1px solid var(--border);
   min-height: 36px;
 }
@@ -2687,19 +3248,19 @@
 
 /* Run results card (right column) */
 .run-detail-results-card {
-  padding: 16px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  padding: 16px 20px 0;
+  background: transparent;
   border-radius: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   min-height: 0;
+  flex: 1 1 0;
   overflow: hidden;
 }
 
 .run-detail-results-card .run-detail-results {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -2739,19 +3300,26 @@
   flex-shrink: 0;
 }
 
-/* 分页在 footer 内、横线与 Save to workspace 上方 */
+/* 分页 + Save/Score 贴底部，横线与 dataset 页一致：toolbar 用 border-top，footer-actions 用 border-top + margin/padding */
 .run-detail-results-footer {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding-top: 0;
+  padding: 0 0 16px;
+  margin-top: auto;
+}
+
+.run-detail-results-footer .run-detail-results-toolbar {
+  padding: 6px 0;
+  background: var(--bg);
   border-top: none;
 }
 
 .run-detail-results-footer-actions {
+  margin-top: 4px;
+  padding-top: 8px;
   border-top: 1px solid var(--border);
-  padding-top: 12px;
   display: flex;
   justify-content: flex-end;
   align-items: center;
@@ -2798,12 +3366,22 @@
 
 .run-detail-results-table thead th {
   font-weight: 600;
-  color: var(--text-muted);
-  background: var(--bg-bar);
+  color: var(--text);
+  background: var(--hover);
 }
 
-.run-detail-results-table tbody tr:nth-child(even) {
-  background: var(--bg-bar);
+.run-detail-results-table tbody td {
+  color: var(--text);
+  background: var(--bg);
+}
+.run-detail-results-table tbody tr:nth-child(even) td {
+  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
+}
+/* 中括号列整列与标题行同色，需覆盖上面的斑马纹 */
+.run-detail-results-table tbody tr td.run-detail-td--dataset-row-col,
+.run-detail-results-table tbody tr td.run-detail-td--error-col {
+  background: var(--hover) !important;
+  color: var(--text);
 }
 
 .run-detail-results-table .run-detail-th--index,
@@ -2822,11 +3400,11 @@
   font-size: 12px;
 }
 
-/* [Error] 与 [From #] 系统列：背景与文字弱化，一眼区分 */
+/* [Error] 与 [#] 等中括号列：标题行与标题行同色，内容行随行背景 */
 .run-detail-results-table .run-detail-th--error-col,
 .run-detail-results-table .run-detail-th--dataset-row-col {
-  background: var(--hover, #f0f0f0);
-  color: var(--text-muted, #666);
+  background: var(--hover);
+  color: var(--text);
   font-weight: 600;
   font-size: 11px;
 }
@@ -2839,8 +3417,6 @@
 }
 .run-detail-results-table .run-detail-td--error-col,
 .run-detail-results-table .run-detail-td--dataset-row-col {
-  background: var(--hover, #f5f5f5);
-  color: var(--text-muted, #666);
   font-size: 12px;
 }
 .run-detail-results-table .run-detail-td--error-col.run-detail-td--error {
@@ -2851,6 +3427,7 @@
   color: var(--danger, #c00);
   font-size: 13px;
 }
+
 
 /* Dataset detail modal (subset): prompt/add style, preview only, no name/description edit */
 .modal-panel--working-dataset-detail {
@@ -2929,11 +3506,14 @@
 }
 
 /* 底部四按钮：与其它 detail 相同的 footer 风格（上划线 + 按钮右对齐） */
+.dataset-detail-card .dataset-detail-footer.working-dataset-detail-footer,
 .working-dataset-detail-footer {
   flex-shrink: 0;
   padding-left: 12px;
   padding-right: 12px;
   padding-bottom: 8px;
+  margin-top: 4px;
+  padding-top: 8px;
 }
 
 /* 关闭时未保存则弹出的询问框 */

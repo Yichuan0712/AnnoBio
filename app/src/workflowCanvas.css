@@ -167,8 +167,8 @@
 /* Run node: 保证标题能显示全，略短于 dataset 节点，方角 */
 .workflow-node--run {
   min-width: 110px;
-  max-width: 176px;
-  width: 176px;
+  max-width: 160px;
+  width: 160px;
   overflow: hidden;
   border-radius: 0;
 }
@@ -180,8 +180,8 @@
 /* Score node: 与 Run 外观类似，略短于 dataset 节点 */
 .workflow-node--score {
   min-width: 110px;
-  max-width: 176px;
-  width: 176px;
+  max-width: 160px;
+  width: 160px;
   overflow: hidden;
   border-radius: 0;
 }
@@ -197,8 +197,8 @@
 /* Review node: 接在 Score 后，略短于 dataset 节点 */
 .workflow-node--prompt-review {
   min-width: 110px;
-  max-width: 176px;
-  width: 176px;
+  max-width: 160px;
+  width: 160px;
   overflow: hidden;
   border-radius: 0;
 }
@@ -214,8 +214,8 @@
 /* Sample node: 与 Run 一样，略短于 dataset 节点，方角 */
 .workflow-node--sampler {
   min-width: 110px;
-  max-width: 176px;
-  width: 176px;
+  max-width: 160px;
+  width: 160px;
   overflow: hidden;
   border-radius: 0;
 }
@@ -377,7 +377,8 @@
 }
 
 .workflow-node-context-item--run,
-.workflow-node-context-item--sample {
+.workflow-node-context-item--sample,
+.workflow-node-context-item--score {
   font-weight: 700;
 }
 

@@ -36,7 +36,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   let selectedNodeId = (node?.dataset?.scoreGroundTruthId || '').trim();
 
-  /** Normalize to rules: [{ outputKey, gtColumns: string[], matchType }]. All rules are AND; within gtColumns is OR. Migrate from old groups/flat format. */
+  /** Tree node: { type: 'group', ops: string[], children: Node[] } | { type: 'rule', ... }. ops[i] = operator between children[i] and children[i+1]. */
   function normalizeToRules(arr) {
     if (!Array.isArray(arr) || arr.length === 0) return [];
     const first = arr[0];
@@ -69,13 +69,81 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return Object.values(byKey).filter((r) => r.outputKey || r.gtColumns.length > 0);
   }
 
-  function getRules() {
+  /** Parse stored value: array (legacy) -> tree root; keep tree (groups allowed). */
+  function parseScoreRoot(raw) {
+    let data;
     try {
-      const raw = node?.dataset?.scoreMapping || '[]';
-      const arr = JSON.parse(raw);
-      const rules = normalizeToRules(Array.isArray(arr) ? arr : []);
-      return rules.length ? rules : [];
-    } catch (_) { return []; }
+      data = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw;
+    } catch (_) {
+      return { type: 'group', ops: [], children: [] };
+    }
+    if (data && data.type === 'group' && Array.isArray(data.children)) {
+      const children = (data.children || []).map((c) => (c && c.type === 'group')
+        ? normalizeGroupChild(c)
+        : normalizeChild(c));
+      const ops = ensureGroupOps(data, children);
+      return { type: 'group', ops, children };
+    }
+    const rules = normalizeToRules(Array.isArray(data) ? data : []);
+    const children = rules.map((r) => ({ type: 'rule', outputKey: r.outputKey || '', gtColumns: (r.gtColumns || []).slice(), matchType: r.matchType || 'exact' }));
+    return { type: 'group', ops: Array(Math.max(0, children.length - 1)).fill('AND'), children };
+  }
+
+  function ensureGroupOps(data, children) {
+    const n = (children || []).length;
+    const len = Math.max(0, n - 1);
+    if (Array.isArray(data.ops) && data.ops.length >= len) {
+      return data.ops.slice(0, len).map((o) => o === 'OR' ? 'OR' : 'AND');
+    }
+    const defaultOp = data.op === 'OR' ? 'OR' : 'AND';
+    return Array(len).fill(defaultOp);
+  }
+
+  function normalizeGroupChild(c) {
+    const children = (c.children || []).map((ch) => (ch && ch.type === 'group') ? normalizeGroupChild(ch) : normalizeChild(ch));
+    const ops = ensureGroupOps(c, children);
+    return { type: 'group', ops, children };
+  }
+
+  function normalizeChild(c) {
+    if (!c || c.type === 'rule') {
+      return {
+        type: 'rule',
+        outputKey: (c && c.outputKey) || '',
+        gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
+        matchType: (c && c.matchType) || 'exact',
+      };
+    }
+    return normalizeGroupChild(c);
+  }
+
+  function getRoot() {
+    return parseScoreRoot(node?.dataset?.scoreMapping || '[]');
+  }
+
+  function setRoot(root) {
+    if (!node) return;
+    node.dataset.scoreMapping = JSON.stringify(root);
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  }
+
+  /** Flatten tree to array of rules (depth-first) for results table and rule cards by path. */
+  function collectRulesFlat(root, path = []) {
+    if (!root) return [];
+    if (root.type === 'rule') return [{ rule: root, path: path.slice() }];
+    if (root.type === 'group' && Array.isArray(root.children)) {
+      const out = [];
+      root.children.forEach((ch, i) => {
+        out.push(...collectRulesFlat(ch, path.concat(i)));
+      });
+      return out;
+    }
+    return [];
+  }
+
+  /** Get flat list of rules for backward-compat APIs (e.g. results table columns). */
+  function getRulesFlat() {
+    return collectRulesFlat(getRoot()).map((x) => x.rule);
   }
 
   /** Stringify value for strict comparison. */
@@ -116,24 +184,40 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /**
-   * Check if run row i (by content) matches GT row j for all rules.
+   * Evaluate a single rule: run value must equal any GT column value.
    */
-  function runRowMatchesGtRow(runRowIndex, gtRowIndex, rules, resultsByIndex, runWs, outputFields, gtContent) {
+  function ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) {
     const runResult = resultsByIndex.get(runRowIndex) || null;
-    for (const rule of rules) {
-      const runVal = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
-      const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
-      if (!gtVals.some((g) => g === runVal)) return false;
-    }
-    return true;
+    const runVal = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
+    const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
+    return gtVals.some((g) => g === runVal);
   }
 
   /**
-   * Match run rows to GT rows by content (one-to-one), not by row index.
-   * Returns { matched: boolean[], runToGt: number[], total, matchedCount }.
-   * runToGt[i] = GT row index matched to run row i, or -1 if none.
+   * Evaluate tree node for run row i vs GT row j.
    */
-  function computeMatchPerRow(rules, results, outputFields, runWs, gtContent) {
+  function evaluateNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) {
+    if (!node) return false;
+    if (node.type === 'rule') {
+      return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent);
+    }
+    if (node.type === 'group' && Array.isArray(node.children)) {
+      if (node.children.length === 0) return false;
+      const ops = node.ops || Array(Math.max(0, node.children.length - 1)).fill('AND');
+      let r = evaluateNode(node.children[0], runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent);
+      for (let i = 1; i < node.children.length; i++) {
+        const next = evaluateNode(node.children[i], runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent);
+        r = (ops[i - 1] === 'OR') ? (r || next) : (r && next);
+      }
+      return r;
+    }
+    return false;
+  }
+
+  /**
+   * Match run rows to GT rows by content (one-to-one). Root is tree root (group).
+   */
+  function computeMatchPerRow(root, results, outputFields, runWs, gtContent) {
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
     (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
@@ -145,7 +229,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     for (let i = 0; i < runCount; i++) {
       for (let j = 0; j < gtCount; j++) {
         if (gtUsed[j]) continue;
-        if (runRowMatchesGtRow(i, j, rules, resultsByIndex, runWs, outputFields, gtContent)) {
+        if (evaluateNode(root, i, j, resultsByIndex, runWs, outputFields, gtContent)) {
           runToGt[i] = j;
           gtUsed[j] = true;
           break;
@@ -167,10 +251,53 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     };
   }
 
-  function setRules(rules) {
-    if (!node) return;
-    node.dataset.scoreMapping = JSON.stringify(rules);
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  /** Get node at path (array of child indices from root). Root = []. */
+  function getNodeAtPath(root, path) {
+    let cur = root;
+    for (const i of path) {
+      if (!cur || cur.type !== 'group' || !Array.isArray(cur.children)) return null;
+      cur = cur.children[i];
+    }
+    return cur;
+  }
+
+  /** Clone tree and set node at path; returns new root. */
+  function setNodeAtPath(root, path, newNode) {
+    if (path.length === 0) return newNode;
+    const [i, ...rest] = path;
+    const group = root.type === 'group' && root.children ? { ...root, children: root.children.slice() } : root;
+    group.children[i] = setNodeAtPath(group.children[i], rest, newNode);
+    return group;
+  }
+
+  /** Clone tree and remove node at path (remove child at path's last index). Returns new root. */
+  function removeNodeAtPath(root, path) {
+    if (path.length === 0) return root;
+    if (path.length === 1) {
+      const k = path[0];
+      const group = root.type === 'group' && root.children ? { ...root, children: root.children.filter((_, idx) => idx !== k) } : root;
+      const ops = (root.ops || []).slice();
+      if (ops.length > 0) ops.splice(k === 0 ? 0 : k - 1, 1);
+      return { ...group, ops };
+    }
+    const [i, ...rest] = path;
+    const group = root.type === 'group' && root.children ? { ...root, children: root.children.slice() } : root;
+    group.children[i] = removeNodeAtPath(group.children[i], rest);
+    return group;
+  }
+
+  /** Insert child at path (path points to parent group). Returns new root. */
+  function insertChildAtPath(root, path, newChild, index) {
+    if (path.length === 0) {
+      const group = root.type === 'group' ? { ...root, children: (root.children || []).slice(), ops: (root.ops || []).slice() } : { type: 'group', ops: [], children: [] };
+      group.children.splice(index, 0, newChild);
+      group.ops.splice(index, 0, 'AND');
+      return group;
+    }
+    const [i, ...rest] = path;
+    const group = root.type === 'group' && root.children ? { ...root, children: root.children.slice() } : root;
+    group.children[i] = insertChildAtPath(group.children[i], rest, newChild, index);
+    return group;
   }
 
   function getResultComments() {
@@ -192,47 +319,47 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'score-detail-title');
   overlay.innerHTML = `
-    <div class="modal-panel modal-panel--score-detail">
+    <div class="modal-panel modal-panel--score-detail score-detail-panel--expanded">
       <div class="modal-header">
         <h2 id="score-detail-title" class="modal-title">${escapeHtml(title)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
-      <div class="modal-body score-detail-body">
-        <div class="score-detail-col score-detail-col--left">
-          <div class="score-detail-card">
-            <div class="score-detail-block score-detail-block--gt">
-              <div class="run-detail-row">
-                <label class="run-detail-label" for="score-detail-gt-picker">Ground truth</label>
-                <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select dataset as ground truth">
-                  <div class="run-detail-ws-trigger" tabindex="0">
-                    <span class="run-detail-ws-trigger-color" id="score-detail-gt-trigger-color"></span>
-                    <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">— Select —</span>
-                    <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
-                  </div>
-                  <div class="run-detail-ws-dropdown" id="score-detail-gt-dropdown" role="listbox" hidden></div>
+      <div class="modal-body score-detail-body modal-body--score">
+        <div class="score-detail-main">
+          <p class="run-detail-main-label score-detail-main-label">Score settings</p>
+          <div class="dataset-meta-wrap score-detail-meta-wrap">
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="score-detail-gt-picker">Ground truth</label>
+              <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select dataset as ground truth">
+                <div class="run-detail-ws-trigger" tabindex="0">
+                  <span class="run-detail-ws-trigger-color" id="score-detail-gt-trigger-color"></span>
+                  <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">— Select dataset —</span>
+                  <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
                 </div>
+                <div class="run-detail-ws-dropdown" id="score-detail-gt-dropdown" role="listbox" hidden></div>
               </div>
             </div>
-            <div class="score-detail-block score-detail-block--rules">
-              <h3 class="score-detail-section-title">Rules</h3>
-              <p class="score-detail-rules-hint">All rules must match (AND). For each rule, run column matches if it equals any selected ground truth column (OR).</p>
-              <div id="score-detail-mapping-wrap" class="score-detail-rules-wrap"></div>
-              <div class="score-detail-mapping-actions">
-                <button type="button" class="btn btn-secondary score-detail-add-rule" id="score-detail-add-rule">+ Add rule</button>
+            <div class="dataset-meta-field score-detail-rules-section">
+              <span class="dataset-meta-label run-detail-section-label score-detail-rules-label">Rules</span>
+              <p class="score-detail-rules-hint">Use groups to combine rules with AND or OR. Within each rule, run column matches if it equals any selected ground truth column.</p>
+              <div class="score-detail-rules-scroll">
+                <div id="score-detail-rules-list" class="score-detail-rules-list"></div>
               </div>
             </div>
           </div>
         </div>
-        <div class="score-detail-col score-detail-col--right">
-          <div class="score-detail-card score-detail-results-card" id="score-detail-results-card">
-            <h3 class="score-detail-section-title">Results</h3>
-            <div id="score-detail-results-body"></div>
-            <div class="score-detail-llm-row">
-              <label class="run-detail-label" for="score-detail-llm-select">LLM</label>
-              <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select LLM"></select>
-            </div>
-            <div class="score-detail-results-actions">
-              <button type="button" class="btn btn-secondary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with selected LLM">Add Review</button>
+        <div class="score-detail-preview-wrap">
+          <h3 class="run-detail-preview-title score-detail-preview-title">Results</h3>
+          <div class="score-detail-preview-content">
+            <div class="score-detail-results-card run-detail-results-card" id="score-detail-results-card">
+              <div id="score-detail-results-body" class="score-detail-results-body-inner"></div>
+              <div class="score-detail-llm-row">
+                <label class="run-detail-label" for="score-detail-llm-select">LLM</label>
+                <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select LLM"></select>
+              </div>
+              <div class="score-detail-results-actions">
+                <button type="button" class="btn btn-secondary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with selected LLM">Add Review</button>
+              </div>
             </div>
           </div>
         </div>
@@ -245,8 +372,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const triggerColorEl = overlay.querySelector('#score-detail-gt-trigger-color');
   const triggerTextEl = overlay.querySelector('#score-detail-gt-trigger-text');
   const dropdownEl = overlay.querySelector('#score-detail-gt-dropdown');
-  const mappingWrap = overlay.querySelector('#score-detail-mapping-wrap');
-  const addRuleBtn = overlay.querySelector('#score-detail-add-rule');
+  const rulesListEl = overlay.querySelector('#score-detail-rules-list');
   const llmSelect = overlay.querySelector('#score-detail-llm-select');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
   const resultsBody = overlay.querySelector('#score-detail-results-body');
@@ -285,14 +411,353 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     pickerEl.setAttribute('aria-expanded', 'true');
   }
 
+  /** Match method options (dropdown); currently only Strict match. */
+  const MATCH_METHODS = [MATCH_TYPE_STRICT];
+
+  /** Open Add rule / Edit rule modal. editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. */
+  function openRuleEditor(editPath, parentPath, indexInParent, onDone) {
+    const isEdit = Array.isArray(editPath) && editPath.length > 0;
+    const root = getRoot();
+    const rule = isEdit
+      ? getNodeAtPath(root, editPath)
+      : { type: 'rule', outputKey: '', gtColumns: [], matchType: MATCH_TYPE_STRICT.value };
+    const ruleData = rule && rule.type === 'rule' ? rule : { outputKey: '', gtColumns: [], matchType: MATCH_TYPE_STRICT.value };
+    const runColumns = getRunResultColumns();
+    const gtHeaders = getGroundTruthHeaders(selectedNodeId);
+    const resultSelectOpts = runColumns.map((c) => {
+      const label = (c.label || '').trim() || c.key || '—';
+      const key = c.key || '';
+      const sel = key === (ruleData.outputKey || '') ? ' selected' : '';
+      return `<option value="${escapeAttr(key)}"${sel}>${escapeHtml(label)}</option>`;
+    }).join('');
+    const matchSelectOpts = MATCH_METHODS.map((m) => {
+      const sel = (m.value || '') === (ruleData.matchType || '') ? ' selected' : '';
+      return `<option value="${escapeAttr(m.value)}"${sel}>${escapeHtml(m.label || m.value)}</option>`;
+    }).join('');
+    const currentGtColumn = (ruleData.gtColumns && ruleData.gtColumns[0]) ? ruleData.gtColumns[0] : '';
+    const defaultGtColumn = currentGtColumn || ((gtHeaders && gtHeaders[0]) ? gtHeaders[0] : '');
+    const gtSelectOpts = (gtHeaders || []).map((h) => {
+      const sel = h === defaultGtColumn ? ' selected' : '';
+      return `<option value="${escapeAttr(h)}"${sel}>${escapeHtml(h)}</option>`;
+    }).join('');
+    const gtSelectEmptyOpt = (gtHeaders && gtHeaders.length > 0) ? '' : '<option value="">— Select column —</option>';
+
+    const editorOverlay = document.createElement('div');
+    editorOverlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
+    editorOverlay.setAttribute('aria-modal', 'true');
+    editorOverlay.innerHTML = `
+      <div class="modal-panel modal-panel--section-editor modal-panel--rule-editor">
+        <div class="modal-header">
+          <h3 class="modal-title">${isEdit ? 'Edit rule' : 'Add rule'}</h3>
+          <button type="button" class="modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="dataset-meta-wrap">
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="rule-editor-result-column">Result column</label>
+              <select id="rule-editor-result-column" class="dataset-meta-input rule-editor-select" aria-label="Result column">${resultSelectOpts}</select>
+            </div>
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="rule-editor-gt-column">Ground truth column</label>
+              <select id="rule-editor-gt-column" class="dataset-meta-input rule-editor-select" aria-label="Ground truth column">
+                ${gtSelectEmptyOpt}${gtSelectOpts}
+              </select>
+            </div>
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="rule-editor-match-type">Match method</label>
+              <select id="rule-editor-match-type" class="dataset-meta-input rule-editor-select" aria-label="Match method">${matchSelectOpts}</select>
+            </div>
+            ${isEdit ? `
+            <div class="dataset-meta-field rule-editor-field-group">
+              <label class="dataset-meta-label rule-editor-checkbox-label">
+                <input type="checkbox" id="rule-editor-make-group" class="rule-editor-checkbox" aria-label="Make this a rule group">
+                Make this a rule group
+              </label>
+              <p class="rule-editor-hint">Convert to a group and edit its rules like the score list.</p>
+            </div>
+            ` : (parentPath && parentPath.length > 0 ? '' : `
+            <div class="dataset-meta-field rule-editor-field-group">
+              <label class="dataset-meta-label rule-editor-checkbox-label">
+                <input type="checkbox" id="rule-editor-add-as-group" class="rule-editor-checkbox" aria-label="Add as rule group">
+                Add as rule group
+              </label>
+              <p class="rule-editor-hint">Create a group with this rule; you can add more rules to the group after.</p>
+            </div>
+            `)}
+          </div>
+          <div class="prompt-form-error section-editor-error rule-editor-error" role="alert" aria-live="polite" hidden></div>
+          <div class="modal-footer-actions">
+            <button type="button" class="btn btn-secondary section-editor-cancel rule-editor-cancel">Cancel</button>
+            <button type="button" class="btn btn-secondary section-editor-save rule-editor-save">${isEdit ? 'Save' : 'Add rule'}</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const resultSelectEl = editorOverlay.querySelector('#rule-editor-result-column');
+    const matchSelectEl = editorOverlay.querySelector('#rule-editor-match-type');
+    const gtSelectEl = editorOverlay.querySelector('#rule-editor-gt-column');
+    const errorEl = editorOverlay.querySelector('.rule-editor-error');
+
+    function closeEditor() {
+      editorOverlay.remove();
+    }
+
+    function showError(msg) {
+      if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.hidden = false;
+      }
+    }
+
+    function clearError() {
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.hidden = true;
+      }
+    }
+
+    resultSelectEl.addEventListener('change', clearError);
+    gtSelectEl.addEventListener('change', clearError);
+    matchSelectEl.addEventListener('change', clearError);
+
+    function save() {
+      const outputKey = (resultSelectEl?.value ?? '').trim();
+      if (!outputKey) {
+        showError('Please select a result column.');
+        return;
+      }
+      const gtColumn = (gtSelectEl?.value ?? '').trim();
+      if (!gtColumn) {
+        showError('Please select a ground truth column.');
+        return;
+      }
+      const matchType = (matchSelectEl?.value ?? '').trim() || MATCH_TYPE_STRICT.value;
+      const newRule = { type: 'rule', outputKey, gtColumns: [gtColumn], matchType };
+      const root = getRoot();
+      const makeGroupEl = editorOverlay.querySelector('#rule-editor-make-group');
+      const addAsGroupEl = editorOverlay.querySelector('#rule-editor-add-as-group');
+      const makeGroup = isEdit && makeGroupEl && makeGroupEl.checked;
+      const addAsGroup = !isEdit && addAsGroupEl && addAsGroupEl.checked;
+      if (isEdit) {
+        if (makeGroup) {
+          setRoot(setNodeAtPath(root, editPath, { type: 'group', ops: [], children: [newRule] }));
+        } else {
+          setRoot(setNodeAtPath(root, editPath, newRule));
+        }
+      } else {
+        if (addAsGroup) {
+          setRoot(insertChildAtPath(root, parentPath, { type: 'group', ops: [], children: [newRule] }, indexInParent));
+        } else {
+          setRoot(insertChildAtPath(root, parentPath, newRule, indexInParent));
+        }
+      }
+      closeEditor();
+      onDone();
+    }
+
+    editorOverlay.querySelector('.modal-close').addEventListener('click', closeEditor);
+    editorOverlay.querySelector('.rule-editor-cancel').addEventListener('click', closeEditor);
+    editorOverlay.querySelector('.rule-editor-save').addEventListener('click', save);
+    editorOverlay.addEventListener('click', (e) => {
+      if (e.target === editorOverlay) closeEditor();
+    });
+    document.body.appendChild(editorOverlay);
+    resultSelectEl?.focus();
+  }
+
+  /** Rule card: optional AND/OR on left (opValue/opIndex), then click to edit, × to delete. */
+  function createRuleCard(rule, path, opts = {}) {
+    const runColumns = getRunResultColumns();
+    const runLabel = runColumns.find((c) => c.key === (rule.outputKey || ''))?.label || rule.outputKey || '—';
+    const gtLabel = (rule.gtColumns || []).length === 0 ? '—' : (rule.gtColumns || []).join(', ');
+    const matchLabel = MATCH_METHODS.find((m) => m.value === (rule.matchType || ''))?.label || MATCH_TYPE_STRICT.label;
+    const summary = `${runLabel} → ${gtLabel} · ${matchLabel}`;
+    const card = document.createElement('div');
+    card.className = 'score-rule-card';
+    const openEditor = () => openRuleEditor(path, [], 0, () => renderRules());
+    card.innerHTML = `
+      <div class="score-rule-card-inner" tabindex="0" role="button">
+        <span class="score-rule-card-summary">${escapeHtml(summary)}</span>
+      </div>
+      <button type="button" class="score-rule-card-remove" aria-label="Remove rule">×</button>
+    `;
+    const parentPathForOp = opts.parentPath !== undefined ? opts.parentPath : (path.length > 0 ? path.slice(0, -1) : []);
+    if (opts.opValue != null && opts.opIndex != null) {
+      const opBtn = document.createElement('button');
+      opBtn.type = 'button';
+      opBtn.className = 'score-rule-card-op';
+      opBtn.setAttribute('aria-label', 'Toggle AND/OR');
+      opBtn.textContent = opts.opValue || 'AND';
+      opBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const r = getRoot();
+        const parent = parentPathForOp.length > 0 ? getNodeAtPath(r, parentPathForOp) : r;
+        if (!parent || parent.type !== 'group') return;
+        const nextOps = (parent.ops || []).slice();
+        nextOps[opts.opIndex] = nextOps[opts.opIndex] === 'OR' ? 'AND' : 'OR';
+        setRoot(setNodeAtPath(r, parentPathForOp, { ...parent, ops: nextOps }));
+        renderRules();
+        if (opts.onAfterChange) opts.onAfterChange();
+      });
+      card.insertBefore(opBtn, card.firstChild);
+    }
+    const inner = card.querySelector('.score-rule-card-inner');
+    const removeBtn = card.querySelector('.score-rule-card-remove');
+    inner.addEventListener('click', openEditor);
+    inner.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openEditor();
+      }
+    });
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setRoot(removeNodeAtPath(getRoot(), path));
+      renderRules();
+      if (opts.onAfterChange) opts.onAfterChange();
+    });
+    return card;
+  }
+
+  /** Group card: same look as rule card, shows "Rule group N". Click to edit group. */
+  function createGroupCard(path, groupIndex, opts = {}) {
+    const label = `Rule group ${groupIndex}`;
+    const card = document.createElement('div');
+    card.className = 'score-rule-card score-rule-card--group';
+    const openGroupEditor = () => openGroupEditorModal(path, () => renderRules());
+    card.innerHTML = `
+      <div class="score-rule-card-inner" tabindex="0" role="button">
+        <span class="score-rule-card-summary">${escapeHtml(label)}</span>
+      </div>
+      <button type="button" class="score-rule-card-remove" aria-label="Remove group">×</button>
+    `;
+    if (opts.opValue != null && opts.opIndex != null) {
+      const opBtn = document.createElement('button');
+      opBtn.type = 'button';
+      opBtn.className = 'score-rule-card-op';
+      opBtn.setAttribute('aria-label', 'Toggle AND/OR');
+      opBtn.textContent = opts.opValue || 'AND';
+      opBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const r = getRoot();
+        const nextOps = (r.ops || []).slice();
+        nextOps[opts.opIndex] = nextOps[opts.opIndex] === 'OR' ? 'AND' : 'OR';
+        setRoot({ ...r, ops: nextOps });
+        renderRules();
+      });
+      card.insertBefore(opBtn, card.firstChild);
+    }
+    const inner = card.querySelector('.score-rule-card-inner');
+    const removeBtn = card.querySelector('.score-rule-card-remove');
+    inner.addEventListener('click', openGroupEditor);
+    inner.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openGroupEditor();
+      }
+    });
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setRoot(removeNodeAtPath(getRoot(), path));
+      renderRules();
+    });
+    return card;
+  }
+
+  /** Modal to edit a group's rules (same UI as score rules list). */
+  function openGroupEditorModal(groupPath, onDone) {
+    const root = getRoot();
+    const group = getNodeAtPath(root, groupPath);
+    if (!group || group.type !== 'group') return;
+    const firstIndex = groupPath[0];
+    const groupIndex = (root.children || []).slice(0, firstIndex + 1).filter((c) => c && c.type === 'group').length;
+    const title = `Edit Rule group ${groupIndex}`;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.innerHTML = `
+      <div class="modal-panel modal-panel--section-editor modal-panel--rule-editor modal-panel--group-editor">
+        <div class="modal-header">
+          <h3 class="modal-title">${escapeHtml(title)}</h3>
+          <button type="button" class="modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body modal-body--group-editor">
+          <div class="score-group-editor-list" id="score-group-editor-list"></div>
+          <div class="score-group-editor-actions">
+            <button type="button" class="score-tree-add-rule-box" id="score-group-editor-add-rule">+ Add rule</button>
+          </div>
+        </div>
+      </div>
+    `;
+    const listEl = overlay.querySelector('#score-group-editor-list');
+    const addBtn = overlay.querySelector('#score-group-editor-add-rule');
+
+    function getGroup() {
+      return getNodeAtPath(getRoot(), groupPath) || { type: 'group', ops: [], children: [] };
+    }
+
+    function setGroup(newGroup) {
+      setRoot(setNodeAtPath(getRoot(), groupPath, newGroup));
+      renderGroupEditorList();
+    }
+
+    function renderGroupEditorList() {
+      listEl.innerHTML = '';
+      const g = getGroup();
+      const children = (g.children || []).slice();
+      const ops = (g.ops || []).slice();
+      const onAfterChange = () => {
+        renderGroupEditorList();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      };
+      children.forEach((node, i) => {
+        if (node.type === 'rule') {
+          const row = document.createElement('div');
+          row.className = 'score-tree-row score-tree-row--flat';
+          const cardWrap = document.createElement('div');
+          cardWrap.className = 'score-tree-row-card';
+          const pathI = groupPath.concat(i);
+          const cardOpts = i > 0 ? { opValue: ops[i - 1] || 'AND', opIndex: i - 1 } : {};
+          cardOpts.onAfterChange = onAfterChange;
+          cardOpts.parentPath = groupPath;
+          cardWrap.appendChild(createRuleCard(node, pathI, cardOpts));
+          row.appendChild(cardWrap);
+          listEl.appendChild(row);
+        }
+      });
+    }
+
+    addBtn.addEventListener('click', () => {
+      openRuleEditor(null, groupPath, (getGroup().children || []).length, () => {
+        renderGroupEditorList();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
+    });
+
+    overlay.querySelector('.modal-close').addEventListener('click', () => {
+      overlay.remove();
+      onDone();
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        overlay.remove();
+        onDone();
+      }
+    });
+    renderGroupEditorList();
+    document.body.appendChild(overlay);
+  }
+
   function renderRules() {
-    mappingWrap.innerHTML = '';
+    rulesListEl.innerHTML = '';
 
     if (!selectedNodeId) {
       const p = document.createElement('p');
       p.className = 'score-detail-placeholder';
-      p.textContent = 'Select a dataset as ground truth, then add rules.';
-      mappingWrap.appendChild(p);
+      p.textContent = 'Select a dataset as ground truth, then add rules. Click a rule to edit; use AND/OR to combine.';
+      rulesListEl.appendChild(p);
+      renderResults();
       return;
     }
     const runColumns = getRunResultColumns();
@@ -303,114 +768,68 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       p.textContent = runColumns.length === 0
         ? 'No run connected or run has no result columns (run once with a dataset to see columns).'
         : 'Ground truth dataset has no columns.';
-      mappingWrap.appendChild(p);
+      rulesListEl.appendChild(p);
+      renderResults();
       return;
     }
 
-    const rules = getRules();
-
-    const table = document.createElement('div');
-    table.className = 'score-detail-mapping-table';
-    table.setAttribute('role', 'table');
-    table.innerHTML = `
-      <div class="score-detail-mapping-head" role="row">
-        <span class="score-detail-mapping-th" role="columnheader">Run column</span>
-        <span class="score-detail-mapping-th" role="columnheader">Ground truth columns (OR)</span>
-        <span class="score-detail-mapping-th" role="columnheader">Match</span>
-        <span class="score-detail-mapping-th score-detail-mapping-th--action" role="columnheader"></span>
-      </div>
-    `;
-
-    rules.forEach((rule, ruleIndex) => {
-      const runOpts = runColumns.map((c) => `<option value="${escapeAttr(c.key)}" ${c.key === (rule.outputKey || '') ? 'selected' : ''}>${escapeHtml((c.label || '').trim() || c.key || '—')}</option>`).join('');
-      const row = document.createElement('div');
-      row.className = 'score-detail-mapping-row';
-      row.setAttribute('role', 'row');
-      const gtChipsHtml = (rule.gtColumns || []).map((h) => `<span class="score-detail-gt-chip">${escapeHtml(h)}<button type="button" class="score-detail-gt-chip-remove" data-gt="${escapeAttr(h)}" aria-label="Remove">×</button></span>`).join('');
-      const gtAddOpts = ['', ...gtHeaders].map((h) => `<option value="${escapeAttr(h)}">${h ? escapeHtml(h) : '— Add —'}</option>`).join('');
-      row.innerHTML = `
-        <span class="score-detail-mapping-cell score-detail-mapping-cell--field" role="cell">
-          <select class="score-detail-mapping-select score-detail-run-column-select" data-rule-index="${ruleIndex}" aria-label="Run result column">
-            ${runOpts}
-          </select>
-        </span>
-        <span class="score-detail-mapping-cell score-detail-mapping-cell--gt-cols" role="cell">
-          <div class="score-detail-gt-chips">${gtChipsHtml}</div>
-          <div class="score-detail-gt-add-wrap">
-            <select class="score-detail-gt-add-select" data-rule-index="${ruleIndex}" aria-label="Add ground truth column">
-              ${gtAddOpts}
-            </select>
-            <span class="score-detail-gt-add-label" aria-hidden="true">+ Add</span>
-          </div>
-        </span>
-        <span class="score-detail-mapping-cell score-detail-mapping-cell--match" role="cell">${escapeHtml(MATCH_TYPE_STRICT.label)}</span>
-        <span class="score-detail-mapping-cell score-detail-mapping-cell--action" role="cell">
-          <button type="button" class="btn btn-secondary score-detail-remove-mapping" data-rule-index="${ruleIndex}" aria-label="Remove rule">×</button>
-        </span>
-      `;
-
-      const runSelect = row.querySelector('.score-detail-run-column-select');
-      const gtAddSelect = row.querySelector('.score-detail-gt-add-select');
-      const removeBtn = row.querySelector('.score-detail-remove-mapping');
-
-      runSelect.addEventListener('change', () => {
-        const r = getRules();
-        if (r[ruleIndex]) {
-          r[ruleIndex] = { ...r[ruleIndex], outputKey: (runSelect.value || '').trim() };
-          setRules(r);
-        }
-      });
-      gtAddSelect.addEventListener('change', () => {
-        const gt = (gtAddSelect.value || '').trim();
-        if (!gt) return;
-        const r = getRules();
-        if (r[ruleIndex] && !(r[ruleIndex].gtColumns || []).includes(gt)) {
-          r[ruleIndex].gtColumns = [...(r[ruleIndex].gtColumns || []), gt];
-          setRules(r);
-          renderRules();
-        }
-        gtAddSelect.value = '';
-      });
-      row.querySelectorAll('.score-detail-gt-chip-remove').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const gt = btn.dataset.gt || '';
-          const r = getRules();
-          if (r[ruleIndex]) {
-            r[ruleIndex].gtColumns = (r[ruleIndex].gtColumns || []).filter((c) => c !== gt);
-            setRules(r);
-            renderRules();
-          }
-        });
-      });
-      removeBtn.addEventListener('click', () => {
-        const r = getRules().filter((_, i) => i !== ruleIndex);
-        setRules(r);
-        renderRules();
-      });
-
-      table.appendChild(row);
-    });
-
-    if (rules.length > 0) {
-      mappingWrap.appendChild(table);
-    } else {
-      const emptyP = document.createElement('p');
-      emptyP.className = 'score-detail-placeholder score-detail-mapping-empty';
-      emptyP.textContent = 'No rules. Click "+ Add rule" to add one.';
-      mappingWrap.appendChild(emptyP);
+    const root = getRoot();
+    if (root.type !== 'group' || !Array.isArray(root.children)) {
+      renderResults();
+      return;
     }
+    const children = root.children || [];
+    const ops = root.ops || Array(Math.max(0, children.length - 1)).fill('AND');
+    let groupCount = 0;
+
+    const treeWrap = document.createElement('div');
+    treeWrap.className = 'score-rules-tree score-rules-tree--flat';
+    children.forEach((node, i) => {
+      const row = document.createElement('div');
+      row.className = 'score-tree-row score-tree-row--flat';
+      const cardWrap = document.createElement('div');
+      cardWrap.className = 'score-tree-row-card';
+      const cardOpts = i > 0 ? { opValue: ops[i - 1] || 'AND', opIndex: i - 1 } : {};
+      if (node.type === 'group') {
+        groupCount += 1;
+        cardWrap.appendChild(createGroupCard([i], groupCount, cardOpts));
+      } else {
+        cardWrap.appendChild(createRuleCard(node, [i], cardOpts));
+      }
+      row.appendChild(cardWrap);
+      treeWrap.appendChild(row);
+    });
+    const addRow = document.createElement('div');
+    addRow.className = 'score-tree-add-row score-tree-row--flat';
+    const addBox = document.createElement('button');
+    addBox.type = 'button';
+    addBox.className = 'score-tree-add-rule-box';
+    addBox.setAttribute('aria-label', 'Add rule');
+    addBox.textContent = '+ Add rule';
+    addBox.addEventListener('click', () => {
+      const r = getRoot();
+      const len = (r.children || []).length;
+      openRuleEditor(null, [], len, () => renderRules());
+    });
+    const cardWrap = document.createElement('div');
+    cardWrap.className = 'score-tree-row-card';
+    cardWrap.appendChild(addBox);
+    addRow.appendChild(cardWrap);
+    treeWrap.appendChild(addRow);
+    rulesListEl.appendChild(treeWrap);
     renderResults();
   }
 
   function renderResults() {
     if (!resultsBody) return;
     resultsBody.innerHTML = '';
-    const rules = getRules();
+    const root = getRoot();
+    const rulesFlat = getRulesFlat();
     if (!selectedNodeId) {
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Select ground truth and add rules to see comparison results.</p>';
       return;
     }
-    if (rules.length === 0) {
+    if (rulesFlat.length === 0) {
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Add at least one rule to compare.</p>';
       return;
     }
@@ -431,7 +850,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       return;
     }
 
-    const { matched, runToGt, total, matchedCount } = computeMatchPerRow(rules, results, outputFields, runWs, gtContent);
+    const { matched, runToGt, total, matchedCount } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
 
     const summary = document.createElement('p');
     summary.className = 'score-detail-results-summary';
@@ -446,7 +865,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const tbl = document.createElement('table');
     tbl.className = 'score-detail-results-table';
     let headerRow = '<thead><tr><th class="score-detail-results-th score-detail-results-th--idx">#</th>';
-    rules.forEach((rule) => {
+    rulesFlat.forEach((rule) => {
       const runLabel = String(rule.outputKey || '').trim() || '—';
       const gtLabel = (rule.gtColumns || []).join(', ') || '—';
       headerRow += `<th class="score-detail-results-th score-detail-results-th--run">Run: ${escapeHtml(runLabel)}</th>`;
@@ -471,7 +890,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const hasRunNoMatch = hasRun && !isMatch;
       const rowClass = isMatch ? 'score-detail-results-tr--match' : (hasRunNoMatch ? 'score-detail-results-tr--run-only' : 'score-detail-results-tr--unmatch');
       let tr = `<tr class="score-detail-results-tr ${rowClass}"><td class="score-detail-results-td score-detail-results-td--idx">${i + 1}</td>`;
-      for (const rule of rules) {
+      for (const rule of rulesFlat) {
         const runVal = getRunValue(runResult, rule.outputKey, i, runWs, outputFields);
         const gtVals = hasGt ? (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtDisplayIndex, col)) : [];
         const gtDisplay = gtVals.length === 0 ? (hasGt ? '—' : '—') : gtVals.join(' | ');
@@ -563,20 +982,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       alert(e?.message || 'Review request failed.');
     }
     addPromptReviewBtn.disabled = false;
-  });
-
-  addRuleBtn.addEventListener('click', () => {
-    const runColumns = getRunResultColumns();
-    const gtHeaders = getGroundTruthHeaders(selectedNodeId);
-    if (runColumns.length === 0 || gtHeaders.length === 0) return;
-    const rules = getRules();
-    rules.push({
-      outputKey: runColumns[0].key || '',
-      gtColumns: gtHeaders[0] ? [gtHeaders[0]] : [],
-      matchType: MATCH_TYPE_STRICT.value,
-    });
-    setRules(rules);
-    renderRules();
   });
 
   function selectGroundTruth(id) {
