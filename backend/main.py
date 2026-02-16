@@ -22,6 +22,7 @@ def _safe_print(s: str) -> None:
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, create_model
 
 from llm import chat as llm_chat, run_structured as llm_run_structured
@@ -93,21 +94,38 @@ class ReviewComparisonRow(BaseModel):
 class ReviewRequest(BaseModel):
     credential_id: str
     prompt_sections: list[dict] = Field(..., description="List of {name, content} for each section")
-    prompt_full_text: str = Field(default="", description="Full prompt as single string")
     run_results: list[dict] = Field(default_factory=list, description="List of {row_index, output}")
     output_fields: list[dict] = Field(default_factory=list, description="List of {key, display}")
     comparison_rows: list[ReviewComparisonRow] = Field(default_factory=list, description="Per-row match result and context")
 
 
 class ReviewSuggestion(BaseModel):
+    name: str = Field(..., description="Short name summarizing this change (e.g. 'Clarify output format')")
     section_index: int = Field(..., ge=0, description="0-based index of the section to change")
-    new_content: str = Field(..., description="Replacement content for that section")
+    old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only)")
+    new_sentence: str = Field(..., description="Replacement for that one sentence")
     reason: str = Field(..., description="Why this change is suggested")
 
 
 class ReviewResult(BaseModel):
     summary: str = Field(..., description="Brief overall analysis")
     suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete edit suggestions")
+
+
+# Two-step review: step1 = plan (summary + change focuses), step2 = concrete suggestions per focus
+class ReviewChangeFocus(BaseModel):
+    section_index: int = Field(..., ge=0, description="0-based section index")
+    focus_description: str = Field(..., description="One-sentence description of what to change in this section")
+    name: str = Field(default="", description="Short title for this change (e.g. 'Clarify output format')")
+
+
+class ReviewPlan(BaseModel):
+    summary: str = Field(..., description="Brief overall analysis of prompt vs comparison")
+    focuses: list[ReviewChangeFocus] = Field(default_factory=list, description="List of change focuses to expand into concrete edits")
+
+
+class FocusSuggestions(BaseModel):
+    suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete suggestions for this focus only")
 
 
 def _sanitize_field_name(key: str) -> str:
@@ -456,14 +474,15 @@ def get_run_result(run_id: str):
     return {"status": "done", "results": job["results"], "output_fields": job["output_fields"]}
 
 
-# ---------- Review: single-round prompt analysis from score comparison ----------
-def _build_review_analysis_prompt(body: ReviewRequest) -> str:
-    """Build the user message for the review LLM."""
+# ---------- Review: two-step (plan then per-focus suggestions) for better quality ----------
+def _build_review_step1_prompt(body: ReviewRequest) -> str:
+    """Step1: Ask for summary + list of change focuses (no exact sentences yet)."""
     lines = [
-        "You are helping improve a prompt used for structured LLM output. Below are the current prompt, the output schema, and per-row comparison of model output vs ground truth (matched or not, and any user comment).",
+        "You are helping improve a prompt used for structured LLM output. Below are the current prompt sections and per-row comparison of model output vs ground truth (matched or not, and any user comment).",
         "",
-        "## Current prompt (full text)",
-        body.prompt_full_text or "(empty)",
+        "## Task (step 1 of 2): Analyze and plan",
+        "Output: (1) A brief overall summary. (2) A list of concrete change focuses. Each focus: section_index (0-based), a short name (e.g. \"Clarify output format\"), and focus_description = one sentence describing exactly what to change in that section (e.g. \"Add an example of valid JSON output\").",
+        "Do NOT output exact old_sentence/new_sentence yet. Only list what should be changed and where. Prefer 3–10 focuses; merge tiny edits into one focus per idea.",
         "",
         "## Sections (0-based index for reference)",
     ]
@@ -483,17 +502,55 @@ def _build_review_analysis_prompt(body: ReviewRequest) -> str:
             lines.append(f"  User comment: {row.comment}")
         lines.append("")
     lines.append(
-        "Respond with a JSON object: {\"summary\": \"...\", \"suggestions\": [{\"section_index\": 0, \"new_content\": \"...\", \"reason\": \"...\"}, ...]}. "
-        "Section names above are only for you to identify which section to edit — do NOT include any section name or title in new_content. "
-        "new_content must be only the section body text (the content part). Use the exact 0-based section_index. "
-        "Make minimal changes so a diff is clear. reason explains why."
+        "Respond with JSON: {\"summary\": \"...\", \"focuses\": [{\"section_index\": 0, \"name\": \"short title\", \"focus_description\": \"one sentence what to change\"}, ...]}."
+    )
+    return "\n".join(lines)
+
+
+def _build_review_step2_prompt(
+    body: ReviewRequest,
+    focus: ReviewChangeFocus,
+) -> str:
+    """Step2: Given one focus, output exact old_sentence/new_sentence for that section."""
+    secs = body.prompt_sections or []
+    idx = focus.section_index
+    if idx < 0 or idx >= len(secs):
+        return ""
+    sec = secs[idx]
+    name = (sec.get("name") or "").strip() or "(unnamed)"
+    content = (sec.get("content") or "").strip() or "(empty)"
+    lines = [
+        "You are improving a prompt section. Output concrete edit suggestions: exact sentence to replace (old_sentence) and replacement (new_sentence).",
+        "",
+        "## Critical: how to set old_sentence",
+        "Copy old_sentence character-for-character from the section text below. Do not paraphrase or add/remove spaces or newlines. "
+        "The tool locates the change by matching this string in the section; if it differs by even one character, the edit may fail. "
+        "Best practice: copy the exact substring from the section (one sentence or one line) into old_sentence.",
+        "",
+        "## Focus for this section",
+        f"Section index: {idx} ({name})",
+        f"What to do: {focus.focus_description}",
+        f"Short name for suggestions: {focus.name or 'Edit'}",
+        "",
+        "## Section full text (copy exact substring from here for old_sentence)",
+        content,
+        "",
+        "## Comparison context (why this change helps)",
+    ]
+    for row in (body.comparison_rows or [])[:15]:
+        status = "matched" if row.matched else "NOT MATCHED"
+        lines.append(f"Row {row.row_index} [{status}] Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
+    lines.append("")
+    lines.append(
+        "Respond with JSON: {\"suggestions\": [{\"name\": \"...\", \"section_index\": " + str(idx) + ", \"old_sentence\": \"exact one sentence copied from the section above\", \"new_sentence\": \"replacement\", \"reason\": \"...\"}, ...]}. "
+        "Each suggestion must change exactly ONE sentence. old_sentence must be a verbatim copy from the section. You may output 1–3 suggestions for this focus."
     )
     return "\n".join(lines)
 
 
 @app.post("/api/review/analyze", response_model=ReviewResult)
 def review_analyze(body: ReviewRequest):
-    """Single-round analysis: suggest prompt section edits from score comparison. Uses credential for LLM."""
+    """Two-step analysis: (1) plan summary + change focuses, (2) per-focus concrete old_sentence/new_sentence. Same API contract."""
     items = _load_credentials()
     cred = None
     for item in items:
@@ -509,17 +566,116 @@ def review_analyze(body: ReviewRequest):
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
     provider = cred.get("provider", "openai")
-    prompt_text = _build_review_analysis_prompt(body)
     try:
-        result = llm_run_structured(
+        # Step 1: get summary + list of change focuses
+        step1_prompt = _build_review_step1_prompt(body)
+        plan_result = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,
-            prompt=prompt_text,
-            response_model=ReviewResult,
-            max_tokens=8192,
+            prompt=step1_prompt,
+            response_model=ReviewPlan,
+            max_tokens=32768,
         )
-        return ReviewResult(**result) if isinstance(result, dict) else result
+        plan = ReviewPlan(**(plan_result if isinstance(plan_result, dict) else plan_result.model_dump()))
+        if not plan.focuses:
+            return ReviewResult(summary=plan.summary, suggestions=[])
+
+        # Step 2: for each focus, get exact suggestions (old_sentence / new_sentence)
+        all_suggestions: list[ReviewSuggestion] = []
+        for focus in plan.focuses:
+            step2_prompt = _build_review_step2_prompt(body, focus)
+            if not step2_prompt:
+                continue
+            step2_result = llm_run_structured(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                prompt=step2_prompt,
+                response_model=FocusSuggestions,
+                max_tokens=32768,
+            )
+            fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
+            for s in fs.suggestions:
+                s_dict = s.model_dump() if hasattr(s, "model_dump") else s
+                s_dict["section_index"] = focus.section_index
+                if not (s_dict.get("name") or "").strip():
+                    s_dict["name"] = focus.name or focus.focus_description[:50]
+                all_suggestions.append(ReviewSuggestion(**s_dict))
+
+        return ReviewResult(summary=plan.summary, suggestions=all_suggestions)
     except Exception as e:
         _safe_print(_HL + "[Review] Error: " + _R + str(e))
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _review_analyze_stream_generator(body: ReviewRequest):
+    """Yield NDJSON lines: plan, then one line per focus with suggestions, then done."""
+    items = _load_credentials()
+    cred = None
+    for item in items:
+        if item.get("id") == body.credential_id:
+            cred = item
+            break
+    if not cred:
+        yield (json.dumps({"type": "error", "detail": "Credential not found"}) + "\n").encode("utf-8")
+        return
+    model = cred.get("llm", "")
+    if model not in ALLOWED_MODELS:
+        yield (json.dumps({"type": "error", "detail": f"Unsupported model: {model}"}) + "\n").encode("utf-8")
+        return
+    api_key = cred.get("api_key", "")
+    if not api_key:
+        yield (json.dumps({"type": "error", "detail": "Missing API key"}) + "\n").encode("utf-8")
+        return
+    provider = cred.get("provider", "openai")
+    try:
+        step1_prompt = _build_review_step1_prompt(body)
+        plan_result = llm_run_structured(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            prompt=step1_prompt,
+            response_model=ReviewPlan,
+            max_tokens=32768,
+        )
+        plan = ReviewPlan(**(plan_result if isinstance(plan_result, dict) else plan_result.model_dump()))
+        yield (json.dumps({"type": "plan", "summary": plan.summary, "focus_count": len(plan.focuses or [])}, ensure_ascii=False) + "\n").encode("utf-8")
+        if not plan.focuses:
+            yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
+            return
+        for focus in plan.focuses:
+            step2_prompt = _build_review_step2_prompt(body, focus)
+            if not step2_prompt:
+                continue
+            step2_result = llm_run_structured(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                prompt=step2_prompt,
+                response_model=FocusSuggestions,
+                max_tokens=32768,
+            )
+            fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
+            batch = []
+            for s in fs.suggestions:
+                s_dict = s.model_dump() if hasattr(s, "model_dump") else s
+                s_dict["section_index"] = focus.section_index
+                if not (s_dict.get("name") or "").strip():
+                    s_dict["name"] = focus.name or (focus.focus_description[:50] if focus.focus_description else "Edit")
+                batch.append(s_dict)
+            if batch:
+                yield (json.dumps({"type": "suggestions", "suggestions": batch}, ensure_ascii=False) + "\n").encode("utf-8")
+        yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
+    except Exception as e:
+        _safe_print(_HL + "[Review] Error: " + _R + str(e))
+        yield (json.dumps({"type": "error", "detail": str(e)}, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+@app.post("/api/review/analyze/stream")
+def review_analyze_stream(body: ReviewRequest):
+    """Stream review: first line = plan (summary), then one NDJSON line per focus with suggestions, then done."""
+    return StreamingResponse(
+        _review_analyze_stream_generator(body),
+        media_type="application/x-ndjson",
+    )

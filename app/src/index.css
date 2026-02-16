@@ -10,6 +10,10 @@
   --node-border: #8b9199;
   --hover: #e4e7eb;
   --shadow: rgba(0, 0, 0, 0.1);
+  --diff-removed-bg: rgba(200, 60, 60, 0.22);
+  --diff-removed-text: #b91c1c;
+  --diff-added-bg: rgba(22, 163, 74, 0.22);
+  --diff-added-text: #15803d;
 }
 
 html.dark {
@@ -23,6 +27,10 @@ html.dark {
   --node-border: #404040;
   --hover: #333;
   --shadow: rgba(0, 0, 0, 0.3);
+  --diff-removed-bg: rgba(248, 113, 113, 0.25);
+  --diff-removed-text: #fca5a5;
+  --diff-added-bg: rgba(74, 222, 128, 0.22);
+  --diff-added-text: #86efac;
 }
 
 body {

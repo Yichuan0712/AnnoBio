@@ -209,20 +209,6 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
           <button type="button" class="modal-close" aria-label="Close">×</button>
         </div>
         <div class="modal-body prompt-detail-body">
-          <div class="prompt-detail-main">
-            <div class="prompt-detail-step">
-              <p class="prompt-step-label">Prompt sections</p>
-              <div class="prompt-detail-sections-scroll">
-                <div class="prompt-detail-sections-wrap">
-                  <div class="prompt-detail-sections-view">${sectionsViewHtml}</div>
-                </div>
-              </div>
-              <div class="prompt-form-error prompt-modal-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
-              <div class="prompt-actions">
-                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
-              </div>
-            </div>
-          </div>
           <div class="prompt-detail-side prompt-preview-wrap">
             <div class="prompt-detail-side-scroll">
               <h3 class="prompt-preview-title">Prompt inputs</h3>
@@ -234,6 +220,21 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
                   <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
                   <button type="button" class="btn btn-secondary prompt-detail-schema-btn-edit">Edit</button>
                 </div>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-detail-main">
+            <div class="prompt-detail-step">
+              <p class="prompt-step-label">Prompt sections</p>
+              <div class="prompt-detail-sections-scroll">
+                <div class="prompt-detail-sections-wrap">
+                  <div class="prompt-detail-sections-view">${sectionsViewHtml}</div>
+                </div>
+              </div>
+              <div class="prompt-form-error prompt-modal-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
+              <div class="prompt-actions">
+                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
+                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Run</button>
               </div>
             </div>
           </div>
@@ -563,6 +564,17 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
 
   if (sectionsBtnEdit) {
     sectionsBtnEdit.addEventListener('click', () => openEditSectionsOverlay());
+  }
+
+  const sectionsBtnRun = overlay.querySelector('.prompt-detail-sections-btn-run');
+  if (sectionsBtnRun && onRunPrompt) {
+    sectionsBtnRun.addEventListener('click', () => {
+      onRunPrompt();
+      overlay.remove();
+      document.body.style.overflow = '';
+    });
+  } else if (sectionsBtnRun) {
+    sectionsBtnRun.style.display = 'none';
   }
 
   let currentSchemaFields = (outputFormat.fields || []).map((o) => ({

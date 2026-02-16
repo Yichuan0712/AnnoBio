@@ -172,6 +172,17 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
     return '';
   };
+  const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
+    if (!rule || rule.type !== 'rule') return false;
+    const runResult = resultsByIndex.get(runRowIndex) || null;
+    const runVal = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
+    const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
+    return gtVals.some((g) => g === runVal);
+  };
+  const countMatchingRules = (root, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
+    const rules = flattenScoreTreeToRules(root);
+    return rules.filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;
+  };
   const computeMatchPerRowTree = (root, results, outputFields, runWs, gtContent) => {
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
@@ -180,15 +191,18 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     const gtCount = gtRows.length;
     const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
     const gtUsed = new Array(gtCount).fill(false);
+    const pairs = [];
     for (let i = 0; i < runCount; i++) {
       for (let j = 0; j < gtCount; j++) {
-        if (gtUsed[j]) continue;
-        if (evaluateScoreNode(root, i, j, resultsByIndex, runWs, outputFields, gtContent, getRunValue, getGtValue)) {
-          runToGt[i] = j;
-          gtUsed[j] = true;
-          break;
-        }
+        const score = countMatchingRules(root, i, j, resultsByIndex, runWs, outputFields, gtContent);
+        if (score > 0) pairs.push({ i, j, score });
       }
+    }
+    pairs.sort((a, b) => b.score - a.score);
+    for (const { i, j } of pairs) {
+      if (runToGt[i] >= 0 || gtUsed[j]) continue;
+      runToGt[i] = j;
+      gtUsed[j] = true;
     }
     const matched = [];
     for (let i = 0; i < runCount; i++) matched.push(runToGt[i] >= 0);
@@ -234,12 +248,14 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
         expectedParts.push(`${rule.outputKey}: ${gtVals.join(' | ') || '—'}`);
       }
     }
+    const isFullMatch = gtRowIndex >= 0 && evaluateScoreNode(scoreRoot, i, gtRowIndex, resultsByIndex, runWsSafe, outputFields, gtSafe, getRunValue, getGtValue);
+    const commentKey = gtRowIndex >= 0 ? String(gtRowIndex) : 'run:' + i;
     rows.push({
       row_index: i,
-      matched: matched[i] === true,
+      matched: isFullMatch,
       run_output: runOutput,
       expected: expectedParts.length ? expectedParts.join('; ') : '—',
-      comment: comments[String(i)] ?? null,
+      comment: comments[commentKey] ?? null,
     });
   }
   return rows;
@@ -1436,6 +1452,52 @@ export function buildWorkflowCanvas(root) {
           }
           updateContentSize();
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          if (runNode?.dataset?.nodeId) {
+            let sections = [];
+            try {
+              sections = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
+            } catch (_) {}
+            const promptInputFields = extractInputFieldsFromSections(Array.isArray(sections) ? sections : []);
+            const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+              const id = n.dataset.nodeId || '';
+              const content = subsetContentByNodeId.get(id);
+              const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+              const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+              return {
+                nodeId: id,
+                name: (n.dataset.subsetName || '').trim() || 'Dataset',
+                headers: content?.headers ? content.headers.slice() : [],
+                color,
+              };
+            });
+            function getSubsetContent(nodeId) {
+              const c = subsetContentByNodeId.get(nodeId);
+              return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+            }
+            function getPromptTemplate() {
+              let sec = [];
+              try {
+                sec = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
+              } catch (_) {}
+              let fields = [];
+              try {
+                fields = JSON.parse(node.dataset.promptOutputFormat || '[]');
+              } catch (_) {}
+              const returnShape = node.dataset.promptOutputReturnShape || 'single';
+              return { sections: sec, outputSchema: { return_shape: returnShape, fields } };
+            }
+            openRunDetailModal({
+              node: runNode,
+              getWorkingSets: () => workingSets,
+              getPromptInputFields: () => promptInputFields,
+              getSubsetContent,
+              getPromptTemplate,
+              registerPendingRun,
+              getPromptName: () => (node.dataset.promptName || '').trim() || (node.querySelector('.workflow-node__title')?.textContent?.trim() || ''),
+              getUniqueDatasetExportName: findUniqueDatasetExportName,
+              isRunNameAlreadyUsedForPrompt,
+            });
+          }
         },
       });
     });
@@ -2107,24 +2169,36 @@ export function buildWorkflowCanvas(root) {
         };
       }
       function getReviewResult() {
-        if (!scoreNode) return null;
         try {
-          const raw = scoreNode.dataset.reviewResult || '';
-          if (!raw.trim()) return null;
+          let raw = (node.dataset.reviewResult || '').trim();
+          if (!raw && scoreNode && (scoreNode.dataset.reviewResult || '').trim()) {
+            raw = scoreNode.dataset.reviewResult || '';
+            node.dataset.reviewResult = raw;
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          }
+          if (!raw) return null;
           return JSON.parse(raw);
         } catch (_) { return null; }
       }
       function updateReviewResult(updated) {
-        if (!scoreNode) return;
-        scoreNode.dataset.reviewResult = JSON.stringify(updated);
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        try {
+          node.dataset.reviewResult = JSON.stringify(updated);
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        } catch (_) {}
       }
       function onExportNewPrompt(sections) {
         document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
           detail: { sections, afterReviewNodeId: node.dataset.nodeId },
         }));
       }
-      openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt });
+      openReviewDetailModal({
+        node,
+        getPayload,
+        getReviewResult,
+        updateReviewResult,
+        onExportNewPrompt,
+        getIsReviewStreaming: () => pendingReviewNodeIds.has(node.dataset.nodeId),
+      });
     });
 
     return node;
@@ -2863,9 +2937,33 @@ export function buildWorkflowCanvas(root) {
         type: EDGE_TYPE_SCORE_TO_PROMPT_REVIEW,
       });
       updateEdges();
+      if (!e.detail) e.detail = {};
+      e.detail.reviewNodeId = promptReviewNode.dataset.nodeId;
     }
     updateContentSize();
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  });
+
+  const pendingReviewNodeIds = new Set();
+  document.addEventListener('workflow:review-stream-started', (e) => {
+    const id = e.detail?.reviewNodeId;
+    if (id) pendingReviewNodeIds.add(id);
+  });
+  document.addEventListener('workflow:review-stream-ended', (e) => {
+    const id = e.detail?.reviewNodeId;
+    if (id) pendingReviewNodeIds.delete(id);
+  });
+
+  document.addEventListener('workflow:save-review-result', (e) => {
+    const reviewNodeId = e.detail?.reviewNodeId;
+    const data = e.detail?.data;
+    if (!reviewNodeId || data === undefined) return;
+    const reviewNode = getNodeById(reviewNodeId);
+    if (!reviewNode || !reviewNode.classList.contains('workflow-node--prompt-review')) return;
+    try {
+      reviewNode.dataset.reviewResult = typeof data === 'string' ? data : JSON.stringify(data);
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    } catch (_) {}
   });
 
   document.addEventListener('workflow:add-prompt-from-review', (e) => {
@@ -3007,6 +3105,7 @@ export function buildWorkflowCanvas(root) {
           scoreResultCommentsObj = scoreResultComments ? JSON.parse(scoreResultComments) : undefined;
         } catch (_) {}
         const reviewResult = (node.dataset.reviewResult || '').trim();
+        const reviewCredentialId = (node.dataset.reviewCredentialId || '').trim() || undefined;
         return {
           type: 'score',
           nodeId,
@@ -3017,16 +3116,19 @@ export function buildWorkflowCanvas(root) {
           scoreMapping,
           scoreResultComments: scoreResultCommentsObj,
           reviewResult: reviewResult || undefined,
+          reviewCredentialId,
         };
       }
       if (node.classList.contains('workflow-node--prompt-review')) {
         const promptReviewName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Review';
+        const reviewResult = (node.dataset.reviewResult || '').trim();
         return {
           type: 'promptReview',
           nodeId,
           left,
           top,
           promptReviewName,
+          reviewResult: reviewResult || undefined,
         };
       }
       let sections = [];
@@ -3132,6 +3234,9 @@ export function buildWorkflowCanvas(root) {
         if (n.reviewResult && typeof n.reviewResult === 'string') {
           scoreNode.dataset.reviewResult = n.reviewResult;
         }
+        if (n.reviewCredentialId && typeof n.reviewCredentialId === 'string') {
+          scoreNode.dataset.reviewCredentialId = n.reviewCredentialId;
+        }
         createdNodes.push(scoreNode);
       } else if (n.type === 'promptReview') {
         const promptReviewNode = createPromptReviewNode({
@@ -3140,6 +3245,9 @@ export function buildWorkflowCanvas(root) {
           nodeId: n.nodeId || n.id,
           title: n.promptReviewName || 'Review',
         });
+        if (n.reviewResult && typeof n.reviewResult === 'string') {
+          promptReviewNode.dataset.reviewResult = n.reviewResult;
+        }
         createdNodes.push(promptReviewNode);
       } else {
         const node = createPromptNode({

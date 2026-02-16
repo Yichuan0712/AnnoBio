@@ -328,6 +328,15 @@
   margin-top: 16px;
 }
 
+/* search 行与表格间距与 score 页一致（约 10px） */
+.dataset-detail-preview-search-wrap.working-dataset-search-wrap {
+  padding-bottom: 4px;
+}
+
+.working-dataset-detail-body .working-dataset-table-wrap {
+  padding-top: 6px;
+}
+
 .dataset-detail-preview-caption {
   margin-right: auto;
 }
@@ -936,10 +945,12 @@
 }
 
 /* Prompt details modal: same panel size as add prompt for consistency */
+/* Review detail 与此处尺寸一致，见下方合并规则 */
 .modal-panel--prompt-detail {
   width: min(1200px, 94vw);
   min-width: min(1200px, 94vw);
   max-width: 96vw;
+  height: min(85vh, 98vh);
   max-height: 98vh;
   min-height: 70vh;
   display: flex;
@@ -956,7 +967,7 @@
   overflow: hidden;
 }
 
-/* Left column: same structure as add prompt main */
+/* Main column (sections): no outer border so no extra right edge */
 .prompt-detail-main {
   flex: 1;
   min-width: 0;
@@ -965,7 +976,6 @@
   gap: 0;
   padding: 6px 0 20px 0;
   background: var(--bg);
-  border-right: 1px solid var(--border);
 }
 
 .prompt-detail-step {
@@ -1005,11 +1015,12 @@
   line-height: 1.2;
 }
 
-/* Right column: same as add prompt preview (prompt-preview-wrap) */
+/* Side column (inputs + schema): right border = divider between side and main */
 .prompt-detail-side.prompt-preview-wrap {
   flex: 1 1 0;
   min-width: 320px;
   overflow: hidden;
+  border-right: 1px solid var(--border);
 }
 
 .prompt-detail-side-scroll {
@@ -2160,11 +2171,30 @@
   flex-shrink: 0;
 }
 
+/* 与 Dataset / Run 分页栏一致：横线上下间距 10px（上）/ 8px（下） */
+.score-detail-results-toolbar {
+  flex-shrink: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 与分页栏右对齐：与 .dataset-detail-preview-toolbar 同用 12px 水平内边距 */
+.score-detail-results-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+  margin-bottom: 16px;
+  padding-left: 12px;
+  padding-right: 12px;
+  flex-shrink: 0;
+}
+
 .score-detail-llm-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 10px;
   flex-shrink: 0;
 }
 
@@ -2172,21 +2202,14 @@
   min-width: 180px;
 }
 
-.score-detail-results-actions {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  justify-content: flex-end;
-}
-
-/* Review detail modal: Analyze step then left=prompt / right=suggestions */
+/* Review detail modal: 与 Prompt 详情高度一致（height / min-height / max-height 同 .modal-panel--prompt-detail） */
 .modal-panel--review-detail {
-  width: 88%;
-  min-width: min(960px, 85%);
-  max-width: 88%;
+  width: min(1200px, 94vw);
+  min-width: min(1200px, 94vw);
+  max-width: 96vw;
+  height: min(85vh, 98vh);
   max-height: 98vh;
-  min-height: min(420px, 85vh);
+  min-height: 70vh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -2196,8 +2219,151 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  gap: 0;
+  padding: 0;
   overflow: hidden;
+}
+
+/* Left column: Suggestions — 1:1 与右栏均分 */
+.review-detail-main {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.review-detail-preview-title {
+  margin: 0;
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.review-detail-stream-status {
+  margin: 0;
+  padding: 6px 20px;
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-bar, var(--bg));
+}
+
+.review-detail-main .review-detail-preview-content {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 20px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.review-detail-main .review-detail-preview-content .review-detail-suggestions {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 0 0;
+}
+
+/* Right column: Prompt sections — 1:1 与左栏均分，样式同 .prompt-detail-main */
+.review-detail-preview-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 20px 20px 20px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.review-detail-preview-wrap .prompt-step-label {
+  margin: 0 -20px;
+  padding: 6px 20px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.review-detail-preview-wrap .prompt-detail-sections-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.review-detail-preview-wrap .prompt-detail-sections-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.review-detail-preview-wrap .review-detail-prompt-wrap.prompt-detail-sections-view {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.review-detail-suggestions-footer {
+  flex-shrink: 0;
+  margin: 0 -20px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.review-detail-suggestions-footer:empty {
+  display: none;
+}
+
+.review-detail-status-note {
+  margin: 0;
+  width: 100%;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.review-detail-status-note--complete {
+  color: var(--text-muted);
+}
+
+.review-detail-status-note--generating {
+  color: var(--text-muted);
+}
+
+.review-detail-status-note--incomplete {
+  color: var(--warning, #b8860b);
+}
+
+/* Export new prompt：放在 Prompt sections 下方 */
+.review-detail-prompt-footer {
+  flex-shrink: 0;
+  margin: 12px -20px 0 -20px;
+  padding: 12px 20px 0;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .review-detail-step--analyze {
@@ -2223,98 +2389,12 @@
   color: var(--error, #c00);
 }
 
-.review-detail-step--result {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.review-detail-cols {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: row;
-  gap: 20px;
-  overflow: hidden;
-}
-
-.review-detail-col {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.review-detail-col--left {
-  flex: 1 1 0;
-  min-height: 0;
-}
-
-.review-detail-col--right {
-  flex: 0 0 280px;
-  min-height: 0;
-  overflow: auto;
-}
-
-.review-detail-section-title {
-  margin: 0 0 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .review-detail-suggestion-reason {
   margin: 0;
   font-size: 12px;
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.review-detail-card {
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.review-detail-card--prompt {
-  flex: 1;
-}
-
-.review-detail-card--prompt .review-detail-prompt-wrap {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  border: none;
-  border-radius: 0;
-}
-
-.review-detail-card--suggestions {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.review-detail-card--suggestions .review-detail-suggestions {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 12px;
-}
-
-.review-detail-suggestions-footer {
-  flex-shrink: 0;
-  margin-top: 0;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  justify-content: flex-end;
 }
 
 .review-detail-export-btn {
@@ -2353,6 +2433,10 @@
   min-width: 0;
 }
 
+.review-detail-suggestion-section-name {
+  display: block;
+}
+
 .review-detail-suggestion-card__actions {
   display: flex;
   justify-content: flex-end;
@@ -2369,6 +2453,20 @@
   background: var(--hover);
 }
 
+.review-detail-suggestion-card--unlocatable {
+  opacity: 0.85;
+}
+
+.review-detail-suggestion-card--unlocatable .review-detail-suggestion-card__main {
+  cursor: default;
+}
+
+.review-detail-suggestion-unlocatable {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .review-detail-suggestion-reason {
   margin: 4px 0 0;
   font-size: 12px;
@@ -2381,20 +2479,20 @@
   color: var(--text-muted);
 }
 
-.review-detail-prompt-sections.preview-field-block-wrap {
+.review-detail-preview-wrap .prompt-detail-sections-view {
   font-size: 13px;
   line-height: 1.5;
 }
 
 .review-removed {
-  background: rgba(200, 60, 60, 0.25);
-  color: var(--text);
+  background: var(--diff-removed-bg);
+  color: var(--diff-removed-text);
   text-decoration: line-through;
 }
 
 .review-added {
-  background: rgba(60, 140, 60, 0.25);
-  color: var(--text);
+  background: var(--diff-added-bg);
+  color: var(--diff-added-text);
 }
 
 .score-detail-results-card #score-detail-results-body {
@@ -2497,11 +2595,44 @@
   margin-bottom: 4px;
 }
 
-.score-detail-results-summary {
-  margin: 0 0 10px;
+.score-detail-results-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  margin-bottom: 10px;
+}
+
+.score-detail-results-top-row .score-detail-results-summary {
   font-size: 12px;
-  font-weight: 600;
   color: var(--text);
+  margin: 0;
+  margin-right: auto;
+}
+
+.score-detail-results-search-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.score-detail-results-search-inline .dataset-detail-search-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.score-detail-results-search-inline .dataset-detail-preview-search-inp {
+  width: 180px;
+  min-width: 0;
+  max-width: 240px;
+  padding: 4px 8px;
+  font-size: 11px;
+  min-height: 26px;
+  box-sizing: border-box;
 }
 
 .score-detail-results-table-wrap {
@@ -2516,19 +2647,43 @@
 
 .score-detail-results-th,
 .score-detail-results-td {
-  padding: 6px 8px;
+  padding: 8px 10px;
   text-align: left;
   border: 1px solid var(--border);
+  font-size: 12px;
 }
 
-.score-detail-results-th {
-  background: var(--bg-bar);
+/* 表头行：按区块区分 GT / Result(Run) / 结果(Match,Comment) */
+.score-detail-results-table thead .score-detail-results-th {
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.score-detail-results-table thead .score-detail-results-th--gt-block {
+  background: var(--bg-bar);
+}
+
+.score-detail-results-table thead .score-detail-results-th--run-block {
+  background: var(--hover);
+}
+
+.score-detail-results-table thead .score-detail-results-th--result-block {
+  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
 }
 
 .score-detail-results-td {
   color: var(--text);
+  vertical-align: top;
+}
+
+/* 数据行：统一背景色 */
+.score-detail-results-table tbody .score-detail-results-td {
+  background: var(--bg);
+}
+
+.score-detail-results-table tbody tr:hover .score-detail-results-td {
+  background: var(--hover);
 }
 
 .score-detail-results-th--idx,
@@ -2539,21 +2694,26 @@
 
 .score-detail-results-th--run,
 .score-detail-results-td--run {
-  background: var(--bg);
   border-left: 2px solid var(--border);
 }
 
-.score-detail-results-th--gt,
-.score-detail-results-td--gt {
-  background: var(--bg-bar);
-}
+/* 表头 GT/Run 区块色由上面的 --gt-block / --run-block 控制 */
 
 .score-detail-results-th--match,
 .score-detail-results-td--match {
   width: 3em;
+  min-width: 3em;
   text-align: center;
   font-weight: 600;
-  border-left: 2px solid var(--border);
+  vertical-align: middle;
+}
+
+.score-detail-results-table thead .score-detail-results-th--match {
+  font-size: 12px;
+}
+
+.score-detail-results-table tbody .score-detail-results-td--match {
+  font-size: 14px;
 }
 
 .score-detail-results-tr--match .score-detail-results-td--match {
@@ -2570,31 +2730,61 @@
 }
 
 .score-detail-results-tr--run-only .score-detail-results-td--match {
-  color: var(--text-muted);
+  color: var(--danger, #c00);
 }
 
 .score-detail-results-th--comment,
 .score-detail-results-td--comment {
-  min-width: 120px;
-  max-width: 200px;
+  min-width: 100px;
+  width: 140px;
+  vertical-align: top;
 }
 
-.score-detail-results-comment-input {
+.score-detail-results-table thead .score-detail-results-th--comment {
+  position: relative;
+  padding-right: 14px;
+}
+
+.score-detail-results-comment-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.score-detail-results-comment-textarea {
   width: 100%;
+  min-width: 60px;
+  min-height: 2.5em;
   box-sizing: border-box;
-  font-size: 11px;
   padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: 2px;
+  font-size: 12px;
+  font-family: inherit;
+  border: 1px solid transparent;
+  border-radius: 0;
   background: var(--bg);
   color: var(--text);
+  resize: vertical;
+  display: block;
+  overflow-y: auto;
 }
 
-.score-detail-results-comment-input::placeholder {
+.score-detail-results-comment-textarea::-webkit-resizer {
+  display: none;
+}
+
+.score-detail-results-comment-textarea::placeholder {
   color: var(--text-muted);
 }
 
-.score-detail-results-comment-input:focus {
+.score-detail-results-comment-textarea:hover {
+  border-color: var(--border);
+}
+
+.score-detail-results-comment-textarea:focus {
   outline: none;
   border-color: var(--text-muted);
 }

@@ -12,6 +12,110 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+/**
+ * Find the segment in content that matches oldSentence, so we can replace it even if whitespace differs.
+ * Returns the exact substring in content to replace, or null if not found.
+ */
+function findSegmentInContent(content, oldSentence) {
+  if (content == null || content === '' || oldSentence == null) return null;
+  const trimmed = String(oldSentence).trim();
+  if (trimmed === '') return null;
+  if (content.includes(trimmed)) return trimmed;
+  const pattern = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  try {
+    const regex = new RegExp(pattern);
+    const m = content.match(regex);
+    return m ? m[0] : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Fallback: find the segment in content that best matches oldSentence (e.g. by sentence boundaries).
+ * Returns a substring of content, or null if no good match.
+ */
+function findBestMatchingSegment(content, oldSentence) {
+  if (content == null || content === '' || oldSentence == null) return null;
+  const trimmed = String(oldSentence).trim();
+  if (trimmed === '') return null;
+  const norm = (s) => String(s).replace(/\s+/g, ' ').trim();
+  const normOld = norm(trimmed);
+  const parts = content.split(/(?<=[.!?\n])\s*|\n/);
+  let best = null;
+  let bestScore = 0;
+  for (const part of parts) {
+    const seg = part.trim();
+    if (seg.length < 2) continue;
+    const normSeg = norm(seg);
+    if (normSeg === normOld) return seg;
+    const segInOld = normOld.includes(normSeg);
+    const oldInSeg = normSeg.includes(normOld);
+    if (segInOld || oldInSeg) {
+      const score = segInOld ? normSeg.length : normOld.length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = seg;
+      }
+    }
+  }
+  if (best) return best;
+  const words = normOld.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  for (const part of parts) {
+    const seg = part.trim();
+    if (seg.length < 2) continue;
+    let match = 0;
+    for (const w of words) {
+      if (seg.includes(w) || norm(seg).includes(w)) match += 1;
+    }
+    const score = match / words.length;
+    if (score >= 0.6 && score > bestScore) {
+      bestScore = score;
+      best = seg;
+    }
+  }
+  return best;
+}
+
+/** Get segment in content for replacement: exact/flexible first, then best-match fallback. */
+function getLocatableSegment(content, oldSentence) {
+  return findSegmentInContent(content, oldSentence) || findBestMatchingSegment(content, oldSentence);
+}
+
+/**
+ * Rebuild working sections from originals by applying all suggestions that have applied === true.
+ * Used when reopening review so Accept/Revert state is correct even if workingSections was lost.
+ */
+function rebuildWorkingFromApplied(originals, suggestions) {
+  if (!Array.isArray(originals) || !Array.isArray(suggestions)) return null;
+  const sections = originals.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+  for (let i = 0; i < suggestions.length; i++) {
+    const s = suggestions[i];
+    if (s.applied !== true) continue;
+    const secIdx = Math.max(0, Math.min(s.section_index ?? 0, sections.length - 1));
+    const useSentenceEdit = s.old_sentence != null && s.new_sentence != null;
+    const oldSentence = (s.old_sentence || '').trim();
+    const newSentence = (s.new_sentence || '').trim();
+    const legacyNewContent = (s.new_content || '').trim();
+    const content = sections[secIdx] ? (sections[secIdx].content || '') : '';
+    if (useSentenceEdit) {
+      const seg = getLocatableSegment(content, oldSentence);
+      const toReplace = seg || oldSentence;
+      if (content.includes(toReplace)) {
+        sections[secIdx].content = content.replace(toReplace, newSentence);
+      } else {
+        const segNew = getLocatableSegment(content, newSentence);
+        if (segNew) sections[secIdx].content = content.replace(segNew, oldSentence);
+        else sections[secIdx].content = content.replace(newSentence, oldSentence);
+      }
+    } else {
+      sections[secIdx].content = legacyNewContent;
+    }
+  }
+  return sections;
+}
+
 function sectionsToFullText(sections) {
   if (!Array.isArray(sections) || sections.length === 0) return '';
   return sections
@@ -47,7 +151,7 @@ function tokenize(str) {
   return tokens;
 }
 
-/** Minimal word-level diff. Returns [{ type: 'equal'|'remove'|'add', text }]. */
+/** Word-level diff (tokens = words + spaces). Returns [{ type: 'equal'|'remove'|'add', text }]. */
 function wordDiff(oldStr, newStr) {
   const a = tokenize(oldStr);
   const b = tokenize(newStr);
@@ -79,11 +183,61 @@ function wordDiff(oldStr, newStr) {
   return segments;
 }
 
-/** Render one section's content, optionally with diff (red remove, green add). */
-function renderSectionContent(content, newContent, withDiff) {
+/** Split text into sentences (by . ! ? followed by space or newline). */
+function splitSentences(str) {
+  if (str == null || typeof str !== 'string') return [];
+  const s = str.trim();
+  if (!s) return [];
+  return s.split(/(?<=[.!?])\s+/).map((x) => x.trim()).filter(Boolean);
+}
+
+/** Sentence-level diff. Returns [{ type: 'equal'|'remove'|'add', text }] with full sentence in each segment. */
+function sentenceDiff(oldStr, newStr) {
+  const a = splitSentences(oldStr);
+  const b = splitSentences(newStr);
+  const n = a.length;
+  const m = b.length;
+  const dp = Array(n + 1).fill(null).map(() => Array(m + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (a[i - 1] === b[j - 1]) dp[i][j] = dp[i - 1][j - 1] + 1;
+      else dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const segments = [];
+  let i = n, j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      segments.push({ type: 'equal', text: a[i - 1] });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      segments.push({ type: 'add', text: b[j - 1] });
+      j--;
+    } else if (i > 0) {
+      segments.push({ type: 'remove', text: a[i - 1] });
+      i--;
+    }
+  }
+  segments.reverse();
+  return segments;
+}
+
+/** Render one section's content, optionally with diff or highlight. highlightSpan: when set (e.g. Revert state), wrap its first occurrence with review-added only, no diff. */
+function renderSectionContent(content, newContent, withDiff, removeSpan, highlightSpan) {
   const oldC = (content || '').trim();
+  if (highlightSpan != null && (highlightSpan = (highlightSpan || '').trim()) && oldC.includes(highlightSpan)) {
+    const idx = oldC.indexOf(highlightSpan);
+    return escapeHtml(oldC.slice(0, idx)) + `<span class="review-added">${escapeHtml(highlightSpan)}</span>` + escapeHtml(oldC.slice(idx + highlightSpan.length));
+  }
   const newC = (newContent || '').trim();
-  if (!withDiff || oldC === newC) return escapeHtml(oldC || '');
+  if (!withDiff) return escapeHtml(oldC || '');
+  if (removeSpan != null && (removeSpan = (removeSpan || '').trim()) && oldC.includes(removeSpan)) {
+    const idx = oldC.indexOf(removeSpan);
+    return escapeHtml(oldC.slice(0, idx)) + `<span class="review-removed">${escapeHtml(removeSpan)}</span>` + escapeHtml(oldC.slice(idx + removeSpan.length));
+  }
+  if (oldC === newC) return escapeHtml(oldC || '');
+  if (newC === '') return `<span class="review-removed">${escapeHtml(oldC)}</span>`;
   const segments = wordDiff(oldC, newC);
   return segments.map((seg) => {
     if (seg.type === 'equal') return escapeHtml(seg.text);
@@ -92,14 +246,27 @@ function renderSectionContent(content, newContent, withDiff) {
   }).join('');
 }
 
-/** Render sections in prompt-detail style (preview-field-block). Optionally show diff for one section. */
-function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent) {
+/** Render sections: optionally diff or highlight one section. highlightSpan: when set for that section, only wrap that span in review-added (no red/green diff). */
+function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent, removeSpan, highlightSpan) {
   if (!Array.isArray(sections) || sections.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
   return sections.map((s, i) => {
     const name = (s.name || '').trim() || 'Unnamed';
     const content = s.content || '';
-    const withDiff = diffSectionIndex === i && diffNewContent !== undefined;
-    const contentHtml = renderSectionContent(content, diffNewContent, withDiff);
+    const isTargetSection = diffSectionIndex === i;
+    const useHighlightOnly = isTargetSection && highlightSpan !== undefined && highlightSpan !== null;
+    const withDiff = isTargetSection && !useHighlightOnly && diffNewContent !== undefined;
+    let contentHtml;
+    if (useHighlightOnly) {
+      contentHtml = `<div class="preview-field-content-line">${renderSectionContent(content, null, false, null, highlightSpan)}</div>`;
+    } else if (withDiff) {
+      contentHtml = `<div class="preview-field-content-line">${renderSectionContent(content, diffNewContent, true, removeSpan)}</div>`;
+    } else {
+      const lines = content.split('\n');
+      const lineEls = lines.length > 0
+        ? lines.map((line) => `<div class="preview-field-content-line">${escapeHtml(line)}</div>`).join('')
+        : '<div class="preview-field-content-line"></div>';
+      contentHtml = lineEls;
+    }
     return `
       <div class="preview-field-block">
         <div class="preview-field-divider">
@@ -114,26 +281,36 @@ function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent
 
 /** Build the shared result UI: left = sections (working copy), right = suggestions with accept/revert; full reason shown in card when selected. */
 function buildReviewResultUI(overlay, options) {
-  const { promptSections, suggestions, promptFullText, title, resultId, saved = {}, onReviewResultChange, onExportNewPrompt } = options;
+  const { promptSections, suggestions: initialSuggestions, promptFullText, title, resultId, saved = {}, onReviewResultChange, onExportNewPrompt, streamRef, getIsReviewStreaming } = options;
   const promptWrap = overlay.querySelector('.review-detail-prompt-wrap');
   const suggestionsEl = overlay.querySelector('.review-detail-suggestions');
+  const suggestionsFooterEl = overlay.querySelector('.review-detail-suggestions-footer');
   if (!promptWrap || !suggestionsEl) return;
 
   const PREVIEW_LEN = 60;
   const originals = (promptSections || []).map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+  const savedSuggestions = Array.isArray(saved.suggestions) ? saved.suggestions : [];
   const savedWorking = Array.isArray(saved.workingSections) && saved.workingSections.length === originals.length
     ? saved.workingSections.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }))
     : null;
-  const working = savedWorking || originals.map((s) => ({ name: s.name, content: s.content }));
+  const workingFromApplied = rebuildWorkingFromApplied(originals, savedSuggestions);
+  /** Working copy: always kept in sync by recomputing from originals + suggestions where .applied === true */
+  let working = savedWorking || (workingFromApplied && workingFromApplied.length === originals.length ? workingFromApplied : null) || originals.map((s) => ({ name: s.name, content: s.content }));
   let activeCard = null;
   let activeSuggestion = null;
+  const allSuggestions = Array.isArray(initialSuggestions) ? initialSuggestions.slice() : [];
+
+  if (promptWrap) {
+    promptWrap.innerHTML = renderSectionsAsPromptDetail(working);
+  }
 
   function persistWorking() {
     if (typeof onReviewResultChange !== 'function') return;
+    const suggestionsToSave = allSuggestions.map((s) => ({ ...s, applied: s.applied === true }));
     const next = {
       ...saved,
       summary: saved.summary ?? '',
-      suggestions: saved.suggestions ?? [],
+      suggestions: suggestionsToSave,
       promptSections: saved.promptSections ?? promptSections,
       promptFullText: saved.promptFullText ?? promptFullText,
       workingSections: working.map((s) => ({ name: s.name, content: s.content })),
@@ -141,124 +318,246 @@ function buildReviewResultUI(overlay, options) {
     onReviewResultChange(next);
   }
 
-  function renderLeft(showDiffSectionIndex, diffNewContent) {
+  /** Recompute working from originals by applying every suggestion that has .applied === true (in order). */
+  function syncWorkingFromApplied() {
+    const next = rebuildWorkingFromApplied(originals, allSuggestions);
+    if (!next || next.length !== working.length) return;
+    for (let i = 0; i < next.length; i++) {
+      working[i].name = next[i].name;
+      working[i].content = next[i].content;
+    }
+  }
+
+  function scrollRightToSection(sectionIndex) {
+    requestAnimationFrame(() => {
+      const blocks = promptSectionsEl.querySelectorAll('.preview-field-block');
+      const block = blocks[sectionIndex];
+      if (block) block.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  }
+
+  const promptSectionsEl = promptWrap;
+
+  function renderLeft(showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan) {
     const sectionsToRender = working.map((s, i) => ({ name: s.name, content: s.content }));
-    if (showDiffSectionIndex >= 0 && showDiffSectionIndex < originals.length && diffNewContent !== undefined) {
-      promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender, showDiffSectionIndex, diffNewContent);
+    if (showDiffSectionIndex >= 0 && showDiffSectionIndex < originals.length && (diffNewContent !== undefined || (highlightSpan !== undefined && highlightSpan !== null))) {
+      promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender, showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan);
+      scrollRightToSection(showDiffSectionIndex);
     } else {
       promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender);
     }
   }
 
-  promptWrap.innerHTML = '<div class="review-detail-prompt-sections preview-field-block-wrap">' + renderSectionsAsPromptDetail(working) + '</div>';
-  const promptSectionsEl = promptWrap.querySelector('.review-detail-prompt-sections');
-
-  function setCardReasonToPreview(card) {
-    const reasonEl = card.querySelector('.review-detail-suggestion-reason');
-    const full = (card.dataset.fullReason || '').trim();
-    if (reasonEl) reasonEl.textContent = full ? (full.slice(0, PREVIEW_LEN) + (full.length > PREVIEW_LEN ? '…' : '')) : '';
+  function showDiffOnRight(sectionIndex, newContent, removeSpan, highlightSpan) {
+    renderLeft(sectionIndex, newContent, removeSpan, highlightSpan);
   }
 
-  function setCardReasonToFull(card) {
-    const reasonEl = card.querySelector('.review-detail-suggestion-reason');
-    if (reasonEl) reasonEl.textContent = card.dataset.fullReason || '';
-  }
-
-  function showDiff(sectionIndex, newContent, card) {
-    renderLeft(sectionIndex, newContent);
-    setCardReasonToFull(card);
-  }
-
-  function showNoDiff(card) {
+  function clearDiffOnRight() {
     renderLeft(-1);
-    if (card) setCardReasonToPreview(card);
   }
 
   const sectionNames = (promptSections || []).map((s, i) => (s.name || '').trim() || `Section ${i}`);
-  suggestionsEl.innerHTML = '';
-  (suggestions || []).forEach((sug) => {
+
+  const statusEl = overlay.querySelector('.review-detail-stream-status');
+
+  function updateAcceptButtonLabels() {
+    suggestionsEl.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
+      const btn = c.querySelector('.review-detail-accept-btn');
+      if (!btn) return;
+      const i = parseInt(c.dataset.suggestionIndex, 10);
+      const s = allSuggestions[i];
+      if (!s) return;
+      const applied = s.applied === true;
+      btn.textContent = applied ? 'Revert' : 'Accept';
+    });
+  }
+
+  function addOneSuggestionCard(sug, sugIdx) {
     const secIdx = Math.max(0, Math.min(sug.section_index, (promptSections || []).length - 1));
     const name = sectionNames[secIdx] || `Section ${secIdx}`;
-    const newContent = (sug.new_content || '').trim();
-    const isApplied = working[secIdx] && working[secIdx].content === newContent;
-    const reasonPreview = (sug.reason || '').slice(0, PREVIEW_LEN) + ((sug.reason || '').length > PREVIEW_LEN ? '…' : '');
+    const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
+    const oldSentence = (sug.old_sentence || '').trim();
+    const newSentence = (sug.new_sentence || '').trim();
+    const legacyNewContent = (sug.new_content || '').trim();
+    const currentContent = working[secIdx] ? (working[secIdx].content || '') : '';
+    const originalContent = (originals[secIdx] && originals[secIdx].content) ? originals[secIdx].content : '';
+    const segmentInOriginal = useSentenceEdit ? getLocatableSegment(originalContent, oldSentence) : null;
+    const unlocatable = useSentenceEdit && !segmentInOriginal;
+    /* Only show Revert when user has explicitly applied (sug.applied === true from persist). Fresh suggestions must show Accept. */
+    const isApplied = sug.applied === true;
+    const fullReason = (sug.reason || '').trim();
+    const changeName = (sug.name || '').trim() || name;
 
     const card = document.createElement('div');
-    card.className = 'review-detail-suggestion-card';
+    card.className = 'review-detail-suggestion-card' + (unlocatable ? ' review-detail-suggestion-card--unlocatable' : '');
     card.dataset.sectionIndex = String(secIdx);
-    card.dataset.fullReason = sug.reason || '';
+    card.dataset.suggestionIndex = String(sugIdx);
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <strong>${escapeHtml(name)}</strong>
-        <p class="review-detail-suggestion-reason">${escapeHtml(reasonPreview)}</p>
+        <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong>
+        <p class="review-detail-suggestion-reason">${escapeHtml(fullReason)}</p>
+        ${unlocatable ? '<p class="review-detail-suggestion-unlocatable">Could not locate the original sentence in the section; Apply is hidden.</p>' : ''}
       </div>
       <div class="review-detail-suggestion-card__actions">
-        <button type="button" class="btn btn-secondary review-detail-accept-btn">${isApplied ? 'Revert' : 'Accept'}</button>
+        ${unlocatable ? '<button type="button" class="btn btn-secondary review-detail-hide-btn">Hide</button>' : '<button type="button" class="btn btn-secondary review-detail-accept-btn">' + (isApplied ? 'Revert' : 'Accept') + '</button>'}
       </div>
     `;
     const mainEl = card.querySelector('.review-detail-suggestion-card__main');
     const acceptBtn = card.querySelector('.review-detail-accept-btn');
+    const hideBtn = card.querySelector('.review-detail-hide-btn');
 
-    mainEl.setAttribute('role', 'button');
-    mainEl.tabIndex = 0;
-    mainEl.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (activeCard === card) {
-        showNoDiff(card);
-        card.classList.remove('review-detail-suggestion-card--active');
-        activeCard = null;
-        activeSuggestion = null;
+    function getDiffContent() {
+      const c = working[secIdx] ? (working[secIdx].content || '') : '';
+      if (!useSentenceEdit) return legacyNewContent;
+      const seg = getLocatableSegment(c, oldSentence);
+      return seg ? c.replace(seg, newSentence, 1) : c.replace(oldSentence, newSentence, 1);
+    }
+    function getRemoveSpanForDiff() {
+      if (!useSentenceEdit || newSentence !== '') return undefined;
+      const c = working[secIdx] ? (working[secIdx].content || '') : '';
+      return getLocatableSegment(c, oldSentence) || oldSentence;
+    }
+    /** When in Revert state: segment of new_sentence in current content to highlight (no red/green diff). */
+    function getHighlightSpanForRevert() {
+      const c = working[secIdx] ? (working[secIdx].content || '') : '';
+      if (useSentenceEdit) {
+        if (newSentence === '') return null;
+        return getLocatableSegment(c, newSentence) || newSentence;
+      }
+      return (c === legacyNewContent ? legacyNewContent : null);
+    }
+    function showPreview() {
+      if (sug.applied) {
+        showDiffOnRight(secIdx, undefined, undefined, getHighlightSpanForRevert());
       } else {
-        suggestionsEl.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
-          setCardReasonToPreview(c);
-          c.classList.remove('review-detail-suggestion-card--active');
-        });
-        showDiff(secIdx, newContent, card);
-        card.classList.add('review-detail-suggestion-card--active');
-        activeCard = card;
-        activeSuggestion = sug;
+        showDiffOnRight(secIdx, getDiffContent(), getRemoveSpanForDiff());
       }
-    });
-    mainEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        mainEl.click();
-      }
-    });
+    }
 
-    function updateAcceptButtonLabels() {
-      suggestionsEl.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
-        const idx = parseInt(c.dataset.sectionIndex, 10);
-        const btn = c.querySelector('.review-detail-accept-btn');
-        if (!btn) return;
-        const sug = (suggestions || []).find((s) => Math.max(0, Math.min(s.section_index, (promptSections || []).length - 1)) === idx && (s.new_content || '').trim() === (working[idx] && working[idx].content));
-        btn.textContent = sug ? 'Revert' : 'Accept';
+    mainEl.setAttribute('role', unlocatable ? null : 'button');
+    mainEl.tabIndex = unlocatable ? -1 : 0;
+    const deleteOnly = useSentenceEdit && newSentence === '';
+
+    if (!unlocatable) {
+      card.addEventListener('mouseenter', () => showPreview());
+      card.addEventListener('mouseleave', () => {
+        if (activeCard !== card) clearDiffOnRight();
+      });
+      mainEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (activeCard === card) {
+          clearDiffOnRight();
+          card.classList.remove('review-detail-suggestion-card--active');
+          activeCard = null;
+          activeSuggestion = null;
+        } else {
+          suggestionsEl.querySelectorAll('.review-detail-suggestion-card').forEach((c) => c.classList.remove('review-detail-suggestion-card--active'));
+          showPreview();
+          card.classList.add('review-detail-suggestion-card--active');
+          activeCard = card;
+          activeSuggestion = sug;
+        }
+      });
+      mainEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          mainEl.click();
+        }
+      });
+
+      acceptBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (secIdx < 0 || secIdx >= working.length) return;
+        sug.applied = sug.applied !== true;
+        syncWorkingFromApplied();
+        updateAcceptButtonLabels();
+        renderLeft(-1);
+        if (activeCard === card && activeSuggestion) showPreview();
+        persistWorking();
       });
     }
 
-    acceptBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (working[secIdx].content === newContent) {
-        working[secIdx].content = originals[secIdx].content;
-      } else {
-        working[secIdx].content = newContent;
-      }
-      updateAcceptButtonLabels();
-      if (activeCard === card && activeSuggestion) {
-        renderLeft(secIdx, newContent);
-      } else {
-        renderLeft(-1);
-      }
-      persistWorking();
-    });
+    if (hideBtn) {
+      hideBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const i = allSuggestions.indexOf(sug);
+        if (i !== -1) {
+          allSuggestions.splice(i, 1);
+          card.remove();
+          suggestionsEl.querySelectorAll('.review-detail-suggestion-card').forEach((c, k) => {
+            c.dataset.suggestionIndex = String(k);
+          });
+          saved.suggestions = allSuggestions.slice();
+          if (typeof onReviewResultChange === 'function') {
+            onReviewResultChange({ ...saved, suggestions: saved.suggestions });
+          }
+        }
+      });
+    }
 
     suggestionsEl.appendChild(card);
-  });
-  if (!suggestions || suggestions.length === 0) {
-    suggestionsEl.innerHTML = '<p class="review-detail-placeholder">No suggestions.</p>';
   }
 
-  const footer = overlay.querySelector('.review-detail-suggestions-footer');
+  suggestionsEl.innerHTML = '';
+  if (streamRef) {
+    if (statusEl) statusEl.textContent = 'Generating suggestions…';
+    streamRef.appendSuggestions = (batch) => {
+      if (statusEl) statusEl.textContent = 'Generating suggestions…';
+      batch.forEach((sug) => {
+        const sugIdx = allSuggestions.length;
+        allSuggestions.push(sug);
+        addOneSuggestionCard(sug, sugIdx);
+      });
+      saved.suggestions = allSuggestions.slice();
+      if (typeof onReviewResultChange === 'function') {
+        onReviewResultChange({ ...saved, suggestions: saved.suggestions });
+      }
+    };
+    streamRef.streamDone = () => {
+      if (statusEl) statusEl.textContent = 'Suggestions complete.';
+      if (allSuggestions.length === 0) {
+        suggestionsEl.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
+      }
+      saved.suggestions = allSuggestions.slice();
+      if (typeof onReviewResultChange === 'function') {
+        onReviewResultChange({ ...saved, suggestions: saved.suggestions });
+      }
+    };
+    streamRef.streamError = () => {
+      if (statusEl) statusEl.textContent = 'Failed.';
+      if (allSuggestions.length === 0) {
+        suggestionsEl.innerHTML = '<p class="review-detail-placeholder">Request failed.</p>';
+      }
+    };
+  } else {
+    (initialSuggestions || []).forEach((sug, sugIdx) => addOneSuggestionCard(sug, sugIdx));
+    if (!initialSuggestions || initialSuggestions.length === 0) {
+      suggestionsEl.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
+    }
+  }
+
+  if (suggestionsFooterEl && allSuggestions.length > 0) {
+    const isComplete = saved.streamComplete === true;
+    const isStreaming = !isComplete && typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
+    let statusClass = 'review-detail-status-note--incomplete';
+    let statusText = 'Last run did not complete. Please run Review again.';
+    if (isComplete) {
+      statusClass = 'review-detail-status-note--complete';
+      statusText = 'Suggestions complete.';
+    } else if (isStreaming) {
+      statusClass = 'review-detail-status-note--generating';
+      statusText = 'Suggestions are still generating…';
+    }
+    const statusNote = document.createElement('p');
+    statusNote.className = 'review-detail-status-note ' + statusClass;
+    statusNote.setAttribute('aria-live', 'polite');
+    statusNote.textContent = statusText;
+    suggestionsFooterEl.innerHTML = '';
+    suggestionsFooterEl.appendChild(statusNote);
+  }
+
+  const footer = overlay.querySelector('.review-detail-prompt-footer');
   if (footer) {
     footer.innerHTML = '';
     const exportBtn = document.createElement('button');
@@ -290,16 +589,24 @@ function buildReviewResultUI(overlay, options) {
 }
 
 /** Review node modal: show saved result (sections + suggestions) or empty state. */
-export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt }) {
+export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, getIsReviewStreaming }) {
   const payload = getPayload ? getPayload() : null;
   const saved = getReviewResult ? getReviewResult() : null;
   const title = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
-  const hasResult = saved && Array.isArray(saved.promptSections) && saved.promptSections.length > 0;
+  const sectionsForDisplay = saved && (
+    (Array.isArray(saved.promptSections) && saved.promptSections.length > 0)
+      ? saved.promptSections
+      : (Array.isArray(saved.workingSections) && saved.workingSections.length > 0)
+        ? saved.workingSections
+        : null
+  );
+  const hasResult = saved && sectionsForDisplay && sectionsForDisplay.length > 0;
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'review-detail-title');
+  const promptSectionsHtmlForNode = hasResult ? renderSectionsAsPromptDetail(sectionsForDisplay.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }))) : '';
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--review-detail">
       <div class="modal-header">
@@ -307,20 +614,21 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body review-detail-body">
-        <div class="review-detail-step review-detail-step--result">
-          <div class="review-detail-cols">
-            <div class="review-detail-col review-detail-col--left">
-              <div class="review-detail-card review-detail-card--prompt">
-                <div class="review-detail-prompt-wrap"></div>
-              </div>
-            </div>
-            <div class="review-detail-col review-detail-col--right">
-              <div class="review-detail-card review-detail-card--suggestions">
-                <div class="review-detail-suggestions" id="review-detail-suggestions"></div>
-                <div class="review-detail-suggestions-footer" id="review-detail-suggestions-footer"></div>
-              </div>
+        <div class="review-detail-main">
+          <h3 class="review-detail-preview-title">Suggestions</h3>
+          <div class="review-detail-preview-content">
+            <div class="review-detail-suggestions" id="review-detail-suggestions"></div>
+            <div class="review-detail-suggestions-footer" id="review-detail-suggestions-footer"></div>
+          </div>
+        </div>
+        <div class="review-detail-preview-wrap">
+          <p class="prompt-step-label">Prompt sections</p>
+          <div class="prompt-detail-sections-scroll">
+            <div class="prompt-detail-sections-wrap">
+              <div class="review-detail-prompt-wrap prompt-detail-sections-view">${promptSectionsHtmlForNode}</div>
             </div>
           </div>
+          <div class="review-detail-prompt-footer" id="review-detail-prompt-footer"></div>
         </div>
       </div>
     </div>
@@ -329,26 +637,48 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
   const promptWrap = overlay.querySelector('.review-detail-prompt-wrap');
   const suggestionsEl = overlay.querySelector('#review-detail-suggestions');
 
+  const reviewNodeId = node?.dataset?.nodeId || '';
+  const baseOptions = {
+    promptSections: sectionsForDisplay || [],
+    suggestions: saved?.suggestions || [],
+    promptFullText: saved?.promptFullText || '',
+    title,
+    resultId: 'detail',
+    saved: saved || {},
+    onReviewResultChange: updateReviewResult || null,
+    onExportNewPrompt: onExportNewPrompt || null,
+    getIsReviewStreaming: getIsReviewStreaming || null,
+  };
+
+  function refreshFromSaved(data) {
+    if (!data || typeof data !== 'object') return;
+    baseOptions.saved = data;
+    baseOptions.promptSections = (Array.isArray(data.promptSections) && data.promptSections.length > 0) ? data.promptSections : baseOptions.promptSections;
+    baseOptions.suggestions = Array.isArray(data.suggestions) ? data.suggestions : baseOptions.suggestions;
+    buildReviewResultUI(overlay, baseOptions);
+  }
+
+  function onSaveReviewResult(e) {
+    if (e.detail?.reviewNodeId !== reviewNodeId) return;
+    refreshFromSaved(e.detail.data);
+  }
+
   if (hasResult) {
-    buildReviewResultUI(overlay, {
-      promptSections: saved.promptSections,
-      suggestions: saved.suggestions || [],
-      promptFullText: saved.promptFullText || '',
-      title,
-      resultId: 'detail',
-      saved,
-      onReviewResultChange: updateReviewResult || null,
-      onExportNewPrompt: onExportNewPrompt || null,
-    });
+    buildReviewResultUI(overlay, baseOptions);
   } else {
-    promptWrap.innerHTML = '<p class="review-detail-placeholder">Open the Score detail, select an LLM, and click Add Review to run analysis.</p>';
-    suggestionsEl.innerHTML = '<p class="review-detail-placeholder">Open the Score detail, select an LLM, and click Add Review to run analysis.</p>';
+    if (!promptWrap.innerHTML.trim()) promptWrap.innerHTML = '<p class="review-detail-placeholder">Running analysis…</p>';
+    suggestionsEl.innerHTML = '<p class="review-detail-placeholder">Running analysis…</p>';
+  }
+
+  if (reviewNodeId) {
+    document.addEventListener('workflow:save-review-result', onSaveReviewResult);
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   function close() {
+    if (reviewNodeId) document.removeEventListener('workflow:save-review-result', onSaveReviewResult);
     overlay.remove();
     document.body.style.overflow = '';
   }
@@ -357,8 +687,15 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
   document.body.appendChild(overlay);
 }
 
-/** Open modal with review result (from Score Add Review). Saves result to scoreNode and shows prompt-detail style + red/green diff on hover. */
-export function openReviewResultModal({ summary, suggestions = [], promptSections = [], promptFullText = '', scoreNode, onExportNewPrompt }) {
+/** Open modal with review result (from Score Add Review). Saves result to reviewNode (via reviewNodeId) or scoreNode. Pass streamRef to show suggestions incrementally. 右侧 Prompt sections 一打开就填好，左侧 Suggestions 流式一条条出现。 */
+export function openReviewResultModal({ summary, suggestions = [], promptSections = [], promptFullText = '', scoreNode, reviewNodeId, onExportNewPrompt, streamRef }) {
+  const workingSections = Array.isArray(promptSections) && promptSections.length > 0
+    ? promptSections.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }))
+    : [];
+  const promptSectionsHtml = workingSections.length > 0
+    ? renderSectionsAsPromptDetail(workingSections)
+    : '';
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -370,20 +707,22 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body review-detail-body">
-        <div class="review-detail-step review-detail-step--result">
-          <div class="review-detail-cols">
-            <div class="review-detail-col review-detail-col--left">
-              <div class="review-detail-card review-detail-card--prompt">
-                <div class="review-detail-prompt-wrap"></div>
-              </div>
-            </div>
-            <div class="review-detail-col review-detail-col--right">
-              <div class="review-detail-card review-detail-card--suggestions">
-                <div class="review-detail-suggestions" id="review-result-suggestions"></div>
-                <div class="review-detail-suggestions-footer" id="review-result-suggestions-footer"></div>
-              </div>
+        <div class="review-detail-main">
+          <h3 class="review-detail-preview-title">Suggestions</h3>
+          <p class="review-detail-stream-status" id="review-result-stream-status" aria-live="polite"></p>
+          <div class="review-detail-preview-content">
+            <div class="review-detail-suggestions" id="review-result-suggestions"></div>
+            <div class="review-detail-suggestions-footer" id="review-result-suggestions-footer"></div>
+          </div>
+        </div>
+        <div class="review-detail-preview-wrap">
+          <p class="prompt-step-label">Prompt sections</p>
+          <div class="prompt-detail-sections-scroll">
+            <div class="prompt-detail-sections-wrap">
+              <div class="review-detail-prompt-wrap prompt-detail-sections-view">${promptSectionsHtml}</div>
             </div>
           </div>
+          <div class="review-detail-prompt-footer" id="review-result-prompt-footer"></div>
         </div>
       </div>
     </div>
@@ -392,35 +731,36 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
   const saved = {
     summary: summary || '',
     suggestions: suggestions || [],
-    promptSections: promptSections || [],
+    promptSections: (promptSections || []).slice(),
     promptFullText: promptFullText || sectionsToFullText(promptSections || []),
-    workingSections: (promptSections || []).map((s) => ({ name: s.name || '', content: (s.content || '').slice() })),
+    workingSections: workingSections.length ? workingSections.map((s) => ({ name: s.name, content: s.content })) : [],
   };
-  if (scoreNode && promptSections && promptSections.length) {
-    try {
-      scoreNode.dataset.reviewResult = JSON.stringify(saved);
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    } catch (_) {}
-  }
-
-  buildReviewResultUI(overlay, {
-    promptSections: promptSections || [],
-    suggestions,
-    promptFullText,
-    title: 'Review result',
-    resultId: 'result',
-    saved,
-    onReviewResultChange: scoreNode ? (updated) => {
+  const persistResult = (updated) => {
+    if (reviewNodeId) {
+      document.dispatchEvent(new CustomEvent('workflow:save-review-result', { detail: { reviewNodeId, data: updated } }));
+    } else if (scoreNode) {
       try {
         scoreNode.dataset.reviewResult = JSON.stringify(updated);
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       } catch (_) {}
-    } : null,
-    onExportNewPrompt: onExportNewPrompt || null,
-  });
+    }
+  };
+  if (reviewNodeId || scoreNode) persistResult(saved);
 
   overlay.querySelector('.modal-close').addEventListener('click', () => { overlay.remove(); document.body.style.overflow = ''; });
   overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); document.body.style.overflow = ''; } });
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
+
+  buildReviewResultUI(overlay, {
+    promptSections: saved.promptSections.length ? saved.promptSections : workingSections,
+    suggestions,
+    promptFullText,
+    title: 'Review result',
+    resultId: 'result',
+    saved,
+    onReviewResultChange: (reviewNodeId || scoreNode) ? persistResult : null,
+    onExportNewPrompt: onExportNewPrompt || null,
+    streamRef: streamRef || null,
+  });
 }

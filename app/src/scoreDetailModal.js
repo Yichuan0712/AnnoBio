@@ -1,12 +1,11 @@
 /**
  * Score detail modal: left = Dataset as ground truth picker + field mapping table; right = results.
- * @param {{ node: HTMLElement, getWorkingSets?: () => Array<...>, getRunResultColumns?: () => Array<...>, getGroundTruthHeaders?: (wsNodeId: string) => string[], getReviewPayload?: () => { prompt_sections, prompt_full_text, run_results, output_fields, comparison_rows } | null }} options
+ * @param {{ node: HTMLElement, getWorkingSets?: () => Array<...>, getRunResultColumns?: () => Array<...>, getGroundTruthHeaders?: (wsNodeId: string) => string[], getReviewPayload?: () => { prompt_sections, run_results, output_fields, comparison_rows } | null }} options
  */
-
-import { openReviewResultModal } from './reviewDetailModal.js';
 
 const API_BASE = 'http://localhost:8000';
 const MATCH_TYPE_STRICT = { value: 'exact', label: 'Strict match' };
+const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -215,7 +214,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /**
-   * Match run rows to GT rows by content (one-to-one). Root is tree root (group).
+   * Count how many leaf rules match for (run row i, GT row j). Used for pairing only.
+   */
+  function countMatchingRules(root, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) {
+    const rules = collectRulesFlat(root).map((x) => x.rule);
+    return rules.filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;
+  }
+
+  /**
+   * Match run rows to GT rows: one-to-one pairing by "most rules matching" (greedy).
+   * Match column still uses full tree evaluateNode(root, i, j) when rendering.
    */
   function computeMatchPerRow(root, results, outputFields, runWs, gtContent) {
     const gtRows = gtContent.rows || [];
@@ -226,15 +234,18 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
     const gtUsed = new Array(gtCount).fill(false);
 
+    const pairs = [];
     for (let i = 0; i < runCount; i++) {
       for (let j = 0; j < gtCount; j++) {
-        if (gtUsed[j]) continue;
-        if (evaluateNode(root, i, j, resultsByIndex, runWs, outputFields, gtContent)) {
-          runToGt[i] = j;
-          gtUsed[j] = true;
-          break;
-        }
+        const score = countMatchingRules(root, i, j, resultsByIndex, runWs, outputFields, gtContent);
+        if (score > 0) pairs.push({ i, j, score });
       }
+    }
+    pairs.sort((a, b) => b.score - a.score);
+    for (const { i, j } of pairs) {
+      if (runToGt[i] >= 0 || gtUsed[j]) continue;
+      runToGt[i] = j;
+      gtUsed[j] = true;
     }
 
     const matched = [];
@@ -353,12 +364,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           <div class="score-detail-preview-content">
             <div class="score-detail-results-card run-detail-results-card" id="score-detail-results-card">
               <div id="score-detail-results-body" class="score-detail-results-body-inner"></div>
-              <div class="score-detail-llm-row">
-                <label class="run-detail-label" for="score-detail-llm-select">LLM</label>
-                <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select LLM"></select>
-              </div>
-              <div class="score-detail-results-actions">
-                <button type="button" class="btn btn-secondary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with selected LLM">Add Review</button>
+              <div id="score-detail-results-toolbar" class="dataset-detail-preview-toolbar score-detail-results-toolbar" style="display: none;"></div>
+              <div class="score-detail-results-footer-row">
+                <div class="score-detail-llm-row">
+                  <label class="run-detail-label" for="score-detail-llm-select">Reviewer model</label>
+                  <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select Reviewer model"></select>
+                </div>
+                <button type="button" class="btn btn-secondary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with selected Reviewer model">Review</button>
               </div>
             </div>
           </div>
@@ -376,6 +388,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const llmSelect = overlay.querySelector('#score-detail-llm-select');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
   const resultsBody = overlay.querySelector('#score-detail-results-body');
+  const resultsToolbar = overlay.querySelector('#score-detail-results-toolbar');
+
+  const scoreDetailPagination = { rowsPerPage: 25, currentPage: 1, searchQuery: '' };
 
   function getSelectedWorkingSet() {
     return workingSets.find((ws) => ws.nodeId === selectedNodeId) || null;
@@ -827,10 +842,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const rulesFlat = getRulesFlat();
     if (!selectedNodeId) {
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Select ground truth and add rules to see comparison results.</p>';
+      if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
     if (rulesFlat.length === 0) {
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Add at least one rule to compare.</p>';
+      if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
     const { results, outputFields } = getRunResults();
@@ -838,6 +855,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const gtContent = getGroundTruthContent(selectedNodeId);
     const gtHeaders = gtContent.headers || [];
     const gtRows = gtContent.rows || [];
+    const runColumns = getRunResultColumns();
     const resultsByIndex = new Map();
     (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
     const maxRunRow = results.length ? Math.max(...(results || []).map((r) => r.row_index), 0) : -1;
@@ -847,79 +865,272 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
     if (!hasAnyRows) {
       resultsBody.innerHTML = '<p class="score-detail-placeholder">No run results and no ground truth rows.</p>';
+      if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
 
     const { matched, runToGt, total, matchedCount } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
+    const runCount = total;
+    const gtToRun = new Array(gtRows.length).fill(-1);
+    for (let i = 0; i < (runToGt || []).length; i++) {
+      if (runToGt[i] >= 0) gtToRun[runToGt[i]] = i;
+    }
 
-    const summary = document.createElement('p');
-    summary.className = 'score-detail-results-summary';
+    const descriptors = [];
+    for (let j = 0; j < gtRows.length; j++) {
+      if (gtToRun[j] >= 0) descriptors.push({ type: 'gt', j });
+    }
+    for (let j = 0; j < gtRows.length; j++) {
+      if (gtToRun[j] < 0) descriptors.push({ type: 'gt', j });
+    }
+    for (let i = 0; i < runCount; i++) {
+      if (runToGt[i] < 0) descriptors.push({ type: 'runOnly', i });
+    }
+
+    const comments = getResultComments();
+    const q = (scoreDetailPagination.searchQuery || '').trim().toLowerCase();
+    function getRowStringsForSearch(d) {
+      const parts = [];
+      if (d.type === 'gt') {
+        const j = d.j;
+        const runRowIndex = gtToRun[j];
+        const runResult = runRowIndex >= 0 ? resultsByIndex.get(runRowIndex) || null : null;
+        parts.push(String(j + 1), runRowIndex >= 0 ? String(runRowIndex + 1) : '—');
+        gtColsUsed.forEach((col) => { parts.push(getGtValue(gtContent, j, col)); });
+        rulesFlat.forEach((rule) => {
+          parts.push(runResult ? getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields) : '');
+        });
+        parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? '✓' : '✗');
+        parts.push(comments[String(j)] ?? '');
+      } else {
+        const i = d.i;
+        const runResult = resultsByIndex.get(i) || null;
+        parts.push('—', String(i + 1));
+        gtColsUsed.forEach(() => { parts.push('—'); });
+        rulesFlat.forEach((rule) => { parts.push(runResult ? getRunValue(runResult, rule.outputKey, i, runWs, outputFields) : ''); });
+        parts.push('✗');
+        parts.push(comments['run:' + i] ?? '');
+      }
+      return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
+    }
+    const gtColsUsed = [];
+    for (const r of rulesFlat) {
+      for (const c of (r.gtColumns || [])) {
+        if (c && !gtColsUsed.includes(c)) gtColsUsed.push(c);
+      }
+    }
+    let filteredDescriptors = descriptors;
+    if (q) {
+      filteredDescriptors = descriptors.filter((d) => getRowStringsForSearch(d).some((s) => s.toLowerCase().includes(q)));
+    }
+    const totalUnfiltered = descriptors.length;
+    const totalRows = filteredDescriptors.length;
+    const totalPages = Math.max(1, Math.ceil(totalRows / scoreDetailPagination.rowsPerPage));
+    scoreDetailPagination.currentPage = Math.min(Math.max(1, scoreDetailPagination.currentPage), totalPages);
+    const start = (scoreDetailPagination.currentPage - 1) * scoreDetailPagination.rowsPerPage;
+    const end = Math.min(start + scoreDetailPagination.rowsPerPage, totalRows);
+    const pageDescriptors = filteredDescriptors.slice(start, end);
+
     const runOnlyCount = total > 0 ? total - matchedCount : 0;
     const unmatchedGtCount = gtRows.length - matchedCount;
-    summary.textContent = `${matchedCount} of ${total} run rows matched` +
-      (runOnlyCount > 0 ? ` · ${runOnlyCount} run row(s) without match` : '') +
-      (unmatchedGtCount > 0 ? ` · ${unmatchedGtCount} GT row(s) without match` : '');
-    resultsBody.appendChild(summary);
-    const table = document.createElement('div');
-    table.className = 'score-detail-results-table-wrap';
-    const tbl = document.createElement('table');
-    tbl.className = 'score-detail-results-table';
-    let headerRow = '<thead><tr><th class="score-detail-results-th score-detail-results-th--idx">#</th>';
-    rulesFlat.forEach((rule) => {
-      const runLabel = String(rule.outputKey || '').trim() || '—';
-      const gtLabel = (rule.gtColumns || []).join(', ') || '—';
-      headerRow += `<th class="score-detail-results-th score-detail-results-th--run">Run: ${escapeHtml(runLabel)}</th>`;
-      headerRow += `<th class="score-detail-results-th score-detail-results-th--gt">GT: ${escapeHtml(gtLabel)}</th>`;
-    });
-    headerRow += '<th class="score-detail-results-th score-detail-results-th--match">Match</th><th class="score-detail-results-th score-detail-results-th--comment">Comment</th></tr></thead><tbody>';
-    tbl.innerHTML = headerRow;
-    const tbody = tbl.querySelector('tbody');
-    const comments = getResultComments();
+    const summaryText = `${matchedCount} of ${total} run rows paired` +
+      (runOnlyCount > 0 ? ` · ${runOnlyCount} run row(s) without pair` : '') +
+      (unmatchedGtCount > 0 ? ` · ${unmatchedGtCount} GT row(s) without pair` : '');
 
-    function cellText(val, maxLen = 24) {
+    const topRow = document.createElement('div');
+    topRow.className = 'score-detail-results-top-row';
+    topRow.innerHTML = `
+      <span class="score-detail-results-summary">${escapeHtml(summaryText)}</span>
+      <div class="score-detail-results-search-inline">
+        <label class="dataset-detail-search-label" for="score-detail-results-search">Search</label>
+        <input type="text" id="score-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" value="${escapeAttr(scoreDetailPagination.searchQuery)}" />
+      </div>
+    `;
+    const searchInp = topRow.querySelector('#score-detail-results-search');
+    if (searchInp) {
+      searchInp.addEventListener('input', () => {
+        scoreDetailPagination.searchQuery = searchInp.value;
+        scoreDetailPagination.currentPage = 1;
+        renderResults();
+      });
+    }
+    resultsBody.appendChild(topRow);
+
+    function cellText(val, maxLen = 32) {
       const s = val === null || val === undefined ? '—' : (typeof val === 'string' ? val : String(val));
       return s.length > maxLen ? s.slice(0, maxLen) + '…' : s;
     }
 
-    for (let i = 0; i <= maxRow; i++) {
-      const runResult = resultsByIndex.get(i) || null;
-      const hasRun = runResult != null;
-      const gtDisplayIndex = (runToGt && i < runToGt.length && runToGt[i] >= 0) ? runToGt[i] : i;
-      const hasGt = gtDisplayIndex < gtRows.length;
-      const isMatch = hasRun && (matched[i] === true);
-      const hasRunNoMatch = hasRun && !isMatch;
-      const rowClass = isMatch ? 'score-detail-results-tr--match' : (hasRunNoMatch ? 'score-detail-results-tr--run-only' : 'score-detail-results-tr--unmatch');
-      let tr = `<tr class="score-detail-results-tr ${rowClass}"><td class="score-detail-results-td score-detail-results-td--idx">${i + 1}</td>`;
-      for (const rule of rulesFlat) {
-        const runVal = getRunValue(runResult, rule.outputKey, i, runWs, outputFields);
-        const gtVals = hasGt ? (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtDisplayIndex, col)) : [];
-        const gtDisplay = gtVals.length === 0 ? (hasGt ? '—' : '—') : gtVals.join(' | ');
-        tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
-        tr += `<td class="score-detail-results-td score-detail-results-td--gt" title="${escapeAttr(gtDisplay)}">${escapeHtml(cellText(gtDisplay, 30))}</td>`;
+    const runColLabels = rulesFlat.map((r) => (runColumns.find((c) => c.key === (r.outputKey || ''))?.label || r.outputKey || '—').trim() || '—');
+
+    let headerRow = '<thead><tr><th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--gt-block" title="Ground truth row index">Ground truth #</th>';
+    if (gtColsUsed.length > 0) {
+      gtColsUsed.forEach((col) => { headerRow += `<th class="score-detail-results-th score-detail-results-th--gt score-detail-results-th--gt-block">${escapeHtml(col)}</th>`; });
+    } else {
+      headerRow += '<th class="score-detail-results-th score-detail-results-th--gt score-detail-results-th--gt-block">Ground truth</th>';
+    }
+    headerRow += '<th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--run-block" title="Run result row index (matched to this ground truth row)">Result #</th>';
+    runColLabels.forEach((label) => { headerRow += `<th class="score-detail-results-th score-detail-results-th--run score-detail-results-th--run-block">${escapeHtml(label)}</th>`; });
+    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block">Match</th><th class="score-detail-results-th score-detail-results-th--comment score-detail-results-th--result-block">Comment</th></tr></thead><tbody>';
+    const tableWrap = document.createElement('div');
+    tableWrap.className = 'score-detail-results-table-wrap';
+    const tbl = document.createElement('table');
+    tbl.className = 'score-detail-results-table';
+    tbl.innerHTML = headerRow;
+    const tbody = tbl.querySelector('tbody');
+
+    function appendGtRow(j) {
+      const runRowIndex = gtToRun[j];
+      const runResult = runRowIndex >= 0 ? resultsByIndex.get(runRowIndex) || null : null;
+      const isMatch = runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent);
+      const rowClass = isMatch ? 'score-detail-results-tr--match' : 'score-detail-results-tr--unmatch';
+      const runNum = runRowIndex >= 0 ? String(runRowIndex + 1) : '—';
+      const commentKey = String(j);
+      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--idx" title="GT row ${j + 1}">${j + 1}</td>`;
+      if (gtColsUsed.length > 0) {
+        gtColsUsed.forEach((col) => {
+          const val = getGtValue(gtContent, j, col);
+          tr += `<td class="score-detail-results-td score-detail-results-td--gt" title="${escapeAttr(val)}">${escapeHtml(cellText(val))}</td>`;
+        });
+      } else {
+        tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>';
       }
-      tr += `<td class="score-detail-results-td score-detail-results-td--match" aria-label="${isMatch ? 'Matched' : hasRunNoMatch ? 'Run row without match' : 'Not matched'}">${isMatch ? '✓' : '✗'}</td>`;
+      tr += `<td class="score-detail-results-td score-detail-results-td--idx" title="${runRowIndex >= 0 ? 'Run row ' + (runRowIndex + 1) : 'No match'}">${runNum}</td>`;
+      for (let ri = 0; ri < rulesFlat.length; ri++) {
+        const rule = rulesFlat[ri];
+        const runVal = runResult ? getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields) : null;
+        tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
+      }
+      tr += `<td class="score-detail-results-td score-detail-results-td--match" aria-label="${isMatch ? 'Matched' : 'Not matched'}">${isMatch ? '✓' : '✗'}</td>`;
       tr += '<td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
-    const commentCells = tbody.querySelectorAll('.score-detail-results-td--comment');
-    commentCells.forEach((td, idx) => {
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'score-detail-results-comment-input';
-      input.placeholder = 'Comment...';
-      input.value = comments[String(idx)] ?? '';
-      input.setAttribute('aria-label', `Comment for row ${idx + 1}`);
-      input.addEventListener('change', () => {
+
+    function appendRunOnlyRow(i) {
+      const runResult = resultsByIndex.get(i) || null;
+      const rowClass = 'score-detail-results-tr--run-only';
+      const commentKey = 'run:' + i;
+      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--idx" title="No GT row">—</td>`;
+      if (gtColsUsed.length > 0) {
+        gtColsUsed.forEach(() => { tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>'; });
+      } else {
+        tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>';
+      }
+      tr += `<td class="score-detail-results-td score-detail-results-td--idx" title="Run row ${i + 1}">${i + 1}</td>`;
+      for (let ri = 0; ri < rulesFlat.length; ri++) {
+        const rule = rulesFlat[ri];
+        const runVal = runResult ? getRunValue(runResult, rule.outputKey, i, runWs, outputFields) : '';
+        tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
+      }
+      tr += '<td class="score-detail-results-td score-detail-results-td--match" aria-label="Run row without GT match">✗</td>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
+      tbody.insertAdjacentHTML('beforeend', tr);
+    }
+
+    for (const d of pageDescriptors) {
+      if (d.type === 'gt') appendGtRow(d.j);
+      else appendRunOnlyRow(d.i);
+    }
+
+    tbody.querySelectorAll('tr').forEach((tr) => {
+      const commentKey = tr.getAttribute('data-comment-key');
+      const td = tr.querySelector('.score-detail-results-td--comment');
+      if (!td || commentKey == null) return;
+      const textarea = document.createElement('textarea');
+      textarea.rows = 2;
+      textarea.className = 'score-detail-results-comment-textarea';
+      textarea.placeholder = 'Comment...';
+      textarea.value = comments[commentKey] ?? '';
+      textarea.setAttribute('aria-label', 'Comment');
+      textarea.addEventListener('change', () => {
         const c = getResultComments();
-        const v = (input.value || '').trim();
-        if (v) c[String(idx)] = input.value;
-        else delete c[String(idx)];
+        const v = (textarea.value || '').trim();
+        if (v) c[commentKey] = textarea.value;
+        else delete c[commentKey];
         setResultComments(c);
       });
-      td.appendChild(input);
+      td.appendChild(textarea);
     });
-    table.appendChild(tbl);
-    resultsBody.appendChild(table);
+
+    const commentTh = tbl.querySelector('thead .score-detail-results-th--comment');
+    if (commentTh) {
+      const resizeHandle = document.createElement('div');
+      resizeHandle.className = 'score-detail-results-comment-resize-handle';
+      resizeHandle.setAttribute('aria-label', 'Resize column');
+      resizeHandle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const startW = commentTh.offsetWidth;
+        document.body.classList.add('wd-col-resizing');
+        const onMove = (moveE) => {
+          const dx = moveE.clientX - startX;
+          const newW = Math.max(100, startW + dx);
+          commentTh.style.width = `${newW}px`;
+          commentTh.style.minWidth = `${newW}px`;
+        };
+        const onUp = () => {
+          document.body.classList.remove('wd-col-resizing');
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+      commentTh.appendChild(resizeHandle);
+    }
+
+    tableWrap.appendChild(tbl);
+    resultsBody.appendChild(tableWrap);
+
+    if (resultsToolbar) {
+      resultsToolbar.style.display = '';
+      resultsToolbar.innerHTML = `
+        <label class="dataset-detail-rows-label" for="score-detail-rows-per-page">Rows per page</label>
+        <select id="score-detail-rows-per-page" class="dataset-detail-rows-select" aria-label="Rows per page">
+          ${ROWS_PER_PAGE_OPTIONS.map((n) => `<option value="${n}" ${n === scoreDetailPagination.rowsPerPage ? 'selected' : ''}>${n}</option>`).join('')}
+        </select>
+        <span class="dataset-detail-pagination-info score-detail-pagination-info" aria-live="polite">${totalRows === 0 ? (totalUnfiltered === 0 ? '0 rows' : `0 rows (filtered from ${totalUnfiltered})`) : (totalRows === totalUnfiltered ? `Showing ${start + 1}–${end} of ${totalRows} rows` : `Showing ${start + 1}–${end} of ${totalRows} (filtered from ${totalUnfiltered}) rows`)}</span>
+        <label class="dataset-detail-page-label" for="score-detail-page-inp">Page</label>
+        <input type="number" id="score-detail-page-inp" class="dataset-detail-page-inp" min="1" max="${totalPages}" value="${scoreDetailPagination.currentPage}" aria-label="Page number" />
+        <span class="dataset-detail-page-of score-detail-page-of">/ ${totalPages}</span>
+        <div class="dataset-detail-pagination-btns">
+          <button type="button" class="btn btn-secondary score-detail-prev-page" aria-label="Previous page">Previous</button>
+          <button type="button" class="btn btn-secondary score-detail-next-page" aria-label="Next page">Next</button>
+        </div>
+      `;
+      const rowsPerPageSelect = resultsToolbar.querySelector('#score-detail-rows-per-page');
+      const pageInp = resultsToolbar.querySelector('#score-detail-page-inp');
+      const prevBtn = resultsToolbar.querySelector('.score-detail-prev-page');
+      const nextBtn = resultsToolbar.querySelector('.score-detail-next-page');
+      if (rowsPerPageSelect) {
+        rowsPerPageSelect.addEventListener('change', () => {
+          scoreDetailPagination.rowsPerPage = Number(rowsPerPageSelect.value) || 25;
+          scoreDetailPagination.currentPage = 1;
+          renderResults();
+        });
+      }
+      if (pageInp) {
+        pageInp.addEventListener('change', () => {
+          scoreDetailPagination.currentPage = Math.max(1, Math.min(totalPages, parseInt(pageInp.value, 10) || 1));
+          renderResults();
+        });
+      }
+      if (prevBtn) {
+        prevBtn.disabled = scoreDetailPagination.currentPage <= 1;
+        prevBtn.addEventListener('click', () => {
+          scoreDetailPagination.currentPage = Math.max(1, scoreDetailPagination.currentPage - 1);
+          renderResults();
+        });
+      }
+      if (nextBtn) {
+        nextBtn.disabled = scoreDetailPagination.currentPage >= totalPages;
+        nextBtn.addEventListener('click', () => {
+          scoreDetailPagination.currentPage = Math.min(totalPages, scoreDetailPagination.currentPage + 1);
+          renderResults();
+        });
+      }
+    }
   }
 
   async function loadReviewCredentials() {
@@ -928,60 +1139,147 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (!res.ok) return;
       const list = await res.json();
       llmSelect.innerHTML = '<option value="">— Select —</option>' + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
+      const savedId = (node?.dataset?.reviewCredentialId || '').trim();
+      if (savedId && list?.some((c) => c.id === savedId)) llmSelect.value = savedId;
     } catch (_) {}
     const payload = getReviewPayload();
     addPromptReviewBtn.disabled = !payload || !payload.prompt_sections || payload.prompt_sections.length === 0;
   }
 
+  llmSelect.addEventListener('change', () => {
+    const v = (llmSelect.value || '').trim();
+    if (node) {
+      node.dataset.reviewCredentialId = v;
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    }
+  });
+
   addPromptReviewBtn.addEventListener('click', async () => {
     const scoreNodeId = node?.dataset?.nodeId || '';
     if (!scoreNodeId) return;
-    document.dispatchEvent(new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } }));
     const credentialId = (llmSelect?.value || '').trim();
     const payload = getReviewPayload();
     if (!credentialId || !payload || !payload.prompt_sections || !payload.prompt_sections.length) return;
-    addPromptReviewBtn.disabled = true;
+    const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } });
+    document.dispatchEvent(addEvent);
+    const reviewNodeId = addEvent.detail?.reviewNodeId || '';
+    close();
+    const body = {
+      credential_id: credentialId,
+      prompt_sections: payload.prompt_sections,
+      run_results: payload.run_results || [],
+      output_fields: payload.output_fields || [],
+      comparison_rows: (payload.comparison_rows || []).map((r) => ({
+        row_index: r.row_index,
+        matched: r.matched,
+        run_output: r.run_output || {},
+        expected: r.expected || '',
+        comment: r.comment ?? null,
+      })),
+    };
+    const promptFullText = payload.prompt_full_text || payload.prompt_sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
+    const sectionsCopy = (Array.isArray(payload.prompt_sections) && payload.prompt_sections.length > 0)
+      ? payload.prompt_sections.map((s) => ({ name: String(s?.name ?? ''), content: String(s?.content ?? '').slice() }))
+      : [];
+    const workingSectionsInitial = sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+    // 创建节点后立刻把 promptSections 写入节点，用户稍后打开 review 节点时右侧 prompt 已填好
+    if (reviewNodeId) {
+      document.dispatchEvent(new CustomEvent('workflow:save-review-result', {
+        detail: {
+          reviewNodeId,
+          data: {
+            summary: '',
+            suggestions: [],
+            promptSections: sectionsCopy,
+            promptFullText: promptFullText || '',
+            workingSections: workingSectionsInitial,
+          },
+        },
+      }));
+      document.dispatchEvent(new CustomEvent('workflow:review-stream-started', { detail: { reviewNodeId } }));
+    }
     try {
-      const res = await fetch(`${API_BASE}/api/review/analyze`, {
+      const res = await fetch(`${API_BASE}/api/review/analyze/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          credential_id: credentialId,
-          prompt_sections: payload.prompt_sections,
-          prompt_full_text: payload.prompt_full_text || payload.prompt_sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n'),
-          run_results: payload.run_results || [],
-          output_fields: payload.output_fields || [],
-          comparison_rows: (payload.comparison_rows || []).map((r) => ({
-            row_index: r.row_index,
-            matched: r.matched,
-            run_output: r.run_output || {},
-            expected: r.expected || '',
-            comment: r.comment ?? null,
-          })),
-        }),
+        body: JSON.stringify(body),
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        openReviewResultModal({
-          summary: data.summary || '',
-          suggestions: data.suggestions || [],
-          promptSections: payload.prompt_sections,
-          promptFullText: payload.prompt_full_text || payload.prompt_sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n'),
-          scoreNode: node,
-          onExportNewPrompt: (sections) => {
-            document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
-              detail: { sections, afterScoreNodeId: node.dataset.nodeId },
-            }));
-          },
-        });
-        close();
-      } else {
-        alert(data.detail || res.statusText || 'Review request failed.');
+      if (!res.ok) {
+        if (reviewNodeId) document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
+        alert(res.statusText || 'Review request failed.');
+        return;
       }
+      const workingSections = sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+      let streamSaved = {
+        summary: '',
+        suggestions: [],
+        promptSections: sectionsCopy,
+        promptFullText: promptFullText || '',
+        workingSections,
+      };
+      const persistToNode = (data) => {
+        if (reviewNodeId) {
+          document.dispatchEvent(new CustomEvent('workflow:save-review-result', { detail: { reviewNodeId, data } }));
+        }
+      };
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let data;
+          try {
+            data = JSON.parse(trimmed);
+          } catch (_) {
+            continue;
+          }
+          if (data.type === 'error') {
+            if (reviewNodeId) document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
+            alert(data.detail || 'Review failed.');
+            return;
+          }
+          if (data.type === 'plan') {
+            streamSaved = {
+              summary: data.summary || '',
+              suggestions: [],
+              promptSections: sectionsCopy,
+              promptFullText: promptFullText || '',
+              workingSections,
+              streamComplete: false,
+            };
+            persistToNode(streamSaved);
+          } else if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
+            streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
+            persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
+          } else if (data.type === 'done') {
+            persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions || [], streamComplete: true });
+          }
+        }
+      }
+      if (buf.trim()) {
+        try {
+          const data = JSON.parse(buf.trim());
+          if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
+            streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
+            persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
+          }
+          if (data.type === 'done') {
+            persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions || [], streamComplete: true });
+          }
+        } catch (_) {}
+      }
+      if (reviewNodeId) document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
     } catch (e) {
+      if (reviewNodeId) document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
       alert(e?.message || 'Review request failed.');
     }
-    addPromptReviewBtn.disabled = false;
   });
 
   function selectGroundTruth(id) {
