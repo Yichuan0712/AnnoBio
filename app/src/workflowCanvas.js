@@ -7,7 +7,7 @@
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal } from './runDetailModal.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
-import { openScoreDetailModal, runReviewFromScore } from './scoreDetailModal.js';
+import { openScoreDetailModal, runReviewFromScore, getScoreExportData } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 
@@ -494,6 +494,20 @@ export function buildWorkflowCanvas(root) {
       if (Number.isFinite(num) && num >= 1 && String(num) === numStr) maxN = Math.max(maxN, num);
     }
     return `${base} ${maxN + 1}`;
+  }
+
+  /**
+   * True if the sampler has any subset (dataset) nodes that were sampled from it.
+   * @param {string} samplerNodeId
+   * @returns {boolean}
+   */
+  function hasSampledDatasets(samplerNodeId) {
+    if (!samplerNodeId) return false;
+    const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
+    for (const n of subsetNodes) {
+      if ((n.dataset.samplerNodeId || '') === samplerNodeId) return true;
+    }
+    return false;
   }
 
   function getNodeIndex(node) {
@@ -1133,7 +1147,7 @@ export function buildWorkflowCanvas(root) {
       e.preventDefault();
       e.stopPropagation();
       const samplerNode = getNodeById(edge.toId);
-      if (samplerNode) openSamplerDetailModal({ node: samplerNode, isSamplerNameAlreadyUsedForSource });
+      if (samplerNode) openSamplerDetailModal({ node: samplerNode, isSamplerNameAlreadyUsedForSource, hasSampledDatasets });
     } else if (edgeType === EDGE_TYPE_RUN_TO_SCORE) {
       e.preventDefault();
       e.stopPropagation();
@@ -1715,7 +1729,7 @@ export function buildWorkflowCanvas(root) {
       if (lastInteractionWasDrag) return;
       e.preventDefault();
       e.stopPropagation();
-      openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource });
+      openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource, hasSampledDatasets });
     });
 
     node.addEventListener('contextmenu', (e) => {
@@ -1744,10 +1758,9 @@ export function buildWorkflowCanvas(root) {
     if (notes !== undefined && notes !== null) node.dataset.subsetNote = String(notes);
     node.dataset.nodeType = 'subset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
-    const subsetCount = nodesLayer.querySelectorAll('.workflow-node--subset').length;
     const colorIndex = (typeof givenColorIndex === 'number' && givenColorIndex >= 0)
       ? (givenColorIndex % DATASET_BORDER_COLORS.length)
-      : (subsetCount % DATASET_BORDER_COLORS.length);
+      : Math.floor(Math.random() * DATASET_BORDER_COLORS.length);
     node.dataset.subsetColorIndex = String(colorIndex);
     node.style.borderColor = DATASET_BORDER_COLORS[colorIndex];
     if (Array.isArray(headers) && Array.isArray(rows)) subsetContentByNodeId.set(nodeId, { headers: headers.slice(), rows: rows.map((r) => r.slice()) });
@@ -2362,9 +2375,9 @@ export function buildWorkflowCanvas(root) {
         const rr = JSON.parse(node.dataset.runResults || '[]');
         runHasResults = Array.isArray(rr) && rr.length > 0;
       } catch (_) {}
-      if (!runHasResults) return;
     }
     let scoreHasResults = false;
+    let scoreHasReviewLlm = false;
     if (isScore) {
       const runEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
       const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
@@ -2374,25 +2387,10 @@ export function buildWorkflowCanvas(root) {
           scoreHasResults = Array.isArray(rr) && rr.length > 0;
         } catch (_) {}
       }
-      if (!scoreHasResults) return;
+      scoreHasReviewLlm = (node.dataset.reviewCredentialId || '').trim() !== '';
     }
-
-    const menu = document.createElement('div');
-    menu.className = 'workflow-node-context-menu';
-    menu.setAttribute('role', 'menu');
-    if (isRun) {
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--score" data-action="save-to-workspace-and-score" role="menuitem">Score</button>
-        <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem">Save results to workspace</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-run-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isScore) {
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem">Review</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isPromptReview) {
-      let reviewHasAccepted = false;
+    let reviewHasAccepted = false;
+    if (isPromptReview) {
       try {
         const raw = (node.dataset.reviewResult || '').trim();
         if (raw) {
@@ -2401,16 +2399,30 @@ export function buildWorkflowCanvas(root) {
           reviewHasAccepted = suggestions.some((s) => s.applied === true);
         }
       } catch (_) {}
-      if (reviewHasAccepted) {
-        menu.innerHTML = `
-          <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem">Export</button>
-          <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
-        `;
-      } else {
-        menu.innerHTML = `
-          <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
-        `;
-      }
+    }
+
+    const menu = document.createElement('div');
+    menu.className = 'workflow-node-context-menu';
+    menu.setAttribute('role', 'menu');
+    if (isRun) {
+      menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--score" data-action="save-to-workspace-and-score" role="menuitem" ${runHasResults ? '' : 'disabled'}>Score</button>
+        <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem" ${runHasResults ? '' : 'disabled'}>Save results to workspace</button>
+        <button type="button" class="workflow-node-context-item" data-action="edit-run-name" role="menuitem">Edit name</button>
+      `;
+    } else if (isScore) {
+      const scoreHasGt = (node.dataset.scoreGroundTruthId || '').trim() !== '';
+      const canSaveToWorkspace = scoreHasResults && scoreHasGt;
+      menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem" ${scoreHasReviewLlm && scoreHasResults ? '' : 'disabled'}>Review</button>
+        <button type="button" class="workflow-node-context-item" data-action="score-save-to-workspace" role="menuitem" ${canSaveToWorkspace ? '' : 'disabled'}>Save to workspace</button>
+        <button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>
+      `;
+    } else if (isPromptReview) {
+      menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem" ${reviewHasAccepted ? '' : 'disabled'}>Export</button>
+        <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
+      `;
     } else if (isSubset) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="add-sampler" role="menuitem">Sample</button>
@@ -2420,7 +2432,7 @@ export function buildWorkflowCanvas(root) {
       `;
     } else if (isSampler) {
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item" data-action="create-working-dataset" role="menuitem">Create dataset</button>
+        <button type="button" class="workflow-node-context-item" data-action="create-working-dataset" role="menuitem">Create sample</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-sampler-name" role="menuitem">Edit name</button>
       `;
     } else {
@@ -2616,7 +2628,7 @@ export function buildWorkflowCanvas(root) {
         const left = (parseFloat(node.style.left) || 0) + (node.offsetWidth || 280) + NEW_NODE_OFFSET;
         const top = parseFloat(node.style.top) || 0;
         const newNode = createSamplerNode({
-          name: getNextDefaultSamplerName(sourceNodeId),
+          name: 'Sample',
           notes: '',
           left,
           top,
@@ -2715,6 +2727,50 @@ export function buildWorkflowCanvas(root) {
             if (titleEl) titleEl.textContent = name;
           },
         });
+      },
+      'score-save-to-workspace': () => {
+        if (node.dataset.nodeType !== 'score') return;
+        const scoreNode = node;
+        const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+        const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+        function getRunResults() {
+          if (!runNode) return { results: [], outputFields: [] };
+          let results = [];
+          let outputFields = [];
+          try {
+            results = JSON.parse(runNode.dataset.runResults || '[]');
+            outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+          } catch (_) {}
+          return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
+        }
+        function getRunWorkingSetContent() {
+          const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
+          const c = wsId ? subsetContentByNodeId.get(wsId) : null;
+          return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+        }
+        function getGroundTruthContent(wsNodeId) {
+          const c = subsetContentByNodeId.get(wsNodeId || '');
+          if (!c) return { headers: [], rows: [] };
+          return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
+        }
+        function getGroundTruthHeaders(wsNodeId) {
+          const c = subsetContentByNodeId.get(wsNodeId || '');
+          return (c && c.headers) ? c.headers.slice() : [];
+        }
+        const payload = getScoreExportData({
+          node: scoreNode,
+          getRunResults,
+          getRunWorkingSetContent,
+          getGroundTruthContent,
+          getGroundTruthHeaders,
+        });
+        if (!payload || !payload.headers || !payload.rows) return;
+        const scoreName = (scoreNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Score';
+        const datasetName = findUniqueDatasetExportName(scoreName + ' comparison');
+        const notes = `Exported from Score "${scoreName}". Run vs ground truth comparison.`;
+        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
+          detail: { name: datasetName, notes, headers: payload.headers, rows: payload.rows },
+        }));
       },
       'review-export': () => {
         if (node.dataset.nodeType !== 'promptReview') return;
@@ -2825,6 +2881,7 @@ export function buildWorkflowCanvas(root) {
     menu.querySelectorAll('.workflow-node-context-item').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (btn.disabled) return;
         const action = btn.getAttribute('data-action');
         if (actions[action]) actions[action]();
         menu.remove();
@@ -3171,6 +3228,17 @@ export function buildWorkflowCanvas(root) {
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
+  document.addEventListener('workflow:score-export-to-workspace', (e) => {
+    const { scoreName = '', headers, rows } = e.detail || {};
+    if (!Array.isArray(headers) || !Array.isArray(rows)) return;
+    const baseName = (scoreName && scoreName.trim()) ? scoreName.trim() + ' comparison' : 'Score comparison';
+    const datasetName = findUniqueDatasetExportName(baseName);
+    const notes = `Exported from Score "${(scoreName && scoreName.trim()) ? scoreName.trim() : 'Score'}". Run vs ground truth comparison.`;
+    document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
+      detail: { name: datasetName, notes, headers, rows },
+    }));
+  });
+
   document.addEventListener('workflow:add-dataset-node', (e) => {
     const { name = '', notes = '', headers, rows, left: detailLeft, top: detailTop } = e.detail || {};
     const VISIBLE_PADDING = 40;
@@ -3194,7 +3262,7 @@ export function buildWorkflowCanvas(root) {
 
   document.addEventListener('workflow:add-sampler-node', (e) => {
     const { sourceNodeId = '', colorIndex, name: nameParam, samplingType = 'without-replacement', sampleSizeType = 'rows', sampleSize = 100, rowSpec = '' } = e.detail || {};
-    const name = (nameParam && nameParam.trim()) ? nameParam.trim() : getNextDefaultSamplerName(sourceNodeId);
+    const name = (nameParam && nameParam.trim()) ? nameParam.trim() : 'Sample';
     let left, top;
     const sourceNode = sourceNodeId ? getNodeById(sourceNodeId) : null;
     if (sourceNode) {

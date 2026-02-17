@@ -72,7 +72,7 @@ export function openAddPromptModal(workflowCanvasApi) {
             <div class="prompt-form-error prompt-modal-error" role="alert" aria-live="polite" hidden></div>
             <div class="prompt-actions">
               <button type="button" class="btn btn-secondary prompt-btn-back">Back</button>
-              <button type="button" class="btn btn-secondary prompt-generate-node">Create this prompt</button>
+              <button type="button" class="btn btn-primary prompt-generate-node">Create this prompt</button>
             </div>
           </div>
         </div>

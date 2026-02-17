@@ -95,7 +95,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
             <div class="prompt-form-error prompt-modal-error dataset-add-error" role="alert" aria-live="polite" hidden></div>
             <div class="prompt-actions">
               <button type="button" class="btn btn-secondary dataset-add-btn-back">Back</button>
-              <button type="button" class="btn btn-secondary dataset-add-btn">Create this dataset</button>
+              <button type="button" class="btn btn-primary dataset-add-btn">Create this dataset</button>
             </div>
           </div>
         </div>

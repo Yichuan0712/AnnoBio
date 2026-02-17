@@ -137,6 +137,22 @@ ipcMain.handle('project:load', async (_e, filePath) => {
   return JSON.parse(raw);
 });
 
+// Dataset/table export: save dialog then write file (CSV/TSV = utf8, XLSX = base64)
+ipcMain.handle('dialog:show-save', async (_e, opts) => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: opts?.title ?? 'Save file',
+    defaultPath: opts?.defaultPath ?? undefined,
+    filters: Array.isArray(opts?.filters) ? opts.filters : [{ name: 'All Files', extensions: ['*'] }],
+  });
+  return canceled ? null : filePath;
+});
+
+ipcMain.handle('fs:write-file', async (_e, filePath, data, encoding) => {
+  const enc = encoding === 'base64' ? 'base64' : 'utf8';
+  const buf = enc === 'base64' ? Buffer.from(data, 'base64') : data;
+  await fs.writeFile(filePath, buf, enc === 'base64' ? undefined : enc);
+});
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.

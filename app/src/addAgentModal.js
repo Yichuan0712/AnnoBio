@@ -34,7 +34,7 @@ export function openAddAgentModal() {
             </select>
           </div>
           <div class="agent-form-actions">
-            <button type="button" class="btn btn-secondary agent-add-btn">Create this agent</button>
+            <button type="button" class="btn btn-primary agent-add-btn">Create this agent</button>
           </div>
         </div>
       </div>

@@ -119,7 +119,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
           </div>
           <div class="prompt-form-error prompt-modal-error run-detail-form-error" id="run-detail-form-error" role="alert" aria-live="polite" hidden></div>
           <div class="prompt-actions run-detail-actions">
-            <button type="button" class="btn btn-secondary run-detail-run-btn" disabled>Run</button>
+            <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
           </div>
         </div>
         <div class="run-detail-preview-wrap">
@@ -451,7 +451,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       footerActions.appendChild(btn);
       const saveAndScoreBtn = document.createElement('button');
       saveAndScoreBtn.type = 'button';
-      saveAndScoreBtn.className = 'btn btn-secondary run-detail-save-to-workspace-score-btn';
+      saveAndScoreBtn.className = 'btn btn-primary run-detail-save-to-workspace-score-btn';
       saveAndScoreBtn.textContent = 'Score';
       saveAndScoreBtn.addEventListener('click', () => {
         document.dispatchEvent(
@@ -489,6 +489,8 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     runBtn.disabled = true;
     runBtn.textContent = 'Run completed';
     runBtn.setAttribute('aria-label', 'Run completed');
+    runBtn.classList.remove('btn-primary');
+    runBtn.classList.add('btn-secondary');
     llmSelectEl.disabled = true;
     pickerEl.classList.add('run-detail-ws-picker--locked');
     pickerEl.setAttribute('aria-disabled', 'true');
@@ -683,9 +685,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   }
   document.addEventListener('workflow:run-results-updated', onRunResultsUpdated);
   overlay.querySelector('.modal-close').addEventListener('click', closeModal);
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeModal();
-  });
 
   async function loadCredentialsAndPopulateLlm() {
     const sel = llmSelectEl;

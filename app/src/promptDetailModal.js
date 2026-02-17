@@ -234,7 +234,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
               <div class="prompt-form-error prompt-modal-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
               <div class="prompt-actions">
                 <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
-                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Run</button>
+                <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Run</button>
               </div>
             </div>
           </div>

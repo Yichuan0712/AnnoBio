@@ -579,7 +579,7 @@ function buildReviewResultUI(overlay, options) {
     footer.innerHTML = '';
     const exportBtn = document.createElement('button');
     exportBtn.type = 'button';
-    exportBtn.className = 'btn btn-secondary review-detail-export-btn';
+    exportBtn.className = 'btn btn-primary review-detail-export-btn';
     exportBtn.textContent = 'Export';
     exportBtn.addEventListener('click', () => {
       const sections = working.map((s) => ({ name: s.name || '', content: s.content || '' }));
@@ -695,7 +695,6 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   function close() {
     if (reviewNodeId) document.removeEventListener('workflow:save-review-result', onSaveReviewResult);
@@ -768,7 +767,6 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
   if (reviewNodeId || scoreNode) persistResult(saved);
 
   overlay.querySelector('.modal-close').addEventListener('click', () => { overlay.remove(); document.body.style.overflow = ''; });
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); document.body.style.overflow = ''; } });
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
 

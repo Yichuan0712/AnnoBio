@@ -1,6 +1,6 @@
 /**
  * Sampler detail modal: view/edit sampler settings (name, sampling type, sample size, row spec).
- * @param {{ node: HTMLElement, isSamplerNameAlreadyUsedForSource?: (name: string, sourceNodeId: string, excludeNodeId?: string | null) => boolean }} options
+ * @param {{ node: HTMLElement, isSamplerNameAlreadyUsedForSource?: (name: string, sourceNodeId: string, excludeNodeId?: string | null) => boolean, hasSampledDatasets?: (samplerNodeId: string) => boolean }} options
  */
 
 function escapeHtml(str) {
@@ -31,7 +31,7 @@ function parseRowSpecToItems(spec) {
   return items;
 }
 
-export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource }) {
+export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource, hasSampledDatasets }) {
   const nodeId = node?.dataset?.nodeId ?? '';
   const sourceNodeId = (node?.dataset?.sourceNodeId ?? '').trim();
   const name = (node?.dataset?.samplerName ?? '').trim() || 'Sample';
@@ -40,13 +40,14 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
   const sampleSize = node?.dataset?.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
   const rowSpec = (node?.dataset?.samplerRowSpec ?? '').trim();
   const rowSpecItems = parseRowSpecToItems(rowSpec);
+  const readOnly = !!(typeof hasSampledDatasets === 'function' && hasSampledDatasets(nodeId));
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'sampler-detail-title');
   overlay.innerHTML = `
-    <div class="modal-panel modal-panel--sampler-detail">
+    <div class="modal-panel modal-panel--sampler-detail" ${readOnly ? 'data-sampler-readonly="true"' : ''}>
       <div class="modal-header">
         <h2 id="sampler-detail-title" class="modal-title">Sample: ${escapeHtml(name)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
@@ -102,8 +103,7 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
           </div>
           <div class="prompt-form-error prompt-modal-error sampler-form-error" role="alert" aria-live="polite" hidden></div>
           <div class="prompt-actions sampler-actions">
-            <button type="button" class="btn btn-secondary dataset-detail-btn-save">Save</button>
-            <button type="button" class="btn btn-secondary sampler-detail-btn-create-subset">Create dataset</button>
+            <button type="button" class="btn btn-primary sampler-detail-btn-create-subset">Create sample</button>
           </div>
         </div>
       </div>
@@ -124,7 +124,6 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
   const samplerAddRangeTo = overlay.querySelector('#sampler-add-range-to');
   const samplerAddRangeBtn = overlay.querySelector('.sampler-add-range-btn');
   const samplerFormErrorEl = overlay.querySelector('.sampler-form-error');
-  const btnSave = overlay.querySelector('.dataset-detail-btn-save');
   const btnCreateSubset = overlay.querySelector('.sampler-detail-btn-create-subset');
 
   const editRowSpecItems = [];
@@ -145,7 +144,7 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
       remove.className = 'sampler-row-spec-chip-remove';
       remove.setAttribute('aria-label', 'Remove');
       remove.textContent = '×';
-      remove.addEventListener('click', () => {
+          remove.addEventListener('click', () => {
         editRowSpecItems.splice(idx, 1);
         renderRowSpecList();
       });
@@ -175,24 +174,6 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
       sampleSize: isSpecify ? 100 : sampleSize,
       rowSpec: isSpecify ? buildRowSpecString() : '',
     };
-  }
-
-  function isDirty() {
-    const cur = getFormState();
-    const initialName = (node?.dataset?.samplerName ?? '').trim() || '';
-    const initialSt = node?.dataset?.samplerSamplingType || 'without-replacement';
-    const initialSst = node?.dataset?.samplerSampleSizeType || 'rows';
-    const initialSize = node?.dataset?.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
-    const initialRowSpec = (node?.dataset?.samplerRowSpec ?? '').trim();
-    if ((cur.name || 'Sample') !== (initialName || 'Sample')) return true;
-    if (cur.samplingType !== initialSt) return true;
-    if (initialSt === 'specify-rows') {
-      if (cur.rowSpec !== initialRowSpec) return true;
-    } else {
-      if (cur.sampleSizeType !== initialSst) return true;
-      if (String(cur.sampleSize) !== String(initialSize)) return true;
-    }
-    return false;
   }
 
   function populateForm() {
@@ -299,14 +280,6 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
       }
       return false;
     }
-    if (sourceNodeId && typeof isSamplerNameAlreadyUsedForSource === 'function' && isSamplerNameAlreadyUsedForSource(newName, sourceNodeId, nodeId)) {
-      if (samplerFormErrorEl) {
-        samplerFormErrorEl.textContent = 'This sample name is already used for this dataset. Please choose another.';
-        samplerFormErrorEl.hidden = false;
-      }
-      return false;
-    }
-
     if (node) {
       node.dataset.samplerName = newName;
       node.dataset.samplerSamplingType = samplingTypeVal;
@@ -326,47 +299,7 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
     return true;
   }
 
-  btnSave.addEventListener('click', () => {
-    if (performSave()) close();
-  });
-
-  function requestClose() {
-    if (!isDirty()) {
-      close();
-      return;
-    }
-    const panel = overlay.querySelector('.modal-panel');
-    const saveDialog = document.createElement('div');
-    saveDialog.className = 'working-dataset-save-dialog-overlay';
-    saveDialog.setAttribute('role', 'dialog');
-    saveDialog.setAttribute('aria-labelledby', 'sampler-save-dialog-title');
-    saveDialog.innerHTML = `
-      <div class="working-dataset-save-dialog">
-        <p id="sampler-save-dialog-title" class="working-dataset-save-dialog-title">Save changes before closing?</p>
-        <div class="working-dataset-save-dialog-btns">
-          <button type="button" class="btn btn-secondary wd-save-dialog-save">Save</button>
-          <button type="button" class="btn btn-secondary wd-save-dialog-dont">Don't save</button>
-          <button type="button" class="btn btn-secondary wd-save-dialog-cancel">Cancel</button>
-        </div>
-      </div>
-    `;
-    const removeDialog = () => saveDialog.remove();
-    saveDialog.querySelector('.wd-save-dialog-save').addEventListener('click', () => {
-      removeDialog();
-      if (performSave()) close();
-    });
-    saveDialog.querySelector('.wd-save-dialog-dont').addEventListener('click', () => {
-      removeDialog();
-      close();
-    });
-    saveDialog.querySelector('.wd-save-dialog-cancel').addEventListener('click', removeDialog);
-    panel.appendChild(saveDialog);
-  }
-
-  overlay.querySelector('.modal-close').addEventListener('click', requestClose);
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) requestClose();
-  });
+  overlay.querySelector('.modal-close').addEventListener('click', close);
 
   if (btnCreateSubset) {
     btnCreateSubset.addEventListener('click', () => {

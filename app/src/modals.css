@@ -1101,7 +1101,7 @@
 }
 
 .prompt-detail-inputs-table-wrap .prompt-detail-inputs-table tbody tr:hover td {
-  background: rgba(255, 193, 7, 0.25) !important;
+  background: var(--hover) !important;
 }
 
 .prompt-detail-side .prompt-detail-schema-wrap {
@@ -1644,6 +1644,18 @@
   overflow-y: auto;
 }
 
+/* 锁死时：表单区不设 disabled，外观一致；遮罩层接收鼠标以显示 not-allowed 并拦截点击 */
+.modal-panel--sampler-detail[data-sampler-readonly="true"] .sampler-meta-wrap {
+  position: relative;
+}
+.modal-panel--sampler-detail[data-sampler-readonly="true"] .sampler-meta-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
 .sampler-meta-wrap {
   display: flex;
   flex-direction: column;
@@ -1676,14 +1688,21 @@
 
 /* Score detail modal: layout aligned with Run detail (main + preview-wrap) */
 .modal-panel--score-detail {
-  width: 88%;
-  min-width: min(960px, 85%);
-  max-width: 88%;
+  width: min(400px, 92vw);
+  min-width: min(400px, 92vw);
+  max-width: 92vw;
   max-height: 98vh;
   min-height: min(520px, 85vh);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  transition: width 0.35s ease-out, min-width 0.35s ease-out, max-width 0.35s ease-out;
+}
+
+.modal-panel--score-detail.score-detail-panel--expanded {
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 88%;
 }
 
 .modal-panel--score-detail .modal-body.score-detail-body,
@@ -1706,6 +1725,7 @@
   padding: 0 20px 20px 20px;
   border-right: 1px solid var(--border);
   overflow: hidden;
+  transition: flex 0.35s ease-out, max-width 0.35s ease-out;
 }
 
 .modal-panel--score-detail.score-detail-panel--expanded .score-detail-main {
@@ -2108,16 +2128,24 @@
   background: var(--hover);
 }
 
-/* Score right column: Results (like run-detail-preview-wrap) */
+/* Score right column: Results. 无结果时收起（max-width:0），有结果时展开，带过渡动画 */
 .score-detail-preview-wrap {
   flex: 1 1 0;
-  min-width: 320px;
+  min-width: 0;
+  max-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  border-left: 1px solid var(--border);
+  border-left: none;
   overflow: hidden;
+  transition: max-width 0.35s ease-out, flex 0.35s ease-out;
+}
+
+.modal-panel--score-detail.score-detail-panel--expanded .score-detail-preview-wrap {
+  max-width: 100vw;
+  min-width: 320px;
+  border-left: 1px solid var(--border);
 }
 
 .score-detail-preview-title {
@@ -2171,23 +2199,30 @@
   flex-shrink: 0;
 }
 
-/* 与 Dataset / Run 分页栏一致：横线上下间距 10px（上）/ 8px（下）；右无内边距使按钮与横线右对齐 */
+/* 与 Dataset / Run 分页栏一致：横线上下间距 10px（上）/ 8px（下）；左对齐横线，右无内边距 */
 .score-detail-results-toolbar {
   flex-shrink: 0;
-  padding-bottom: 10px;
-  padding-right: 0;
+  padding: 6px 0 10px 0;
   border-bottom: 1px solid var(--border);
 }
 
 .score-detail-results-footer-row {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 12px;
   margin-top: 8px;
   margin-bottom: 16px;
-  padding-left: 12px;
+  padding-left: 0;
   padding-right: 0;
+  flex-shrink: 0;
+}
+
+.score-detail-results-footer-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   flex-shrink: 0;
 }
 
@@ -2291,7 +2326,7 @@
 
 .review-detail-preview-title {
   margin: 0;
-  padding: 12px 20px;
+  padding: 6px 20px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
@@ -2325,7 +2360,10 @@
   flex: 1 1 0;
   min-height: 0;
   overflow: auto;
-  padding: 12px 0 0;
+  padding: 6px 0 0;
+}
+.review-detail-main .review-detail-preview-content .review-detail-suggestions > *:last-child {
+  margin-bottom: 12px;
 }
 
 /* Right column: Prompt sections — 1:1 与左栏均分，样式同 .prompt-detail-main */
@@ -2684,10 +2722,8 @@
 
 .score-detail-results-summary-wrap {
   display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   margin-right: auto;
   min-width: 0;
 }
@@ -2699,9 +2735,9 @@
 }
 
 .score-detail-results-metrics {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text);
-  font-weight: 500;
+  font-weight: normal;
 }
 
 .score-detail-results-search-inline {
@@ -2746,23 +2782,12 @@
   font-size: 12px;
 }
 
-/* 表头行：按区块区分 GT / Result(Run) / 结果(Match,Comment) */
+/* 表头行：与 Run/Dataset 等表头一致用 var(--hover)，用分割线区分三块 */
 .score-detail-results-table thead .score-detail-results-th {
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
-}
-
-.score-detail-results-table thead .score-detail-results-th--gt-block {
-  background: var(--bg-bar);
-}
-
-.score-detail-results-table thead .score-detail-results-th--run-block {
   background: var(--hover);
-}
-
-.score-detail-results-table thead .score-detail-results-th--result-block {
-  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
 }
 
 .score-detail-results-td {
@@ -2785,15 +2810,16 @@
   text-align: right;
 }
 
-.score-detail-results-th--run,
-.score-detail-results-td--run {
-  border-left: 2px solid var(--border);
-}
 
-/* 表头 GT/Run 区块色由上面的 --gt-block / --run-block 控制 */
+/* 三块分割线：Ground truth | Run result | Match+Comment，加粗加深以更明显 */
+.score-detail-results-th--block-sep,
+.score-detail-results-td--block-sep {
+  border-left: 4px solid var(--text-muted);
+}
 
 .score-detail-results-th--match,
 .score-detail-results-td--match {
+  border-left: 4px solid var(--text-muted);
   width: 3em;
   min-width: 3em;
   text-align: center;
@@ -3605,9 +3631,13 @@
   padding-top: 8px;
   border-top: 1px solid var(--border);
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: center;
   gap: 10px;
+}
+
+.run-detail-results-footer-actions .run-detail-save-to-workspace-score-btn {
+  margin-left: auto;
 }
 
 .run-detail-results-note {
@@ -3799,39 +3829,6 @@
   padding-bottom: 8px;
   margin-top: 4px;
   padding-top: 8px;
-}
-
-/* 关闭时未保存则弹出的询问框 */
-.working-dataset-save-dialog-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-}
-
-.working-dataset-save-dialog {
-  background: var(--bg-bar);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  padding: 16px 20px;
-  box-shadow: 0 4px 12px var(--shadow);
-  min-width: 280px;
-}
-
-.working-dataset-save-dialog-title {
-  margin: 0 0 14px;
-  font-size: 14px;
-  color: var(--text);
-}
-
-.working-dataset-save-dialog-btns {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-end;
 }
 
 /* App-level alert (replaces system alert); fixed overlay on body */
@@ -4149,7 +4146,7 @@ body.wd-row-resizing {
 }
 
 .prompt-detail-sections-view .preview-field-content-line.prompt-detail-line-highlight {
-  background: rgba(255, 193, 7, 0.25);
+  background: var(--hover);
   outline: none;
 }
 
@@ -5742,13 +5739,13 @@ body.wd-row-resizing {
 }
 
 .btn-primary {
-  color: #fff;
-  background: var(--accent, #2563eb);
-  border-color: var(--accent, #2563eb);
+  color: var(--primary-btn-text, #2563eb);
+  background: var(--primary-btn-bg, rgba(37, 99, 235, 0.22));
+  border-color: var(--primary-btn-text, #2563eb);
 }
 
 .btn-primary:hover {
-  filter: brightness(1.1);
+  filter: brightness(0.95);
 }
 
 .btn-secondary {

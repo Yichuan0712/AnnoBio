@@ -87,6 +87,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
                 <button type="button" class="btn btn-secondary working-dataset-add-col">Add column</button>
                 <button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button>
                 <button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button>
+                <button type="button" class="btn btn-primary working-dataset-sample">Sample</button>
               </div>
             </div>
           </div>
@@ -107,6 +108,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   const addColBtn = overlay.querySelector('.working-dataset-add-col');
   const deleteRowBtn = overlay.querySelector('.working-dataset-delete-row');
   const deleteColBtn = overlay.querySelector('.working-dataset-delete-col');
+  const sampleBtn = overlay.querySelector('.working-dataset-sample');
   const searchInp = overlay.querySelector('#wd-preview-search');
   const summaryEl = overlay.querySelector('.wd-summary');
   const tableWrap = overlay.querySelector('.working-dataset-table-wrap');
@@ -422,6 +424,17 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     render();
   });
 
+  if (sampleBtn) {
+    sampleBtn.disabled = !node?.dataset?.nodeId;
+    sampleBtn.addEventListener('click', () => {
+      if (!node?.dataset?.nodeId) return;
+      document.dispatchEvent(new CustomEvent('workflow:add-sampler-node', {
+        detail: { sourceNodeId: node.dataset.nodeId },
+      }));
+      close();
+    });
+  }
+
   function updateDeleteButtons() {
     const hasRowSelected = selectedRowIndex >= 0 && selectedRowIndex < rows.length;
     const hasColSelected = selectedColIndex >= 0 && selectedColIndex < headers.length;
@@ -429,67 +442,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     deleteColBtn.disabled = headers.length <= 1 || !hasColSelected;
   }
 
-  function isDirty() {
-    if (headers.length !== initialHeaders.length) return true;
-    if (rows.length !== initialRows.length) return true;
-    for (let i = 0; i < headers.length; i++) {
-      if ((headers[i] ?? '') !== (initialHeaders[i] ?? '')) return true;
-    }
-    for (let i = 0; i < rows.length; i++) {
-      const a = initialRows[i] ?? [];
-      const b = rows[i] ?? [];
-      if (a.length !== b.length) return true;
-      for (let j = 0; j < a.length; j++) {
-        if ((a[j] ?? '') !== (b[j] ?? '')) return true;
-      }
-    }
-    return false;
-  }
-
-  function doSave() {
-    saveContent({ headers: headers.slice(), rows: rows.map((r) => r.slice()) });
-  }
-
-  function requestClose() {
-    if (!isDirty()) {
-      close();
-      return;
-    }
-    const panel = overlay.querySelector('.modal-panel');
-    const saveDialog = document.createElement('div');
-    saveDialog.className = 'working-dataset-save-dialog-overlay';
-    saveDialog.setAttribute('role', 'dialog');
-    saveDialog.setAttribute('aria-labelledby', 'wd-save-dialog-title');
-    saveDialog.innerHTML = `
-      <div class="working-dataset-save-dialog">
-        <p id="wd-save-dialog-title" class="working-dataset-save-dialog-title">Save changes before closing?</p>
-        <div class="working-dataset-save-dialog-btns">
-          <button type="button" class="btn btn-secondary wd-save-dialog-save">Save</button>
-          <button type="button" class="btn btn-secondary wd-save-dialog-dont">Don't save</button>
-          <button type="button" class="btn btn-secondary wd-save-dialog-cancel">Cancel</button>
-        </div>
-      </div>
-    `;
-    const removeDialog = () => {
-      saveDialog.remove();
-    };
-    saveDialog.querySelector('.wd-save-dialog-save').addEventListener('click', () => {
-      removeDialog();
-      doSave();
-      close();
-    });
-    saveDialog.querySelector('.wd-save-dialog-dont').addEventListener('click', () => {
-      removeDialog();
-      close();
-    });
-    saveDialog.querySelector('.wd-save-dialog-cancel').addEventListener('click', removeDialog);
-    panel.appendChild(saveDialog);
-  }
-
-  overlay.querySelector('.modal-close').addEventListener('click', requestClose);
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) requestClose();
-  });
+  overlay.querySelector('.modal-close').addEventListener('click', close);
 
   if (searchInp) {
     searchInp.addEventListener('input', () => {
