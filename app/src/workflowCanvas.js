@@ -2757,12 +2757,31 @@ export function buildWorkflowCanvas(root) {
           const c = subsetContentByNodeId.get(wsNodeId || '');
           return (c && c.headers) ? c.headers.slice() : [];
         }
+        function getRunResultColumns() {
+          if (!runNode) return [];
+          const cols = [];
+          cols.push({ key: '#', label: '#' });
+          let outputFields = [];
+          try {
+            const raw = runNode.dataset.runOutputFields || '[]';
+            const arr = JSON.parse(raw);
+            outputFields = Array.isArray(arr) ? arr : [];
+          } catch (_) {}
+          outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+          const wsId = (runNode.dataset.runWorkingSetId || '').trim();
+          const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
+          const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
+          cols.push({ key: '[#]', label: 'Input: #' });
+          wsHeaders.forEach((h) => cols.push({ key: `[${h}]`, label: `Input: ${h}` }));
+          return cols;
+        }
         const payload = getScoreExportData({
           node: scoreNode,
           getRunResults,
           getRunWorkingSetContent,
           getGroundTruthContent,
           getGroundTruthHeaders,
+          getRunResultColumns,
         });
         if (!payload || !payload.headers || !payload.rows) return;
         const scoreName = (scoreNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Score';

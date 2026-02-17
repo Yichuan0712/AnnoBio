@@ -1354,7 +1354,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   function updateSaveToWorkspaceButton() {
     if (!saveToWorkspaceBtn) return;
-    const payload = getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders });
+    const payload = getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns });
     saveToWorkspaceBtn.disabled = !payload || !payload.headers || !payload.rows.length;
   }
 
@@ -1368,7 +1368,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   if (saveToWorkspaceBtn) {
     saveToWorkspaceBtn.addEventListener('click', () => {
-      const payload = getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders });
+      const payload = getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns });
       if (!payload || !payload.headers || !payload.rows) return;
       const scoreName = (node?.querySelector?.('.workflow-node__title')?.textContent || '').trim() || 'Score';
       document.dispatchEvent(new CustomEvent('workflow:score-export-to-workspace', {
@@ -1473,10 +1473,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
 /**
  * Build score comparison table for export (Save to workspace).
- * @param {{ node: HTMLElement, getRunResults: () => { results, outputFields }, getRunWorkingSetContent: () => { headers, rows }, getGroundTruthContent: (wsNodeId: string) => { headers, rows }, getGroundTruthHeaders: (wsNodeId: string) => string[] }} options
+ * Column names and order match the Score page display.
+ * @param {{ node: HTMLElement, getRunResults: () => { results, outputFields }, getRunWorkingSetContent: () => { headers, rows }, getGroundTruthContent: (wsNodeId: string) => { headers, rows }, getGroundTruthHeaders: (wsNodeId: string) => string[], getRunResultColumns?: () => Array<{ key: string, label: string }> }} options
  * @returns {{ headers: string[], rows: string[][] } | null}
  */
-export function getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders }) {
+export function getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns }) {
   if (!node) return null;
   const selectedNodeId = (node.dataset.scoreGroundTruthId || '').trim();
   if (!selectedNodeId) return null;
@@ -1661,24 +1662,29 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
   try {
     comments = JSON.parse(node.dataset.scoreResultComments || '{}');
   } catch (_) {}
-  const runLabels = rulesFlat.map((rule) => (rule.outputKey && rule.outputKey.trim()) ? rule.outputKey.trim() : '—');
-  const headers = ['GT #', 'Run #', ...gtColsUsed, ...runLabels, 'Match', 'Comment'];
+  const runColumns = typeof getRunResultColumns === 'function' ? getRunResultColumns() : [];
+  const runLabels = rulesFlat.map((r) => (runColumns.find((c) => c.key === (r.outputKey || ''))?.label || r.outputKey || '—').trim() || '—');
+  const headers = ['Ground truth #', ...(gtColsUsed.length > 0 ? gtColsUsed : ['Ground truth']), 'Run result #', ...runLabels, 'Match', 'Comment'];
   const rows = descriptors.map((d) => {
     const parts = [];
     if (d.type === 'gt') {
       const j = d.j;
       const runRowIndex = gtToRun[j];
       const runResult = runRowIndex >= 0 ? resultsByIndex.get(runRowIndex) || null : null;
-      parts.push(String(j + 1), runRowIndex >= 0 ? String(runRowIndex + 1) : '—');
+      parts.push(String(j + 1));
+      if (gtColsUsed.length === 0) parts.push('—');
       gtColsUsed.forEach((col) => { parts.push(getGtValue(gtContent, j, col)); });
+      parts.push(runRowIndex >= 0 ? String(runRowIndex + 1) : '—');
       rulesFlat.forEach((rule) => { parts.push(runResult ? getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields) : ''); });
       parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? '1' : '0');
       parts.push(comments[String(j)] ?? '');
     } else {
       const i = d.i;
       const runResult = resultsByIndex.get(i) || null;
-      parts.push('—', String(i + 1));
+      parts.push('—');
+      if (gtColsUsed.length === 0) parts.push('—');
       gtColsUsed.forEach(() => { parts.push('—'); });
+      parts.push(String(i + 1));
       rulesFlat.forEach((rule) => { parts.push(runResult ? getRunValue(runResult, rule.outputKey, i, runWs, outputFields) : ''); });
       parts.push('0');
       parts.push(comments['run:' + i] ?? '');
