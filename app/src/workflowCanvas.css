@@ -378,7 +378,9 @@
 
 .workflow-node-context-item--run,
 .workflow-node-context-item--sample,
-.workflow-node-context-item--score {
+.workflow-node-context-item--score,
+.workflow-node-context-item--review,
+.workflow-node-context-item--export {
   font-weight: 700;
 }
 

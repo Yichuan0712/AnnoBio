@@ -2171,14 +2171,14 @@
   flex-shrink: 0;
 }
 
-/* 与 Dataset / Run 分页栏一致：横线上下间距 10px（上）/ 8px（下） */
+/* 与 Dataset / Run 分页栏一致：横线上下间距 10px（上）/ 8px（下）；右无内边距使按钮与横线右对齐 */
 .score-detail-results-toolbar {
   flex-shrink: 0;
   padding-bottom: 10px;
+  padding-right: 0;
   border-bottom: 1px solid var(--border);
 }
 
-/* 与分页栏右对齐：与 .dataset-detail-preview-toolbar 同用 12px 水平内边距 */
 .score-detail-results-footer-row {
   display: flex;
   align-items: center;
@@ -2187,7 +2187,7 @@
   margin-top: 8px;
   margin-bottom: 16px;
   padding-left: 12px;
-  padding-right: 12px;
+  padding-right: 0;
   flex-shrink: 0;
 }
 
@@ -2235,6 +2235,58 @@
   padding: 0;
   border-right: 1px solid var(--border);
   overflow: hidden;
+}
+
+/* Review name: 顶部身份条，左侧色条 + 小标签 + 主输入 */
+.review-detail-name-block {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 14px 20px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.review-detail-name-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.review-detail-name-inp {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.review-detail-name-inp::placeholder {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.review-detail-name-inp:hover {
+  border-color: var(--text-muted);
+}
+
+.review-detail-name-inp:focus {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--shadow);
 }
 
 .review-detail-preview-title {
@@ -2442,9 +2494,23 @@
   justify-content: flex-end;
 }
 
-.review-detail-accept-btn {
+.review-detail-suggestion-card__actions .review-detail-accept-btn {
   font-size: 12px;
   padding: 4px 10px;
+  background: var(--diff-added-bg) !important;
+  color: var(--diff-added-text) !important;
+  border-color: var(--diff-added-text, currentColor) !important;
+}
+
+.review-detail-suggestion-card__actions .review-detail-accept-btn:hover {
+  filter: brightness(0.95);
+}
+
+.review-detail-suggestion-card__actions .review-detail-accept-btn--revert {
+  background: var(--diff-removed-bg) !important;
+  color: var(--diff-removed-text) !important;
+  border-color: var(--diff-removed-text, currentColor) !important;
+  text-decoration: none;
 }
 
 .review-detail-suggestion-card:hover,
@@ -2604,11 +2670,26 @@
   margin-bottom: 10px;
 }
 
+.score-detail-results-summary-wrap {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-right: auto;
+  min-width: 0;
+}
+
 .score-detail-results-top-row .score-detail-results-summary {
   font-size: 12px;
   color: var(--text);
   margin: 0;
-  margin-right: auto;
+}
+
+.score-detail-results-metrics {
+  font-size: 11px;
+  color: var(--text);
+  font-weight: 500;
 }
 
 .score-detail-results-search-inline {
@@ -3188,7 +3269,7 @@
   color: var(--text-muted);
 }
 .run-detail-main--locked .run-detail-name-field .dataset-meta-input {
-  cursor: not-allowed;
+  cursor: text;
 }
 .run-detail-main--locked .run-detail-ws-picker {
   pointer-events: none;
@@ -3453,7 +3534,7 @@
   flex: 1 1 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
   overflow: auto;
 }
@@ -3474,6 +3555,7 @@
 .run-detail-results-note--inline {
   font-size: 12px;
   margin: 0;
+  color: var(--text);
 }
 
 /* Run results: 搜索框长度与其他页面一致 */
@@ -3523,11 +3605,11 @@
 }
 
 .run-detail-results-generating {
-  color: var(--text-muted);
+  color: var(--text);
 }
 
 .run-detail-results-complete {
-  color: var(--text-muted);
+  color: var(--text);
 }
 
 .run-detail-results-incomplete {
@@ -3693,14 +3775,15 @@
 /* 底部：分页栏 + footer（Add/Delete row/column，上划线，与其它 detail 一致） */
 .working-dataset-detail-body .working-dataset-pagination-toolbar {
   flex-shrink: 0;
+  padding-right: 0;
 }
 
-/* 底部四按钮：与其它 detail 相同的 footer 风格（上划线 + 按钮右对齐） */
+/* 底部四按钮：与 Run 一致，右无内边距使按钮与横线右对齐 */
 .dataset-detail-card .dataset-detail-footer.working-dataset-detail-footer,
 .working-dataset-detail-footer {
   flex-shrink: 0;
   padding-left: 12px;
-  padding-right: 12px;
+  padding-right: 0;
   padding-bottom: 8px;
   margin-top: 4px;
   padding-top: 8px;
@@ -5195,6 +5278,26 @@ body.wd-row-resizing {
   margin-top: auto;
   flex-shrink: 0;
   justify-content: flex-end;
+}
+
+/* Edit node name (Run / Score / Review / Sample): 单名称编辑弹窗，按钮右对齐并排 */
+.modal-panel--edit-node-name {
+  width: min(400px, 92vw);
+  min-width: min(360px, 92vw);
+  max-width: 92vw;
+  min-height: auto;
+}
+
+.modal-panel--edit-node-name .modal-body {
+  padding-bottom: 20px;
+}
+
+.modal-panel--edit-node-name .prompt-actions {
+  margin-top: 20px;
+  margin-bottom: 0;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 /* Edit sections popup (prompt detail): same look as Add prompt step 2 left */

@@ -55,10 +55,6 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
         <div class="sampler-main">
           <div class="dataset-meta-wrap prompt-meta-wrap sampler-meta-wrap">
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="sampler-name-inp">Sample name</label>
-              <input type="text" id="sampler-name-inp" class="dataset-meta-input" placeholder="My sample" />
-            </div>
-            <div class="dataset-meta-field">
               <span class="dataset-meta-label">Sampling method</span>
               <div class="sampler-radio-group">
                 <label class="sampler-radio-label"><input type="radio" name="sampler-replacement" value="with-replacement" /> With replacement</label>
@@ -115,7 +111,6 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
   `;
 
   const titleEl = overlay.querySelector('#sampler-detail-title');
-  const nameInp = overlay.querySelector('#sampler-name-inp');
   const samplerRowsInp = overlay.querySelector('#sampler-rows-inp');
   const samplerRatioInp = overlay.querySelector('#sampler-ratio-inp');
   const samplerSizeWrap = overlay.querySelector('.sampler-size-wrap');
@@ -174,7 +169,7 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
       ? (Number.isFinite(sizeNum) && sizeNum >= 1 ? sizeNum : 100)
       : (Number.isFinite(sizeNum) && sizeNum >= 1 && sizeNum <= 100 ? sizeNum : 100);
     return {
-      name: (nameInp?.value || '').trim() || '',
+      name: (node?.dataset?.samplerName ?? '').trim() || 'Sample',
       samplingType: samplingTypeVal,
       sampleSizeType: isSpecify ? 'rows' : sampleSizeTypeVal,
       sampleSize: isSpecify ? 100 : sampleSize,
@@ -201,7 +196,6 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
   }
 
   function populateForm() {
-    nameInp.value = (node?.dataset?.samplerName ?? '').trim() || '';
     const st = node?.dataset?.samplerSamplingType || 'without-replacement';
     overlay.querySelector(`input[name="sampler-replacement"][value="${st}"]`)?.click();
     const sst = node?.dataset?.samplerSampleSizeType || 'rows';
@@ -264,7 +258,7 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
   /** Validate form and apply to node. Returns true if saved, false if validation failed (error shown). */
   function performSave() {
     if (samplerFormErrorEl) samplerFormErrorEl.hidden = true;
-    const newName = (nameInp?.value || '').trim();
+    const newName = (node?.dataset?.samplerName ?? '').trim() || 'Sample';
     const samplingTypeVal = overlay.querySelector('input[name="sampler-replacement"]:checked')?.value || 'without-replacement';
     const isSpecifyRowsVal = samplingTypeVal === 'specify-rows';
     const rowSpecVal = isSpecifyRowsVal ? buildRowSpecString() : '';

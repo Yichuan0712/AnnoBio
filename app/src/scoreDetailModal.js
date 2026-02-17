@@ -18,7 +18,140 @@ function escapeAttr(str) {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload }) {
+/**
+ * Create Review node and run review API stream (no modal).
+ * @param {{ scoreNodeId: string, getReviewPayload: () => { prompt_sections, prompt_full_text?, run_results, output_fields, comparison_rows } | null, credentialId: string }} options
+ * @returns {Promise<{ reviewNodeId: string } | null>} reviewNodeId after node is created; null if payload/credential invalid
+ */
+export function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId }) {
+  const payload = getReviewPayload && getReviewPayload();
+  if (!credentialId || !payload || !payload.prompt_sections || !payload.prompt_sections.length) return Promise.resolve(null);
+  const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } });
+  document.dispatchEvent(addEvent);
+  const reviewNodeId = addEvent.detail?.reviewNodeId || '';
+  if (!reviewNodeId) return Promise.resolve(null);
+  return runReviewStream({ reviewNodeId, payload, credentialId }).then(() => ({ reviewNodeId }));
+}
+
+/**
+ * Run review API stream and persist to node via workflow:save-review-result / review-stream-ended.
+ * @param {{ reviewNodeId: string, payload: object, credentialId: string }} options
+ */
+export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
+  const body = {
+    credential_id: credentialId,
+    prompt_sections: payload.prompt_sections,
+    run_results: payload.run_results || [],
+    output_fields: payload.output_fields || [],
+    comparison_rows: (payload.comparison_rows || []).map((r) => ({
+      row_index: r.row_index,
+      matched: r.matched,
+      run_output: r.run_output || {},
+      expected: r.expected || '',
+      comment: r.comment ?? null,
+    })),
+  };
+  const promptFullText = payload.prompt_full_text || (payload.prompt_sections || []).map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
+  const sectionsCopy = (Array.isArray(payload.prompt_sections) && payload.prompt_sections.length > 0)
+    ? payload.prompt_sections.map((s) => ({ name: String(s?.name ?? ''), content: String(s?.content ?? '').slice() }))
+    : [];
+  const workingSectionsInitial = sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+  document.dispatchEvent(new CustomEvent('workflow:save-review-result', {
+    detail: {
+      reviewNodeId,
+      data: {
+        summary: '',
+        suggestions: [],
+        promptSections: sectionsCopy,
+        promptFullText: promptFullText || '',
+        workingSections: workingSectionsInitial,
+      },
+    },
+  }));
+  document.dispatchEvent(new CustomEvent('workflow:review-stream-started', { detail: { reviewNodeId } }));
+  try {
+    const res = await fetch(`${API_BASE}/api/review/analyze/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
+      alert(res.statusText || 'Review request failed.');
+      return;
+    }
+    const workingSections = sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+    let streamSaved = {
+      summary: '',
+      suggestions: [],
+      promptSections: sectionsCopy,
+      promptFullText: promptFullText || '',
+      workingSections,
+    };
+    const persistToNode = (data) => {
+      document.dispatchEvent(new CustomEvent('workflow:save-review-result', { detail: { reviewNodeId, data } }));
+    };
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let data;
+        try {
+          data = JSON.parse(trimmed);
+        } catch (_) {
+          continue;
+        }
+        if (data.type === 'error') {
+          document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
+          alert(data.detail || 'Review failed.');
+          return;
+        }
+        if (data.type === 'plan') {
+          streamSaved = {
+            summary: data.summary || '',
+            suggestions: [],
+            promptSections: sectionsCopy,
+            promptFullText: promptFullText || '',
+            workingSections,
+            streamComplete: false,
+          };
+          persistToNode(streamSaved);
+        } else if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
+          streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
+          persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
+        } else if (data.type === 'done') {
+          persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions || [], streamComplete: true });
+        }
+      }
+    }
+    if (buf.trim()) {
+      try {
+        const data = JSON.parse(buf.trim());
+        if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
+          streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
+          persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
+        }
+        if (data.type === 'done') {
+          persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions || [], streamComplete: true });
+        }
+      } catch (_) {}
+    }
+    document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
+  } catch (e) {
+    document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
+    alert(e?.message || 'Review request failed.');
+  }
+}
+
+export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview }) {
   getWorkingSets = getWorkingSets || (() => []);
   getRunResultColumns = getRunResultColumns || (() => []);
   getGroundTruthHeaders = getGroundTruthHeaders || (() => []);
@@ -26,12 +159,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   getRunWorkingSetContent = getRunWorkingSetContent || (() => ({ headers: [], rows: [] }));
   getGroundTruthContent = getGroundTruthContent || (() => ({ headers: [], rows: [] }));
   getReviewPayload = getReviewPayload || (() => null);
+  autoTriggerReview = !!autoTriggerReview;
 
   const workingSets = getWorkingSets();
 
   const name = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Score';
-  const n = (name.match(/Score\s*(\d+)/i) || [])[1] || '1';
-  const title = `Scorecard ${n} details`;
+  const title = `Score: ${name}`;
 
   let selectedNodeId = (node?.dataset?.scoreGroundTruthId || '').trim();
 
@@ -933,6 +1066,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
     const runOnlyCount = total > 0 ? total - matchedCount : 0;
     const unmatchedGtCount = gtRows.length - matchedCount;
+    let tp = 0;
+    for (let j = 0; j < gtRows.length; j++) {
+      const runRowIndex = gtToRun[j];
+      if (runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent)) tp++;
+    }
+    const precision = runCount > 0 ? (tp / runCount) * 100 : 0;
+    const recall = gtRows.length > 0 ? (tp / gtRows.length) * 100 : 0;
+    const f1 = (precision + recall) > 0 ? (2 * (precision / 100) * (recall / 100) / ((precision + recall) / 100)) * 100 : 0;
+    const fmt = (x) => (Number.isFinite(x) ? x.toFixed(2) : '—');
+    const metricsText = `Precision ${fmt(precision)}% · Recall ${fmt(recall)}% · F1 ${fmt(f1)}%`;
+
     const summaryText = `${matchedCount} of ${total} run rows paired` +
       (runOnlyCount > 0 ? ` · ${runOnlyCount} run row(s) without pair` : '') +
       (unmatchedGtCount > 0 ? ` · ${unmatchedGtCount} GT row(s) without pair` : '');
@@ -940,7 +1084,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const topRow = document.createElement('div');
     topRow.className = 'score-detail-results-top-row';
     topRow.innerHTML = `
-      <span class="score-detail-results-summary">${escapeHtml(summaryText)}</span>
+      <div class="score-detail-results-summary-wrap">
+        <span class="score-detail-results-summary">${escapeHtml(summaryText)}</span>
+        <span class="score-detail-results-metrics" aria-label="Precision, Recall, F1">${escapeHtml(metricsText)}</span>
+      </div>
       <div class="score-detail-results-search-inline">
         <label class="dataset-detail-search-label" for="score-detail-results-search">Search</label>
         <input type="text" id="score-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" value="${escapeAttr(scoreDetailPagination.searchQuery)}" />
@@ -1164,122 +1311,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     document.dispatchEvent(addEvent);
     const reviewNodeId = addEvent.detail?.reviewNodeId || '';
     close();
-    const body = {
-      credential_id: credentialId,
-      prompt_sections: payload.prompt_sections,
-      run_results: payload.run_results || [],
-      output_fields: payload.output_fields || [],
-      comparison_rows: (payload.comparison_rows || []).map((r) => ({
-        row_index: r.row_index,
-        matched: r.matched,
-        run_output: r.run_output || {},
-        expected: r.expected || '',
-        comment: r.comment ?? null,
-      })),
-    };
-    const promptFullText = payload.prompt_full_text || payload.prompt_sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
-    const sectionsCopy = (Array.isArray(payload.prompt_sections) && payload.prompt_sections.length > 0)
-      ? payload.prompt_sections.map((s) => ({ name: String(s?.name ?? ''), content: String(s?.content ?? '').slice() }))
-      : [];
-    const workingSectionsInitial = sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
-    // 创建节点后立刻把 promptSections 写入节点，用户稍后打开 review 节点时右侧 prompt 已填好
-    if (reviewNodeId) {
-      document.dispatchEvent(new CustomEvent('workflow:save-review-result', {
-        detail: {
-          reviewNodeId,
-          data: {
-            summary: '',
-            suggestions: [],
-            promptSections: sectionsCopy,
-            promptFullText: promptFullText || '',
-            workingSections: workingSectionsInitial,
-          },
-        },
-      }));
-      document.dispatchEvent(new CustomEvent('workflow:review-stream-started', { detail: { reviewNodeId } }));
-    }
-    try {
-      const res = await fetch(`${API_BASE}/api/review/analyze/stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        if (reviewNodeId) document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
-        alert(res.statusText || 'Review request failed.');
-        return;
-      }
-      const workingSections = sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
-      let streamSaved = {
-        summary: '',
-        suggestions: [],
-        promptSections: sectionsCopy,
-        promptFullText: promptFullText || '',
-        workingSections,
-      };
-      const persistToNode = (data) => {
-        if (reviewNodeId) {
-          document.dispatchEvent(new CustomEvent('workflow:save-review-result', { detail: { reviewNodeId, data } }));
-        }
-      };
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          let data;
-          try {
-            data = JSON.parse(trimmed);
-          } catch (_) {
-            continue;
-          }
-          if (data.type === 'error') {
-            if (reviewNodeId) document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
-            alert(data.detail || 'Review failed.');
-            return;
-          }
-          if (data.type === 'plan') {
-            streamSaved = {
-              summary: data.summary || '',
-              suggestions: [],
-              promptSections: sectionsCopy,
-              promptFullText: promptFullText || '',
-              workingSections,
-              streamComplete: false,
-            };
-            persistToNode(streamSaved);
-          } else if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
-            streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
-            persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
-          } else if (data.type === 'done') {
-            persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions || [], streamComplete: true });
-          }
-        }
-      }
-      if (buf.trim()) {
-        try {
-          const data = JSON.parse(buf.trim());
-          if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
-            streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
-            persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
-          }
-          if (data.type === 'done') {
-            persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions || [], streamComplete: true });
-          }
-        } catch (_) {}
-      }
-      if (reviewNodeId) document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
-    } catch (e) {
-      if (reviewNodeId) document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
-      alert(e?.message || 'Review request failed.');
-    }
+    if (reviewNodeId) await runReviewStream({ reviewNodeId, payload, credentialId });
   });
 
   function selectGroundTruth(id) {
@@ -1358,4 +1390,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   loadReviewCredentials();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
+  if (autoTriggerReview && addPromptReviewBtn) {
+    setTimeout(() => {
+      if (addPromptReviewBtn.disabled) return;
+      addPromptReviewBtn.click();
+    }, 200);
+  }
 }

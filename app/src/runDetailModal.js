@@ -79,7 +79,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     return {};
   })();
 
-  const titleText = `${runName} details`;
+  const titleText = `Run: ${runName}`;
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -95,10 +95,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         <div class="run-detail-main">
           <p class="run-detail-main-label">Run settings</p>
           <div class="dataset-meta-wrap run-detail-meta-wrap">
-            <div class="dataset-meta-field run-detail-name-field">
-              <label class="dataset-meta-label" for="run-detail-name-inp">Run name</label>
-              <input type="text" id="run-detail-name-inp" class="dataset-meta-input" value="" placeholder="Run name" aria-label="Run name">
-            </div>
             <div class="dataset-meta-field">
               <label class="dataset-meta-label" for="run-detail-ws-picker">Dataset</label>
               <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select dataset">
@@ -134,8 +130,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     </div>
   `;
 
-  const runNameInp = overlay.querySelector('#run-detail-name-inp');
-  runNameInp.value = runName;
   const pickerEl = overlay.querySelector('#run-detail-ws-picker');
   const triggerEl = overlay.querySelector('.run-detail-ws-trigger');
   const triggerColorEl = overlay.querySelector('#run-detail-ws-trigger-color');
@@ -155,32 +149,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     if (runDetailPanel && !runDetailPanel.classList.contains('run-detail-panel--expanded')) {
       runDetailPanel.classList.add('run-detail-panel--expanded');
     }
-  }
-
-  /** Validate run name and apply to node. If showError is true and name is duplicate, shows error above Run button. Returns false if duplicate. */
-  function applyRunName(showError = false) {
-    const raw = (runNameInp.value || '').trim();
-    const newName = raw || 'Run';
-    if (runDetailFormErrorEl) {
-      runDetailFormErrorEl.hidden = true;
-      runDetailFormErrorEl.textContent = '';
-    }
-    if (isRunNameAlreadyUsedForPrompt(newName, node?.dataset?.nodeId)) {
-      if (showError && runDetailFormErrorEl) {
-        runDetailFormErrorEl.textContent = 'A run with this name already exists under the same prompt. Please use a different name.';
-        runDetailFormErrorEl.hidden = false;
-      }
-      runNameInp.focus();
-      return false;
-    }
-    runName = newName;
-    if (node) {
-      node.dataset.runName = newName;
-      const titleEl = node.querySelector('.workflow-node__title');
-      if (titleEl) titleEl.textContent = newName;
-    }
-    if (modalTitleEl) modalTitleEl.textContent = `${runName} details`;
-    return true;
   }
 
   function renderResultsEmptyCard() {
@@ -522,7 +490,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     runBtn.textContent = 'Run completed';
     runBtn.setAttribute('aria-label', 'Run completed');
     llmSelectEl.disabled = true;
-    if (runNameInp) runNameInp.disabled = true;
     pickerEl.classList.add('run-detail-ws-picker--locked');
     pickerEl.setAttribute('aria-disabled', 'true');
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
@@ -720,16 +687,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     if (e.target === overlay) closeModal();
   });
 
-  runNameInp.addEventListener('blur', () => {
-    applyRunName(false);
-  });
-  runNameInp.addEventListener('input', () => {
-    if (runDetailFormErrorEl) {
-      runDetailFormErrorEl.hidden = true;
-      runDetailFormErrorEl.textContent = '';
-    }
-  });
-
   async function loadCredentialsAndPopulateLlm() {
     const sel = llmSelectEl;
     sel.innerHTML = '<option value="">— Select model for prompt —</option>';
@@ -757,7 +714,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
 
   runBtn.addEventListener('click', async () => {
     if (isRunCompleted()) return;
-    if (!applyRunName(true)) return;
     if (!selectedNodeId || !selectedCredentialId) return;
     const content = getSubsetContent(selectedNodeId);
     const template = getPromptTemplate();

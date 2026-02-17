@@ -127,62 +127,6 @@ function sectionsToFullText(sections) {
     .join('\n\n');
 }
 
-/** Tokenize into words and spaces for minimal diff. */
-function tokenize(str) {
-  if (str == null || str === '') return [];
-  const s = String(str);
-  const tokens = [];
-  let i = 0;
-  while (i < s.length) {
-    const ws = s.slice(i).match(/^\s+/);
-    if (ws) {
-      tokens.push(ws[0]);
-      i += ws[0].length;
-      continue;
-    }
-    const word = s.slice(i).match(/^\S+/);
-    if (word) {
-      tokens.push(word[0]);
-      i += word[0].length;
-      continue;
-    }
-    i++;
-  }
-  return tokens;
-}
-
-/** Word-level diff (tokens = words + spaces). Returns [{ type: 'equal'|'remove'|'add', text }]. */
-function wordDiff(oldStr, newStr) {
-  const a = tokenize(oldStr);
-  const b = tokenize(newStr);
-  const n = a.length;
-  const m = b.length;
-  const dp = Array(n + 1).fill(null).map(() => Array(m + 1).fill(0));
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      if (a[i - 1] === b[j - 1]) dp[i][j] = dp[i - 1][j - 1] + 1;
-      else dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-    }
-  }
-  const segments = [];
-  let i = n, j = m;
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
-      segments.push({ type: 'equal', text: a[i - 1] });
-      i--;
-      j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      segments.push({ type: 'add', text: b[j - 1] });
-      j--;
-    } else if (i > 0) {
-      segments.push({ type: 'remove', text: a[i - 1] });
-      i--;
-    }
-  }
-  segments.reverse();
-  return segments;
-}
-
 /** Split text into sentences (by . ! ? followed by space or newline). */
 function splitSentences(str) {
   if (str == null || typeof str !== 'string') return [];
@@ -223,31 +167,96 @@ function sentenceDiff(oldStr, newStr) {
   return segments;
 }
 
-/** Render one section's content, optionally with diff or highlight. highlightSpan: when set (e.g. Revert state), wrap its first occurrence with review-added only, no diff. */
-function renderSectionContent(content, newContent, withDiff, removeSpan, highlightSpan) {
-  const oldC = (content || '').trim();
-  if (highlightSpan != null && (highlightSpan = (highlightSpan || '').trim()) && oldC.includes(highlightSpan)) {
-    const idx = oldC.indexOf(highlightSpan);
-    return escapeHtml(oldC.slice(0, idx)) + `<span class="review-added">${escapeHtml(highlightSpan)}</span>` + escapeHtml(oldC.slice(idx + highlightSpan.length));
-  }
-  const newC = (newContent || '').trim();
-  if (!withDiff) return escapeHtml(oldC || '');
-  if (removeSpan != null && (removeSpan = (removeSpan || '').trim()) && oldC.includes(removeSpan)) {
-    const idx = oldC.indexOf(removeSpan);
-    return escapeHtml(oldC.slice(0, idx)) + `<span class="review-removed">${escapeHtml(removeSpan)}</span>` + escapeHtml(oldC.slice(idx + removeSpan.length));
-  }
-  if (oldC === newC) return escapeHtml(oldC || '');
-  if (newC === '') return `<span class="review-removed">${escapeHtml(oldC)}</span>`;
-  const segments = wordDiff(oldC, newC);
+/** Render a single line with sentence-level diff (red/green only, no structure change). */
+function renderLineDiff(oldLine, newLine) {
+  if (oldLine === newLine) return escapeHtml(oldLine || '');
+  if (!newLine) return `<span class="review-removed">${escapeHtml(oldLine)}</span>`;
+  const segments = sentenceDiff(oldLine, newLine);
   return segments.map((seg) => {
     if (seg.type === 'equal') return escapeHtml(seg.text);
     if (seg.type === 'remove') return `<span class="review-removed">${escapeHtml(seg.text)}</span>`;
     return `<span class="review-added">${escapeHtml(seg.text)}</span>`;
-  }).join('');
+  }).join(' ');
 }
 
-/** Render sections: optionally diff or highlight one section. highlightSpan: when set for that section, only wrap that span in review-added (no red/green diff). */
-function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent, removeSpan, highlightSpan) {
+/** Render one section's content, optionally with diff or highlight. Preserves line breaks (one div per line). */
+function renderSectionContent(content, newContent, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan) {
+  const oldC = (content || '').trim();
+  const oldLines = oldC.split('\n');
+  const newC = (newContent || '').trim();
+  const newLines = newC.split('\n');
+
+  if (highlightSpan != null && (highlightSpan = (highlightSpan || '').trim())) {
+    let spanToUse = oldC.includes(highlightSpan) ? highlightSpan : (getLocatableSegment(oldC, highlightSpan) || highlightSpan);
+    if (spanToUse && oldC.includes(spanToUse)) {
+      const spanStart = oldC.indexOf(spanToUse);
+      const spanEnd = spanStart + spanToUse.length;
+      const cssClass = highlightAsRemoved ? 'review-removed' : 'review-added';
+      const greenPart = (highlightAddSpan != null && (highlightAddSpan = (highlightAddSpan || '').trim()))
+        ? `<span class="review-added">${escapeHtml(highlightAddSpan)}</span>`
+        : '';
+      let offset = 0;
+      const lineHtmls = oldLines.map((line) => {
+        const lineStart = offset;
+        const lineEnd = offset + line.length;
+        offset = lineEnd + 1;
+        if (spanEnd <= lineStart || spanStart >= lineEnd) {
+          return escapeHtml(line);
+        }
+        const startInLine = Math.max(0, spanStart - lineStart);
+        const endInLine = Math.min(line.length, spanEnd - lineStart);
+        const before = line.slice(0, startInLine);
+        const span = line.slice(startInLine, endInLine);
+        const after = line.slice(endInLine);
+        const isLastLineOfSpan = spanEnd <= lineEnd;
+        return escapeHtml(before) + `<span class="${cssClass}">${escapeHtml(span)}</span>` + (isLastLineOfSpan ? greenPart : '') + escapeHtml(after);
+      });
+      return lineHtmls.map((html) => `<div class="preview-field-content-line">${html}</div>`).join('');
+    }
+  }
+
+  if (!withDiff) {
+    return oldLines.length > 0
+      ? oldLines.map((line) => `<div class="preview-field-content-line">${escapeHtml(line)}</div>`).join('')
+      : '<div class="preview-field-content-line"></div>';
+  }
+  if (removeSpan != null && (removeSpan = (removeSpan || '').trim()) && oldC.includes(removeSpan)) {
+    const idx = oldC.indexOf(removeSpan);
+    let offset = 0;
+    const lineHtmls = oldLines.map((line) => {
+      const lineStart = offset;
+      const lineEnd = offset + line.length;
+      offset = lineEnd + 1;
+      if (idx >= lineEnd || idx + removeSpan.length <= lineStart) return escapeHtml(line);
+      const startInLine = Math.max(0, idx - lineStart);
+      const endInLine = Math.min(line.length, idx + removeSpan.length - lineStart);
+      const before = line.slice(0, startInLine);
+      const span = line.slice(startInLine, endInLine);
+      const after = line.slice(endInLine);
+      return escapeHtml(before) + `<span class="review-removed">${escapeHtml(span)}</span>` + escapeHtml(after);
+    });
+    return lineHtmls.map((html) => `<div class="preview-field-content-line">${html}</div>`).join('');
+  }
+  if (oldC === newC) {
+    return oldLines.length > 0
+      ? oldLines.map((line) => `<div class="preview-field-content-line">${escapeHtml(line)}</div>`).join('')
+      : '<div class="preview-field-content-line"></div>';
+  }
+  if (newC === '') {
+    return oldLines.map((line) => `<div class="preview-field-content-line"><span class="review-removed">${escapeHtml(line)}</span></div>`).join('');
+  }
+  const numLines = Math.max(oldLines.length, newLines.length);
+  const lineHtmls = [];
+  for (let i = 0; i < numLines; i++) {
+    const oldLine = oldLines[i] || '';
+    const newLine = newLines[i] || '';
+    lineHtmls.push(renderLineDiff(oldLine, newLine));
+  }
+  return lineHtmls.map((html) => `<div class="preview-field-content-line">${html}</div>`).join('');
+}
+
+/** Render sections: optionally diff or highlight one section. highlightSpan/highlightAsRemoved: Revert state; highlightAddSpan: green text to show after red (what will be restored). */
+function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan) {
   if (!Array.isArray(sections) || sections.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
   return sections.map((s, i) => {
     const name = (s.name || '').trim() || 'Unnamed';
@@ -256,10 +265,8 @@ function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent
     const useHighlightOnly = isTargetSection && highlightSpan !== undefined && highlightSpan !== null;
     const withDiff = isTargetSection && !useHighlightOnly && diffNewContent !== undefined;
     let contentHtml;
-    if (useHighlightOnly) {
-      contentHtml = `<div class="preview-field-content-line">${renderSectionContent(content, null, false, null, highlightSpan)}</div>`;
-    } else if (withDiff) {
-      contentHtml = `<div class="preview-field-content-line">${renderSectionContent(content, diffNewContent, true, removeSpan)}</div>`;
+    if (useHighlightOnly || withDiff) {
+      contentHtml = renderSectionContent(content, withDiff ? diffNewContent : null, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan);
     } else {
       const lines = content.split('\n');
       const lineEls = lines.length > 0
@@ -296,8 +303,6 @@ function buildReviewResultUI(overlay, options) {
   const workingFromApplied = rebuildWorkingFromApplied(originals, savedSuggestions);
   /** Working copy: always kept in sync by recomputing from originals + suggestions where .applied === true */
   let working = savedWorking || (workingFromApplied && workingFromApplied.length === originals.length ? workingFromApplied : null) || originals.map((s) => ({ name: s.name, content: s.content }));
-  let activeCard = null;
-  let activeSuggestion = null;
   const allSuggestions = Array.isArray(initialSuggestions) ? initialSuggestions.slice() : [];
 
   if (promptWrap) {
@@ -338,18 +343,18 @@ function buildReviewResultUI(overlay, options) {
 
   const promptSectionsEl = promptWrap;
 
-  function renderLeft(showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan) {
+  function renderLeft(showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan) {
     const sectionsToRender = working.map((s, i) => ({ name: s.name, content: s.content }));
     if (showDiffSectionIndex >= 0 && showDiffSectionIndex < originals.length && (diffNewContent !== undefined || (highlightSpan !== undefined && highlightSpan !== null))) {
-      promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender, showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan);
+      promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender, showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan);
       scrollRightToSection(showDiffSectionIndex);
     } else {
       promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender);
     }
   }
 
-  function showDiffOnRight(sectionIndex, newContent, removeSpan, highlightSpan) {
-    renderLeft(sectionIndex, newContent, removeSpan, highlightSpan);
+  function showDiffOnRight(sectionIndex, newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan) {
+    renderLeft(sectionIndex, newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan);
   }
 
   function clearDiffOnRight() {
@@ -369,6 +374,7 @@ function buildReviewResultUI(overlay, options) {
       if (!s) return;
       const applied = s.applied === true;
       btn.textContent = applied ? 'Revert' : 'Accept';
+      btn.classList.toggle('review-detail-accept-btn--revert', applied);
     });
   }
 
@@ -399,7 +405,7 @@ function buildReviewResultUI(overlay, options) {
         ${unlocatable ? '<p class="review-detail-suggestion-unlocatable">Could not locate the original sentence in the section; Apply is hidden.</p>' : ''}
       </div>
       <div class="review-detail-suggestion-card__actions">
-        ${unlocatable ? '<button type="button" class="btn btn-secondary review-detail-hide-btn">Hide</button>' : '<button type="button" class="btn btn-secondary review-detail-accept-btn">' + (isApplied ? 'Revert' : 'Accept') + '</button>'}
+        ${unlocatable ? '<button type="button" class="btn btn-secondary review-detail-hide-btn">Hide</button>' : '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'}
       </div>
     `;
     const mainEl = card.querySelector('.review-detail-suggestion-card__main');
@@ -417,53 +423,28 @@ function buildReviewResultUI(overlay, options) {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
       return getLocatableSegment(c, oldSentence) || oldSentence;
     }
-    /** When in Revert state: segment of new_sentence in current content to highlight (no red/green diff). */
-    function getHighlightSpanForRevert() {
+    /** Reverted section content (current with new_sentence -> old_sentence, or original for legacy). */
+    function getRevertedContent() {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
-      if (useSentenceEdit) {
-        if (newSentence === '') return null;
-        return getLocatableSegment(c, newSentence) || newSentence;
-      }
-      return (c === legacyNewContent ? legacyNewContent : null);
+      if (!useSentenceEdit) return originalContent || '';
+      const seg = getLocatableSegment(c, newSentence);
+      return seg ? c.replace(seg, oldSentence, 1) : c.replace(newSentence, oldSentence, 1);
     }
     function showPreview() {
       if (sug.applied) {
-        showDiffOnRight(secIdx, undefined, undefined, getHighlightSpanForRevert());
+        showDiffOnRight(secIdx, getRevertedContent(), getRemoveSpanForDiff());
       } else {
         showDiffOnRight(secIdx, getDiffContent(), getRemoveSpanForDiff());
       }
     }
 
-    mainEl.setAttribute('role', unlocatable ? null : 'button');
-    mainEl.tabIndex = unlocatable ? -1 : 0;
+    mainEl.removeAttribute('role');
+    mainEl.tabIndex = -1;
     const deleteOnly = useSentenceEdit && newSentence === '';
 
     if (!unlocatable) {
       card.addEventListener('mouseenter', () => showPreview());
-      card.addEventListener('mouseleave', () => {
-        if (activeCard !== card) clearDiffOnRight();
-      });
-      mainEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (activeCard === card) {
-          clearDiffOnRight();
-          card.classList.remove('review-detail-suggestion-card--active');
-          activeCard = null;
-          activeSuggestion = null;
-        } else {
-          suggestionsEl.querySelectorAll('.review-detail-suggestion-card').forEach((c) => c.classList.remove('review-detail-suggestion-card--active'));
-          showPreview();
-          card.classList.add('review-detail-suggestion-card--active');
-          activeCard = card;
-          activeSuggestion = sug;
-        }
-      });
-      mainEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          mainEl.click();
-        }
-      });
+      card.addEventListener('mouseleave', () => clearDiffOnRight());
 
       acceptBtn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -473,7 +454,6 @@ function buildReviewResultUI(overlay, options) {
         syncWorkingFromApplied();
         updateAcceptButtonLabels();
         renderLeft(-1);
-        if (activeCard === card && activeSuggestion) showPreview();
         persistWorking();
       });
     }
@@ -563,7 +543,7 @@ function buildReviewResultUI(overlay, options) {
     const exportBtn = document.createElement('button');
     exportBtn.type = 'button';
     exportBtn.className = 'btn btn-secondary review-detail-export-btn';
-    exportBtn.textContent = 'Export new prompt';
+    exportBtn.textContent = 'Export';
     exportBtn.addEventListener('click', () => {
       const sections = working.map((s) => ({ name: s.name || '', content: s.content || '' }));
       if (!sections.length) return;
@@ -576,10 +556,10 @@ function buildReviewResultUI(overlay, options) {
         if (text) {
           navigator.clipboard.writeText(text).then(() => {
             exportBtn.textContent = 'Copied';
-            setTimeout(() => { exportBtn.textContent = 'Export new prompt'; }, 1500);
+            setTimeout(() => { exportBtn.textContent = 'Export'; }, 1500);
           }).catch(() => {
             exportBtn.textContent = 'Copy failed';
-            setTimeout(() => { exportBtn.textContent = 'Export new prompt'; }, 1500);
+            setTimeout(() => { exportBtn.textContent = 'Export'; }, 1500);
           });
         }
       }
@@ -592,7 +572,8 @@ function buildReviewResultUI(overlay, options) {
 export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, getIsReviewStreaming }) {
   const payload = getPayload ? getPayload() : null;
   const saved = getReviewResult ? getReviewResult() : null;
-  const title = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
+  const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
+  const title = `Review: ${reviewName}`;
   const sectionsForDisplay = saved && (
     (Array.isArray(saved.promptSections) && saved.promptSections.length > 0)
       ? saved.promptSections
@@ -660,7 +641,9 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 
   function onSaveReviewResult(e) {
     if (e.detail?.reviewNodeId !== reviewNodeId) return;
-    refreshFromSaved(e.detail.data);
+    // 使用节点上的最新状态（workflow 已合并 workingSections 与 .applied），避免被流式原始数据覆盖导致 hover 时绿标不显示
+    const data = (getReviewResult && getReviewResult()) ?? e.detail?.data;
+    if (data) refreshFromSaved(data);
   }
 
   if (hasResult) {

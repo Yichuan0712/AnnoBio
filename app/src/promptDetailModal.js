@@ -205,7 +205,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
   overlay.innerHTML = `
       <div class="modal-panel modal-panel--prompt-detail" data-prompt-detail-mode="view">
         <div class="modal-header">
-          <h2 id="prompt-detail-title" class="modal-title">Prompt details: ${escapeHtml(displayName)}</h2>
+          <h2 id="prompt-detail-title" class="modal-title">Prompt: ${escapeHtml(displayName)}</h2>
           <button type="button" class="modal-close" aria-label="Close">×</button>
         </div>
         <div class="modal-body prompt-detail-body">

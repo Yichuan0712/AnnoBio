@@ -48,7 +48,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--working-dataset-detail modal-panel--prompt-detail">
       <div class="modal-header">
-        <h2 id="working-dataset-detail-title" class="modal-title">Dataset details: ${escapeHtml(name)}</h2>
+        <h2 id="working-dataset-detail-title" class="modal-title">Dataset: ${escapeHtml(name)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body prompt-detail-body working-dataset-detail-body">

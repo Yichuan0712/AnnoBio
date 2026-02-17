@@ -7,7 +7,7 @@
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal } from './runDetailModal.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
-import { openScoreDetailModal } from './scoreDetailModal.js';
+import { openScoreDetailModal, runReviewFromScore } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 
@@ -956,14 +956,7 @@ export function buildWorkflowCanvas(root) {
     return result;
   }
 
-  function openEdgeDetailModal(edge, edgeIndex) {
-    const fromNode = getNodeById(edge.fromId);
-    const toNode = getNodeById(edge.toId);
-    const fromData = fromNode ? getPromptDataFromNode(fromNode) : null;
-    const toData = toNode ? getPromptDataFromNode(toNode) : null;
-    const fromName = (fromData && fromData.name.trim()) || 'Prompt';
-    const toName = (toData && toData.name.trim()) || 'Prompt';
-
+  function openPromptDiffModal(fromData, toData, fromName, toName) {
     let bodyHtml;
     if (!fromData || !toData) {
       bodyHtml = '<p class="prompt-detail-placeholder">One or both nodes are missing. Cannot compare.</p>';
@@ -983,7 +976,6 @@ export function buildWorkflowCanvas(root) {
         }).join('') +
         '</tbody></table></div>';
     }
-
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.setAttribute('aria-modal', 'true');
@@ -991,7 +983,7 @@ export function buildWorkflowCanvas(root) {
     overlay.innerHTML = `
       <div class="modal-panel modal-panel--edge-detail">
         <div class="modal-header">
-          <h2 id="edge-detail-title" class="modal-title">Compare versions: ${escapeHtml(fromName)} → ${escapeHtml(toName)}</h2>
+          <h2 id="edge-detail-title" class="modal-title">${escapeHtml(fromName)} → ${escapeHtml(toName)}</h2>
           <button type="button" class="modal-close" aria-label="Close">×</button>
         </div>
         <div class="modal-body modal-body--diff">
@@ -1005,6 +997,33 @@ export function buildWorkflowCanvas(root) {
     });
     document.body.style.overflow = 'hidden';
     document.body.appendChild(overlay);
+  }
+
+  function openEdgeDetailModal(edge, edgeIndex) {
+    const fromNode = getNodeById(edge.fromId);
+    const toNode = getNodeById(edge.toId);
+    const fromData = fromNode ? getPromptDataFromNode(fromNode) : null;
+    const toData = toNode ? getPromptDataFromNode(toNode) : null;
+    const fromName = (fromData && fromData.name.trim()) || 'Prompt';
+    const toName = (toData && toData.name.trim()) || 'Prompt';
+    openPromptDiffModal(fromData, toData, fromName, toName);
+  }
+
+  function openReviewToPromptEdgeDetailModal(edge) {
+    const reviewNode = getNodeById(edge.fromId);
+    const toNode = getNodeById(edge.toId);
+    if (!reviewNode || !toNode) return;
+    const scoreToReview = connections.find((c) => c.toId === reviewNode.dataset.nodeId && c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW);
+    const scoreNode = scoreToReview ? getNodeById(scoreToReview.fromId) : null;
+    const runEdge = scoreNode ? connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE) : null;
+    const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+    const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
+    const sourcePromptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+    const fromData = sourcePromptNode ? getPromptDataFromNode(sourcePromptNode) : null;
+    const toData = toNode ? getPromptDataFromNode(toNode) : null;
+    const fromName = (fromData && fromData.name.trim()) || 'Prompt';
+    const toName = (toData && toData.name.trim()) || 'Prompt';
+    openPromptDiffModal(fromData, toData, fromName, toName);
   }
 
   function serializeSubsetToDiffText(content) {
@@ -1051,7 +1070,7 @@ export function buildWorkflowCanvas(root) {
     overlay.innerHTML = `
       <div class="modal-panel modal-panel--edge-detail">
         <div class="modal-header">
-          <h2 id="edge-detail-title" class="modal-title">Compare versions: ${escapeHtml(fromName)} → ${escapeHtml(toName)}</h2>
+          <h2 id="edge-detail-title" class="modal-title">${escapeHtml(fromName)} → ${escapeHtml(toName)}</h2>
           <button type="button" class="modal-close" aria-label="Close">×</button>
         </div>
         <div class="modal-body modal-body--diff">
@@ -1080,6 +1099,10 @@ export function buildWorkflowCanvas(root) {
       e.preventDefault();
       e.stopPropagation();
       openEdgeDetailModal(edge, edgeIndex);
+    } else if (edgeType === EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT) {
+      e.preventDefault();
+      e.stopPropagation();
+      openReviewToPromptEdgeDetailModal(edge);
     } else if (edgeType === EDGE_TYPE_SUBSET_TO_SUBSET) {
       e.preventDefault();
       e.stopPropagation();
@@ -1229,6 +1252,71 @@ export function buildWorkflowCanvas(root) {
         },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
         isRunNameAlreadyUsedForPrompt,
+      });
+    } else if (edgeType === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW) {
+      e.preventDefault();
+      e.stopPropagation();
+      const node = getNodeById(edge.toId);
+      if (!node || !node.classList.contains('workflow-node--prompt-review')) return;
+      const scoreEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW);
+      const scoreNode = scoreEdge ? getNodeById(scoreEdge.fromId) : null;
+      const runEdge = scoreNode ? connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE) : null;
+      const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+      const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
+      const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+      function getPayload() {
+        if (!promptNode || !runNode || !scoreNode) return null;
+        let sections = [];
+        try {
+          sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+        } catch (_) {}
+        if (!Array.isArray(sections) || sections.length === 0) return null;
+        const promptFullText = sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
+        let runResults = [];
+        let outputFields = [];
+        try {
+          runResults = JSON.parse(runNode.dataset.runResults || '[]');
+          outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+        } catch (_) {}
+        const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId);
+        return {
+          prompt_sections: sections,
+          prompt_full_text: promptFullText,
+          run_results: runResults,
+          output_fields: outputFields,
+          comparison_rows,
+        };
+      }
+      function getReviewResult() {
+        try {
+          let raw = (node.dataset.reviewResult || '').trim();
+          if (!raw && scoreNode && (scoreNode.dataset.reviewResult || '').trim()) {
+            raw = scoreNode.dataset.reviewResult || '';
+            node.dataset.reviewResult = raw;
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          }
+          if (!raw) return null;
+          return JSON.parse(raw);
+        } catch (_) { return null; }
+      }
+      function updateReviewResult(updated) {
+        try {
+          node.dataset.reviewResult = JSON.stringify(updated);
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        } catch (_) {}
+      }
+      function onExportNewPrompt(sections) {
+        document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
+          detail: { sections, afterReviewNodeId: node.dataset.nodeId },
+        }));
+      }
+      openReviewDetailModal({
+        node,
+        getPayload,
+        getReviewResult,
+        updateReviewResult,
+        onExportNewPrompt,
+        getIsReviewStreaming: () => pendingReviewNodeIds.has(node.dataset.nodeId),
       });
     }
   }
@@ -1432,16 +1520,11 @@ export function buildWorkflowCanvas(root) {
           const left = parseFloat(node.style.left) || 0;
           const top = parseFloat(node.style.top) || 0;
           const width = node.offsetWidth || 280;
-          const promptId = node.dataset.nodeId;
-          const existingRunCount = connections.filter(
-            (c) => c.fromId === promptId && c.type === EDGE_TYPE_PROMPT_TO_RUN
-          ).length;
-          const runTitle = `Run ${existingRunCount + 1}`;
-          const runNode = createRunNode({
-            left: left + width + NEW_NODE_OFFSET,
-            top,
-            title: runTitle,
-          });
+        const runNode = createRunNode({
+          left: left + width + NEW_NODE_OFFSET,
+          top,
+          title: 'Run',
+        });
           if (runNode?.dataset?.nodeId) {
             connections.push({
               fromId: node.dataset.nodeId,
@@ -1969,6 +2052,13 @@ export function buildWorkflowCanvas(root) {
     }
     node.addEventListener('pointerdown', onPointerDown);
 
+    node.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showNodeContextMenu(e.clientX, e.clientY, node);
+    });
+
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
       if (lastInteractionWasDrag) return;
@@ -2134,6 +2224,13 @@ export function buildWorkflowCanvas(root) {
     }
     node.addEventListener('pointerdown', onPointerDown);
 
+    node.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showNodeContextMenu(e.clientX, e.clientY, node);
+    });
+
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
       if (lastInteractionWasDrag) return;
@@ -2248,6 +2345,8 @@ export function buildWorkflowCanvas(root) {
     const isSampler = node.dataset.nodeType === 'sampler';
     const isSubset = node.dataset.nodeType === 'subset';
     const isRun = node.dataset.nodeType === 'run';
+    const isScore = node.dataset.nodeType === 'score';
+    const isPromptReview = node.dataset.nodeType === 'promptReview';
     let runHasResults = false;
     if (isRun) {
       try {
@@ -2255,6 +2354,18 @@ export function buildWorkflowCanvas(root) {
         runHasResults = Array.isArray(rr) && rr.length > 0;
       } catch (_) {}
       if (!runHasResults) return;
+    }
+    let scoreHasResults = false;
+    if (isScore) {
+      const runEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+      const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+      if (runNode) {
+        try {
+          const rr = JSON.parse(runNode.dataset.runResults || '[]');
+          scoreHasResults = Array.isArray(rr) && rr.length > 0;
+        } catch (_) {}
+      }
+      if (!scoreHasResults) return;
     }
 
     const menu = document.createElement('div');
@@ -2264,7 +2375,33 @@ export function buildWorkflowCanvas(root) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item workflow-node-context-item--score" data-action="save-to-workspace-and-score" role="menuitem">Score</button>
         <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem">Save results to workspace</button>
+        <button type="button" class="workflow-node-context-item" data-action="edit-run-name" role="menuitem">Edit name</button>
       `;
+    } else if (isScore) {
+      menu.innerHTML = `
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem">Review</button>
+        <button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>
+      `;
+    } else if (isPromptReview) {
+      let reviewHasAccepted = false;
+      try {
+        const raw = (node.dataset.reviewResult || '').trim();
+        if (raw) {
+          const data = JSON.parse(raw);
+          const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+          reviewHasAccepted = suggestions.some((s) => s.applied === true);
+        }
+      } catch (_) {}
+      if (reviewHasAccepted) {
+        menu.innerHTML = `
+          <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem">Export</button>
+          <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
+        `;
+      } else {
+        menu.innerHTML = `
+          <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
+        `;
+      }
     } else if (isSubset) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="add-sampler" role="menuitem">Sample</button>
@@ -2275,6 +2412,7 @@ export function buildWorkflowCanvas(root) {
     } else if (isSampler) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item" data-action="create-working-dataset" role="menuitem">Create dataset</button>
+        <button type="button" class="workflow-node-context-item" data-action="edit-sampler-name" role="menuitem">Edit name</button>
       `;
     } else {
       menu.innerHTML = `
@@ -2355,6 +2493,114 @@ export function buildWorkflowCanvas(root) {
         if (node.dataset.nodeType !== 'run') return;
         document.dispatchEvent(new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node.dataset.nodeId } }));
       },
+      'score-add-review': async () => {
+        if (node.dataset.nodeType !== 'score') return;
+        const scoreNode = node;
+        const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+          const id = n.dataset.nodeId || '';
+          const content = subsetContentByNodeId.get(id);
+          const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+          const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+          return {
+            nodeId: id,
+            name: (n.dataset.subsetName || '').trim() || 'Dataset',
+            headers: content?.headers ? content.headers.slice() : [],
+            color,
+          };
+        });
+        const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+        const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+        const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
+        const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+        function getRunResultColumns() {
+          if (!runNode) return [];
+          const cols = [];
+          cols.push({ key: '#', label: '#' });
+          let outputFields = [];
+          try {
+            const raw = runNode.dataset.runOutputFields || '[]';
+            const arr = JSON.parse(raw);
+            outputFields = Array.isArray(arr) ? arr : [];
+          } catch (_) {}
+          outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+          const wsId = (runNode.dataset.runWorkingSetId || '').trim();
+          const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
+          const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
+          cols.push({ key: '[#]', label: 'Input: #' });
+          wsHeaders.forEach((h) => {
+            const headerText = String(h ?? '').trim() || ' ';
+            cols.push({ key: `[${headerText}]`, label: `Input: ${headerText}` });
+          });
+          return cols;
+        }
+        function getGroundTruthHeaders(wsNodeId) {
+          const c = subsetContentByNodeId.get(wsNodeId || '');
+          return (c && c.headers) ? c.headers.slice() : [];
+        }
+        function getRunResults() {
+          if (!runNode) return { results: [], outputFields: [] };
+          let results = [];
+          let outputFields = [];
+          try {
+            results = JSON.parse(runNode.dataset.runResults || '[]');
+            outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+          } catch (_) {}
+          return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
+        }
+        function getRunWorkingSetContent() {
+          const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
+          const c = wsId ? subsetContentByNodeId.get(wsId) : null;
+          return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+        }
+        function getGroundTruthContent(wsNodeId) {
+          const c = subsetContentByNodeId.get(wsNodeId || '');
+          if (!c) return { headers: [], rows: [] };
+          return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
+        }
+        function getReviewPayload() {
+          if (!promptNode || !runNode || !scoreNode) return null;
+          let sections = [];
+          try {
+            sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+          } catch (_) {}
+          if (!Array.isArray(sections) || sections.length === 0) return null;
+          const promptFullText = sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
+          let runResults = [];
+          let outputFields = [];
+          try {
+            runResults = JSON.parse(runNode.dataset.runResults || '[]');
+            outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+          } catch (_) {}
+          const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId);
+          return {
+            prompt_sections: sections,
+            prompt_full_text: promptFullText,
+            run_results: runResults,
+            output_fields: outputFields,
+            comparison_rows,
+          };
+        }
+        let credentialId = (scoreNode.dataset.reviewCredentialId || '').trim();
+        if (!credentialId) {
+          try {
+            const res = await fetch(`${RUN_API_BASE}/api/credentials`);
+            if (res.ok) {
+              const list = await res.json();
+              const first = Array.isArray(list) && list[0];
+              if (first && first.id) credentialId = String(first.id).trim();
+            }
+          } catch (_) {}
+        }
+        if (!credentialId) {
+          alert('请先在 Score 详情页选择 Reviewer model，或先添加一个 API 凭证。');
+          return;
+        }
+        runReviewFromScore({
+          scoreNodeId: scoreNode.dataset.nodeId,
+          getReviewPayload,
+          credentialId,
+        });
+      },
       'add-sampler': () => {
         if (node.dataset.nodeType !== 'subset') return;
         const sourceNodeId = node.dataset.nodeId || '';
@@ -2390,15 +2636,10 @@ export function buildWorkflowCanvas(root) {
         const left = parseFloat(node.style.left) || 0;
         const top = parseFloat(node.style.top) || 0;
         const width = node.offsetWidth || 280;
-        const promptId = node.dataset.nodeId;
-        const existingRunCount = connections.filter(
-          (c) => c.fromId === promptId && c.type === EDGE_TYPE_PROMPT_TO_RUN
-        ).length;
-        const runTitle = `Run ${existingRunCount + 1}`;
         const runNode = createRunNode({
           left: left + width + NEW_NODE_OFFSET,
           top,
-          title: runTitle,
+          title: 'Run',
         });
         if (runNode?.dataset?.nodeId) {
           connections.push({
@@ -2438,6 +2679,75 @@ export function buildWorkflowCanvas(root) {
       },
       'edit-dataset-name-description': () => {
         openEditDatasetNameModal(node);
+      },
+      'edit-run-name': () => {
+        if (node.dataset.nodeType !== 'run') return;
+        openEditNodeNameModal(node, {
+          modalTitle: 'Edit Run name',
+          fieldLabel: 'Run name',
+          placeholder: 'Run',
+          getCurrentName: () => (node.dataset.runName || node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run',
+          onSave: (name) => {
+            node.dataset.runName = name;
+            const titleEl = node.querySelector('.workflow-node__title');
+            if (titleEl) titleEl.textContent = name;
+          },
+        });
+      },
+      'edit-score-name': () => {
+        if (node.dataset.nodeType !== 'score') return;
+        openEditNodeNameModal(node, {
+          modalTitle: 'Edit Scorecard name',
+          fieldLabel: 'Scorecard name',
+          placeholder: 'Score',
+          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Score',
+          onSave: (name) => {
+            const titleEl = node.querySelector('.workflow-node__title');
+            if (titleEl) titleEl.textContent = name;
+          },
+        });
+      },
+      'review-export': () => {
+        if (node.dataset.nodeType !== 'promptReview') return;
+        try {
+          const raw = (node.dataset.reviewResult || '').trim();
+          if (!raw) return;
+          const data = JSON.parse(raw);
+          const sections = Array.isArray(data.workingSections) && data.workingSections.length > 0
+            ? data.workingSections.map((s) => ({ name: s.name || '', content: s.content || '' }))
+            : (Array.isArray(data.promptSections) ? data.promptSections : []).map((s) => ({ name: s.name || '', content: s.content || '' }));
+          if (sections.length === 0) return;
+          document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
+            detail: { sections, afterReviewNodeId: node.dataset.nodeId },
+          }));
+        } catch (_) {}
+      },
+      'edit-review-name': () => {
+        if (node.dataset.nodeType !== 'promptReview') return;
+        openEditNodeNameModal(node, {
+          modalTitle: 'Edit Review name',
+          fieldLabel: 'Review name',
+          placeholder: 'Review',
+          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Review',
+          onSave: (name) => {
+            const titleEl = node.querySelector('.workflow-node__title');
+            if (titleEl) titleEl.textContent = name;
+          },
+        });
+      },
+      'edit-sampler-name': () => {
+        if (node.dataset.nodeType !== 'sampler') return;
+        openEditNodeNameModal(node, {
+          modalTitle: 'Edit Sample name',
+          fieldLabel: 'Sample name',
+          placeholder: 'Sample',
+          getCurrentName: () => (node.dataset.samplerName || node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Sample',
+          onSave: (name) => {
+            node.dataset.samplerName = name;
+            const titleEl = node.querySelector('.workflow-node__title');
+            if (titleEl) titleEl.textContent = name;
+          },
+        });
       },
       'duplicate-working-dataset': () => {
         const left = parseFloat(node.style.left) || 0;
@@ -2537,6 +2847,67 @@ export function buildWorkflowCanvas(root) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  /**
+   * Open modal to edit a node's display name only (Run, Score, Review, Sample).
+   * @param {HTMLElement} node - The workflow node
+   * @param {{ modalTitle: string, fieldLabel: string, placeholder: string, getCurrentName: () => string, onSave: (name: string) => void }} options
+   */
+  function openEditNodeNameModal(node, { modalTitle, fieldLabel, placeholder, getCurrentName, onSave }) {
+    const currentName = getCurrentName();
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay modal-overlay--edit-node-name';
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'edit-node-name-title');
+    overlay.innerHTML = `
+      <div class="modal-panel modal-panel--edit-node-name">
+        <div class="modal-header">
+          <h2 id="edit-node-name-title" class="modal-title">${escapeHtml(modalTitle)}</h2>
+          <button type="button" class="modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="dataset-meta-wrap prompt-meta-wrap">
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="edit-node-name-input">${escapeHtml(fieldLabel)}</label>
+              <input type="text" id="edit-node-name-input" class="dataset-meta-input" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(currentName)}" aria-label="${escapeHtml(fieldLabel)}" />
+            </div>
+          </div>
+          <div class="prompt-form-error prompt-modal-error edit-node-name-error" role="alert" aria-live="polite" hidden></div>
+          <div class="prompt-actions">
+            <button type="button" class="btn btn-secondary edit-node-name-cancel">Cancel</button>
+            <button type="button" class="btn btn-secondary edit-node-name-save">Save</button>
+          </div>
+        </div>
+      </div>
+    `;
+    const nameInput = overlay.querySelector('#edit-node-name-input');
+    const errorEl = overlay.querySelector('.edit-node-name-error');
+
+    function close() {
+      overlay.remove();
+      document.body.style.overflow = '';
+    }
+
+    overlay.querySelector('.modal-close').addEventListener('click', close);
+    overlay.querySelector('.edit-node-name-cancel').addEventListener('click', close);
+    overlay.querySelector('.edit-node-name-save').addEventListener('click', () => {
+      const name = (nameInput?.value ?? '').trim() || placeholder;
+      if (!name) {
+        if (errorEl) {
+          errorEl.textContent = `Please enter a ${fieldLabel.toLowerCase()}.`;
+          errorEl.hidden = false;
+        }
+        return;
+      }
+      onSave(name);
+      close();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    });
+
+    document.body.style.overflow = 'hidden';
+    document.body.appendChild(overlay);
+    nameInput?.focus();
   }
 
   /**
@@ -2902,11 +3273,7 @@ export function buildWorkflowCanvas(root) {
     if (!runNode || !runNode.classList.contains('workflow-node--run')) return;
     const left = (parseFloat(runNode.style.left) || 0) + (runNode.offsetWidth || 280) + NEW_NODE_OFFSET;
     const top = parseFloat(runNode.style.top) || 0;
-    const existingScoreCount = connections.filter(
-      (c) => c.fromId === runNodeId && c.type === EDGE_TYPE_RUN_TO_SCORE
-    ).length;
-    const scoreTitle = `Score ${existingScoreCount + 1}`;
-    const scoreNode = createScoreNode({ left, top, title: scoreTitle });
+    const scoreNode = createScoreNode({ left, top, title: 'Score' });
     if (scoreNode?.dataset?.nodeId) {
       connections.push({
         fromId: runNodeId,
@@ -2925,11 +3292,7 @@ export function buildWorkflowCanvas(root) {
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return;
     const left = (parseFloat(scoreNode.style.left) || 0) + (scoreNode.offsetWidth || 280) + NEW_NODE_OFFSET;
     const top = parseFloat(scoreNode.style.top) || 0;
-    const existingCount = connections.filter(
-      (c) => c.fromId === scoreNodeId && c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW
-    ).length;
-    const promptReviewTitle = existingCount === 0 ? 'Review' : `Review ${existingCount + 1}`;
-    const promptReviewNode = createPromptReviewNode({ left, top, title: promptReviewTitle });
+    const promptReviewNode = createPromptReviewNode({ left, top, title: 'Review' });
     if (promptReviewNode?.dataset?.nodeId) {
       connections.push({
         fromId: scoreNodeId,
@@ -2961,7 +3324,29 @@ export function buildWorkflowCanvas(root) {
     const reviewNode = getNodeById(reviewNodeId);
     if (!reviewNode || !reviewNode.classList.contains('workflow-node--prompt-review')) return;
     try {
-      reviewNode.dataset.reviewResult = typeof data === 'string' ? data : JSON.stringify(data);
+      let toWrite = typeof data === 'string' ? (() => { try { return JSON.parse(data); } catch (_) { return null; } })() : data;
+      if (!toWrite || typeof toWrite !== 'object') return;
+      const existingRaw = (reviewNode.dataset.reviewResult || '').trim();
+      if (existingRaw && Array.isArray(toWrite.suggestions)) {
+        let existing = null;
+        try {
+          existing = JSON.parse(existingRaw);
+        } catch (_) {}
+        if (existing && typeof existing === 'object' && Array.isArray(existing.suggestions)) {
+          const merged = { ...toWrite };
+          if (Array.isArray(existing.workingSections) && existing.workingSections.length > 0) {
+            merged.workingSections = existing.workingSections.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+          }
+          const existSug = existing.suggestions;
+          merged.suggestions = (toWrite.suggestions || []).map((s, i) => {
+            const prev = existSug[i];
+            if (prev && prev.applied === true) return { ...s, applied: true };
+            return { ...s };
+          });
+          toWrite = merged;
+        }
+      }
+      reviewNode.dataset.reviewResult = JSON.stringify(toWrite);
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     } catch (_) {}
   });
@@ -2978,6 +3363,7 @@ export function buildWorkflowCanvas(root) {
     }
     let outputFormat;
     let scoreNode = null;
+    let sourcePromptNode = null;
     if (refNode) {
       const scoreToReview = connections.find((c) => c.toId === refNode.dataset.nodeId && c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW);
       scoreNode = scoreToReview ? getNodeById(scoreToReview.fromId) : null;
@@ -2988,7 +3374,7 @@ export function buildWorkflowCanvas(root) {
       const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
       const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
       const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
-      const sourcePromptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+      sourcePromptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
       if (sourcePromptNode && sourcePromptNode.classList.contains('workflow-node--prompt')) {
         try {
           const fields = JSON.parse(sourcePromptNode.dataset.promptOutputFormat || '[]');
@@ -3002,7 +3388,8 @@ export function buildWorkflowCanvas(root) {
     const refTop = refNode ? (parseFloat(refNode.style.top) || 0) : 0;
     const left = refNode ? refLeft + refWidth + NEW_NODE_OFFSET : undefined;
     const top = refNode ? refTop : undefined;
-    const promptName = 'Prompt (from Review)';
+    const baseName = (sourcePromptNode && (sourcePromptNode.dataset.promptName || sourcePromptNode.querySelector('.workflow-node__title')?.textContent || '').trim()) || 'Prompt (from Review)';
+    const promptName = findUniquePromptName(baseName, true);
     const promptNote = 'Exported from Review.';
     const newNode = createPromptNode({
       name: promptName,
