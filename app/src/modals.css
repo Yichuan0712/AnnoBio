@@ -2527,6 +2527,18 @@
   cursor: default;
 }
 
+/* Design suggestions: global guidance only, no accept/revert */
+.review-detail-design-suggestions {
+  margin-bottom: 10px;
+}
+.review-detail-design-card .review-detail-suggestion-card__main {
+  cursor: default;
+}
+.review-detail-design-card:hover {
+  border-color: var(--border);
+  background: var(--bg);
+}
+
 .review-detail-suggestion-unlocatable {
   margin: 6px 0 0;
   font-size: 11px;

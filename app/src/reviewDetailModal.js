@@ -304,10 +304,20 @@ function buildReviewResultUI(overlay, options) {
   /** Working copy: always kept in sync by recomputing from originals + suggestions where .applied === true */
   let working = savedWorking || (workingFromApplied && workingFromApplied.length === originals.length ? workingFromApplied : null) || originals.map((s) => ({ name: s.name, content: s.content }));
   const allSuggestions = Array.isArray(initialSuggestions) ? initialSuggestions.slice() : [];
+  /** Design suggestions: global guidance only, no accept/revert */
+  let designSuggestions = Array.isArray(saved.design_suggestions) ? saved.design_suggestions.slice() : [];
 
   if (promptWrap) {
     promptWrap.innerHTML = renderSectionsAsPromptDetail(working);
   }
+
+  suggestionsEl.innerHTML = '';
+  const designContainer = document.createElement('div');
+  designContainer.className = 'review-detail-design-suggestions';
+  suggestionsEl.appendChild(designContainer);
+  const editContainer = document.createElement('div');
+  editContainer.className = 'review-detail-edit-suggestions';
+  suggestionsEl.appendChild(editContainer);
 
   function persistWorking() {
     if (typeof onReviewResultChange !== 'function') return;
@@ -316,6 +326,7 @@ function buildReviewResultUI(overlay, options) {
       ...saved,
       summary: saved.summary ?? '',
       suggestions: suggestionsToSave,
+      design_suggestions: designSuggestions,
       promptSections: saved.promptSections ?? promptSections,
       promptFullText: saved.promptFullText ?? promptFullText,
       workingSections: working.map((s) => ({ name: s.name, content: s.content })),
@@ -365,8 +376,20 @@ function buildReviewResultUI(overlay, options) {
 
   const statusEl = overlay.querySelector('.review-detail-stream-status');
 
+  function addOneDesignCard(d) {
+    const card = document.createElement('div');
+    card.className = 'review-detail-suggestion-card review-detail-design-card';
+    card.innerHTML = `
+      <div class="review-detail-suggestion-card__main">
+        <strong class="review-detail-suggestion-section-name">${escapeHtml((d.name || '').trim() || 'Design')}</strong>
+        <p class="review-detail-suggestion-reason">${escapeHtml((d.reason || '').trim())}</p>
+      </div>
+    `;
+    designContainer.appendChild(card);
+  }
+
   function updateAcceptButtonLabels() {
-    suggestionsEl.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
+    editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
       const btn = c.querySelector('.review-detail-accept-btn');
       if (!btn) return;
       const i = parseInt(c.dataset.suggestionIndex, 10);
@@ -465,7 +488,7 @@ function buildReviewResultUI(overlay, options) {
         if (i !== -1) {
           allSuggestions.splice(i, 1);
           card.remove();
-          suggestionsEl.querySelectorAll('.review-detail-suggestion-card').forEach((c, k) => {
+          editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c, k) => {
             c.dataset.suggestionIndex = String(k);
           });
           saved.suggestions = allSuggestions.slice();
@@ -476,12 +499,23 @@ function buildReviewResultUI(overlay, options) {
       });
     }
 
-    suggestionsEl.appendChild(card);
+    editContainer.appendChild(card);
   }
 
-  suggestionsEl.innerHTML = '';
+  designSuggestions.forEach((d) => addOneDesignCard(d));
+
   if (streamRef) {
     if (statusEl) statusEl.textContent = 'Generating suggestions…';
+    streamRef.appendDesignSuggestions = (arr) => {
+      if (!Array.isArray(arr)) return;
+      designSuggestions = arr.slice();
+      designContainer.innerHTML = '';
+      designSuggestions.forEach((d) => addOneDesignCard(d));
+      saved.design_suggestions = designSuggestions;
+      if (typeof onReviewResultChange === 'function') {
+        onReviewResultChange({ ...saved, design_suggestions: designSuggestions });
+      }
+    };
     streamRef.appendSuggestions = (batch) => {
       if (statusEl) statusEl.textContent = 'Generating suggestions…';
       batch.forEach((sug) => {
@@ -496,28 +530,31 @@ function buildReviewResultUI(overlay, options) {
     };
     streamRef.streamDone = () => {
       if (statusEl) statusEl.textContent = 'Suggestions complete.';
-      if (allSuggestions.length === 0) {
-        suggestionsEl.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
+      if (allSuggestions.length === 0 && designSuggestions.length === 0) {
+        editContainer.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
       }
       saved.suggestions = allSuggestions.slice();
+      saved.design_suggestions = designSuggestions;
       if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({ ...saved, suggestions: saved.suggestions });
+        onReviewResultChange({ ...saved, suggestions: saved.suggestions, design_suggestions: designSuggestions });
       }
     };
     streamRef.streamError = () => {
       if (statusEl) statusEl.textContent = 'Failed.';
-      if (allSuggestions.length === 0) {
-        suggestionsEl.innerHTML = '<p class="review-detail-placeholder">Request failed.</p>';
+      if (allSuggestions.length === 0 && designSuggestions.length === 0) {
+        editContainer.innerHTML = '<p class="review-detail-placeholder">Request failed.</p>';
       }
     };
   } else {
     (initialSuggestions || []).forEach((sug, sugIdx) => addOneSuggestionCard(sug, sugIdx));
     if (!initialSuggestions || initialSuggestions.length === 0) {
-      suggestionsEl.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
+      if (designSuggestions.length === 0) {
+        editContainer.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
+      }
     }
   }
 
-  if (suggestionsFooterEl && allSuggestions.length > 0) {
+  if (suggestionsFooterEl && (allSuggestions.length > 0 || designSuggestions.length > 0)) {
     const isComplete = saved.streamComplete === true;
     const isStreaming = !isComplete && typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
     let statusClass = 'review-detail-status-note--incomplete';

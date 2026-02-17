@@ -406,6 +406,14 @@ export function buildWorkflowCanvas(root) {
     bar.style.width = pct + '%';
     bar.setAttribute('aria-valuenow', String(pct));
   }
+  function setReviewNodeProgress(node, percent) {
+    const bar = node?.querySelector('.workflow-node__review-progress');
+    if (!bar) return;
+    const pct = Math.min(100, Math.max(0, Math.round(percent)));
+    bar.style.width = pct + '%';
+    bar.setAttribute('aria-valuenow', String(pct));
+    if (node) node.dataset.reviewProgress = String(pct);
+  }
 
   setInterval(async () => {
     if (pendingRuns.size === 0) return;
@@ -2174,6 +2182,7 @@ export function buildWorkflowCanvas(root) {
         <span class="workflow-node__title">${escapeHtml(promptReviewTitle)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
+      <div class="workflow-node__review-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
     nodesLayer.appendChild(node);
 
@@ -3317,6 +3326,16 @@ export function buildWorkflowCanvas(root) {
     if (id) pendingReviewNodeIds.delete(id);
   });
 
+  document.addEventListener('workflow:review-progress', (e) => {
+    const reviewNodeId = e.detail?.reviewNodeId;
+    const percent = e.detail?.percent;
+    if (!reviewNodeId || percent == null) return;
+    const reviewNode = getNodeById(reviewNodeId);
+    if (!reviewNode || !reviewNode.classList.contains('workflow-node--prompt-review')) return;
+    setReviewNodeProgress(reviewNode, percent);
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  });
+
   document.addEventListener('workflow:save-review-result', (e) => {
     const reviewNodeId = e.detail?.reviewNodeId;
     const data = e.detail?.data;
@@ -3347,6 +3366,9 @@ export function buildWorkflowCanvas(root) {
         }
       }
       reviewNode.dataset.reviewResult = JSON.stringify(toWrite);
+      if (toWrite.reviewProgress != null) {
+        setReviewNodeProgress(reviewNode, toWrite.reviewProgress);
+      }
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     } catch (_) {}
   });
@@ -3509,7 +3531,9 @@ export function buildWorkflowCanvas(root) {
       if (node.classList.contains('workflow-node--prompt-review')) {
         const promptReviewName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Review';
         const reviewResult = (node.dataset.reviewResult || '').trim();
-        return {
+        const bar = node.querySelector('.workflow-node__review-progress');
+        const pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : (node.dataset.reviewProgress != null ? parseInt(node.dataset.reviewProgress, 10) : 0);
+        const out = {
           type: 'promptReview',
           nodeId,
           left,
@@ -3517,6 +3541,8 @@ export function buildWorkflowCanvas(root) {
           promptReviewName,
           reviewResult: reviewResult || undefined,
         };
+        if (pct > 0) out.reviewProgress = pct;
+        return out;
       }
       let sections = [];
       let outputFormat = [];
@@ -3634,6 +3660,9 @@ export function buildWorkflowCanvas(root) {
         });
         if (n.reviewResult && typeof n.reviewResult === 'string') {
           promptReviewNode.dataset.reviewResult = n.reviewResult;
+        }
+        if (n.reviewProgress != null && n.reviewProgress >= 0 && n.reviewProgress <= 100) {
+          setReviewNodeProgress(promptReviewNode, n.reviewProgress);
         }
         createdNodes.push(promptReviewNode);
       } else {

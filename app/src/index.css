@@ -1,14 +1,14 @@
-/* Base: theme variables, layout — light mode: 柔和对比、层次清晰 */
+/* Base: theme variables, layout — light mode: 略深背景减轻刺眼 */
 :root {
-  --bg: #f0f2f5;
-  --bg-bar: #fafbfc;
+  --bg: #e2e6ea;
+  --bg-bar: #e8eaee;
   --bg-canvas: #bcc2cb;
   --grid-color: rgba(0, 0, 0, 0.08);
   --text: #1a1d21;
   --text-muted: #5c636a;
-  --border: #c5c9cf;
+  --border: #c0c4c9;
   --node-border: #8b9199;
-  --hover: #e4e7eb;
+  --hover: #d2d6db;
   --shadow: rgba(0, 0, 0, 0.1);
   --diff-removed-bg: rgba(200, 60, 60, 0.22);
   --diff-removed-text: #b91c1c;

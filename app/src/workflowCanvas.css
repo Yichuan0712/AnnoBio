@@ -236,6 +236,18 @@
   background: var(--text-muted);
 }
 
+/* Review progress: 与 Run 一致，底部进度条，进度会保存 */
+.workflow-node__review-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 5px;
+  width: 0;
+  border-radius: 0;
+  transition: width 0.3s ease-out;
+  background: var(--text-muted);
+}
+
 .workflow-node__header {
   padding: 8px 12px;
   background: var(--hover);

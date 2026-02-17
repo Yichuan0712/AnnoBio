@@ -107,9 +107,16 @@ class ReviewSuggestion(BaseModel):
     reason: str = Field(..., description="Why this change is suggested")
 
 
+class DesignSuggestion(BaseModel):
+    """Global design guidance only; not sentence-level edits. Shown without accept/revert."""
+    name: str = Field(..., description="Short title (e.g. 'Consider splitting sections')")
+    reason: str = Field(..., description="One or two sentences of design guidance")
+
+
 class ReviewResult(BaseModel):
     summary: str = Field(..., description="Brief overall analysis")
     suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete edit suggestions")
+    design_suggestions: list[DesignSuggestion] = Field(default_factory=list, description="Global design guidance only; no accept/revert in UI")
 
 
 # Two-step review: step1 = plan (summary + change focuses), step2 = concrete suggestions per focus
@@ -126,6 +133,11 @@ class ReviewPlan(BaseModel):
 
 class FocusSuggestions(BaseModel):
     suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete suggestions for this focus only")
+
+
+class DesignReviewResult(BaseModel):
+    """Step 0: design check. Only suggest when user clearly has design issues (very loose)."""
+    suggestions: list[DesignSuggestion] = Field(default_factory=list, description="0–3 design guidance items; empty if design is fine")
 
 
 def _sanitize_field_name(key: str) -> str:
@@ -474,7 +486,32 @@ def get_run_result(run_id: str):
     return {"status": "done", "results": job["results"], "output_fields": job["output_fields"]}
 
 
-# ---------- Review: two-step (plan then per-focus suggestions) for better quality ----------
+# ---------- Review: step0 design check (optional), then step1 plan + step2 per-focus suggestions ----------
+def _build_review_design_prompt(body: ReviewRequest) -> str:
+    """Step 0: Check section layout and output schema. Only suggest when design is clearly poor (very loose)."""
+    lines = [
+        "You are reviewing how a user structured their prompt: sections (names + content) and output schema (field keys).",
+        "",
+        "## Task",
+        "Only if the user clearly has design problems (e.g. no clear section structure, output schema obviously mismatched to the task, missing obvious inputs or outputs), output 0–3 short design suggestions. Each: name (short title) and reason (1–2 sentences of guidance). If the design is reasonable or only has minor issues, output an empty suggestions list.",
+        "Be very conservative: only suggest when the user would clearly benefit from design guidance.",
+        "",
+        "## Sections",
+    ]
+    for i, sec in enumerate(body.prompt_sections or []):
+        name = (sec.get("name") or "").strip() or "(unnamed)"
+        content = (sec.get("content") or "").strip() or "(empty)"
+        lines.append(f"--- {i}: {name} ---")
+        lines.append(content[:800] + ("..." if len(content) > 800 else ""))
+        lines.append("")
+    lines.append("## Output schema (field keys)")
+    keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
+    lines.append(", ".join(keys) if keys else "(none)")
+    lines.append("")
+    lines.append('Respond with JSON: {"suggestions": [{"name": "short title", "reason": "1-2 sentences"}, ...]} or {"suggestions": []}.')
+    return "\n".join(lines)
+
+
 def _build_review_step1_prompt(body: ReviewRequest) -> str:
     """Step1: Ask for summary + list of change focuses (no exact sentences yet)."""
     lines = [
@@ -501,6 +538,18 @@ def _build_review_step1_prompt(body: ReviewRequest) -> str:
         if row.comment:
             lines.append(f"  User comment: {row.comment}")
         lines.append("")
+    # Constraint: do not suggest changing user-defined output field keys or section names (from existing payload)
+    schema_keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
+    section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
+    if schema_keys or section_names:
+        lines.append("## Constraints (mandatory)")
+        lines.append("Do NOT suggest any change that would rename, remove, or alter the following. They are user-defined and must stay exactly as-is:")
+        if schema_keys:
+            lines.append("- Output schema field keys (keep these exact strings in the prompt): " + ", ".join(repr(k) for k in schema_keys))
+        if section_names:
+            lines.append("- Input/section names (do not suggest renaming sections or changing these names in the text): " + ", ".join(repr(n) for n in section_names))
+        lines.append("Do not add focuses that would modify output field keys or input/section names. You may still suggest clarifications or examples that keep these names unchanged.")
+        lines.append("")
     lines.append(
         "Respond with JSON: {\"summary\": \"...\", \"focuses\": [{\"section_index\": 0, \"name\": \"short title\", \"focus_description\": \"one sentence what to change\"}, ...]}."
     )
@@ -519,6 +568,8 @@ def _build_review_step2_prompt(
     sec = secs[idx]
     name = (sec.get("name") or "").strip() or "(unnamed)"
     content = (sec.get("content") or "").strip() or "(empty)"
+    schema_keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
+    section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
     lines = [
         "You are improving a prompt section. Output concrete edit suggestions: exact sentence to replace (old_sentence) and replacement (new_sentence).",
         "",
@@ -537,6 +588,15 @@ def _build_review_step2_prompt(
         "",
         "## Comparison context (why this change helps)",
     ]
+    if schema_keys or section_names:
+        lines.append("")
+        lines.append("## Constraints (mandatory)")
+        lines.append("Do NOT suggest any edit that would rename, remove, or alter these user-defined names (they must stay exactly as-is in new_sentence):")
+        if schema_keys:
+            lines.append("- Output schema field keys: " + ", ".join(repr(k) for k in schema_keys))
+        if section_names:
+            lines.append("- Input/section names: " + ", ".join(repr(n) for n in section_names))
+        lines.append("")
     for row in (body.comparison_rows or [])[:15]:
         status = "matched" if row.matched else "NOT MATCHED"
         lines.append(f"Row {row.row_index} [{status}] Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
@@ -550,7 +610,7 @@ def _build_review_step2_prompt(
 
 @app.post("/api/review/analyze", response_model=ReviewResult)
 def review_analyze(body: ReviewRequest):
-    """Two-step analysis: (1) plan summary + change focuses, (2) per-focus concrete old_sentence/new_sentence. Same API contract."""
+    """Step 0: design check (optional). Step 1: plan. Step 2: per-focus concrete suggestions."""
     items = _load_credentials()
     cred = None
     for item in items:
@@ -567,6 +627,19 @@ def review_analyze(body: ReviewRequest):
         raise HTTPException(status_code=400, detail="Missing API key")
     provider = cred.get("provider", "openai")
     try:
+        # Step 0: design check (loose; only when clearly needed)
+        design_prompt = _build_review_design_prompt(body)
+        design_result = llm_run_structured(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            prompt=design_prompt,
+            response_model=DesignReviewResult,
+            max_tokens=2048,
+        )
+        design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
+        design_suggestions = list(design_review.suggestions or [])
+
         # Step 1: get summary + list of change focuses
         step1_prompt = _build_review_step1_prompt(body)
         plan_result = llm_run_structured(
@@ -579,7 +652,7 @@ def review_analyze(body: ReviewRequest):
         )
         plan = ReviewPlan(**(plan_result if isinstance(plan_result, dict) else plan_result.model_dump()))
         if not plan.focuses:
-            return ReviewResult(summary=plan.summary, suggestions=[])
+            return ReviewResult(summary=plan.summary, suggestions=[], design_suggestions=design_suggestions)
 
         # Step 2: for each focus, get exact suggestions (old_sentence / new_sentence)
         all_suggestions: list[ReviewSuggestion] = []
@@ -603,7 +676,7 @@ def review_analyze(body: ReviewRequest):
                     s_dict["name"] = focus.name or focus.focus_description[:50]
                 all_suggestions.append(ReviewSuggestion(**s_dict))
 
-        return ReviewResult(summary=plan.summary, suggestions=all_suggestions)
+        return ReviewResult(summary=plan.summary, suggestions=all_suggestions, design_suggestions=design_suggestions)
     except Exception as e:
         _safe_print(_HL + "[Review] Error: " + _R + str(e))
         raise HTTPException(status_code=400, detail=str(e))
@@ -630,6 +703,20 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         return
     provider = cred.get("provider", "openai")
     try:
+        # Step 0: design check
+        design_prompt = _build_review_design_prompt(body)
+        design_result = llm_run_structured(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            prompt=design_prompt,
+            response_model=DesignReviewResult,
+            max_tokens=2048,
+        )
+        design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
+        design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in (design_review.suggestions or [])]
+        yield (json.dumps({"type": "design", "design_suggestions": design_list}, ensure_ascii=False) + "\n").encode("utf-8")
+
         step1_prompt = _build_review_step1_prompt(body)
         plan_result = llm_run_structured(
             provider=provider,
