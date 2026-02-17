@@ -16,6 +16,7 @@
   --diff-added-text: #15803d;
   --primary-btn-bg: rgba(37, 99, 235, 0.22);
   --primary-btn-text: #2563eb;
+  --control-radius: 3px;
 }
 
 html.dark {
@@ -35,6 +36,7 @@ html.dark {
   --diff-added-text: #86efac;
   --primary-btn-bg: rgba(147, 197, 253, 0.32);
   --primary-btn-text: #93c5fd;
+  --control-radius: 3px;
 }
 
 body {

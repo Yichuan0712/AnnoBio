@@ -533,7 +533,7 @@
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--control-radius, 3px);
   font-family: inherit;
 }
 
@@ -544,7 +544,7 @@
 .dataset-meta-textarea {
   resize: vertical;
   min-height: 60px;
-  border-radius: 0;
+  border-radius: var(--control-radius, 3px);
   box-sizing: border-box;
 }
 
@@ -1379,7 +1379,7 @@
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--control-radius, 3px);
   font-family: inherit;
   box-sizing: border-box;
 }
@@ -1390,7 +1390,7 @@
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--control-radius, 3px);
   font-family: inherit;
   resize: vertical;
   min-height: 120px;
@@ -3779,7 +3779,7 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  padding: 0 20px 20px;
+  padding: 0 20px 12px;
 }
 
 .modal-panel--working-dataset-detail .dataset-detail-preview-side .prompt-preview-title {
@@ -3820,13 +3820,13 @@
   padding-right: 0;
 }
 
-/* 底部四按钮：与 Run 一致，右无内边距使按钮与横线右对齐 */
+/* 底部四按钮：与 Run/Score 一致，底边距约 16px（footer 4px + scroll 12px） */
 .dataset-detail-card .dataset-detail-footer.working-dataset-detail-footer,
 .working-dataset-detail-footer {
   flex-shrink: 0;
   padding-left: 12px;
   padding-right: 0;
-  padding-bottom: 8px;
+  padding-bottom: 4px;
   margin-top: 4px;
   padding-top: 8px;
 }
@@ -5736,6 +5736,7 @@ body.wd-row-resizing {
   font-family: inherit;
   cursor: pointer;
   border: 1px solid var(--border);
+  border-radius: var(--control-radius, 3px);
 }
 
 .btn-primary {
