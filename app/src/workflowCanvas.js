@@ -1218,6 +1218,8 @@ export function buildWorkflowCanvas(root) {
         });
         const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
         const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+        const promptEdgeForRun = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
+        const promptNodeForScore = promptEdgeForRun ? getNodeById(promptEdgeForRun.fromId) : null;
         function getRunResultColumns() {
           if (!runNode) return [];
           const cols = [];
@@ -1228,6 +1230,13 @@ export function buildWorkflowCanvas(root) {
             const arr = JSON.parse(raw);
             outputFields = Array.isArray(arr) ? arr : [];
           } catch (_) {}
+          if (outputFields.length === 0 && promptNodeForScore) {
+            try {
+              const rawOf = promptNodeForScore.dataset.promptOutputFormat || '[]';
+              const ofArr = JSON.parse(rawOf);
+              outputFields = Array.isArray(ofArr) ? ofArr.map((o) => ({ key: o.key || '', display: (o.display || o.key || '').trim() || o.key })) : [];
+            } catch (_) {}
+          }
           outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
           const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
@@ -1263,7 +1272,16 @@ export function buildWorkflowCanvas(root) {
           if (!c) return { headers: [], rows: [] };
           return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
         }
-        openScoreDetailModal({ node: scoreNode, getWorkingSets: () => workingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent });
+        openScoreDetailModal({
+          node: scoreNode,
+          getWorkingSets: () => workingSets,
+          getRunResultColumns,
+          getGroundTruthHeaders,
+          getRunResults,
+          getRunWorkingSetContent,
+          getGroundTruthContent,
+          getScoreMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).map((n) => n.dataset.scoreMapping || '[]'),
+        });
       }
     } else if (edgeType === EDGE_TYPE_PROMPT_TO_RUN) {
       e.preventDefault();
@@ -2201,6 +2219,8 @@ export function buildWorkflowCanvas(root) {
       });
       const runEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
       const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+      const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
+      const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
       function getRunResultColumns() {
         if (!runNode) return [];
         const cols = [];
@@ -2211,6 +2231,13 @@ export function buildWorkflowCanvas(root) {
           const arr = JSON.parse(raw);
           outputFields = Array.isArray(arr) ? arr : [];
         } catch (_) {}
+        if (outputFields.length === 0 && promptNode) {
+          try {
+            const rawOf = promptNode.dataset.promptOutputFormat || '[]';
+            const ofArr = JSON.parse(rawOf);
+            outputFields = Array.isArray(ofArr) ? ofArr.map((o) => ({ key: o.key || '', display: (o.display || o.key || '').trim() || o.key })) : [];
+          } catch (_) {}
+        }
         outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
         const wsId = (runNode.dataset.runWorkingSetId || '').trim();
         const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
@@ -2246,8 +2273,6 @@ export function buildWorkflowCanvas(root) {
         if (!c) return { headers: [], rows: [] };
         return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
       }
-      const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
-      const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
       function getReviewPayload() {
         if (!promptNode || !runNode || !node) return null;
         let sections = [];
@@ -2288,7 +2313,17 @@ export function buildWorkflowCanvas(root) {
           comparison_rows,
         };
       }
-      openScoreDetailModal({ node, getWorkingSets: () => workingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload });
+      openScoreDetailModal({
+        node,
+        getWorkingSets: () => workingSets,
+        getRunResultColumns,
+        getGroundTruthHeaders,
+        getRunResults,
+        getRunWorkingSetContent,
+        getGroundTruthContent,
+        getReviewPayload,
+        getScoreMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).map((n) => n.dataset.scoreMapping || '[]'),
+      });
     });
 
     return node;

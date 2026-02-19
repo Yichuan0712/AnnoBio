@@ -602,6 +602,13 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     }
     inputFields.forEach((inputName) => {
       let col = inputToColumn[inputName] || '';
+      if (col && !headerSet.has(col)) {
+        col = '';
+        inputToColumn[inputName] = '';
+        if (node) {
+          try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
+        }
+      }
       if (!col && inputNameToColumnMemory[inputName] && headerSet.has(inputNameToColumnMemory[inputName])) {
         col = inputNameToColumnMemory[inputName];
         inputToColumn[inputName] = col;
@@ -639,7 +646,6 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       sel.addEventListener('change', () => {
         const v = sel.value.trim() || '';
         inputToColumn[inputName] = v;
-        if (v) inputNameToColumnMemory[inputName] = v;
         if (node) {
           try {
             node.dataset.runInputToColumn = JSON.stringify(inputToColumn);

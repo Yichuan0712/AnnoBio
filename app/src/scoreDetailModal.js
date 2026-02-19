@@ -23,6 +23,9 @@ const MATCH_FLAGS = [
 
 const DEFAULT_MATCH_FLAGS = { ignoreCase: false, ignoreSymbols: false, ignoreWhitespace: false };
 
+/** Session-only: (outputKey + '\t' + gtColumn) -> { matchType, matchFlags }. Not persisted. */
+const ruleEditorMemory = {};
+
 function getMatchFlags(rule) {
   const f = rule && rule.matchFlags;
   return {
@@ -232,7 +235,7 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
   }
 }
 
-export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview }) {
+export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas }) {
   getWorkingSets = getWorkingSets || (() => []);
   getRunResultColumns = getRunResultColumns || (() => []);
   getGroundTruthHeaders = getGroundTruthHeaders || (() => []);
@@ -369,6 +372,23 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   /** Get flat list of rules for backward-compat APIs (e.g. results table columns). */
   function getRulesFlat() {
     return collectRulesFlat(getRoot()).map((x) => x.rule);
+  }
+
+  if (getScoreMappingsFromCanvas) {
+    (getScoreMappingsFromCanvas() || []).forEach((raw) => {
+      try {
+        const root = parseScoreRoot(raw);
+        const rules = collectRulesFlat(root).map((x) => x.rule);
+        rules.forEach((rule) => {
+          const outputKey = (rule.outputKey || '').trim();
+          const flags = getMatchFlags(rule);
+          (rule.gtColumns || []).forEach((gtCol) => {
+            const g = String(gtCol || '').trim();
+            if (outputKey && g) ruleEditorMemory[outputKey + '\t' + g] = { matchType: rule.matchType || 'exact', matchFlags: { ...flags } };
+          });
+        });
+      } catch (_) {}
+    });
   }
 
   /** Stringify value for strict comparison. */
@@ -545,6 +565,22 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return group;
   }
 
+  /** Remove rules whose gtColumns include any column not in the selected GT headers. Returns new root. */
+  function filterRootByGtHeaders(root, gtSet) {
+    if (!root) return null;
+    if (root.type === 'rule') {
+      const cols = root.gtColumns || [];
+      const allIn = cols.length > 0 && cols.every((c) => gtSet.has(String(c || '').trim()));
+      return allIn ? root : null;
+    }
+    if (root.type === 'group' && Array.isArray(root.children)) {
+      const filtered = root.children.map((ch) => filterRootByGtHeaders(ch, gtSet)).filter((x) => x != null);
+      const ops = (root.ops || []).slice(0, Math.max(0, filtered.length - 1));
+      return { type: 'group', ops, children: filtered };
+    }
+    return null;
+  }
+
   /** Insert child at path (path points to parent group). Returns new root. */
   function insertChildAtPath(root, path, newChild, index) {
     if (path.length === 0) {
@@ -692,10 +728,31 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const root = getRoot();
     const defaultRule = { type: 'rule', outputKey: '', gtColumns: [], matchType: 'exact', matchFlags: { ...DEFAULT_MATCH_FLAGS } };
     const rule = isEdit ? getNodeAtPath(root, editPath) : defaultRule;
-    const ruleData = rule && rule.type === 'rule' ? rule : defaultRule;
-    const flags = getMatchFlags(ruleData);
+    let ruleData = rule && rule.type === 'rule' ? rule : defaultRule;
     const runColumns = getRunResultColumns();
     const gtHeaders = getGroundTruthHeaders(selectedNodeId);
+    if (!isEdit && (!(ruleData.outputKey || '').trim() || !(ruleData.gtColumns || []).length)) {
+      const runKeys = new Set((runColumns || []).map((c) => (c.key || '').trim()).filter(Boolean));
+      const gtSet = new Set(gtHeaders || []);
+      for (const key of Object.keys(ruleEditorMemory)) {
+        const idx = key.indexOf('\t');
+        if (idx <= 0) continue;
+        const outputKey = key.slice(0, idx);
+        const gtColumn = key.slice(idx + 1);
+        if (runKeys.has(outputKey) && gtSet.has(gtColumn)) {
+          const mem = ruleEditorMemory[key];
+          ruleData = {
+            type: 'rule',
+            outputKey,
+            gtColumns: [gtColumn],
+            matchType: (mem && mem.matchType) || 'exact',
+            matchFlags: (mem && mem.matchFlags && typeof mem.matchFlags === 'object') ? { ...DEFAULT_MATCH_FLAGS, ...mem.matchFlags } : { ...DEFAULT_MATCH_FLAGS },
+          };
+          break;
+        }
+      }
+    }
+    const flags = getMatchFlags(ruleData);
     const resultSelectOpts = runColumns.map((c) => {
       const label = (c.label || '').trim() || c.key || '—';
       const key = c.key || '';
@@ -1496,6 +1553,45 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (reviewNodeId) await runReviewStream({ reviewNodeId, payload, credentialId });
   });
 
+  /** When a GT is selected, add rules from ruleEditorMemory (run column + GT column match). Returns true if any were added. */
+  function applyRulesFromMemory() {
+    if (!selectedNodeId) return false;
+    const runColumns = getRunResultColumns();
+    const gtHeaders = getGroundTruthHeaders(selectedNodeId);
+    const runKeys = new Set((runColumns || []).map((c) => (c.key || '').trim()).filter(Boolean));
+    const gtSet = new Set(gtHeaders || []);
+    const existingSet = new Set();
+    collectRulesFlat(getRoot()).forEach(({ rule: r }) => {
+      const ok = (r.outputKey || '').trim();
+      (r.gtColumns || []).forEach((gc) => {
+        const g = String(gc || '').trim();
+        if (ok && g) existingSet.add(ok + '\t' + g);
+      });
+    });
+    let root = getRoot();
+    let added = false;
+    for (const key of Object.keys(ruleEditorMemory)) {
+      const idx = key.indexOf('\t');
+      if (idx <= 0) continue;
+      const outputKey = key.slice(0, idx);
+      const gtColumn = key.slice(idx + 1);
+      if (!runKeys.has(outputKey) || !gtSet.has(gtColumn) || existingSet.has(key)) continue;
+      const mem = ruleEditorMemory[key];
+      const newRule = {
+        type: 'rule',
+        outputKey,
+        gtColumns: [gtColumn],
+        matchType: (mem && mem.matchType) || 'exact',
+        matchFlags: (mem && mem.matchFlags && typeof mem.matchFlags === 'object') ? { ...DEFAULT_MATCH_FLAGS, ...mem.matchFlags } : { ...DEFAULT_MATCH_FLAGS },
+      };
+      root = insertChildAtPath(root, [], newRule, (root.children || []).length);
+      added = true;
+      existingSet.add(key);
+    }
+    if (added) setRoot(root);
+    return added;
+  }
+
   function selectGroundTruth(id) {
     selectedNodeId = id || '';
     if (node) {
@@ -1506,6 +1602,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     updateScoreNodeBorder();
     closeDropdown();
     dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.nodeId === selectedNodeId ? 'true' : 'false'));
+    if (selectedNodeId) {
+      const gtSet = new Set(getGroundTruthHeaders(selectedNodeId) || []);
+      let root = getRoot();
+      const filtered = filterRootByGtHeaders(root, gtSet);
+      if (filtered && JSON.stringify(filtered) !== JSON.stringify(root)) {
+        setRoot(filtered);
+        root = getRoot();
+      }
+      applyRulesFromMemory();
+    }
     renderRules();
   }
 
@@ -1569,6 +1675,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   loadReviewCredentials();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
+  if (selectedNodeId) {
+    const gtSet = new Set(getGroundTruthHeaders(selectedNodeId) || []);
+    let root = getRoot();
+    const filtered = filterRootByGtHeaders(root, gtSet);
+    if (filtered && JSON.stringify(filtered) !== JSON.stringify(root)) {
+      setRoot(filtered);
+    }
+    applyRulesFromMemory();
+    renderRules();
+  }
   if (autoTriggerReview && addPromptReviewBtn) {
     setTimeout(() => {
       if (addPromptReviewBtn.disabled) return;
