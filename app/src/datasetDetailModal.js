@@ -16,6 +16,15 @@ function escapeHtml(str) {
 }
 
 export function openDatasetDetailModal({ node, getContent, saveContent }) {
+  const nodeId = (node?.dataset?.nodeId ?? '').trim();
+  const existing = nodeId
+    ? document.querySelector(`.modal-overlay[data-modal-half="true"][data-working-dataset-node-id="${CSS.escape(nodeId)}"]`)
+    : null;
+  if (existing) {
+    document.body.appendChild(existing);
+    return;
+  }
+
   const name = (node?.dataset?.subsetName ?? '').trim() || 'Dataset';
 
   let headers = [];
@@ -45,6 +54,8 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'working-dataset-detail-title');
+  overlay.dataset.modalHalf = 'true';
+  if (nodeId) overlay.dataset.workingDatasetNodeId = nodeId;
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--working-dataset-detail modal-panel--prompt-detail">
       <div class="modal-header">
@@ -224,7 +235,10 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       inp.dataset.colIndex = String(colIdx);
       inp.addEventListener('change', () => {
         const idx = parseInt(inp.dataset.colIndex, 10);
-        if (Number.isFinite(idx) && idx >= 0 && idx < headers.length) headers[idx] = inp.value.trim() || '';
+        if (Number.isFinite(idx) && idx >= 0 && idx < headers.length) {
+          headers[idx] = inp.value.trim() || '';
+          persistContent();
+        }
       });
       inp.addEventListener('click', (e) => e.stopPropagation());
       th.appendChild(inp);
@@ -323,6 +337,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
           if (Number.isFinite(ri) && Number.isFinite(ci) && rows[ri]) {
             while (rows[ri].length <= ci) rows[ri].push('');
             rows[ri][ci] = textarea.value;
+            persistContent();
           }
         });
         td.appendChild(textarea);
@@ -396,6 +411,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     rows.push(Array(headers.length).fill(''));
     rowHeights.push(undefined);
     render();
+    persistContent();
   });
 
   addColBtn.addEventListener('click', () => {
@@ -403,6 +419,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     columnWidths.push(140);
     rows.forEach((r) => r.push(''));
     render();
+    persistContent();
   });
 
   deleteRowBtn.addEventListener('click', () => {
@@ -413,6 +430,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     const totalPages = Math.max(1, Math.ceil(rows.length / rowsPerPage));
     if (currentPage > totalPages) currentPage = totalPages;
     render();
+    persistContent();
   });
 
   deleteColBtn.addEventListener('click', () => {
@@ -422,6 +440,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     rows.forEach((r) => r.splice(selectedColIndex, 1));
     selectedColIndex = -1;
     render();
+    persistContent();
   });
 
   if (sampleBtn) {
@@ -473,9 +492,25 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     }
   });
 
+  function persistContent() {
+    saveContent({ headers: headers.slice(), rows: rows.map((r) => r.slice()) });
+  }
+
   function close() {
+    persistContent();
     overlay.remove();
     document.body.style.overflow = '';
+  }
+
+  // 半屏默认右边；若右边已有半屏则左边，若左边已有则右边
+  const existingLeft = document.querySelector('.modal-overlay[data-modal-half="true"].modal-overlay--half-left');
+  const existingRight = document.querySelector('.modal-overlay[data-modal-half="true"].modal-overlay--half-right');
+  if (existingRight) {
+    overlay.classList.add('modal-overlay--half-left');
+  } else if (existingLeft) {
+    overlay.classList.add('modal-overlay--half-right');
+  } else {
+    overlay.classList.add('modal-overlay--half-right');
   }
 
   document.body.style.overflow = 'hidden';
