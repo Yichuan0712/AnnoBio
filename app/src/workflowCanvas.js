@@ -1190,6 +1190,8 @@ export function buildWorkflowCanvas(root) {
       e.stopPropagation();
       const subsetNode = getNodeById(edge.toId);
       if (subsetNode && subsetNode.classList.contains('workflow-node--subset')) {
+        const colorIndex = subsetNode.dataset.subsetColorIndex != null ? parseInt(subsetNode.dataset.subsetColorIndex, 10) : 0;
+        const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
         openDatasetDetailModal({
           node: subsetNode,
           getContent: () => subsetContentByNodeId.get(subsetNode.dataset.nodeId) || { headers: [], rows: [] },
@@ -1197,6 +1199,7 @@ export function buildWorkflowCanvas(root) {
             subsetContentByNodeId.set(subsetNode.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           },
+          color,
         });
       }
     } else if (edgeType === EDGE_TYPE_DATASET_TO_SAMPLER) {
@@ -1720,12 +1723,13 @@ export function buildWorkflowCanvas(root) {
     return node;
   }
 
+  // 高对比度调色板：相邻色相差异大，便于区分不同数据集
   const DATASET_BORDER_COLORS = [
-    '#2563eb', '#16a34a', '#ca8a04', '#c026d3', '#0891b2', '#dc2626', '#65a30d', '#7c3aed',
-    '#0d9488', '#ea580c', '#4f46e5', '#059669', '#be185d', '#0369a1', '#b45309', '#7e22ce',
-    '#0e7490', '#c2410c', '#6366f1', '#047857', '#9d174d', '#0284c7', '#a16207', '#6b21a8',
-    '#0f766e', '#c9340a', '#4c1d95', '#0d9668', '#831843', '#854d0e', '#581c87', '#115e59',
-    '#b91c1c', '#3730a3', '#10b981', '#9f1239', '#0c4a6e', '#713f12', '#1e40af', '#15803d',
+    '#2563eb', '#dc2626', '#16a34a', '#c026d3', '#ea580c', '#0891b2', '#ca8a04', '#7c3aed',
+    '#0d9488', '#b91c1c', '#65a30d', '#a855f7', '#f59e0b', '#06b6d4', '#84cc16', '#6366f1',
+    '#10b981', '#ef4444', '#22c55e', '#d946ef', '#f97316', '#0ea5e9', '#eab308', '#8b5cf6',
+    '#14b8a6', '#f43f5e', '#4ade80', '#c084fc', '#fb923c', '#38bdf8', '#a3e635', '#a78bfa',
+    '#2dd4bf', '#ec4899', '#86efac', '#e879f9', '#fdba74', '#7dd3fc', '#bef264', '#c4b5fd',
   ]; // 40 colors
 
   /** 从 sampler 节点生成简短描述（用于 subset 节点下方） */
@@ -1945,6 +1949,8 @@ export function buildWorkflowCanvas(root) {
       if (lastInteractionWasDrag) return;
       e.preventDefault();
       e.stopPropagation();
+      const colorIndex = node.dataset.subsetColorIndex != null ? parseInt(node.dataset.subsetColorIndex, 10) : 0;
+      const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
       openDatasetDetailModal({
         node,
         getContent: () => subsetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
@@ -1952,6 +1958,7 @@ export function buildWorkflowCanvas(root) {
           subsetContentByNodeId.set(node.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         },
+        color,
       });
     });
 

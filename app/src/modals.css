@@ -132,6 +132,12 @@
   display: none;
 }
 
+/* 全屏时保留底边留白，使 dataset 详情面板的底部颜色描边可见 */
+.modal-overlay--maximized:has(.modal-panel--working-dataset-detail) {
+  padding-bottom: 4px;
+  box-sizing: border-box;
+}
+
 .modal-half {
   width: 28px;
   height: 28px;
@@ -196,6 +202,20 @@
   min-width: 0 !important;
   min-height: 0 !important;
   margin: 0 !important;
+}
+
+/* 双开 dataset 半屏时，中线无缝贴合（缝为 0 时中线只显示一种描边颜色） */
+.modal-overlay--half-left .modal-panel--working-dataset-detail {
+  box-sizing: border-box !important;
+  width: 50vw !important;
+  max-width: 50vw !important;
+  margin-right: 0 !important;
+}
+.modal-overlay--half-right .modal-panel--working-dataset-detail {
+  box-sizing: border-box !important;
+  width: 50vw !important;
+  max-width: 50vw !important;
+  margin-left: 0 !important;
 }
 
 .modal-overlay--half-left .modal-resize-handle,

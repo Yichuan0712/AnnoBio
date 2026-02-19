@@ -37,12 +37,26 @@ function sanitizeFilename(name) {
   return s || 'dataset';
 }
 
-export function openDatasetDetailModal({ node, getContent, saveContent }) {
+/** Apply dataset color to modal panel border (called when opening or re-showing). */
+function applyDatasetDetailBorderColor(panel, color) {
+  if (!panel) return;
+  if (color) {
+    panel.style.borderColor = color;
+    panel.style.borderWidth = '2px';
+  } else {
+    panel.style.borderColor = '';
+    panel.style.borderWidth = '';
+  }
+}
+
+export function openDatasetDetailModal({ node, getContent, saveContent, color }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-modal-half="true"][data-working-dataset-node-id="${CSS.escape(nodeId)}"]`)
     : null;
   if (existing) {
+    const panel = existing.querySelector('.modal-panel');
+    if (panel) applyDatasetDetailBorderColor(panel, color);
     document.body.appendChild(existing);
     return;
   }
@@ -131,6 +145,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       </div>
     </div>
   `;
+
+  const panel = overlay.querySelector('.modal-panel');
+  applyDatasetDetailBorderColor(panel, color);
 
   const theadRow = overlay.querySelector('.wd-header-row');
   const tbody = overlay.querySelector('.wd-tbody');
