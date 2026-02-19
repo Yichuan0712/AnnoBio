@@ -5,6 +5,8 @@
  * @param {{ node: HTMLElement, getContent: () => { headers: string[], rows: string[][] }, saveContent: (content: { headers: string[], rows: string[][] }) => void }} options
  */
 
+import * as XLSX from 'xlsx';
+
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 /** 行高下限：至少一行字高度（约 12px 字号 + 行高 + 内边距） */
 const MIN_ROW_HEIGHT_PX = 28;
@@ -13,6 +15,26 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+/** Escape a value for CSV: quote if contains comma, newline, or double-quote; double any quotes inside. */
+function escapeCsvField(value) {
+  const s = String(value ?? '');
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+/** Escape a value for TSV: quote if contains tab, newline, or double-quote; double any quotes inside. */
+function escapeTsvField(value) {
+  const s = String(value ?? '');
+  if (/[\t\r\n"]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+/** Sanitize node name for use as default filename (remove/replace invalid path chars). */
+function sanitizeFilename(name) {
+  const s = String(name ?? '').replace(/[\r\n/:*?"<>|\\]/g, '_').trim();
+  return s || 'dataset';
 }
 
 export function openDatasetDetailModal({ node, getContent, saveContent }) {
@@ -94,11 +116,14 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
                 </div>
               </div>
               <div class="dataset-detail-footer working-dataset-detail-footer">
-                <button type="button" class="btn btn-secondary working-dataset-add-row">Add row</button>
-                <button type="button" class="btn btn-secondary working-dataset-add-col">Add column</button>
-                <button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button>
-                <button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button>
-                <button type="button" class="btn btn-primary working-dataset-sample">Sample</button>
+                <button type="button" class="btn btn-secondary working-dataset-export-local">Save to local</button>
+                <div class="working-dataset-detail-footer__actions">
+                  <button type="button" class="btn btn-secondary working-dataset-add-row">Add row</button>
+                  <button type="button" class="btn btn-secondary working-dataset-add-col">Add column</button>
+                  <button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button>
+                  <button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button>
+                  <button type="button" class="btn btn-primary working-dataset-sample">Sample</button>
+                </div>
               </div>
             </div>
           </div>
@@ -120,6 +145,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   const deleteRowBtn = overlay.querySelector('.working-dataset-delete-row');
   const deleteColBtn = overlay.querySelector('.working-dataset-delete-col');
   const sampleBtn = overlay.querySelector('.working-dataset-sample');
+  const exportLocalBtn = overlay.querySelector('.working-dataset-export-local');
   const searchInp = overlay.querySelector('#wd-preview-search');
   const summaryEl = overlay.querySelector('.wd-summary');
   const tableWrap = overlay.querySelector('.working-dataset-table-wrap');
@@ -454,6 +480,60 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     });
   }
 
+  if (exportLocalBtn) {
+    exportLocalBtn.addEventListener('click', async () => {
+      const defaultBase = sanitizeFilename(name);
+      const api = window.electronAPI;
+      const filters = [
+        { name: 'CSV', extensions: ['csv'] },
+        { name: 'TSV', extensions: ['tsv'] },
+        { name: 'Excel', extensions: ['xlsx'] },
+      ];
+      let path;
+      let encoding = 'utf8';
+      let payload;
+      if (api?.showSaveFileDialog && api?.writeFile) {
+        path = await api.showSaveFileDialog({
+          title: 'Save dataset',
+          defaultPath: `${defaultBase}.csv`,
+          filters,
+        });
+      }
+      if (!path && !api?.showSaveFileDialog) {
+        path = `${defaultBase}.csv`;
+      }
+      if (path) {
+        const ext = path.toLowerCase().slice(path.lastIndexOf('.'));
+        if (ext === '.tsv') {
+          const headerLine = headers.map(escapeTsvField).join('\t');
+          const dataLines = rows.map((row) => headers.map((_, i) => escapeTsvField(row[i] ?? '')).join('\t'));
+          payload = [headerLine, ...dataLines].join('\r\n');
+        } else if (ext === '.xlsx' || ext === '.xls') {
+          const wb = XLSX.utils.book_new();
+          const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+          XLSX.utils.book_append_sheet(wb, sheet, 'Sheet1');
+          payload = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+          encoding = 'base64';
+        } else {
+          const headerLine = headers.map(escapeCsvField).join(',');
+          const dataLines = rows.map((row) => headers.map((_, i) => escapeCsvField(row[i] ?? '')).join(','));
+          payload = '\ufeff' + [headerLine, ...dataLines].join('\r\n');
+        }
+        if (api?.writeFile) {
+          await api.writeFile(path, payload, encoding);
+        } else {
+          const mime = ext === '.tsv' ? 'text/tab-separated-values' : ext === '.xlsx' || ext === '.xls' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv';
+          const blob = encoding === 'base64' ? new Blob([Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))], { type: mime }) : new Blob([payload], { type: mime + ';charset=utf-8' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = path.split(/[/\\]/).pop() || `${defaultBase}.csv`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        }
+      }
+    });
+  }
+
   function updateDeleteButtons() {
     const hasRowSelected = selectedRowIndex >= 0 && selectedRowIndex < rows.length;
     const hasColSelected = selectedColIndex >= 0 && selectedColIndex < headers.length;
@@ -502,14 +582,12 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     document.body.style.overflow = '';
   }
 
-  // 半屏默认右边；若右边已有半屏则左边，若左边已有则右边
+  // 若已有半屏的 dataset 弹窗，新打开的自动半屏并占另一侧
   const existingLeft = document.querySelector('.modal-overlay[data-modal-half="true"].modal-overlay--half-left');
   const existingRight = document.querySelector('.modal-overlay[data-modal-half="true"].modal-overlay--half-right');
   if (existingRight) {
     overlay.classList.add('modal-overlay--half-left');
   } else if (existingLeft) {
-    overlay.classList.add('modal-overlay--half-right');
-  } else {
     overlay.classList.add('modal-overlay--half-right');
   }
 

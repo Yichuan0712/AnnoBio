@@ -7,6 +7,9 @@ const API_BASE = 'http://localhost:8000';
 const MAX_CELL_CHARS = 40;
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 
+/** Session-only: input name -> last used dataset column name. Not persisted. */
+const inputNameToColumnMemory = {};
+
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
@@ -45,7 +48,7 @@ function filterResultsBySearch(results, outputFields, searchQuery, workingConten
   });
 }
 
-export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields, getSubsetContent, getPromptTemplate, registerPendingRun, getPromptName, getUniqueDatasetExportName, isRunNameAlreadyUsedForPrompt }) {
+export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields, getSubsetContent, getPromptTemplate, registerPendingRun, getPromptName, getUniqueDatasetExportName, isRunNameAlreadyUsedForPrompt, getRunMappingsFromCanvas }) {
   const workingSets = getWorkingSets ? getWorkingSets() : [];
   const inputFields = getPromptInputFields ? getPromptInputFields() : [];
   getSubsetContent = getSubsetContent || (() => ({ headers: [], rows: [] }));
@@ -54,6 +57,16 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   getPromptName = getPromptName || (() => '');
   getUniqueDatasetExportName = getUniqueDatasetExportName || ((name) => name);
   isRunNameAlreadyUsedForPrompt = isRunNameAlreadyUsedForPrompt || (() => false);
+
+  if (getRunMappingsFromCanvas) {
+    (getRunMappingsFromCanvas() || []).forEach((parsed) => {
+      if (parsed && typeof parsed === 'object') {
+        Object.entries(parsed).forEach(([inputName, columnName]) => {
+          if (inputName != null && String(columnName || '').trim()) inputNameToColumnMemory[inputName] = String(columnName).trim();
+        });
+      }
+    });
+  }
 
   let selectedNodeId = (node?.dataset?.runWorkingSetId || '').trim();
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
@@ -96,18 +109,18 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
           <p class="run-detail-main-label">Run settings</p>
           <div class="dataset-meta-wrap run-detail-meta-wrap">
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="run-detail-ws-picker">Dataset</label>
-              <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select dataset">
+              <label class="dataset-meta-label" for="run-detail-ws-picker">Input dataset</label>
+              <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select input dataset">
                 <div class="run-detail-ws-trigger" tabindex="0">
                   <span class="run-detail-ws-trigger-color" id="run-detail-ws-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="run-detail-ws-trigger-text">— Select dataset —</span>
+                  <span class="run-detail-ws-trigger-text" id="run-detail-ws-trigger-text">— Select input dataset —</span>
                   <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
                 </div>
                 <div class="run-detail-ws-dropdown" id="run-detail-ws-dropdown" role="listbox" hidden></div>
               </div>
             </div>
             <div class="run-detail-inputs-section dataset-meta-field" id="run-detail-inputs-section">
-              <span class="dataset-meta-label run-detail-section-label">Map dataset columns to prompt inputs</span>
+              <span class="dataset-meta-label run-detail-section-label">Map input dataset columns to prompt inputs</span>
               <div class="run-detail-mapping-wrap" id="run-detail-inputs-list"></div>
             </div>
             <div class="dataset-meta-field">
@@ -531,7 +544,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     } else {
       triggerColorEl.style.background = '';
       triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = '— Select dataset —';
+      triggerTextEl.textContent = '— Select input dataset —';
     }
   }
 
@@ -561,7 +574,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     emptyOption.className = 'run-detail-ws-option';
     emptyOption.setAttribute('role', 'option');
     emptyOption.setAttribute('aria-selected', !selectedNodeId ? 'true' : 'false');
-    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select dataset —</span>';
+    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select input dataset —</span>';
     emptyOption.dataset.nodeId = '';
     emptyOption.addEventListener('click', () => selectWorkingSet(''));
     dropdownEl.appendChild(emptyOption);
@@ -579,12 +592,24 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
 
   function renderInputMappings() {
     const ws = getSelectedWorkingSet();
-    const headers = ws ? (ws.headers || []).slice() : [];
+    const content = selectedNodeId ? getSubsetContent(selectedNodeId) : null;
+    const headers = content && content.headers ? content.headers.slice() : (ws ? (ws.headers || []).slice() : []);
+    const headerSet = new Set(headers);
     inputsListEl.innerHTML = '';
     if (inputFields.length === 0) {
       inputsListEl.innerHTML = '<p class="run-detail-placeholder">No prompt inputs.</p>';
       return;
     }
+    inputFields.forEach((inputName) => {
+      let col = inputToColumn[inputName] || '';
+      if (!col && inputNameToColumnMemory[inputName] && headerSet.has(inputNameToColumnMemory[inputName])) {
+        col = inputNameToColumnMemory[inputName];
+        inputToColumn[inputName] = col;
+        if (node) {
+          try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
+        }
+      }
+    });
     const table = document.createElement('div');
     table.className = 'run-detail-mapping-table';
     table.setAttribute('role', 'table');
@@ -612,7 +637,9 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       `;
       const sel = row.querySelector('.run-detail-column-select');
       sel.addEventListener('change', () => {
-        inputToColumn[inputName] = sel.value.trim() || '';
+        const v = sel.value.trim() || '';
+        inputToColumn[inputName] = v;
+        if (v) inputNameToColumnMemory[inputName] = v;
         if (node) {
           try {
             node.dataset.runInputToColumn = JSON.stringify(inputToColumn);

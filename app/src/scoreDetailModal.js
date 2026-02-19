@@ -588,11 +588,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           <p class="run-detail-main-label score-detail-main-label">Score settings</p>
           <div class="dataset-meta-wrap score-detail-meta-wrap">
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="score-detail-gt-picker">Ground truth</label>
-              <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select dataset as ground truth">
+              <label class="dataset-meta-label" for="score-detail-gt-picker">Ground truth dataset</label>
+              <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select ground truth dataset">
                 <div class="run-detail-ws-trigger" tabindex="0">
                   <span class="run-detail-ws-trigger-color" id="score-detail-gt-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">— Select dataset —</span>
+                  <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">— Select ground truth dataset —</span>
                   <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
                 </div>
                 <div class="run-detail-ws-dropdown" id="score-detail-gt-dropdown" role="listbox" hidden></div>
@@ -739,7 +739,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <label class="dataset-meta-label" for="rule-editor-match-type">Comparison type</label>
               <select id="rule-editor-match-type" class="dataset-meta-input rule-editor-select" aria-label="Comparison type">${matchSelectOpts}</select>
             </div>
-            <div class="dataset-meta-field rule-editor-flags-wrap">
+            <div class="dataset-meta-field rule-editor-flags-wrap" id="rule-editor-flags-wrap">
               <span class="dataset-meta-label">Normalization (optional, multiple)</span>
               <div class="rule-editor-flags">
                 ${MATCH_FLAGS.map((f) => `<label class="rule-editor-flag-label"><input type="checkbox" class="rule-editor-flag-cb" data-flag="${escapeAttr(f.key)}" ${flags[f.key] ? 'checked' : ''} aria-label="${escapeAttr(f.label)}" />${escapeHtml(f.label)}</label>`).join('')}
@@ -799,14 +799,23 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     gtSelectEl.addEventListener('change', clearError);
     matchSelectEl.addEventListener('change', clearError);
 
-    function updateFlagsDisabled() {
-      const isNumeric = (matchSelectEl?.value ?? '') === 'numeric';
+    /** Comparison types that support normalization (exact, contains, gt-contains-run). Numeric does not. */
+    function comparisonTypeSupportsNormalization() {
+      const v = (matchSelectEl?.value ?? '').trim() || 'exact';
+      return v !== 'numeric';
+    }
+    function updateNormalizationVisibility() {
+      const flagsWrap = editorOverlay.querySelector('#rule-editor-flags-wrap');
+      const show = comparisonTypeSupportsNormalization();
+      if (flagsWrap) flagsWrap.style.display = show ? '' : 'none';
       editorOverlay.querySelectorAll('.rule-editor-flag-cb').forEach((cb) => {
-        cb.disabled = isNumeric;
+        cb.disabled = !show;
       });
     }
-    matchSelectEl.addEventListener('change', updateFlagsDisabled);
-    updateFlagsDisabled();
+    matchSelectEl.addEventListener('change', updateNormalizationVisibility);
+    updateNormalizationVisibility();
+    // 弹窗挂载后再跑一次，确保“数值相等”时 Normalization 块初始就隐藏
+    requestAnimationFrame(() => updateNormalizationVisibility());
 
     function save() {
       const outputKey = (resultSelectEl?.value ?? '').trim();
@@ -868,13 +877,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const flags = getMatchFlags(rule);
     const flagLabels = MATCH_FLAGS.filter((f) => flags[f.key]).map((f) => f.label);
     const flagPart = flagLabels.length > 0 ? ` · ${flagLabels.join(', ')}` : '';
-    const summary = `${runLabel} → ${gtLabel} · ${typeLabel}${flagPart}`;
+    const summary = `${runLabel} → ${gtLabel} ( ${typeLabel}${flagPart} )`;
     const card = document.createElement('div');
     card.className = 'score-rule-card';
     const openEditor = () => openRuleEditor(path, [], 0, () => renderRules());
     card.innerHTML = `
-      <div class="score-rule-card-inner" tabindex="0" role="button">
-        <span class="score-rule-card-summary">${escapeHtml(summary)}</span>
+      <div class="score-rule-card-inner" tabindex="0" role="button" title="${escapeAttr(summary)}">
+        <span class="score-rule-card-summary" title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
       </div>
       <button type="button" class="score-rule-card-remove" aria-label="Remove rule">×</button>
     `;
@@ -1506,7 +1515,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     emptyOption.className = 'run-detail-ws-option';
     emptyOption.setAttribute('role', 'option');
     emptyOption.setAttribute('aria-selected', !selectedNodeId ? 'true' : 'false');
-    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select dataset —</span>';
+    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select ground truth dataset —</span>';
     emptyOption.dataset.nodeId = '';
     emptyOption.addEventListener('click', () => selectGroundTruth(''));
     dropdownEl.appendChild(emptyOption);

@@ -428,12 +428,11 @@ function buildReviewResultUI(overlay, options) {
         ${unlocatable ? '<p class="review-detail-suggestion-unlocatable">Could not locate the original sentence in the section; Apply is hidden.</p>' : ''}
       </div>
       <div class="review-detail-suggestion-card__actions">
-        ${unlocatable ? '<button type="button" class="btn btn-secondary review-detail-hide-btn">Hide</button>' : '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'}
+        ${unlocatable ? '' : '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'}
       </div>
     `;
     const mainEl = card.querySelector('.review-detail-suggestion-card__main');
     const acceptBtn = card.querySelector('.review-detail-accept-btn');
-    const hideBtn = card.querySelector('.review-detail-hide-btn');
 
     function getDiffContent() {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
@@ -478,24 +477,6 @@ function buildReviewResultUI(overlay, options) {
         updateAcceptButtonLabels();
         renderLeft(-1);
         persistWorking();
-      });
-    }
-
-    if (hideBtn) {
-      hideBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const i = allSuggestions.indexOf(sug);
-        if (i !== -1) {
-          allSuggestions.splice(i, 1);
-          card.remove();
-          editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c, k) => {
-            c.dataset.suggestionIndex = String(k);
-          });
-          saved.suggestions = allSuggestions.slice();
-          if (typeof onReviewResultChange === 'function') {
-            onReviewResultChange({ ...saved, suggestions: saved.suggestions });
-          }
-        }
       });
     }
 

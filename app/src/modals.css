@@ -220,6 +220,40 @@
   min-height: 120px;
 }
 
+/* Alert / message modal (in-app, design system) */
+.modal-panel--alert {
+  min-width: 280px;
+  max-width: min(420px, 92vw);
+}
+
+.modal-body--alert {
+  min-height: 0;
+}
+
+.modal-body--alert .alert-modal-message {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.modal-alert-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 8px 20px 16px;
+}
+
+.modal-alert-footer .btn {
+  box-sizing: border-box;
+  min-height: 36px;
+  line-height: 1.2;
+}
+
+.modal-panel--alert .modal-header {
+  cursor: default;
+}
+
 .modal-panel--prompt {
   min-width: min(400px, 92vw);
   max-width: 92vw;
@@ -3945,7 +3979,7 @@
   padding-right: 0;
 }
 
-/* 底部四按钮：与 Run/Score 一致，底边距约 16px（footer 4px + scroll 12px） */
+/* 底部四按钮：与 Run/Score 一致，底边距约 16px（footer 4px + scroll 12px）；横线从左对齐 12px 起画，与上下内容左缘一致 */
 .dataset-detail-card .dataset-detail-footer.working-dataset-detail-footer,
 .working-dataset-detail-footer {
   flex-shrink: 0;
@@ -3954,6 +3988,26 @@
   padding-bottom: 4px;
   margin-top: 4px;
   padding-top: 8px;
+  justify-content: space-between;
+  border-top: none;
+  position: relative;
+}
+
+.working-dataset-detail-footer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+.working-dataset-detail-footer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
 }
 
 /* App-level alert (replaces system alert); fixed overlay on body */

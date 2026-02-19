@@ -10,6 +10,7 @@ import { openReviewDetailModal } from './reviewDetailModal.js';
 import { openScoreDetailModal, runReviewFromScore, getScoreExportData, getMatchFlags, normalizeForMatch } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
+import { showAlert } from './alertModal.js';
 
 const MIN_CONTENT_PADDING = 200;
 /** Minimum canvas content size (width, height) so there is plenty of room to work and zoom. */
@@ -1036,7 +1037,7 @@ export function buildWorkflowCanvas(root) {
       const oldText = serializePromptToDiffText(fromData);
       const newText = serializePromptToDiffText(toData);
       const diffLines = lineDiff(oldText, newText);
-      bodyHtml = '<div class="prompt-diff-view"><table class="prompt-diff-table"><colgroup><col class="diff-col-old-num"><col class="diff-col-old-content"><col class="diff-col-new-num"><col class="diff-col-new-content"></colgroup><thead><tr><th colspan="2" class="diff-th-old">Old</th><th colspan="2" class="diff-th-new">New</th></tr></thead><tbody>' +
+      bodyHtml = '<div class="prompt-diff-view"><table class="prompt-diff-table"><colgroup><col class="diff-col-old-num"><col class="diff-col-old-content"><col class="diff-col-new-num"><col class="diff-col-new-content"></colgroup><thead><tr><th colspan="2" class="diff-th-old">Before</th><th colspan="2" class="diff-th-new">After</th></tr></thead><tbody>' +
         diffLines.map((item) => {
           const cls = 'diff-line diff-' + item.type;
           const oldNum = item.type === 'add' ? '' : (item.oldNum || '');
@@ -1123,7 +1124,7 @@ export function buildWorkflowCanvas(root) {
     const oldText = serializeSubsetToDiffText(fromContent);
     const newText = serializeSubsetToDiffText(toContent);
     const diffLines = lineDiff(oldText, newText);
-    const bodyHtml = '<div class="prompt-diff-view"><table class="prompt-diff-table"><colgroup><col class="diff-col-old-num"><col class="diff-col-old-content"><col class="diff-col-new-num"><col class="diff-col-new-content"></colgroup><thead><tr><th colspan="2" class="diff-th-old">Old</th><th colspan="2" class="diff-th-new">New</th></tr></thead><tbody>' +
+    const bodyHtml = '<div class="prompt-diff-view"><table class="prompt-diff-table"><colgroup><col class="diff-col-old-num"><col class="diff-col-old-content"><col class="diff-col-new-num"><col class="diff-col-new-content"></colgroup><thead><tr><th colspan="2" class="diff-th-old">Before</th><th colspan="2" class="diff-th-new">After</th></tr></thead><tbody>' +
       diffLines.map((item) => {
         const cls = 'diff-line diff-' + item.type;
         const oldNum = item.type === 'add' ? '' : (item.oldNum || '');
@@ -1324,6 +1325,14 @@ export function buildWorkflowCanvas(root) {
         },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
         isRunNameAlreadyUsedForPrompt,
+        getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
+          try {
+            const raw = n.dataset.runInputToColumn;
+            if (!raw) return null;
+            const o = JSON.parse(raw);
+            return typeof o === 'object' && o !== null ? o : null;
+          } catch (_) { return null; }
+        }).filter(Boolean),
       });
     } else if (edgeType === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW) {
       e.preventDefault();
@@ -1523,6 +1532,19 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      const runEdges = connections.filter((c) => c.type === EDGE_TYPE_PROMPT_TO_RUN && c.fromId === nodeId);
+      const hasRunWithResults = runEdges.some((edge) => {
+        const runNode = getNodeById(edge.toId);
+        if (!runNode || !runNode.classList.contains('workflow-node--run')) return false;
+        try {
+          const rr = JSON.parse(runNode.dataset.runResults || '[]');
+          return Array.isArray(rr) && rr.length > 0;
+        } catch (_) { return false; }
+      });
+      if (hasRunWithResults) {
+        showAlert('This prompt has been run. Remove or clear the one or more Run nodes that use it before deleting the prompt.', { title: 'Cannot delete prompt' });
+        return;
+      }
       removeConnectionsInvolvingNodeId(nodeId);
       node.remove();
       updateContentSize();
@@ -1651,6 +1673,14 @@ export function buildWorkflowCanvas(root) {
               getPromptName: () => (node.dataset.promptName || '').trim() || (node.querySelector('.workflow-node__title')?.textContent?.trim() || ''),
               getUniqueDatasetExportName: findUniqueDatasetExportName,
               isRunNameAlreadyUsedForPrompt,
+              getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
+                try {
+                  const raw = n.dataset.runInputToColumn;
+                  if (!raw) return null;
+                  const o = JSON.parse(raw);
+                  return typeof o === 'object' && o !== null ? o : null;
+                } catch (_) { return null; }
+              }).filter(Boolean),
             });
           }
         },
@@ -1833,6 +1863,16 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
+        (n) => (n.dataset.runWorkingSetId || '').trim() === nodeId
+      );
+      const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
+        (n) => (n.dataset.scoreGroundTruthId || '').trim() === nodeId
+      );
+      if (usedByRun || usedByScore) {
+        showAlert('This dataset is selected by one or more Run or Score nodes. Clear the selection in those nodes before deleting.', { title: 'Cannot delete dataset' });
+        return;
+      }
       removeConnectionsInvolvingNodeId(nodeId);
       subsetContentByNodeId.delete(nodeId);
       node.remove();
@@ -1931,6 +1971,11 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      const usedByScore = connections.some((c) => c.type === EDGE_TYPE_RUN_TO_SCORE && c.fromId === nodeId);
+      if (usedByScore) {
+        showAlert('This Run node is used by one or more Score nodes. Remove the Score nodes before deleting this Run.', { title: 'Cannot delete Run node' });
+        return;
+      }
       removeConnectionsInvolvingNodeId(nodeId);
       node.remove();
       updateContentSize();
@@ -1976,12 +2021,6 @@ export function buildWorkflowCanvas(root) {
 
     node.addEventListener('contextmenu', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
-      let hasResults = false;
-      try {
-        const rr = JSON.parse(node.dataset.runResults || '[]');
-        hasResults = Array.isArray(rr) && rr.length > 0;
-      } catch (_) {}
-      if (!hasResults) return;
       e.preventDefault();
       e.stopPropagation();
       showNodeContextMenu(e.clientX, e.clientY, node);
@@ -2047,6 +2086,14 @@ export function buildWorkflowCanvas(root) {
         },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
         isRunNameAlreadyUsedForPrompt,
+        getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
+          try {
+            const raw = n.dataset.runInputToColumn;
+            if (!raw) return null;
+            const o = JSON.parse(raw);
+            return typeof o === 'object' && o !== null ? o : null;
+          } catch (_) { return null; }
+        }).filter(Boolean),
       });
     });
 
@@ -2080,6 +2127,11 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      const usedByReview = connections.some((c) => c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW && c.fromId === nodeId);
+      if (usedByReview) {
+        showAlert('This Score node is used by one or more Review nodes. Remove the Review nodes before deleting this Score.', { title: 'Cannot delete Score node' });
+        return;
+      }
       removeConnectionsInvolvingNodeId(nodeId);
       node.remove();
       updateContentSize();
@@ -2482,7 +2534,7 @@ export function buildWorkflowCanvas(root) {
       const canSaveToWorkspace = scoreHasResults && scoreHasGt;
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem" ${scoreHasReviewLlm && scoreHasResults ? '' : 'disabled'}>Review</button>
-        <button type="button" class="workflow-node-context-item" data-action="score-save-to-workspace" role="menuitem" ${canSaveToWorkspace ? '' : 'disabled'}>Save to workspace</button>
+        <button type="button" class="workflow-node-context-item" data-action="score-save-to-workspace" role="menuitem" ${canSaveToWorkspace ? '' : 'disabled'}>Save results to workspace</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>
       `;
     } else if (isPromptReview) {
