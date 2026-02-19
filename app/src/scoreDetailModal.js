@@ -4,8 +4,45 @@
  */
 
 const API_BASE = 'http://localhost:8000';
-const MATCH_TYPE_STRICT = { value: 'exact', label: 'Strict match' };
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
+
+/** Comparison type (single choice) */
+const MATCH_TYPES = [
+  { value: 'exact', label: 'Exact match' },
+  { value: 'contains', label: 'Result contains ground truth' },
+  { value: 'gt-contains-run', label: 'Ground truth contains result' },
+  { value: 'numeric', label: 'Numeric equality' },
+];
+
+/** Normalization options (multi-select; not applied for numeric, only trim before compare) */
+const MATCH_FLAGS = [
+  { key: 'ignoreCase', label: 'Ignore case' },
+  { key: 'ignoreSymbols', label: 'Ignore symbols' },
+  { key: 'ignoreWhitespace', label: 'Ignore whitespace' },
+];
+
+const DEFAULT_MATCH_FLAGS = { ignoreCase: false, ignoreSymbols: false, ignoreWhitespace: false };
+
+function getMatchFlags(rule) {
+  const f = rule && rule.matchFlags;
+  return {
+    ignoreCase: !!(f && f.ignoreCase),
+    ignoreSymbols: !!(f && f.ignoreSymbols),
+    ignoreWhitespace: !!(f && f.ignoreWhitespace),
+  };
+}
+
+/** 对字符串应用规范化（用于比较前）；numeric 时不使用 flags，仅 trim 后按数值比较。 */
+function normalizeForMatch(str, flags, isNumeric) {
+  let s = str == null ? '' : String(str).trim();
+  if (isNumeric) return s;
+  if (flags.ignoreWhitespace) s = s.replace(/\s+/g, ' ').trim();
+  if (flags.ignoreCase) s = s.toLowerCase();
+  if (flags.ignoreSymbols) s = s.replace(/[^\w\s]/gu, '').replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+export { getMatchFlags, normalizeForMatch };
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -38,12 +75,17 @@ export function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId
  * @param {{ reviewNodeId: string, payload: object, credentialId: string }} options
  */
 export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
+  const comparisonRows = payload.comparison_rows || [];
+  const allRowsMatched = comparisonRows.length === 0 || comparisonRows.every((r) => r.matched === true);
   const body = {
     credential_id: credentialId,
     prompt_sections: payload.prompt_sections,
     run_results: payload.run_results || [],
     output_fields: payload.output_fields || [],
-    comparison_rows: (payload.comparison_rows || []).map((r) => ({
+    output_schema: payload.output_schema || undefined,
+    ...(payload.output_schema ? {} : { output_return_shape: payload.output_return_shape || 'single' }),
+    all_rows_matched: allRowsMatched,
+    comparison_rows: comparisonRows.map((r) => ({
       row_index: r.row_index,
       matched: r.matched,
       run_output: r.run_output || {},
@@ -256,7 +298,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       return { type: 'group', ops, children };
     }
     const rules = normalizeToRules(Array.isArray(data) ? data : []);
-    const children = rules.map((r) => ({ type: 'rule', outputKey: r.outputKey || '', gtColumns: (r.gtColumns || []).slice(), matchType: r.matchType || 'exact' }));
+    const children = rules.map((r) => ({
+      type: 'rule',
+      outputKey: r.outputKey || '',
+      gtColumns: (r.gtColumns || []).slice(),
+      matchType: r.matchType || 'exact',
+      matchFlags: r.matchFlags && typeof r.matchFlags === 'object' ? { ...r.matchFlags } : DEFAULT_MATCH_FLAGS,
+    }));
     return { type: 'group', ops: Array(Math.max(0, children.length - 1)).fill('AND'), children };
   }
 
@@ -278,11 +326,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   function normalizeChild(c) {
     if (!c || c.type === 'rule') {
+      const f = c && c.matchFlags && typeof c.matchFlags === 'object' ? c.matchFlags : {};
       return {
         type: 'rule',
         outputKey: (c && c.outputKey) || '',
         gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
         matchType: (c && c.matchType) || 'exact',
+        matchFlags: {
+          ignoreCase: !!(f.ignoreCase),
+          ignoreSymbols: !!(f.ignoreSymbols),
+          ignoreWhitespace: !!(f.ignoreWhitespace),
+        },
       };
     }
     return normalizeGroupChild(c);
@@ -355,13 +409,35 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /**
-   * Evaluate a single rule: run value must equal any GT column value.
+   * Evaluate a single rule: run value vs GT column value(s) by matchType and matchFlags.
    */
   function ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) {
     const runResult = resultsByIndex.get(runRowIndex) || null;
-    const runVal = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
-    const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
-    return gtVals.some((g) => g === runVal);
+    const runValRaw = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
+    const gtValsRaw = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
+    const matchType = rule.matchType || 'exact';
+    const flags = getMatchFlags(rule);
+    const isNumeric = matchType === 'numeric';
+
+    if (matchType === 'numeric') {
+      const runNorm = normalizeForMatch(runValRaw, flags, true);
+      const runNum = parseFloat(runNorm);
+      return gtValsRaw.some((g) => {
+        const gtNorm = normalizeForMatch(g, flags, true);
+        const gtNum = parseFloat(gtNorm);
+        if (Number.isFinite(runNum) && Number.isFinite(gtNum)) return runNum === gtNum;
+        return runNorm === gtNorm;
+      });
+    }
+
+    const runVal = normalizeForMatch(runValRaw, flags, false);
+    return gtValsRaw.some((g) => {
+      const gtVal = normalizeForMatch(g, flags, false);
+      if (matchType === 'exact') return runVal === gtVal;
+      if (matchType === 'contains') return runVal.includes(gtVal);
+      if (matchType === 'gt-contains-run') return gtVal.includes(runVal);
+      return runVal === gtVal;
+    });
   }
 
   /**
@@ -610,17 +686,14 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     pickerEl.setAttribute('aria-expanded', 'true');
   }
 
-  /** Match method options (dropdown); currently only Strict match. */
-  const MATCH_METHODS = [MATCH_TYPE_STRICT];
-
   /** Open Add rule / Edit rule modal. editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. */
   function openRuleEditor(editPath, parentPath, indexInParent, onDone) {
     const isEdit = Array.isArray(editPath) && editPath.length > 0;
     const root = getRoot();
-    const rule = isEdit
-      ? getNodeAtPath(root, editPath)
-      : { type: 'rule', outputKey: '', gtColumns: [], matchType: MATCH_TYPE_STRICT.value };
-    const ruleData = rule && rule.type === 'rule' ? rule : { outputKey: '', gtColumns: [], matchType: MATCH_TYPE_STRICT.value };
+    const defaultRule = { type: 'rule', outputKey: '', gtColumns: [], matchType: 'exact', matchFlags: { ...DEFAULT_MATCH_FLAGS } };
+    const rule = isEdit ? getNodeAtPath(root, editPath) : defaultRule;
+    const ruleData = rule && rule.type === 'rule' ? rule : defaultRule;
+    const flags = getMatchFlags(ruleData);
     const runColumns = getRunResultColumns();
     const gtHeaders = getGroundTruthHeaders(selectedNodeId);
     const resultSelectOpts = runColumns.map((c) => {
@@ -629,7 +702,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const sel = key === (ruleData.outputKey || '') ? ' selected' : '';
       return `<option value="${escapeAttr(key)}"${sel}>${escapeHtml(label)}</option>`;
     }).join('');
-    const matchSelectOpts = MATCH_METHODS.map((m) => {
+    const matchSelectOpts = MATCH_TYPES.map((m) => {
       const sel = (m.value || '') === (ruleData.matchType || '') ? ' selected' : '';
       return `<option value="${escapeAttr(m.value)}"${sel}>${escapeHtml(m.label || m.value)}</option>`;
     }).join('');
@@ -663,8 +736,14 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               </select>
             </div>
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="rule-editor-match-type">Match method</label>
-              <select id="rule-editor-match-type" class="dataset-meta-input rule-editor-select" aria-label="Match method">${matchSelectOpts}</select>
+              <label class="dataset-meta-label" for="rule-editor-match-type">Comparison type</label>
+              <select id="rule-editor-match-type" class="dataset-meta-input rule-editor-select" aria-label="Comparison type">${matchSelectOpts}</select>
+            </div>
+            <div class="dataset-meta-field rule-editor-flags-wrap">
+              <span class="dataset-meta-label">Normalization (optional, multiple)</span>
+              <div class="rule-editor-flags">
+                ${MATCH_FLAGS.map((f) => `<label class="rule-editor-flag-label"><input type="checkbox" class="rule-editor-flag-cb" data-flag="${escapeAttr(f.key)}" ${flags[f.key] ? 'checked' : ''} aria-label="${escapeAttr(f.label)}" />${escapeHtml(f.label)}</label>`).join('')}
+              </div>
             </div>
             ${isEdit ? `
             <div class="dataset-meta-field rule-editor-field-group">
@@ -720,6 +799,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     gtSelectEl.addEventListener('change', clearError);
     matchSelectEl.addEventListener('change', clearError);
 
+    function updateFlagsDisabled() {
+      const isNumeric = (matchSelectEl?.value ?? '') === 'numeric';
+      editorOverlay.querySelectorAll('.rule-editor-flag-cb').forEach((cb) => {
+        cb.disabled = isNumeric;
+      });
+    }
+    matchSelectEl.addEventListener('change', updateFlagsDisabled);
+    updateFlagsDisabled();
+
     function save() {
       const outputKey = (resultSelectEl?.value ?? '').trim();
       if (!outputKey) {
@@ -731,8 +819,14 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         showError('Please select a ground truth column.');
         return;
       }
-      const matchType = (matchSelectEl?.value ?? '').trim() || MATCH_TYPE_STRICT.value;
-      const newRule = { type: 'rule', outputKey, gtColumns: [gtColumn], matchType };
+      const matchType = (matchSelectEl?.value ?? '').trim() || 'exact';
+      const flagCbs = editorOverlay.querySelectorAll('.rule-editor-flag-cb');
+      const matchFlags = { ...DEFAULT_MATCH_FLAGS };
+      flagCbs.forEach((cb) => {
+        const key = cb.getAttribute('data-flag');
+        if (key && (key === 'ignoreCase' || key === 'ignoreSymbols' || key === 'ignoreWhitespace')) matchFlags[key] = !!cb.checked;
+      });
+      const newRule = { type: 'rule', outputKey, gtColumns: [gtColumn], matchType, matchFlags };
       const root = getRoot();
       const makeGroupEl = editorOverlay.querySelector('#rule-editor-make-group');
       const addAsGroupEl = editorOverlay.querySelector('#rule-editor-add-as-group');
@@ -770,8 +864,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const runColumns = getRunResultColumns();
     const runLabel = runColumns.find((c) => c.key === (rule.outputKey || ''))?.label || rule.outputKey || '—';
     const gtLabel = (rule.gtColumns || []).length === 0 ? '—' : (rule.gtColumns || []).join(', ');
-    const matchLabel = MATCH_METHODS.find((m) => m.value === (rule.matchType || ''))?.label || MATCH_TYPE_STRICT.label;
-    const summary = `${runLabel} → ${gtLabel} · ${matchLabel}`;
+    const typeLabel = MATCH_TYPES.find((m) => m.value === (rule.matchType || ''))?.label || 'Exact match';
+    const flags = getMatchFlags(rule);
+    const flagLabels = MATCH_FLAGS.filter((f) => flags[f.key]).map((f) => f.label);
+    const flagPart = flagLabels.length > 0 ? ` · ${flagLabels.join(', ')}` : '';
+    const summary = `${runLabel} → ${gtLabel} · ${typeLabel}${flagPart}`;
     const card = document.createElement('div');
     card.className = 'score-rule-card';
     const openEditor = () => openRuleEditor(path, [], 0, () => renderRules());
@@ -1518,7 +1615,16 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
     return Array(len).fill(data && data.op === 'OR' ? 'OR' : 'AND');
   }
   function normalizeChild(c) {
-    if (!c || c.type === 'rule') return { type: 'rule', outputKey: (c && c.outputKey) || '', gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [], matchType: (c && c.matchType) || 'exact' };
+    if (!c || c.type === 'rule') {
+      const f = c && c.matchFlags && typeof c.matchFlags === 'object' ? c.matchFlags : {};
+      return {
+        type: 'rule',
+        outputKey: (c && c.outputKey) || '',
+        gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
+        matchType: (c && c.matchType) || 'exact',
+        matchFlags: { ignoreCase: !!(f.ignoreCase), ignoreSymbols: !!(f.ignoreSymbols), ignoreWhitespace: !!(f.ignoreWhitespace) },
+      };
+    }
     return normalizeGroupChild(c);
   }
   function normalizeGroupChild(c) {
@@ -1531,7 +1637,13 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       return { type: 'group', ops: ensureGroupOps(data, children), children };
     }
     const rules = normalizeToRules(Array.isArray(data) ? data : []);
-    const children = rules.map((r) => ({ type: 'rule', outputKey: r.outputKey || '', gtColumns: (r.gtColumns || []).slice(), matchType: r.matchType || 'exact' }));
+    const children = rules.map((r) => ({
+      type: 'rule',
+      outputKey: r.outputKey || '',
+      gtColumns: (r.gtColumns || []).slice(),
+      matchType: r.matchType || 'exact',
+      matchFlags: r.matchFlags && typeof r.matchFlags === 'object' ? { ...r.matchFlags } : DEFAULT_MATCH_FLAGS,
+    }));
     return { type: 'group', ops: Array(Math.max(0, children.length - 1)).fill('AND'), children };
   }
   const root = parseRoot();
@@ -1577,9 +1689,29 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
   };
   const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
     const runResult = resultsByIndex.get(runRowIndex) || null;
-    const runVal = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
-    const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
-    return gtVals.some((g) => g === runVal);
+    const runValRaw = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
+    const gtValsRaw = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
+    const matchType = rule.matchType || 'exact';
+    const flags = getMatchFlags(rule);
+    const isNumeric = matchType === 'numeric';
+    if (matchType === 'numeric') {
+      const runNorm = normalizeForMatch(runValRaw, flags, true);
+      const runNum = parseFloat(runNorm);
+      return gtValsRaw.some((g) => {
+        const gtNorm = normalizeForMatch(g, flags, true);
+        const gtNum = parseFloat(gtNorm);
+        if (Number.isFinite(runNum) && Number.isFinite(gtNum)) return runNum === gtNum;
+        return runNorm === gtNorm;
+      });
+    }
+    const runVal = normalizeForMatch(runValRaw, flags, false);
+    return gtValsRaw.some((g) => {
+      const gtVal = normalizeForMatch(g, flags, false);
+      if (matchType === 'exact') return runVal === gtVal;
+      if (matchType === 'contains') return runVal.includes(gtVal);
+      if (matchType === 'gt-contains-run') return gtVal.includes(runVal);
+      return runVal === gtVal;
+    });
   };
   const countMatchingRules = (r, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) =>
     collectRulesFlat(r).map((x) => x.rule).filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;

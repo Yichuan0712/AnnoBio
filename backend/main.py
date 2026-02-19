@@ -95,8 +95,11 @@ class ReviewRequest(BaseModel):
     credential_id: str
     prompt_sections: list[dict] = Field(..., description="List of {name, content} for each section")
     run_results: list[dict] = Field(default_factory=list, description="List of {row_index, output}")
-    output_fields: list[dict] = Field(default_factory=list, description="List of {key, display}")
+    output_fields: list[dict] = Field(default_factory=list, description="List of {key, display}; used when output_schema not provided")
+    output_schema: dict | None = Field(default=None, description="Same as run: return_shape + fields [{ key, type, description?, allow_none? }]; when set, used instead of output_return_shape + output_fields for prompts")
+    output_return_shape: str = Field(default="single", description="Fallback when output_schema not provided")
     comparison_rows: list[ReviewComparisonRow] = Field(default_factory=list, description="Per-row match result and context")
+    all_rows_matched: bool | None = Field(default=None, description="If True, frontend says all rows matched; backend will force empty suggestions")
 
 
 class ReviewSuggestion(BaseModel):
@@ -487,14 +490,50 @@ def get_run_result(run_id: str):
 
 
 # ---------- Review: step0 design check (optional), then step1 plan + step2 per-focus suggestions ----------
+def _review_output_schema_lines(body: ReviewRequest) -> tuple[list[str], list[str]]:
+    """Return (lines for prompt, list of field keys for constraints). When output_schema present use it; else derive keys from output_fields."""
+    schema = body.output_schema if isinstance(body.output_schema, dict) else None
+    if schema and (schema.get("fields") or schema.get("return_shape") is not None):
+        shape = (schema.get("return_shape") or "single").strip().lower()
+        if shape not in ("single", "table"):
+            shape = "single"
+        lines = [f"return_shape: {shape} (one object per run)" if shape == "single" else "return_shape: table (array of objects per run)"]
+        keys = []
+        for f in schema.get("fields") or []:
+            key = (f.get("key") or "").strip()
+            if not key:
+                continue
+            keys.append(key)
+            typ = (f.get("type") or "str").strip()
+            desc = (f.get("description") or "").strip()
+            allow_none = f.get("allow_none") or f.get("allowNone") is True
+            part = f"  - {key}: {typ}"
+            if desc:
+                part += f" — {desc}"
+            if allow_none:
+                part += " (allow_none)"
+            lines.append(part)
+        return lines, keys
+    keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
+    return [], keys
+
+
+def _review_all_matched(body: ReviewRequest) -> bool:
+    """True if frontend says all rows matched, or we infer from comparison_rows (empty => True)."""
+    if body.all_rows_matched is not None:
+        return body.all_rows_matched
+    comparison_rows = body.comparison_rows or []
+    return all(r.matched for r in comparison_rows) if comparison_rows else True
+
+
 def _build_review_design_prompt(body: ReviewRequest) -> str:
-    """Step 0: Check section layout and output schema. Only suggest when design is clearly poor (very loose)."""
+    """Step 0: Design suggestions only when prompt is seriously broken (user typically can't write)."""
     lines = [
         "You are reviewing how a user structured their prompt: sections (names + content) and output schema (field keys).",
         "",
         "## Task",
-        "Only if the user clearly has design problems (e.g. no clear section structure, output schema obviously mismatched to the task, missing obvious inputs or outputs), output 0–3 short design suggestions. Each: name (short title) and reason (1–2 sentences of guidance). If the design is reasonable or only has minor issues, output an empty suggestions list.",
-        "Be very conservative: only suggest when the user would clearly benefit from design guidance.",
+        "Output design suggestions ONLY when the prompt has serious structural/schema problems: e.g. no usable section structure, output schema clearly wrong or missing for the task, or the prompt would not work at all. This is for cases where the user typically does not know how to write a prompt.",
+        "When the prompt is already reasonable, usable, or only has minor polish issues, you MUST output {\"suggestions\": []}. Do NOT suggest optional improvements, polish, or 'consider adding X'. Default to empty list.",
         "",
         "## Sections",
     ]
@@ -502,44 +541,84 @@ def _build_review_design_prompt(body: ReviewRequest) -> str:
         name = (sec.get("name") or "").strip() or "(unnamed)"
         content = (sec.get("content") or "").strip() or "(empty)"
         lines.append(f"--- {i}: {name} ---")
-        lines.append(content[:800] + ("..." if len(content) > 800 else ""))
+        lines.append(content)
         lines.append("")
-    lines.append("## Output schema (field keys)")
-    keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
-    lines.append(", ".join(keys) if keys else "(none)")
+    schema_lines, _ = _review_output_schema_lines(body)
+    if schema_lines:
+        lines.append("## Output schema (same as used in run)")
+        lines.extend(schema_lines)
+        lines.append("(This schema is enforced by LangChain at run time; the user does NOT need to add the exact JSON format or output structure in the prompt text. Do not suggest adding JSON examples or output format to the prompt.)")
+    else:
+        keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
+        lines.append("## Output schema (field keys)")
+        lines.append(", ".join(keys) if keys else "(none)")
+        lines.append("(Output format is enforced by LangChain; do not suggest adding JSON/output format to the prompt.)")
     lines.append("")
-    lines.append('Respond with JSON: {"suggestions": [{"name": "short title", "reason": "1-2 sentences"}, ...]} or {"suggestions": []}.')
+    lines.append('Respond with JSON: {"suggestions": [{"name": "short title", "reason": "1-2 sentences"}, ...]}. Use {"suggestions": []} unless the prompt is seriously broken.')
     return "\n".join(lines)
 
 
 def _build_review_step1_prompt(body: ReviewRequest) -> str:
     """Step1: Ask for summary + list of change focuses (no exact sentences yet)."""
+    all_matched = _review_all_matched(body)
     lines = [
         "You are helping improve a prompt used for structured LLM output. Below are the current prompt sections and per-row comparison of model output vs ground truth (matched or not, and any user comment).",
         "",
         "## Task (step 1 of 2): Analyze and plan",
         "Output: (1) A brief overall summary. (2) A list of concrete change focuses. Each focus: section_index (0-based), a short name (e.g. \"Clarify output format\"), and focus_description = one sentence describing exactly what to change in that section (e.g. \"Add an example of valid JSON output\").",
-        "Do NOT output exact old_sentence/new_sentence yet. Only list what should be changed and where. Prefer 3–10 focuses; merge tiny edits into one focus per idea.",
+        "Do NOT output exact old_sentence/new_sentence yet. Only list what should be changed and where. Focus your focuses on fixing the rows that failed (NOT MATCHED); consider matched rows as context and avoid suggesting changes that would break them. Prefer 3–10 focuses when there are failures; merge tiny edits into one focus per idea.",
         "",
-        "## Sections (0-based index for reference)",
+        "**Do NOT suggest putting the correct/expected answer or ground truth into the prompt.** Summarize the problem (why the model failed) and suggest real prompt improvements: clarify instructions, add criteria or rules, improve wording. The prompt must teach the model how to behave so it can generalize; do not embed the right answer in the prompt.",
+        "",
     ]
+    if all_matched:
+        lines.extend([
+            "**All rows are matched (no failures).** Give a short positive summary. You MUST output at least 1 and at most 2 optional improvement focuses (e.g. one small clarity or wording tweak). Pick the 1–2 most valuable optional improvements so the user gets at least one suggestion.",
+            "",
+        ])
+    lines.append("## Sections (0-based index for reference)")
     for i, sec in enumerate(body.prompt_sections or []):
         name = (sec.get("name") or "").strip() or "(unnamed)"
         content = (sec.get("content") or "").strip() or "(empty)"
         lines.append(f"--- Section index {i}: {name} ---")
         lines.append(content)
         lines.append("")
-    lines.append("## Comparison (rows that failed or have comments are most important)")
-    for row in body.comparison_rows or []:
-        status = "matched" if row.matched else "NOT MATCHED"
-        lines.append(f"Row {row.row_index} [{status}]")
-        lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
-        lines.append(f"  Expected: {row.expected}")
-        if row.comment:
-            lines.append(f"  User comment: {row.comment}")
+    schema_lines, _ = _review_output_schema_lines(body)
+    if schema_lines:
+        lines.append("## Output schema (same as used in run)")
+        lines.extend(schema_lines)
+        lines.append("(This schema is enforced by LangChain at run time; the user does NOT need to add the exact JSON format or output structure in the prompt. Do not suggest adding JSON examples or output format to the prompt.)")
+        lines.append("")
+    comparison_rows = body.comparison_rows or []
+    unmatched = [r for r in comparison_rows if not r.matched]
+    matched = [r for r in comparison_rows if r.matched]
+    lines.append("## Rows that failed (NOT MATCHED) — focus your suggestions on fixing these")
+    lines.append("Your focuses and edits should target why these rows failed. In focus_description, when helpful briefly refer to the relevant failed row(s) (e.g. which row or what the model output vs expected). Prioritize fixing these.")
+    if unmatched:
+        for row in unmatched:
+            lines.append(f"Row {row.row_index} [NOT MATCHED]")
+            lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
+            lines.append(f"  Expected: {row.expected}")
+            if row.comment:
+                lines.append(f"  User comment: {row.comment}")
+            lines.append("")
+    else:
+        lines.append("(None — all rows matched.)")
+        lines.append("")
+    lines.append("## Rows that matched — for context only; avoid suggesting changes that would break these")
+    if matched:
+        for row in matched:
+            lines.append(f"Row {row.row_index} [matched]")
+            lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
+            lines.append(f"  Expected: {row.expected}")
+            if row.comment:
+                lines.append(f"  User comment: {row.comment}")
+            lines.append("")
+    else:
+        lines.append("(None.)")
         lines.append("")
     # Constraint: do not suggest changing user-defined output field keys or section names (from existing payload)
-    schema_keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
+    _, schema_keys = _review_output_schema_lines(body)
     section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
     if schema_keys or section_names:
         lines.append("## Constraints (mandatory)")
@@ -565,18 +644,31 @@ def _build_review_step2_prompt(
     idx = focus.section_index
     if idx < 0 or idx >= len(secs):
         return ""
+    all_matched = _review_all_matched(body)
     sec = secs[idx]
     name = (sec.get("name") or "").strip() or "(unnamed)"
     content = (sec.get("content") or "").strip() or "(empty)"
-    schema_keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
+    _, schema_keys = _review_output_schema_lines(body)
     section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
     lines = [
         "You are improving a prompt section. Output concrete edit suggestions: exact sentence to replace (old_sentence) and replacement (new_sentence).",
         "",
+        "**Do NOT put the correct/expected answer or ground truth into new_sentence.** The edit must improve the prompt's instructions, criteria, or wording so the model can produce correct output on its own. new_sentence must not contain the expected value or the right answer for the failed rows; it must be a real prompt improvement (e.g. clarify a rule, add a criterion), not a shortcut that pastes the answer into the prompt.",
+        "",
+    ]
+    if all_matched:
+        lines.extend([
+            "**All rows matched — no failures.** Output exactly 1 suggestion for this focus (one optional small edit). Provide one concrete, low-impact improvement (e.g. clearer wording or a brief example).",
+            "",
+        ])
+    lines.extend([
         "## Critical: how to set old_sentence",
         "Copy old_sentence character-for-character from the section text below. Do not paraphrase or add/remove spaces or newlines. "
         "The tool locates the change by matching this string in the section; if it differs by even one character, the edit may fail. "
         "Best practice: copy the exact substring from the section (one sentence or one line) into old_sentence.",
+        "",
+        "## Critical: new_sentence must improve the prompt, not paste the answer",
+        "new_sentence must not contain the expected/correct output or ground truth. It must change the prompt's instructions or criteria (e.g. clarify a rule, add a condition, fix ambiguous wording) so the model learns how to behave. Do not suggest adding the right answer into the prompt.",
         "",
         "## Focus for this section",
         f"Section index: {idx} ({name})",
@@ -587,7 +679,7 @@ def _build_review_step2_prompt(
         content,
         "",
         "## Comparison context (why this change helps)",
-    ]
+    ])
     if schema_keys or section_names:
         lines.append("")
         lines.append("## Constraints (mandatory)")
@@ -597,13 +689,29 @@ def _build_review_step2_prompt(
         if section_names:
             lines.append("- Input/section names: " + ", ".join(repr(n) for n in section_names))
         lines.append("")
-    for row in (body.comparison_rows or [])[:15]:
-        status = "matched" if row.matched else "NOT MATCHED"
-        lines.append(f"Row {row.row_index} [{status}] Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
+    schema_lines, _ = _review_output_schema_lines(body)
+    if schema_lines:
+        lines.append("Output schema (same as used in run):")
+        lines.extend(schema_lines)
+        lines.append("(Enforced by LangChain; do not suggest adding JSON/output format to the prompt.)")
+        lines.append("")
+    comparison_rows = body.comparison_rows or []
+    unmatched = [r for r in comparison_rows if not r.matched][:15]
+    matched = [r for r in comparison_rows if r.matched][:15]
+    lines.append("Focus your edit on fixing the failed rows; ensure the change does not break the matched rows.")
+    lines.append("Failed rows (fix these):")
+    for row in unmatched:
+        lines.append(f"  Row {row.row_index} [NOT MATCHED] Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
+    lines.append("Matched rows (for context; avoid breaking these):")
+    for row in matched:
+        lines.append(f"  Row {row.row_index} [matched] Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
     lines.append("")
+    lines.append("In the reason field, cite the relevant failed row(s): e.g. mention row index and how the model output differed from expected (e.g. \"Row 2 produced X but expected Y\"), so the user sees which wrong example this edit addresses.")
+    lines.append("")
+    count_instruction = "Output exactly 1 suggestion for this focus." if all_matched else "You may output 1–3 suggestions for this focus."
     lines.append(
         "Respond with JSON: {\"suggestions\": [{\"name\": \"...\", \"section_index\": " + str(idx) + ", \"old_sentence\": \"exact one sentence copied from the section above\", \"new_sentence\": \"replacement\", \"reason\": \"...\"}, ...]}. "
-        "Each suggestion must change exactly ONE sentence. old_sentence must be a verbatim copy from the section. You may output 1–3 suggestions for this focus."
+        "Each suggestion must change exactly ONE sentence. old_sentence must be a verbatim copy from the section. In reason, reference the failed row(s) and wrong output vs expected. " + count_instruction
     )
     return "\n".join(lines)
 
@@ -635,10 +743,13 @@ def review_analyze(body: ReviewRequest):
             api_key=api_key,
             prompt=design_prompt,
             response_model=DesignReviewResult,
-            max_tokens=2048,
+            max_tokens=8192,
         )
         design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
+        all_matched = _review_all_matched(body)
         design_suggestions = list(design_review.suggestions or [])
+        if all_matched and len(design_suggestions) > 1:
+            design_suggestions = design_suggestions[:1]
 
         # Step 1: get summary + list of change focuses
         step1_prompt = _build_review_step1_prompt(body)
@@ -651,6 +762,8 @@ def review_analyze(body: ReviewRequest):
             max_tokens=32768,
         )
         plan = ReviewPlan(**(plan_result if isinstance(plan_result, dict) else plan_result.model_dump()))
+        if all_matched and plan.focuses:
+            plan.focuses = plan.focuses[:2]
         if not plan.focuses:
             return ReviewResult(summary=plan.summary, suggestions=[], design_suggestions=design_suggestions)
 
@@ -669,7 +782,10 @@ def review_analyze(body: ReviewRequest):
                 max_tokens=32768,
             )
             fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
-            for s in fs.suggestions:
+            suggestions_for_focus = list(fs.suggestions or [])
+            if all_matched and len(suggestions_for_focus) > 1:
+                suggestions_for_focus = suggestions_for_focus[:1]
+            for s in suggestions_for_focus:
                 s_dict = s.model_dump() if hasattr(s, "model_dump") else s
                 s_dict["section_index"] = focus.section_index
                 if not (s_dict.get("name") or "").strip():
@@ -711,10 +827,13 @@ def _review_analyze_stream_generator(body: ReviewRequest):
             api_key=api_key,
             prompt=design_prompt,
             response_model=DesignReviewResult,
-            max_tokens=2048,
+            max_tokens=8192,
         )
         design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
+        all_matched = _review_all_matched(body)
         design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in (design_review.suggestions or [])]
+        if all_matched and len(design_list) > 1:
+            design_list = design_list[:1]
         yield (json.dumps({"type": "design", "design_suggestions": design_list}, ensure_ascii=False) + "\n").encode("utf-8")
 
         step1_prompt = _build_review_step1_prompt(body)
@@ -727,6 +846,8 @@ def _review_analyze_stream_generator(body: ReviewRequest):
             max_tokens=32768,
         )
         plan = ReviewPlan(**(plan_result if isinstance(plan_result, dict) else plan_result.model_dump()))
+        if all_matched and plan.focuses:
+            plan.focuses = plan.focuses[:2]
         yield (json.dumps({"type": "plan", "summary": plan.summary, "focus_count": len(plan.focuses or [])}, ensure_ascii=False) + "\n").encode("utf-8")
         if not plan.focuses:
             yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
@@ -745,7 +866,10 @@ def _review_analyze_stream_generator(body: ReviewRequest):
             )
             fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
             batch = []
-            for s in fs.suggestions:
+            suggestions_for_focus = list(fs.suggestions or [])
+            if all_matched and len(suggestions_for_focus) > 1:
+                suggestions_for_focus = suggestions_for_focus[:1]
+            for s in suggestions_for_focus:
                 s_dict = s.model_dump() if hasattr(s, "model_dump") else s
                 s_dict["section_index"] = focus.section_index
                 if not (s_dict.get("name") or "").strip():

@@ -2324,11 +2324,13 @@
   box-shadow: 0 0 0 2px var(--shadow);
 }
 
+/* Match right column title height: right has wrap padding-top 6px + label 6px 20px 12px, so left needs 12px top */
 .review-detail-preview-title {
   margin: 0;
-  padding: 6px 20px;
+  padding: 12px 20px 12px;
   font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--text);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -2360,7 +2362,8 @@
   flex: 1 1 0;
   min-height: 0;
   overflow: auto;
-  padding: 6px 0 0;
+  padding: 12px 0 0 0;
+  gap: 0;
 }
 .review-detail-main .review-detail-preview-content .review-detail-suggestions > *:last-child {
   margin-bottom: 12px;
@@ -2500,10 +2503,12 @@
 }
 
 
+/* Single source for top spacing: first card (design or edit) is always 12px below the title area. */
 .review-detail-suggestions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
+  padding-top: 12px;
 }
 
 .review-detail-suggestion-card {
@@ -2565,10 +2570,22 @@
   cursor: default;
 }
 
-/* Design suggestions: global guidance only, no accept/revert */
 .review-detail-design-suggestions {
-  margin-bottom: 10px;
+  padding-top: 0;
+  margin-bottom: 0;
 }
+.review-detail-edit-suggestions {
+  padding-top: 0;
+  margin-top: 0;
+}
+/* When design has cards: no gap between design block and edit block. */
+.review-detail-design-suggestions + .review-detail-edit-suggestions {
+  margin-top: 0;
+}
+.review-detail-suggestions--design-empty .review-detail-edit-suggestions {
+  margin-top: 0;
+}
+
 .review-detail-design-card .review-detail-suggestion-card__main {
   cursor: default;
 }
@@ -2641,6 +2658,31 @@
 .rule-editor-checkbox {
   width: 16px;
   height: 16px;
+}
+
+.rule-editor-flags-wrap {
+  margin-top: 4px;
+}
+
+.rule-editor-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-top: 6px;
+}
+
+.rule-editor-flag-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.rule-editor-flag-label input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .modal-body--group-editor {

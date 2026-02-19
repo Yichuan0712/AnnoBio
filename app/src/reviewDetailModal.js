@@ -503,6 +503,10 @@ function buildReviewResultUI(overlay, options) {
   }
 
   designSuggestions.forEach((d) => addOneDesignCard(d));
+  function updateSuggestionsDesignEmptyClass() {
+    if (suggestionsEl) suggestionsEl.classList.toggle('review-detail-suggestions--design-empty', designContainer.children.length === 0);
+  }
+  updateSuggestionsDesignEmptyClass();
 
   if (streamRef) {
     if (statusEl) statusEl.textContent = 'Generating suggestions…';
@@ -511,6 +515,7 @@ function buildReviewResultUI(overlay, options) {
       designSuggestions = arr.slice();
       designContainer.innerHTML = '';
       designSuggestions.forEach((d) => addOneDesignCard(d));
+      updateSuggestionsDesignEmptyClass();
       saved.design_suggestions = designSuggestions;
       if (typeof onReviewResultChange === 'function') {
         onReviewResultChange({ ...saved, design_suggestions: designSuggestions });

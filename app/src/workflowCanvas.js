@@ -7,7 +7,7 @@
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal } from './runDetailModal.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
-import { openScoreDetailModal, runReviewFromScore, getScoreExportData } from './scoreDetailModal.js';
+import { openScoreDetailModal, runReviewFromScore, getScoreExportData, getMatchFlags, normalizeForMatch } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 
@@ -37,11 +37,15 @@ function normalizeScoreMappingToRules(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return [];
   const first = arr[0];
   if (first && typeof first === 'object' && Array.isArray(first.gtColumns)) {
-    return arr.map((r) => ({
-      outputKey: r.outputKey || '',
-      gtColumns: Array.isArray(r.gtColumns) ? r.gtColumns.filter(Boolean) : [],
-      matchType: r.matchType || 'exact',
-    })).filter((r) => r.outputKey || r.gtColumns.length > 0);
+    return arr.map((r) => {
+      const f = r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {};
+      return {
+        outputKey: r.outputKey || '',
+        gtColumns: Array.isArray(r.gtColumns) ? r.gtColumns.filter(Boolean) : [],
+        matchType: r.matchType || 'exact',
+        matchFlags: { ignoreCase: !!(f.ignoreCase), ignoreSymbols: !!(f.ignoreSymbols), ignoreWhitespace: !!(f.ignoreWhitespace) },
+      };
+    }).filter((r) => r.outputKey || r.gtColumns.length > 0);
   }
   const pairs = [];
   if (first && first.outputKey !== undefined && !first.rules) {
@@ -86,7 +90,14 @@ function parseScoreMappingToTree(data) {
     return { type: 'group', ops, children };
   }
   const rules = normalizeScoreMappingToRules(Array.isArray(data) ? data : []);
-  const children = rules.map((r) => ({ type: 'rule', outputKey: r.outputKey || '', gtColumns: (r.gtColumns || []).slice(), matchType: r.matchType || 'exact' }));
+  const defaultFlags = { ignoreCase: false, ignoreSymbols: false, ignoreWhitespace: false };
+  const children = rules.map((r) => ({
+    type: 'rule',
+    outputKey: r.outputKey || '',
+    gtColumns: (r.gtColumns || []).slice(),
+    matchType: r.matchType || 'exact',
+    matchFlags: r.matchFlags && typeof r.matchFlags === 'object' ? { ...r.matchFlags } : defaultFlags,
+  }));
   const ops = Array(Math.max(0, children.length - 1)).fill('AND');
   return { type: 'group', ops, children };
 }
@@ -99,11 +110,13 @@ function normalizeScoreGroupChild(c) {
 
 function normalizeScoreChild(c) {
   if (!c || c.type === 'rule') {
+    const f = c && c.matchFlags && typeof c.matchFlags === 'object' ? c.matchFlags : {};
     return {
       type: 'rule',
       outputKey: (c && c.outputKey) || '',
       gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
       matchType: (c && c.matchType) || 'exact',
+      matchFlags: { ignoreCase: !!(f.ignoreCase), ignoreSymbols: !!(f.ignoreSymbols), ignoreWhitespace: !!(f.ignoreWhitespace) },
     };
   }
   return normalizeScoreGroupChild(c);
@@ -175,9 +188,28 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
   const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
     if (!rule || rule.type !== 'rule') return false;
     const runResult = resultsByIndex.get(runRowIndex) || null;
-    const runVal = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
-    const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
-    return gtVals.some((g) => g === runVal);
+    const runValRaw = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
+    const gtValsRaw = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
+    const matchType = rule.matchType || 'exact';
+    const flags = getMatchFlags(rule);
+    if (matchType === 'numeric') {
+      const runNorm = normalizeForMatch(runValRaw, flags, true);
+      const runNum = parseFloat(runNorm);
+      return gtValsRaw.some((g) => {
+        const gtNorm = normalizeForMatch(g, flags, true);
+        const gtNum = parseFloat(gtNorm);
+        if (Number.isFinite(runNum) && Number.isFinite(gtNum)) return runNum === gtNum;
+        return runNorm === gtNorm;
+      });
+    }
+    const runVal = normalizeForMatch(runValRaw, flags, false);
+    return gtValsRaw.some((g) => {
+      const gtVal = normalizeForMatch(g, flags, false);
+      if (matchType === 'exact') return runVal === gtVal;
+      if (matchType === 'contains') return runVal.includes(gtVal);
+      if (matchType === 'gt-contains-run') return gtVal.includes(runVal);
+      return runVal === gtVal;
+    });
   };
   const countMatchingRules = (root, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
     const rules = flattenScoreTreeToRules(root);
@@ -235,6 +267,24 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
   const runCount = runWsSafe?.rows?.length ?? 0;
   const resultsByIndex = new Map();
   (results || []).forEach((r) => resultsByIndex.set(r.row_index, r));
+  /** Same logic as Score table Match column: full tree with matchType + matchFlags. */
+  function evaluateNodeLocal(node, runRowIndex, gtRowIndex) {
+    if (!node) return false;
+    if (node.type === 'rule') {
+      return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWsSafe, outputFields, gtSafe);
+    }
+    if (node.type === 'group' && Array.isArray(node.children)) {
+      if (node.children.length === 0) return false;
+      const ops = node.ops || Array(Math.max(0, node.children.length - 1)).fill('AND');
+      let r = evaluateNodeLocal(node.children[0], runRowIndex, gtRowIndex);
+      for (let c = 1; c < node.children.length; c++) {
+        const next = evaluateNodeLocal(node.children[c], runRowIndex, gtRowIndex);
+        r = (ops[c - 1] === 'OR') ? (r || next) : (r && next);
+      }
+      return r;
+    }
+    return false;
+  }
   const rows = [];
   for (let i = 0; i < runCount; i++) {
     const runResult = resultsByIndex.get(i) || null;
@@ -248,7 +298,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
         expectedParts.push(`${rule.outputKey}: ${gtVals.join(' | ') || '—'}`);
       }
     }
-    const isFullMatch = gtRowIndex >= 0 && evaluateScoreNode(scoreRoot, i, gtRowIndex, resultsByIndex, runWsSafe, outputFields, gtSafe, getRunValue, getGtValue);
+    const isFullMatch = gtRowIndex >= 0 && evaluateNodeLocal(scoreRoot, i, gtRowIndex);
     const commentKey = gtRowIndex >= 0 ? String(gtRowIndex) : 'run:' + i;
     rows.push({
       row_index: i,
@@ -2160,12 +2210,29 @@ export function buildWorkflowCanvas(root) {
           runResults = JSON.parse(runNode.dataset.runResults || '[]');
           outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
         } catch (_) {}
+        let output_schema = null;
+        try {
+          const raw = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
+          const fields = (Array.isArray(raw) ? raw : []).map((o) => ({
+            key: o.key || '',
+            type: o.type || 'str',
+            description: o.description,
+            allow_none: o.allowNone === true || o.allow_none === true,
+          })).filter((f) => (f.key || '').trim());
+          if (fields.length > 0) {
+            output_schema = {
+              return_shape: promptNode.dataset.promptOutputReturnShape || 'single',
+              fields,
+            };
+          }
+        } catch (_) {}
         const comparison_rows = buildReviewComparisonRows(node, runNode, subsetContentByNodeId);
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
           run_results: runResults,
           output_fields: outputFields,
+          output_schema,
           comparison_rows,
         };
       }
@@ -2592,12 +2659,29 @@ export function buildWorkflowCanvas(root) {
             runResults = JSON.parse(runNode.dataset.runResults || '[]');
             outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
           } catch (_) {}
+          let output_schema = null;
+          try {
+            const raw = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
+            const fields = (Array.isArray(raw) ? raw : []).map((o) => ({
+              key: o.key || '',
+              type: o.type || 'str',
+              description: o.description,
+              allow_none: o.allowNone === true || o.allow_none === true,
+            })).filter((f) => (f.key || '').trim());
+            if (fields.length > 0) {
+              output_schema = {
+                return_shape: promptNode.dataset.promptOutputReturnShape || 'single',
+                fields,
+              };
+            }
+          } catch (_) {}
           const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId);
           return {
             prompt_sections: sections,
             prompt_full_text: promptFullText,
             run_results: runResults,
             output_fields: outputFields,
+            output_schema,
             comparison_rows,
           };
         }
@@ -2613,7 +2697,7 @@ export function buildWorkflowCanvas(root) {
           } catch (_) {}
         }
         if (!credentialId) {
-          alert('请先在 Score 详情页选择 Reviewer model，或先添加一个 API 凭证。');
+          alert('Please select a Reviewer model in the Score detail first, or add an API credential.');
           return;
         }
         runReviewFromScore({
