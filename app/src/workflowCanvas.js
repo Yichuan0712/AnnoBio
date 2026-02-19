@@ -286,17 +286,21 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     }
     return false;
   }
+  const MATCH_TYPE_LABELS = { exact: 'Exact match', contains: 'Result contains ground truth', 'gt-contains-run': 'Ground truth contains result', numeric: 'Numeric equality' };
   const rows = [];
   for (let i = 0; i < runCount; i++) {
     const runResult = resultsByIndex.get(i) || null;
     const runOutput = runResult?.output && typeof runResult.output === 'object' ? runResult.output : {};
     const gtRowIndex = runToGt && runToGt[i] >= 0 ? runToGt[i] : -1;
     const expectedParts = [];
+    const comparisonTypes = [];
     if (gtRowIndex >= 0) {
       const rulesFlat = flattenScoreTreeToRules(scoreRoot);
       for (const rule of rulesFlat) {
         const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtSafe, gtRowIndex, col));
         expectedParts.push(`${rule.outputKey}: ${gtVals.join(' | ') || '—'}`);
+        const label = MATCH_TYPE_LABELS[rule.matchType || 'exact'] || rule.matchType || 'Exact match';
+        comparisonTypes.push(`${rule.outputKey}: ${label}`);
       }
     }
     const isFullMatch = gtRowIndex >= 0 && evaluateNodeLocal(scoreRoot, i, gtRowIndex);
@@ -306,6 +310,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
       matched: isFullMatch,
       run_output: runOutput,
       expected: expectedParts.length ? expectedParts.join('; ') : '—',
+      comparison_types: comparisonTypes.length ? comparisonTypes : null,
       comment: comments[commentKey] ?? null,
     });
   }
@@ -3015,7 +3020,7 @@ export function buildWorkflowCanvas(root) {
         const rows = content?.rows ? content.rows.map((r) => r.slice()) : [];
         const samplerNodeId = node.dataset.samplerNodeId || '';
         const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
-        const notes = formatSamplerDescription(samplerNode);
+        const notes = (node.dataset.subsetNote ?? '').trim() || formatSamplerDescription(samplerNode);
         const newNode = createSubsetNode({
           name: newName,
           notes,
@@ -3045,7 +3050,7 @@ export function buildWorkflowCanvas(root) {
         const rows = content?.rows ? content.rows.map((r) => r.slice()) : [];
         const samplerNodeId = node.dataset.samplerNodeId || '';
         const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
-        const notes = formatSamplerDescription(samplerNode);
+        const notes = (node.dataset.subsetNote ?? '').trim() || formatSamplerDescription(samplerNode);
         const newNode = createSubsetNode({
           name: versionName,
           notes,

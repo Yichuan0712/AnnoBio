@@ -88,6 +88,7 @@ class ReviewComparisonRow(BaseModel):
     matched: bool
     run_output: dict = Field(default_factory=dict, description="Model output for this row")
     expected: str = Field(default="", description="Expected value(s) from ground truth")
+    comparison_types: list[str] | None = Field(default=None, description="Per-rule comparison: e.g. ['field_key: Exact match', 'field_key: Result contains ground truth']")
     comment: str | None = Field(default=None, description="User comment if any")
 
 
@@ -597,6 +598,8 @@ def _build_review_step1_prompt(body: ReviewRequest) -> str:
     if unmatched:
         for row in unmatched:
             lines.append(f"Row {row.row_index} [NOT MATCHED]")
+            if row.comparison_types:
+                lines.append(f"  Comparison: {', '.join(row.comparison_types)}")
             lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
             lines.append(f"  Expected: {row.expected}")
             if row.comment:
@@ -609,6 +612,8 @@ def _build_review_step1_prompt(body: ReviewRequest) -> str:
     if matched:
         for row in matched:
             lines.append(f"Row {row.row_index} [matched]")
+            if row.comparison_types:
+                lines.append(f"  Comparison: {', '.join(row.comparison_types)}")
             lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
             lines.append(f"  Expected: {row.expected}")
             if row.comment:
@@ -701,10 +706,12 @@ def _build_review_step2_prompt(
     lines.append("Focus your edit on fixing the failed rows; ensure the change does not break the matched rows.")
     lines.append("Failed rows (fix these):")
     for row in unmatched:
-        lines.append(f"  Row {row.row_index} [NOT MATCHED] Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
+        comp = f" Comparison: {', '.join(row.comparison_types)}." if row.comparison_types else ""
+        lines.append(f"  Row {row.row_index} [NOT MATCHED]{comp} Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
     lines.append("Matched rows (for context; avoid breaking these):")
     for row in matched:
-        lines.append(f"  Row {row.row_index} [matched] Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
+        comp = f" Comparison: {', '.join(row.comparison_types)}." if row.comparison_types else ""
+        lines.append(f"  Row {row.row_index} [matched]{comp} Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
     lines.append("")
     lines.append("In the reason field, cite the relevant failed row(s): e.g. mention row index and how the model output differed from expected (e.g. \"Row 2 produced X but expected Y\"), so the user sees which wrong example this edit addresses.")
     lines.append("")

@@ -93,6 +93,7 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
       matched: r.matched,
       run_output: r.run_output || {},
       expected: r.expected || '',
+      comparison_types: r.comparison_types ?? null,
       comment: r.comment ?? null,
     })),
   };
