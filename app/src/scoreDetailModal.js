@@ -95,6 +95,7 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
       expected: r.expected || '',
       comparison_types: r.comparison_types ?? null,
       comment: r.comment ?? null,
+      row_input: r.row_input ?? null,
     })),
   };
   const promptFullText = payload.prompt_full_text || (payload.prompt_sections || []).map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');

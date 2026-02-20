@@ -305,6 +305,11 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     }
     const isFullMatch = gtRowIndex >= 0 && evaluateNodeLocal(scoreRoot, i, gtRowIndex);
     const commentKey = gtRowIndex >= 0 ? String(gtRowIndex) : 'run:' + i;
+    const wsRow = runWsSafe.rows && runWsSafe.rows[i] ? runWsSafe.rows[i] : [];
+    const headers = runWsSafe.headers || [];
+    const row_input = headers.length
+      ? Object.fromEntries(headers.map((h, j) => [String(h).trim(), wsRow[j] ?? '']))
+      : null;
     rows.push({
       row_index: i,
       matched: isFullMatch,
@@ -312,6 +317,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
       expected: expectedParts.length ? expectedParts.join('; ') : '—',
       comparison_types: comparisonTypes.length ? comparisonTypes : null,
       comment: comments[commentKey] ?? null,
+      row_input: row_input,
     });
   }
   return rows;

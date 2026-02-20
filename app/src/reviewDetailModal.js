@@ -412,23 +412,27 @@ function buildReviewResultUI(overlay, options) {
     const originalContent = (originals[secIdx] && originals[secIdx].content) ? originals[secIdx].content : '';
     const segmentInOriginal = useSentenceEdit ? getLocatableSegment(originalContent, oldSentence) : null;
     const unlocatable = useSentenceEdit && !segmentInOriginal;
+    const groundTruthIssue = sug.ground_truth_issue === true;
+    const noButton = unlocatable || groundTruthIssue;
     /* Only show Revert when user has explicitly applied (sug.applied === true from persist). Fresh suggestions must show Accept. */
     const isApplied = sug.applied === true;
     const fullReason = (sug.reason || '').trim();
     const changeName = (sug.name || '').trim() || name;
 
+    const noButtonNote = groundTruthIssue ? '<p class="review-detail-suggestion-unlocatable">This may be a ground truth issue; no prompt edit suggested.</p>' : '';
+
     const card = document.createElement('div');
-    card.className = 'review-detail-suggestion-card' + (unlocatable ? ' review-detail-suggestion-card--unlocatable' : '');
+    card.className = 'review-detail-suggestion-card' + (noButton ? ' review-detail-suggestion-card--unlocatable' : '');
     card.dataset.sectionIndex = String(secIdx);
     card.dataset.suggestionIndex = String(sugIdx);
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
         <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong>
         <p class="review-detail-suggestion-reason">${escapeHtml(fullReason)}</p>
-        ${unlocatable ? '<p class="review-detail-suggestion-unlocatable">Could not locate the original sentence in the section; Apply is hidden.</p>' : ''}
+        ${noButtonNote}
       </div>
       <div class="review-detail-suggestion-card__actions">
-        ${unlocatable ? '' : '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'}
+        ${noButton ? '' : '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'}
       </div>
     `;
     const mainEl = card.querySelector('.review-detail-suggestion-card__main');
@@ -464,7 +468,7 @@ function buildReviewResultUI(overlay, options) {
     mainEl.tabIndex = -1;
     const deleteOnly = useSentenceEdit && newSentence === '';
 
-    if (!unlocatable) {
+    if (!noButton) {
       card.addEventListener('mouseenter', () => showPreview());
       card.addEventListener('mouseleave', () => clearDiffOnRight());
 

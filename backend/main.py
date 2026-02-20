@@ -90,6 +90,7 @@ class ReviewComparisonRow(BaseModel):
     expected: str = Field(default="", description="Expected value(s) from ground truth")
     comparison_types: list[str] | None = Field(default=None, description="Per-rule comparison: e.g. ['field_key: Exact match', 'field_key: Result contains ground truth']")
     comment: str | None = Field(default=None, description="User comment if any")
+    row_input: dict | None = Field(default=None, description="Input key-values used to fill the prompt for this row; used in Step 1b when LLM requests it")
 
 
 class ReviewRequest(BaseModel):
@@ -106,9 +107,10 @@ class ReviewRequest(BaseModel):
 class ReviewSuggestion(BaseModel):
     name: str = Field(..., description="Short name summarizing this change (e.g. 'Clarify output format')")
     section_index: int = Field(..., ge=0, description="0-based index of the section to change")
-    old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only)")
-    new_sentence: str = Field(..., description="Replacement for that one sentence")
+    old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only); use '(no edit)' when ground_truth_issue is true")
+    new_sentence: str = Field(..., description="Replacement for that one sentence; use '(no edit)' when ground_truth_issue is true")
     reason: str = Field(..., description="Why this change is suggested")
+    ground_truth_issue: bool = Field(default=False, description="If true, informational only: failure may be due to ground truth error; no prompt edit suggested")
 
 
 class DesignSuggestion(BaseModel):
@@ -123,20 +125,32 @@ class ReviewResult(BaseModel):
     design_suggestions: list[DesignSuggestion] = Field(default_factory=list, description="Global design guidance only; no accept/revert in UI")
 
 
-# Two-step review: step1 = plan (summary + change focuses), step2 = concrete suggestions per focus
-class ReviewChangeFocus(BaseModel):
-    section_index: int = Field(..., ge=0, description="0-based section index")
-    focus_description: str = Field(..., description="One-sentence description of what to change in this section")
-    name: str = Field(default="", description="Short title for this change (e.g. 'Clarify output format')")
+# New review flow: step1 = per-row analysis (+ rows_needing_input), step1b = optional refill with row_input, step2 = one shot suggestions from per_row
+class ReviewStep1RowAnalysis(BaseModel):
+    row_index: int = Field(..., description="0-based row index")
+    reason: str = Field(..., description="Brief reason why this row failed")
+    section_index_suggestions: list[int] = Field(default_factory=list, description="0-based section indices that might need change")
+    need_input: bool = Field(default=False, description="True if analysis is unclear without seeing the row's input")
 
 
-class ReviewPlan(BaseModel):
+class ReviewStep1Result(BaseModel):
     summary: str = Field(..., description="Brief overall analysis of prompt vs comparison")
-    focuses: list[ReviewChangeFocus] = Field(default_factory=list, description="List of change focuses to expand into concrete edits")
+    per_row: list[ReviewStep1RowAnalysis] = Field(default_factory=list, description="Per failed-row analysis")
+    rows_needing_input: list[int] = Field(default_factory=list, description="Row indices for which input is needed to analyze; subset of failed rows")
+
+
+class ReviewStep1bRowUpdate(BaseModel):
+    row_index: int = Field(..., description="0-based row index")
+    reason: str = Field(..., description="Refined reason after seeing row input")
+    section_index_suggestions: list[int] = Field(default_factory=list, description="0-based section indices to change")
+
+
+class ReviewStep1bResult(BaseModel):
+    updates: list[ReviewStep1bRowUpdate] = Field(default_factory=list, description="Refined analysis for rows that had row_input")
 
 
 class FocusSuggestions(BaseModel):
-    suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete suggestions for this focus only")
+    suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete suggestions (used for step2 single call)")
 
 
 class DesignReviewResult(BaseModel):
@@ -527,6 +541,37 @@ def _review_all_matched(body: ReviewRequest) -> bool:
     return all(r.matched for r in comparison_rows) if comparison_rows else True
 
 
+# Comparison rule labels (must match frontend MATCH_TYPE_LABELS) and their definitions for LLM prompts.
+REVIEW_COMPARISON_RULES_BLOCK = """
+- **Exact match**: Model output must equal the expected value exactly (after trimming). No extra or missing characters.
+- **Result contains ground truth**: The model output string must contain the expected value (expected is a substring of run output).
+- **Ground truth contains result**: The expected value string must contain the model output (run output is a substring of expected).
+- **Numeric equality**: Both sides are normalized and compared as numbers; they must be numerically equal.
+"""
+
+
+def _review_compared_fields_and_rules(comparison_rows: list[ReviewComparisonRow]) -> tuple[list[str], str]:
+    """From comparison_rows, return (list of compared output field names, full comparison rules text for prompt)."""
+    for row in comparison_rows or []:
+        if not row.comparison_types:
+            continue
+        fields: list[str] = []
+        for ct in row.comparison_types:
+            # Format is "outputKey: Label" e.g. "summary: Exact match"
+            if ": " in ct:
+                key = ct.split(": ", 1)[0].strip()
+                if key and key not in fields:
+                    fields.append(key)
+        if fields:
+            block = "## Compared fields (only these were used to decide matched / NOT MATCHED)\n"
+            block += "When giving reasons or suggestions, only refer to these fields. Do not cite or reason about other keys in the model output; they were not part of the scoring.\n"
+            block += "Fields: " + ", ".join(fields) + "\n\n"
+            block += "## Comparison rules (how each field was judged)\n"
+            block += REVIEW_COMPARISON_RULES_BLOCK.strip()
+            return fields, block
+    return [], ""
+
+
 def _build_review_design_prompt(body: ReviewRequest) -> str:
     """Step 0: Design suggestions only when prompt is seriously broken (user typically can't write)."""
     lines = [
@@ -560,21 +605,23 @@ def _build_review_design_prompt(body: ReviewRequest) -> str:
 
 
 def _build_review_step1_prompt(body: ReviewRequest) -> str:
-    """Step1: Ask for summary + list of change focuses (no exact sentences yet)."""
+    """Step1: Per-row analysis. For each failed row: reason, section_index_suggestions; if unclear, set need_input and add row_index to rows_needing_input."""
     all_matched = _review_all_matched(body)
     lines = [
-        "You are helping improve a prompt used for structured LLM output. Below are the current prompt sections and per-row comparison of model output vs ground truth (matched or not, and any user comment).",
+        "You are helping improve a prompt used for structured LLM output. Below are the prompt sections and per-row comparison of model output vs ground truth.",
         "",
-        "## Task (step 1 of 2): Analyze and plan",
-        "Output: (1) A brief overall summary. (2) A list of concrete change focuses. Each focus: section_index (0-based), a short name (e.g. \"Clarify output format\"), and focus_description = one sentence describing exactly what to change in that section (e.g. \"Add an example of valid JSON output\").",
-        "Do NOT output exact old_sentence/new_sentence yet. Only list what should be changed and where. Focus your focuses on fixing the rows that failed (NOT MATCHED); consider matched rows as context and avoid suggesting changes that would break them. Prefer 3–10 focuses when there are failures; merge tiny edits into one focus per idea.",
+        "## Task (step 1): Analyze each failed row",
+        "For each row that is NOT MATCHED: (1) Give a brief but complete reason why it failed — e.g. 'Row 1: phosphatase field was under-extracted' or 'Row 2: expected value appears to be a typo; consider checking ground truth.' The reason must explain what went wrong, not just state the row number. (2) List which section indices (0-based) might need a change to fix this. (3) If you cannot tell why it failed without seeing the input that was used to fill the prompt for this row, set need_input to true and add that row_index to rows_needing_input.",
+        "(4) If the expected/ground-truth value clearly appears wrong (typo, wrong entity, contradicts the passage, or model output is more plausible), say so in the reason (e.g. 'Row 2: expected value appears incorrect; consider checking ground truth.'). This will be surfaced to the user so they can fix the dataset.",
+        "You do NOT see the input (the data that filled the prompt) here; only model output vs expected. If the failure is unclear, request input for that row.",
+        "**In your summary and reason text, write row numbers as Row 1, Row 2, Row 3, etc. (do not write '(1-based)' or '0-based' in the text; the row_index in JSON stays 0-based).**",
         "",
-        "**Do NOT suggest putting the correct/expected answer or ground truth into the prompt.** Summarize the problem (why the model failed) and suggest real prompt improvements: clarify instructions, add criteria or rules, improve wording. The prompt must teach the model how to behave so it can generalize; do not embed the right answer in the prompt.",
+        "**Do NOT suggest putting the correct/expected answer or ground truth into the prompt.** Suggest real prompt improvements: clarify instructions, add criteria, improve wording.",
         "",
     ]
     if all_matched:
         lines.extend([
-            "**All rows are matched (no failures).** Give a short positive summary. You MUST output at least 1 and at most 2 optional improvement focuses (e.g. one small clarity or wording tweak). Pick the 1–2 most valuable optional improvements so the user gets at least one suggestion.",
+            "**All rows are matched (no failures).** Give a short positive summary. For per_row, output one synthetic entry (e.g. row_index 0, reason \"all matched\", section_index_suggestions [0] or [], need_input false) so we have at least one optional improvement. Keep rows_needing_input empty.",
             "",
         ])
     lines.append("## Sections (0-based index for reference)")
@@ -588,16 +635,19 @@ def _build_review_step1_prompt(body: ReviewRequest) -> str:
     if schema_lines:
         lines.append("## Output schema (same as used in run)")
         lines.extend(schema_lines)
-        lines.append("(This schema is enforced by LangChain at run time; the user does NOT need to add the exact JSON format or output structure in the prompt. Do not suggest adding JSON examples or output format to the prompt.)")
+        lines.append("(Enforced by LangChain; do not suggest adding JSON/output format to the prompt.)")
         lines.append("")
     comparison_rows = body.comparison_rows or []
+    compared_fields, rules_block = _review_compared_fields_and_rules(comparison_rows)
+    if rules_block:
+        lines.append(rules_block)
+        lines.append("")
     unmatched = [r for r in comparison_rows if not r.matched]
     matched = [r for r in comparison_rows if r.matched]
-    lines.append("## Rows that failed (NOT MATCHED) — focus your suggestions on fixing these")
-    lines.append("Your focuses and edits should target why these rows failed. In focus_description, when helpful briefly refer to the relevant failed row(s) (e.g. which row or what the model output vs expected). Prioritize fixing these.")
+    lines.append("## Rows that failed (NOT MATCHED) — analyze each; add to rows_needing_input if you need to see this row's input")
     if unmatched:
         for row in unmatched:
-            lines.append(f"Row {row.row_index} [NOT MATCHED]")
+            lines.append(f"Row {row.row_index + 1} (row_index {row.row_index}) [NOT MATCHED]")
             if row.comparison_types:
                 lines.append(f"  Comparison: {', '.join(row.comparison_types)}")
             lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
@@ -608,10 +658,10 @@ def _build_review_step1_prompt(body: ReviewRequest) -> str:
     else:
         lines.append("(None — all rows matched.)")
         lines.append("")
-    lines.append("## Rows that matched — for context only; avoid suggesting changes that would break these")
+    lines.append("## Rows that matched — context only; avoid suggesting changes that would break these")
     if matched:
-        for row in matched:
-            lines.append(f"Row {row.row_index} [matched]")
+        for row in matched[:20]:
+            lines.append(f"Row {row.row_index + 1} (row_index {row.row_index}) [matched]")
             if row.comparison_types:
                 lines.append(f"  Comparison: {', '.join(row.comparison_types)}")
             lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
@@ -622,110 +672,143 @@ def _build_review_step1_prompt(body: ReviewRequest) -> str:
     else:
         lines.append("(None.)")
         lines.append("")
-    # Constraint: do not suggest changing user-defined output field keys or section names (from existing payload)
     _, schema_keys = _review_output_schema_lines(body)
     section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
     if schema_keys or section_names:
-        lines.append("## Constraints (mandatory)")
-        lines.append("Do NOT suggest any change that would rename, remove, or alter the following. They are user-defined and must stay exactly as-is:")
-        if schema_keys:
-            lines.append("- Output schema field keys (keep these exact strings in the prompt): " + ", ".join(repr(k) for k in schema_keys))
-        if section_names:
-            lines.append("- Input/section names (do not suggest renaming sections or changing these names in the text): " + ", ".join(repr(n) for n in section_names))
-        lines.append("Do not add focuses that would modify output field keys or input/section names. You may still suggest clarifications or examples that keep these names unchanged.")
+        lines.append("## Constraints")
+        lines.append("Do NOT suggest changing output schema field keys or section names; they must stay as-is.")
         lines.append("")
     lines.append(
-        "Respond with JSON: {\"summary\": \"...\", \"focuses\": [{\"section_index\": 0, \"name\": \"short title\", \"focus_description\": \"one sentence what to change\"}, ...]}."
+        "Respond with JSON: {\"summary\": \"...\", \"per_row\": [{\"row_index\": 0, \"reason\": \"...\", \"section_index_suggestions\": [0, 1], \"need_input\": false}, ...], \"rows_needing_input\": [0, 2]}."
     )
     return "\n".join(lines)
 
 
-def _build_review_step2_prompt(
-    body: ReviewRequest,
-    focus: ReviewChangeFocus,
-) -> str:
-    """Step2: Given one focus, output exact old_sentence/new_sentence for that section."""
-    secs = body.prompt_sections or []
-    idx = focus.section_index
-    if idx < 0 or idx >= len(secs):
-        return ""
+def _build_review_step1b_prompt(rows_with_input: list[ReviewComparisonRow]) -> str:
+    """Step1b: Refine analysis for rows that need input; each row has row_input (key-values used to fill prompt)."""
+    lines = [
+        "You previously could not fully analyze these rows without seeing the input. Below each row now includes the input (key-value pairs that were used to fill the prompt for that row).",
+        "",
+        "## Task: Refine analysis for each row",
+        "For each row below, output an update: row_index, reason (refined now that you see the input), and section_index_suggestions (0-based section indices to change).",
+        "The reason must be a clear, short explanation for the user (e.g. 'Row 2: substrate in input is TRPV6 but expected has a typo; correct the ground truth.'), not just the row number. When giving reasons, only refer to the compared fields (see below); do not cite other keys in the model output.",
+        "",
+    ]
+    _, rules_block = _review_compared_fields_and_rules(rows_with_input)
+    if rules_block:
+        lines.append(rules_block)
+        lines.append("")
+    lines.append("**In your reason text, write row numbers as Row 1, Row 2, etc.; do not write '(1-based)' or '0-based' in the text. The row_index in JSON stays 0-based.**")
+    lines.append("")
+    for row in rows_with_input:
+        lines.append(f"Row {row.row_index + 1} (row_index {row.row_index})")
+        lines.append(f"  Input (used to fill prompt): {json.dumps(row.row_input or {}, ensure_ascii=False)}")
+        lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
+        lines.append(f"  Expected: {row.expected}")
+        if row.comparison_types:
+            lines.append(f"  Comparison: {', '.join(row.comparison_types)}")
+        if row.comment:
+            lines.append(f"  User comment: {row.comment}")
+        lines.append("")
+    lines.append(
+        "Respond with JSON: {\"updates\": [{\"row_index\": 0, \"reason\": \"...\", \"section_index_suggestions\": [0, 1]}, ...]}."
+    )
+    return "\n".join(lines)
+
+
+def _build_review_step2_prompt(body: ReviewRequest, per_row: list[ReviewStep1RowAnalysis]) -> str:
+    """Step2: From merged per_row analysis, output concrete old_sentence/new_sentence suggestions (one call, all sections)."""
     all_matched = _review_all_matched(body)
-    sec = secs[idx]
-    name = (sec.get("name") or "").strip() or "(unnamed)"
-    content = (sec.get("content") or "").strip() or "(empty)"
     _, schema_keys = _review_output_schema_lines(body)
     section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
     lines = [
-        "You are improving a prompt section. Output concrete edit suggestions: exact sentence to replace (old_sentence) and replacement (new_sentence).",
+        "You are improving a prompt. You have per-row analysis (reason + which sections to change). Output concrete edit suggestions: for each change, exact old_sentence (verbatim from section) and new_sentence.",
         "",
-        "**Do NOT put the correct/expected answer or ground truth into new_sentence.** The edit must improve the prompt's instructions, criteria, or wording so the model can produce correct output on its own. new_sentence must not contain the expected value or the right answer for the failed rows; it must be a real prompt improvement (e.g. clarify a rule, add a criterion), not a shortcut that pastes the answer into the prompt.",
+        "**Do NOT put the correct/expected answer or ground truth into new_sentence.** Improve instructions, criteria, or wording so the model can generalize.",
+        "",
+        "## Critical: old_sentence",
+        "Copy character-for-character from the section text. One sentence or one line per suggestion. The tool matches by string; one character wrong and the edit may fail.",
+        "",
+        "## Critical: new_sentence",
+        "Must not contain expected/correct output. Change instructions or criteria only.",
         "",
     ]
     if all_matched:
-        lines.extend([
-            "**All rows matched — no failures.** Output exactly 1 suggestion for this focus (one optional small edit). Provide one concrete, low-impact improvement (e.g. clearer wording or a brief example).",
-            "",
-        ])
-    lines.extend([
-        "## Critical: how to set old_sentence",
-        "Copy old_sentence character-for-character from the section text below. Do not paraphrase or add/remove spaces or newlines. "
-        "The tool locates the change by matching this string in the section; if it differs by even one character, the edit may fail. "
-        "Best practice: copy the exact substring from the section (one sentence or one line) into old_sentence.",
-        "",
-        "## Critical: new_sentence must improve the prompt, not paste the answer",
-        "new_sentence must not contain the expected/correct output or ground truth. It must change the prompt's instructions or criteria (e.g. clarify a rule, add a condition, fix ambiguous wording) so the model learns how to behave. Do not suggest adding the right answer into the prompt.",
-        "",
-        "## Focus for this section",
-        f"Section index: {idx} ({name})",
-        f"What to do: {focus.focus_description}",
-        f"Short name for suggestions: {focus.name or 'Edit'}",
-        "",
-        "## Section full text (copy exact substring from here for old_sentence)",
-        content,
-        "",
-        "## Comparison context (why this change helps)",
-    ])
-    if schema_keys or section_names:
+        lines.append("**All rows matched.** Output 1–2 optional small improvements (e.g. clarity or wording).")
         lines.append("")
-        lines.append("## Constraints (mandatory)")
-        lines.append("Do NOT suggest any edit that would rename, remove, or alter these user-defined names (they must stay exactly as-is in new_sentence):")
-        if schema_keys:
-            lines.append("- Output schema field keys: " + ", ".join(repr(k) for k in schema_keys))
-        if section_names:
-            lines.append("- Input/section names: " + ", ".join(repr(n) for n in section_names))
+    comparison_rows = body.comparison_rows or []
+    compared_fields, rules_block = _review_compared_fields_and_rules(comparison_rows)
+    if rules_block:
+        lines.append(rules_block)
+        lines.append("")
+    lines.append("## Sections (copy exact substring from here for old_sentence)")
+    for i, sec in enumerate(body.prompt_sections or []):
+        name = (sec.get("name") or "").strip() or "(unnamed)"
+        content = (sec.get("content") or "").strip() or "(empty)"
+        lines.append(f"--- Section index {i}: {name} ---")
+        lines.append(content)
+        lines.append("")
+    lines.append("## Per-row analysis (why each failed and which sections to change)")
+    for a in per_row:
+        lines.append(f"Row {a.row_index + 1} (row_index {a.row_index}): {a.reason} -> section indices to consider: {a.section_index_suggestions}")
+    lines.append("")
+    if schema_keys or section_names:
+        lines.append("## Constraints")
+        lines.append("Do NOT rename or alter output schema field keys or section names.")
         lines.append("")
     schema_lines, _ = _review_output_schema_lines(body)
     if schema_lines:
-        lines.append("Output schema (same as used in run):")
+        lines.append("Output schema (same as run):")
         lines.extend(schema_lines)
-        lines.append("(Enforced by LangChain; do not suggest adding JSON/output format to the prompt.)")
         lines.append("")
     comparison_rows = body.comparison_rows or []
     unmatched = [r for r in comparison_rows if not r.matched][:15]
-    matched = [r for r in comparison_rows if r.matched][:15]
-    lines.append("Focus your edit on fixing the failed rows; ensure the change does not break the matched rows.")
-    lines.append("Failed rows (fix these):")
+    lines.append("## Reason field rules")
+    lines.append(
+        "If the suggestion is to fix an unmatched (failed) row: the reason MUST state which run result(s) caused it — e.g. 'Row 2 failed because phosphatase was under-extracted; this edit clarifies that the symbol must come from the list.' Always say which row(s) (Row 1, Row 2, etc.; do not write '1-based' or '0-based') and which error led to this change."
+    )
+    lines.append(
+        "When several failed rows share the same root cause: output one suggestion that fixes it (do not duplicate the same edit for each row). In the reason, list all the rows affected — e.g. 'Rows 2, 3, and 5 all failed because phosphatase was under-extracted; this edit clarifies that the symbol must come from the list.'"
+    )
+    lines.append(
+        "If the suggestion is a general improvement based on matched rows (e.g. all rows matched, or optional polish): no need to mention a row number; a short explanation of the improvement is enough."
+    )
     for row in unmatched:
         comp = f" Comparison: {', '.join(row.comparison_types)}." if row.comparison_types else ""
-        lines.append(f"  Row {row.row_index} [NOT MATCHED]{comp} Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
-    lines.append("Matched rows (for context; avoid breaking these):")
-    for row in matched:
-        comp = f" Comparison: {', '.join(row.comparison_types)}." if row.comparison_types else ""
-        lines.append(f"  Row {row.row_index} [matched]{comp} Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
+        lines.append(f"  Row {row.row_index + 1} (row_index {row.row_index}){comp} Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
     lines.append("")
-    lines.append("In the reason field, cite the relevant failed row(s): e.g. mention row index and how the model output differed from expected (e.g. \"Row 2 produced X but expected Y\"), so the user sees which wrong example this edit addresses.")
-    lines.append("")
-    count_instruction = "Output exactly 1 suggestion for this focus." if all_matched else "You may output 1–3 suggestions for this focus."
+    lines.append("## Ground truth issues (important)")
     lines.append(
-        "Respond with JSON: {\"suggestions\": [{\"name\": \"...\", \"section_index\": " + str(idx) + ", \"old_sentence\": \"exact one sentence copied from the section above\", \"new_sentence\": \"replacement\", \"reason\": \"...\"}, ...]}. "
-        "Each suggestion must change exactly ONE sentence. old_sentence must be a verbatim copy from the section. In reason, reference the failed row(s) and wrong output vs expected. " + count_instruction
+        "When the failure is clearly due to incorrect or inconsistent ground truth (e.g. expected has a typo, wrong ID, contradicts the passage, or model output is more plausible than expected), you MUST include exactly one suggestion with ground_truth_issue: true so the user can fix the dataset. Use name e.g. \"Possible ground truth issue\"; in reason give a full explanation for the user (e.g. 'Row 3: the expected substrate value does not match the passage; please correct the ground truth.'), not just the row number. Write Row 1, Row 2, Row 3 in text; do not write '1-based' or '0-based'. Set old_sentence and new_sentence to \"(no edit)\", section_index 0. Do not be reluctant when the evidence is clear. When the failure is a prompt or extraction issue, do not use ground_truth_issue; output normal edit suggestions instead."
+    )
+    lines.append("")
+    lines.append(
+        "Respond with JSON: {\"suggestions\": [{\"name\": \"short title\", \"section_index\": 0, \"old_sentence\": \"exact copy from section\", \"new_sentence\": \"replacement\", \"reason\": \"...\", \"ground_truth_issue\": false}, ...]}. "
+        "For suggestions that address an unmatched row: reason must say which row (Row 1, Row 2, etc.) and which error in that run result led to this edit. For suggestions based on matched rows only: no row number needed. For ground_truth_issue, give a full explanation including which row. Never write '(1-based)' or '0-based'. Refer only to the compared fields. Prefer 3–10 suggestions that cover the failures without duplicate edits."
     )
     return "\n".join(lines)
+
+
+def _merge_step1b_into_per_row(
+    per_row: list[ReviewStep1RowAnalysis],
+    step1b_result: ReviewStep1bResult,
+) -> list[ReviewStep1RowAnalysis]:
+    """Merge Step1b updates into per_row by row_index (overwrite reason and section_index_suggestions)."""
+    by_index = {a.row_index: a for a in per_row}
+    for u in step1b_result.updates or []:
+        if u.row_index in by_index:
+            by_index[u.row_index] = ReviewStep1RowAnalysis(
+                row_index=u.row_index,
+                reason=u.reason,
+                section_index_suggestions=list(u.section_index_suggestions or []),
+                need_input=False,
+            )
+    return list(by_index.values())
 
 
 @app.post("/api/review/analyze", response_model=ReviewResult)
 def review_analyze(body: ReviewRequest):
-    """Step 0: design check (optional). Step 1: plan. Step 2: per-focus concrete suggestions."""
+    """Step 0: design check. Step 1: per-row analysis. Step 1b (optional): refine with row_input. Step 2: one-shot suggestions from per_row."""
     items = _load_credentials()
     cred = None
     for item in items:
@@ -742,8 +825,13 @@ def review_analyze(body: ReviewRequest):
         raise HTTPException(status_code=400, detail="Missing API key")
     provider = cred.get("provider", "openai")
     try:
-        # Step 0: design check (loose; only when clearly needed)
+        # Step 0: design check
         design_prompt = _build_review_design_prompt(body)
+        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + "[Review] Step 0 (design) PROMPT SENT TO LLM:" + _R)
+        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(design_prompt)
+        _safe_print(_HL + "-" * 60 + _R)
         design_result = llm_run_structured(
             provider=provider,
             model=model,
@@ -752,61 +840,107 @@ def review_analyze(body: ReviewRequest):
             response_model=DesignReviewResult,
             max_tokens=8192,
         )
+        _safe_print(_HL + "[Review] Step 0 (design) LLM STRUCTURED OUTPUT:" + _R)
+        _safe_print(json.dumps(design_result if isinstance(design_result, dict) else design_result.model_dump(), ensure_ascii=False, indent=2))
+        _safe_print(_HL + "=" * 60 + _R + "\n")
         design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
         all_matched = _review_all_matched(body)
         design_suggestions = list(design_review.suggestions or [])
         if all_matched and len(design_suggestions) > 1:
             design_suggestions = design_suggestions[:1]
 
-        # Step 1: get summary + list of change focuses
+        # Step 1: per-row analysis
         step1_prompt = _build_review_step1_prompt(body)
-        plan_result = llm_run_structured(
+        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + "[Review] Step 1 (per-row analysis) PROMPT SENT TO LLM:" + _R)
+        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(step1_prompt)
+        _safe_print(_HL + "-" * 60 + _R)
+        step1_result = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,
             prompt=step1_prompt,
-            response_model=ReviewPlan,
+            response_model=ReviewStep1Result,
             max_tokens=32768,
         )
-        plan = ReviewPlan(**(plan_result if isinstance(plan_result, dict) else plan_result.model_dump()))
-        if all_matched and plan.focuses:
-            plan.focuses = plan.focuses[:2]
-        if not plan.focuses:
-            return ReviewResult(summary=plan.summary, suggestions=[], design_suggestions=design_suggestions)
+        _safe_print(_HL + "[Review] Step 1 (per-row analysis) LLM STRUCTURED OUTPUT:" + _R)
+        _safe_print(json.dumps(step1_result if isinstance(step1_result, dict) else step1_result.model_dump(), ensure_ascii=False, indent=2))
+        _safe_print(_HL + "=" * 60 + _R + "\n")
+        step1 = ReviewStep1Result(**(step1_result if isinstance(step1_result, dict) else step1_result.model_dump()))
+        per_row = list(step1.per_row or [])
+        rows_needing_input = list(step1.rows_needing_input or [])
 
-        # Step 2: for each focus, get exact suggestions (old_sentence / new_sentence)
-        all_suggestions: list[ReviewSuggestion] = []
-        for focus in plan.focuses:
-            step2_prompt = _build_review_step2_prompt(body, focus)
-            if not step2_prompt:
+        # Step 1b: optional refill for rows that need input (one LLM call per row to avoid huge prompts when input is long)
+        if rows_needing_input and body.comparison_rows:
+            rows_with_input = [
+                r for r in body.comparison_rows
+                if r.row_index in rows_needing_input and (r.row_input is not None and len(r.row_input) > 0)
+            ]
+            for row in rows_with_input:
+                step1b_prompt = _build_review_step1b_prompt([row])
+                _safe_print("\n" + _HL + "=" * 60 + _R)
+                _safe_print(_HL + f"[Review] Step 1b (refine row {row.row_index}) PROMPT SENT TO LLM:" + _R)
+                _safe_print(_HL + "-" * 60 + _R)
+                _safe_print(step1b_prompt)
+                _safe_print(_HL + "-" * 60 + _R)
+                step1b_result = llm_run_structured(
+                    provider=provider,
+                    model=model,
+                    api_key=api_key,
+                    prompt=step1b_prompt,
+                    response_model=ReviewStep1bResult,
+                    max_tokens=8192,
+                )
+                _safe_print(_HL + f"[Review] Step 1b (refine row {row.row_index}) LLM STRUCTURED OUTPUT:" + _R)
+                _safe_print(json.dumps(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump(), ensure_ascii=False, indent=2))
+                _safe_print(_HL + "=" * 60 + _R + "\n")
+                step1b = ReviewStep1bResult(**(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump()))
+                per_row = _merge_step1b_into_per_row(per_row, step1b)
+
+        if not per_row and not all_matched:
+            return ReviewResult(summary=step1.summary, suggestions=[], design_suggestions=design_suggestions)
+        if all_matched and per_row:
+            per_row = per_row[:3]
+
+        # Step 2: one call to get all suggestions from per_row
+        step2_prompt = _build_review_step2_prompt(body, per_row)
+        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + "[Review] Step 2 (suggestions) PROMPT SENT TO LLM:" + _R)
+        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(step2_prompt)
+        _safe_print(_HL + "-" * 60 + _R)
+        step2_result = llm_run_structured(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            prompt=step2_prompt,
+            response_model=FocusSuggestions,
+            max_tokens=32768,
+        )
+        _safe_print(_HL + "[Review] Step 2 (suggestions) LLM STRUCTURED OUTPUT:" + _R)
+        _safe_print(json.dumps(step2_result if isinstance(step2_result, dict) else step2_result.model_dump(), ensure_ascii=False, indent=2))
+        _safe_print(_HL + "=" * 60 + _R + "\n")
+        fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
+        raw_suggestions = list(fs.suggestions or [])
+        if all_matched and len(raw_suggestions) > 2:
+            raw_suggestions = raw_suggestions[:2]
+        out_suggestions: list[ReviewSuggestion] = []
+        for s in raw_suggestions:
+            s_dict = s.model_dump() if hasattr(s, "model_dump") else s
+            if not isinstance(s_dict, dict):
                 continue
-            step2_result = llm_run_structured(
-                provider=provider,
-                model=model,
-                api_key=api_key,
-                prompt=step2_prompt,
-                response_model=FocusSuggestions,
-                max_tokens=32768,
-            )
-            fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
-            suggestions_for_focus = list(fs.suggestions or [])
-            if all_matched and len(suggestions_for_focus) > 1:
-                suggestions_for_focus = suggestions_for_focus[:1]
-            for s in suggestions_for_focus:
-                s_dict = s.model_dump() if hasattr(s, "model_dump") else s
-                s_dict["section_index"] = focus.section_index
-                if not (s_dict.get("name") or "").strip():
-                    s_dict["name"] = focus.name or focus.focus_description[:50]
-                all_suggestions.append(ReviewSuggestion(**s_dict))
-
-        return ReviewResult(summary=plan.summary, suggestions=all_suggestions, design_suggestions=design_suggestions)
+            if (s_dict.get("section_index") or 0) < 0 and body.prompt_sections:
+                s_dict["section_index"] = 0
+            out_suggestions.append(ReviewSuggestion(**s_dict))
+        return ReviewResult(summary=step1.summary, suggestions=out_suggestions, design_suggestions=design_suggestions)
     except Exception as e:
         _safe_print(_HL + "[Review] Error: " + _R + str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
 
 def _review_analyze_stream_generator(body: ReviewRequest):
-    """Yield NDJSON lines: plan, then one line per focus with suggestions, then done."""
+    """Yield NDJSON lines: design, step1 (summary), optional step1b, step2 (suggestions), done."""
     items = _load_credentials()
     cred = None
     for item in items:
@@ -828,6 +962,11 @@ def _review_analyze_stream_generator(body: ReviewRequest):
     try:
         # Step 0: design check
         design_prompt = _build_review_design_prompt(body)
+        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + "[Review stream] Step 0 (design) PROMPT SENT TO LLM:" + _R)
+        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(design_prompt)
+        _safe_print(_HL + "-" * 60 + _R)
         design_result = llm_run_structured(
             provider=provider,
             model=model,
@@ -836,6 +975,9 @@ def _review_analyze_stream_generator(body: ReviewRequest):
             response_model=DesignReviewResult,
             max_tokens=8192,
         )
+        _safe_print(_HL + "[Review stream] Step 0 (design) LLM STRUCTURED OUTPUT:" + _R)
+        _safe_print(json.dumps(design_result if isinstance(design_result, dict) else design_result.model_dump(), ensure_ascii=False, indent=2))
+        _safe_print(_HL + "=" * 60 + _R + "\n")
         design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
         all_matched = _review_all_matched(body)
         design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in (design_review.suggestions or [])]
@@ -843,47 +985,100 @@ def _review_analyze_stream_generator(body: ReviewRequest):
             design_list = design_list[:1]
         yield (json.dumps({"type": "design", "design_suggestions": design_list}, ensure_ascii=False) + "\n").encode("utf-8")
 
+        # Step 1: per-row analysis
         step1_prompt = _build_review_step1_prompt(body)
-        plan_result = llm_run_structured(
+        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + "[Review stream] Step 1 (per-row analysis) PROMPT SENT TO LLM:" + _R)
+        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(step1_prompt)
+        _safe_print(_HL + "-" * 60 + _R)
+        step1_result = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,
             prompt=step1_prompt,
-            response_model=ReviewPlan,
+            response_model=ReviewStep1Result,
             max_tokens=32768,
         )
-        plan = ReviewPlan(**(plan_result if isinstance(plan_result, dict) else plan_result.model_dump()))
-        if all_matched and plan.focuses:
-            plan.focuses = plan.focuses[:2]
-        yield (json.dumps({"type": "plan", "summary": plan.summary, "focus_count": len(plan.focuses or [])}, ensure_ascii=False) + "\n").encode("utf-8")
-        if not plan.focuses:
+        _safe_print(_HL + "[Review stream] Step 1 (per-row analysis) LLM STRUCTURED OUTPUT:" + _R)
+        _safe_print(json.dumps(step1_result if isinstance(step1_result, dict) else step1_result.model_dump(), ensure_ascii=False, indent=2))
+        _safe_print(_HL + "=" * 60 + _R + "\n")
+        step1 = ReviewStep1Result(**(step1_result if isinstance(step1_result, dict) else step1_result.model_dump()))
+        per_row = list(step1.per_row or [])
+        rows_needing_input = list(step1.rows_needing_input or [])
+        yield (json.dumps({
+            "type": "plan",
+            "summary": step1.summary,
+            "focus_count": 1,
+            "per_row_count": len(per_row),
+            "rows_needing_input": rows_needing_input,
+        }, ensure_ascii=False) + "\n").encode("utf-8")
+
+        # Step 1b: optional (one LLM call per row to avoid huge prompts when input is long)
+        if rows_needing_input and body.comparison_rows:
+            rows_with_input = [
+                r for r in body.comparison_rows
+                if r.row_index in rows_needing_input and (r.row_input is not None and len(r.row_input) > 0)
+            ]
+            for row in rows_with_input:
+                yield (json.dumps({"type": "step1b", "row_count": 1, "row_index": row.row_index}, ensure_ascii=False) + "\n").encode("utf-8")
+                step1b_prompt = _build_review_step1b_prompt([row])
+                _safe_print("\n" + _HL + "=" * 60 + _R)
+                _safe_print(_HL + f"[Review stream] Step 1b (refine row {row.row_index}) PROMPT SENT TO LLM:" + _R)
+                _safe_print(_HL + "-" * 60 + _R)
+                _safe_print(step1b_prompt)
+                _safe_print(_HL + "-" * 60 + _R)
+                step1b_result = llm_run_structured(
+                    provider=provider,
+                    model=model,
+                    api_key=api_key,
+                    prompt=step1b_prompt,
+                    response_model=ReviewStep1bResult,
+                    max_tokens=8192,
+                )
+                _safe_print(_HL + f"[Review stream] Step 1b (refine row {row.row_index}) LLM STRUCTURED OUTPUT:" + _R)
+                _safe_print(json.dumps(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump(), ensure_ascii=False, indent=2))
+                _safe_print(_HL + "=" * 60 + _R + "\n")
+                step1b = ReviewStep1bResult(**(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump()))
+                per_row = _merge_step1b_into_per_row(per_row, step1b)
+
+        if not per_row and not all_matched:
             yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
             return
-        for focus in plan.focuses:
-            step2_prompt = _build_review_step2_prompt(body, focus)
-            if not step2_prompt:
-                continue
-            step2_result = llm_run_structured(
-                provider=provider,
-                model=model,
-                api_key=api_key,
-                prompt=step2_prompt,
-                response_model=FocusSuggestions,
-                max_tokens=32768,
-            )
-            fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
-            batch = []
-            suggestions_for_focus = list(fs.suggestions or [])
-            if all_matched and len(suggestions_for_focus) > 1:
-                suggestions_for_focus = suggestions_for_focus[:1]
-            for s in suggestions_for_focus:
-                s_dict = s.model_dump() if hasattr(s, "model_dump") else s
-                s_dict["section_index"] = focus.section_index
-                if not (s_dict.get("name") or "").strip():
-                    s_dict["name"] = focus.name or (focus.focus_description[:50] if focus.focus_description else "Edit")
+        if all_matched and per_row:
+            per_row = per_row[:3]
+
+        # Step 2: one-shot suggestions
+        step2_prompt = _build_review_step2_prompt(body, per_row)
+        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + "[Review stream] Step 2 (suggestions) PROMPT SENT TO LLM:" + _R)
+        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(step2_prompt)
+        _safe_print(_HL + "-" * 60 + _R)
+        step2_result = llm_run_structured(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            prompt=step2_prompt,
+            response_model=FocusSuggestions,
+            max_tokens=32768,
+        )
+        _safe_print(_HL + "[Review stream] Step 2 (suggestions) LLM STRUCTURED OUTPUT:" + _R)
+        _safe_print(json.dumps(step2_result if isinstance(step2_result, dict) else step2_result.model_dump(), ensure_ascii=False, indent=2))
+        _safe_print(_HL + "=" * 60 + _R + "\n")
+        fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
+        raw_suggestions = list(fs.suggestions or [])
+        if all_matched and len(raw_suggestions) > 2:
+            raw_suggestions = raw_suggestions[:2]
+        batch = []
+        for s in raw_suggestions:
+            s_dict = s.model_dump() if hasattr(s, "model_dump") else s
+            if isinstance(s_dict, dict):
+                if (s_dict.get("section_index") or 0) < 0 and body.prompt_sections:
+                    s_dict["section_index"] = 0
                 batch.append(s_dict)
-            if batch:
-                yield (json.dumps({"type": "suggestions", "suggestions": batch}, ensure_ascii=False) + "\n").encode("utf-8")
+        if batch:
+            yield (json.dumps({"type": "suggestions", "suggestions": batch}, ensure_ascii=False) + "\n").encode("utf-8")
         yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
     except Exception as e:
         _safe_print(_HL + "[Review] Error: " + _R + str(e))
