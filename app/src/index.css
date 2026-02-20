@@ -39,6 +39,48 @@ html.dark {
   --control-radius: 3px;
 }
 
+/* Sepia: 护眼棕褐色，背景柔和、文字与边框对比清晰；画布偏暗使节点更突出 */
+html.sepia {
+  --bg: #e8e0cc;
+  --bg-bar: #e2d8c4;
+  --bg-canvas: #c4b498;
+  --grid-color: rgba(72, 60, 48, 0.14);
+  --text: #2d261e;
+  --text-muted: #5c5042;
+  --border: #a89878;
+  --node-border: #6b5a42;
+  --hover: #d4c8b0;
+  --shadow: rgba(45, 38, 30, 0.22);
+  --diff-removed-bg: rgba(170, 65, 50, 0.28);
+  --diff-removed-text: #a02d1e;
+  --diff-added-bg: rgba(45, 110, 58, 0.28);
+  --diff-added-text: #1e6b32;
+  --primary-btn-bg: rgba(55, 75, 140, 0.3);
+  --primary-btn-text: #2d3d7a;
+  --control-radius: 3px;
+}
+
+/* High contrast: 高对比度，便于阅读与无障碍 */
+html.high-contrast {
+  --bg: #ffffff;
+  --bg-bar: #f0f0f0;
+  --bg-canvas: #e5e5e5;
+  --grid-color: rgba(0, 0, 0, 0.2);
+  --text: #000000;
+  --text-muted: #333333;
+  --border: #000000;
+  --node-border: #000000;
+  --hover: #d0d0d0;
+  --shadow: rgba(0, 0, 0, 0.25);
+  --diff-removed-bg: rgba(200, 0, 0, 0.35);
+  --diff-removed-text: #b30000;
+  --diff-added-bg: rgba(0, 120, 0, 0.35);
+  --diff-added-text: #006600;
+  --primary-btn-bg: rgba(0, 0, 200, 0.3);
+  --primary-btn-text: #0000aa;
+  --control-radius: 2px;
+}
+
 body {
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,

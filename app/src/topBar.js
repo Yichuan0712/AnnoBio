@@ -2,7 +2,7 @@
  * Top menu bar: File, Edit, Settings.
  */
 
-import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
+import { setTheme, THEME_LIGHT, THEME_DARK, THEME_SEPIA, THEME_HIGH_CONTRAST } from './theme.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
@@ -109,9 +109,13 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   submenu.innerHTML = `
     <button type="button" class="menu-option" data-mode="light">Light</button>
     <button type="button" class="menu-option" data-mode="dark">Dark</button>
+    <button type="button" class="menu-option" data-mode="sepia">Sepia</button>
+    <button type="button" class="menu-option" data-mode="high-contrast">High contrast</button>
   `;
   submenu.querySelector('[data-mode="light"]').addEventListener('click', () => setTheme(THEME_LIGHT));
   submenu.querySelector('[data-mode="dark"]').addEventListener('click', () => setTheme(THEME_DARK));
+  submenu.querySelector('[data-mode="sepia"]').addEventListener('click', () => setTheme(THEME_SEPIA));
+  submenu.querySelector('[data-mode="high-contrast"]').addEventListener('click', () => setTheme(THEME_HIGH_CONTRAST));
   displayModeOpt.appendChild(submenu);
   settingsDrop.appendChild(displayModeOpt);
   settingsBtn.appendChild(settingsDrop);

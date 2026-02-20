@@ -4,8 +4,8 @@
     {
       "type": "prompt",
       "nodeId": "n_1770918266442_878231386",
-      "left": 39.3828,
-      "top": 264.898,
+      "left": 34.375,
+      "top": 255.891,
       "name": "Phosphatase",
       "note": "Phosphatase Prompt",
       "sections": [
@@ -150,8 +150,8 @@
     {
       "type": "dataset",
       "nodeId": "n_1771558216955_662068173",
-      "left": 39,
-      "top": 151,
+      "left": 38.5,
+      "top": 152,
       "name": "Ground truth",
       "note": "3 papers",
       "samplerNodeId": "",
