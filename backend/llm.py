@@ -6,12 +6,13 @@ Provider-agnostic: add new providers by registering in PROVIDER_REGISTRY below.
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 # ---------------------------------------------------------------------------
-# Provider: OpenAI (add more providers here, e.g. Anthropic, Google)
+# Provider: OpenAI
 # ---------------------------------------------------------------------------
 
-# Supported OpenAI model ids (used directly as API model names)
 OPENAI_MODEL_MAP = {
     "gpt-5": "gpt-5",
     "gpt-5-mini": "gpt-5-mini",
@@ -20,21 +21,63 @@ OPENAI_MODEL_MAP = {
 
 
 def _build_openai(model: str, api_key: str, **kwargs) -> ChatOpenAI:
-    if model not in OPENAI_MODEL_MAP:
-        raise ValueError(f"Unsupported OpenAI model: {model}")
+    model_id = OPENAI_MODEL_MAP.get(model) or model
     return ChatOpenAI(
-        model=OPENAI_MODEL_MAP[model],
+        model=model_id,
         api_key=api_key,
         max_tokens=kwargs.pop("max_tokens", 1024),
         **kwargs,
     )
 
 
-# Register providers here when adding new ones, e.g.:
-# def _build_anthropic(model: str, api_key: str, **kwargs): ...
-# PROVIDER_REGISTRY["anthropic"] = _build_anthropic
+# ---------------------------------------------------------------------------
+# Provider: Anthropic (Claude)
+# ---------------------------------------------------------------------------
+
+ANTHROPIC_MODEL_MAP = {
+    "claude-3-5-sonnet": "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku": "claude-3-5-haiku-20241022",
+    "claude-3-opus": "claude-3-opus-20240229",
+    "claude-3-sonnet": "claude-3-sonnet-20240229",
+    "claude-3-haiku": "claude-3-haiku-20240307",
+}
+
+
+def _build_anthropic(model: str, api_key: str, **kwargs) -> ChatAnthropic:
+    model_id = ANTHROPIC_MODEL_MAP.get(model) or model
+    return ChatAnthropic(
+        model=model_id,
+        api_key=api_key,
+        max_tokens=kwargs.pop("max_tokens", 1024),
+        **kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Provider: Google (Gemini)
+# ---------------------------------------------------------------------------
+
+GOOGLE_MODEL_MAP = {
+    "gemini-2.5-pro": "gemini-2.5-pro",
+    "gemini-2.5-flash": "gemini-2.5-flash",
+    "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
+}
+
+
+def _build_google(model: str, api_key: str, **kwargs) -> ChatGoogleGenerativeAI:
+    model_id = GOOGLE_MODEL_MAP.get(model) or model
+    return ChatGoogleGenerativeAI(
+        model=model_id,
+        api_key=api_key,
+        max_output_tokens=kwargs.pop("max_tokens", 1024),
+        **kwargs,
+    )
+
+
 PROVIDER_REGISTRY = {
     "openai": _build_openai,
+    "anthropic": _build_anthropic,
+    "google": _build_google,
 }
 
 

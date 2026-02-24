@@ -240,6 +240,14 @@
   min-height: 120px;
 }
 
+/* Form controls in modals: same small rounded corners as buttons (Run, Score, etc.) */
+.modal-panel select,
+.modal-panel input[type="text"],
+.modal-panel input[type="number"],
+.modal-panel .run-detail-ws-trigger {
+  border-radius: var(--control-radius, 6px);
+}
+
 /* Alert / message modal (in-app, design system) */
 .modal-panel--alert {
   min-width: 280px;

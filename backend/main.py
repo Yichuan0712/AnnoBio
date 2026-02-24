@@ -20,7 +20,7 @@ def _safe_print(s: str) -> None:
     except UnicodeEncodeError:
         sys.stdout.write((s + "\n").encode(enc, errors="replace").decode(enc))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, create_model
@@ -46,14 +46,34 @@ CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 # 支持的提供商与模型（扩展时在此维护，前端通过 GET /api/credentials/models 获取）
 PROVIDERS = [
     {"id": "openai", "name": "OpenAI"},
+    {"id": "anthropic", "name": "Anthropic"},
+    {"id": "google", "name": "Google"},
 ]
+# name = 下拉框显示名，与 API 传入的模型名一致（GPT 用 id，Anthropic 用 API 实际模型 id）
 MODELS = [
     {"id": "gpt-5", "name": "gpt-5", "provider": "openai"},
     {"id": "gpt-5-mini", "name": "gpt-5-mini", "provider": "openai"},
     {"id": "gpt-5-nano", "name": "gpt-5-nano", "provider": "openai"},
+    {"id": "claude-3-5-sonnet", "name": "claude-3-5-sonnet-20241022", "provider": "anthropic"},
+    {"id": "claude-3-5-haiku", "name": "claude-3-5-haiku-20241022", "provider": "anthropic"},
+    {"id": "claude-3-opus", "name": "claude-3-opus-20240229", "provider": "anthropic"},
+    {"id": "claude-3-sonnet", "name": "claude-3-sonnet-20240229", "provider": "anthropic"},
+    {"id": "claude-3-haiku", "name": "claude-3-haiku-20240307", "provider": "anthropic"},
+    {"id": "gemini-2.5-pro", "name": "gemini-2.5-pro", "provider": "google"},
+    {"id": "gemini-2.5-flash", "name": "gemini-2.5-flash", "provider": "google"},
+    {"id": "gemini-2.5-flash-lite", "name": "gemini-2.5-flash-lite", "provider": "google"},
 ]
 ALLOWED_MODELS = {m["id"] for m in MODELS}
 ALLOWED_PROVIDERS = {p["id"] for p in PROVIDERS}
+
+
+def _log_backend_version():
+    """启动时打印，便于确认加载的是否为本文件（新版本应有 11 个 models、3 个 providers）。"""
+    print(f"[backend] main.py loaded from: {Path(__file__).resolve()}")
+    print(f"[backend] MODELS={len(MODELS)}, PROVIDERS={len(PROVIDERS)}")
+
+
+_log_backend_version()
 
 
 def _infer_provider(llm: str) -> str:
@@ -64,11 +84,30 @@ def _infer_provider(llm: str) -> str:
     return "openai"
 
 
+def _check_model_for_provider(provider: str, llm: str) -> None:
+    """校验 (provider, llm) 在 MODELS 中为合法组合，否则抛出 HTTPException。"""
+    for m in MODELS:
+        if m["id"] == llm and m["provider"] == provider:
+            return
+    by_provider: dict[str, list[str]] = {}
+    for m in MODELS:
+        p = m["provider"]
+        if p not in by_provider:
+            by_provider[p] = []
+        by_provider[p].append(m["id"])
+    parts = [f"{p}: {sorted(ids)}" for p, ids in sorted(by_provider.items())]
+    raise HTTPException(
+        status_code=400,
+        detail=f"model '{llm}' is not valid for provider '{provider}'. Valid by provider: " + "; ".join(parts),
+    )
+
+
 class CredentialCreate(BaseModel):
-    name: str | None = Field(default=None, description="Optional; if omitted, defaults to model name with number if duplicate")
-    llm: str = Field(..., description="Model: gpt-5, gpt-5-mini, gpt-5-nano")
+    """Not used for POST /api/credentials (we parse Request body by hand). Kept for OpenAPI docs only."""
+    name: str | None = Field(default=None, description="Optional display name")
+    llm: str = Field(..., description="Model id from MODELS (openai/anthropic/google)")
     api_key: str = Field(..., min_length=1, description="API key")
-    provider: str = Field(default="openai", description="LLM provider; extend ALLOWED_PROVIDERS when adding more")
+    provider: str = Field(default="openai", description="Provider id from PROVIDERS")
 
 
 class CredentialRenameBody(BaseModel):
@@ -257,7 +296,19 @@ def _credential_provider(item: dict) -> str:
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    """健康检查；返回 models/providers 数量便于确认后端是否为新版本。"""
+    return {"ok": True, "models": len(MODELS), "providers": len(PROVIDERS)}
+
+
+@app.get("/api/debug/backend-info")
+def debug_backend_info():
+    """调试用：确认当前跑的是否为本仓库新版本。新版本应有 11 个 model_ids。"""
+    return {
+        "main_file": str(Path(__file__).resolve()),
+        "models_count": len(MODELS),
+        "model_ids": [m["id"] for m in MODELS],
+        "providers_count": len(PROVIDERS),
+    }
 
 
 @app.get("/api/credentials/models")
@@ -283,23 +334,33 @@ def list_credentials():
 
 
 @app.post("/api/credentials", response_model=CredentialResponse)
-def add_credential(body: CredentialCreate):
-    """添加一条凭证。"""
-    if body.llm not in ALLOWED_MODELS:
-        raise HTTPException(status_code=400, detail=f"model must be one of {sorted(ALLOWED_MODELS)}")
-    provider = (body.provider or "").strip() or _infer_provider(body.llm)
+async def add_credential(request: Request):
+    """添加一条凭证。使用原始 JSON 解析，避免 Pydantic 缓存导致只认 gpt-5 三模型。"""
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+    llm = (body.get("llm") or body.get("model") or "").strip()
+    api_key = (body.get("api_key") or "").strip()
+    if not llm:
+        raise HTTPException(status_code=400, detail="llm is required")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+    provider = (body.get("provider") or "").strip() or _infer_provider(llm)
     if provider not in ALLOWED_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"provider must be one of {sorted(ALLOWED_PROVIDERS)}")
+    if llm in ALLOWED_MODELS:
+        _check_model_for_provider(provider, llm)
     items = _load_credentials()
     new_id = str(uuid.uuid4())
-    name = (body.name or "").strip() if body.name else ""
+    name = (body.get("name") or "").strip() if body.get("name") else ""
     if not name:
-        name = _unique_name_for_model(items, body.llm)
+        name = _unique_name_for_model(items, llm)
     new_item = {
         "id": new_id,
         "name": name,
-        "llm": body.llm,
-        "api_key": body.api_key,
+        "llm": llm,
+        "api_key": api_key,
         "provider": provider,
     }
     items.append(new_item)
@@ -353,7 +414,7 @@ def rename_credential(credential_id: str, body: CredentialRenameBody):
 
 @app.post("/api/credentials/{credential_id}/test")
 def test_credential(credential_id: str):
-    """Verify API key by sending a minimal prompt to OpenAI."""
+    """Verify API key by sending a minimal prompt to the LLM."""
     items = _load_credentials()
     cred = None
     for item in items:
@@ -363,8 +424,6 @@ def test_credential(credential_id: str):
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
     model = cred.get("llm", "")
-    if model not in ALLOWED_MODELS:
-        raise HTTPException(status_code=400, detail=f"Unsupported model: {model}")
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
@@ -420,9 +479,9 @@ def _do_run_work(
         provider = cred.get("provider", "openai")
         model = cred.get("llm", "")
         api_key = cred.get("api_key", "")
-        if model not in ALLOWED_MODELS or provider not in ALLOWED_PROVIDERS:
+        if provider not in ALLOWED_PROVIDERS:
             with _run_jobs_lock:
-                _run_jobs[run_id] = {"status": "done", "error": "Unsupported model or provider"}
+                _run_jobs[run_id] = {"status": "done", "error": "Unsupported provider"}
             return
         if not api_key:
             with _run_jobs_lock:
@@ -852,8 +911,6 @@ def review_analyze(body: ReviewRequest):
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
     model = cred.get("llm", "")
-    if model not in ALLOWED_MODELS:
-        raise HTTPException(status_code=400, detail=f"Unsupported model: {model}")
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
@@ -985,9 +1042,6 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         yield (json.dumps({"type": "error", "detail": "Credential not found"}) + "\n").encode("utf-8")
         return
     model = cred.get("llm", "")
-    if model not in ALLOWED_MODELS:
-        yield (json.dumps({"type": "error", "detail": f"Unsupported model: {model}"}) + "\n").encode("utf-8")
-        return
     api_key = cred.get("api_key", "")
     if not api_key:
         yield (json.dumps({"type": "error", "detail": "Missing API key"}) + "\n").encode("utf-8")

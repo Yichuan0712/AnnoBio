@@ -50,12 +50,6 @@ async function fetchCredentials() {
   return res.json();
 }
 
-async function fetchCredentialModels() {
-  const res = await fetch(`${API_BASE}/api/credentials/models`);
-  if (!res.ok) throw new Error('Failed to load models');
-  return res.json();
-}
-
 async function loadAndRender(overlay) {
   try {
     const list = await fetchCredentials();
@@ -248,6 +242,75 @@ export function openCredentialsModal() {
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'my-credentials-title');
   overlay.innerHTML = `
+    <style>
+      .modal-panel--credentials .credentials-add-card {
+        margin-top: 1rem;
+      }
+      .modal-panel--credentials .credentials-add-row {
+        display: grid;
+        grid-template-columns: 145px 165px 1fr auto;
+        row-gap: 0.75rem;
+        column-gap: 1.5rem;
+        align-items: end;
+      }
+      .modal-panel--credentials .credentials-add-field {
+        min-width: 0;
+        overflow: hidden;
+      }
+      .modal-panel--credentials .credentials-add-field.credentials-add-field--btn {
+        justify-self: end;
+        overflow: visible;
+      }
+      .modal-panel--credentials .credentials-add-card .credentials-select,
+      .modal-panel--credentials .credentials-add-card .dataset-meta-input,
+      .modal-panel--credentials .credentials-add-card .credentials-add-btn,
+      .modal-panel--credentials .credentials-add-card .credentials-model-back-preset {
+        height: 40px;
+        box-sizing: border-box;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        border-radius: 6px;
+      }
+      .modal-panel--credentials .credentials-add-card .credentials-add-field--btn .credentials-add-btn {
+        width: auto;
+      }
+      .modal-panel--credentials .credentials-add-card .credentials-model-back-preset {
+        width: 40px;
+        min-width: 40px;
+        padding: 0;
+        font-size: 1.1rem;
+      }
+      .modal-panel--credentials .credentials-add-card .credentials-add-btn {
+        line-height: 1;
+      }
+      .modal-panel--credentials .credentials-model-cell {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+      .modal-panel--credentials .credentials-model-custom-wrap {
+        display: none;
+      }
+      .modal-panel--credentials .credentials-model-custom-wrap.is-visible {
+        display: block;
+      }
+      .modal-panel--credentials .credentials-model-custom-row {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .modal-panel--credentials .credentials-model-custom-row input {
+        flex: 1;
+        min-width: 0;
+      }
+      .modal-panel--credentials .credentials-model-back-preset {
+        flex-shrink: 0;
+      }
+      .modal-panel--credentials .credentials-model-preset-wrap.is-hidden {
+        display: none;
+      }
+    </style>
     <div class="modal-panel modal-panel--credentials">
       <div class="modal-header">
         <h2 id="my-credentials-title" class="modal-title">My credentials</h2>
@@ -275,7 +338,8 @@ export function openCredentialsModal() {
             </table>
           </div>
         </div>
-        <div class="credentials-add">
+        <div class="credentials-add credentials-add-card">
+          <p class="credentials-section-title credentials-add-title">Add new credential</p>
           <div class="credentials-add-row">
             <div class="credentials-add-field">
               <label class="dataset-meta-label" for="credentials-provider-select">Provider</label>
@@ -283,21 +347,27 @@ export function openCredentialsModal() {
                 <option value="">— Select provider —</option>
               </select>
             </div>
-            <div class="credentials-add-field">
+            <div class="credentials-add-field credentials-model-cell">
               <label class="dataset-meta-label" for="credentials-model-select">Model</label>
-              <select id="credentials-model-select" class="credentials-select" aria-label="Select model">
-                <option value="">— Select model —</option>
-              </select>
+              <div class="credentials-model-preset-wrap">
+                <select id="credentials-model-select" class="credentials-select" aria-label="Select model">
+                  <option value="">— Select model —</option>
+                </select>
+              </div>
+              <div class="credentials-model-custom-wrap" id="credentials-model-custom-wrap">
+                <div class="credentials-model-custom-row">
+                  <input type="text" id="credentials-model-custom" class="dataset-meta-input" placeholder="e.g. gpt-4o, claude-3-opus-20240229" autocomplete="off" aria-label="Custom model ID" />
+                  <button type="button" class="btn btn-secondary credentials-model-back-preset" aria-label="Back to preset" title="Back to preset">×</button>
+                </div>
+              </div>
             </div>
             <div class="credentials-add-field credentials-add-field--grow">
               <label class="dataset-meta-label" for="credentials-api-key">API key</label>
-              <div class="credentials-api-key-wrap">
-                <input type="password" id="credentials-api-key" class="dataset-meta-input credentials-api-key-input" placeholder="Enter your API key" autocomplete="off" />
-              </div>
+              <input type="text" id="credentials-api-key" class="dataset-meta-input credentials-api-key-input" placeholder="Paste your API key" autocomplete="off" />
             </div>
             <div class="credentials-add-field credentials-add-field--btn">
               <label class="dataset-meta-label" aria-hidden="true">&nbsp;</label>
-              <button type="button" class="btn btn-secondary credentials-add-btn">Create and add to table</button>
+              <button type="button" class="btn btn-secondary credentials-add-btn">Add</button>
             </div>
           </div>
         </div>
@@ -314,16 +384,18 @@ export function openCredentialsModal() {
   overlay.querySelector('.credentials-add-btn').addEventListener('click', async () => {
     const providerSelect = overlay.querySelector('#credentials-provider-select');
     const modelSelect = overlay.querySelector('#credentials-model-select');
+    const modelCustomInput = overlay.querySelector('#credentials-model-custom');
     const apiKeyInput = overlay.querySelector('#credentials-api-key');
     const provider = (providerSelect?.value || '').trim();
-    const llm = (modelSelect?.value || '').trim();
+    const modelValue = (modelSelect?.value || '').trim();
+    const llm = modelValue === '__custom__' ? (modelCustomInput?.value || '').trim() : modelValue;
     const api_key = (apiKeyInput?.value || '').trim();
     if (!provider) {
       console.warn('Please select a provider');
       return;
     }
     if (!llm) {
-      console.warn('Please select a model');
+      console.warn('Please select a model or enter a custom model id');
       return;
     }
     if (!api_key) {
@@ -338,11 +410,16 @@ export function openCredentialsModal() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Add failed');
+        const msg = typeof err.detail === 'string' ? err.detail : Array.isArray(err.detail) ? err.detail.map((d) => d?.msg || String(d)).join(', ') : 'Add failed';
+        showAlert(msg, { title: 'Add credential failed' });
+        return;
       }
       apiKeyInput.value = '';
+      if (modelCustomInput) modelCustomInput.value = '';
       await loadAndRender(overlay);
     } catch (e) {
+      const msg = (e && e.message) || String(e);
+      showAlert(msg, { title: 'Add credential failed' });
       console.error('Add credential:', e);
     }
   });
@@ -350,9 +427,9 @@ export function openCredentialsModal() {
   function fillProviderSelect() {
     const sel = overlay.querySelector('#credentials-provider-select');
     if (!sel || !overlay._providers) return;
-    const first = overlay._providers[0];
-    sel.innerHTML = overlay._providers.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
-    if (first) sel.value = first.id;
+    const placeholder = '<option value="">— Select provider —</option>';
+    const options = overlay._providers.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+    sel.innerHTML = placeholder + options;
     fillModelSelect();
   }
 
@@ -362,36 +439,58 @@ export function openCredentialsModal() {
     if (!modelSel || !overlay._models) return;
     const providerId = (providerSel && providerSel.value) || '';
     const modelsForProvider = providerId ? overlay._models.filter((m) => m.provider === providerId) : [];
-    modelSel.innerHTML = '<option value="">— Select model —</option>' + modelsForProvider.map((m) => `<option value="${m.id}">${m.name}</option>`).join('');
+    const customOption = providerId ? '<option value="__custom__">— Custom —</option>' : '';
+    modelSel.innerHTML = '<option value="">— Select model —</option>' + modelsForProvider.map((m) => `<option value="${m.id}">${m.name}</option>`).join('') + customOption;
+    toggleModelCustomVisibility(overlay);
+  }
+
+  function toggleModelCustomVisibility(overlay) {
+    const modelSel = overlay.querySelector('#credentials-model-select');
+    const presetWrap = overlay.querySelector('.credentials-model-preset-wrap');
+    const customWrap = overlay.querySelector('#credentials-model-custom-wrap');
+    const isCustom = modelSel?.value === '__custom__';
+    if (presetWrap) presetWrap.classList.toggle('is-hidden', isCustom);
+    if (customWrap) customWrap.classList.toggle('is-visible', isCustom);
   }
 
   overlay.querySelector('#credentials-provider-select')?.addEventListener('change', fillModelSelect);
+  overlay.querySelector('#credentials-model-select')?.addEventListener('change', () => toggleModelCustomVisibility(overlay));
+  overlay.querySelector('.credentials-model-back-preset')?.addEventListener('click', () => {
+    const modelSel = overlay.querySelector('#credentials-model-select');
+    const modelCustomInput = overlay.querySelector('#credentials-model-custom');
+    if (modelSel) modelSel.value = '';
+    if (modelCustomInput) modelCustomInput.value = '';
+    toggleModelCustomVisibility(overlay);
+  });
 
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
 
-  const fallbackProviders = [{ id: 'openai', name: 'OpenAI' }];
-  const fallbackModels = [
+  // 与 backend main.py 的 PROVIDERS / MODELS 保持一致，不依赖接口返回的列表，保证下拉始终有全部选项
+  const allProviders = [
+    { id: 'openai', name: 'OpenAI' },
+    { id: 'anthropic', name: 'Anthropic' },
+    { id: 'google', name: 'Google' },
+  ];
+  const allModels = [
     { id: 'gpt-5', name: 'gpt-5', provider: 'openai' },
     { id: 'gpt-5-mini', name: 'gpt-5-mini', provider: 'openai' },
     { id: 'gpt-5-nano', name: 'gpt-5-nano', provider: 'openai' },
+    { id: 'claude-3-5-sonnet', name: 'claude-3-5-sonnet-20241022', provider: 'anthropic' },
+    { id: 'claude-3-5-haiku', name: 'claude-3-5-haiku-20241022', provider: 'anthropic' },
+    { id: 'claude-3-opus', name: 'claude-3-opus-20240229', provider: 'anthropic' },
+    { id: 'claude-3-sonnet', name: 'claude-3-sonnet-20240229', provider: 'anthropic' },
+    { id: 'claude-3-haiku', name: 'claude-3-haiku-20240307', provider: 'anthropic' },
+    { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', provider: 'google' },
+    { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash', provider: 'google' },
+    { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite', provider: 'google' },
   ];
   (async () => {
-    try {
-      const { providers = [], models = [] } = await fetchCredentialModels();
-      overlay._providers = providers.length ? providers : fallbackProviders;
-      overlay._models = models.length ? models : fallbackModels;
-      overlay._providersMap = Object.fromEntries((overlay._providers || []).map((p) => [p.id, p.name]));
-      overlay._modelsMap = Object.fromEntries((overlay._models || []).map((m) => [m.id, m]));
-      fillProviderSelect();
-    } catch (e) {
-      console.error('Load credential models:', e);
-      overlay._providers = fallbackProviders;
-      overlay._models = fallbackModels;
-      overlay._providersMap = Object.fromEntries(fallbackProviders.map((p) => [p.id, p.name]));
-      overlay._modelsMap = Object.fromEntries(fallbackModels.map((m) => [m.id, m]));
-      fillProviderSelect();
-    }
+    overlay._providers = allProviders;
+    overlay._models = allModels;
+    overlay._providersMap = Object.fromEntries(allProviders.map((p) => [p.id, p.name]));
+    overlay._modelsMap = Object.fromEntries(allModels.map((m) => [m.id, m]));
+    fillProviderSelect();
     await loadAndRender(overlay);
   })();
 }

@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, screen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 
 /**
  * ===== Python backend =====
@@ -12,8 +12,21 @@ import { spawn } from 'node:child_process';
 const BACKEND_PORT = 8000;
 let pyProc = null;
 
+// Dev: find repo root by walking up from __dirname until we see backend/main.py (this repo's backend).
+// Packaged: use resourcesPath.
 function getRepoRoot() {
-  return path.resolve(app.getAppPath(), '..');
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, '..');
+  }
+  let dir = __dirname;
+  const root = path.parse(dir).root;
+  while (dir !== root) {
+    if (fsSync.existsSync(path.join(dir, 'backend', 'main.py'))) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+  return path.resolve(__dirname, '..', '..', '..');
 }
 
 function getPythonExe() {
@@ -39,11 +52,48 @@ function getBackendCwd() {
   return path.join(getRepoRoot(), 'backend');
 }
 
+function killProcessOnPort(port) {
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+      const lines = out.split(/\r?\n/).filter((s) => s.trim());
+      const pids = new Set();
+      for (const line of lines) {
+        const m = line.match(/\s+(\d+)\s*$/);
+        if (m) pids.add(m[1]);
+      }
+      for (const pid of pids) {
+        try {
+          execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
+        } catch (_) {}
+      }
+    } else {
+      execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null || true`, { stdio: 'ignore' });
+    }
+  } catch (_) {}
+}
+
 function startPythonBackend() {
   if (pyProc) return;
 
-  const pythonExe = getPythonExe();
+  killProcessOnPort(BACKEND_PORT);
+  setTimeout(() => {
+    startPythonBackendInner();
+  }, 1200);
+}
+
+function startPythonBackendInner() {
+  if (pyProc) return;
+
   const cwd = getBackendCwd();
+  const pycache = path.join(cwd, '__pycache__');
+  if (fsSync.existsSync(pycache)) {
+    try {
+      fsSync.rmSync(pycache, { recursive: true });
+    } catch (_) {}
+  }
+
+  const pythonExe = getPythonExe();
   if (!fsSync.existsSync(pythonExe)) {
     const msg = `Python backend not found.\n\nExpected: ${pythonExe}\n\nIf you installed from the setup, try uninstalling and reinstalling.`;
     console.error(msg);
@@ -56,6 +106,9 @@ function startPythonBackend() {
     args.push('--reload');
   }
 
+  const mainPy = path.join(cwd, 'main.py');
+  console.log('[python] backend cwd=', cwd);
+  console.log('[python] main.py path=', mainPy);
   pyProc = spawn(pythonExe, args, {
     cwd,
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
