@@ -43,9 +43,25 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 
 
-ALLOWED_MODELS = {"gpt-5", "gpt-5-mini", "gpt-5-nano"}
-# Extend when adding new providers (anthropic, google, etc.)
-ALLOWED_PROVIDERS = {"openai"}
+# 支持的提供商与模型（扩展时在此维护，前端通过 GET /api/credentials/models 获取）
+PROVIDERS = [
+    {"id": "openai", "name": "OpenAI"},
+]
+MODELS = [
+    {"id": "gpt-5", "name": "gpt-5", "provider": "openai"},
+    {"id": "gpt-5-mini", "name": "gpt-5-mini", "provider": "openai"},
+    {"id": "gpt-5-nano", "name": "gpt-5-nano", "provider": "openai"},
+]
+ALLOWED_MODELS = {m["id"] for m in MODELS}
+ALLOWED_PROVIDERS = {p["id"] for p in PROVIDERS}
+
+
+def _infer_provider(llm: str) -> str:
+    """从 llm 推断 provider，兼容旧数据无 provider 字段。"""
+    for m in MODELS:
+        if m["id"] == llm:
+            return m["provider"]
+    return "openai"
 
 
 class CredentialCreate(BaseModel):
@@ -63,6 +79,7 @@ class CredentialResponse(BaseModel):
     id: str
     name: str
     llm: str
+    provider: str
     api_key_masked: str
 
 
@@ -72,6 +89,7 @@ class CredentialDetailResponse(BaseModel):
     id: str
     name: str
     llm: str
+    provider: str
     api_key: str
 
 
@@ -232,9 +250,20 @@ def _unique_name_for_model(items: list[dict], model: str) -> str:
     return f"{model} {n}"
 
 
+def _credential_provider(item: dict) -> str:
+    """从存储项取 provider，缺省时根据 llm 推断（兼容旧数据）。"""
+    return item.get("provider") or _infer_provider(item.get("llm", ""))
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/api/credentials/models")
+def list_credential_models():
+    """返回支持的 providers 与 models，供前端动态渲染下拉等。"""
+    return {"providers": list(PROVIDERS), "models": list(MODELS)}
 
 
 @app.get("/api/credentials", response_model=list[CredentialResponse])
@@ -246,6 +275,7 @@ def list_credentials():
             id=item["id"],
             name=item.get("name", "Unnamed"),
             llm=item["llm"],
+            provider=_credential_provider(item),
             api_key_masked=_mask_key(item["api_key"]),
         )
         for item in items
@@ -257,7 +287,8 @@ def add_credential(body: CredentialCreate):
     """添加一条凭证。"""
     if body.llm not in ALLOWED_MODELS:
         raise HTTPException(status_code=400, detail=f"model must be one of {sorted(ALLOWED_MODELS)}")
-    if body.provider not in ALLOWED_PROVIDERS:
+    provider = (body.provider or "").strip() or _infer_provider(body.llm)
+    if provider not in ALLOWED_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"provider must be one of {sorted(ALLOWED_PROVIDERS)}")
     items = _load_credentials()
     new_id = str(uuid.uuid4())
@@ -269,7 +300,7 @@ def add_credential(body: CredentialCreate):
         "name": name,
         "llm": body.llm,
         "api_key": body.api_key,
-        "provider": body.provider,
+        "provider": provider,
     }
     items.append(new_item)
     _save_credentials(items)
@@ -277,6 +308,7 @@ def add_credential(body: CredentialCreate):
         id=new_id,
         name=new_item["name"],
         llm=new_item["llm"],
+        provider=new_item["provider"],
         api_key_masked=_mask_key(new_item["api_key"]),
     )
 
@@ -291,6 +323,7 @@ def get_credential(credential_id: str):
                 id=item["id"],
                 name=item.get("name", "Unnamed"),
                 llm=item["llm"],
+                provider=_credential_provider(item),
                 api_key=item["api_key"],
             )
     raise HTTPException(status_code=404, detail="Credential not found")
@@ -312,6 +345,7 @@ def rename_credential(credential_id: str, body: CredentialRenameBody):
                 id=item["id"],
                 name=item["name"],
                 llm=item["llm"],
+                provider=_credential_provider(item),
                 api_key_masked=_mask_key(item["api_key"]),
             )
     raise HTTPException(status_code=404, detail="Credential not found")

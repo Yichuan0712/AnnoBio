@@ -3,6 +3,8 @@
  * @param {{ node: HTMLElement, getWorkingSets?: () => Array<...>, getRunResultColumns?: () => Array<...>, getGroundTruthHeaders?: (wsNodeId: string) => string[], getReviewPayload?: () => { prompt_sections, run_results, output_fields, comparison_rows } | null }} options
  */
 
+import { showAlert } from './alertModal.js';
+
 const API_BASE = 'http://localhost:8000';
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 
@@ -1508,7 +1510,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const res = await fetch(`${API_BASE}/api/credentials`);
       if (!res.ok) return;
       const list = await res.json();
-      llmSelect.innerHTML = '<option value="">— Select —</option>' + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
+      llmSelect.innerHTML = '<option value="">— Select reviewer model —</option>' + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
       const savedId = (node?.dataset?.reviewCredentialId || '').trim();
       if (savedId && list?.some((c) => c.id === savedId)) llmSelect.value = savedId;
     } catch (_) {}
@@ -1546,8 +1548,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const scoreNodeId = node?.dataset?.nodeId || '';
     if (!scoreNodeId) return;
     const credentialId = (llmSelect?.value || '').trim();
+    if (!credentialId) {
+      showAlert('Please select a Reviewer model first.', { title: 'No model selected' });
+      return;
+    }
     const payload = getReviewPayload();
-    if (!credentialId || !payload || !payload.prompt_sections || !payload.prompt_sections.length) return;
+    if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) return;
     const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } });
     document.dispatchEvent(addEvent);
     const reviewNodeId = addEvent.detail?.reviewNodeId || '';

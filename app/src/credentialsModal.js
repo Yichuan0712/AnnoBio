@@ -3,6 +3,8 @@
  * Uses backend API: GET/POST/DELETE /api/credentials.
  */
 
+import { showAlert } from './alertModal.js';
+
 const API_BASE = 'http://localhost:8000';
 
 function getTbody(overlay) {
@@ -12,11 +14,12 @@ function getTbody(overlay) {
 function renderCredentialsTable(overlay, list) {
   const tbody = getTbody(overlay);
   if (!tbody) return;
+  const providerName = (id) => (overlay._providersMap && overlay._providersMap[id]) || id || '—';
+  const modelLabel = (v) => (overlay._modelsMap && overlay._modelsMap[v] && overlay._modelsMap[v].name) || v || '—';
   if (!list || list.length === 0) {
-    tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="4">No credentials added yet.</td></tr>';
+    tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="5">No credentials added yet.</td></tr>';
     return;
   }
-  const modelLabel = (v) => ({ 'gpt-5': 'gpt-5', 'gpt-5-mini': 'gpt-5-mini', 'gpt-5-nano': 'gpt-5-nano' }[v] || v);
   const escapeHtml = (s) => {
     const div = document.createElement('div');
     div.textContent = s ?? '';
@@ -26,7 +29,8 @@ function renderCredentialsTable(overlay, list) {
   tbody.innerHTML = list.map((c) => `
     <tr data-credential-id="${c.id}">
       <td class="credentials-name-cell">${escapeHtml(c.name || 'Unnamed')}</td>
-      <td>${modelLabel(c.llm)}</td>
+      <td class="credentials-provider-cell">${escapeHtml(providerName(c.provider))}</td>
+      <td>${escapeHtml(modelLabel(c.llm))}</td>
       <td class="credentials-key-cell">
         <code class="credentials-key-value">${maskedPlaceholder}</code>
       </td>
@@ -35,7 +39,6 @@ function renderCredentialsTable(overlay, list) {
         <button type="button" class="btn btn-secondary credentials-show-key-btn" data-id="${c.id}" aria-label="Show key">Show</button>
         <button type="button" class="btn btn-secondary credentials-test-btn" data-id="${c.id}" aria-label="Test">Test</button>
         <button type="button" class="btn btn-secondary credentials-delete-btn" data-id="${c.id}" aria-label="Delete">Delete</button>
-        <span class="credentials-test-hint" aria-live="polite"></span>
       </td>
     </tr>
   `).join('');
@@ -44,6 +47,12 @@ function renderCredentialsTable(overlay, list) {
 async function fetchCredentials() {
   const res = await fetch(`${API_BASE}/api/credentials`);
   if (!res.ok) throw new Error('Failed to load credentials');
+  return res.json();
+}
+
+async function fetchCredentialModels() {
+  const res = await fetch(`${API_BASE}/api/credentials/models`);
+  if (!res.ok) throw new Error('Failed to load models');
   return res.json();
 }
 
@@ -58,7 +67,7 @@ async function loadAndRender(overlay) {
   } catch (e) {
     console.error('Load credentials:', e);
     const tbody = getTbody(overlay);
-    if (tbody) tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="4">Unable to load (is the backend running?).</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="5">Unable to load (is the backend running?).</td></tr>';
   }
 }
 
@@ -194,50 +203,21 @@ function bindTestButtons(overlay) {
       const origText = btn.textContent;
       btn.textContent = 'Testing...';
       btn.disabled = true;
-      const actionsCell = btn.closest('.credentials-actions-cell');
-      const hint = actionsCell?.querySelector('.credentials-test-hint');
       try {
         const res = await fetch(`${API_BASE}/api/credentials/${id}/test`, { method: 'POST' });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          btn.textContent = origText;
-          btn.disabled = false;
-          if (hint) {
-            hint.textContent = 'API key valid';
-            hint.classList.remove('credentials-test-hint--error');
-            hint.classList.add('credentials-test-hint--success');
-            setTimeout(() => {
-              hint.textContent = '';
-              hint.classList.remove('credentials-test-hint--success');
-            }, 4000);
-          }
+          showAlert('API key valid.', { title: 'Test result' });
         } else {
-          btn.textContent = origText;
-          btn.disabled = false;
-          if (hint) {
-            hint.textContent = typeof data.detail === 'string' ? data.detail : 'Test failed';
-            hint.classList.remove('credentials-test-hint--success');
-            hint.classList.add('credentials-test-hint--error');
-            setTimeout(() => {
-              hint.textContent = '';
-              hint.classList.remove('credentials-test-hint--error');
-            }, 4000);
-          }
+          showAlert(typeof data.detail === 'string' ? data.detail : 'Test failed', { title: 'Test failed' });
           console.warn('Test failed:', data.detail || res.statusText);
         }
       } catch (e) {
+        showAlert((e && e.message) || 'Test failed', { title: 'Test failed' });
+        console.error('Test credential:', e);
+      } finally {
         btn.textContent = origText;
         btn.disabled = false;
-        if (hint) {
-          hint.textContent = (e && e.message) || 'Test failed';
-          hint.classList.remove('credentials-test-hint--success');
-          hint.classList.add('credentials-test-hint--error');
-          setTimeout(() => {
-            hint.textContent = '';
-            hint.classList.remove('credentials-test-hint--error');
-          }, 4000);
-        }
-        console.error('Test credential:', e);
       }
     });
   });
@@ -281,6 +261,7 @@ export function openCredentialsModal() {
               <thead>
                 <tr>
                   <th>Name</th>
+                  <th>Provider</th>
                   <th>Model</th>
                   <th>API key</th>
                   <th>Actions</th>
@@ -288,29 +269,30 @@ export function openCredentialsModal() {
               </thead>
               <tbody>
                 <tr class="credentials-table-empty">
-                  <td colspan="4">No credentials added yet.</td>
+                  <td colspan="5">No credentials added yet.</td>
                 </tr>
               </tbody>
             </table>
           </div>
         </div>
         <div class="credentials-add">
-          <h3 class="credentials-section-title">Create credential</h3>
           <div class="credentials-add-row">
+            <div class="credentials-add-field">
+              <label class="dataset-meta-label" for="credentials-provider-select">Provider</label>
+              <select id="credentials-provider-select" class="credentials-select" aria-label="Select provider">
+                <option value="">— Select provider —</option>
+              </select>
+            </div>
             <div class="credentials-add-field">
               <label class="dataset-meta-label" for="credentials-model-select">Model</label>
               <select id="credentials-model-select" class="credentials-select" aria-label="Select model">
-                <option value="">Select a model...</option>
-                <option value="gpt-5">gpt-5</option>
-                <option value="gpt-5-mini">gpt-5-mini</option>
-                <option value="gpt-5-nano">gpt-5-nano</option>
+                <option value="">— Select model —</option>
               </select>
             </div>
             <div class="credentials-add-field credentials-add-field--grow">
               <label class="dataset-meta-label" for="credentials-api-key">API key</label>
               <div class="credentials-api-key-wrap">
                 <input type="password" id="credentials-api-key" class="dataset-meta-input credentials-api-key-input" placeholder="Enter your API key" autocomplete="off" />
-                <button type="button" class="credentials-api-key-toggle" aria-label="Show API key" title="Show API key">Show</button>
               </div>
             </div>
             <div class="credentials-add-field credentials-add-field--btn">
@@ -329,23 +311,17 @@ export function openCredentialsModal() {
   };
   overlay.querySelector('.modal-close').addEventListener('click', close);
 
-  /* Toggle API key visibility */
-  overlay.querySelector('.credentials-api-key-toggle').addEventListener('click', () => {
-    const input = overlay.querySelector('#credentials-api-key');
-    const btn = overlay.querySelector('.credentials-api-key-toggle');
-    if (!input || !btn) return;
-    const isPassword = input.type === 'password';
-    input.type = isPassword ? 'text' : 'password';
-    btn.textContent = isPassword ? 'Hide' : 'Show';
-    btn.setAttribute('aria-label', isPassword ? 'Hide API key' : 'Show API key');
-    btn.setAttribute('title', isPassword ? 'Hide API key' : 'Show API key');
-  });
-
   overlay.querySelector('.credentials-add-btn').addEventListener('click', async () => {
+    const providerSelect = overlay.querySelector('#credentials-provider-select');
     const modelSelect = overlay.querySelector('#credentials-model-select');
     const apiKeyInput = overlay.querySelector('#credentials-api-key');
+    const provider = (providerSelect?.value || '').trim();
     const llm = (modelSelect?.value || '').trim();
     const api_key = (apiKeyInput?.value || '').trim();
+    if (!provider) {
+      console.warn('Please select a provider');
+      return;
+    }
     if (!llm) {
       console.warn('Please select a model');
       return;
@@ -358,7 +334,7 @@ export function openCredentialsModal() {
       const res = await fetch(`${API_BASE}/api/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ llm, api_key }),
+        body: JSON.stringify({ provider, llm, api_key }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -371,7 +347,51 @@ export function openCredentialsModal() {
     }
   });
 
+  function fillProviderSelect() {
+    const sel = overlay.querySelector('#credentials-provider-select');
+    if (!sel || !overlay._providers) return;
+    const first = overlay._providers[0];
+    sel.innerHTML = overlay._providers.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+    if (first) sel.value = first.id;
+    fillModelSelect();
+  }
+
+  function fillModelSelect() {
+    const providerSel = overlay.querySelector('#credentials-provider-select');
+    const modelSel = overlay.querySelector('#credentials-model-select');
+    if (!modelSel || !overlay._models) return;
+    const providerId = (providerSel && providerSel.value) || '';
+    const modelsForProvider = providerId ? overlay._models.filter((m) => m.provider === providerId) : [];
+    modelSel.innerHTML = '<option value="">— Select model —</option>' + modelsForProvider.map((m) => `<option value="${m.id}">${m.name}</option>`).join('');
+  }
+
+  overlay.querySelector('#credentials-provider-select')?.addEventListener('change', fillModelSelect);
+
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
-  loadAndRender(overlay);
+
+  const fallbackProviders = [{ id: 'openai', name: 'OpenAI' }];
+  const fallbackModels = [
+    { id: 'gpt-5', name: 'gpt-5', provider: 'openai' },
+    { id: 'gpt-5-mini', name: 'gpt-5-mini', provider: 'openai' },
+    { id: 'gpt-5-nano', name: 'gpt-5-nano', provider: 'openai' },
+  ];
+  (async () => {
+    try {
+      const { providers = [], models = [] } = await fetchCredentialModels();
+      overlay._providers = providers.length ? providers : fallbackProviders;
+      overlay._models = models.length ? models : fallbackModels;
+      overlay._providersMap = Object.fromEntries((overlay._providers || []).map((p) => [p.id, p.name]));
+      overlay._modelsMap = Object.fromEntries((overlay._models || []).map((m) => [m.id, m]));
+      fillProviderSelect();
+    } catch (e) {
+      console.error('Load credential models:', e);
+      overlay._providers = fallbackProviders;
+      overlay._models = fallbackModels;
+      overlay._providersMap = Object.fromEntries(fallbackProviders.map((p) => [p.id, p.name]));
+      overlay._modelsMap = Object.fromEntries(fallbackModels.map((m) => [m.id, m]));
+      fillProviderSelect();
+    }
+    await loadAndRender(overlay);
+  })();
 }
