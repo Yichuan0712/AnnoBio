@@ -2,11 +2,11 @@
 *.code-workspace
 .cursor/
 
-# Node
+# Node / Electron
 node_modules/
-dist/
-out/
 .vite/
+app/out/
+app/dist/
 
 # Env / secrets
 .env
@@ -21,3 +21,7 @@ __pycache__/
 
 # Logs
 *.log
+
+# OS
+.DS_Store
+Thumbs.db

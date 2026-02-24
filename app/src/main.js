@@ -1,41 +1,42 @@
 import { app, BrowserWindow, ipcMain, dialog, screen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import started from 'electron-squirrel-startup';
+import fsSync from 'node:fs';
 import { spawn } from 'node:child_process';
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (started) {
-  app.quit();
-}
-
 /**
- * ===== Python backend (dev) =====
- * repo:
- *   ElectronVuePython/
- *     app/
- *       src/main.js  (this file)
- *     backend/
- *       main.py
- *       .venv/Scripts/python.exe
+ * ===== Python backend =====
+ * Dev: repo backend/.venv (Scripts/python.exe on Windows, bin/python on macOS/Linux).
+ * Packaged: resources/backend/python-embed (python.exe on Windows, bin/python on macOS/Linux).
  */
 const BACKEND_PORT = 8000;
 let pyProc = null;
 
 function getRepoRoot() {
-  // dev mode: app.getAppPath() ~= ...\ElectronVuePython\app
-  // repo root: its parent folder
   return path.resolve(app.getAppPath(), '..');
 }
 
 function getPythonExe() {
+  if (app.isPackaged) {
+    const base = process.resourcesPath;
+    const backendDir = path.join(base, 'backend');
+    if (process.platform === 'win32') {
+      return path.join(backendDir, 'python-embed', 'pythonw.exe');
+    }
+    return path.join(backendDir, 'python-embed', 'bin', 'python');
+  }
   const repoRoot = getRepoRoot();
-  return path.join(repoRoot, 'backend', '.venv', 'Scripts', 'python.exe');
+  if (process.platform === 'win32') {
+    return path.join(repoRoot, 'backend', '.venv', 'Scripts', 'python.exe');
+  }
+  return path.join(repoRoot, 'backend', '.venv', 'bin', 'python');
 }
 
 function getBackendCwd() {
-  const repoRoot = getRepoRoot();
-  return path.join(repoRoot, 'backend');
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'backend');
+  }
+  return path.join(getRepoRoot(), 'backend');
 }
 
 function startPythonBackend() {
@@ -43,18 +44,24 @@ function startPythonBackend() {
 
   const pythonExe = getPythonExe();
   const cwd = getBackendCwd();
+  if (!fsSync.existsSync(pythonExe)) {
+    const msg = `Python backend not found.\n\nExpected: ${pythonExe}\n\nIf you installed from the setup, try uninstalling and reinstalling.`;
+    console.error(msg);
+    dialog.showErrorBox('Backend Error', msg);
+    return;
+  }
 
-  // Start: python -m uvicorn main:app --port 8000 --reload (reload so backend route changes apply without restarting the app)
-  pyProc = spawn(
-    pythonExe,
-    ['-m', 'uvicorn', 'main:app', '--port', String(BACKEND_PORT), '--reload'],
-    {
-      cwd,
-      env: { ...process.env, PYTHONUNBUFFERED: '1' },
-      stdio: 'inherit',
-      windowsHide: true,
-    }
-  );
+  const args = ['-m', 'uvicorn', 'main:app', '--port', String(BACKEND_PORT)];
+  if (!app.isPackaged) {
+    args.push('--reload');
+  }
+
+  pyProc = spawn(pythonExe, args, {
+    cwd,
+    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+    stdio: 'inherit',
+    windowsHide: true,
+  });
 
   pyProc.on('exit', (code) => {
     console.log('[python] exited with code', code);
