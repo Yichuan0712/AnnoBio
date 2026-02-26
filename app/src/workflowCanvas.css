@@ -48,7 +48,7 @@
   padding: 6px 10px;
   background: var(--bg-bar);
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--control-radius, 6px);
   box-shadow: 0 2px 8px var(--shadow);
 }
 
@@ -64,7 +64,7 @@
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--control-radius, 6px);
   cursor: pointer;
   font-family: inherit;
 }

@@ -51,3 +51,65 @@ export function showAlert(message, options = {}) {
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
 }
+
+/**
+ * Confirm modal (same style as alert): title, message, Cancel + primary action.
+ * @param {string} message - Body text.
+ * @param {{ title?: string, confirmText?: string }} [options] - title (default "Confirm"), confirmText (default "OK").
+ * @returns {Promise<boolean>} - true if user clicked confirm, false if Cancel/Close/Escape.
+ */
+export function showConfirm(message, options = {}) {
+  const title = (options.title != null && options.title !== '') ? String(options.title) : 'Confirm';
+  const confirmText = (options.confirmText != null && options.confirmText !== '') ? String(options.confirmText) : 'OK';
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay modal-overlay--alert';
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'confirm-modal-title');
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--alert">
+      <div class="modal-header">
+        <h2 id="confirm-modal-title" class="modal-title">${escapeHtml(title)}</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body modal-body--alert">
+        <p class="alert-modal-message">${escapeHtml(message)}</p>
+      </div>
+      <div class="modal-alert-footer">
+        <button type="button" class="btn btn-secondary confirm-modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-secondary confirm-modal-ok">${escapeHtml(confirmText)}</button>
+      </div>
+    </div>
+  `;
+
+  let resolved = false;
+  const promise = new Promise((resolve) => {
+    function done(ok) {
+      if (resolved) return;
+      resolved = true;
+      overlay.remove();
+      document.body.style.overflow = '';
+      document.removeEventListener('keydown', onKeyDown);
+      resolve(ok);
+    }
+    function close() {
+      done(false);
+    }
+    function confirm() {
+      done(true);
+    }
+    function onKeyDown(e) {
+      if (e.key === 'Escape') close();
+    }
+    overlay.querySelector('.modal-close').addEventListener('click', close);
+    overlay.querySelector('.confirm-modal-cancel').addEventListener('click', close);
+    overlay.querySelector('.confirm-modal-ok').addEventListener('click', confirm);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    document.addEventListener('keydown', onKeyDown);
+  });
+
+  document.body.style.overflow = 'hidden';
+  document.body.appendChild(overlay);
+  return promise;
+}

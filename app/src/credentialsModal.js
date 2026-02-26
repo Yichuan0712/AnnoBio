@@ -3,7 +3,7 @@
  * Uses backend API: GET/POST/DELETE /api/credentials.
  */
 
-import { showAlert } from './alertModal.js';
+import { showAlert, showConfirm } from './alertModal.js';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -35,8 +35,6 @@ function renderCredentialsTable(overlay, list) {
         <code class="credentials-key-value">${maskedPlaceholder}</code>
       </td>
       <td class="credentials-actions-cell">
-        <button type="button" class="btn btn-secondary credentials-rename-btn" data-id="${c.id}" aria-label="Rename">Rename</button>
-        <button type="button" class="btn btn-secondary credentials-show-key-btn" data-id="${c.id}" aria-label="Show key">Show</button>
         <button type="button" class="btn btn-secondary credentials-test-btn" data-id="${c.id}" aria-label="Test">Test</button>
         <button type="button" class="btn btn-secondary credentials-delete-btn" data-id="${c.id}" aria-label="Delete">Delete</button>
       </td>
@@ -54,8 +52,8 @@ async function loadAndRender(overlay) {
   try {
     const list = await fetchCredentials();
     renderCredentialsTable(overlay, list);
-    bindRenameButtons(overlay);
-    bindShowKeyButtons(overlay);
+    bindNameCellClick(overlay);
+    bindKeyCellClick(overlay);
     bindTestButtons(overlay);
     bindDeleteButtons(overlay);
   } catch (e) {
@@ -65,123 +63,109 @@ async function loadAndRender(overlay) {
   }
 }
 
-function bindRenameButtons(overlay) {
-  overlay.querySelectorAll('.credentials-rename-btn').forEach((btn) => {
-    btn.replaceWith(btn.cloneNode(true));
-  });
-  overlay.querySelectorAll('.credentials-rename-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-id');
-      const row = btn.closest('tr');
-      const nameCell = row?.querySelector('.credentials-name-cell');
-      if (!id || !nameCell) return;
-      if (nameCell.querySelector('.credentials-rename-inline')) return;
-      const currentName = (nameCell.textContent || '').trim();
-      const wrap = document.createElement('div');
-      wrap.className = 'credentials-rename-inline';
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'dataset-meta-input credentials-rename-input';
-      input.value = currentName;
-      input.setAttribute('aria-label', 'New name');
-      const doSave = async () => {
-        const trimmed = input.value.trim();
-        if (!trimmed) {
-          nameCell.textContent = currentName;
-          wrap.remove();
-          return;
-        }
-        try {
-          const res = await fetch(`${API_BASE}/api/credentials/${id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: trimmed }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok) {
-            nameCell.textContent = trimmed;
-            wrap.remove();
-          } else {
-            nameCell.textContent = currentName;
-            wrap.remove();
-            const hint = row?.querySelector('.credentials-test-hint');
-            if (hint) {
-              hint.textContent = typeof data.detail === 'string' ? data.detail : 'Rename failed';
-              hint.classList.remove('credentials-test-hint--success');
-              hint.classList.add('credentials-test-hint--error');
-              setTimeout(() => {
-                hint.textContent = '';
-                hint.classList.remove('credentials-test-hint--error');
-              }, 4000);
-            }
-          }
-        } catch (e) {
-          console.error('Rename credential:', e);
-          nameCell.textContent = currentName;
-          wrap.remove();
-        }
-      };
-      const doCancel = () => {
-        nameCell.textContent = currentName;
-        wrap.remove();
-      };
-      input.addEventListener('blur', doSave);
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-        if (e.key === 'Escape') { e.preventDefault(); doCancel(); }
+function openNameEditInCell(id, nameCell, currentName) {
+  if (nameCell.querySelector('.credentials-cell-edit-wrap')) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'credentials-cell-edit-wrap';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = currentName;
+  input.setAttribute('aria-label', 'Name');
+  const doSave = async () => {
+    const trimmed = input.value.trim();
+    wrap.remove();
+    if (!trimmed) {
+      nameCell.textContent = currentName;
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/credentials/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
       });
-      wrap.appendChild(input);
-      nameCell.textContent = '';
-      nameCell.appendChild(wrap);
-      input.focus();
-      input.select();
+      if (res.ok) {
+        nameCell.textContent = trimmed;
+      } else {
+        nameCell.textContent = currentName;
+      }
+    } catch (e) {
+      console.error('Rename credential:', e);
+      nameCell.textContent = currentName;
+    }
+  };
+  input.addEventListener('blur', doSave);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); doSave(); }
+    if (e.key === 'Escape') { e.preventDefault(); wrap.remove(); nameCell.textContent = currentName; }
+  });
+  wrap.appendChild(input);
+  nameCell.textContent = '';
+  nameCell.appendChild(wrap);
+  input.focus();
+  input.select();
+}
+
+function bindNameCellClick(overlay) {
+  overlay.querySelectorAll('.credentials-name-cell').forEach((cell) => {
+    cell.addEventListener('click', () => {
+      const row = cell.closest('tr');
+      const id = row?.getAttribute('data-credential-id');
+      if (!id) return;
+      const currentName = (cell.textContent || '').trim();
+      openNameEditInCell(id, cell, currentName);
     });
   });
 }
 
-function bindShowKeyButtons(overlay) {
-  const maskedPlaceholder = '••••••••';
-  overlay.querySelectorAll('.credentials-show-key-btn').forEach((btn) => {
-    btn.replaceWith(btn.cloneNode(true));
+const MASKED_PLACEHOLDER = '••••••••';
+
+function openKeyViewInCell(id, keyCell) {
+  if (keyCell.querySelector('.credentials-cell-edit-wrap')) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'credentials-cell-edit-wrap credentials-cell-key-wrap';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.readOnly = true;
+  input.setAttribute('aria-label', 'API key');
+  input.value = 'Loading…';
+  const doClose = () => {
+    input.value = '';
+    wrap.remove();
+    const code = document.createElement('code');
+    code.className = 'credentials-key-value';
+    code.textContent = MASKED_PLACEHOLDER;
+    keyCell.textContent = '';
+    keyCell.appendChild(code);
+  };
+  input.addEventListener('blur', doClose);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); doClose(); }
   });
-  overlay.querySelectorAll('.credentials-show-key-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const id = btn.getAttribute('data-id');
-      const row = btn.closest('tr');
-      const code = row?.querySelector('.credentials-key-value');
-      if (!id || !code) return;
-      const visible = code.getAttribute('data-visible') === 'true';
-      if (visible) {
-        code.textContent = maskedPlaceholder;
-        code.removeAttribute('data-visible');
-        code.removeAttribute('data-full-key');
-        btn.textContent = 'Show';
-        btn.setAttribute('aria-label', 'Show key');
-        return;
-      }
-      const cached = code.getAttribute('data-full-key');
-      if (cached !== null) {
-        code.textContent = cached;
-        code.setAttribute('data-visible', 'true');
-        btn.textContent = 'Hide';
-        btn.setAttribute('aria-label', 'Hide key');
-        return;
-      }
-      code.textContent = '…';
-      try {
-        const res = await fetch(`${API_BASE}/api/credentials/${id}`);
-        if (!res.ok) throw new Error('Failed to load key');
-        const data = await res.json();
-        const fullKey = data.api_key ?? '';
-        code.textContent = fullKey;
-        code.setAttribute('data-full-key', fullKey);
-        code.setAttribute('data-visible', 'true');
-        btn.textContent = 'Hide';
-        btn.setAttribute('aria-label', 'Hide key');
-      } catch (e) {
-        console.error('Load full key:', e);
-        code.textContent = maskedPlaceholder;
-      }
+  wrap.appendChild(input);
+  keyCell.textContent = '';
+  keyCell.appendChild(wrap);
+  (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/credentials/${id}`);
+      if (!res.ok) throw new Error('Failed to load key');
+      const data = await res.json();
+      input.value = data.api_key ?? '';
+      input.focus();
+    } catch (e) {
+      console.error('Load full key:', e);
+      input.value = 'Failed to load.';
+    }
+  })();
+}
+
+function bindKeyCellClick(overlay) {
+  overlay.querySelectorAll('.credentials-key-cell').forEach((cell) => {
+    cell.addEventListener('click', () => {
+      const row = cell.closest('tr');
+      const id = row?.getAttribute('data-credential-id');
+      if (!id) return;
+      openKeyViewInCell(id, cell);
     });
   });
 }
@@ -225,6 +209,8 @@ function bindDeleteButtons(overlay) {
     btn.addEventListener('click', async () => {
       const id = btn.getAttribute('data-id');
       if (!id) return;
+      const ok = await showConfirm('Delete this credential?', { title: 'Delete credential', confirmText: 'Delete' });
+      if (!ok) return;
       try {
         const res = await fetch(`${API_BASE}/api/credentials/${id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Delete failed');
@@ -243,6 +229,10 @@ export function openCredentialsModal() {
   overlay.setAttribute('aria-labelledby', 'my-credentials-title');
   overlay.innerHTML = `
     <style>
+      .modal-panel--credentials {
+        width: 520px;
+        max-width: 92vw;
+      }
       .modal-panel--credentials .credentials-add-card {
         margin-top: 1rem;
       }
@@ -263,8 +253,7 @@ export function openCredentialsModal() {
       }
       .modal-panel--credentials .credentials-add-card .credentials-select,
       .modal-panel--credentials .credentials-add-card .dataset-meta-input,
-      .modal-panel--credentials .credentials-add-card .credentials-add-btn,
-      .modal-panel--credentials .credentials-add-card .credentials-model-back-preset {
+      .modal-panel--credentials .credentials-add-card .credentials-add-btn {
         height: 40px;
         box-sizing: border-box;
         width: 100%;
@@ -274,12 +263,6 @@ export function openCredentialsModal() {
       }
       .modal-panel--credentials .credentials-add-card .credentials-add-field--btn .credentials-add-btn {
         width: auto;
-      }
-      .modal-panel--credentials .credentials-add-card .credentials-model-back-preset {
-        width: 40px;
-        min-width: 40px;
-        padding: 0;
-        font-size: 1.1rem;
       }
       .modal-panel--credentials .credentials-add-card .credentials-add-btn {
         line-height: 1;
@@ -295,20 +278,59 @@ export function openCredentialsModal() {
       .modal-panel--credentials .credentials-model-custom-wrap.is-visible {
         display: block;
       }
-      .modal-panel--credentials .credentials-model-custom-row {
-        display: flex;
-        gap: 0.5rem;
-        align-items: center;
-      }
-      .modal-panel--credentials .credentials-model-custom-row input {
-        flex: 1;
-        min-width: 0;
-      }
-      .modal-panel--credentials .credentials-model-back-preset {
-        flex-shrink: 0;
-      }
       .modal-panel--credentials .credentials-model-preset-wrap.is-hidden {
         display: none;
+      }
+      .modal-panel--credentials .credentials-name-cell,
+      .modal-panel--credentials .credentials-key-cell {
+        cursor: pointer;
+        vertical-align: middle;
+        position: relative;
+      }
+      .modal-panel--credentials .credentials-name-cell:has(.credentials-cell-edit-wrap),
+      .modal-panel--credentials .credentials-key-cell:has(.credentials-cell-edit-wrap) {
+        min-height: 2.5em;
+      }
+      .modal-panel--credentials .credentials-table {
+        table-layout: fixed;
+      }
+      .modal-panel--credentials .credentials-table th:nth-child(1),
+      .modal-panel--credentials .credentials-table td:nth-child(1) { width: 120px; max-width: 120px; overflow: hidden; }
+      .modal-panel--credentials .credentials-table th:nth-child(4),
+      .modal-panel--credentials .credentials-table td:nth-child(4) { width: 160px; max-width: 160px; overflow: hidden; }
+      .modal-panel--credentials .credentials-cell-edit-wrap {
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 5;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--control-radius, 4px);
+        padding: 2px 6px;
+      }
+      .modal-panel--credentials .credentials-cell-edit-wrap input {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+        padding: 2px 0;
+        background: transparent;
+        color: var(--text);
+        border: none;
+        border-radius: 0;
+        font: inherit;
+        outline: none;
+      }
+      .modal-panel--credentials .credentials-cell-key-wrap input {
+        font-size: 0.9em;
+        overflow-x: auto;
+      }
+      .modal-panel--credentials .credentials-actions-cell .btn {
+        min-width: 72px;
       }
     </style>
     <div class="modal-panel modal-panel--credentials">
@@ -325,7 +347,7 @@ export function openCredentialsModal() {
                 <tr>
                   <th>Name</th>
                   <th>Provider</th>
-                  <th>Model</th>
+                  <th>Model type</th>
                   <th>API key</th>
                   <th>Actions</th>
                 </tr>
@@ -348,17 +370,14 @@ export function openCredentialsModal() {
               </select>
             </div>
             <div class="credentials-add-field credentials-model-cell">
-              <label class="dataset-meta-label" for="credentials-model-select">Model</label>
+              <label class="dataset-meta-label" for="credentials-model-select">Model type</label>
               <div class="credentials-model-preset-wrap">
-                <select id="credentials-model-select" class="credentials-select" aria-label="Select model">
-                  <option value="">— Select model —</option>
+                <select id="credentials-model-select" class="credentials-select" aria-label="Select model type">
+                  <option value="">— Select model type —</option>
                 </select>
               </div>
               <div class="credentials-model-custom-wrap" id="credentials-model-custom-wrap">
-                <div class="credentials-model-custom-row">
-                  <input type="text" id="credentials-model-custom" class="dataset-meta-input" placeholder="e.g. gpt-4o, claude-3-opus-20240229" autocomplete="off" aria-label="Custom model ID" />
-                  <button type="button" class="btn btn-secondary credentials-model-back-preset" aria-label="Back to preset" title="Back to preset">×</button>
-                </div>
+                <input type="text" id="credentials-model-custom" class="dataset-meta-input" placeholder="e.g. gpt-4o, claude-3-opus-20240229" autocomplete="off" aria-label="Custom model ID" />
               </div>
             </div>
             <div class="credentials-add-field credentials-add-field--grow">
@@ -395,7 +414,7 @@ export function openCredentialsModal() {
       return;
     }
     if (!llm) {
-      console.warn('Please select a model or enter a custom model id');
+      console.warn('Please select a model type or enter a custom model ID');
       return;
     }
     if (!api_key) {
@@ -416,6 +435,8 @@ export function openCredentialsModal() {
       }
       apiKeyInput.value = '';
       if (modelCustomInput) modelCustomInput.value = '';
+      if (providerSelect) providerSelect.value = '';
+      fillModelSelect();
       await loadAndRender(overlay);
     } catch (e) {
       const msg = (e && e.message) || String(e);
@@ -440,7 +461,7 @@ export function openCredentialsModal() {
     const providerId = (providerSel && providerSel.value) || '';
     const modelsForProvider = providerId ? overlay._models.filter((m) => m.provider === providerId) : [];
     const customOption = providerId ? '<option value="__custom__">— Custom —</option>' : '';
-    modelSel.innerHTML = '<option value="">— Select model —</option>' + modelsForProvider.map((m) => `<option value="${m.id}">${m.name}</option>`).join('') + customOption;
+    modelSel.innerHTML = '<option value="">— Select model type —</option>' + modelsForProvider.map((m) => `<option value="${m.id}">${m.name}</option>`).join('') + customOption;
     toggleModelCustomVisibility(overlay);
   }
 
@@ -455,12 +476,14 @@ export function openCredentialsModal() {
 
   overlay.querySelector('#credentials-provider-select')?.addEventListener('change', fillModelSelect);
   overlay.querySelector('#credentials-model-select')?.addEventListener('change', () => toggleModelCustomVisibility(overlay));
-  overlay.querySelector('.credentials-model-back-preset')?.addEventListener('click', () => {
-    const modelSel = overlay.querySelector('#credentials-model-select');
+  overlay.querySelector('#credentials-model-custom')?.addEventListener('blur', () => {
     const modelCustomInput = overlay.querySelector('#credentials-model-custom');
-    if (modelSel) modelSel.value = '';
-    if (modelCustomInput) modelCustomInput.value = '';
-    toggleModelCustomVisibility(overlay);
+    const modelSel = overlay.querySelector('#credentials-model-select');
+    if (modelSel?.value === '__custom__' && (!modelCustomInput?.value || !modelCustomInput.value.trim())) {
+      if (modelSel) modelSel.value = '';
+      if (modelCustomInput) modelCustomInput.value = '';
+      toggleModelCustomVisibility(overlay);
+    }
   });
 
   document.body.style.overflow = 'hidden';
@@ -476,11 +499,8 @@ export function openCredentialsModal() {
     { id: 'gpt-5', name: 'gpt-5', provider: 'openai' },
     { id: 'gpt-5-mini', name: 'gpt-5-mini', provider: 'openai' },
     { id: 'gpt-5-nano', name: 'gpt-5-nano', provider: 'openai' },
-    { id: 'claude-3-5-sonnet', name: 'claude-3-5-sonnet-20241022', provider: 'anthropic' },
-    { id: 'claude-3-5-haiku', name: 'claude-3-5-haiku-20241022', provider: 'anthropic' },
-    { id: 'claude-3-opus', name: 'claude-3-opus-20240229', provider: 'anthropic' },
-    { id: 'claude-3-sonnet', name: 'claude-3-sonnet-20240229', provider: 'anthropic' },
-    { id: 'claude-3-haiku', name: 'claude-3-haiku-20240307', provider: 'anthropic' },
+    { id: 'claude-opus-4-6', name: 'claude-opus-4-6', provider: 'anthropic' },
+    { id: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6', provider: 'anthropic' },
     { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', provider: 'google' },
     { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash', provider: 'google' },
     { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite', provider: 'google' },
