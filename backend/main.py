@@ -48,6 +48,9 @@ PROVIDERS = [
     {"id": "openai", "name": "OpenAI"},
     {"id": "anthropic", "name": "Anthropic"},
     {"id": "google", "name": "Google"},
+    {"id": "deepseek", "name": "DeepSeek"},
+    {"id": "mistral", "name": "Mistral"},
+    {"id": "bedrock", "name": "Amazon Bedrock"},
 ]
 # name = 下拉框显示名，与 API 传入的模型名一致（GPT 用 id，Anthropic 用 API 实际模型 id）
 MODELS = [
@@ -59,13 +62,18 @@ MODELS = [
     {"id": "gemini-2.5-pro", "name": "gemini-2.5-pro", "provider": "google"},
     {"id": "gemini-2.5-flash", "name": "gemini-2.5-flash", "provider": "google"},
     {"id": "gemini-2.5-flash-lite", "name": "gemini-2.5-flash-lite", "provider": "google"},
+    {"id": "openai.gpt-oss-20b-1:0", "name": "openai.gpt-oss-20b-1:0", "provider": "bedrock"},
+    {"id": "openai.gpt-oss-120b-1:0", "name": "openai.gpt-oss-120b-1:0", "provider": "bedrock"},
+    {"id": "deepseek-chat", "name": "deepseek-chat", "provider": "deepseek"},
+    {"id": "deepseek-reasoner", "name": "deepseek-reasoner", "provider": "deepseek"},
+    {"id": "mistral-large-2512", "name": "mistral-large-2512", "provider": "mistral"},
 ]
 ALLOWED_MODELS = {m["id"] for m in MODELS}
 ALLOWED_PROVIDERS = {p["id"] for p in PROVIDERS}
 
 
 def _log_backend_version():
-    """启动时打印，便于确认加载的是否为本文件（新版本应有 11 个 models、3 个 providers）。"""
+    """启动时打印，便于确认加载的是否为本文件。"""
     print(f"[backend] main.py loaded from: {Path(__file__).resolve()}")
     print(f"[backend] MODELS={len(MODELS)}, PROVIDERS={len(PROVIDERS)}")
 

@@ -179,7 +179,7 @@ function bindTestButtons(overlay) {
       const id = btn.getAttribute('data-id');
       if (!id) return;
       const origText = btn.textContent;
-      btn.textContent = 'Testing...';
+      btn.textContent = 'Testing';
       btn.disabled = true;
       try {
         const res = await fetch(`${API_BASE}/api/credentials/${id}/test`, { method: 'POST' });
@@ -494,6 +494,9 @@ export function openCredentialsModal() {
     { id: 'openai', name: 'OpenAI' },
     { id: 'anthropic', name: 'Anthropic' },
     { id: 'google', name: 'Google' },
+    { id: 'deepseek', name: 'DeepSeek' },
+    { id: 'mistral', name: 'Mistral' },
+    { id: 'bedrock', name: 'Amazon Bedrock' },
   ];
   const allModels = [
     { id: 'gpt-5', name: 'gpt-5', provider: 'openai' },
@@ -504,6 +507,11 @@ export function openCredentialsModal() {
     { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', provider: 'google' },
     { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash', provider: 'google' },
     { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite', provider: 'google' },
+    { id: 'openai.gpt-oss-20b-1:0', name: 'openai.gpt-oss-20b-1:0', provider: 'bedrock' },
+    { id: 'openai.gpt-oss-120b-1:0', name: 'openai.gpt-oss-120b-1:0', provider: 'bedrock' },
+    { id: 'deepseek-chat', name: 'deepseek-chat', provider: 'deepseek' },
+    { id: 'deepseek-reasoner', name: 'deepseek-reasoner', provider: 'deepseek' },
+    { id: 'mistral-large-2512', name: 'mistral-large-2512', provider: 'mistral' },
   ];
   (async () => {
     overlay._providers = allProviders;

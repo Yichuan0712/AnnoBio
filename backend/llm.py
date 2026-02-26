@@ -4,10 +4,22 @@ with user-defined output schema (structured output).
 Provider-agnostic: add new providers by registering in PROVIDER_REGISTRY below.
 """
 
+import os
+
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
+
+try:
+    from langchain_aws import ChatBedrock
+except ImportError:
+    ChatBedrock = None
+
+try:
+    from langchain_mistralai import ChatMistralAI
+except ImportError:
+    ChatMistralAI = None
 
 # ---------------------------------------------------------------------------
 # Provider: OpenAI
@@ -71,10 +83,91 @@ def _build_google(model: str, api_key: str, **kwargs) -> ChatGoogleGenerativeAI:
     )
 
 
+# ---------------------------------------------------------------------------
+# Provider: DeepSeek (OpenAI-compatible API)
+# ---------------------------------------------------------------------------
+
+DEEPSEEK_MODEL_MAP = {
+    "deepseek-chat": "deepseek-chat",
+    "deepseek-reasoner": "deepseek-reasoner",
+}
+
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+
+def _build_deepseek(model: str, api_key: str, **kwargs) -> ChatOpenAI:
+    model_id = DEEPSEEK_MODEL_MAP.get(model) or model
+    return ChatOpenAI(
+        model=model_id,
+        api_key=api_key,
+        base_url=DEEPSEEK_BASE_URL,
+        max_tokens=kwargs.pop("max_tokens", 1024),
+        **kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Provider: Mistral AI
+# ---------------------------------------------------------------------------
+
+MISTRAL_MODEL_MAP = {
+    "mistral-large-2512": "mistral-large-2512",
+}
+
+
+def _build_mistral(model: str, api_key: str, **kwargs):
+    if ChatMistralAI is None:
+        raise ValueError(
+            "Mistral requires langchain-mistralai. Install with: pip install langchain-mistralai"
+        )
+    model_id = MISTRAL_MODEL_MAP.get(model) or model
+    return ChatMistralAI(
+        model=model_id,
+        api_key=api_key,
+        max_tokens=kwargs.pop("max_tokens", 1024),
+        **kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Provider: Amazon Bedrock
+# ---------------------------------------------------------------------------
+# Region 固定 us-east-1（支持最全）。API key 栏可留空（用环境变量鉴权）或填 Bearer token。
+
+BEDROCK_MODEL_MAP = {
+    "openai.gpt-oss-20b-1:0": "openai.gpt-oss-20b-1:0",
+    "openai.gpt-oss-120b-1:0": "openai.gpt-oss-120b-1:0",
+}
+
+
+def _build_bedrock(model: str, api_key: str, **kwargs):
+    if ChatBedrock is None:
+        raise ValueError(
+            "Amazon Bedrock requires langchain-aws. Install with: pip install langchain-aws"
+        )
+    model_id = BEDROCK_MODEL_MAP.get(model) or model
+    raw = (api_key or "").strip()
+    if raw:
+        if "=" in raw:
+            raw = raw.split("=", 1)[-1]
+        raw = raw.strip()
+        if raw:
+            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = raw
+    return ChatBedrock(
+        model_id=model_id,
+        region_name="us-east-1",
+        max_tokens=kwargs.pop("max_tokens", 1024),
+        **kwargs,
+    )
+
+
 PROVIDER_REGISTRY = {
     "openai": _build_openai,
     "anthropic": _build_anthropic,
     "google": _build_google,
+    "deepseek": _build_deepseek,
+    "mistral": _build_mistral,
+    "bedrock": _build_bedrock,
 }
 
 
