@@ -5,7 +5,7 @@
  *
  * 打开时：左侧配置，右侧显示之前结果（如有）。不自动运行。
  *
- * 按钮：Run（从头跑）| Running（跑中禁用）| Run completed（跑完禁用）
+ * 按钮：Run（从头跑）| Resume（接着跑）| Running（跑中禁用）| Run completed（跑完禁用）
  */
 
 const API_BASE = 'http://localhost:8000';
@@ -57,6 +57,28 @@ function filterResults(results, outputFields, searchQuery, workingContent) {
     }
     return false;
   });
+}
+
+/** Resume 时合并已有结果与新结果。newResults 的 row_index 是相对批次的 (0,1,2...)，需加上 startIndex 得到全局行号。 */
+function mergeResumeResults(existing, newResults, startIndex) {
+  if (!Array.isArray(existing)) existing = [];
+  if (!Array.isArray(newResults)) newResults = [];
+  const adjusted = newResults.map((r) => ({ ...r, row_index: (r.row_index ?? 0) + startIndex }));
+  const byIndex = new Map();
+  existing.forEach((r) => byIndex.set(r.row_index ?? -1, r));
+  adjusted.forEach((r) => byIndex.set(r.row_index ?? -1, r));
+  const merged = Array.from(byIndex.values()).filter((r) => (r.row_index ?? -1) >= 0);
+  merged.sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0));
+  return merged;
+}
+
+/** 第一个未完成的行索引（0-based）。根据 results 中的 row_index 判断哪些行已有结果。 */
+function getNextRowIndex(results, totalRows) {
+  if (!Array.isArray(results) || results.length === 0) return 0;
+  const done = new Set(results.map((x) => x.row_index ?? -1).filter((i) => i >= 0));
+  let i = 0;
+  while (i < totalRows && done.has(i)) i++;
+  return i;
 }
 
 // ---
@@ -209,7 +231,7 @@ export function openRunDetailModal({
     if (completed != null && total != null) setNodeProgressBar(completed, total);
   }
 
-  // --- 按钮状态：Run | Running | Run completed ---
+  // --- 按钮状态：Run | Resume | Running | Run completed ---
 
   function applyRunningLock() {
     runBtn.disabled = true;
@@ -242,9 +264,10 @@ export function openRunDetailModal({
       return;
     }
     applyUnlock();
+    const { results } = getNodeResults();
     runBtn.classList.remove('btn-danger');
     runBtn.classList.add('btn-primary');
-    runBtn.textContent = 'Run';
+    runBtn.textContent = results.length > 0 ? 'Resume' : 'Run';
     runBtn.disabled = !(selectedNodeId && selectedCredentialId);
   }
 
@@ -645,7 +668,7 @@ export function openRunDetailModal({
     refreshButton();
   });
 
-  // --- 点击 Run ---
+  // --- 点击 Run / Resume ---
 
   runBtn.addEventListener('click', async () => {
     if (isCompleted()) return;
@@ -672,6 +695,17 @@ export function openRunDetailModal({
       return;
     }
 
+    const { results: existingResults, outputFields: existingFields } = getNodeResults();
+    const nextRowIndex = getNextRowIndex(existingResults, rows.length);
+    const rowsToRun = rows.slice(nextRowIndex);
+
+    if (rowsToRun.length === 0) {
+      if (node && existingResults.length > 0) writeNodeRunState({ results: existingResults, outputFields: existingFields, completed: existingResults.length, total: rows.length, runCompleted: true });
+      showResults(existingResults, existingFields, 'complete', 'All rows already completed.');
+      refreshButton();
+      return;
+    }
+
     const buildPrompts = (rowList) => rowList.map((row) => {
       let text = templateText;
       inputFields.forEach((inputName) => {
@@ -682,15 +716,24 @@ export function openRunDetailModal({
       });
       return text;
     });
-    const prompts = buildPrompts(rows);
+    const prompts = buildPrompts(rowsToRun);
 
     if (node) {
-      writeNodeRunState({ results: [], outputFields: [], completed: 0, total: rows.length, runCompleted: false });
-      const bar = node.querySelector('.workflow-node__run-progress');
-      if (bar) bar.style.width = '0%';
+      if (nextRowIndex === 0) {
+        writeNodeRunState({ results: [], outputFields: [], completed: 0, total: rows.length, runCompleted: false });
+        const bar = node.querySelector('.workflow-node__run-progress');
+        if (bar) bar.style.width = '0%';
+        delete node.dataset.runResumeStartIndex;
+        delete node.dataset.runResumeExistingResults;
+        delete node.dataset.runResumeTotalRows;
+      } else {
+        node.dataset.runResumeStartIndex = String(nextRowIndex);
+        node.dataset.runResumeExistingResults = node.dataset.runResults || '[]';
+        node.dataset.runResumeTotalRows = String(rows.length);
+      }
     }
 
-    showResults([], [], 'generating', 'Running…');
+    showResults(existingResults, existingFields, 'generating', nextRowIndex > 0 ? 'Resuming…' : 'Running…');
     applyRunningLock();
 
     try {
@@ -705,19 +748,37 @@ export function openRunDetailModal({
       if (!res.ok) {
         runId = null;
         resultsState.status = 'complete';
+        if (nextRowIndex > 0) {
+          delete node?.dataset?.runResumeStartIndex;
+          delete node?.dataset?.runResumeExistingResults;
+          delete node?.dataset?.runResumeTotalRows;
+        }
         rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(data.detail || res.statusText || 'Request failed')}</p>`;
         expandRightPanel();
         refreshButton();
         return;
       }
-      const results = data.results || [];
+      let results = data.results || [];
       const outputFields = data.output_fields || [];
+      if (nextRowIndex > 0 && existingResults.length > 0) {
+        results = mergeResumeResults(existingResults, results, nextRowIndex);
+      }
       runId = null;
+      if (node && nextRowIndex > 0) {
+        delete node.dataset.runResumeStartIndex;
+        delete node.dataset.runResumeExistingResults;
+        delete node.dataset.runResumeTotalRows;
+      }
       writeNodeRunState({ results, outputFields, completed: results.length, total: rows.length, runCompleted: true });
       showResults(results, outputFields, 'complete');
     } catch (e) {
       runId = null;
       resultsState.status = 'complete';
+      if (nextRowIndex > 0 && node) {
+        delete node.dataset.runResumeStartIndex;
+        delete node.dataset.runResumeExistingResults;
+        delete node.dataset.runResumeTotalRows;
+      }
       rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(String(e.message || e))}</p>`;
       expandRightPanel();
     }

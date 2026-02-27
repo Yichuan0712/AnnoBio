@@ -481,6 +481,18 @@ export function buildWorkflowCanvas(root) {
     if (node) node.dataset.reviewProgress = String(pct);
   }
 
+  function mergeResumeResults(existing, newResults, startIndex) {
+    if (!Array.isArray(existing)) existing = [];
+    if (!Array.isArray(newResults)) newResults = [];
+    const adjusted = newResults.map((r) => ({ ...r, row_index: (r.row_index ?? 0) + startIndex }));
+    const byIndex = new Map();
+    existing.forEach((r) => byIndex.set(r.row_index ?? -1, r));
+    adjusted.forEach((r) => byIndex.set(r.row_index ?? -1, r));
+    const merged = Array.from(byIndex.values()).filter((r) => (r.row_index ?? -1) >= 0);
+    merged.sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0));
+    return merged;
+  }
+
   /** When true, run poll is stopped (app closing); do not start new API calls. */
   let runPollStopped = false;
 
@@ -498,12 +510,25 @@ export function buildWorkflowCanvas(root) {
           continue;
         }
         if (res.status === 202) {
-          const partialResults = data.results;
-          const outputFields = data.output_fields;
-          const totalRows = data.total || 0;
+          let partialResults = data.results;
+          let outputFields = data.output_fields;
+          const startIndex = node.dataset.runResumeStartIndex != null ? parseInt(node.dataset.runResumeStartIndex, 10) : 0;
+          const totalRows = node.dataset.runResumeTotalRows != null ? parseInt(node.dataset.runResumeTotalRows, 10) : (data.total || 0);
+          if (startIndex > 0 && node.dataset.runResumeExistingResults) {
+            try {
+              const existing = JSON.parse(node.dataset.runResumeExistingResults);
+              partialResults = mergeResumeResults(existing, partialResults || [], startIndex);
+              if (!Array.isArray(outputFields) || outputFields.length === 0) {
+                const of = node.dataset.runOutputFields;
+                if (of) outputFields = JSON.parse(of);
+              }
+            } catch (_) {
+              continue;
+            }
+          }
           if (Array.isArray(partialResults) && Array.isArray(outputFields)) {
             const completed = partialResults.length;
-            const total = totalRows || completed;
+            const total = totalRows || data.total || completed;
             setRunNodeProgress(node, completed, total);
             if (node.style.borderColor) {
               const bar = node.querySelector('.workflow-node__run-progress');
@@ -518,11 +543,33 @@ export function buildWorkflowCanvas(root) {
         }
         if (res.status !== 200) continue;
         if (data.status === 'done' || data.status === 'cancelled') {
-          const results = data.results || [];
-          const outputFields = data.output_fields || [];
-          const totalRows = data.total || 0;
+          let results = data.results || [];
+          let outputFields = data.output_fields || [];
+          const startIndex = node.dataset.runResumeStartIndex != null ? parseInt(node.dataset.runResumeStartIndex, 10) : 0;
+          const totalRows = node.dataset.runResumeTotalRows != null ? parseInt(node.dataset.runResumeTotalRows, 10) : (data.total || 0);
+          if (startIndex > 0 && node.dataset.runResumeExistingResults) {
+            try {
+              const existing = JSON.parse(node.dataset.runResumeExistingResults);
+              results = mergeResumeResults(existing, results, startIndex);
+              if (!Array.isArray(outputFields) || outputFields.length === 0) {
+                const of = node.dataset.runOutputFields;
+                if (of) outputFields = JSON.parse(of);
+              }
+            } catch (_) {
+              try {
+                const existing = JSON.parse(node.dataset.runResumeExistingResults || '[]');
+                results = Array.isArray(existing) ? existing : [];
+              } catch (_) { results = []; }
+              try {
+                if (node.dataset.runOutputFields) outputFields = JSON.parse(node.dataset.runOutputFields);
+              } catch (_) {}
+            }
+            delete node.dataset.runResumeStartIndex;
+            delete node.dataset.runResumeExistingResults;
+            delete node.dataset.runResumeTotalRows;
+          }
           const completed = results.length;
-          const total = totalRows || completed;
+          const total = totalRows || data.total || completed;
           setRunNodeProgress(node, completed, total);
           if (data.status === 'done') node.dataset.runCompleted = '1';
           if (data.status === 'done' && data.error && results.length === 0) {
@@ -1518,9 +1565,9 @@ export function buildWorkflowCanvas(root) {
   zoomToolbar.setAttribute('role', 'toolbar');
   zoomToolbar.setAttribute('aria-label', 'Canvas zoom');
   zoomToolbar.innerHTML = `
-    <button type="button" class="workflow-canvas__zoom-btn" data-zoom="out" aria-label="Zoom out">−</button>
+    <button type="button" class="workflow-canvas__zoom-btn" data-zoom="out" aria-label="Zoom out"><span class="workflow-canvas__zoom-btn-symbol">−</span></button>
     <span class="workflow-canvas__zoom-label" aria-live="polite">100%</span>
-    <button type="button" class="workflow-canvas__zoom-btn" data-zoom="in" aria-label="Zoom in">+</button>
+    <button type="button" class="workflow-canvas__zoom-btn" data-zoom="in" aria-label="Zoom in"><span class="workflow-canvas__zoom-btn-symbol">+</span></button>
   `;
   const zoomLabelEl = zoomToolbar.querySelector('.workflow-canvas__zoom-label');
   function updateZoomLabel() {

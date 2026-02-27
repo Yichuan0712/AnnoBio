@@ -3041,6 +3041,11 @@
   vertical-align: top;
 }
 
+/* Comment 格子内边距缩小，让文本框占满更多空间 */
+.score-detail-results-td--comment {
+  padding: 4px 6px;
+}
+
 .score-detail-results-table thead .score-detail-results-th--comment {
   position: relative;
   padding-right: 14px;
@@ -3058,7 +3063,7 @@
 
 .score-detail-results-comment-textarea {
   width: 100%;
-  min-width: 60px;
+  min-width: 0;
   min-height: 2.5em;
   box-sizing: border-box;
   padding: 4px 6px;

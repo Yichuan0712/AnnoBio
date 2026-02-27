@@ -1105,7 +1105,7 @@ def review_analyze(body: ReviewRequest):
         _safe_print(_HL + "-" * 60 + _R)
         _safe_print(design_prompt)
         _safe_print(_HL + "-" * 60 + _R)
-        design_result = llm_run_structured(
+        design_result, _ = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,
@@ -1129,7 +1129,7 @@ def review_analyze(body: ReviewRequest):
         _safe_print(_HL + "-" * 60 + _R)
         _safe_print(step1_prompt)
         _safe_print(_HL + "-" * 60 + _R)
-        step1_result = llm_run_structured(
+        step1_result, _ = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,
@@ -1157,7 +1157,7 @@ def review_analyze(body: ReviewRequest):
                 _safe_print(_HL + "-" * 60 + _R)
                 _safe_print(step1b_prompt)
                 _safe_print(_HL + "-" * 60 + _R)
-                step1b_result = llm_run_structured(
+                step1b_result, _ = llm_run_structured(
                     provider=provider,
                     model=model,
                     api_key=api_key,
@@ -1183,7 +1183,7 @@ def review_analyze(body: ReviewRequest):
         _safe_print(_HL + "-" * 60 + _R)
         _safe_print(step2_prompt)
         _safe_print(_HL + "-" * 60 + _R)
-        step2_result = llm_run_structured(
+        step2_result, _ = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,
@@ -1237,7 +1237,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         _safe_print(_HL + "-" * 60 + _R)
         _safe_print(design_prompt)
         _safe_print(_HL + "-" * 60 + _R)
-        design_result = llm_run_structured(
+        design_result, _ = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,
@@ -1262,7 +1262,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         _safe_print(_HL + "-" * 60 + _R)
         _safe_print(step1_prompt)
         _safe_print(_HL + "-" * 60 + _R)
-        step1_result = llm_run_structured(
+        step1_result, _ = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,
@@ -1298,7 +1298,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
                 _safe_print(_HL + "-" * 60 + _R)
                 _safe_print(step1b_prompt)
                 _safe_print(_HL + "-" * 60 + _R)
-                step1b_result = llm_run_structured(
+                step1b_result, _ = llm_run_structured(
                     provider=provider,
                     model=model,
                     api_key=api_key,
@@ -1325,7 +1325,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         _safe_print(_HL + "-" * 60 + _R)
         _safe_print(step2_prompt)
         _safe_print(_HL + "-" * 60 + _R)
-        step2_result = llm_run_structured(
+        step2_result, _ = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,

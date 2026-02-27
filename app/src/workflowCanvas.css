@@ -69,6 +69,13 @@
   font-family: inherit;
 }
 
+/* 加减号微调：视觉上略偏下时向上轻微偏移 */
+.workflow-canvas__zoom-btn-symbol {
+  display: block;
+  line-height: 1;
+  transform: translateY(-0.5px);
+}
+
 .workflow-canvas__zoom-btn:hover {
   background: var(--hover);
 }
@@ -164,17 +171,17 @@
   z-index: 10;
 }
 
-/* Run node: 保证标题能显示全，略短于 dataset 节点，方角 */
+/* Run node: 保证标题能显示全，略短于 dataset 节点，小圆角 */
 .workflow-node--run {
   min-width: 110px;
   max-width: 160px;
   width: 160px;
   overflow: hidden;
-  border-radius: 0;
+  border-radius: 2px;
 }
 
 .workflow-node--run .workflow-node__header {
-  border-radius: 0;
+  border-radius: 2px 2px 0 0;
 }
 
 /* Score node: 与 Run 外观类似，略短于 dataset 节点 */
@@ -183,15 +190,15 @@
   max-width: 160px;
   width: 160px;
   overflow: hidden;
-  border-radius: 0;
+  border-radius: 2px;
 }
 
 .workflow-node--score .workflow-node__header {
-  border-radius: 0;
+  border-radius: 2px 2px 0 0;
 }
 
 .workflow-node--score.workflow-node--no-body .workflow-node__header {
-  border-radius: 0;
+  border-radius: 2px;
 }
 
 /* Review node: 接在 Score 后，略短于 dataset 节点 */
@@ -200,28 +207,28 @@
   max-width: 160px;
   width: 160px;
   overflow: hidden;
-  border-radius: 0;
+  border-radius: 2px;
 }
 
 .workflow-node--prompt-review .workflow-node__header {
-  border-radius: 0;
+  border-radius: 2px 2px 0 0;
 }
 
 .workflow-node--prompt-review.workflow-node--no-body .workflow-node__header {
-  border-radius: 0;
+  border-radius: 2px;
 }
 
-/* Sample node: 与 Run 一样，略短于 dataset 节点，方角 */
+/* Sample node: 与 Run 一样，略短于 dataset 节点，小圆角 */
 .workflow-node--sampler {
   min-width: 110px;
   max-width: 160px;
   width: 160px;
   overflow: hidden;
-  border-radius: 0;
+  border-radius: 2px;
 }
 
 .workflow-node--sampler .workflow-node__header {
-  border-radius: 0;
+  border-radius: 2px 2px 0 0;
 }
 
 /* Run progress: bar at bottom fills left-to-right with working set color；右侧直角，不设圆角 */
@@ -264,12 +271,12 @@
   border-radius: 8px;
 }
 
-/* Run/Sampler/Score/Review 无 body 时内部也方角 */
+/* Run/Sampler/Score/Review 无 body 时内部也小圆角 */
 .workflow-node--run.workflow-node--no-body .workflow-node__header,
 .workflow-node--sampler.workflow-node--no-body .workflow-node__header,
 .workflow-node--score.workflow-node--no-body .workflow-node__header,
 .workflow-node--prompt-review.workflow-node--no-body .workflow-node__header {
-  border-radius: 0;
+  border-radius: 2px;
 }
 
 .workflow-node__icon {
