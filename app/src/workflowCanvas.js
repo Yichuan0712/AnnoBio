@@ -177,6 +177,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
       return '';
     }
     if (runResult?.output && typeof runResult.output === 'object' && keyStr in runResult.output) return toCompareStr(runResult.output[keyStr]);
+    if (runResult?.error) return toCompareStr(runResult.error);
     return '';
   };
   const getGtValue = (gtContent, rowIndex, columnName) => {

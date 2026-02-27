@@ -403,7 +403,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return String(v).trim();
   }
 
-  /** Get run value for row i and outputKey. runResult = results.find(r => r.row_index === i). */
+  /** Get run value for row i and outputKey. runResult = results.find(r => r.row_index === i). When run has error, use error message as value. */
   function getRunValue(runResult, outputKey, rowIndex, runWs, outputFields) {
     if (outputKey === '#' || outputKey === '[#]') return toCompareStr(rowIndex);
     const keyStr = String(outputKey || '').trim();
@@ -420,6 +420,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (runResult && runResult.output && typeof runResult.output === 'object' && keyStr in runResult.output) {
       return toCompareStr(runResult.output[keyStr]);
     }
+    if (runResult && runResult.error) return toCompareStr(runResult.error);
     return '';
   }
 
