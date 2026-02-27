@@ -46,7 +46,8 @@ function filterResults(results, outputFields, searchQuery, workingContent) {
   return results.filter((r) => {
     if (String(r.row_index + 1).toLowerCase().includes(q)) return true;
     if (r.error && String(r.error).toLowerCase().includes(q)) return true;
-    const wsRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
+    const inpIdx = r.input_row_index ?? r.row_index ?? 0;
+    const wsRow = Array.isArray(wsRows[inpIdx]) ? wsRows[inpIdx] : [];
     if (wsRow.some((v) => v != null && String(v).toLowerCase().includes(q))) return true;
     if (r.output && typeof r.output === 'object') {
       for (const f of outputFields || []) {
@@ -59,11 +60,23 @@ function filterResults(results, outputFields, searchQuery, workingContent) {
   });
 }
 
-/** Resume 时合并已有结果与新结果。newResults 的 row_index 是相对批次的 (0,1,2...)，需加上 startIndex 得到全局行号。 */
-function mergeResumeResults(existing, newResults, startIndex) {
+/**
+ * Resume 时合并已有结果与新结果。
+ * @param {Array} existing - 已有结果
+ * @param {Array} newResults - 新批次结果（row_index/input_row_index 为批次内相对值）
+ * @param {number} inputRowOffset - 输入行偏移（nextRowIndex），用于 input_row_index
+ * @param {number} rowIndexOffset - 展示行偏移（通常 = existing.length），用于 row_index 保证序号连续
+ */
+function mergeResumeResults(existing, newResults, inputRowOffset, rowIndexOffset) {
   if (!Array.isArray(existing)) existing = [];
   if (!Array.isArray(newResults)) newResults = [];
-  const adjusted = newResults.map((r) => ({ ...r, row_index: (r.row_index ?? 0) + startIndex }));
+  const rOffset = typeof rowIndexOffset === 'number' ? rowIndexOffset : existing.length;
+  const iOffset = typeof inputRowOffset === 'number' ? inputRowOffset : 0;
+  const adjusted = newResults.map((r) => ({
+    ...r,
+    row_index: (r.row_index ?? 0) + rOffset,
+    input_row_index: (r.input_row_index ?? r.row_index ?? 0) + iOffset,
+  }));
   const byIndex = new Map();
   existing.forEach((r) => byIndex.set(r.row_index ?? -1, r));
   adjusted.forEach((r) => byIndex.set(r.row_index ?? -1, r));
@@ -72,10 +85,10 @@ function mergeResumeResults(existing, newResults, startIndex) {
   return merged;
 }
 
-/** 第一个未完成的行索引（0-based）。根据 results 中的 row_index 判断哪些行已有结果。 */
+/** 第一个未完成的 input 行索引（0-based）。用 input_row_index 判断哪些 input 行已有结果；无则回退到 row_index。 */
 function getNextRowIndex(results, totalRows) {
   if (!Array.isArray(results) || results.length === 0) return 0;
-  const done = new Set(results.map((x) => x.row_index ?? -1).filter((i) => i >= 0));
+  const done = new Set(results.map((x) => (x.input_row_index ?? x.row_index ?? -1)).filter((i) => i >= 0));
   let i = 0;
   while (i < totalRows && done.has(i)) i++;
   return i;
@@ -377,8 +390,9 @@ export function openRunDetailModal({
           td.textContent = '...';
           tr.appendChild(td);
         } else {
-          tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: String(r.row_index + 1) }));
-          const wsRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
+          const inpIdx = r.input_row_index ?? r.row_index ?? 0;
+          tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: String(inpIdx + 1) }));
+          const wsRow = Array.isArray(wsRows[inpIdx]) ? wsRows[inpIdx] : [];
           wsHeaders.forEach((_, i) => {
             const td = document.createElement('td');
             td.className = 'run-detail-td run-detail-td--dataset-row-col';
@@ -489,7 +503,8 @@ export function openRunDetailModal({
       const inputHeaders = (wc.headers || []).map((h) => 'Input: ' + (String(h ?? '').trim() || ' '));
       const rows = (resultsState.results || []).map((r) => {
         const outputPart = r.error ? (resultsState.outputFields || []).map(() => String(r.error)) : (resultsState.outputFields || []).map((f) => { const v = r.output?.[f.key]; return v == null ? '—' : Array.isArray(v) ? v.join(', ') : String(v); });
-        const inputRow = (wc.rows || [])[r.row_index] || [];
+        const inpIdx = r.input_row_index ?? r.row_index ?? 0;
+        const inputRow = (wc.rows || [])[inpIdx] || [];
         const inputPart = (wc.headers || []).map((_, i) => (inputRow[i] == null ? '—' : String(inputRow[i])));
         return [...outputPart, ...inputPart];
       });
@@ -700,7 +715,7 @@ export function openRunDetailModal({
     const rowsToRun = rows.slice(nextRowIndex);
 
     if (rowsToRun.length === 0) {
-      if (node && existingResults.length > 0) writeNodeRunState({ results: existingResults, outputFields: existingFields, completed: existingResults.length, total: rows.length, runCompleted: true });
+      if (node && existingResults.length > 0) writeNodeRunState({ results: existingResults, outputFields: existingFields, completed: rows.length, total: rows.length, runCompleted: true });
       showResults(existingResults, existingFields, 'complete', 'All rows already completed.');
       refreshButton();
       return;
@@ -761,7 +776,7 @@ export function openRunDetailModal({
       let results = data.results || [];
       const outputFields = data.output_fields || [];
       if (nextRowIndex > 0 && existingResults.length > 0) {
-        results = mergeResumeResults(existingResults, results, nextRowIndex);
+        results = mergeResumeResults(existingResults, results, nextRowIndex, existingResults.length);
       }
       runId = null;
       if (node && nextRowIndex > 0) {
@@ -769,7 +784,7 @@ export function openRunDetailModal({
         delete node.dataset.runResumeExistingResults;
         delete node.dataset.runResumeTotalRows;
       }
-      writeNodeRunState({ results, outputFields, completed: results.length, total: rows.length, runCompleted: true });
+      writeNodeRunState({ results, outputFields, completed: rows.length, total: rows.length, runCompleted: true });
       showResults(results, outputFields, 'complete');
     } catch (e) {
       runId = null;

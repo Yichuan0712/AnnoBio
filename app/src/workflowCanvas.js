@@ -163,8 +163,10 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     if (Array.isArray(v)) return v.map((x) => toCompareStr(x)).join(', ').trim();
     return String(v).trim();
   };
-  const getRunValue = (runResult, outputKey, rowIndex, runWs, outputFields) => {
-    if (outputKey === '#' || outputKey === '[#]') return toCompareStr(rowIndex);
+  const getRunValue = (runResult, outputKey, runWs, outputFields) => {
+    const displayIdx = runResult?.row_index ?? 0;
+    const inputRowIdx = runResult?.input_row_index ?? runResult?.row_index ?? 0;
+    if (outputKey === '#' || outputKey === '[#]') return toCompareStr(displayIdx);
     const keyStr = String(outputKey || '').trim();
     if (!keyStr) return '';
     const isBracket = keyStr.startsWith('[') && keyStr.endsWith(']');
@@ -173,7 +175,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
       const rows = runWs.rows || [];
       const headers = runWs.headers || [];
       const colIdx = headers.findIndex((h) => String(h).trim() === header);
-      if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
+      if (colIdx >= 0 && rows[inputRowIdx]) return toCompareStr(rows[inputRowIdx][colIdx]);
       return '';
     }
     if (runResult?.output && typeof runResult.output === 'object' && keyStr in runResult.output) return toCompareStr(runResult.output[keyStr]);
@@ -190,7 +192,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
   const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
     if (!rule || rule.type !== 'rule') return false;
     const runResult = resultsByIndex.get(runRowIndex) || null;
-    const runValRaw = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
+    const runValRaw = getRunValue(runResult, rule.outputKey, runWs, outputFields);
     const gtValsRaw = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
     const matchType = rule.matchType || 'exact';
     const flags = getMatchFlags(rule);
@@ -217,32 +219,6 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
     const rules = flattenScoreTreeToRules(root);
     return rules.filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;
   };
-  const computeMatchPerRowTree = (root, results, outputFields, runWs, gtContent) => {
-    const gtRows = gtContent.rows || [];
-    const resultsByIndex = new Map();
-    (results || []).forEach((r) => resultsByIndex.set(r.row_index, r));
-    const runCount = runWs?.rows?.length ?? 0;
-    const gtCount = gtRows.length;
-    const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
-    const gtUsed = new Array(gtCount).fill(false);
-    const pairs = [];
-    for (let i = 0; i < runCount; i++) {
-      for (let j = 0; j < gtCount; j++) {
-        const score = countMatchingRules(root, i, j, resultsByIndex, runWs, outputFields, gtContent);
-        if (score > 0) pairs.push({ i, j, score });
-      }
-    }
-    pairs.sort((a, b) => b.score - a.score);
-    for (const { i, j } of pairs) {
-      if (runToGt[i] >= 0 || gtUsed[j]) continue;
-      runToGt[i] = j;
-      gtUsed[j] = true;
-    }
-    const matched = [];
-    for (let i = 0; i < runCount; i++) matched.push(runToGt[i] >= 0);
-    return { matched, runToGt };
-  };
-
   let scoreRoot = { type: 'group', op: 'AND', children: [] };
   try {
     const raw = scoreNode.dataset.scoreMapping || '[]';
@@ -261,14 +237,14 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
   const gtContent = gtId ? subsetContentByNodeId.get(gtId) : null;
   const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
   const gtSafe = gtContent ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
-  const { matched, runToGt } = computeMatchPerRowTree(scoreRoot, results, outputFields, runWsSafe, gtSafe);
+  const gtRows = gtSafe.rows || [];
   let comments = {};
   try {
     comments = JSON.parse(scoreNode.dataset.scoreResultComments || '{}');
   } catch (_) {}
-  const runCount = runWsSafe?.rows?.length ?? 0;
+  /** resultsByIndex: key = result index (0..len-1), value = result. 每个输出都参与比较。 */
   const resultsByIndex = new Map();
-  (results || []).forEach((r) => resultsByIndex.set(r.row_index, r));
+  (results || []).forEach((r, i) => resultsByIndex.set(i, r));
   /** Same logic as Score table Match column: full tree with matchType + matchFlags. */
   function evaluateNodeLocal(node, runRowIndex, gtRowIndex) {
     if (!node) return false;
@@ -289,10 +265,11 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
   }
   const MATCH_TYPE_LABELS = { exact: 'Exact match', contains: 'Result contains ground truth', 'gt-contains-run': 'Ground truth contains result', numeric: 'Numeric equality' };
   const rows = [];
-  for (let i = 0; i < runCount; i++) {
-    const runResult = resultsByIndex.get(i) || null;
-    const runOutput = runResult?.output && typeof runResult.output === 'object' ? runResult.output : {};
-    const gtRowIndex = runToGt && runToGt[i] >= 0 ? runToGt[i] : -1;
+  for (let i = 0; i < (results || []).length; i++) {
+    const r = results[i];
+    const inpIdx = r?.input_row_index ?? r?.row_index ?? i;
+    const gtRowIndex = inpIdx >= 0 && inpIdx < gtRows.length ? inpIdx : -1;
+    const runOutput = r?.output && typeof r.output === 'object' ? r.output : {};
     const expectedParts = [];
     const comparisonTypes = [];
     if (gtRowIndex >= 0) {
@@ -305,8 +282,8 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
       }
     }
     const isFullMatch = gtRowIndex >= 0 && evaluateNodeLocal(scoreRoot, i, gtRowIndex);
-    const commentKey = gtRowIndex >= 0 ? String(gtRowIndex) : 'run:' + i;
-    const wsRow = runWsSafe.rows && runWsSafe.rows[i] ? runWsSafe.rows[i] : [];
+    const commentKey = gtRowIndex >= 0 ? `${gtRowIndex}_${i}` : 'run:' + i;
+    const wsRow = runWsSafe.rows && runWsSafe.rows[inpIdx] ? runWsSafe.rows[inpIdx] : [];
     const headers = runWsSafe.headers || [];
     const row_input = headers.length
       ? Object.fromEntries(headers.map((h, j) => [String(h).trim(), wsRow[j] ?? '']))
@@ -317,7 +294,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
       run_output: runOutput,
       expected: expectedParts.length ? expectedParts.join('; ') : '—',
       comparison_types: comparisonTypes.length ? comparisonTypes : null,
-      comment: comments[commentKey] ?? null,
+      comment: comments[commentKey] ?? comments[String(gtRowIndex)] ?? comments['run:' + i] ?? null,
       row_input: row_input,
     });
   }
@@ -481,10 +458,23 @@ export function buildWorkflowCanvas(root) {
     if (node) node.dataset.reviewProgress = String(pct);
   }
 
-  function mergeResumeResults(existing, newResults, startIndex) {
+  /**
+   * Resume 时合并已有结果与新结果。
+   * @param {Array} existing - 已有结果
+   * @param {Array} newResults - 新批次结果
+   * @param {number} inputRowOffset - 输入行偏移（nextRowIndex），用于 input_row_index
+   * @param {number} rowIndexOffset - 展示行偏移（= existing.length），用于 row_index
+   */
+  function mergeResumeResults(existing, newResults, inputRowOffset, rowIndexOffset) {
     if (!Array.isArray(existing)) existing = [];
     if (!Array.isArray(newResults)) newResults = [];
-    const adjusted = newResults.map((r) => ({ ...r, row_index: (r.row_index ?? 0) + startIndex }));
+    const rOffset = typeof rowIndexOffset === 'number' ? rowIndexOffset : existing.length;
+    const iOffset = typeof inputRowOffset === 'number' ? inputRowOffset : 0;
+    const adjusted = newResults.map((r) => ({
+      ...r,
+      row_index: (r.row_index ?? 0) + rOffset,
+      input_row_index: (r.input_row_index ?? r.row_index ?? 0) + iOffset,
+    }));
     const byIndex = new Map();
     existing.forEach((r) => byIndex.set(r.row_index ?? -1, r));
     adjusted.forEach((r) => byIndex.set(r.row_index ?? -1, r));
@@ -517,7 +507,7 @@ export function buildWorkflowCanvas(root) {
           if (startIndex > 0 && node.dataset.runResumeExistingResults) {
             try {
               const existing = JSON.parse(node.dataset.runResumeExistingResults);
-              partialResults = mergeResumeResults(existing, partialResults || [], startIndex);
+              partialResults = mergeResumeResults(existing, partialResults || [], startIndex, existing.length);
               if (!Array.isArray(outputFields) || outputFields.length === 0) {
                 const of = node.dataset.runOutputFields;
                 if (of) outputFields = JSON.parse(of);
@@ -527,9 +517,9 @@ export function buildWorkflowCanvas(root) {
             }
           }
           if (Array.isArray(partialResults) && Array.isArray(outputFields)) {
-            const completed = partialResults.length;
-            const total = totalRows || data.total || completed;
-            setRunNodeProgress(node, completed, total);
+            const inputRowsCompleted = (startIndex || 0) + (data.completed ?? 0);
+            const total = totalRows || data.total || inputRowsCompleted;
+            setRunNodeProgress(node, inputRowsCompleted, total);
             if (node.style.borderColor) {
               const bar = node.querySelector('.workflow-node__run-progress');
               if (bar && !bar.style.background) bar.style.background = node.style.borderColor;
@@ -550,7 +540,7 @@ export function buildWorkflowCanvas(root) {
           if (startIndex > 0 && node.dataset.runResumeExistingResults) {
             try {
               const existing = JSON.parse(node.dataset.runResumeExistingResults);
-              results = mergeResumeResults(existing, results, startIndex);
+              results = mergeResumeResults(existing, results, startIndex, existing.length);
               if (!Array.isArray(outputFields) || outputFields.length === 0) {
                 const of = node.dataset.runOutputFields;
                 if (of) outputFields = JSON.parse(of);
@@ -568,9 +558,9 @@ export function buildWorkflowCanvas(root) {
             delete node.dataset.runResumeExistingResults;
             delete node.dataset.runResumeTotalRows;
           }
-          const completed = results.length;
-          const total = totalRows || data.total || completed;
-          setRunNodeProgress(node, completed, total);
+          const total = totalRows || data.total || results.length;
+          const inputRowsCompleted = (data.status === 'done' || data.status === 'cancelled') ? total : (totalRows ?? data.completed ?? data.total ?? results.length);
+          setRunNodeProgress(node, inputRowsCompleted, total);
           if (data.status === 'done') node.dataset.runCompleted = '1';
           if (data.status === 'done' && data.error && results.length === 0) {
             node.dataset.runResults = JSON.stringify([{ row_index: 0, output: null, error: data.error }]);

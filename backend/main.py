@@ -604,7 +604,7 @@ def _do_run_work(
                         "results": list(results),
                         "output_fields": output_fields,
                         "run_node_id": nid,
-                        "completed": len(results),
+                        "completed": row_index,
                         "total": total,
                     }
                     _run_cancelled.discard(run_id)
@@ -618,7 +618,7 @@ def _do_run_work(
                         "results": list(results),
                         "output_fields": output_fields,
                         "run_node_id": nid,
-                        "completed": len(results),
+                        "completed": row_index,
                         "total": total,
                     }
                     _persist_run_jobs()
@@ -648,15 +648,33 @@ def _do_run_work(
                     _safe_print(_HL + "-" * 60 + _R)
                 if return_shape == "table" and isinstance(out, list):
                     for row in out:
-                        results.append({"row_index": row_index, "output": row if isinstance(row, dict) else {}, "error": None})
+                        out_idx = len(results)
+                        results.append({
+                            "row_index": out_idx,
+                            "input_row_index": row_index,
+                            "output": row if isinstance(row, dict) else {},
+                            "error": None,
+                        })
                 else:
-                    results.append({"row_index": row_index, "output": out, "error": None})
+                    out_idx = len(results)
+                    results.append({
+                        "row_index": out_idx,
+                        "input_row_index": row_index,
+                        "output": out,
+                        "error": None,
+                    })
                 _safe_print(_HL + "[Run] LLM STRUCTURED OUTPUT:" + _R)
                 _safe_print(_HL + "-" * 60 + _R)
                 _safe_print(json.dumps(out, ensure_ascii=False, indent=2))
                 _safe_print(_HL + "-" * 60 + _R)
             except Exception as e:
-                results.append({"row_index": row_index, "output": None, "error": str(e)})
+                out_idx = len(results)
+                results.append({
+                    "row_index": out_idx,
+                    "input_row_index": row_index,
+                    "output": None,
+                    "error": str(e),
+                })
                 _safe_print(_HL + "[Run] LLM ERROR: " + _R + str(e))
             with _run_jobs_lock:
                 _run_jobs[run_id]["completed"] = row_index + 1
@@ -665,7 +683,14 @@ def _do_run_work(
             _safe_print(_HL + "=" * 60 + _R + "\n")
         with _run_jobs_lock:
             nid = _run_jobs.get(run_id, {}).get("run_node_id")
-            _run_jobs[run_id] = {"status": "done", "results": results, "output_fields": output_fields, "run_node_id": nid}
+            _run_jobs[run_id] = {
+                "status": "done",
+                "results": results,
+                "output_fields": output_fields,
+                "run_node_id": nid,
+                "completed": total,
+                "total": total,
+            }
         _persist_run_jobs()
     except Exception as e:
         _safe_print(_HL + "[Run] Error: " + _R + str(e))
@@ -720,10 +745,22 @@ def get_run_result(run_id: str):
             },
         )
     if job.get("status") == "cancelled":
-        return {"status": "cancelled", "results": job.get("results") or [], "output_fields": job.get("output_fields") or []}
+        return {
+            "status": "cancelled",
+            "results": job.get("results") or [],
+            "output_fields": job.get("output_fields") or [],
+            "completed": job.get("completed", 0),
+            "total": job.get("total", 0),
+        }
     if job.get("error"):
         return {"status": "done", "error": job["error"], "results": None, "output_fields": None}
-    return {"status": "done", "results": job["results"], "output_fields": job["output_fields"]}
+    return {
+        "status": "done",
+        "results": job["results"],
+        "output_fields": job["output_fields"],
+        "completed": job.get("completed", 0),
+        "total": job.get("total", 0),
+    }
 
 
 @app.post("/api/run/cancel/{run_id}")
