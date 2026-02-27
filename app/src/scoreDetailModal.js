@@ -403,7 +403,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return String(v).trim();
   }
 
-  /** Get run value for row i and outputKey. runResult = results.find(r => r.row_index === i). When run has error, use error message as value. */
+  /**
+   * 取 run 某行的值。rowIndex = row_index（结果行号）。
+   * Bracket [col] 用 input_row_index 取输入行，1 input → 多 output 时多行共享同一 input。
+   */
   function getRunValue(runResult, outputKey, rowIndex, runWs, outputFields) {
     if (outputKey === '#' || outputKey === '[#]') return toCompareStr(rowIndex);
     const keyStr = String(outputKey || '').trim();
@@ -414,7 +417,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const rows = runWs.rows || [];
       const headers = runWs.headers || [];
       const colIdx = headers.findIndex((h) => String(h).trim() === header);
-      if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
+      const inputRowIdx = runResult?.input_row_index ?? rowIndex;
+      if (colIdx >= 0 && rows[inputRowIdx]) return toCompareStr(rows[inputRowIdx][colIdx]);
       return '';
     }
     if (runResult && runResult.output && typeof runResult.output === 'object' && keyStr in runResult.output) {
@@ -431,6 +435,35 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const colIdx = headers.findIndex((h) => String(h).trim() === String(columnName).trim());
     if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
     return '';
+  }
+
+  /** 按用户选定的 GT 列去重，保留首次出现。 */
+  function deduplicateGtRows(gtContent, gtColsUsed) {
+    if (!gtColsUsed || gtColsUsed.length === 0) return gtContent;
+    const rows = gtContent.rows || [];
+    const seen = new Set();
+    const dedupRows = [];
+    for (let i = 0; i < rows.length; i++) {
+      const key = JSON.stringify(gtColsUsed.map((col) => getGtValue(gtContent, i, col)));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedupRows.push(rows[i]);
+    }
+    return { ...gtContent, rows: dedupRows };
+  }
+
+  /** 按用户选定的 output 列去重，保留首次出现。 */
+  function deduplicateResults(results, outputKeys, runWs, outputFields) {
+    if (!outputKeys || outputKeys.length === 0) return results || [];
+    const seen = new Set();
+    const dedupResults = [];
+    for (const r of (results || [])) {
+      const key = JSON.stringify(outputKeys.map((k) => getRunValue(r, k, r.row_index, runWs, outputFields)));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedupResults.push(r);
+    }
+    return dedupResults;
   }
 
   /**
@@ -495,20 +528,23 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /**
-   * Match run rows to GT rows: one-to-one pairing by "most rules matching" (greedy).
-   * Match column still uses full tree evaluateNode(root, i, j) when rendering.
+   * 贪心配对 run 与 GT。resultsByIndex 用 row_index 做 key（每行唯一）。
+   * 1 input → 多 output 时，每行有独立 row_index，不会覆盖。
    */
   function computeMatchPerRow(root, results, outputFields, runWs, gtContent) {
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
     (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
-    const runCount = runWs?.rows?.length ?? 0;
+    const inputRowCount = runWs?.rows?.length ?? 0;
     const gtCount = gtRows.length;
+    const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
+    const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
+    const runCount = Math.max(inputRowCount, maxRunRowIndex + 1);
     const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
     const gtUsed = new Array(gtCount).fill(false);
 
     const pairs = [];
-    for (let i = 0; i < runCount; i++) {
+    for (const i of runRowIndices) {
       for (let j = 0; j < gtCount; j++) {
         const score = countMatchingRules(root, i, j, resultsByIndex, runWs, outputFields, gtContent);
         if (score > 0) pairs.push({ i, j, score });
@@ -527,10 +563,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       matched.push(i < runCount && runToGt[i] >= 0);
     }
     const matchedCount = runToGt.slice(0, runCount).filter((j) => j >= 0).length;
+    const total = (results || []).length;
     return {
       matched,
       runToGt,
-      total: runCount,
+      total,
       matchedCount,
     };
   }
@@ -1199,18 +1236,31 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
-    const { results, outputFields } = getRunResults();
+    const { results: rawResults, outputFields } = getRunResults();
     const runWs = getRunWorkingSetContent();
-    const gtContent = getGroundTruthContent(selectedNodeId);
+    const rawGtContent = getGroundTruthContent(selectedNodeId);
+    const runColumns = getRunResultColumns();
+
+    const gtColsUsed = [];
+    const outputKeysUsed = [];
+    for (const r of rulesFlat) {
+      for (const c of (r.gtColumns || [])) {
+        if (c && !gtColsUsed.includes(c)) gtColsUsed.push(c);
+      }
+      const k = (r.outputKey || '').trim();
+      if (k && !outputKeysUsed.includes(k)) outputKeysUsed.push(k);
+    }
+
+    const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
+    const results = deduplicateResults(rawResults, outputKeysUsed, runWs, outputFields);
     const gtHeaders = gtContent.headers || [];
     const gtRows = gtContent.rows || [];
-    const runColumns = getRunResultColumns();
     const resultsByIndex = new Map();
     (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
-    const maxRunRow = results.length ? Math.max(...(results || []).map((r) => r.row_index), 0) : -1;
+    const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
+    const maxRunRow = runRowIndices.length ? Math.max(...runRowIndices) : -1;
     const maxGtRow = gtRows.length ? gtRows.length - 1 : -1;
-    const maxRow = Math.max(maxRunRow, maxGtRow, 0);
-    const hasAnyRows = maxRow >= 0;
+    const hasAnyRows = maxRunRow >= 0 || maxGtRow >= 0;
 
     if (!hasAnyRows) {
       updatePanelExpanded(false);
@@ -1220,8 +1270,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
 
     updatePanelExpanded(true);
-    const { matched, runToGt, total, matchedCount } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
-    const runCount = total;
+    const { runToGt, total: runCount, matchedCount } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
     const gtToRun = new Array(gtRows.length).fill(-1);
     for (let i = 0; i < (runToGt || []).length; i++) {
       if (runToGt[i] >= 0) gtToRun[runToGt[i]] = i;
@@ -1234,9 +1283,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     for (let j = 0; j < gtRows.length; j++) {
       if (gtToRun[j] < 0) descriptors.push({ type: 'gt', j });
     }
-    for (let i = 0; i < runCount; i++) {
-      if (runToGt[i] >= 0) continue;
-      // 去重：多出来的 run 行（与某 GT 规则匹配但未拿到 1-to-1 配对）也算配对上了，不显示为 run-only，且不影响分数
+    for (const i of runRowIndices) {
+      const paired = i < (runToGt || []).length && runToGt[i] >= 0;
+      if (paired) continue;
       let matchesAnyGt = false;
       for (let j = 0; j < gtRows.length; j++) {
         if (evaluateNode(root, i, j, resultsByIndex, runWs, outputFields, gtContent)) {
@@ -1273,12 +1322,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       }
       return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
     }
-    const gtColsUsed = [];
-    for (const r of rulesFlat) {
-      for (const c of (r.gtColumns || [])) {
-        if (c && !gtColsUsed.includes(c)) gtColsUsed.push(c);
-      }
-    }
     let filteredDescriptors = descriptors;
     if (q) {
       filteredDescriptors = descriptors.filter((d) => getRowStringsForSearch(d).some((s) => s.toLowerCase().includes(q)));
@@ -1291,7 +1334,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const end = Math.min(start + scoreDetailPagination.rowsPerPage, totalRows);
     const pageDescriptors = filteredDescriptors.slice(start, end);
 
-    const runOnlyCount = total > 0 ? total - matchedCount : 0;
+    const runOnlyCount = runCount > 0 ? runCount - matchedCount : 0;
     const unmatchedGtCount = gtRows.length - matchedCount;
     let tp = 0;
     for (let j = 0; j < gtRows.length; j++) {
@@ -1808,7 +1851,8 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       const rows = runWs.rows || [];
       const headers = runWs.headers || [];
       const colIdx = headers.findIndex((h) => String(h).trim() === header);
-      if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
+      const inputRowIdx = runResult?.input_row_index ?? rowIndex;
+      if (colIdx >= 0 && rows[inputRowIdx]) return toCompareStr(rows[inputRowIdx][colIdx]);
       return '';
     }
     if (runResult && runResult.output && typeof runResult.output === 'object' && keyStr in runResult.output) return toCompareStr(runResult.output[keyStr]);

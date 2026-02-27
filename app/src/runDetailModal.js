@@ -361,6 +361,12 @@ export function openRunDetailModal({
     thead.appendChild(headerRow);
     tbl.appendChild(thead);
     const tbody = document.createElement('tbody');
+    /**
+     * Run 结果表格：每个 result 是一行。
+     * - row_index: 结果行号（0,1,2...），每行唯一，用于 # 列显示
+     * - input_row_index: 来自哪行输入。1 input → 多 output 时，多行共享同一 input_row_index
+     * - output: 该行的 LLM 输出。Input 列用 input_row_index 从 wsRows 取输入数据
+     */
     results.forEach((r) => {
       const tr = document.createElement('tr');
       tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--index', textContent: String(r.row_index + 1) }));
@@ -390,6 +396,7 @@ export function openRunDetailModal({
           td.textContent = '...';
           tr.appendChild(td);
         } else {
+          /* 1 input → 多 output 时用 input_row_index 取正确输入行，否则回退 row_index */
           const inpIdx = r.input_row_index ?? r.row_index ?? 0;
           tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: String(inpIdx + 1) }));
           const wsRow = Array.isArray(wsRows[inpIdx]) ? wsRows[inpIdx] : [];
