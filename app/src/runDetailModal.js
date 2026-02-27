@@ -1,13 +1,23 @@
 /**
- * Run node detail modal: two-column layout. Left: select dataset, select LLM (credential), map prompt inputs to columns. Right: run results.
- * @param {{ node: HTMLElement, getWorkingSets: () => Array<...>, getPromptInputFields: () => string[], getSubsetContent?: (nodeId: string) => ..., getPromptTemplate?: () => ..., registerPendingRun?: (nodeId: string, runId: string) => void }} options
+ * Run 节点详情弹窗
+ *
+ * 功能：对 Prompt 做批量运行。选数据集、选模型、配置列映射，按行调用 LLM，右侧表格显示结果。
+ *
+ * 打开时：左侧配置，右侧显示之前结果（如有）。不自动运行。
+ *
+ * 按钮：Run（从头跑）| Running（跑中禁用）| Run completed（跑完禁用）
  */
 
 const API_BASE = 'http://localhost:8000';
 const MAX_CELL_CHARS = 40;
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
+const STATUS_TEXT = {
+  generating: 'Results are still generating…',
+  complete: 'Results complete.',
+  incomplete: 'Last run did not complete.',
+};
 
-/** Session-only: input name -> last used dataset column name. Not persisted. */
+/** 跨会话记忆：input 名称 -> 上次选的列名 */
 const inputNameToColumnMemory = {};
 
 function escapeHtml(str) {
@@ -25,22 +35,23 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Filter results by search query (match row #, error, any output cell, or working row cells). */
-function filterResultsBySearch(results, outputFields, searchQuery, workingContent) {
+function escapeAttr(str) {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function filterResults(results, outputFields, searchQuery, workingContent) {
   const q = (searchQuery || '').trim().toLowerCase();
   if (!q) return results;
-  const wsRows = (workingContent && workingContent.rows) || [];
+  const wsRows = (workingContent?.rows) || [];
   return results.filter((r) => {
     if (String(r.row_index + 1).toLowerCase().includes(q)) return true;
     if (r.error && String(r.error).toLowerCase().includes(q)) return true;
     const wsRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
-    for (const val of wsRow) {
-      if (val !== null && val !== undefined && String(val).toLowerCase().includes(q)) return true;
-    }
+    if (wsRow.some((v) => v != null && String(v).toLowerCase().includes(q))) return true;
     if (r.output && typeof r.output === 'object') {
       for (const f of outputFields || []) {
         const val = r.output[f.key];
-        if (val !== null && val !== undefined && String(val).toLowerCase().includes(q)) return true;
+        if (val != null && String(val).toLowerCase().includes(q)) return true;
         if (Array.isArray(val) && val.some((v) => String(v).toLowerCase().includes(q))) return true;
       }
     }
@@ -48,29 +59,38 @@ function filterResultsBySearch(results, outputFields, searchQuery, workingConten
   });
 }
 
-export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields, getSubsetContent, getPromptTemplate, registerPendingRun, getPromptName, getUniqueDatasetExportName, isRunNameAlreadyUsedForPrompt, getRunMappingsFromCanvas }) {
-  const workingSets = getWorkingSets ? getWorkingSets() : [];
-  const inputFields = getPromptInputFields ? getPromptInputFields() : [];
-  getSubsetContent = getSubsetContent || (() => ({ headers: [], rows: [] }));
-  getPromptTemplate = getPromptTemplate || (() => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }));
-  registerPendingRun = registerPendingRun || (() => {});
-  getPromptName = getPromptName || (() => '');
-  getUniqueDatasetExportName = getUniqueDatasetExportName || ((name) => name);
-  isRunNameAlreadyUsedForPrompt = isRunNameAlreadyUsedForPrompt || (() => false);
+// ---
 
-  if (getRunMappingsFromCanvas) {
-    (getRunMappingsFromCanvas() || []).forEach((parsed) => {
-      if (parsed && typeof parsed === 'object') {
-        Object.entries(parsed).forEach(([inputName, columnName]) => {
-          if (inputName != null && String(columnName || '').trim()) inputNameToColumnMemory[inputName] = String(columnName).trim();
-        });
-      }
-    });
-  }
+export function openRunDetailModal({
+  node,
+  getWorkingSets = () => [],
+  getPromptInputFields = () => [],
+  getSubsetContent = () => ({ headers: [], rows: [] }),
+  getPromptTemplate = () => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }),
+  registerPendingRun = () => {},
+  unregisterPendingRun = () => {},
+  getPendingRunId = () => null,
+  getPromptName = () => '',
+  getUniqueDatasetExportName = (n) => n,
+  isRunNameAlreadyUsedForPrompt = () => false,
+  getRunMappingsFromCanvas,
+}) {
+  // 从画布其他 Run 节点恢复列映射记忆
+  (getRunMappingsFromCanvas?.() || []).forEach((parsed) => {
+    if (parsed && typeof parsed === 'object') {
+      Object.entries(parsed).forEach(([inputName, columnName]) => {
+        if (inputName != null && String(columnName || '').trim()) inputNameToColumnMemory[inputName] = String(columnName).trim();
+      });
+    }
+  });
 
+  const inputFields = getPromptInputFields();
   let selectedNodeId = (node?.dataset?.runWorkingSetId || '').trim();
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
-  let runName = (node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent?.trim() || 'Run').trim() || 'Run';
+  const runName = (node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent?.trim() || 'Run').trim() || 'Run';
+  const nodeId = node?.dataset?.nodeId || '';
+
+  let runId = getPendingRunId() || null; // 发起运行后得到的 run_id；打开时若有进行中的 run 则从 pendingRuns 恢复
   const resultsState = {
     results: [],
     outputFields: [],
@@ -81,18 +101,16 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     currentPage: 1,
     bracketColsCollapsed: node?.dataset?.runBracketColsCollapsed !== '0',
   };
-  const inputToColumn = (() => {
-    try {
-      const raw = node?.dataset?.runInputToColumn;
-      if (raw) {
-        const o = JSON.parse(raw);
-        return typeof o === 'object' && o !== null ? o : {};
-      }
-    } catch (_) {}
-    return {};
-  })();
+  let inputToColumn = {};
+  try {
+    const raw = node?.dataset?.runInputToColumn;
+    if (raw) {
+      const o = JSON.parse(raw);
+      inputToColumn = typeof o === 'object' && o !== null ? o : {};
+    }
+  } catch (_) {}
 
-  const titleText = `Run: ${runName}`;
+  // --- DOM 结构（界面不变）---
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -101,7 +119,7 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--run-detail">
       <div class="modal-header">
-        <h2 id="run-detail-title" class="modal-title">${escapeHtml(titleText)}</h2>
+        <h2 id="run-detail-title" class="modal-title">${escapeHtml(`Run: ${runName}`)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body run-detail-body modal-body--run">
@@ -153,33 +171,127 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
   const runBtn = overlay.querySelector('.run-detail-run-btn');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
   const runDetailPanel = overlay.querySelector('.modal-panel--run-detail');
-  const modalTitleEl = overlay.querySelector('#run-detail-title');
+  const workingSets = getWorkingSets();
 
-  const runDetailFormErrorEl = overlay.querySelector('#run-detail-form-error');
+  // --- 节点状态读写 ---
 
-  /** 展开右半部分：panel 变宽并显示右侧结果区（与 add prompt 从 step1 到 step2 一致，带动画） */
-  function expandRightPanel() {
-    if (runDetailPanel && !runDetailPanel.classList.contains('run-detail-panel--expanded')) {
-      runDetailPanel.classList.add('run-detail-panel--expanded');
+  function getNodeResults() {
+    try {
+      const r = node?.dataset?.runResults;
+      const f = node?.dataset?.runOutputFields;
+      if (!r || !f) return { results: [], outputFields: [] };
+      const results = JSON.parse(r);
+      const outputFields = JSON.parse(f);
+      return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
+    } catch (_) { return { results: [], outputFields: [] }; }
+  }
+
+  function isCompleted() { return node?.dataset?.runCompleted === '1'; }
+
+  /** 正在运行中（generating 状态） */
+  function isRunning() { return !!(runId || resultsState.status === 'generating'); }
+
+  function setNodeProgressBar(completed, total) {
+    const bar = node?.querySelector('.workflow-node__run-progress');
+    if (!bar) return;
+    const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+    bar.style.width = pct + '%';
+    bar.setAttribute('aria-valuenow', String(pct));
+  }
+
+  function writeNodeRunState({ results, outputFields, completed, total, runCompleted }) {
+    if (!node) return;
+    try {
+      if (results != null) node.dataset.runResults = JSON.stringify(results);
+      if (outputFields != null) node.dataset.runOutputFields = JSON.stringify(outputFields);
+      if (runCompleted !== undefined) node.dataset.runCompleted = runCompleted ? '1' : '';
+    } catch (_) {}
+    if (completed != null && total != null) setNodeProgressBar(completed, total);
+  }
+
+  // --- 按钮状态：Run | Running | Run completed ---
+
+  function applyRunningLock() {
+    runBtn.disabled = true;
+    runBtn.textContent = 'Running';
+    runBtn.classList.remove('btn-primary', 'btn-danger');
+    runBtn.classList.add('btn-secondary');
+    runBtn.setAttribute('aria-label', 'Running');
+    llmSelectEl.disabled = true;
+    pickerEl.classList.add('run-detail-ws-picker--locked');
+    pickerEl.setAttribute('aria-disabled', 'true');
+    inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
+    overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
+  }
+
+  function applyUnlock() {
+    llmSelectEl.disabled = false;
+    pickerEl.classList.remove('run-detail-ws-picker--locked');
+    pickerEl.removeAttribute('aria-disabled');
+    inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = false; });
+    overlay.querySelector('.run-detail-main')?.classList.remove('run-detail-main--locked');
+  }
+
+  function refreshButton() {
+    if (isCompleted()) {
+      applyCompletedLock();
+      return;
     }
+    if (isRunning()) {
+      applyRunningLock();
+      return;
+    }
+    applyUnlock();
+    runBtn.classList.remove('btn-danger');
+    runBtn.classList.add('btn-primary');
+    runBtn.textContent = 'Run';
+    runBtn.disabled = !(selectedNodeId && selectedCredentialId);
   }
 
-  function renderResultsEmptyCard() {
-    const card = document.createElement('div');
-    card.className = 'run-detail-results-card';
-    const wrap = document.createElement('div');
-    wrap.className = 'run-detail-results';
-    wrap.innerHTML = '<p class="run-detail-placeholder">Run to see results.</p>';
-    card.appendChild(wrap);
-    return card;
+  function applyCompletedLock() {
+    if (!isCompleted()) return;
+    runBtn.disabled = true;
+    runBtn.textContent = 'Run completed';
+    runBtn.setAttribute('aria-label', 'Run completed');
+    runBtn.classList.remove('btn-primary', 'btn-danger');
+    runBtn.classList.add('btn-secondary');
+    llmSelectEl.disabled = true;
+    pickerEl.classList.add('run-detail-ws-picker--locked');
+    pickerEl.setAttribute('aria-disabled', 'true');
+    inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
+    overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
   }
 
-  /** workingContent: { headers: string[], rows: any[][] }. Columns with [] at end; if bracketColsCollapsed, show as single "..." column (click to expand). */
+  // --- 右侧结果展示 ---
+
+  function expandRightPanel() {
+    if (runDetailPanel && !runDetailPanel.classList.contains('run-detail-panel--expanded')) runDetailPanel.classList.add('run-detail-panel--expanded');
+  }
+
+  function showResults(results, outputFields, status, placeholderText) {
+    resultsState.results = results || [];
+    resultsState.outputFields = outputFields || [];
+    resultsState.workingContent = getSubsetContent(selectedNodeId) || null;
+    resultsState.status = status || 'complete';
+    rightCol.innerHTML = '';
+    if (!resultsState.results.length) {
+      const card = document.createElement('div');
+      card.className = 'run-detail-results-card';
+      const wrap = document.createElement('div');
+      wrap.className = 'run-detail-results';
+      wrap.innerHTML = `<p class="run-detail-placeholder">${escapeHtml(placeholderText || 'Run to see results.')}</p>`;
+      card.appendChild(wrap);
+      rightCol.appendChild(card);
+    } else {
+      rightCol.appendChild(buildResultsCard(resultsState.results, resultsState.outputFields, resultsState.status));
+    }
+    expandRightPanel();
+  }
+
   function buildResultsTable(results, outputFields, workingContent, bracketColsCollapsed, onToggleCollapse) {
-    const wsHeaders = (workingContent && workingContent.headers) || [];
-    const wsRows = (workingContent && workingContent.rows) || [];
+    const wsHeaders = (workingContent?.headers) || [];
+    const wsRows = (workingContent?.rows) || [];
     const collapsed = !!bracketColsCollapsed;
-    const hasBracketCols = wsHeaders.length >= 0;
     const tbl = document.createElement('table');
     tbl.className = 'run-detail-results-table';
     const thead = document.createElement('thead');
@@ -191,11 +303,11 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       th.textContent = f.display || f.key || '';
       headerRow.appendChild(th);
     });
-    if (hasBracketCols) {
+    if (wsHeaders.length >= 0) {
       const thBracket = document.createElement('th');
       thBracket.className = 'run-detail-th run-detail-th--dataset-row-col run-detail-th--bracket-toggle';
       thBracket.textContent = collapsed ? '...' : 'Input: #';
-      thBracket.title = collapsed ? 'Click to expand. These columns show the corresponding input dataset rows.' : 'Click to collapse. These columns show the corresponding input dataset rows.';
+      thBracket.title = collapsed ? 'Click to expand.' : 'Click to collapse.';
       thBracket.setAttribute('role', 'button');
       thBracket.setAttribute('tabindex', '0');
       if (typeof onToggleCollapse === 'function') {
@@ -203,24 +315,19 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
         thBracket.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleCollapse(); } });
       }
       headerRow.appendChild(thBracket);
-      if (!collapsed) {
-        wsHeaders.forEach((h) => {
-          const th = document.createElement('th');
-          th.className = 'run-detail-th run-detail-th--dataset-row-col';
-          th.textContent = `Input: ${String(h ?? '').trim() || ' '}`;
-          headerRow.appendChild(th);
-        });
-      }
+      if (!collapsed) wsHeaders.forEach((h) => {
+        const th = document.createElement('th');
+        th.className = 'run-detail-th run-detail-th--dataset-row-col';
+        th.textContent = `Input: ${String(h ?? '').trim() || ' '}`;
+        headerRow.appendChild(th);
+      });
     }
     thead.appendChild(headerRow);
     tbl.appendChild(thead);
     const tbody = document.createElement('tbody');
     results.forEach((r) => {
       const tr = document.createElement('tr');
-      const idxCell = document.createElement('td');
-      idxCell.className = 'run-detail-td run-detail-td--index';
-      idxCell.textContent = String(r.row_index + 1);
-      tr.appendChild(idxCell);
+      tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--index', textContent: String(r.row_index + 1) }));
       if (r.error) {
         outputFields.forEach(() => {
           const td = document.createElement('td');
@@ -230,57 +337,31 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
           tr.appendChild(td);
         });
       } else {
-        if (r.output && typeof r.output === 'object') {
-          outputFields.forEach((f) => {
-            const td = document.createElement('td');
-            td.className = 'run-detail-td';
-            const val = r.output[f.key];
-            if (val === null || val === undefined) {
-              td.textContent = '—';
-            } else if (Array.isArray(val)) {
-              const full = val.join(', ');
-              td.textContent = truncate(full);
-              td.title = full;
-            } else {
-              const full = String(val);
-              td.textContent = truncate(full);
-              td.title = full;
-            }
-            tr.appendChild(td);
-          });
-        } else {
-          outputFields.forEach(() => {
-            const td = document.createElement('td');
-            td.className = 'run-detail-td';
-            td.textContent = '—';
-            tr.appendChild(td);
-          });
-        }
+        outputFields.forEach((f) => {
+          const td = document.createElement('td');
+          td.className = 'run-detail-td';
+          const val = r.output?.[f.key];
+          if (val == null) td.textContent = '—';
+          else if (Array.isArray(val)) { td.textContent = truncate(val.join(', ')); td.title = val.join(', '); }
+          else { td.textContent = truncate(String(val)); td.title = String(val); }
+          tr.appendChild(td);
+        });
       }
-      if (hasBracketCols) {
+      if (wsHeaders.length >= 0) {
         if (collapsed) {
           const td = document.createElement('td');
           td.className = 'run-detail-td run-detail-td--dataset-row-col';
           td.textContent = '...';
-          td.title = '...';
           tr.appendChild(td);
         } else {
-          const datasetRowCell = document.createElement('td');
-          datasetRowCell.className = 'run-detail-td run-detail-td--dataset-row-col';
-          datasetRowCell.textContent = String(r.row_index + 1);
-          tr.appendChild(datasetRowCell);
+          tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: String(r.row_index + 1) }));
           const wsRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
           wsHeaders.forEach((_, i) => {
             const td = document.createElement('td');
             td.className = 'run-detail-td run-detail-td--dataset-row-col';
-            const val = wsRow[i];
-            if (val === null || val === undefined) {
-              td.textContent = '—';
-            } else {
-              const full = String(val);
-              td.textContent = truncate(full);
-              td.title = full;
-            }
+            const v = wsRow[i];
+            td.textContent = v == null ? '—' : truncate(String(v));
+            if (v != null) td.title = String(v);
             tr.appendChild(td);
           });
         }
@@ -291,234 +372,124 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     return tbl;
   }
 
-  function getStatusNoteText(status, hasResults) {
-    if (!hasResults) return '';
-    if (status === 'generating') return 'Results are still generating…';
-    if (status === 'complete') return 'Results complete.';
-    if (status === 'incomplete') return 'Last run did not complete. Please run again.';
-    return '';
-  }
-
-  /** status: 'generating' | 'complete' | 'incomplete' */
-  function fillResultsWrap(card, results, outputFields, status) {
-    resultsState.results = results || [];
-    resultsState.outputFields = outputFields || [];
-    resultsState.workingContent = getSubsetContent(selectedNodeId) || null;
-    resultsState.status = status || 'complete';
-    const wrap = document.createElement('div');
-    wrap.className = 'run-detail-results';
-    if (resultsState.results.length === 0) {
-      const placeholder = document.createElement('p');
-      placeholder.className = 'run-detail-placeholder';
-      placeholder.textContent = status === 'generating' ? 'Running… Results will appear below as they complete.' : 'Run to see results.';
-      wrap.appendChild(placeholder);
-    } else {
-      const topRow = document.createElement('div');
-      topRow.className = 'run-detail-results-top-row';
-      const statusNote = document.createElement('span');
-      statusNote.className = 'run-detail-results-note run-detail-results-note--inline';
-      if (status === 'generating') statusNote.classList.add('run-detail-results-generating');
-      else if (status === 'complete') statusNote.classList.add('run-detail-results-complete');
-      else if (status === 'incomplete') statusNote.classList.add('run-detail-results-incomplete');
-      statusNote.textContent = getStatusNoteText(status, true);
-      topRow.appendChild(statusNote);
-      const searchWrap = document.createElement('div');
-      searchWrap.className = 'dataset-detail-preview-search-wrap run-detail-results-search-wrap';
-      searchWrap.innerHTML = `
-        <label class="dataset-detail-search-label" for="run-detail-results-search">Search</label>
-        <input type="text" id="run-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" />
-      `;
-      topRow.appendChild(searchWrap);
-      wrap.appendChild(topRow);
-      const tableWrap = document.createElement('div');
-      tableWrap.className = 'run-detail-results-table-wrap';
-      wrap.appendChild(tableWrap);
-      const searchInp = wrap.querySelector('#run-detail-results-search');
-      const toolbar = document.createElement('div');
-      toolbar.className = 'dataset-detail-preview-toolbar run-detail-results-toolbar';
-      toolbar.innerHTML = `
-        <label class="dataset-detail-rows-label" for="run-detail-rows-per-page">Rows per page</label>
-        <select id="run-detail-rows-per-page" class="dataset-detail-rows-select" aria-label="Rows per page">
-          ${ROWS_PER_PAGE_OPTIONS.map((n) => `<option value="${n}" ${n === resultsState.rowsPerPage ? 'selected' : ''}>${n}</option>`).join('')}
-        </select>
-        <span class="dataset-detail-pagination-info run-detail-pagination-info" aria-live="polite"></span>
-        <label class="dataset-detail-page-label" for="run-detail-page-inp">Page</label>
-        <input type="number" id="run-detail-page-inp" class="dataset-detail-page-inp" min="1" value="1" aria-label="Page number" />
-        <span class="dataset-detail-page-of run-detail-page-of">/ 1</span>
-        <div class="dataset-detail-pagination-btns">
-          <button type="button" class="btn btn-secondary run-detail-prev-page" aria-label="Previous page">Previous</button>
-          <button type="button" class="btn btn-secondary run-detail-next-page" aria-label="Next page">Next</button>
-        </div>
-      `;
-      const rowsPerPageSelect = toolbar.querySelector('#run-detail-rows-per-page');
-      const paginationInfo = toolbar.querySelector('.run-detail-pagination-info');
-      const pageInp = toolbar.querySelector('#run-detail-page-inp');
-      const pageOfSpan = toolbar.querySelector('.run-detail-page-of');
-      const prevBtn = toolbar.querySelector('.run-detail-prev-page');
-      const nextBtn = toolbar.querySelector('.run-detail-next-page');
-
-      function updateResultsTable() {
-        const filtered = filterResultsBySearch(resultsState.results, resultsState.outputFields, resultsState.searchQuery, resultsState.workingContent);
-        const totalPages = Math.max(1, Math.ceil(filtered.length / resultsState.rowsPerPage));
-        resultsState.currentPage = Math.min(Math.max(1, resultsState.currentPage), totalPages);
-        const start = (resultsState.currentPage - 1) * resultsState.rowsPerPage;
-        const end = Math.min(start + resultsState.rowsPerPage, filtered.length);
-        const pageResults = filtered.slice(start, end);
-        function onToggleBracketCollapse() {
-          resultsState.bracketColsCollapsed = !resultsState.bracketColsCollapsed;
-          if (node) node.dataset.runBracketColsCollapsed = resultsState.bracketColsCollapsed ? '1' : '0';
-          updateResultsTable();
-        }
-        tableWrap.innerHTML = '';
-        tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields, resultsState.workingContent, resultsState.bracketColsCollapsed, onToggleBracketCollapse));
-        const totalFiltered = filtered.length;
-        const totalRows = resultsState.results.length;
-        if (totalFiltered === 0) {
-          paginationInfo.textContent = totalRows === 0 ? '0 rows' : `0 rows (filtered from ${totalRows.toLocaleString()})`;
-        } else {
-          paginationInfo.textContent = totalFiltered === totalRows
-            ? `Showing ${start + 1}–${end} of ${totalRows.toLocaleString()} rows`
-            : `Showing ${start + 1}–${end} of ${totalFiltered.toLocaleString()} (filtered from ${totalRows.toLocaleString()}) rows`;
-        }
-        pageInp.value = String(resultsState.currentPage);
-        pageInp.max = String(totalPages);
-        pageOfSpan.textContent = `/ ${totalPages}`;
-        prevBtn.disabled = resultsState.currentPage <= 1;
-        nextBtn.disabled = resultsState.currentPage >= totalPages;
-      }
-
-      searchInp.addEventListener('input', () => {
-        resultsState.searchQuery = searchInp.value;
-        resultsState.currentPage = 1;
-        updateResultsTable();
-      });
-      rowsPerPageSelect.addEventListener('change', () => {
-        resultsState.rowsPerPage = Number(rowsPerPageSelect.value) || 25;
-        resultsState.currentPage = 1;
-        updateResultsTable();
-      });
-      pageInp.addEventListener('change', () => {
-        resultsState.currentPage = Math.max(1, parseInt(pageInp.value, 10) || 1);
-        updateResultsTable();
-      });
-      prevBtn.addEventListener('click', () => {
-        resultsState.currentPage = Math.max(1, resultsState.currentPage - 1);
-        updateResultsTable();
-      });
-      nextBtn.addEventListener('click', () => {
-        const totalPages = Math.max(1, Math.ceil(filterResultsBySearch(resultsState.results, resultsState.outputFields, resultsState.searchQuery, resultsState.workingContent).length / resultsState.rowsPerPage));
-        resultsState.currentPage = Math.min(totalPages, resultsState.currentPage + 1);
-        updateResultsTable();
-      });
-      wrap._updateResultsTable = updateResultsTable;
-      updateResultsTable();
-
-      const footer = document.createElement('div');
-      footer.className = 'run-detail-results-footer';
-      footer.appendChild(toolbar);
-      const footerActions = document.createElement('div');
-      footerActions.className = 'run-detail-results-footer-actions';
-      function doSaveToWorkspace() {
-        const promptName = (getPromptName() || '').trim() || 'Prompt';
-        const baseName = `${promptName} ${runName}`.trim();
-        const datasetName = getUniqueDatasetExportName(baseName);
-        const statusLine = resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.';
-        const description = `Exported from ${promptName} ${runName}.\n${statusLine}`;
-        const outputFields = resultsState.outputFields || [];
-        const workingContent = resultsState.workingContent || { headers: [], rows: [] };
-        const wsHeaders = workingContent.headers || [];
-        const wsRows = workingContent.rows || [];
-        const outputHeaders = outputFields.map((f) => (f.display || f.key || '').trim() || 'output');
-        const inputHeaders = wsHeaders.map((h) => 'Input: ' + String(h ?? '').trim() || ' ');
-        const headers = [...outputHeaders, ...inputHeaders];
-        const rows = (resultsState.results || []).map((r) => {
-          const outputPart = r.error
-            ? outputFields.map(() => String(r.error))
-            : outputFields.map((f) => {
-                const val = r.output && r.output[f.key];
-                if (val === null || val === undefined) return '—';
-                if (Array.isArray(val)) return val.join(', ');
-                return String(val);
-              });
-          const inputRow = Array.isArray(wsRows[r.row_index]) ? wsRows[r.row_index] : [];
-          const inputPart = wsHeaders.map((_, i) => {
-            const v = inputRow[i];
-            return v === null || v === undefined ? '—' : String(v);
-          });
-          return [...outputPart, ...inputPart];
-        });
-        document.dispatchEvent(
-          new CustomEvent('workflow:add-dataset-node', {
-            detail: { name: datasetName, notes: description, headers, rows },
-          })
-        );
-      }
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'btn btn-secondary run-detail-save-to-workspace-btn';
-      btn.textContent = 'Save to workspace';
-      btn.addEventListener('click', () => {
-        doSaveToWorkspace();
-        closeModal();
-      });
-      footerActions.appendChild(btn);
-      const saveAndScoreBtn = document.createElement('button');
-      saveAndScoreBtn.type = 'button';
-      saveAndScoreBtn.className = 'btn btn-primary run-detail-save-to-workspace-score-btn';
-      saveAndScoreBtn.textContent = 'Score';
-      saveAndScoreBtn.addEventListener('click', () => {
-        document.dispatchEvent(
-          new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node?.dataset?.nodeId || '' } })
-        );
-        closeModal();
-      });
-      footerActions.appendChild(saveAndScoreBtn);
-      footer.appendChild(footerActions);
-      card.appendChild(wrap);
-      card.appendChild(footer);
-      return;
-    }
-    /* 无结果（未运行或运行中尚无数据）时不显示 Save to workspace，至少跑完一行后才显示 */
-    card.appendChild(wrap);
-  }
-
-  function renderResultsTable(results, outputFields, status) {
+  function buildResultsCard(results, outputFields, status) {
     const card = document.createElement('div');
     card.className = 'run-detail-results-card';
-    fillResultsWrap(card, results, outputFields, status);
-    card._updateResults = () => {
-      const w = card.querySelector('.run-detail-results');
-      if (w && w._updateResultsTable) w._updateResultsTable();
-    };
+    const wrap = document.createElement('div');
+    wrap.className = 'run-detail-results';
+    const statusNote = document.createElement('span');
+    statusNote.className = `run-detail-results-note run-detail-results-note--inline run-detail-results-note--${status === 'generating' ? 'generating' : status === 'complete' ? 'complete' : 'incomplete'}`;
+    statusNote.textContent = STATUS_TEXT[status] || '';
+    const topRow = document.createElement('div');
+    topRow.className = 'run-detail-results-top-row';
+    topRow.appendChild(statusNote);
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'dataset-detail-preview-search-wrap run-detail-results-search-wrap';
+    searchWrap.innerHTML = `<label class="dataset-detail-search-label" for="run-detail-results-search">Search</label><input type="text" id="run-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" />`;
+    topRow.appendChild(searchWrap);
+    wrap.appendChild(topRow);
+    const tableWrap = document.createElement('div');
+    tableWrap.className = 'run-detail-results-table-wrap';
+    wrap.appendChild(tableWrap);
+    const toolbar = document.createElement('div');
+    toolbar.className = 'dataset-detail-preview-toolbar run-detail-results-toolbar';
+    toolbar.innerHTML = `
+      <label class="dataset-detail-rows-label" for="run-detail-rows-per-page">Rows per page</label>
+      <select id="run-detail-rows-per-page" class="dataset-detail-rows-select" aria-label="Rows per page">${ROWS_PER_PAGE_OPTIONS.map((n) => `<option value="${n}" ${n === resultsState.rowsPerPage ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <span class="dataset-detail-pagination-info run-detail-pagination-info" aria-live="polite"></span>
+      <label class="dataset-detail-page-label" for="run-detail-page-inp">Page</label>
+      <input type="number" id="run-detail-page-inp" class="dataset-detail-page-inp" min="1" value="1" aria-label="Page number" />
+      <span class="dataset-detail-page-of run-detail-page-of">/ 1</span>
+      <div class="dataset-detail-pagination-btns">
+        <button type="button" class="btn btn-secondary run-detail-prev-page" aria-label="Previous page">Previous</button>
+        <button type="button" class="btn btn-secondary run-detail-next-page" aria-label="Next page">Next</button>
+      </div>
+    `;
+    const rowsPerPageSelect = toolbar.querySelector('#run-detail-rows-per-page');
+    const paginationInfo = toolbar.querySelector('.run-detail-pagination-info');
+    const pageInp = toolbar.querySelector('#run-detail-page-inp');
+    const pageOfSpan = toolbar.querySelector('.run-detail-page-of');
+    const prevBtn = toolbar.querySelector('.run-detail-prev-page');
+    const nextBtn = toolbar.querySelector('.run-detail-next-page');
+
+    function refreshTable() {
+      const filtered = filterResults(resultsState.results, resultsState.outputFields, resultsState.searchQuery, resultsState.workingContent);
+      const totalPages = Math.max(1, Math.ceil(filtered.length / resultsState.rowsPerPage));
+      resultsState.currentPage = Math.min(Math.max(1, resultsState.currentPage), totalPages);
+      const start = (resultsState.currentPage - 1) * resultsState.rowsPerPage;
+      const pageResults = filtered.slice(start, start + resultsState.rowsPerPage);
+      const onToggle = () => {
+        resultsState.bracketColsCollapsed = !resultsState.bracketColsCollapsed;
+        if (node) node.dataset.runBracketColsCollapsed = resultsState.bracketColsCollapsed ? '1' : '0';
+        refreshTable();
+      };
+      tableWrap.innerHTML = '';
+      tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields, resultsState.workingContent, resultsState.bracketColsCollapsed, onToggle));
+      const totalFiltered = filtered.length;
+      const totalRows = resultsState.results.length;
+      paginationInfo.textContent = totalFiltered === 0 ? (totalRows === 0 ? '0 rows' : `0 rows (filtered from ${totalRows.toLocaleString()})`) : (totalFiltered === totalRows ? `Showing ${start + 1}–${Math.min(start + resultsState.rowsPerPage, totalFiltered)} of ${totalRows.toLocaleString()} rows` : `Showing ${start + 1}–${Math.min(start + resultsState.rowsPerPage, totalFiltered)} of ${totalFiltered.toLocaleString()} (filtered from ${totalRows.toLocaleString()}) rows`);
+      pageInp.value = String(resultsState.currentPage);
+      pageInp.max = String(totalPages);
+      pageOfSpan.textContent = `/ ${totalPages}`;
+      prevBtn.disabled = resultsState.currentPage <= 1;
+      nextBtn.disabled = resultsState.currentPage >= totalPages;
+    }
+
+    const searchInp = wrap.querySelector('#run-detail-results-search');
+    searchInp.addEventListener('input', () => { resultsState.searchQuery = searchInp.value; resultsState.currentPage = 1; refreshTable(); });
+    rowsPerPageSelect.addEventListener('change', () => { resultsState.rowsPerPage = Number(rowsPerPageSelect.value) || 25; resultsState.currentPage = 1; refreshTable(); });
+    pageInp.addEventListener('change', () => { resultsState.currentPage = Math.max(1, parseInt(pageInp.value, 10) || 1); refreshTable(); });
+    prevBtn.addEventListener('click', () => { resultsState.currentPage = Math.max(1, resultsState.currentPage - 1); refreshTable(); });
+    nextBtn.addEventListener('click', () => {
+      const filtered = filterResults(resultsState.results, resultsState.outputFields, resultsState.searchQuery, resultsState.workingContent);
+      resultsState.currentPage = Math.min(Math.ceil(filtered.length / resultsState.rowsPerPage), resultsState.currentPage + 1);
+      refreshTable();
+    });
+    wrap._updateResultsTable = refreshTable;
+    refreshTable();
+
+    const footer = document.createElement('div');
+    footer.className = 'run-detail-results-footer';
+    footer.appendChild(toolbar);
+    const footerActions = document.createElement('div');
+    footerActions.className = 'run-detail-results-footer-actions';
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'btn btn-secondary run-detail-save-to-workspace-btn';
+    saveBtn.textContent = 'Save to workspace';
+    saveBtn.addEventListener('click', () => {
+      const promptName = (getPromptName() || '').trim() || 'Prompt';
+      const baseName = `${promptName} ${runName}`.trim();
+      const datasetName = getUniqueDatasetExportName(baseName);
+      const wc = resultsState.workingContent || { headers: [], rows: [] };
+      const outputHeaders = (resultsState.outputFields || []).map((f) => (f.display || f.key || '').trim() || 'output');
+      const inputHeaders = (wc.headers || []).map((h) => 'Input: ' + (String(h ?? '').trim() || ' '));
+      const rows = (resultsState.results || []).map((r) => {
+        const outputPart = r.error ? (resultsState.outputFields || []).map(() => String(r.error)) : (resultsState.outputFields || []).map((f) => { const v = r.output?.[f.key]; return v == null ? '—' : Array.isArray(v) ? v.join(', ') : String(v); });
+        const inputRow = (wc.rows || [])[r.row_index] || [];
+        const inputPart = (wc.headers || []).map((_, i) => (inputRow[i] == null ? '—' : String(inputRow[i])));
+        return [...outputPart, ...inputPart];
+      });
+      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: [...outputHeaders, ...inputHeaders], rows } }));
+      closeModal();
+    });
+    const scoreBtn = document.createElement('button');
+    scoreBtn.type = 'button';
+    scoreBtn.className = 'btn btn-primary run-detail-save-to-workspace-score-btn';
+    scoreBtn.textContent = 'Score';
+    scoreBtn.addEventListener('click', () => {
+      document.dispatchEvent(new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node?.dataset?.nodeId || '' } }));
+      closeModal();
+    });
+    footerActions.append(saveBtn, scoreBtn);
+    footer.appendChild(footerActions);
+    wrap.appendChild(footer);
+    card.appendChild(wrap);
+    card._updateResults = () => wrap._updateResultsTable?.();
     return card;
   }
 
-  function isRunCompleted() {
-    return node?.dataset?.runCompleted === '1';
-  }
-
-  function applyRunCompletedLock() {
-    if (!isRunCompleted()) return;
-    runBtn.disabled = true;
-    runBtn.textContent = 'Run completed';
-    runBtn.setAttribute('aria-label', 'Run completed');
-    runBtn.classList.remove('btn-primary');
-    runBtn.classList.add('btn-secondary');
-    llmSelectEl.disabled = true;
-    pickerEl.classList.add('run-detail-ws-picker--locked');
-    pickerEl.setAttribute('aria-disabled', 'true');
-    inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
-    const leftMain = overlay.querySelector('.run-detail-main');
-    if (leftMain) leftMain.classList.add('run-detail-main--locked');
-  }
-
-  function updateRunButtonState() {
-    if (isRunCompleted()) {
-      runBtn.disabled = true;
-      return;
-    }
-    runBtn.disabled = !(selectedNodeId && selectedCredentialId);
-  }
+  // --- 左侧：数据集选择、列映射、模型选择 ---
 
   function getSelectedWorkingSet() {
     return workingSets.find((ws) => ws.nodeId === selectedNodeId) || null;
@@ -526,12 +497,11 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
 
   function updateRunNodeBorder() {
     const ws = getSelectedWorkingSet();
-    if (node && node.style) {
-      const color = ws && ws.color ? ws.color : '';
-      node.style.borderColor = color;
+    if (node?.style) {
+      node.style.borderColor = ws?.color || '';
       node.dataset.runWorkingSetId = selectedNodeId || '';
-      const progressBar = node.querySelector('.workflow-node__run-progress');
-      if (progressBar) progressBar.style.background = color;
+      const bar = node.querySelector('.workflow-node__run-progress');
+      if (bar) bar.style.background = ws?.color || bar.style.background;
     }
   }
 
@@ -548,223 +518,163 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
     }
   }
 
-  function closeDropdown() {
-    dropdownEl.hidden = true;
-    pickerEl.setAttribute('aria-expanded', 'false');
-  }
-
-  function openDropdown() {
-    dropdownEl.hidden = false;
-    pickerEl.setAttribute('aria-expanded', 'true');
-  }
-
   function selectWorkingSet(id) {
     selectedNodeId = id || '';
     updateTriggerDisplay();
     updateRunNodeBorder();
-    closeDropdown();
+    dropdownEl.hidden = true;
+    pickerEl.setAttribute('aria-expanded', 'false');
     dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.nodeId === selectedNodeId ? 'true' : 'false'));
     renderInputMappings();
-    updateRunButtonState();
+    refreshButton();
   }
 
   function populateDropdown() {
     dropdownEl.innerHTML = '';
-    const emptyOption = document.createElement('div');
-    emptyOption.className = 'run-detail-ws-option';
-    emptyOption.setAttribute('role', 'option');
-    emptyOption.setAttribute('aria-selected', !selectedNodeId ? 'true' : 'false');
-    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select input dataset —</span>';
-    emptyOption.dataset.nodeId = '';
-    emptyOption.addEventListener('click', () => selectWorkingSet(''));
-    dropdownEl.appendChild(emptyOption);
-    workingSets.forEach((ws) => {
-      const option = document.createElement('div');
-      option.className = 'run-detail-ws-option';
-      option.setAttribute('role', 'option');
-      option.setAttribute('aria-selected', ws.nodeId === selectedNodeId ? 'true' : 'false');
-      option.innerHTML = `<span class="run-detail-ws-option-color" style="background:${escapeHtml(ws.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(ws.name || 'Dataset')}</span>`;
-      option.dataset.nodeId = ws.nodeId;
-      option.addEventListener('click', () => selectWorkingSet(ws.nodeId));
-      dropdownEl.appendChild(option);
-    });
+    const add = (nid, label) => {
+      const opt = document.createElement('div');
+      opt.className = 'run-detail-ws-option';
+      opt.setAttribute('role', 'option');
+      opt.setAttribute('aria-selected', nid === selectedNodeId ? 'true' : 'false');
+      opt.dataset.nodeId = nid;
+      opt.innerHTML = nid ? `<span class="run-detail-ws-option-color" style="background:${escapeHtml(workingSets.find((w) => w.nodeId === nid)?.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(label)}</span>` : '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select input dataset —</span>';
+      opt.addEventListener('click', () => selectWorkingSet(nid));
+      dropdownEl.appendChild(opt);
+    };
+    add('', '');
+    workingSets.forEach((ws) => add(ws.nodeId, ws.name || 'Dataset'));
   }
 
   function renderInputMappings() {
-    const ws = getSelectedWorkingSet();
     const content = selectedNodeId ? getSubsetContent(selectedNodeId) : null;
-    const headers = content && content.headers ? content.headers.slice() : (ws ? (ws.headers || []).slice() : []);
+    const ws = getSelectedWorkingSet();
+    const headers = (content?.headers || ws?.headers || []).slice();
     const headerSet = new Set(headers);
     inputsListEl.innerHTML = '';
-    if (inputFields.length === 0) {
-      inputsListEl.innerHTML = '<p class="run-detail-placeholder">No prompt inputs.</p>';
-      return;
-    }
+    if (inputFields.length === 0) { inputsListEl.innerHTML = '<p class="run-detail-placeholder">No prompt inputs.</p>'; return; }
     inputFields.forEach((inputName) => {
       let col = inputToColumn[inputName] || '';
-      if (col && !headerSet.has(col)) {
-        col = '';
-        inputToColumn[inputName] = '';
-        if (node) {
-          try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
-        }
-      }
-      if (!col && inputNameToColumnMemory[inputName] && headerSet.has(inputNameToColumnMemory[inputName])) {
-        col = inputNameToColumnMemory[inputName];
-        inputToColumn[inputName] = col;
-        if (node) {
-          try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
-        }
-      }
+      if (col && !headerSet.has(col)) { col = ''; inputToColumn[inputName] = ''; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
+      if (!col && inputNameToColumnMemory[inputName] && headerSet.has(inputNameToColumnMemory[inputName])) { col = inputNameToColumnMemory[inputName]; inputToColumn[inputName] = col; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
     });
     const table = document.createElement('div');
     table.className = 'run-detail-mapping-table';
     table.setAttribute('role', 'table');
-    table.innerHTML = `
-      <div class="run-detail-mapping-head" role="row">
-        <span class="run-detail-mapping-th run-detail-mapping-th--column" role="columnheader">Dataset column</span>
-        <span class="run-detail-mapping-th run-detail-mapping-th--arrow" aria-hidden="true">→</span>
-        <span class="run-detail-mapping-th run-detail-mapping-th--input" role="columnheader">Prompt input</span>
-      </div>
-    `;
+    table.innerHTML = `<div class="run-detail-mapping-head" role="row"><span class="run-detail-mapping-th run-detail-mapping-th--column" role="columnheader">Dataset column</span><span class="run-detail-mapping-th run-detail-mapping-th--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-th run-detail-mapping-th--input" role="columnheader">Prompt input</span></div>`;
     inputFields.forEach((inputName) => {
-      const currentCol = inputToColumn[inputName] || '';
       const row = document.createElement('div');
       row.className = 'run-detail-mapping-row';
       row.setAttribute('role', 'row');
-      row.innerHTML = `
-        <span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell">
-          <select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Dataset column for ${escapeAttr(inputName)}">
-            <option value="">— Select column —</option>
-            ${headers.map((h) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}</option>`).join('')}
-          </select>
-        </span>
-        <span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span>
-        <span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}</span>
-      `;
-      const sel = row.querySelector('.run-detail-column-select');
-      sel.addEventListener('change', () => {
-        const v = sel.value.trim() || '';
-        inputToColumn[inputName] = v;
-        if (node) {
-          try {
-            node.dataset.runInputToColumn = JSON.stringify(inputToColumn);
-          } catch (_) {}
-        }
+      const currentCol = inputToColumn[inputName] || '';
+      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Dataset column for ${escapeAttr(inputName)}"><option value="">— Select column —</option>${headers.map((h) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}</span>`;
+      row.querySelector('.run-detail-column-select').addEventListener('change', (e) => {
+        inputToColumn[inputName] = (e.target.value || '').trim() || '';
+        if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
       });
       table.appendChild(row);
     });
     inputsListEl.appendChild(table);
   }
 
-  function escapeAttr(str) {
-    const s = String(str ?? '');
-    return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-  }
-
-  triggerEl.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (isRunCompleted()) return;
-    if (dropdownEl.hidden) {
-      populateDropdown();
-      openDropdown();
-    } else {
-      closeDropdown();
-    }
-  });
-  triggerEl.addEventListener('keydown', (e) => {
-    if (isRunCompleted()) return;
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      if (dropdownEl.hidden) {
-        populateDropdown();
-        openDropdown();
-      } else {
-        closeDropdown();
-      }
-    }
-  });
-  overlay.addEventListener('click', (e) => {
-    if (pickerEl.contains(e.target)) return;
-    closeDropdown();
-  });
+  // --- 轮询更新：workflow:run-results-updated ---
 
   function onRunResultsUpdated(e) {
-    if (e.detail?.nodeId !== node?.dataset?.nodeId) return;
-    const results = e.detail.results;
-    const outputFields = e.detail.outputFields;
-    const isComplete = e.detail.isComplete !== false;
-    if (isComplete && node) node.dataset.runCompleted = '1';
-    if (!Array.isArray(results) || !Array.isArray(outputFields)) return;
-    const status = isComplete ? 'complete' : 'generating';
-    const card = rightCol.querySelector('.run-detail-results-card');
-    if (card) {
-      card.innerHTML = '';
-      fillResultsWrap(card, results, outputFields, status);
-      card._updateResults = () => {
-        const w = card.querySelector('.run-detail-results');
-        if (w && w._updateResultsTable) w._updateResultsTable();
-      };
-    } else {
-      rightCol.innerHTML = '';
-      rightCol.appendChild(renderResultsTable(results, outputFields, status));
+    if (e.detail?.nodeId !== nodeId) return;
+    let { results, outputFields, isComplete, cancelled } = e.detail;
+    if (isComplete) runId = null;
+    if (isComplete && !cancelled && node) node.dataset.runCompleted = '1';
+    if (!Array.isArray(results)) return;
+    if (!Array.isArray(outputFields) || outputFields.length === 0) {
+      outputFields = getNodeResults().outputFields;
     }
-    if (isComplete) applyRunCompletedLock();
+    if (outputFields.length === 0 && results.length > 0 && results[0].output && typeof results[0].output === 'object') {
+      outputFields = Object.keys(results[0].output).map((k) => ({ key: k, display: k }));
+    }
+    const status = isComplete ? 'complete' : 'generating';
+    resultsState.results = results;
+    resultsState.outputFields = outputFields;
+    resultsState.workingContent = getSubsetContent(selectedNodeId) || null;
+    resultsState.status = status;
+    resultsState.currentPage = 1;
+    rightCol.innerHTML = '';
+    rightCol.appendChild(buildResultsCard(results, outputFields, status));
+    expandRightPanel();
+    if (isComplete) applyCompletedLock(); else refreshButton();
   }
+
   function closeModal() {
     document.removeEventListener('workflow:run-results-updated', onRunResultsUpdated);
     overlay.remove();
     document.body.style.overflow = '';
   }
+
+  // --- 事件绑定 ---
+
   document.addEventListener('workflow:run-results-updated', onRunResultsUpdated);
   overlay.querySelector('.modal-close').addEventListener('click', closeModal);
 
-  async function loadCredentialsAndPopulateLlm() {
-    const sel = llmSelectEl;
-    sel.innerHTML = '<option value="">— Select model for prompt —</option>';
+  triggerEl.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (isCompleted() || isRunning()) return;
+    if (dropdownEl.hidden) { populateDropdown(); dropdownEl.hidden = false; pickerEl.setAttribute('aria-expanded', 'true'); }
+    else { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); }
+  });
+  triggerEl.addEventListener('keydown', (e) => {
+    if (isCompleted() || isRunning()) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (dropdownEl.hidden) { populateDropdown(); dropdownEl.hidden = false; pickerEl.setAttribute('aria-expanded', 'true'); }
+      else { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); }
+    }
+  });
+  overlay.addEventListener('click', (e) => { if (!pickerEl.contains(e.target)) { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); } });
+
+  (async () => {
+    llmSelectEl.innerHTML = '<option value="">— Select model for prompt —</option>';
     try {
       const res = await fetch(`${API_BASE}/api/credentials`);
       if (!res.ok) return;
       const list = await res.json();
-      list.forEach((c) => {
-        const opt = document.createElement('option');
-        opt.value = c.id;
-        opt.textContent = c.name || c.llm || c.id;
-        sel.appendChild(opt);
-      });
-      if (selectedCredentialId) sel.value = selectedCredentialId;
-    } catch (e) {
-      console.error('Load credentials for LLM select:', e);
-    }
-  }
-
+      list.forEach((c) => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name || c.llm || c.id; llmSelectEl.appendChild(o); });
+      if (selectedCredentialId) llmSelectEl.value = selectedCredentialId;
+    } catch (e) { console.error('Load credentials:', e); }
+  })();
   llmSelectEl.addEventListener('change', () => {
     selectedCredentialId = (llmSelectEl.value || '').trim();
     if (node) node.dataset.runCredentialId = selectedCredentialId || '';
-    updateRunButtonState();
+    refreshButton();
   });
 
+  // --- 点击 Run ---
+
   runBtn.addEventListener('click', async () => {
-    if (isRunCompleted()) return;
+    if (isCompleted()) return;
+    if (runId) return;
     if (!selectedNodeId || !selectedCredentialId) return;
+
     const content = getSubsetContent(selectedNodeId);
     const template = getPromptTemplate();
-    const headers = content.headers || [];
-    const rows = content.rows || [];
+    const headers = content?.headers || [];
+    const rows = content?.rows || [];
+
     if (rows.length === 0) {
-      rightCol.innerHTML = '<p class="run-detail-placeholder">Dataset has no rows.</p>';
-      expandRightPanel();
+      showResults([], [], 'complete', 'Dataset has no rows.');
       return;
     }
     const templateText = (template.sections || []).map((s) => (s.content || '').trim()).filter(Boolean).join('\n\n');
     if (!templateText) {
-      rightCol.innerHTML = '<p class="run-detail-placeholder">Prompt has no content.</p>';
-      expandRightPanel();
+      showResults([], [], 'complete', 'Prompt has no content.');
       return;
     }
-    const prompts = rows.map((row) => {
+    const outputSchema = { return_shape: template.outputSchema?.return_shape || 'single', fields: (template.outputSchema?.fields || []).map((f) => ({ key: f.key, type: f.type || 'str', description: f.description, allow_none: f.allowNone ?? f.allow_none ?? false })) };
+    if (!outputSchema.fields.length) {
+      showResults([], [], 'complete', 'Prompt output schema has no fields.');
+      return;
+    }
+
+    const buildPrompts = (rowList) => rowList.map((row) => {
       let text = templateText;
-      (inputFields || []).forEach((inputName) => {
+      inputFields.forEach((inputName) => {
         const col = inputToColumn[inputName];
         const idx = headers.indexOf(col);
         const val = idx >= 0 ? (row[idx] ?? '') : '';
@@ -772,86 +682,59 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       });
       return text;
     });
-    const outputSchema = {
-      return_shape: template.outputSchema?.return_shape || 'single',
-      fields: (template.outputSchema?.fields || []).map((f) => ({
-        key: f.key,
-        type: f.type || 'str',
-        description: f.description,
-        allow_none: f.allowNone ?? f.allow_none ?? false,
-      })),
-    };
-    if (outputSchema.fields.length === 0) {
-      rightCol.innerHTML = '<p class="run-detail-placeholder">Prompt output schema has no fields. Add fields in the Prompt node.</p>';
-      expandRightPanel();
-      return;
-    }
+    const prompts = buildPrompts(rows);
+
     if (node) {
-      node.dataset.runResults = '';
-      node.dataset.runOutputFields = '';
-      node.dataset.runCompleted = '';
+      writeNodeRunState({ results: [], outputFields: [], completed: 0, total: rows.length, runCompleted: false });
       const bar = node.querySelector('.workflow-node__run-progress');
       if (bar) bar.style.width = '0%';
     }
-    const cardRunning = renderResultsEmptyCard();
-    const pRunning = cardRunning.querySelector('.run-detail-placeholder');
-    if (pRunning) pRunning.textContent = 'Running… Results will appear below as they complete.';
-    rightCol.innerHTML = '';
-    rightCol.appendChild(cardRunning);
-    expandRightPanel();
-    runBtn.disabled = true;
+
+    showResults([], [], 'generating', 'Running…');
+    applyRunningLock();
+
     try {
-      const res = await fetch(`${API_BASE}/api/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          credential_id: selectedCredentialId,
-          prompts,
-          output_schema: outputSchema,
-          run_node_id: node?.dataset?.nodeId || null,
-        }),
-      });
+      const res = await fetch(`${API_BASE}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ credential_id: selectedCredentialId, prompts, output_schema: outputSchema, run_node_id: nodeId || null }) });
       const data = await res.json().catch(() => ({}));
       if (res.status === 202) {
-        const runId = data.run_id;
-        if (runId && node?.dataset?.nodeId) registerPendingRun(node.dataset.nodeId, runId);
-        updateRunButtonState();
+        runId = data.run_id || null;
+        if (runId && nodeId) registerPendingRun(nodeId, runId);
+        refreshButton();
         return;
       }
       if (!res.ok) {
-        rightCol.innerHTML = '<p class="run-detail-error">' + escapeHtml(data.detail || res.statusText || 'Request failed') + '</p>';
+        runId = null;
+        resultsState.status = 'complete';
+        rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(data.detail || res.statusText || 'Request failed')}</p>`;
         expandRightPanel();
-        updateRunButtonState();
+        refreshButton();
         return;
       }
       const results = data.results || [];
       const outputFields = data.output_fields || [];
-      rightCol.innerHTML = '';
-      rightCol.appendChild(renderResultsTable(results, outputFields, 'complete'));
-      if (node) {
-        try {
-          node.dataset.runResults = JSON.stringify(results);
-          node.dataset.runOutputFields = JSON.stringify(outputFields);
-        } catch (_) {}
-      }
+      runId = null;
+      writeNodeRunState({ results, outputFields, completed: results.length, total: rows.length, runCompleted: true });
+      showResults(results, outputFields, 'complete');
     } catch (e) {
-      rightCol.innerHTML = '<p class="run-detail-error">' + escapeHtml(String(e.message || e)) + '</p>';
+      runId = null;
+      resultsState.status = 'complete';
+      rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(String(e.message || e))}</p>`;
       expandRightPanel();
-    } finally {
-      updateRunButtonState();
     }
+    refreshButton();
   });
+
+  // --- 初始化：不自动运行，不自动恢复 ---
 
   updateTriggerDisplay();
   updateRunNodeBorder();
   renderInputMappings();
-  updateRunButtonState();
-  applyRunCompletedLock();
-  loadCredentialsAndPopulateLlm();
+  refreshButton();
+  if (isCompleted()) applyCompletedLock();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
 
-  // Show Results card immediately: restore saved results or placeholder; expand right panel only if run had been started (has results or we will show placeholder)
+  // 右侧：显示上次保存的结果（如有）
   rightCol.innerHTML = '';
   try {
     const savedResults = node?.dataset?.runResults;
@@ -860,18 +743,21 @@ export function openRunDetailModal({ node, getWorkingSets, getPromptInputFields,
       const results = JSON.parse(savedResults);
       const outputFields = JSON.parse(savedFields);
       if (Array.isArray(results) && Array.isArray(outputFields)) {
-        const progressBar = node?.querySelector('.workflow-node__run-progress');
-        const isRunComplete = progressBar?.getAttribute('aria-valuenow') === '100';
-        const status = isRunComplete ? 'complete' : 'incomplete';
-        rightCol.appendChild(renderResultsTable(results, outputFields, status));
+        const pct = node?.querySelector('.workflow-node__run-progress')?.getAttribute('aria-valuenow');
+        const status = runId ? 'generating' : (pct === '100' ? 'complete' : 'incomplete');
+        resultsState.results = results;
+        resultsState.outputFields = outputFields;
+        resultsState.workingContent = getSubsetContent(selectedNodeId) || null;
+        resultsState.status = status;
+        rightCol.appendChild(buildResultsCard(results, outputFields, status));
         expandRightPanel();
-      } else {
-        rightCol.appendChild(renderResultsEmptyCard());
       }
-    } else {
-      rightCol.appendChild(renderResultsEmptyCard());
     }
-  } catch (_) {
-    rightCol.appendChild(renderResultsEmptyCard());
+  } catch (_) {}
+  if (!rightCol.firstChild) {
+    const card = document.createElement('div');
+    card.className = 'run-detail-results-card';
+    card.innerHTML = `<div class="run-detail-results"><p class="run-detail-placeholder">${runId ? 'Running…' : 'Run to see results.'}</p></div>`;
+    rightCol.appendChild(card);
   }
 }

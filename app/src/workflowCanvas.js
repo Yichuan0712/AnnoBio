@@ -461,6 +461,9 @@ export function buildWorkflowCanvas(root) {
   function registerPendingRun(nodeId, runId) {
     if (nodeId && runId) pendingRuns.set(nodeId, runId);
   }
+  function unregisterPendingRun(nodeId) {
+    if (nodeId) pendingRuns.delete(nodeId);
+  }
   function setRunNodeProgress(node, completed, total) {
     const bar = node?.querySelector('.workflow-node__run-progress');
     if (!bar) return;
@@ -477,9 +480,14 @@ export function buildWorkflowCanvas(root) {
     if (node) node.dataset.reviewProgress = String(pct);
   }
 
-  setInterval(async () => {
-    if (pendingRuns.size === 0) return;
+  /** When true, run poll is stopped (app closing); do not start new API calls. */
+  let runPollStopped = false;
+
+  /** Poll only runs that are already in pendingRuns (started in this session or restored when user opened Run modal). No by-node loop here; restore is done in runDetailModal when modal opens. */
+  const runPollIntervalId = setInterval(async () => {
+    if (runPollStopped) return;
     for (const [nodeId, runId] of pendingRuns) {
+      if (runPollStopped) return;
       try {
         const res = await fetch(`${RUN_API_BASE}/api/run/result/${runId}`);
         const data = await res.json().catch(() => ({}));
@@ -489,40 +497,67 @@ export function buildWorkflowCanvas(root) {
           continue;
         }
         if (res.status === 202) {
-          const total = data.total || 0;
-          const completed = data.completed || 0;
           const partialResults = data.results;
           const outputFields = data.output_fields;
-          setRunNodeProgress(node, completed, total);
-          if (node.style.borderColor) {
-            const bar = node.querySelector('.workflow-node__run-progress');
-            if (bar && !bar.style.background) bar.style.background = node.style.borderColor;
-          }
+          const totalRows = data.total || 0;
           if (Array.isArray(partialResults) && Array.isArray(outputFields)) {
+            const completed = partialResults.length;
+            const total = totalRows || completed;
+            setRunNodeProgress(node, completed, total);
+            if (node.style.borderColor) {
+              const bar = node.querySelector('.workflow-node__run-progress');
+              if (bar && !bar.style.background) bar.style.background = node.style.borderColor;
+            }
             node.dataset.runResults = JSON.stringify(partialResults);
             node.dataset.runOutputFields = JSON.stringify(outputFields);
             document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: partialResults, outputFields, isComplete: false } }));
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           }
           continue;
         }
         if (res.status !== 200) continue;
-        if (data.status === 'done') {
-          setRunNodeProgress(node, data.results?.length ?? 0, data.results?.length ?? 1);
-          node.dataset.runCompleted = '1';
-          if (data.error) {
+        if (data.status === 'done' || data.status === 'cancelled') {
+          const results = data.results || [];
+          const outputFields = data.output_fields || [];
+          const totalRows = data.total || 0;
+          const completed = results.length;
+          const total = totalRows || completed;
+          setRunNodeProgress(node, completed, total);
+          if (data.status === 'done') node.dataset.runCompleted = '1';
+          if (data.status === 'done' && data.error && results.length === 0) {
             node.dataset.runResults = JSON.stringify([{ row_index: 0, output: null, error: data.error }]);
             node.dataset.runOutputFields = JSON.stringify([]);
             document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: [{ row_index: 0, output: null, error: data.error }], outputFields: [], isComplete: true } }));
-          } else if (data.results && data.output_fields) {
-            node.dataset.runResults = JSON.stringify(data.results);
-            node.dataset.runOutputFields = JSON.stringify(data.output_fields);
-            document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: data.results, outputFields: data.output_fields, isComplete: true } }));
+          } else {
+            node.dataset.runResults = JSON.stringify(results);
+            node.dataset.runOutputFields = JSON.stringify(outputFields);
+            document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results, outputFields, isComplete: true, cancelled: data.status === 'cancelled' } }));
           }
           pendingRuns.delete(nodeId);
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         }
       } catch (_) {}
     }
   }, 2000);
+
+  /** On app close: stop polling and tell backend to cancel every pending run. Sync XHR so the request is sent before process exits (sendBeacon does not wait). */
+  function shutdownRunPoll() {
+    runPollStopped = true;
+    clearInterval(runPollIntervalId);
+    const runIds = Array.from(pendingRuns.values());
+    for (const runId of runIds) {
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${RUN_API_BASE}/api/run/cancel/${runId}`, false);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.send('{}');
+      } catch (_) {}
+    }
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', shutdownRunPoll);
+    window.addEventListener('pagehide', shutdownRunPoll);
+  }
 
   function getNodeList() {
     return Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'));
@@ -2116,6 +2151,8 @@ export function buildWorkflowCanvas(root) {
         getSubsetContent,
         getPromptTemplate,
         registerPendingRun,
+        unregisterPendingRun,
+        getPendingRunId: () => pendingRuns.get(node.dataset.nodeId) || null,
         getPromptName: () => {
           if (!promptNode) return '';
           return (promptNode.dataset.promptName || '').trim() || (promptNode.querySelector('.workflow-node__title')?.textContent?.trim() || '');
@@ -3755,7 +3792,7 @@ export function buildWorkflowCanvas(root) {
       }
       if (node.classList.contains('workflow-node--run')) {
         const bar = node.querySelector('.workflow-node__run-progress');
-        const pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : 0;
+        let pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : 0;
         const runName = (node.dataset.runName || '').trim() || node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Run';
         const out = {
           type: 'run',
@@ -3770,7 +3807,13 @@ export function buildWorkflowCanvas(root) {
           runOutputFields: node.dataset.runOutputFields || undefined,
           runCompleted: node.dataset.runCompleted || undefined,
         };
-        if (pct === 100) out.runProgress = 100;
+        if (pct <= 0 && node.dataset.runResults) {
+          try {
+            const results = JSON.parse(node.dataset.runResults);
+            if (Array.isArray(results) && results.length > 0) pct = Math.min(99, results.length);
+          } catch (_) {}
+        }
+        if (pct > 0) out.runProgress = pct;
         return out;
       }
       if (node.classList.contains('workflow-node--score')) {
@@ -3898,7 +3941,17 @@ export function buildWorkflowCanvas(root) {
         if (n.runResults) runNode.dataset.runResults = n.runResults;
         if (n.runOutputFields) runNode.dataset.runOutputFields = n.runOutputFields;
         if (n.runCompleted) runNode.dataset.runCompleted = n.runCompleted;
-        if (n.runProgress === 100) setRunNodeProgress(runNode, 100, 100);
+        if (n.runProgress != null && n.runProgress >= 0 && n.runProgress <= 100) {
+          setRunNodeProgress(runNode, n.runProgress, 100);
+        } else if (n.runResults) {
+          try {
+            const results = JSON.parse(n.runResults);
+            if (Array.isArray(results) && results.length > 0) {
+              const pct = Math.min(99, results.length);
+              setRunNodeProgress(runNode, pct, 100);
+            }
+          } catch (_) {}
+        }
         createdNodes.push(runNode);
       } else if (n.type === 'assessment' || n.type === 'score') {
         const scoreNode = createScoreNode({
@@ -4126,5 +4179,6 @@ export function buildWorkflowCanvas(root) {
     redo: performRedo,
     getCanUndo,
     getCanRedo,
+    shutdownRunPoll,
   };
 }

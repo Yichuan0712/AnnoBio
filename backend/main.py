@@ -3,8 +3,9 @@ import json
 import re
 import sys
 import threading
+import time
 import uuid
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 
 # ANSI codes for terminal highlight (all yellow; supported on Windows 10+ and Unix)
@@ -41,6 +42,7 @@ app.add_middleware(
 # 凭证存储路径（不提交到 git）
 DATA_DIR = Path(__file__).resolve().parent / "data"
 CREDENTIALS_FILE = DATA_DIR / "credentials.json"
+RUN_JOBS_FILE = DATA_DIR / "run_jobs.json"
 
 
 # 支持的提供商与模型（扩展时在此维护，前端通过 GET /api/credentials/models 获取）
@@ -257,6 +259,11 @@ def _build_output_model(fields: list[dict]) -> type[BaseModel]:
     return create_model("StructuredOutput", **field_defs)
 
 
+def _build_table_output_model(row_model: type[BaseModel]) -> type[BaseModel]:
+    """Build a Pydantic model with one field 'rows': list[row_model] for return_shape=table."""
+    return create_model("TableOutput", rows=(List[row_model], Field(default_factory=list)))
+
+
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -458,9 +465,62 @@ def delete_credential(credential_id: str):
 
 
 # ---------- Run (execute prompts with structured output) ----------
-# Background runs: run_id -> { status: "running" | "done", results?, output_fields? }
+# Run progress is persisted to RUN_JOBS_FILE (data/run_jobs.json). Load on startup, save after every update.
+# If the client stops polling (e.g. user force-quits), the worker abandons the run within RUN_ABANDON_TIMEOUT_SEC.
+# job: { status, run_node_id?, completed?, total?, results?, output_fields?, error? }
+# by_node: run_node_id -> run_id (latest run per node)
+# _run_last_activity: run_id -> last time we saw activity (poll or cancel); worker exits when no activity for RUN_ABANDON_TIMEOUT_SEC
+RUN_ABANDON_TIMEOUT_SEC = 12  # if no GET/cancel for this run in 12s, treat client as gone and stop
+
 _run_jobs: dict[str, dict] = {}
+_run_jobs_by_node: dict[str, str] = {}
+_run_last_activity: dict[str, float] = {}  # run_id -> time.time(); updated on every poll or cancel
 _run_jobs_lock = threading.Lock()
+_run_cancelled: set[str] = set()  # run_ids client asked to cancel; worker checks each row
+
+
+def _touch_run_activity(run_id: str) -> None:
+    """Call while holding _run_jobs_lock (or from a single-threaded request)."""
+    _run_last_activity[run_id] = time.time()
+
+
+def _persist_run_jobs() -> None:
+    """Write run jobs and by_node index to disk so progress survives restart."""
+    with _run_jobs_lock:
+        snapshot = dict(_run_jobs)
+    by_node: dict[str, str] = {}
+    for rid, job in snapshot.items():
+        nid = job.get("run_node_id")
+        if nid:
+            by_node[nid] = rid
+    payload = {"jobs": snapshot, "by_node": by_node}
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        RUN_JOBS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        print(f"[Run] persist failed: {e}", file=sys.stderr)
+
+
+def _load_run_jobs() -> None:
+    """Load persisted run jobs on startup. Do not load _run_last_activity (client is gone)."""
+    if not RUN_JOBS_FILE.exists():
+        return
+    try:
+        raw = RUN_JOBS_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        jobs = data.get("jobs") or {}
+        by_node = data.get("by_node") or {}
+        with _run_jobs_lock:
+            _run_jobs.clear()
+            _run_jobs.update(jobs)
+            _run_jobs_by_node.clear()
+            _run_jobs_by_node.update(by_node)
+            _run_last_activity.clear()
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[Run] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_run_jobs()
 
 
 def _do_run_work(
@@ -469,7 +529,7 @@ def _do_run_work(
     prompts: list[str],
     output_schema: dict,
 ) -> None:
-    """Run in background thread; store result in _run_jobs[run_id]."""
+    """Background worker: run prompts row by row. Stops when cancelled or when client has not polled for RUN_ABANDON_TIMEOUT_SEC."""
     try:
         items = _load_credentials()
         cred = None
@@ -479,30 +539,44 @@ def _do_run_work(
                 break
         if not cred:
             with _run_jobs_lock:
-                _run_jobs[run_id] = {"status": "done", "error": "Credential not found"}
+                nid = _run_jobs.get(run_id, {}).get("run_node_id")
+                _run_jobs[run_id] = {"status": "done", "error": "Credential not found", "run_node_id": nid}
+            _persist_run_jobs()
             return
         provider = cred.get("provider", "openai")
         model = cred.get("llm", "")
         api_key = cred.get("api_key", "")
         if provider not in ALLOWED_PROVIDERS:
             with _run_jobs_lock:
-                _run_jobs[run_id] = {"status": "done", "error": "Unsupported provider"}
+                nid = _run_jobs.get(run_id, {}).get("run_node_id")
+                _run_jobs[run_id] = {"status": "done", "error": "Unsupported provider", "run_node_id": nid}
+            _persist_run_jobs()
             return
         if not api_key:
             with _run_jobs_lock:
-                _run_jobs[run_id] = {"status": "done", "error": "Missing API key"}
+                nid = _run_jobs.get(run_id, {}).get("run_node_id")
+                _run_jobs[run_id] = {"status": "done", "error": "Missing API key", "run_node_id": nid}
+            _persist_run_jobs()
             return
 
         fields = output_schema.get("fields") or []
         if not fields:
             with _run_jobs_lock:
-                _run_jobs[run_id] = {"status": "done", "error": "output_schema.fields is required"}
+                nid = _run_jobs.get(run_id, {}).get("run_node_id")
+                _run_jobs[run_id] = {"status": "done", "error": "output_schema.fields is required", "run_node_id": nid}
+            _persist_run_jobs()
             return
-        ResponseModel = _build_output_model(fields)
+        shape_raw = (output_schema.get("return_shape") or "single").strip().lower()
+        return_shape = shape_raw if shape_raw in ("single", "table") else "single"
+        if return_shape == "table":
+            RowModel = _build_output_model(fields)
+            ResponseModel = _build_table_output_model(RowModel)
+        else:
+            ResponseModel = _build_output_model(fields)
         schema_repr = json.dumps(output_schema, ensure_ascii=False, indent=2)
 
         output_fields = []
-        _seen = set()
+        _seen: set[str] = set()
         for f in fields:
             display = f.get("key") or "field"
             name = _sanitize_field_name(display)
@@ -520,51 +594,97 @@ def _do_run_work(
             _run_jobs[run_id]["completed"] = 0
             _run_jobs[run_id]["results"] = []
             _run_jobs[run_id]["output_fields"] = output_fields
-        results = []
+        results: list[dict] = []
         for row_index, prompt in enumerate(prompts):
+            with _run_jobs_lock:
+                if run_id in _run_cancelled:
+                    nid = _run_jobs.get(run_id, {}).get("run_node_id")
+                    _run_jobs[run_id] = {
+                        "status": "cancelled",
+                        "results": list(results),
+                        "output_fields": output_fields,
+                        "run_node_id": nid,
+                        "completed": len(results),
+                        "total": total,
+                    }
+                    _run_cancelled.discard(run_id)
+                    _persist_run_jobs()
+                    return
+                last = _run_last_activity.get(run_id, 0)
+                if (time.time() - last) > RUN_ABANDON_TIMEOUT_SEC:
+                    nid = _run_jobs.get(run_id, {}).get("run_node_id")
+                    _run_jobs[run_id] = {
+                        "status": "cancelled",
+                        "results": list(results),
+                        "output_fields": output_fields,
+                        "run_node_id": nid,
+                        "completed": len(results),
+                        "total": total,
+                    }
+                    _persist_run_jobs()
+                    _safe_print(_HL + "[Run] Client gone (no poll for {}s), run {} abandoned.\n".format(RUN_ABANDON_TIMEOUT_SEC, run_id) + _R)
+                    return
             _safe_print("\n" + _HL + "=" * 60 + _R)
             _safe_print(_HL + "[Run] PROMPT SENT TO LLM:" + _R)
             _safe_print(_HL + "-" * 60 + _R)
             _safe_print(prompt)
             _safe_print(_HL + "-" * 60 + _R)
-            _safe_print(_HL + "[Run] OUTPUT SCHEMA GIVEN TO LANGCHAIN:" + _R)
-            _safe_print(schema_repr)
-            _safe_print(_HL + "-" * 60 + _R)
             try:
-                out = llm_run_structured(
+                out, used_fallback = llm_run_structured(
                     provider=provider,
                     model=model,
                     api_key=api_key,
                     prompt=prompt,
                     response_model=ResponseModel,
                     max_tokens=8192,
+                    return_shape=return_shape,
                 )
-                results.append({"row_index": row_index, "output": out, "error": None})
+                if return_shape == "table" and isinstance(out, dict) and "rows" in out:
+                    out = out["rows"]
+                if not used_fallback:
+                    _safe_print(_HL + "[Run] OUTPUT SCHEMA GIVEN TO LANGCHAIN:" + _R)
+                    _safe_print(_HL + "-" * 60 + _R)
+                    _safe_print(schema_repr)
+                    _safe_print(_HL + "-" * 60 + _R)
+                if return_shape == "table" and isinstance(out, list):
+                    for row in out:
+                        results.append({"row_index": row_index, "output": row if isinstance(row, dict) else {}, "error": None})
+                else:
+                    results.append({"row_index": row_index, "output": out, "error": None})
                 _safe_print(_HL + "[Run] LLM STRUCTURED OUTPUT:" + _R)
+                _safe_print(_HL + "-" * 60 + _R)
                 _safe_print(json.dumps(out, ensure_ascii=False, indent=2))
+                _safe_print(_HL + "-" * 60 + _R)
             except Exception as e:
                 results.append({"row_index": row_index, "output": None, "error": str(e)})
                 _safe_print(_HL + "[Run] LLM ERROR: " + _R + str(e))
             with _run_jobs_lock:
-                _run_jobs[run_id]["completed"] = len(results)
+                _run_jobs[run_id]["completed"] = row_index + 1
                 _run_jobs[run_id]["results"] = list(results)
+            _persist_run_jobs()
             _safe_print(_HL + "=" * 60 + _R + "\n")
         with _run_jobs_lock:
-            _run_jobs[run_id] = {"status": "done", "results": results, "output_fields": output_fields}
+            nid = _run_jobs.get(run_id, {}).get("run_node_id")
+            _run_jobs[run_id] = {"status": "done", "results": results, "output_fields": output_fields, "run_node_id": nid}
+        _persist_run_jobs()
     except Exception as e:
+        _safe_print(_HL + "[Run] Error: " + _R + str(e))
         with _run_jobs_lock:
-            _run_jobs[run_id] = {"status": "done", "error": str(e)}
+            nid = _run_jobs.get(run_id, {}).get("run_node_id")
+            _run_jobs[run_id] = {"status": "done", "error": str(e), "run_node_id": nid}
+        _persist_run_jobs()
 
 
 @app.post("/api/run")
 def run_prompts(body: RunRequest):
-    """
-    Start run in background; returns 202 with run_id. Poll GET /api/run/result/{run_id} for results.
-    Run continues even if the client closes the connection.
-    """
+    """Start run in background; returns 202 with run_id. Poll GET /api/run/result/{run_id}. Worker stops if client stops polling."""
     run_id = str(uuid.uuid4())
     with _run_jobs_lock:
-        _run_jobs[run_id] = {"status": "running"}
+        _run_jobs[run_id] = {"status": "running", "run_node_id": body.run_node_id}
+        if body.run_node_id:
+            _run_jobs_by_node[body.run_node_id] = run_id
+        _touch_run_activity(run_id)
+    _persist_run_jobs()
     thread = threading.Thread(
         target=_do_run_work,
         args=(run_id, body.credential_id, body.prompts, body.output_schema),
@@ -580,9 +700,11 @@ def run_prompts(body: RunRequest):
 
 @app.get("/api/run/result/{run_id}")
 def get_run_result(run_id: str):
-    """Return 202 while running, 200 with results (or error) when done, 404 if unknown run_id."""
+    """Return 202 while running, 200 when done. Each poll updates last_activity so worker knows client is still there."""
     with _run_jobs_lock:
         job = _run_jobs.get(run_id)
+        if job and job.get("status") == "running":
+            _touch_run_activity(run_id)
     if not job:
         raise HTTPException(status_code=404, detail="Run not found")
     if job.get("status") == "running":
@@ -597,9 +719,64 @@ def get_run_result(run_id: str):
                 "output_fields": job.get("output_fields") or [],
             },
         )
+    if job.get("status") == "cancelled":
+        return {"status": "cancelled", "results": job.get("results") or [], "output_fields": job.get("output_fields") or []}
     if job.get("error"):
         return {"status": "done", "error": job["error"], "results": None, "output_fields": None}
     return {"status": "done", "results": job["results"], "output_fields": job["output_fields"]}
+
+
+@app.post("/api/run/cancel/{run_id}")
+def cancel_run(run_id: str):
+    """Mark run as cancelled; worker stops after current row. Also updates last_activity."""
+    with _run_jobs_lock:
+        if run_id not in _run_jobs:
+            raise HTTPException(status_code=404, detail="Run not found")
+        job = _run_jobs[run_id]
+        if job.get("status") != "running":
+            return {"ok": True, "status": job.get("status")}
+        _run_cancelled.add(run_id)
+        _touch_run_activity(run_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+@app.get("/api/run/result/by-node/{run_node_id}")
+def get_run_result_by_node(run_node_id: str):
+    """Return latest run state for this node. Each poll updates last_activity for that run."""
+    with _run_jobs_lock:
+        run_id = _run_jobs_by_node.get(run_node_id)
+        if not run_id:
+            raise HTTPException(status_code=404, detail="No run found for this node")
+        job = _run_jobs.get(run_id)
+        if job and job.get("status") == "running":
+            _touch_run_activity(run_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if job.get("status") == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={
+                "run_id": run_id,
+                "status": "running",
+                "completed": job.get("completed", 0),
+                "total": job.get("total", 0),
+                "results": job.get("results") or [],
+                "output_fields": job.get("output_fields") or [],
+            },
+        )
+    if job.get("status") == "cancelled":
+        return {
+            "run_id": run_id,
+            "status": "cancelled",
+            "results": job.get("results") or [],
+            "output_fields": job.get("output_fields") or [],
+            "completed": job.get("completed", 0),
+            "total": job.get("total", 0),
+        }
+    if job.get("error"):
+        return {"run_id": run_id, "status": "done", "error": job["error"], "results": None, "output_fields": None}
+    return {"run_id": run_id, "status": "done", "results": job["results"], "output_fields": job["output_fields"]}
 
 
 # ---------- Review: step0 design check (optional), then step1 plan + step2 per-focus suggestions ----------

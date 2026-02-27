@@ -5959,3 +5959,13 @@ body.wd-row-resizing {
 .btn-secondary:hover {
   background: var(--hover);
 }
+
+.btn-danger {
+  color: var(--diff-removed-text, #b91c1c);
+  background: var(--diff-removed-bg, rgba(200, 60, 60, 0.22));
+  border-color: var(--diff-removed-text, #b91c1c);
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
