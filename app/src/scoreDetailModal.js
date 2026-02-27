@@ -844,7 +844,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 ${MATCH_FLAGS.map((f) => `<label class="rule-editor-flag-label"><input type="checkbox" class="rule-editor-flag-cb" data-flag="${escapeAttr(f.key)}" ${flags[f.key] ? 'checked' : ''} aria-label="${escapeAttr(f.label)}" />${escapeHtml(f.label)}</label>`).join('')}
               </div>
             </div>
-            ${isEdit ? `
+            ${isEdit && editPath.length <= 1 ? `
             <div class="dataset-meta-field rule-editor-field-group">
               <label class="dataset-meta-label rule-editor-checkbox-label">
                 <input type="checkbox" id="rule-editor-make-group" class="rule-editor-checkbox" aria-label="Make this a rule group">
@@ -852,7 +852,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               </label>
               <p class="rule-editor-hint">Convert to a group and edit its rules like the score list.</p>
             </div>
-            ` : (parentPath && parentPath.length > 0 ? '' : `
+            ` : (!isEdit && (!parentPath || parentPath.length === 0) ? `
             <div class="dataset-meta-field rule-editor-field-group">
               <label class="dataset-meta-label rule-editor-checkbox-label">
                 <input type="checkbox" id="rule-editor-add-as-group" class="rule-editor-checkbox" aria-label="Add as rule group">
@@ -860,7 +860,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               </label>
               <p class="rule-editor-hint">Create a group with this rule; you can add more rules to the group after.</p>
             </div>
-            `)}
+            ` : '')}
           </div>
           <div class="prompt-form-error section-editor-error rule-editor-error" role="alert" aria-live="polite" hidden></div>
           <div class="modal-footer-actions">
