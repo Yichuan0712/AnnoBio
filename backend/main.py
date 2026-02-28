@@ -5,12 +5,16 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, List, Optional
+
+RUN_MAX_CONCURRENCY = 4
 
 
 # ANSI codes for terminal highlight (all yellow; supported on Windows 10+ and Unix)
 _HL = "\033[1;33m"   # bold yellow
 _R = "\033[0m"       # reset
+_SEP = "=" * 60      # unified separator for LLM prompt/output logs
 
 
 def _safe_print(s: str) -> None:
@@ -594,42 +598,16 @@ def _do_run_work(
             _run_jobs[run_id]["completed"] = 0
             _run_jobs[run_id]["results"] = []
             _run_jobs[run_id]["output_fields"] = output_fields
-        results: list[dict] = []
-        for row_index, prompt in enumerate(prompts):
-            with _run_jobs_lock:
-                if run_id in _run_cancelled:
-                    nid = _run_jobs.get(run_id, {}).get("run_node_id")
-                    _run_jobs[run_id] = {
-                        "status": "cancelled",
-                        "results": list(results),
-                        "output_fields": output_fields,
-                        "run_node_id": nid,
-                        "completed": row_index,
-                        "total": total,
-                    }
-                    _run_cancelled.discard(run_id)
-                    _persist_run_jobs()
-                    return
-                last = _run_last_activity.get(run_id, 0)
-                if (time.time() - last) > RUN_ABANDON_TIMEOUT_SEC:
-                    nid = _run_jobs.get(run_id, {}).get("run_node_id")
-                    _run_jobs[run_id] = {
-                        "status": "cancelled",
-                        "results": list(results),
-                        "output_fields": output_fields,
-                        "run_node_id": nid,
-                        "completed": row_index,
-                        "total": total,
-                    }
-                    _persist_run_jobs()
-                    _safe_print(_HL + "[Run] Client gone (no poll for {}s), run {} abandoned.\n".format(RUN_ABANDON_TIMEOUT_SEC, run_id) + _R)
-                    return
-            _safe_print("\n" + _HL + "=" * 60 + _R)
-            _safe_print(_HL + "[Run] PROMPT SENT TO LLM:" + _R)
-            _safe_print(_HL + "-" * 60 + _R)
-            _safe_print(prompt)
-            _safe_print(_HL + "-" * 60 + _R)
+        results_by_input: dict[int, list[dict]] = {}
+
+        def process_one(row_index: int, prompt: str) -> tuple[int, list[dict]]:
+            items: list[dict] = []
             try:
+                _safe_print("\n" + _HL + _SEP + _R)
+                _safe_print(_HL + f"[Run] Row {row_index} PROMPT SENT TO LLM:" + _R)
+                _safe_print(_HL + _SEP + _R)
+                _safe_print(prompt)
+                _safe_print(_HL + _SEP + _R + "\n")
                 out, used_fallback = llm_run_structured(
                     provider=provider,
                     model=model,
@@ -639,56 +617,62 @@ def _do_run_work(
                     max_tokens=8192,
                     return_shape=return_shape,
                 )
+                _safe_print(_HL + _SEP + _R)
+                _safe_print(_HL + f"[Run] Row {row_index} LLM OUTPUT:" + _R)
+                _safe_print(_HL + _SEP + _R)
+                _safe_print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+                _safe_print(_HL + _SEP + _R + "\n")
                 if return_shape == "table" and isinstance(out, dict) and "rows" in out:
                     out = out["rows"]
-                if not used_fallback:
-                    _safe_print(_HL + "[Run] OUTPUT SCHEMA GIVEN TO LANGCHAIN:" + _R)
-                    _safe_print(_HL + "-" * 60 + _R)
-                    _safe_print(schema_repr)
-                    _safe_print(_HL + "-" * 60 + _R)
                 if return_shape == "table" and isinstance(out, list):
                     for row in out:
-                        out_idx = len(results)
-                        results.append({
-                            "row_index": out_idx,
-                            "input_row_index": row_index,
-                            "output": row if isinstance(row, dict) else {},
-                            "error": None,
-                        })
+                        items.append({"input_row_index": row_index, "output": row if isinstance(row, dict) else {}, "error": None})
                 else:
-                    out_idx = len(results)
-                    results.append({
-                        "row_index": out_idx,
-                        "input_row_index": row_index,
-                        "output": out,
-                        "error": None,
-                    })
-                _safe_print(_HL + "[Run] LLM STRUCTURED OUTPUT:" + _R)
-                _safe_print(_HL + "-" * 60 + _R)
-                _safe_print(json.dumps(out, ensure_ascii=False, indent=2))
-                _safe_print(_HL + "-" * 60 + _R)
+                    items.append({"input_row_index": row_index, "output": out, "error": None})
             except Exception as e:
-                out_idx = len(results)
-                results.append({
-                    "row_index": out_idx,
-                    "input_row_index": row_index,
-                    "output": None,
-                    "error": str(e),
-                })
-                _safe_print(_HL + "[Run] LLM ERROR: " + _R + str(e))
-            with _run_jobs_lock:
-                _run_jobs[run_id]["completed"] = row_index + 1
-                _run_jobs[run_id]["results"] = list(results)
-            _persist_run_jobs()
-            _safe_print(_HL + "=" * 60 + _R + "\n")
+                items.append({"input_row_index": row_index, "output": None, "error": str(e)})
+            return (row_index, items)
+
+        cancelled_early = False
+        with ThreadPoolExecutor(max_workers=RUN_MAX_CONCURRENCY) as ex:
+            futures = {ex.submit(process_one, i, p): i for i, p in enumerate(prompts)}
+            for future in as_completed(futures):
+                row_index, items = future.result()
+                with _run_jobs_lock:
+                    if run_id in _run_cancelled:
+                        cancelled_early = True
+                    elif (time.time() - _run_last_activity.get(run_id, 0)) > RUN_ABANDON_TIMEOUT_SEC:
+                        cancelled_early = True
+                results_by_input[row_index] = items
+                with _run_jobs_lock:
+                    if cancelled_early:
+                        break
+                    merged = []
+                    for i in range(total):
+                        if i in results_by_input:
+                            for r in results_by_input[i]:
+                                merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
+                    completed = max((i + 1 for i in range(total) if i in results_by_input), default=0)
+                    _run_jobs[run_id]["results"] = merged
+                    _run_jobs[run_id]["completed"] = completed
+                _persist_run_jobs()
+
         with _run_jobs_lock:
+            if run_id in _run_cancelled:
+                _run_cancelled.discard(run_id)
+            merged = []
+            for i in range(total):
+                if i in results_by_input:
+                    for r in results_by_input[i]:
+                        merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
+            completed = max((i + 1 for i in range(total) if i in results_by_input), default=0)
             nid = _run_jobs.get(run_id, {}).get("run_node_id")
             _run_jobs[run_id] = {
-                "status": "done",
-                "results": results,
+                "status": "cancelled" if cancelled_early else "done",
+                "results": merged,
                 "output_fields": output_fields,
                 "run_node_id": nid,
-                "completed": total,
+                "completed": completed,
                 "total": total,
             }
         _persist_run_jobs()
@@ -1137,11 +1121,11 @@ def review_analyze(body: ReviewRequest):
     try:
         # Step 0: design check
         design_prompt = _build_review_design_prompt(body)
-        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print("\n" + _HL + _SEP + _R)
         _safe_print(_HL + "[Review] Step 0 (design) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(design_prompt)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         design_result, _ = llm_run_structured(
             provider=provider,
             model=model,
@@ -1152,7 +1136,7 @@ def review_analyze(body: ReviewRequest):
         )
         _safe_print(_HL + "[Review] Step 0 (design) LLM STRUCTURED OUTPUT:" + _R)
         _safe_print(json.dumps(design_result if isinstance(design_result, dict) else design_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + "=" * 60 + _R + "\n")
+        _safe_print(_HL + _SEP + _R + "\n")
         design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
         all_matched = _review_all_matched(body)
         design_suggestions = list(design_review.suggestions or [])
@@ -1161,11 +1145,11 @@ def review_analyze(body: ReviewRequest):
 
         # Step 1: per-row analysis
         step1_prompt = _build_review_step1_prompt(body)
-        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(_HL + "[Review] Step 1 (per-row analysis) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(step1_prompt)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         step1_result, _ = llm_run_structured(
             provider=provider,
             model=model,
@@ -1176,7 +1160,7 @@ def review_analyze(body: ReviewRequest):
         )
         _safe_print(_HL + "[Review] Step 1 (per-row analysis) LLM STRUCTURED OUTPUT:" + _R)
         _safe_print(json.dumps(step1_result if isinstance(step1_result, dict) else step1_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + "=" * 60 + _R + "\n")
+        _safe_print(_HL + _SEP + _R + "\n")
         step1 = ReviewStep1Result(**(step1_result if isinstance(step1_result, dict) else step1_result.model_dump()))
         per_row = list(step1.per_row or [])
         rows_needing_input = list(step1.rows_needing_input or [])
@@ -1189,11 +1173,11 @@ def review_analyze(body: ReviewRequest):
             ]
             for row in rows_with_input:
                 step1b_prompt = _build_review_step1b_prompt([row])
-                _safe_print("\n" + _HL + "=" * 60 + _R)
+                _safe_print(_HL + _SEP + _R)
                 _safe_print(_HL + f"[Review] Step 1b (refine row {row.row_index}) PROMPT SENT TO LLM:" + _R)
-                _safe_print(_HL + "-" * 60 + _R)
+                _safe_print(_HL + _SEP + _R)
                 _safe_print(step1b_prompt)
-                _safe_print(_HL + "-" * 60 + _R)
+                _safe_print(_HL + _SEP + _R)
                 step1b_result, _ = llm_run_structured(
                     provider=provider,
                     model=model,
@@ -1204,7 +1188,7 @@ def review_analyze(body: ReviewRequest):
                 )
                 _safe_print(_HL + f"[Review] Step 1b (refine row {row.row_index}) LLM STRUCTURED OUTPUT:" + _R)
                 _safe_print(json.dumps(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump(), ensure_ascii=False, indent=2))
-                _safe_print(_HL + "=" * 60 + _R + "\n")
+                _safe_print(_HL + _SEP + _R + "\n")
                 step1b = ReviewStep1bResult(**(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump()))
                 per_row = _merge_step1b_into_per_row(per_row, step1b)
 
@@ -1215,11 +1199,11 @@ def review_analyze(body: ReviewRequest):
 
         # Step 2: one call to get all suggestions from per_row
         step2_prompt = _build_review_step2_prompt(body, per_row)
-        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(_HL + "[Review] Step 2 (suggestions) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(step2_prompt)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         step2_result, _ = llm_run_structured(
             provider=provider,
             model=model,
@@ -1230,7 +1214,7 @@ def review_analyze(body: ReviewRequest):
         )
         _safe_print(_HL + "[Review] Step 2 (suggestions) LLM STRUCTURED OUTPUT:" + _R)
         _safe_print(json.dumps(step2_result if isinstance(step2_result, dict) else step2_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + "=" * 60 + _R + "\n")
+        _safe_print(_HL + _SEP + _R + "\n")
         fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
         raw_suggestions = list(fs.suggestions or [])
         if all_matched and len(raw_suggestions) > 2:
@@ -1269,11 +1253,11 @@ def _review_analyze_stream_generator(body: ReviewRequest):
     try:
         # Step 0: design check
         design_prompt = _build_review_design_prompt(body)
-        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print("\n" + _HL + _SEP + _R)
         _safe_print(_HL + "[Review stream] Step 0 (design) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(design_prompt)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         design_result, _ = llm_run_structured(
             provider=provider,
             model=model,
@@ -1284,7 +1268,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         )
         _safe_print(_HL + "[Review stream] Step 0 (design) LLM STRUCTURED OUTPUT:" + _R)
         _safe_print(json.dumps(design_result if isinstance(design_result, dict) else design_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + "=" * 60 + _R + "\n")
+        _safe_print(_HL + _SEP + _R + "\n")
         design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
         all_matched = _review_all_matched(body)
         design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in (design_review.suggestions or [])]
@@ -1294,11 +1278,11 @@ def _review_analyze_stream_generator(body: ReviewRequest):
 
         # Step 1: per-row analysis
         step1_prompt = _build_review_step1_prompt(body)
-        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(_HL + "[Review stream] Step 1 (per-row analysis) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(step1_prompt)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         step1_result, _ = llm_run_structured(
             provider=provider,
             model=model,
@@ -1309,7 +1293,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         )
         _safe_print(_HL + "[Review stream] Step 1 (per-row analysis) LLM STRUCTURED OUTPUT:" + _R)
         _safe_print(json.dumps(step1_result if isinstance(step1_result, dict) else step1_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + "=" * 60 + _R + "\n")
+        _safe_print(_HL + _SEP + _R + "\n")
         step1 = ReviewStep1Result(**(step1_result if isinstance(step1_result, dict) else step1_result.model_dump()))
         per_row = list(step1.per_row or [])
         rows_needing_input = list(step1.rows_needing_input or [])
@@ -1330,11 +1314,11 @@ def _review_analyze_stream_generator(body: ReviewRequest):
             for row in rows_with_input:
                 yield (json.dumps({"type": "step1b", "row_count": 1, "row_index": row.row_index}, ensure_ascii=False) + "\n").encode("utf-8")
                 step1b_prompt = _build_review_step1b_prompt([row])
-                _safe_print("\n" + _HL + "=" * 60 + _R)
+                _safe_print(_HL + _SEP + _R)
                 _safe_print(_HL + f"[Review stream] Step 1b (refine row {row.row_index}) PROMPT SENT TO LLM:" + _R)
-                _safe_print(_HL + "-" * 60 + _R)
+                _safe_print(_HL + _SEP + _R)
                 _safe_print(step1b_prompt)
-                _safe_print(_HL + "-" * 60 + _R)
+                _safe_print(_HL + _SEP + _R)
                 step1b_result, _ = llm_run_structured(
                     provider=provider,
                     model=model,
@@ -1345,7 +1329,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
                 )
                 _safe_print(_HL + f"[Review stream] Step 1b (refine row {row.row_index}) LLM STRUCTURED OUTPUT:" + _R)
                 _safe_print(json.dumps(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump(), ensure_ascii=False, indent=2))
-                _safe_print(_HL + "=" * 60 + _R + "\n")
+                _safe_print(_HL + _SEP + _R + "\n")
                 step1b = ReviewStep1bResult(**(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump()))
                 per_row = _merge_step1b_into_per_row(per_row, step1b)
 
@@ -1357,11 +1341,11 @@ def _review_analyze_stream_generator(body: ReviewRequest):
 
         # Step 2: one-shot suggestions
         step2_prompt = _build_review_step2_prompt(body, per_row)
-        _safe_print("\n" + _HL + "=" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(_HL + "[Review stream] Step 2 (suggestions) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(step2_prompt)
-        _safe_print(_HL + "-" * 60 + _R)
+        _safe_print(_HL + _SEP + _R)
         step2_result, _ = llm_run_structured(
             provider=provider,
             model=model,
@@ -1372,7 +1356,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         )
         _safe_print(_HL + "[Review stream] Step 2 (suggestions) LLM STRUCTURED OUTPUT:" + _R)
         _safe_print(json.dumps(step2_result if isinstance(step2_result, dict) else step2_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + "=" * 60 + _R + "\n")
+        _safe_print(_HL + _SEP + _R + "\n")
         fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
         raw_suggestions = list(fs.suggestions or [])
         if all_matched and len(raw_suggestions) > 2:

@@ -8,11 +8,12 @@ import json
 import os
 import re
 import sys
+import time
 
 # ANSI: bold yellow for step names (match main.py)
 _HL = "\033[1;33m"
 _R = "\033[0m"
-_SEP = "-" * 60
+_SEP = "=" * 60
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -189,6 +190,34 @@ def get_chat_model(provider: str, model: str, api_key: str, **kwargs):
     return PROVIDER_REGISTRY[provider](model, api_key, **kwargs)
 
 
+def _is_retryable_error(e: Exception) -> bool:
+    """True if error is transient (429, timeout, connection, 5xx)."""
+    msg = (getattr(e, "message", None) or str(e)).lower()
+    if any(x in msg for x in ("429", "rate limit", "rate", "timeout", "timed out", "connection", "network", "500", "502", "503", "service unavailable")):
+        return True
+    if getattr(e, "status_code", None) in (429, 500, 502, 503):
+        return True
+    return False
+
+
+def _retry_invoke(fn, max_retries: int = 3):
+    """Retry fn() on retryable errors with exponential backoff (1s, 2s, 4s)."""
+    last_e = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_e = e
+            if attempt < max_retries and _is_retryable_error(e):
+                delay = 1.0 * (2**attempt)
+                print(_HL + f"[LLM] Retry {attempt + 1}/{max_retries} after {delay:.0f}s: " + _R + str(e))
+                sys.stdout.flush()
+                time.sleep(delay)
+            else:
+                raise
+    raise last_e
+
+
 def _messages_to_langchain(messages: list[dict]) -> list[BaseMessage]:
     out = []
     for m in messages:
@@ -220,7 +249,7 @@ def chat(
     """
     llm = get_chat_model(provider=provider, model=model, api_key=api_key, max_tokens=max_tokens)
     lc_messages = _messages_to_langchain(messages)
-    response = llm.invoke(lc_messages)
+    response = _retry_invoke(lambda: llm.invoke(lc_messages))
     return (response.content or "").strip()
 
 
@@ -292,14 +321,14 @@ def _run_structured_fallback(llm, prompt: str, response_model: type, return_shap
             + json.dumps(item_schema, ensure_ascii=False, indent=2)
         )
         full_prompt = prompt + instruction
-        print(_HL + _SEP + _R)
+        print("\n" + _HL + _SEP + _R)
         print(_HL + "[Run] Fallback: prompt + JSON array schema (structured output not supported)" + _R)
         print(_HL + _SEP + _R)
         print(instruction)
-        print(_HL + _SEP + _R)
+        print(_HL + _SEP + _R + "\n")
         sys.stdout.flush()
         messages = [HumanMessage(content=full_prompt)]
-        response = llm.invoke(messages)
+        response = _retry_invoke(lambda: llm.invoke(messages))
         text = (response.content or "").strip()
         json_str = _extract_json_array_from_text(text)
         data = json.loads(json_str)
@@ -321,14 +350,14 @@ def _run_structured_fallback(llm, prompt: str, response_model: type, return_shap
         + json.dumps(schema, ensure_ascii=False, indent=2)
     )
     full_prompt = prompt + instruction
-    print(_HL + _SEP + _R)
+    print("\n" + _HL + _SEP + _R)
     print(_HL + "[Run] Fallback: prompt + JSON schema (structured output not supported)" + _R)
     print(_HL + _SEP + _R)
     print(instruction)
-    print(_HL + _SEP + _R)
+    print(_HL + _SEP + _R + "\n")
     sys.stdout.flush()
     messages = [HumanMessage(content=full_prompt)]
-    response = llm.invoke(messages)
+    response = _retry_invoke(lambda: llm.invoke(messages))
     text = (response.content or "").strip()
     json_str = _extract_json_from_text(text)
     data = json.loads(json_str)
@@ -357,7 +386,7 @@ def run_structured(
     try:
         structured_llm = llm.with_structured_output(response_model)
         messages = [HumanMessage(content=prompt)]
-        result = structured_llm.invoke(messages)
+        result = _retry_invoke(lambda: structured_llm.invoke(messages))
         out = result.model_dump() if hasattr(result, "model_dump") else result.dict()
         return (out, False)
     except Exception as e:

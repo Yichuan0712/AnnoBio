@@ -27,6 +27,8 @@ const DEFAULT_MATCH_FLAGS = { ignoreCase: false, ignoreSymbols: false, ignoreWhi
 
 /** Session-only: (outputKey + '\t' + gtColumn) -> { matchType, matchFlags }. Not persisted. */
 const ruleEditorMemory = {};
+/** Session-only: ordered list of top-level items { type: 'rule', ... } | { type: 'group', ops, children }. Preserves original order. */
+const ruleEditorMemoryOrdered = [];
 
 function getMatchFlags(rule) {
   const f = rule && rule.matchFlags;
@@ -378,18 +380,45 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return collectRulesFlat(getRoot()).map((x) => x.rule);
   }
 
+  /** Collect group subtree for memory (preserves ops + nested rules/groups). */
+  function collectGroupForMemory(group) {
+    if (!group || group.type !== 'group' || !Array.isArray(group.children)) return null;
+    const children = group.children.map((ch) => {
+      if (ch.type === 'rule') {
+        return {
+          type: 'rule',
+          outputKey: (ch.outputKey || '').trim(),
+          gtColumns: (ch.gtColumns || []).slice(),
+          matchType: ch.matchType || 'exact',
+          matchFlags: getMatchFlags(ch),
+        };
+      }
+      return collectGroupForMemory(ch);
+    }).filter(Boolean);
+    if (children.length === 0) return null;
+    return { ops: (group.ops || []).slice(0, Math.max(0, children.length - 1)), children };
+  }
+
   if (getScoreMappingsFromCanvas) {
+    ruleEditorMemoryOrdered.length = 0;
+    Object.keys(ruleEditorMemory).forEach((k) => delete ruleEditorMemory[k]);
     (getScoreMappingsFromCanvas() || []).forEach((raw) => {
       try {
         const root = parseScoreRoot(raw);
-        const rules = collectRulesFlat(root).map((x) => x.rule);
-        rules.forEach((rule) => {
-          const outputKey = (rule.outputKey || '').trim();
-          const flags = getMatchFlags(rule);
-          (rule.gtColumns || []).forEach((gtCol) => {
-            const g = String(gtCol || '').trim();
-            if (outputKey && g) ruleEditorMemory[outputKey + '\t' + g] = { matchType: rule.matchType || 'exact', matchFlags: { ...flags } };
-          });
+        if (!root || root.type !== 'group' || !Array.isArray(root.children)) return;
+        root.children.forEach((ch) => {
+          if (ch.type === 'rule') {
+            const outputKey = (ch.outputKey || '').trim();
+            const flags = getMatchFlags(ch);
+            const gtCols = (ch.gtColumns || []).map((c) => String(c || '').trim()).filter(Boolean);
+            if (outputKey && gtCols.length > 0) {
+              ruleEditorMemoryOrdered.push({ type: 'rule', outputKey, gtColumns: gtCols, matchType: ch.matchType || 'exact', matchFlags: { ...flags } });
+              gtCols.forEach((g) => { ruleEditorMemory[outputKey + '\t' + g] = { matchType: ch.matchType || 'exact', matchFlags: { ...flags } }; });
+            }
+          } else if (ch.type === 'group') {
+            const collected = collectGroupForMemory(ch);
+            if (collected) ruleEditorMemoryOrdered.push({ type: 'group', ...collected });
+          }
         });
       } catch (_) {}
     });
@@ -1610,6 +1639,23 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (reviewNodeId) await runReviewStream({ reviewNodeId, payload, credentialId });
   });
 
+  /** Filter group for memory apply: keep only rules valid for runKeys/gtSet, update existingSet. Returns null if empty. */
+  function filterGroupForApply(g, runKeys, gtSet, existingSet) {
+    if (!g || !Array.isArray(g.children)) return null;
+    const children = g.children.map((ch) => {
+      if (ch.type === 'rule') {
+        const ok = (ch.outputKey || '').trim();
+        const cols = (ch.gtColumns || []).map((c) => String(c || '').trim()).filter((c) => runKeys.has(ok) && gtSet.has(c) && !existingSet.has(ok + '\t' + c));
+        if (cols.length === 0) return null;
+        cols.forEach((c) => existingSet.add(ok + '\t' + c));
+        return { type: 'rule', outputKey: ok, gtColumns: cols, matchType: ch.matchType || 'exact', matchFlags: { ...DEFAULT_MATCH_FLAGS, ...(ch.matchFlags || {}) } };
+      }
+      return filterGroupForApply(ch, runKeys, gtSet, existingSet);
+    }).filter(Boolean);
+    if (children.length === 0) return null;
+    return { type: 'group', ops: (g.ops || []).slice(0, Math.max(0, children.length - 1)), children };
+  }
+
   /** When a GT is selected, add rules from ruleEditorMemory (run column + GT column match). Returns true if any were added. */
   function applyRulesFromMemory() {
     if (!selectedNodeId) return false;
@@ -1627,23 +1673,28 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     });
     let root = getRoot();
     let added = false;
-    for (const key of Object.keys(ruleEditorMemory)) {
-      const idx = key.indexOf('\t');
-      if (idx <= 0) continue;
-      const outputKey = key.slice(0, idx);
-      const gtColumn = key.slice(idx + 1);
-      if (!runKeys.has(outputKey) || !gtSet.has(gtColumn) || existingSet.has(key)) continue;
-      const mem = ruleEditorMemory[key];
-      const newRule = {
-        type: 'rule',
-        outputKey,
-        gtColumns: [gtColumn],
-        matchType: (mem && mem.matchType) || 'exact',
-        matchFlags: (mem && mem.matchFlags && typeof mem.matchFlags === 'object') ? { ...DEFAULT_MATCH_FLAGS, ...mem.matchFlags } : { ...DEFAULT_MATCH_FLAGS },
-      };
-      root = insertChildAtPath(root, [], newRule, (root.children || []).length);
-      added = true;
-      existingSet.add(key);
+
+    for (const item of ruleEditorMemoryOrdered || []) {
+      if (item.type === 'group') {
+        const filtered = filterGroupForApply(item, runKeys, gtSet, existingSet);
+        if (!filtered) continue;
+        root = insertChildAtPath(root, [], filtered, (root.children || []).length);
+        added = true;
+      } else if (item.type === 'rule') {
+        const outputKey = (item.outputKey || '').trim();
+        const cols = (item.gtColumns || []).map((c) => String(c || '').trim()).filter((c) => runKeys.has(outputKey) && gtSet.has(c) && !existingSet.has(outputKey + '\t' + c));
+        if (cols.length === 0) continue;
+        cols.forEach((c) => existingSet.add(outputKey + '\t' + c));
+        const newRule = {
+          type: 'rule',
+          outputKey,
+          gtColumns: cols,
+          matchType: (item.matchType || 'exact'),
+          matchFlags: (item.matchFlags && typeof item.matchFlags === 'object') ? { ...DEFAULT_MATCH_FLAGS, ...item.matchFlags } : { ...DEFAULT_MATCH_FLAGS },
+        };
+        root = insertChildAtPath(root, [], newRule, (root.children || []).length);
+        added = true;
+      }
     }
     if (added) setRoot(root);
     return added;
