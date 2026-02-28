@@ -470,7 +470,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     editOverlay.innerHTML = `
       <div class="modal-panel modal-panel--edit-sections">
         <div class="modal-header">
-          <h2 class="modal-title">Edit sections</h2>
+          <h2 class="modal-title">Edit prompt sections</h2>
           <button type="button" class="modal-close modal-close--edit-sections" aria-label="Close">×</button>
         </div>
         <div class="modal-body">
@@ -484,10 +484,6 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
                 </div>
               </div>
               <div class="prompt-form-error prompt-modal-error edit-sections-error" role="alert" aria-live="polite" hidden></div>
-              <div class="prompt-actions">
-                <button type="button" class="btn btn-secondary edit-sections-cancel">Cancel</button>
-                <button type="button" class="btn btn-secondary edit-sections-save">Save</button>
-              </div>
             </div>
           </div>
         </div>
@@ -497,9 +493,14 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     const addBtn = editOverlay.querySelector('.prompt-add-section');
     const errorEl = editOverlay.querySelector('.edit-sections-error');
 
+    function onSectionChange() {
+      renderSectionsList();
+      persistSections();
+    }
+
     function renderSectionsList() {
       container.innerHTML = '';
-      editSections.forEach((section, index) => container.appendChild(createSectionCardForDetail(section, index, editSections, container, renderSectionsList)));
+      editSections.forEach((section, index) => container.appendChild(createSectionCardForDetail(section, index, editSections, container, onSectionChange)));
     }
 
     function close() {
@@ -520,7 +521,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       }
     }
 
-    function save() {
+    function persistSections() {
       const withContent = editSections.filter((s) => (s.name || '').trim() && (s.content ?? '').trim());
       const hasPartial = editSections.some((s) => {
         const n = (s.name || '').trim();
@@ -529,30 +530,29 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       });
       if (hasPartial) {
         showError('Section name and content are required for each section.');
-        return;
+        return false;
       }
       if (withContent.length === 0) {
         showError('At least one section with name and content is required.');
-        return;
+        return false;
       }
       if (hasDuplicateSectionNames(withContent)) {
         showError('Section names must be unique within this prompt. Please fix duplicate section names.');
-        return;
+        return false;
       }
       currentSections = withContent;
       if (sourceNode) sourceNode.dataset.promptSections = JSON.stringify(currentSections);
       sectionsView.innerHTML = sectionsToViewHtml(currentSections.length ? currentSections : []);
       const inputsContentEl = overlay.querySelector('.prompt-detail-inputs-content');
       if (inputsContentEl) inputsContentEl.innerHTML = inputsToViewHtml(currentSections);
-      close();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      return true;
     }
 
     editOverlay.querySelector('.modal-close--edit-sections').addEventListener('click', close);
-    editOverlay.querySelector('.edit-sections-cancel').addEventListener('click', close);
-    editOverlay.querySelector('.edit-sections-save').addEventListener('click', save);
+
     addBtn.addEventListener('click', () => {
-      openSectionEditorForDetail(editSections, null, renderSectionsList);
+      openSectionEditorForDetail(editSections, null, onSectionChange);
     });
     editOverlay.addEventListener('click', (e) => {
       if (e.target === editOverlay) close();
@@ -1070,10 +1070,6 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
                 </div>
               </div>
               <div class="prompt-form-error prompt-modal-error edit-schema-error" role="alert" aria-live="polite" hidden></div>
-              <div class="prompt-actions">
-                <button type="button" class="btn btn-secondary edit-schema-cancel">Cancel</button>
-                <button type="button" class="btn btn-secondary edit-schema-save">Save</button>
-              </div>
             </div>
           </div>
         </div>
@@ -1093,16 +1089,25 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     function renderSchemaCards() {
       keysListEl.innerHTML = '';
       editSchemaFields.forEach((field, index) => {
-        keysListEl.appendChild(createFieldCardForDetail(field, index, editSchemaFields, renderSchemaCards));
+        keysListEl.appendChild(createFieldCardForDetail(field, index, editSchemaFields, () => {
+          renderSchemaCards();
+          persistToNode();
+        }));
       });
     }
 
     const addFieldBtn = formContainer.querySelector('.prompt-output-add-key');
     if (addFieldBtn) {
       addFieldBtn.addEventListener('click', () => {
-        openFieldEditorForDetail(editSchemaFields, null, renderSchemaCards);
+        openFieldEditorForDetail(editSchemaFields, null, () => {
+          renderSchemaCards();
+          persistToNode();
+        });
       });
     }
+
+    if (returnShapeSingle) returnShapeSingle.addEventListener('change', () => persistToNode());
+    if (returnShapeTable) returnShapeTable.addEventListener('change', () => persistToNode());
 
     function close() {
       schemaOverlay.remove();
@@ -1122,9 +1127,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       }
     }
 
-    schemaOverlay.querySelector('.modal-close--edit-schema').addEventListener('click', close);
-    schemaOverlay.querySelector('.edit-schema-cancel').addEventListener('click', close);
-    schemaOverlay.querySelector('.edit-schema-save').addEventListener('click', () => {
+    function persistToNode() {
       const returnShapeEl = formContainer.querySelector('input[name="prompt-detail-schema-return-shape"]:checked');
       const returnShape = (returnShapeEl?.value || 'table') === 'single' ? 'single' : 'table';
       const fieldsToSave = editSchemaFields.length
@@ -1139,21 +1142,21 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       clearError();
       if (fieldsToSave.length === 0) {
         showError('Add at least one field.');
-        return;
+        return false;
       }
       const missingFieldName = fieldsToSave.some((f) => !(f.key ?? '').trim());
       if (missingFieldName) {
         showError('Field name is required for all fields.');
-        return;
+        return false;
       }
       const missingFieldDesc = fieldsToSave.some((f) => !(f.description ?? '').trim());
       if (missingFieldDesc) {
         showError('Field description is required for all fields.');
-        return;
+        return false;
       }
       if (hasDuplicateFieldNames(fieldsToSave)) {
         showError('Field names must be unique within this prompt. Please fix duplicate field names.');
-        return;
+        return false;
       }
       currentSchemaFields = fieldsToSave;
       currentSchemaReturnShape = returnShape;
@@ -1162,9 +1165,11 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
         sourceNode.dataset.promptOutputReturnShape = currentSchemaReturnShape;
       }
       schemaView.innerHTML = schemaToViewHtml(currentSchemaFields, currentSchemaReturnShape);
-      close();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    });
+      return true;
+    }
+
+    schemaOverlay.querySelector('.modal-close--edit-schema').addEventListener('click', close);
     schemaOverlay.addEventListener('click', (e) => {
       if (e.target === schemaOverlay) close();
     });

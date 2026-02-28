@@ -1,7 +1,7 @@
 # 使用方式: 先 npm run package，再对本脚本用 --pd 指向 out/app-win32-x64
 # 即: npm run dist 会执行 package && electron-builder --win --pd out/app-win32-x64
 appId: com.electron.app
-productName: app
+productName: Prompt Workflow Demo
 directories:
   output: dist
 win:
@@ -9,14 +9,14 @@ win:
     - target: nsis
       arch:
         - x64
-  executableName: app
+  executableName: Prompt Workflow Demo
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   allowElevation: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: app
+  shortcutName: Prompt Workflow Demo
   installerLanguages:
     - zh_CN
     - en_US

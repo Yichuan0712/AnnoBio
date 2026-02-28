@@ -60,12 +60,19 @@ window.addEventListener('DOMContentLoaded', () => {
     const canvasAPI = buildWorkflowCanvas(appMain);
     let currentProjectPath = null;
 
+  const APP_TITLE = 'Prompt Workflow Demo';
+  function updateWindowTitle(projectPath) {
+    const name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
+    document.title = name ? `${name} - ${APP_TITLE}` : APP_TITLE;
+  }
+
   const onNewProject = async () => {
     const api = window.electronAPI;
     if (!api?.showNewProjectDialog) return;
     const path = await api.showNewProjectDialog();
     if (!path) return;
     currentProjectPath = path;
+    updateWindowTitle(path);
     const state = canvasAPI.getCanvasState();
     await api.saveProject(path, state);
     topBarAPI.setAddMenuEnabled(true);
@@ -80,6 +87,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const state = await api.loadProject(path);
     canvasAPI.loadCanvasState(state);
     currentProjectPath = path;
+    updateWindowTitle(path);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
   };
@@ -92,6 +100,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const state = canvasAPI.getCanvasState();
     await api.saveProject(path, state);
     currentProjectPath = path;
+    updateWindowTitle(path);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
   };
