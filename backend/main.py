@@ -6,9 +6,10 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 RUN_MAX_CONCURRENCY = 4
+REVIEW_STEP2_MAX_CONCURRENCY = 4  # Parallel per-row analysis
 
 
 # ANSI codes for terminal highlight (all yellow; supported on Windows 10+ and Unix)
@@ -175,10 +176,9 @@ class ReviewRequest(BaseModel):
 class ReviewSuggestion(BaseModel):
     name: str = Field(..., description="Short name summarizing this change (e.g. 'Clarify output format')")
     section_index: int = Field(..., ge=0, description="0-based index of the section to change")
-    old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only); use '(no edit)' when ground_truth_issue is true")
-    new_sentence: str = Field(..., description="Replacement for that one sentence; use '(no edit)' when ground_truth_issue is true")
+    old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only)")
+    new_sentence: str = Field(..., description="Replacement for that one sentence")
     reason: str = Field(..., description="Why this change is suggested")
-    ground_truth_issue: bool = Field(default=False, description="If true, informational only: failure may be due to ground truth error; no prompt edit suggested")
 
 
 class DesignSuggestion(BaseModel):
@@ -191,39 +191,29 @@ class ReviewResult(BaseModel):
     summary: str = Field(..., description="Brief overall analysis")
     suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete edit suggestions")
     design_suggestions: list[DesignSuggestion] = Field(default_factory=list, description="Global design guidance only; no accept/revert in UI")
+    data_refinement: list[dict] = Field(default_factory=list, description="GT质疑汇总: [{row_indices, reason}]")
 
 
-# New review flow: step1 = per-row analysis (+ rows_needing_input), step1b = optional refill with row_input, step2 = one shot suggestions from per_row
-class ReviewStep1RowAnalysis(BaseModel):
+# Agent 2.0: Step 2 per-row diagnosis output
+class PerRowDiagnosis(BaseModel):
     row_index: int = Field(..., description="0-based row index")
-    reason: str = Field(..., description="Brief reason why this row failed")
-    section_index_suggestions: list[int] = Field(default_factory=list, description="0-based section indices that might need change")
-    need_input: bool = Field(default=False, description="True if analysis is unclear without seeing the row's input")
-
-
-class ReviewStep1Result(BaseModel):
-    summary: str = Field(..., description="Brief overall analysis of prompt vs comparison")
-    per_row: list[ReviewStep1RowAnalysis] = Field(default_factory=list, description="Per failed-row analysis")
-    rows_needing_input: list[int] = Field(default_factory=list, description="Row indices for which input is needed to analyze; subset of failed rows")
-
-
-class ReviewStep1bRowUpdate(BaseModel):
-    row_index: int = Field(..., description="0-based row index")
-    reason: str = Field(..., description="Refined reason after seeing row input")
+    root_cause: str = Field(..., description="根因定位")
+    gt_questioned: bool = Field(default=False, description="是否质疑 GT")
+    gt_reason: str | None = Field(default=None, description="质疑理由（若 gt_questioned）")
     section_index_suggestions: list[int] = Field(default_factory=list, description="0-based section indices to change")
+    micro_suggestion: str = Field(default="", description="针对这一行的微观建议")
 
 
-class ReviewStep1bResult(BaseModel):
-    updates: list[ReviewStep1bRowUpdate] = Field(default_factory=list, description="Refined analysis for rows that had row_input")
+# Agent 2.0: Step 3 synthesis output (data refinement)
+class DataRefinementItem(BaseModel):
+    row_indices: list[int] = Field(default_factory=list, description="需改数据的行号 (1-based for display)")
+    reason: str = Field(default="", description="汇总的质疑理由")
 
 
-class FocusSuggestions(BaseModel):
-    suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete suggestions (used for step2 single call)")
-
-
-class DesignReviewResult(BaseModel):
-    """Step 0: design check. Only suggest when user clearly has design issues (very loose)."""
-    suggestions: list[DesignSuggestion] = Field(default_factory=list, description="0–3 design guidance items; empty if design is fine")
+# Agent 2.0: Step 3 synthesis output
+class Step3SynthesisResult(BaseModel):
+    suggestions: list[ReviewSuggestion] = Field(default_factory=list)
+    data_refinement: list[DataRefinementItem] = Field(default_factory=list)
 
 
 def _sanitize_field_name(key: str) -> str:
@@ -837,6 +827,67 @@ def _review_all_matched(body: ReviewRequest) -> bool:
     return all(r.matched for r in comparison_rows) if comparison_rows else True
 
 
+# ---------- Agent 2.0: Step 1 Gatekeeper (static pre-check, no LLM) ----------
+RouteDecision = Literal["REWRITE", "ANALYZE"]
+
+
+def _gatekeeper_check_instruction_completeness(sections: list[dict]) -> tuple[bool, list[DesignSuggestion]]:
+    """Return (is_ok, design_suggestions). '一句话 Prompt' or missing Role/Task => not ok."""
+    suggestions: list[DesignSuggestion] = []
+    if not sections:
+        return False, [DesignSuggestion(name="No sections", reason="Prompt has no sections.")]
+    full_text = " ".join((s.get("content") or "").strip() for s in sections).lower()
+    role_keywords = ["role", "you are", "作为", "扮演", "act as", "system", "你"]
+    task_keywords = ["task", "instruction", "do", "output", "extract", "analyze", "任务", "指令", "请"]
+    has_role = any(kw in full_text for kw in role_keywords)
+    has_task = any(kw in full_text for kw in task_keywords)
+    is_one_liner = len(full_text.strip()) < 50 or len(sections) < 2
+    if is_one_liner:
+        if not has_role:
+            suggestions.append(DesignSuggestion(name="缺少 Role 定义", reason="Prompt 过于简单，建议添加 Role（如「你是一位...」）以明确模型角色。"))
+        if not has_task:
+            suggestions.append(DesignSuggestion(name="缺少 Task 定义", reason="Prompt 过于简单，建议添加 Task（如「请...」「输出...」）以明确任务。"))
+        if suggestions:
+            return False, suggestions
+    return True, suggestions
+
+
+def _gatekeeper_check_schema_alignment(sections: list[dict], output_schema: dict | None) -> tuple[bool, list[DesignSuggestion]]:
+    """Return (is_ok, design_suggestions). Schema keys not mentioned in prompt => not ok."""
+    suggestions: list[DesignSuggestion] = []
+    schema = output_schema if isinstance(output_schema, dict) else {}
+    fields = schema.get("fields") or []
+    schema_keys = [(f.get("key") or "").strip() for f in fields if (f.get("key") or "").strip()]
+    if not schema_keys:
+        return True, suggestions
+    full_text = " ".join((s.get("content") or "").strip() for s in sections)
+    mentioned = sum(1 for k in schema_keys if k and k in full_text)
+    ratio = mentioned / len(schema_keys) if schema_keys else 1.0
+    if ratio < 0.3:
+        suggestions.append(DesignSuggestion(
+            name="Schema 对齐度低",
+            reason=f"Prompt 与 output_schema 字段关联度低（{mentioned}/{len(schema_keys)} 个字段被提及），可能导致输出不符合预期。",
+        ))
+        return False, suggestions
+    return True, suggestions
+
+
+def _gatekeeper_route(body: ReviewRequest) -> tuple[RouteDecision, list[DesignSuggestion]]:
+    """Static pre-check. Return (REWRITE|ANALYZE, design_suggestions from check)."""
+    sections = body.prompt_sections or []
+    output_schema = body.output_schema if isinstance(body.output_schema, dict) else {}
+    if not output_schema and body.output_fields:
+        output_schema = {"fields": body.output_fields}
+    design_suggestions: list[DesignSuggestion] = []
+    complete_ok, complete_sug = _gatekeeper_check_instruction_completeness(sections)
+    design_suggestions.extend(complete_sug)
+    aligned_ok, aligned_sug = _gatekeeper_check_schema_alignment(sections, output_schema)
+    design_suggestions.extend(aligned_sug)
+    if not complete_ok or not aligned_ok:
+        return "REWRITE", design_suggestions
+    return "ANALYZE", design_suggestions
+
+
 # Comparison rule labels (must match frontend MATCH_TYPE_LABELS) and their definitions for LLM prompts.
 REVIEW_COMPARISON_RULES_BLOCK = """
 - **Exact match**: Model output must equal the expected value exactly (after trimming). No extra or missing characters.
@@ -868,243 +919,180 @@ def _review_compared_fields_and_rules(comparison_rows: list[ReviewComparisonRow]
     return [], ""
 
 
-def _build_review_design_prompt(body: ReviewRequest) -> str:
-    """Step 0: Design suggestions only when prompt is seriously broken (user typically can't write)."""
+def _build_step1_gatekeeper_prompt(body: ReviewRequest) -> str:
+    """Agent 2.0 Step 1: Complete prompt for Gatekeeper (static, no LLM). Describes routing logic + input + output."""
     lines = [
-        "You are reviewing how a user structured their prompt: sections (names + content) and output schema (field keys).",
+        "## Step 1: Gatekeeper (static pre-check, no LLM call)",
+        "",
+        "## Routing logic",
+        "Evaluate the prompt under review. Output: route (REWRITE | ANALYZE) + design_suggestions.",
+        "",
+        "1. Instruction completeness: REWRITE if missing Role/Task, or prompt is one-liner (<50 chars or <2 sections).",
+        "2. Schema alignment: REWRITE if <30% of output_schema keys are mentioned in prompt content.",
+        "",
+        "Route meanings:",
+        "- REWRITE: Prompt is broken; skip Step 2, go to Step 3 to generate expert template from scratch.",
+        "- ANALYZE: Prompt is ok; run Step 2 parallel per-row analysis, then Step 3 synthesis.",
+        "",
+        "## Input under review",
+        "",
+        "### Prompt sections",
+    ]
+    for i, sec in enumerate(body.prompt_sections or []):
+        name = (sec.get("name") or "").strip() or "(unnamed)"
+        content = (sec.get("content") or "").strip() or "(empty)"
+        lines.append(f"--- Section {i}: {name} ---")
+        lines.append(content)
+        lines.append("")
+    schema_lines, _ = _review_output_schema_lines(body)
+    lines.append("### Output schema")
+    if schema_lines:
+        lines.extend(schema_lines)
+    else:
+        schema = body.output_schema if isinstance(body.output_schema, dict) else {}
+        if not schema and body.output_fields:
+            schema = {"fields": body.output_fields}
+        lines.append(json.dumps(schema, ensure_ascii=False, indent=2) if schema else "(none)")
+    lines.append("")
+    lines.append("## Output format")
+    lines.append('route: "REWRITE" | "ANALYZE"')
+    lines.append('design_suggestions: [{"name": "...", "reason": "..."}, ...]')
+    return "\n".join(lines)
+
+
+# ---------- Agent 2.0: Step 2 per-row analysis prompt ----------
+def _build_per_row_analysis_prompt(row: ReviewComparisonRow, rules_block: str, schema_lines: list[str]) -> str:
+    """Single failed row: Full Input + Full Output + GT + Matching Rules."""
+    lines = [
+        "You are a Prompt debugging expert. Analyze this single failed case to find the root cause.",
+        "",
+        "## Full Input (key-values used to fill the prompt for this row)",
+        json.dumps(row.row_input or {}, ensure_ascii=False, indent=2),
+        "",
+        "## Model Output (Full Output)",
+        json.dumps(row.run_output, ensure_ascii=False, indent=2),
+        "",
+        "## Ground Truth (Expected)",
+        str(row.expected or ""),
+        "",
+    ]
+    if row.comparison_types:
+        lines.append("## Comparison types for this row")
+        lines.append(", ".join(row.comparison_types))
+        lines.append("")
+    lines.append("## Matching Rules")
+    lines.append(rules_block)
+    lines.append("")
+    if schema_lines:
+        lines.append("## Output schema")
+        lines.extend(schema_lines)
+        lines.append("")
+    lines.extend([
+        "## Task",
+        "1. Root cause: Why did the model fail? (unclear instruction, weak constraint, misleading input, etc.)",
+        "2. GT质疑: If the model output seems more plausible than expected, set gt_questioned=true and explain in gt_reason.",
+        "3. Micro suggestion: Give a brief improvement direction for this row (do NOT write exact new_sentence; describe what to clarify).",
+        "",
+        "Respond with JSON: {\"row_index\": <0-based>, \"root_cause\": \"...\", \"gt_questioned\": false, \"gt_reason\": null, \"section_index_suggestions\": [0, 1], \"micro_suggestion\": \"...\"}.",
+    ])
+    return "\n".join(lines)
+
+
+# ---------- Agent 2.0: Step 3 synthesis prompts ----------
+def _build_step3_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDiagnosis]) -> str:
+    """ANALYZE path: aggregate diagnoses, output suggestions + data_refinement."""
+    all_matched = _review_all_matched(body)
+    _, schema_keys = _review_output_schema_lines(body)
+    section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
+    lines = [
+        "You have per-row diagnosis reports. Synthesize them into global edit suggestions.",
         "",
         "## Task",
-        "Output design suggestions ONLY when the prompt has serious structural/schema problems: e.g. no usable section structure, output schema clearly wrong or missing for the task, or the prompt would not work at all. This is for cases where the user typically does not know how to write a prompt.",
-        "When the prompt is already reasonable, usable, or only has minor polish issues, you MUST output {\"suggestions\": []}. Do NOT suggest optional improvements, polish, or 'consider adding X'. Default to empty list.",
+        "1. Merge similar root causes (e.g. 20 rows all 'cannot identify negative sentiment' -> one suggestion).",
+        "2. Identify global logic gaps.",
+        "3. Output: suggestions (old_sentence -> new_sentence) and data_refinement (rows where GT may be wrong).",
         "",
-        "## Sections",
+        "**Do NOT put correct/expected answers into new_sentence.** Improve instructions, criteria, or wording only.",
+        "",
+        "## Critical: old_sentence",
+        "Copy character-for-character from the section text. One sentence or one line per suggestion.",
+        "",
+        "## Critical: new_sentence",
+        "Must not contain expected output. Change instructions or criteria only.",
+        "",
     ]
+    if all_matched:
+        lines.append("**All rows matched.** Output 1–2 optional small improvements.")
+        lines.append("")
+    _, rules_block = _review_compared_fields_and_rules(body.comparison_rows or [])
+    if rules_block:
+        lines.append(rules_block)
+        lines.append("")
+    lines.append("## Sections (copy exact substring for old_sentence)")
+    for i, sec in enumerate(body.prompt_sections or []):
+        name = (sec.get("name") or "").strip() or "(unnamed)"
+        content = (sec.get("content") or "").strip() or "(empty)"
+        lines.append(f"--- Section index {i}: {name} ---")
+        lines.append(content)
+        lines.append("")
+    lines.append("## Per-row diagnoses (for synthesis)")
+    for d in diagnoses:
+        gt_note = f" | GT questioned: {d.gt_reason}" if d.gt_questioned and d.gt_reason else ""
+        lines.append(f"Row {d.row_index + 1}: {d.root_cause} | sections: {d.section_index_suggestions} | micro: {d.micro_suggestion}{gt_note}")
+    lines.append("")
+    if schema_keys or section_names:
+        lines.append("## Constraints")
+        lines.append("Do NOT rename output schema field keys or section names.")
+        lines.append("")
+    lines.append("## Ground truth issues")
+    lines.append(
+        "For rows where gt_questioned=true, add one data_refinement item: {\"row_indices\": [2, 5], \"reason\": \"...\"} (1-based for display). "
+        "Do not add data_refinement for prompt/extraction issues."
+    )
+    lines.append("")
+    lines.append(
+        "Respond with JSON: {\"suggestions\": [{\"name\": \"...\", \"section_index\": 0, \"old_sentence\": \"...\", \"new_sentence\": \"...\", \"reason\": \"...\"}, ...], "
+        "\"data_refinement\": [{\"row_indices\": [2, 5], \"reason\": \"...\"}, ...]}."
+    )
+    return "\n".join(lines)
+
+
+def _build_step3_rewrite_prompt(body: ReviewRequest) -> str:
+    """REWRITE path: prompt is broken; generate expert template from scratch."""
+    schema_lines, schema_keys = _review_output_schema_lines(body)
+    lines = [
+        "The user's prompt has serious structural problems (missing Role/Task or schema misalignment). "
+        "Generate an expert-level prompt template from scratch based on the output_schema and the user's intent (inferred from the broken prompt).",
+        "",
+        "## Output schema",
+    ]
+    if schema_lines:
+        lines.extend(schema_lines)
+    else:
+        lines.append(", ".join(schema_keys) if schema_keys else "(none)")
+    lines.append("")
+    lines.append("## Current (broken) prompt (for reference only)")
     for i, sec in enumerate(body.prompt_sections or []):
         name = (sec.get("name") or "").strip() or "(unnamed)"
         content = (sec.get("content") or "").strip() or "(empty)"
         lines.append(f"--- {i}: {name} ---")
         lines.append(content)
         lines.append("")
-    schema_lines, _ = _review_output_schema_lines(body)
-    if schema_lines:
-        lines.append("## Output schema (same as used in run)")
-        lines.extend(schema_lines)
-        lines.append("(This schema is enforced by LangChain at run time; the user does NOT need to add the exact JSON format or output structure in the prompt text. Do not suggest adding JSON examples or output format to the prompt.)")
-    else:
-        keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
-        lines.append("## Output schema (field keys)")
-        lines.append(", ".join(keys) if keys else "(none)")
-        lines.append("(Output format is enforced by LangChain; do not suggest adding JSON/output format to the prompt.)")
-    lines.append("")
-    lines.append('Respond with JSON: {"suggestions": [{"name": "short title", "reason": "1-2 sentences"}, ...]}. Use {"suggestions": []} unless the prompt is seriously broken.')
-    return "\n".join(lines)
-
-
-def _build_review_step1_prompt(body: ReviewRequest) -> str:
-    """Step1: Per-row analysis. For each failed row: reason, section_index_suggestions; if unclear, set need_input and add row_index to rows_needing_input."""
-    all_matched = _review_all_matched(body)
-    lines = [
-        "You are helping improve a prompt used for structured LLM output. Below are the prompt sections and per-row comparison of model output vs ground truth.",
-        "",
-        "## Task (step 1): Analyze each failed row",
-        "For each row that is NOT MATCHED: (1) Give a brief but complete reason why it failed — e.g. 'Row 1: phosphatase field was under-extracted' or 'Row 2: expected value appears to be a typo; consider checking ground truth.' The reason must explain what went wrong, not just state the row number. (2) List which section indices (0-based) might need a change to fix this. (3) If you cannot tell why it failed without seeing the input that was used to fill the prompt for this row, set need_input to true and add that row_index to rows_needing_input.",
-        "(4) If the expected/ground-truth value clearly appears wrong (typo, wrong entity, contradicts the passage, or model output is more plausible), say so in the reason (e.g. 'Row 2: expected value appears incorrect; consider checking ground truth.'). This will be surfaced to the user so they can fix the dataset.",
-        "You do NOT see the input (the data that filled the prompt) here; only model output vs expected. If the failure is unclear, request input for that row.",
-        "**In your summary and reason text, write row numbers as Row 1, Row 2, Row 3, etc. (do not write '(1-based)' or '0-based' in the text; the row_index in JSON stays 0-based).**",
-        "",
-        "**Do NOT suggest putting the correct/expected answer or ground truth into the prompt.** Suggest real prompt improvements: clarify instructions, add criteria, improve wording.",
-        "",
-    ]
-    if all_matched:
-        lines.extend([
-            "**All rows are matched (no failures).** Give a short positive summary. For per_row, output one synthetic entry (e.g. row_index 0, reason \"all matched\", section_index_suggestions [0] or [], need_input false) so we have at least one optional improvement. Keep rows_needing_input empty.",
-            "",
-        ])
-    lines.append("## Sections (0-based index for reference)")
-    for i, sec in enumerate(body.prompt_sections or []):
-        name = (sec.get("name") or "").strip() or "(unnamed)"
-        content = (sec.get("content") or "").strip() or "(empty)"
-        lines.append(f"--- Section index {i}: {name} ---")
-        lines.append(content)
-        lines.append("")
-    schema_lines, _ = _review_output_schema_lines(body)
-    if schema_lines:
-        lines.append("## Output schema (same as used in run)")
-        lines.extend(schema_lines)
-        lines.append("(Enforced by LangChain; do not suggest adding JSON/output format to the prompt.)")
-        lines.append("")
-    comparison_rows = body.comparison_rows or []
-    compared_fields, rules_block = _review_compared_fields_and_rules(comparison_rows)
-    if rules_block:
-        lines.append(rules_block)
-        lines.append("")
-    unmatched = [r for r in comparison_rows if not r.matched]
-    matched = [r for r in comparison_rows if r.matched]
-    lines.append("## Rows that failed (NOT MATCHED) — analyze each; add to rows_needing_input if you need to see this row's input")
-    if unmatched:
-        for row in unmatched:
-            lines.append(f"Row {row.row_index + 1} (row_index {row.row_index}) [NOT MATCHED]")
-            if row.comparison_types:
-                lines.append(f"  Comparison: {', '.join(row.comparison_types)}")
-            lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
-            lines.append(f"  Expected: {row.expected}")
-            if row.comment:
-                lines.append(f"  User comment: {row.comment}")
-            lines.append("")
-    else:
-        lines.append("(None — all rows matched.)")
-        lines.append("")
-    lines.append("## Rows that matched — context only; avoid suggesting changes that would break these")
-    if matched:
-        for row in matched[:20]:
-            lines.append(f"Row {row.row_index + 1} (row_index {row.row_index}) [matched]")
-            if row.comparison_types:
-                lines.append(f"  Comparison: {', '.join(row.comparison_types)}")
-            lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
-            lines.append(f"  Expected: {row.expected}")
-            if row.comment:
-                lines.append(f"  User comment: {row.comment}")
-            lines.append("")
-    else:
-        lines.append("(None.)")
-        lines.append("")
-    _, schema_keys = _review_output_schema_lines(body)
-    section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
-    if schema_keys or section_names:
-        lines.append("## Constraints")
-        lines.append("Do NOT suggest changing output schema field keys or section names; they must stay as-is.")
-        lines.append("")
+    lines.append("## Task")
     lines.append(
-        "Respond with JSON: {\"summary\": \"...\", \"per_row\": [{\"row_index\": 0, \"reason\": \"...\", \"section_index_suggestions\": [0, 1], \"need_input\": false}, ...], \"rows_needing_input\": [0, 2]}."
+        "Output suggestions that replace entire sections. Use old_sentence as the full section content to replace, "
+        "and new_sentence as the new expert template for that section. Include Role, Task, and clear instructions."
+    )
+    lines.append("")
+    lines.append(
+        "Respond with JSON: {\"suggestions\": [{\"name\": \"...\", \"section_index\": 0, \"old_sentence\": \"<full section>\", \"new_sentence\": \"<new section>\", \"reason\": \"...\"}, ...], \"data_refinement\": []}."
     )
     return "\n".join(lines)
-
-
-def _build_review_step1b_prompt(rows_with_input: list[ReviewComparisonRow]) -> str:
-    """Step1b: Refine analysis for rows that need input; each row has row_input (key-values used to fill prompt)."""
-    lines = [
-        "You previously could not fully analyze these rows without seeing the input. Below each row now includes the input (key-value pairs that were used to fill the prompt for that row).",
-        "",
-        "## Task: Refine analysis for each row",
-        "For each row below, output an update: row_index, reason (refined now that you see the input), and section_index_suggestions (0-based section indices to change).",
-        "The reason must be a clear, short explanation for the user (e.g. 'Row 2: substrate in input is TRPV6 but expected has a typo; correct the ground truth.'), not just the row number. When giving reasons, only refer to the compared fields (see below); do not cite other keys in the model output.",
-        "",
-    ]
-    _, rules_block = _review_compared_fields_and_rules(rows_with_input)
-    if rules_block:
-        lines.append(rules_block)
-        lines.append("")
-    lines.append("**In your reason text, write row numbers as Row 1, Row 2, etc.; do not write '(1-based)' or '0-based' in the text. The row_index in JSON stays 0-based.**")
-    lines.append("")
-    for row in rows_with_input:
-        lines.append(f"Row {row.row_index + 1} (row_index {row.row_index})")
-        lines.append(f"  Input (used to fill prompt): {json.dumps(row.row_input or {}, ensure_ascii=False)}")
-        lines.append(f"  Model output: {json.dumps(row.run_output, ensure_ascii=False)}")
-        lines.append(f"  Expected: {row.expected}")
-        if row.comparison_types:
-            lines.append(f"  Comparison: {', '.join(row.comparison_types)}")
-        if row.comment:
-            lines.append(f"  User comment: {row.comment}")
-        lines.append("")
-    lines.append(
-        "Respond with JSON: {\"updates\": [{\"row_index\": 0, \"reason\": \"...\", \"section_index_suggestions\": [0, 1]}, ...]}."
-    )
-    return "\n".join(lines)
-
-
-def _build_review_step2_prompt(body: ReviewRequest, per_row: list[ReviewStep1RowAnalysis]) -> str:
-    """Step2: From merged per_row analysis, output concrete old_sentence/new_sentence suggestions (one call, all sections)."""
-    all_matched = _review_all_matched(body)
-    _, schema_keys = _review_output_schema_lines(body)
-    section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
-    lines = [
-        "You are improving a prompt. You have per-row analysis (reason + which sections to change). Output concrete edit suggestions: for each change, exact old_sentence (verbatim from section) and new_sentence.",
-        "",
-        "**Do NOT put the correct/expected answer or ground truth into new_sentence.** Improve instructions, criteria, or wording so the model can generalize.",
-        "",
-        "## Critical: old_sentence",
-        "Copy character-for-character from the section text. One sentence or one line per suggestion. The tool matches by string; one character wrong and the edit may fail.",
-        "",
-        "## Critical: new_sentence",
-        "Must not contain expected/correct output. Change instructions or criteria only.",
-        "",
-    ]
-    if all_matched:
-        lines.append("**All rows matched.** Output 1–2 optional small improvements (e.g. clarity or wording).")
-        lines.append("")
-    comparison_rows = body.comparison_rows or []
-    compared_fields, rules_block = _review_compared_fields_and_rules(comparison_rows)
-    if rules_block:
-        lines.append(rules_block)
-        lines.append("")
-    lines.append("## Sections (copy exact substring from here for old_sentence)")
-    for i, sec in enumerate(body.prompt_sections or []):
-        name = (sec.get("name") or "").strip() or "(unnamed)"
-        content = (sec.get("content") or "").strip() or "(empty)"
-        lines.append(f"--- Section index {i}: {name} ---")
-        lines.append(content)
-        lines.append("")
-    lines.append("## Per-row analysis (why each failed and which sections to change)")
-    for a in per_row:
-        lines.append(f"Row {a.row_index + 1} (row_index {a.row_index}): {a.reason} -> section indices to consider: {a.section_index_suggestions}")
-    lines.append("")
-    if schema_keys or section_names:
-        lines.append("## Constraints")
-        lines.append("Do NOT rename or alter output schema field keys or section names.")
-        lines.append("")
-    schema_lines, _ = _review_output_schema_lines(body)
-    if schema_lines:
-        lines.append("Output schema (same as run):")
-        lines.extend(schema_lines)
-        lines.append("")
-    comparison_rows = body.comparison_rows or []
-    unmatched = [r for r in comparison_rows if not r.matched][:15]
-    lines.append("## Reason field rules")
-    lines.append(
-        "If the suggestion is to fix an unmatched (failed) row: the reason MUST state which run result(s) caused it — e.g. 'Row 2 failed because phosphatase was under-extracted; this edit clarifies that the symbol must come from the list.' Always say which row(s) (Row 1, Row 2, etc.; do not write '1-based' or '0-based') and which error led to this change."
-    )
-    lines.append(
-        "When several failed rows share the same root cause: output one suggestion that fixes it (do not duplicate the same edit for each row). In the reason, list all the rows affected — e.g. 'Rows 2, 3, and 5 all failed because phosphatase was under-extracted; this edit clarifies that the symbol must come from the list.'"
-    )
-    lines.append(
-        "If the suggestion is a general improvement based on matched rows (e.g. all rows matched, or optional polish): no need to mention a row number; a short explanation of the improvement is enough."
-    )
-    for row in unmatched:
-        comp = f" Comparison: {', '.join(row.comparison_types)}." if row.comparison_types else ""
-        lines.append(f"  Row {row.row_index + 1} (row_index {row.row_index}){comp} Model: {json.dumps(row.run_output, ensure_ascii=False)[:200]}... Expected: {row.expected}")
-    lines.append("")
-    lines.append("## Ground truth issues (important)")
-    lines.append(
-        "When the failure is clearly due to incorrect or inconsistent ground truth (e.g. expected has a typo, wrong ID, contradicts the passage, or model output is more plausible than expected), you MUST include exactly one suggestion with ground_truth_issue: true so the user can fix the dataset. Use name e.g. \"Possible ground truth issue\"; in reason give a full explanation for the user (e.g. 'Row 3: the expected substrate value does not match the passage; please correct the ground truth.'), not just the row number. Write Row 1, Row 2, Row 3 in text; do not write '1-based' or '0-based'. Set old_sentence and new_sentence to \"(no edit)\", section_index 0. Do not be reluctant when the evidence is clear. When the failure is a prompt or extraction issue, do not use ground_truth_issue; output normal edit suggestions instead."
-    )
-    lines.append("")
-    lines.append(
-        "Respond with JSON: {\"suggestions\": [{\"name\": \"short title\", \"section_index\": 0, \"old_sentence\": \"exact copy from section\", \"new_sentence\": \"replacement\", \"reason\": \"...\", \"ground_truth_issue\": false}, ...]}. "
-        "For suggestions that address an unmatched row: reason must say which row (Row 1, Row 2, etc.) and which error in that run result led to this edit. For suggestions based on matched rows only: no row number needed. For ground_truth_issue, give a full explanation including which row. Never write '(1-based)' or '0-based'. Refer only to the compared fields. Prefer 3–10 suggestions that cover the failures without duplicate edits."
-    )
-    return "\n".join(lines)
-
-
-def _merge_step1b_into_per_row(
-    per_row: list[ReviewStep1RowAnalysis],
-    step1b_result: ReviewStep1bResult,
-) -> list[ReviewStep1RowAnalysis]:
-    """Merge Step1b updates into per_row by row_index (overwrite reason and section_index_suggestions)."""
-    by_index = {a.row_index: a for a in per_row}
-    for u in step1b_result.updates or []:
-        if u.row_index in by_index:
-            by_index[u.row_index] = ReviewStep1RowAnalysis(
-                row_index=u.row_index,
-                reason=u.reason,
-                section_index_suggestions=list(u.section_index_suggestions or []),
-                need_input=False,
-            )
-    return list(by_index.values())
 
 
 @app.post("/api/review/analyze", response_model=ReviewResult)
 def review_analyze(body: ReviewRequest):
-    """Step 0: design check. Step 1: per-row analysis. Step 1b (optional): refine with row_input. Step 2: one-shot suggestions from per_row."""
+    """Agent 2.0: Step 1 Gatekeeper (static) -> Step 2 parallel per-row analysis -> Step 3 global synthesis."""
     items = _load_credentials()
     cred = None
     for item in items:
@@ -1119,106 +1107,118 @@ def review_analyze(body: ReviewRequest):
         raise HTTPException(status_code=400, detail="Missing API key")
     provider = cred.get("provider", "openai")
     try:
-        # Step 0: design check
-        design_prompt = _build_review_design_prompt(body)
-        _safe_print("\n" + _HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Step 0 (design) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(design_prompt)
-        _safe_print(_HL + _SEP + _R)
-        design_result, _ = llm_run_structured(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            prompt=design_prompt,
-            response_model=DesignReviewResult,
-            max_tokens=8192,
-        )
-        _safe_print(_HL + "[Review] Step 0 (design) LLM STRUCTURED OUTPUT:" + _R)
-        _safe_print(json.dumps(design_result if isinstance(design_result, dict) else design_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + _SEP + _R + "\n")
-        design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
+        # Step 1: Gatekeeper (static, no LLM)
+        gatekeeper_prompt = _build_step1_gatekeeper_prompt(body)
+        route, design_suggestions = _gatekeeper_route(body)
         all_matched = _review_all_matched(body)
-        design_suggestions = list(design_review.suggestions or [])
-        if all_matched and len(design_suggestions) > 1:
-            design_suggestions = design_suggestions[:1]
-
-        # Step 1: per-row analysis
-        step1_prompt = _build_review_step1_prompt(body)
+        design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in design_suggestions]
+        _safe_print("\n" + _HL + _SEP + _R)
+        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) COMPLETE PROMPT (route + design_suggestions):" + _R)
         _safe_print(_HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Step 1 (per-row analysis) PROMPT SENT TO LLM:" + _R)
+        _safe_print(gatekeeper_prompt)
         _safe_print(_HL + _SEP + _R)
-        _safe_print(step1_prompt)
+        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) OUTPUT (route + design_suggestions):" + _R)
         _safe_print(_HL + _SEP + _R)
-        step1_result, _ = llm_run_structured(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            prompt=step1_prompt,
-            response_model=ReviewStep1Result,
-            max_tokens=32768,
-        )
-        _safe_print(_HL + "[Review] Step 1 (per-row analysis) LLM STRUCTURED OUTPUT:" + _R)
-        _safe_print(json.dumps(step1_result if isinstance(step1_result, dict) else step1_result.model_dump(), ensure_ascii=False, indent=2))
+        _safe_print("route: " + route + ", design_suggestions: " + json.dumps(design_list, ensure_ascii=False, indent=2))
         _safe_print(_HL + _SEP + _R + "\n")
-        step1 = ReviewStep1Result(**(step1_result if isinstance(step1_result, dict) else step1_result.model_dump()))
-        per_row = list(step1.per_row or [])
-        rows_needing_input = list(step1.rows_needing_input or [])
 
-        # Step 1b: optional refill for rows that need input (one LLM call per row to avoid huge prompts when input is long)
-        if rows_needing_input and body.comparison_rows:
-            rows_with_input = [
-                r for r in body.comparison_rows
-                if r.row_index in rows_needing_input and (r.row_input is not None and len(r.row_input) > 0)
-            ]
-            for row in rows_with_input:
-                step1b_prompt = _build_review_step1b_prompt([row])
-                _safe_print(_HL + _SEP + _R)
-                _safe_print(_HL + f"[Review] Step 1b (refine row {row.row_index}) PROMPT SENT TO LLM:" + _R)
-                _safe_print(_HL + _SEP + _R)
-                _safe_print(step1b_prompt)
-                _safe_print(_HL + _SEP + _R)
-                step1b_result, _ = llm_run_structured(
-                    provider=provider,
-                    model=model,
-                    api_key=api_key,
-                    prompt=step1b_prompt,
-                    response_model=ReviewStep1bResult,
-                    max_tokens=8192,
-                )
-                _safe_print(_HL + f"[Review] Step 1b (refine row {row.row_index}) LLM STRUCTURED OUTPUT:" + _R)
-                _safe_print(json.dumps(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump(), ensure_ascii=False, indent=2))
-                _safe_print(_HL + _SEP + _R + "\n")
-                step1b = ReviewStep1bResult(**(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump()))
-                per_row = _merge_step1b_into_per_row(per_row, step1b)
+        if route == "REWRITE":
+            # Skip Step 2, go straight to Step 3 rewrite
+            step3_prompt = _build_step3_rewrite_prompt(body)
+            _safe_print("\n" + _HL + _SEP + _R)
+            _safe_print(_HL + "[Review] Step 3 (REWRITE) COMPLETE PROMPT SENT TO LLM:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(step3_prompt)
+            _safe_print(_HL + _SEP + _R + "\n")
+            step3_result, _ = llm_run_structured(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                prompt=step3_prompt,
+                response_model=Step3SynthesisResult,
+                max_tokens=32768,
+            )
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(_HL + "[Review] Step 3 (REWRITE) LLM OUTPUT:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2))
+            _safe_print(_HL + _SEP + _R + "\n")
+            fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
+            raw_suggestions = list(getattr(fs, "suggestions", []) or [])
+            data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
+        else:
+            # ANALYZE path: Step 2 parallel per-row, then Step 3 synthesis
+            unmatched = [r for r in (body.comparison_rows or []) if not r.matched]
+            schema_lines, _ = _review_output_schema_lines(body)
+            _, rules_block = _review_compared_fields_and_rules(body.comparison_rows or [])
 
-        if not per_row and not all_matched:
-            return ReviewResult(summary=step1.summary, suggestions=[], design_suggestions=design_suggestions)
-        if all_matched and per_row:
-            per_row = per_row[:3]
+            if all_matched:
+                diagnoses = [PerRowDiagnosis(row_index=0, root_cause="all matched", gt_questioned=False, section_index_suggestions=[0], micro_suggestion="Optional polish")]
+            elif not unmatched:
+                return ReviewResult(summary="No failed rows to analyze.", suggestions=[], design_suggestions=design_suggestions, data_refinement=[])
+            else:
+                # Step 2: parallel per-row analysis (cap at 30 rows to avoid cost explosion)
+                to_analyze = unmatched[:30]
+                diagnoses_list: list[PerRowDiagnosis] = []
 
-        # Step 2: one call to get all suggestions from per_row
-        step2_prompt = _build_review_step2_prompt(body, per_row)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Step 2 (suggestions) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(step2_prompt)
-        _safe_print(_HL + _SEP + _R)
-        step2_result, _ = llm_run_structured(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            prompt=step2_prompt,
-            response_model=FocusSuggestions,
-            max_tokens=32768,
-        )
-        _safe_print(_HL + "[Review] Step 2 (suggestions) LLM STRUCTURED OUTPUT:" + _R)
-        _safe_print(json.dumps(step2_result if isinstance(step2_result, dict) else step2_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + _SEP + _R + "\n")
-        fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
-        raw_suggestions = list(fs.suggestions or [])
-        if all_matched and len(raw_suggestions) > 2:
-            raw_suggestions = raw_suggestions[:2]
+                def analyze_one(row: ReviewComparisonRow) -> PerRowDiagnosis:
+                    prompt = _build_per_row_analysis_prompt(row, rules_block, schema_lines)
+                    _safe_print("\n" + _HL + _SEP + _R)
+                    _safe_print(_HL + f"[Review] Step 2 Row {row.row_index} COMPLETE PROMPT SENT TO LLM:" + _R)
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(prompt)
+                    _safe_print(_HL + _SEP + _R + "\n")
+                    result, _ = llm_run_structured(
+                        provider=provider,
+                        model=model,
+                        api_key=api_key,
+                        prompt=prompt,
+                        response_model=PerRowDiagnosis,
+                        max_tokens=4096,
+                    )
+                    d = result if isinstance(result, PerRowDiagnosis) else PerRowDiagnosis(**(result if isinstance(result, dict) else result.model_dump()))
+                    d.row_index = row.row_index
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(_HL + f"[Review] Step 2 Row {row.row_index} LLM OUTPUT:" + _R)
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(json.dumps(d.model_dump(), ensure_ascii=False, indent=2))
+                    _safe_print(_HL + _SEP + _R + "\n")
+                    return d
+
+                with ThreadPoolExecutor(max_workers=REVIEW_STEP2_MAX_CONCURRENCY) as ex:
+                    futures = {ex.submit(analyze_one, r): r for r in to_analyze}
+                    for future in as_completed(futures):
+                        diagnoses_list.append(future.result())
+
+                diagnoses_list.sort(key=lambda d: d.row_index)
+                diagnoses = diagnoses_list
+
+            # Step 3: global synthesis
+            step3_prompt = _build_step3_synthesis_prompt(body, diagnoses)
+            _safe_print("\n" + _HL + _SEP + _R)
+            _safe_print(_HL + "[Review] Step 3 (synthesis) COMPLETE PROMPT SENT TO LLM:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(step3_prompt)
+            _safe_print(_HL + _SEP + _R + "\n")
+            step3_result, _ = llm_run_structured(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                prompt=step3_prompt,
+                response_model=Step3SynthesisResult,
+                max_tokens=32768,
+            )
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(_HL + "[Review] Step 3 (synthesis) LLM OUTPUT:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2))
+            _safe_print(_HL + _SEP + _R + "\n")
+            fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
+            raw_suggestions = list(getattr(fs, "suggestions", []) or [])
+            if all_matched and len(raw_suggestions) > 2:
+                raw_suggestions = raw_suggestions[:2]
+            data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
+
         out_suggestions: list[ReviewSuggestion] = []
         for s in raw_suggestions:
             s_dict = s.model_dump() if hasattr(s, "model_dump") else s
@@ -1227,14 +1227,16 @@ def review_analyze(body: ReviewRequest):
             if (s_dict.get("section_index") or 0) < 0 and body.prompt_sections:
                 s_dict["section_index"] = 0
             out_suggestions.append(ReviewSuggestion(**s_dict))
-        return ReviewResult(summary=step1.summary, suggestions=out_suggestions, design_suggestions=design_suggestions)
+
+        summary = "REWRITE: expert template generated." if route == "REWRITE" else "ANALYZE: synthesis from per-row diagnoses."
+        return ReviewResult(summary=summary, suggestions=out_suggestions, design_suggestions=design_suggestions, data_refinement=data_refinement)
     except Exception as e:
         _safe_print(_HL + "[Review] Error: " + _R + str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
 
 def _review_analyze_stream_generator(body: ReviewRequest):
-    """Yield NDJSON lines: design, step1 (summary), optional step1b, step2 (suggestions), done."""
+    """Agent 2.0: gatekeeper -> step2_row (progress) -> suggestions -> data_refinement -> done."""
     items = _load_credentials()
     cred = None
     for item in items:
@@ -1251,116 +1253,123 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         return
     provider = cred.get("provider", "openai")
     try:
-        # Step 0: design check
-        design_prompt = _build_review_design_prompt(body)
-        _safe_print("\n" + _HL + _SEP + _R)
-        _safe_print(_HL + "[Review stream] Step 0 (design) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(design_prompt)
-        _safe_print(_HL + _SEP + _R)
-        design_result, _ = llm_run_structured(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            prompt=design_prompt,
-            response_model=DesignReviewResult,
-            max_tokens=8192,
-        )
-        _safe_print(_HL + "[Review stream] Step 0 (design) LLM STRUCTURED OUTPUT:" + _R)
-        _safe_print(json.dumps(design_result if isinstance(design_result, dict) else design_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + _SEP + _R + "\n")
-        design_review = DesignReviewResult(**(design_result if isinstance(design_result, dict) else design_result.model_dump()))
+        # Step 1: Gatekeeper (static)
+        gatekeeper_prompt = _build_step1_gatekeeper_prompt(body)
+        route, design_suggestions = _gatekeeper_route(body)
         all_matched = _review_all_matched(body)
-        design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in (design_review.suggestions or [])]
-        if all_matched and len(design_list) > 1:
-            design_list = design_list[:1]
-        yield (json.dumps({"type": "design", "design_suggestions": design_list}, ensure_ascii=False) + "\n").encode("utf-8")
-
-        # Step 1: per-row analysis
-        step1_prompt = _build_review_step1_prompt(body)
+        design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in design_suggestions]
+        _safe_print("\n" + _HL + _SEP + _R)
+        _safe_print(_HL + "[Review stream] Step 1 (Gatekeeper) COMPLETE PROMPT (route + design_suggestions):" + _R)
         _safe_print(_HL + _SEP + _R)
-        _safe_print(_HL + "[Review stream] Step 1 (per-row analysis) PROMPT SENT TO LLM:" + _R)
+        _safe_print(gatekeeper_prompt)
         _safe_print(_HL + _SEP + _R)
-        _safe_print(step1_prompt)
+        _safe_print(_HL + "[Review stream] Step 1 (Gatekeeper) OUTPUT (route + design_suggestions):" + _R)
         _safe_print(_HL + _SEP + _R)
-        step1_result, _ = llm_run_structured(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            prompt=step1_prompt,
-            response_model=ReviewStep1Result,
-            max_tokens=32768,
-        )
-        _safe_print(_HL + "[Review stream] Step 1 (per-row analysis) LLM STRUCTURED OUTPUT:" + _R)
-        _safe_print(json.dumps(step1_result if isinstance(step1_result, dict) else step1_result.model_dump(), ensure_ascii=False, indent=2))
+        _safe_print("route: " + route + ", design_suggestions: " + json.dumps(design_list, ensure_ascii=False, indent=2))
         _safe_print(_HL + _SEP + _R + "\n")
-        step1 = ReviewStep1Result(**(step1_result if isinstance(step1_result, dict) else step1_result.model_dump()))
-        per_row = list(step1.per_row or [])
-        rows_needing_input = list(step1.rows_needing_input or [])
-        yield (json.dumps({
-            "type": "plan",
-            "summary": step1.summary,
-            "focus_count": 1,
-            "per_row_count": len(per_row),
-            "rows_needing_input": rows_needing_input,
-        }, ensure_ascii=False) + "\n").encode("utf-8")
+        yield (json.dumps({"type": "design", "design_suggestions": design_list, "route": route}, ensure_ascii=False) + "\n").encode("utf-8")
 
-        # Step 1b: optional (one LLM call per row to avoid huge prompts when input is long)
-        if rows_needing_input and body.comparison_rows:
-            rows_with_input = [
-                r for r in body.comparison_rows
-                if r.row_index in rows_needing_input and (r.row_input is not None and len(r.row_input) > 0)
-            ]
-            for row in rows_with_input:
-                yield (json.dumps({"type": "step1b", "row_count": 1, "row_index": row.row_index}, ensure_ascii=False) + "\n").encode("utf-8")
-                step1b_prompt = _build_review_step1b_prompt([row])
-                _safe_print(_HL + _SEP + _R)
-                _safe_print(_HL + f"[Review stream] Step 1b (refine row {row.row_index}) PROMPT SENT TO LLM:" + _R)
-                _safe_print(_HL + _SEP + _R)
-                _safe_print(step1b_prompt)
-                _safe_print(_HL + _SEP + _R)
-                step1b_result, _ = llm_run_structured(
-                    provider=provider,
-                    model=model,
-                    api_key=api_key,
-                    prompt=step1b_prompt,
-                    response_model=ReviewStep1bResult,
-                    max_tokens=8192,
-                )
-                _safe_print(_HL + f"[Review stream] Step 1b (refine row {row.row_index}) LLM STRUCTURED OUTPUT:" + _R)
-                _safe_print(json.dumps(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump(), ensure_ascii=False, indent=2))
-                _safe_print(_HL + _SEP + _R + "\n")
-                step1b = ReviewStep1bResult(**(step1b_result if isinstance(step1b_result, dict) else step1b_result.model_dump()))
-                per_row = _merge_step1b_into_per_row(per_row, step1b)
+        if route == "REWRITE":
+            step3_prompt = _build_step3_rewrite_prompt(body)
+            _safe_print("\n" + _HL + _SEP + _R)
+            _safe_print(_HL + "[Review stream] Step 3 (REWRITE) COMPLETE PROMPT SENT TO LLM:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(step3_prompt)
+            _safe_print(_HL + _SEP + _R + "\n")
+            step3_result, _ = llm_run_structured(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                prompt=step3_prompt,
+                response_model=Step3SynthesisResult,
+                max_tokens=32768,
+            )
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(_HL + "[Review stream] Step 3 (REWRITE) LLM OUTPUT:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2))
+            _safe_print(_HL + _SEP + _R + "\n")
+            fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
+            raw_suggestions = list(getattr(fs, "suggestions", []) or [])
+            data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
+            yield (json.dumps({"type": "plan", "summary": "REWRITE: generating expert template.", "per_row_count": 0}, ensure_ascii=False) + "\n").encode("utf-8")
+        else:
+            # ANALYZE path
+            unmatched = [r for r in (body.comparison_rows or []) if not r.matched]
+            schema_lines, _ = _review_output_schema_lines(body)
+            _, rules_block = _review_compared_fields_and_rules(body.comparison_rows or [])
 
-        if not per_row and not all_matched:
-            yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
-            return
-        if all_matched and per_row:
-            per_row = per_row[:3]
+            if all_matched:
+                diagnoses = [PerRowDiagnosis(row_index=0, root_cause="all matched", gt_questioned=False, section_index_suggestions=[0], micro_suggestion="Optional polish")]
+                yield (json.dumps({"type": "plan", "summary": "All rows matched.", "per_row_count": 0}, ensure_ascii=False) + "\n").encode("utf-8")
+            elif not unmatched:
+                yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
+                return
+            else:
+                to_analyze = unmatched[:30]
+                yield (json.dumps({"type": "plan", "summary": f"Analyzing {len(to_analyze)} failed rows.", "per_row_count": len(to_analyze)}, ensure_ascii=False) + "\n").encode("utf-8")
+                diagnoses_list: list[PerRowDiagnosis] = []
 
-        # Step 2: one-shot suggestions
-        step2_prompt = _build_review_step2_prompt(body, per_row)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(_HL + "[Review stream] Step 2 (suggestions) PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(step2_prompt)
-        _safe_print(_HL + _SEP + _R)
-        step2_result, _ = llm_run_structured(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            prompt=step2_prompt,
-            response_model=FocusSuggestions,
-            max_tokens=32768,
-        )
-        _safe_print(_HL + "[Review stream] Step 2 (suggestions) LLM STRUCTURED OUTPUT:" + _R)
-        _safe_print(json.dumps(step2_result if isinstance(step2_result, dict) else step2_result.model_dump(), ensure_ascii=False, indent=2))
-        _safe_print(_HL + _SEP + _R + "\n")
-        fs = FocusSuggestions(**(step2_result if isinstance(step2_result, dict) else step2_result.model_dump()))
-        raw_suggestions = list(fs.suggestions or [])
-        if all_matched and len(raw_suggestions) > 2:
-            raw_suggestions = raw_suggestions[:2]
+                def analyze_one(row: ReviewComparisonRow) -> PerRowDiagnosis:
+                    prompt = _build_per_row_analysis_prompt(row, rules_block, schema_lines)
+                    _safe_print("\n" + _HL + _SEP + _R)
+                    _safe_print(_HL + f"[Review stream] Step 2 Row {row.row_index} COMPLETE PROMPT SENT TO LLM:" + _R)
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(prompt)
+                    _safe_print(_HL + _SEP + _R + "\n")
+                    result, _ = llm_run_structured(
+                        provider=provider,
+                        model=model,
+                        api_key=api_key,
+                        prompt=prompt,
+                        response_model=PerRowDiagnosis,
+                        max_tokens=4096,
+                    )
+                    d = result if isinstance(result, PerRowDiagnosis) else PerRowDiagnosis(**(result if isinstance(result, dict) else result.model_dump()))
+                    d.row_index = row.row_index
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(_HL + f"[Review stream] Step 2 Row {row.row_index} LLM OUTPUT:" + _R)
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(json.dumps(d.model_dump(), ensure_ascii=False, indent=2))
+                    _safe_print(_HL + _SEP + _R + "\n")
+                    return d
+
+                with ThreadPoolExecutor(max_workers=REVIEW_STEP2_MAX_CONCURRENCY) as ex:
+                    futures = {ex.submit(analyze_one, r): r for r in to_analyze}
+                    done = 0
+                    for future in as_completed(futures):
+                        diagnoses_list.append(future.result())
+                        done += 1
+                        yield (json.dumps({"type": "step2_row", "row_index": future.result().row_index, "done": done, "total": len(to_analyze)}, ensure_ascii=False) + "\n").encode("utf-8")
+                diagnoses_list.sort(key=lambda d: d.row_index)
+                diagnoses = diagnoses_list
+
+            # Step 3: synthesis
+            step3_prompt = _build_step3_synthesis_prompt(body, diagnoses)
+            _safe_print("\n" + _HL + _SEP + _R)
+            _safe_print(_HL + "[Review stream] Step 3 (synthesis) COMPLETE PROMPT SENT TO LLM:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(step3_prompt)
+            _safe_print(_HL + _SEP + _R + "\n")
+            step3_result, _ = llm_run_structured(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                prompt=step3_prompt,
+                response_model=Step3SynthesisResult,
+                max_tokens=32768,
+            )
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(_HL + "[Review stream] Step 3 (synthesis) LLM OUTPUT:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2))
+            _safe_print(_HL + _SEP + _R + "\n")
+            fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
+            raw_suggestions = list(getattr(fs, "suggestions", []) or [])
+            if all_matched and len(raw_suggestions) > 2:
+                raw_suggestions = raw_suggestions[:2]
+            data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
+
         batch = []
         for s in raw_suggestions:
             s_dict = s.model_dump() if hasattr(s, "model_dump") else s
@@ -1370,6 +1379,8 @@ def _review_analyze_stream_generator(body: ReviewRequest):
                 batch.append(s_dict)
         if batch:
             yield (json.dumps({"type": "suggestions", "suggestions": batch}, ensure_ascii=False) + "\n").encode("utf-8")
+        if data_refinement:
+            yield (json.dumps({"type": "data_refinement", "data_refinement": data_refinement}, ensure_ascii=False) + "\n").encode("utf-8")
         yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
     except Exception as e:
         _safe_print(_HL + "[Review] Error: " + _R + str(e))

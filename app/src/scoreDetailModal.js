@@ -115,6 +115,7 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
         summary: '',
         suggestions: [],
         design_suggestions: [],
+        data_refinement: [],
         promptSections: sectionsCopy,
         promptFullText: promptFullText || '',
         workingSections: workingSectionsInitial,
@@ -139,6 +140,7 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
       summary: '',
       suggestions: [],
       design_suggestions: [],
+      data_refinement: [],
       promptSections: sectionsCopy,
       promptFullText: promptFullText || '',
       workingSections,
@@ -146,6 +148,8 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
     };
     let focusCount = 0;
     let focusDone = 0;
+    let step2Total = 0;
+    let step2Done = 0;
     const setProgress = (percent) => {
       const pct = Math.min(100, Math.max(0, Math.round(percent)));
       streamSaved.reviewProgress = pct;
@@ -183,11 +187,14 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
           persistToNode({ ...streamSaved, design_suggestions: streamSaved.design_suggestions });
         } else if (data.type === 'plan') {
           focusCount = data.focus_count != null ? Math.max(0, parseInt(data.focus_count, 10)) : 0;
+          step2Total = data.per_row_count != null ? Math.max(0, parseInt(data.per_row_count, 10)) : 0;
           focusDone = 0;
+          step2Done = 0;
           streamSaved = {
             summary: data.summary || '',
             suggestions: [],
             design_suggestions: streamSaved.design_suggestions || [],
+            data_refinement: streamSaved.data_refinement || [],
             promptSections: sectionsCopy,
             promptFullText: promptFullText || '',
             workingSections,
@@ -196,15 +203,32 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
           };
           setProgress(20);
           persistToNode(streamSaved);
+        } else if (data.type === 'step2_row') {
+          step2Done = data.done != null ? parseInt(data.done, 10) : step2Done + 1;
+          const total = data.total != null ? parseInt(data.total, 10) : step2Total;
+          const pct = total > 0 ? 20 + Math.floor(60 * step2Done / total) : 80;
+          setProgress(pct);
+          persistToNode({ ...streamSaved, reviewProgress: pct });
         } else if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
           streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
           focusDone += 1;
-          const pct = focusCount > 0 ? 20 + (80 * focusDone / focusCount) : 90;
+          const pct = focusCount > 0 ? 20 + (80 * focusDone / focusCount) : (step2Total > 0 ? 85 : 90);
           setProgress(pct);
           persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
+        } else if (data.type === 'data_refinement' && Array.isArray(data.data_refinement)) {
+          streamSaved.data_refinement = data.data_refinement;
+          setProgress(95);
+          persistToNode({ ...streamSaved, data_refinement: streamSaved.data_refinement });
         } else if (data.type === 'done') {
           setProgress(100);
-          persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions || [], design_suggestions: streamSaved.design_suggestions || [], streamComplete: true, reviewProgress: 100 });
+          persistToNode({
+            ...streamSaved,
+            suggestions: streamSaved.suggestions || [],
+            design_suggestions: streamSaved.design_suggestions || [],
+            data_refinement: streamSaved.data_refinement || [],
+            streamComplete: true,
+            reviewProgress: 100,
+          });
         }
       }
     }
@@ -218,19 +242,38 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
         }
         if (data.type === 'plan') {
           focusCount = data.focus_count != null ? Math.max(0, parseInt(data.focus_count, 10)) : 0;
+          step2Total = data.per_row_count != null ? Math.max(0, parseInt(data.per_row_count, 10)) : 0;
           focusDone = 0;
+          step2Done = 0;
           streamSaved.reviewProgress = 20;
           setProgress(20);
+        }
+        if (data.type === 'step2_row') {
+          step2Done = data.done != null ? parseInt(data.done, 10) : step2Done + 1;
+          const total = data.total != null ? parseInt(data.total, 10) : step2Total;
+          setProgress(total > 0 ? 20 + Math.floor(60 * step2Done / total) : 80);
         }
         if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
           streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
           focusDone += 1;
-          setProgress(focusCount > 0 ? 20 + (80 * focusDone / focusCount) : 90);
+          setProgress(focusCount > 0 ? 20 + (80 * focusDone / focusCount) : (step2Total > 0 ? 85 : 90));
           persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
+        }
+        if (data.type === 'data_refinement' && Array.isArray(data.data_refinement)) {
+          streamSaved.data_refinement = data.data_refinement;
+          setProgress(95);
+          persistToNode({ ...streamSaved, data_refinement: streamSaved.data_refinement });
         }
         if (data.type === 'done') {
           setProgress(100);
-          persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions || [], design_suggestions: streamSaved.design_suggestions || [], streamComplete: true, reviewProgress: 100 });
+          persistToNode({
+            ...streamSaved,
+            suggestions: streamSaved.suggestions || [],
+            design_suggestions: streamSaved.design_suggestions || [],
+            data_refinement: streamSaved.data_refinement || [],
+            streamComplete: true,
+            reviewProgress: 100,
+          });
         }
       } catch (_) {}
     }

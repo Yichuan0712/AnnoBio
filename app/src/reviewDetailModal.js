@@ -306,6 +306,8 @@ function buildReviewResultUI(overlay, options) {
   const allSuggestions = Array.isArray(initialSuggestions) ? initialSuggestions.slice() : [];
   /** Design suggestions: global guidance only, no accept/revert */
   let designSuggestions = Array.isArray(saved.design_suggestions) ? saved.design_suggestions.slice() : [];
+  /** Data refinement: GT 质疑汇总 */
+  let dataRefinement = Array.isArray(saved.data_refinement) ? saved.data_refinement.slice() : [];
 
   if (promptWrap) {
     promptWrap.innerHTML = renderSectionsAsPromptDetail(working);
@@ -315,6 +317,9 @@ function buildReviewResultUI(overlay, options) {
   const designContainer = document.createElement('div');
   designContainer.className = 'review-detail-design-suggestions';
   suggestionsEl.appendChild(designContainer);
+  const dataRefinementContainer = document.createElement('div');
+  dataRefinementContainer.className = 'review-detail-data-refinement';
+  suggestionsEl.appendChild(dataRefinementContainer);
   const editContainer = document.createElement('div');
   editContainer.className = 'review-detail-edit-suggestions';
   suggestionsEl.appendChild(editContainer);
@@ -327,6 +332,7 @@ function buildReviewResultUI(overlay, options) {
       summary: saved.summary ?? '',
       suggestions: suggestionsToSave,
       design_suggestions: designSuggestions,
+      data_refinement: dataRefinement,
       promptSections: saved.promptSections ?? promptSections,
       promptFullText: saved.promptFullText ?? promptFullText,
       workingSections: working.map((s) => ({ name: s.name, content: s.content })),
@@ -388,6 +394,20 @@ function buildReviewResultUI(overlay, options) {
     designContainer.appendChild(card);
   }
 
+  function addOneDataRefinementCard(item) {
+    const rowIndices = Array.isArray(item.row_indices) ? item.row_indices : [];
+    const rowsText = rowIndices.length > 0 ? `Rows ${rowIndices.join(', ')}` : 'Some rows';
+    const card = document.createElement('div');
+    card.className = 'review-detail-suggestion-card review-detail-data-refinement-card';
+    card.innerHTML = `
+      <div class="review-detail-suggestion-card__main">
+        <strong class="review-detail-suggestion-section-name">Possible ground truth issue</strong>
+        <p class="review-detail-suggestion-reason"><span class="review-detail-data-refinement-rows">${escapeHtml(rowsText)}</span>: ${escapeHtml((item.reason || '').trim())}</p>
+      </div>
+    `;
+    dataRefinementContainer.appendChild(card);
+  }
+
   function updateAcceptButtonLabels() {
     editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
       const btn = c.querySelector('.review-detail-accept-btn');
@@ -412,14 +432,11 @@ function buildReviewResultUI(overlay, options) {
     const originalContent = (originals[secIdx] && originals[secIdx].content) ? originals[secIdx].content : '';
     const segmentInOriginal = useSentenceEdit ? getLocatableSegment(originalContent, oldSentence) : null;
     const unlocatable = useSentenceEdit && !segmentInOriginal;
-    const groundTruthIssue = sug.ground_truth_issue === true;
-    const noButton = unlocatable || groundTruthIssue;
+    const noButton = unlocatable;
     /* Only show Revert when user has explicitly applied (sug.applied === true from persist). Fresh suggestions must show Accept. */
     const isApplied = sug.applied === true;
     const fullReason = (sug.reason || '').trim();
     const changeName = (sug.name || '').trim() || name;
-
-    const noButtonNote = groundTruthIssue ? '<p class="review-detail-suggestion-unlocatable">This may be a ground truth issue; no prompt edit suggested.</p>' : '';
 
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card' + (noButton ? ' review-detail-suggestion-card--unlocatable' : '');
@@ -429,7 +446,6 @@ function buildReviewResultUI(overlay, options) {
       <div class="review-detail-suggestion-card__main">
         <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong>
         <p class="review-detail-suggestion-reason">${escapeHtml(fullReason)}</p>
-        ${noButtonNote}
       </div>
       <div class="review-detail-suggestion-card__actions">
         ${noButton ? '' : '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'}
@@ -488,6 +504,7 @@ function buildReviewResultUI(overlay, options) {
   }
 
   designSuggestions.forEach((d) => addOneDesignCard(d));
+  dataRefinement.forEach((item) => addOneDataRefinementCard(item));
   function updateSuggestionsDesignEmptyClass() {
     if (suggestionsEl) suggestionsEl.classList.toggle('review-detail-suggestions--design-empty', designContainer.children.length === 0);
   }
@@ -506,6 +523,16 @@ function buildReviewResultUI(overlay, options) {
         onReviewResultChange({ ...saved, design_suggestions: designSuggestions });
       }
     };
+    streamRef.appendDataRefinement = (arr) => {
+      if (!Array.isArray(arr)) return;
+      dataRefinement = arr.slice();
+      dataRefinementContainer.innerHTML = '';
+      dataRefinement.forEach((item) => addOneDataRefinementCard(item));
+      saved.data_refinement = dataRefinement;
+      if (typeof onReviewResultChange === 'function') {
+        onReviewResultChange({ ...saved, data_refinement: dataRefinement });
+      }
+    };
     streamRef.appendSuggestions = (batch) => {
       if (statusEl) statusEl.textContent = 'Generating suggestions…';
       batch.forEach((sug) => {
@@ -520,13 +547,14 @@ function buildReviewResultUI(overlay, options) {
     };
     streamRef.streamDone = () => {
       if (statusEl) statusEl.textContent = 'Suggestions complete.';
-      if (allSuggestions.length === 0 && designSuggestions.length === 0) {
+      if (allSuggestions.length === 0 && designSuggestions.length === 0 && dataRefinement.length === 0) {
         editContainer.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
       }
       saved.suggestions = allSuggestions.slice();
       saved.design_suggestions = designSuggestions;
+      saved.data_refinement = dataRefinement;
       if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({ ...saved, suggestions: saved.suggestions, design_suggestions: designSuggestions });
+        onReviewResultChange({ ...saved, suggestions: saved.suggestions, design_suggestions: designSuggestions, data_refinement: dataRefinement });
       }
     };
     streamRef.streamError = () => {
