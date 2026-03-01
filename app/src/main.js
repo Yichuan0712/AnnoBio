@@ -166,7 +166,7 @@ const createWindow = () => {
 ipcMain.handle('project:new-dialog', async () => {
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: 'New project',
-    defaultPath: 'project.json',
+    defaultPath: app.getPath('documents'),
     filters: [{ name: 'JSON', extensions: ['json'] }],
   });
   return canceled ? null : filePath;
