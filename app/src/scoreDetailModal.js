@@ -1457,7 +1457,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
     const runColLabels = outputKeysUsed.map((k) => (runColumns.find((c) => c.key === k)?.label || k || '—').trim() || '—');
 
-    let headerRow = '<thead><tr><th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--gt-block" title="Ground truth row index">Ground truth #</th>';
+    let headerRow = '<thead><tr><th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--row-num" title="Row number">#</th><th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--gt-block score-detail-results-th--block-sep" title="Ground truth row index">Ground truth #</th>';
     if (gtColsUsed.length > 0) {
       gtColsUsed.forEach((col) => { headerRow += `<th class="score-detail-results-th score-detail-results-th--gt score-detail-results-th--gt-block">${escapeHtml(col)}</th>`; });
     } else {
@@ -1465,22 +1465,22 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
     headerRow += '<th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--run-block score-detail-results-th--block-sep" title="Run result row index (matched to this ground truth row)">Run result #</th>';
     runColLabels.forEach((label) => { headerRow += `<th class="score-detail-results-th score-detail-results-th--run score-detail-results-th--run-block">${escapeHtml(label)}</th>`; });
-    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block">Match</th><th class="score-detail-results-th score-detail-results-th--comment score-detail-results-th--result-block">Comment</th></tr></thead><tbody>';
+    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block score-detail-results-th--block-sep">Match</th><th class="score-detail-results-th score-detail-results-th--comment score-detail-results-th--result-block">Comment</th></tr></thead><tbody>';
     const tableWrap = document.createElement('div');
     tableWrap.className = 'score-detail-results-table-wrap';
     const tbl = document.createElement('table');
-    tbl.className = 'score-detail-results-table';
+    tbl.className = 'score-detail-results-table run-detail-results-table';
     tbl.innerHTML = headerRow;
     const tbody = tbl.querySelector('tbody');
 
-    function appendGtRow(j) {
+    function appendGtRow(j, rowNum) {
       const runRowIndex = gtToRun[j];
       const runResult = runRowIndex >= 0 ? resultsByIndex.get(runRowIndex) || null : null;
       const isMatch = runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent);
       const rowClass = isMatch ? 'score-detail-results-tr--match' : 'score-detail-results-tr--unmatch';
       const runNum = runRowIndex >= 0 ? String(runRowIndex + 1) : '—';
       const commentKey = String(j);
-      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--idx" title="GT row ${j + 1}">${j + 1}</td>`;
+      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--row-num" title="Row ${rowNum}">${rowNum}</td><td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="GT row ${j + 1}">${j + 1}</td>`;
       if (gtColsUsed.length > 0) {
         gtColsUsed.forEach((col) => {
           const val = getGtValue(gtContent, j, col);
@@ -1494,16 +1494,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const runVal = runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : null;
         tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
       }
-      tr += `<td class="score-detail-results-td score-detail-results-td--match" aria-label="${isMatch ? 'Matched' : 'Not matched'}">${isMatch ? '1' : '0'}</td>`;
+      tr += `<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="${isMatch ? 'Matched' : 'Not matched'}">${isMatch ? '1' : '0'}</td>`;
       tr += '<td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
 
-    function appendRunOnlyRow(i) {
+    function appendRunOnlyRow(i, rowNum) {
       const runResult = resultsByIndex.get(i) || null;
       const rowClass = 'score-detail-results-tr--run-only';
       const commentKey = 'run:' + i;
-      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--idx" title="No GT row">—</td>`;
+      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--row-num" title="Row ${rowNum}">${rowNum}</td><td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="No GT row">—</td>`;
       if (gtColsUsed.length > 0) {
         gtColsUsed.forEach(() => { tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>'; });
       } else {
@@ -1514,14 +1514,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const runVal = runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : '';
         tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
       }
-      tr += '<td class="score-detail-results-td score-detail-results-td--match" aria-label="Run result row without ground truth match">0</td>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="Run result row without ground truth match">0</td>';
       tr += '<td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
 
+    let rowNum = start + 1;
     for (const d of pageDescriptors) {
-      if (d.type === 'gt') appendGtRow(d.j);
-      else appendRunOnlyRow(d.i);
+      if (d.type === 'gt') appendGtRow(d.j, rowNum++);
+      else appendRunOnlyRow(d.i, rowNum++);
     }
 
     tbody.querySelectorAll('tr').forEach((tr) => {
@@ -2011,12 +2012,14 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
     (results || []).forEach((res) => { resultsByIndex.set(res.row_index, res); });
-    const runCount = runWs?.rows?.length ?? 0;
+    const runRowIndices = [...new Set((results || []).map((res) => res.row_index))];
+    const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
     const gtCount = gtRows.length;
-    const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
+    const runToGtSize = Math.max(maxRunRowIndex + 1, gtCount);
+    const runToGt = new Array(runToGtSize).fill(-1);
     const gtUsed = new Array(gtCount).fill(false);
     const pairs = [];
-    for (let i = 0; i < runCount; i++) {
+    for (const i of runRowIndices) {
       for (let j = 0; j < gtCount; j++) {
         const score = countMatchingRules(r, i, j, resultsByIndex, runWs, outputFields, gtContent);
         if (score > 0) pairs.push({ i, j, score });
@@ -2028,24 +2031,9 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       runToGt[i] = j;
       gtUsed[j] = true;
     }
-    return { runToGt, total: runCount };
+    return { runToGt, total: (results || []).length };
   };
 
-  const { results, outputFields } = getRunResults();
-  const runWs = getRunWorkingSetContent();
-  const gtContent = getGroundTruthContent(selectedNodeId);
-  const gtRows = gtContent.rows || [];
-  const gtHeaders = gtContent.headers || [];
-  if (!Array.isArray(gtRows)) return null;
-  if (gtRows.length === 0 && (!results || results.length === 0)) return null;
-  const resultsByIndex = new Map();
-  (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
-  const runCount = runWs?.rows?.length ?? 0;
-  const { runToGt, total } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
-  const gtToRun = new Array(gtRows.length).fill(-1);
-  for (let i = 0; i < (runToGt || []).length; i++) {
-    if (runToGt[i] >= 0) gtToRun[runToGt[i]] = i;
-  }
   const gtColsUsed = [];
   const outputKeysUsed = [];
   for (const r of rulesFlat) {
@@ -2055,6 +2043,50 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
     const k = (r.outputKey || '').trim();
     if (k && !outputKeysUsed.includes(k)) outputKeysUsed.push(k);
   }
+
+  const { results: rawResults, outputFields } = getRunResults();
+  const runWs = getRunWorkingSetContent();
+  const rawGtContent = getGroundTruthContent(selectedNodeId);
+  const deduplicateGtRows = (gtContent, gtCols) => {
+    if (!gtCols || gtCols.length === 0) return gtContent;
+    const rows = gtContent.rows || [];
+    const seen = new Set();
+    const dedupRows = [];
+    for (let i = 0; i < rows.length; i++) {
+      const key = JSON.stringify(gtCols.map((col) => getGtValue(gtContent, i, col)));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedupRows.push(rows[i]);
+    }
+    return { ...gtContent, rows: dedupRows };
+  };
+  const deduplicateResults = (results, outputKeys, runWs, outputFields) => {
+    if (!outputKeys || outputKeys.length === 0) return results || [];
+    const seen = new Set();
+    const dedupResults = [];
+    for (const res of (results || [])) {
+      const key = JSON.stringify(outputKeys.map((k) => getRunValue(res, k, res.row_index, runWs, outputFields)));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedupResults.push(res);
+    }
+    return dedupResults;
+  };
+
+  const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
+  const results = deduplicateResults(rawResults, outputKeysUsed, runWs, outputFields);
+  const gtRows = gtContent.rows || [];
+  const gtHeaders = gtContent.headers || [];
+  if (!Array.isArray(gtRows)) return null;
+  if (gtRows.length === 0 && (!results || results.length === 0)) return null;
+  const resultsByIndex = new Map();
+  (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
+  const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
+  const { runToGt } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
+  const gtToRun = new Array(gtRows.length).fill(-1);
+  for (let i = 0; i < (runToGt || []).length; i++) {
+    if (runToGt[i] >= 0) gtToRun[runToGt[i]] = i;
+  }
   const descriptors = [];
   for (let j = 0; j < gtRows.length; j++) {
     if (gtToRun[j] >= 0) descriptors.push({ type: 'gt', j });
@@ -2062,8 +2094,9 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
   for (let j = 0; j < gtRows.length; j++) {
     if (gtToRun[j] < 0) descriptors.push({ type: 'gt', j });
   }
-  for (let i = 0; i < runCount; i++) {
-    if (runToGt[i] >= 0) continue;
+  for (const i of runRowIndices) {
+    const paired = i < (runToGt || []).length && runToGt[i] >= 0;
+    if (paired) continue;
     let matchesAnyGt = false;
     for (let j = 0; j < gtRows.length; j++) {
       if (evaluateNode(root, i, j, resultsByIndex, runWs, outputFields, gtContent)) { matchesAnyGt = true; break; }

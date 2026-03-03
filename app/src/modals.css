@@ -2764,6 +2764,26 @@
   overflow: auto;
 }
 
+/* # 列与 Ground truth #、Run result # 右对齐，与 dataset 节点一致 */
+.score-detail-results-table .score-detail-results-th--row-num,
+.score-detail-results-table .score-detail-results-td--row-num,
+.score-detail-results-table .score-detail-results-th--idx,
+.score-detail-results-table .score-detail-results-td--idx {
+  text-align: right;
+}
+
+.score-detail-results-table .score-detail-results-th--row-num,
+.score-detail-results-table .score-detail-results-td--row-num {
+  width: 1%;
+  min-width: 2.5em;
+}
+
+/* 块分割线：三处完全统一（2px，颜色加深便于区分）——# 后、GT/Run 间、Run/Result 间 */
+.score-detail-results-table .score-detail-results-th--block-sep,
+.score-detail-results-table .score-detail-results-td--block-sep {
+  border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
+}
+
 /* Reviewer model 选择框与 Review 按钮同高 */
 .score-detail-llm-row .score-detail-llm-select {
   height: 36px;

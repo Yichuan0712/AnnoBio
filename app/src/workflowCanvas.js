@@ -813,15 +813,16 @@ export function buildWorkflowCanvas(root) {
         const j = Math.floor(Math.random() * (i + 1));
         [indices[i], indices[j]] = [indices[j], indices[i]];
       }
-      return indices.slice(0, count).map((i) => sourceRows[i].slice());
+      const selected = indices.slice(0, count).sort((a, b) => a - b);
+      return selected.map((i) => sourceRows[i].slice());
     }
 
-    const result = [];
+    const picked = [];
     for (let k = 0; k < count; k++) {
-      const i = Math.floor(Math.random() * n);
-      result.push(sourceRows[i].slice());
+      picked.push(Math.floor(Math.random() * n));
     }
-    return result;
+    picked.sort((a, b) => a - b);
+    return picked.map((i) => sourceRows[i].slice());
   }
 
   /**
