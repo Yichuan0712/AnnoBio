@@ -1330,8 +1330,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (k && !outputKeysUsed.includes(k)) outputKeysUsed.push(k);
     }
 
+    const errorRowCount = (rawResults || []).filter((r) => r && r.error).length;
+    const resultsWithoutError = (rawResults || []).filter((r) => !r || !r.error);
     const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
-    const results = deduplicateResults(rawResults, outputKeysUsed, runWs, outputFields);
+    const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields);
     const gtHeaders = gtContent.headers || [];
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
@@ -1424,7 +1426,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const recall = gtRows.length > 0 ? (tp / gtRows.length) * 100 : 0;
     const f1 = (precision + recall) > 0 ? (2 * (precision / 100) * (recall / 100) / ((precision + recall) / 100)) * 100 : 0;
     const fmt = (x) => (Number.isFinite(x) ? x.toFixed(2) : '—');
-    const metricsText = `Precision ${fmt(precision)}% · Recall ${fmt(recall)}% · F1 ${fmt(f1)}%`;
+    const errorNote = errorRowCount > 0 ? ` · ${errorRowCount} error row${errorRowCount === 1 ? '' : 's'} removed` : '';
+    const metricsText = `Precision ${fmt(precision)}% · Recall ${fmt(recall)}% · F1 ${fmt(f1)}%${errorNote}`;
 
     const summaryText = `Run result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tp} matched`;
 
@@ -2073,8 +2076,9 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
     return dedupResults;
   };
 
+  const resultsWithoutError = (rawResults || []).filter((r) => !r || !r.error);
   const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
-  const results = deduplicateResults(rawResults, outputKeysUsed, runWs, outputFields);
+  const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields);
   const gtRows = gtContent.rows || [];
   const gtHeaders = gtContent.headers || [];
   if (!Array.isArray(gtRows)) return null;
