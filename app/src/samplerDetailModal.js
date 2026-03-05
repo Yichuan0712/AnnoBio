@@ -306,7 +306,7 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
       if (!performSave()) return;
       const samplerNodeId = node?.dataset?.nodeId ?? '';
       const colorIndex = node?.dataset?.samplerColorIndex != null ? parseInt(node.dataset.samplerColorIndex, 10) : undefined;
-      document.dispatchEvent(new CustomEvent('workflow:add-subset-node', { detail: { samplerNodeId, colorIndex } }));
+      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId, colorIndex } }));
       close();
     });
   }

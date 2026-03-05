@@ -61,7 +61,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, color })
     return;
   }
 
-  const name = (node?.dataset?.subsetName ?? '').trim() || 'Dataset';
+  const name = (node?.dataset?.datasetName ?? node?.dataset?.subsetName ?? '').trim() || 'Dataset';
 
   let headers = [];
   let rows = [];

@@ -22,10 +22,10 @@ const MIN_CANVAS_HEIGHT = 2600;
 const EDGE_TYPE_PROMPT_TO_PROMPT = 'prompt-to-prompt';
 /** Edge type for source dataset → sampler. */
 const EDGE_TYPE_DATASET_TO_SAMPLER = 'dataset-to-sampler';
-/** Edge type for sampler → subset. */
-const EDGE_TYPE_SAMPLER_TO_SUBSET = 'sampler-to-subset';
-/** Edge type for subset → subset (e.g. "version of" link). */
-const EDGE_TYPE_SUBSET_TO_SUBSET = 'subset-to-subset';
+/** Edge type for sampler → dataset (sampled output). */
+const EDGE_TYPE_SAMPLER_TO_DATASET = 'sampler-to-dataset';
+/** Edge type for dataset → dataset (e.g. "version of" link). */
+const EDGE_TYPE_DATASET_TO_DATASET = 'dataset-to-dataset';
 /** Edge type for prompt → run (run/test this prompt). */
 const EDGE_TYPE_PROMPT_TO_RUN = 'prompt-to-run';
 /** Edge type for run → score (compare result with ground truth). */
@@ -157,7 +157,7 @@ function evaluateScoreNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
 }
 
 /** Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow). */
-function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
+function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId) {
   const toCompareStr = (v) => {
     if (v === null || v === undefined) return '';
     if (typeof v === 'string') return v.trim();
@@ -234,8 +234,8 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
   } catch (_) {}
   const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
   const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
-  const runWs = runWsId ? subsetContentByNodeId.get(runWsId) : null;
-  const gtContent = gtId ? subsetContentByNodeId.get(gtId) : null;
+  const runWs = runWsId ? datasetContentByNodeId.get(runWsId) : null;
+  const gtContent = gtId ? datasetContentByNodeId.get(gtId) : null;
   const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
   const gtSafe = gtContent ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
   const gtRows = gtSafe.rows || [];
@@ -305,7 +305,7 @@ function buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId) {
 /** Invisible stroke width for edge hit area (px). */
 const EDGE_HIT_STROKE_WIDTH = 16;
 
-/** Horizontal gap when placing a new node to the right of its parent (source → sampler, sampler → subset, duplicate prompt). */
+/** Horizontal gap when placing a new node to the right of its parent (source → sampler, sampler → dataset, duplicate prompt). */
 const NEW_NODE_OFFSET = 40;
 
 function generateNodeId() {
@@ -429,10 +429,8 @@ export function buildWorkflowCanvas(root) {
   /** 上一次保存的完整状态（变更前），用于在下次变更时压入 undo */
   let lastSavedState = null;
 
-  /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content for preview/detail */
+  /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content (imported or sampled) */
   const datasetContentByNodeId = new Map();
-  /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset (subset) content */
-  const subsetContentByNodeId = new Map();
 
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
@@ -612,15 +610,15 @@ export function buildWorkflowCanvas(root) {
   function findNextWorkingDatasetName(samplerNodeId) {
     const samplerNode = getNodeById(samplerNodeId);
     const sourceNode = samplerNode?.dataset?.sourceNodeId ? getNodeById(samplerNode.dataset.sourceNodeId) : null;
-    const sourceName = (sourceNode?.dataset?.subsetName ?? sourceNode?.dataset?.datasetName ?? '').trim() || 'Dataset';
+    const sourceName = (sourceNode?.dataset?.datasetName ?? sourceNode?.dataset?.subsetName ?? '').trim() || 'Dataset';
     const samplerName = (samplerNode?.dataset?.samplerName ?? '').trim() || 'Sample';
     const base = `${sourceName} ${samplerName}`;
-    const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
+    const datasetNodes = nodesLayer.querySelectorAll('.workflow-node--dataset');
     let maxN = 0;
     const prefix = base + ' ';
-    for (const n of subsetNodes) {
+    for (const n of datasetNodes) {
       if (n.dataset.samplerNodeId !== samplerNodeId) continue;
-      const name = (n.dataset.subsetName || '').trim();
+      const name = (n.dataset.datasetName || n.dataset.subsetName || '').trim();
       if (!name.startsWith(prefix)) continue;
       const numStr = name.slice(prefix.length).trim();
       const num = parseInt(numStr, 10);
@@ -636,8 +634,8 @@ export function buildWorkflowCanvas(root) {
    */
   function hasSampledDatasets(samplerNodeId) {
     if (!samplerNodeId) return false;
-    const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
-    for (const n of subsetNodes) {
+    const datasetNodes = nodesLayer.querySelectorAll('.workflow-node--dataset');
+    for (const n of datasetNodes) {
       if ((n.dataset.samplerNodeId || '') === samplerNodeId) return true;
     }
     return false;
@@ -671,9 +669,21 @@ export function buildWorkflowCanvas(root) {
    * @param {string|null} [excludeNodeId=null] - node id to exclude (e.g. when editing that node)
    * @returns {boolean}
    */
-  /** 唯一一种 dataset 即 subset 节点，检查名称是否已被占用 */
+  /**
+   * Check if a dataset name is already used on the canvas (case-insensitive).
+   * @param {string} nameToCheck
+   * @param {string|null} [excludeNodeId=null] - node id to exclude
+   * @returns {boolean}
+   */
   function isDatasetNameAlreadyUsed(nameToCheck, excludeNodeId = null) {
-    return isSubsetNameAlreadyUsed(nameToCheck, excludeNodeId);
+    const normalized = (nameToCheck || '').trim().toLowerCase();
+    const datasetNodes = nodesLayer.querySelectorAll('.workflow-node--dataset');
+    for (const n of datasetNodes) {
+      if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
+      const existing = (n.dataset.datasetName || n.dataset.datasetName || '').trim().toLowerCase();
+      if (existing === normalized) return true;
+    }
+    return false;
   }
 
   /** For run-exported datasets: return baseName or "baseName Copy 1", "baseName Copy 2", … so name is unique. */
@@ -687,23 +697,6 @@ export function buildWorkflowCanvas(root) {
       n++;
     } while (isDatasetNameAlreadyUsed(candidate));
     return candidate;
-  }
-
-  /**
-   * Check if a dataset (subset) name is already used on the canvas (case-insensitive).
-   * @param {string} nameToCheck
-   * @param {string|null} [excludeNodeId=null] - node id to exclude
-   * @returns {boolean}
-   */
-  function isSubsetNameAlreadyUsed(nameToCheck, excludeNodeId = null) {
-    const normalized = (nameToCheck || '').trim().toLowerCase();
-    const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
-    for (const n of subsetNodes) {
-      if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
-      const existing = (n.dataset.subsetName || '').trim().toLowerCase();
-      if (existing === normalized) return true;
-    }
-    return false;
   }
 
   /**
@@ -1196,13 +1189,13 @@ export function buildWorkflowCanvas(root) {
     return lines.join('\n');
   }
 
-  function openSubsetEdgeDetailModal(edge) {
+  function openDatasetEdgeDetailModal(edge) {
     const fromNode = getNodeById(edge.fromId);
     const toNode = getNodeById(edge.toId);
-    const fromContent = subsetContentByNodeId.get(edge.fromId) || null;
-    const toContent = subsetContentByNodeId.get(edge.toId) || null;
-    const fromName = (fromNode?.dataset?.subsetName ?? '').trim() || 'Dataset';
-    const toName = (toNode?.dataset?.subsetName ?? '').trim() || 'Dataset';
+    const fromContent = datasetContentByNodeId.get(edge.fromId) || null;
+    const toContent = datasetContentByNodeId.get(edge.toId) || null;
+    const fromName = (fromNode?.dataset?.datasetName ?? fromNode?.dataset?.subsetName ?? '').trim() || 'Dataset';
+    const toName = (toNode?.dataset?.datasetName ?? toNode?.dataset?.subsetName ?? '').trim() || 'Dataset';
 
     const oldText = serializeSubsetToDiffText(fromContent);
     const newText = serializeSubsetToDiffText(toContent);
@@ -1259,22 +1252,22 @@ export function buildWorkflowCanvas(root) {
       e.preventDefault();
       e.stopPropagation();
       openReviewToPromptEdgeDetailModal(edge);
-    } else if (edgeType === EDGE_TYPE_SUBSET_TO_SUBSET) {
+    } else if (edgeType === EDGE_TYPE_DATASET_TO_DATASET) {
       e.preventDefault();
       e.stopPropagation();
-      openSubsetEdgeDetailModal(edge);
-    } else if (edgeType === EDGE_TYPE_SAMPLER_TO_SUBSET) {
+      openDatasetEdgeDetailModal(edge);
+    } else if (edgeType === EDGE_TYPE_SAMPLER_TO_DATASET) {
       e.preventDefault();
       e.stopPropagation();
-      const subsetNode = getNodeById(edge.toId);
-      if (subsetNode && subsetNode.classList.contains('workflow-node--subset')) {
-        const colorIndex = subsetNode.dataset.subsetColorIndex != null ? parseInt(subsetNode.dataset.subsetColorIndex, 10) : 0;
+      const dsNode = getNodeById(edge.toId);
+      if (dsNode && dsNode.classList.contains('workflow-node--dataset')) {
+        const colorIndex = dsNode.dataset.datasetColorIndex != null ? parseInt(dsNode.dataset.datasetColorIndex, 10) : 0;
         const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
         openDatasetDetailModal({
-          node: subsetNode,
-          getContent: () => subsetContentByNodeId.get(subsetNode.dataset.nodeId) || { headers: [], rows: [] },
+          node: dsNode,
+          getContent: () => datasetContentByNodeId.get(dsNode.dataset.nodeId) || { headers: [], rows: [] },
           saveContent: (content) => {
-            subsetContentByNodeId.set(subsetNode.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
+            datasetContentByNodeId.set(dsNode.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           },
           color,
@@ -1290,14 +1283,14 @@ export function buildWorkflowCanvas(root) {
       e.stopPropagation();
       const scoreNode = getNodeById(edge.toId);
       if (scoreNode && scoreNode.classList.contains('workflow-node--score')) {
-        const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+        const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
           const id = n.dataset.nodeId || '';
-          const content = subsetContentByNodeId.get(id);
-          const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+          const content = datasetContentByNodeId.get(id);
+          const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
           const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
           return {
             nodeId: id,
-            name: (n.dataset.subsetName || '').trim() || 'Dataset',
+            name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
             headers: content?.headers ? content.headers.slice() : [],
             color,
           };
@@ -1326,7 +1319,7 @@ export function buildWorkflowCanvas(root) {
           const outputFields = deriveOutputFields(results, schemaFields);
           outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-          const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
+          const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
           cols.push({ key: '[#]', label: 'Input: #' });
           wsHeaders.forEach((h) => {
@@ -1336,7 +1329,7 @@ export function buildWorkflowCanvas(root) {
           return cols;
         }
         function getGroundTruthHeaders(wsNodeId) {
-          const c = subsetContentByNodeId.get(wsNodeId || '');
+          const c = datasetContentByNodeId.get(wsNodeId || '');
           return (c && c.headers) ? c.headers.slice() : [];
         }
         function getRunResults() {
@@ -1359,11 +1352,11 @@ export function buildWorkflowCanvas(root) {
         }
         function getRunWorkingSetContent() {
           const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-          const c = wsId ? subsetContentByNodeId.get(wsId) : null;
+          const c = wsId ? datasetContentByNodeId.get(wsId) : null;
           return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
         }
         function getGroundTruthContent(wsNodeId) {
-          const c = subsetContentByNodeId.get(wsNodeId || '');
+          const c = datasetContentByNodeId.get(wsNodeId || '');
           if (!c) return { headers: [], rows: [] };
           return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
         }
@@ -1395,21 +1388,21 @@ export function buildWorkflowCanvas(root) {
         }
       }
       const promptInputFields = extractInputFieldsFromSections(Array.isArray(sections) ? sections : []);
-      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
         const id = n.dataset.nodeId || '';
-        const content = subsetContentByNodeId.get(id);
-        const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+        const content = datasetContentByNodeId.get(id);
+        const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
         const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
         return {
           nodeId: id,
-          name: (n.dataset.subsetName || '').trim() || 'Dataset',
+          name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
           headers: content?.headers ? content.headers.slice() : [],
           color,
         };
       });
       const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
       function getSubsetContent(nodeId) {
-        const c = subsetContentByNodeId.get(nodeId);
+        const c = datasetContentByNodeId.get(nodeId);
         return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
       }
       function getPromptTemplate() {
@@ -1474,7 +1467,7 @@ export function buildWorkflowCanvas(root) {
           runResults = JSON.parse(runNode.dataset.runResults || '[]');
           outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
         } catch (_) {}
-        const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId);
+        const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId);
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
@@ -1750,20 +1743,20 @@ export function buildWorkflowCanvas(root) {
               sections = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
             } catch (_) {}
             const promptInputFields = extractInputFieldsFromSections(Array.isArray(sections) ? sections : []);
-            const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+            const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
               const id = n.dataset.nodeId || '';
-              const content = subsetContentByNodeId.get(id);
-              const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+              const content = datasetContentByNodeId.get(id);
+              const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
               const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
               return {
                 nodeId: id,
-                name: (n.dataset.subsetName || '').trim() || 'Dataset',
+                name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
                 headers: content?.headers ? content.headers.slice() : [],
                 color,
               };
             });
             function getSubsetContent(nodeId) {
-              const c = subsetContentByNodeId.get(nodeId);
+              const c = datasetContentByNodeId.get(nodeId);
               return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
             }
             function getPromptTemplate() {
@@ -1821,7 +1814,7 @@ export function buildWorkflowCanvas(root) {
     '#2dd4bf', '#ec4899', '#86efac', '#e879f9', '#fdba74', '#7dd3fc', '#bef264', '#c4b5fd',
   ]; // 40 colors
 
-  /** 从 sampler 节点生成简短描述（用于 subset 节点下方） */
+  /** 从 sampler 节点生成简短描述（用于 dataset 节点下方） */
   function formatSamplerDescription(samplerNode) {
     if (!samplerNode || !samplerNode.dataset) return '';
     const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -1938,7 +1931,7 @@ export function buildWorkflowCanvas(root) {
     return node;
   }
 
-  function createSubsetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', colorIndex: givenColorIndex, headers, rows }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', colorIndex: givenColorIndex, headers, rows }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -1946,20 +1939,20 @@ export function buildWorkflowCanvas(root) {
     const notesTrimmed = (notes !== undefined && notes !== null) ? String(notes).trim() : '';
     const bodyText = samplerDesc || notesTrimmed || '';
     const node = document.createElement('div');
-    node.className = 'workflow-node workflow-node--subset';
+    node.className = 'workflow-node workflow-node--dataset';
     node.setAttribute('role', 'article');
     node.setAttribute('aria-label', `Dataset node: ${title}`);
     node.dataset.nodeId = nodeId;
-    node.dataset.subsetName = name;
-    if (notes !== undefined && notes !== null) node.dataset.subsetNote = String(notes);
-    node.dataset.nodeType = 'subset';
+    node.dataset.datasetName = name;
+    if (notes !== undefined && notes !== null) node.dataset.datasetNote = String(notes);
+    node.dataset.nodeType = 'dataset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
     const colorIndex = (typeof givenColorIndex === 'number' && givenColorIndex >= 0)
       ? (givenColorIndex % DATASET_BORDER_COLORS.length)
       : Math.floor(Math.random() * DATASET_BORDER_COLORS.length);
-    node.dataset.subsetColorIndex = String(colorIndex);
+    node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = DATASET_BORDER_COLORS[colorIndex];
-    if (Array.isArray(headers) && Array.isArray(rows)) subsetContentByNodeId.set(nodeId, { headers: headers.slice(), rows: rows.map((r) => r.slice()) });
+    if (Array.isArray(headers) && Array.isArray(rows)) datasetContentByNodeId.set(nodeId, { headers: headers.slice(), rows: rows.map((r) => r.slice()) });
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
@@ -1967,11 +1960,11 @@ export function buildWorkflowCanvas(root) {
     node.style.top = `${y}px`;
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--subset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="12" height="12" rx="0.5"/><line x1="1" y1="4" x2="13" y2="4"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="1" y1="10" x2="13" y2="10"/><line x1="4.5" y1="1" x2="4.5" y2="13"/><line x1="8" y1="1" x2="8" y2="13"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="12" height="12" rx="0.5"/><line x1="1" y1="4" x2="13" y2="4"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="1" y1="10" x2="13" y2="10"/><line x1="4.5" y1="1" x2="4.5" y2="13"/><line x1="8" y1="1" x2="8" y2="13"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
-      <div class="workflow-node__body workflow-node__subset-desc">${bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>'}</div>
+      <div class="workflow-node__body workflow-node__dataset-desc">${bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>'}</div>
     `;
     nodesLayer.appendChild(node);
 
@@ -1990,7 +1983,7 @@ export function buildWorkflowCanvas(root) {
         return;
       }
       removeConnectionsInvolvingNodeId(nodeId);
-      subsetContentByNodeId.delete(nodeId);
+      datasetContentByNodeId.delete(nodeId);
       node.remove();
       updateContentSize();
       updateEdges();
@@ -2038,13 +2031,13 @@ export function buildWorkflowCanvas(root) {
       if (lastInteractionWasDrag) return;
       e.preventDefault();
       e.stopPropagation();
-      const colorIndex = node.dataset.subsetColorIndex != null ? parseInt(node.dataset.subsetColorIndex, 10) : 0;
+      const colorIndex = node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : 0;
       const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
       openDatasetDetailModal({
         node,
-        getContent: () => subsetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
+        getContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
         saveContent: (content) => {
-          subsetContentByNodeId.set(node.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
+          datasetContentByNodeId.set(node.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         },
         color,
@@ -2162,21 +2155,21 @@ export function buildWorkflowCanvas(root) {
         }
       }
       const promptInputFields = extractInputFieldsFromSections(Array.isArray(sections) ? sections : []);
-      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
         const id = n.dataset.nodeId || '';
-        const content = subsetContentByNodeId.get(id);
-        const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+        const content = datasetContentByNodeId.get(id);
+        const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
         const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
         return {
           nodeId: id,
-          name: (n.dataset.subsetName || '').trim() || 'Dataset',
+          name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
           headers: content?.headers ? content.headers.slice() : [],
           color,
         };
       });
       const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
       function getSubsetContent(nodeId) {
-        const c = subsetContentByNodeId.get(nodeId);
+        const c = datasetContentByNodeId.get(nodeId);
         return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
       }
       function getPromptTemplate() {
@@ -2307,14 +2300,14 @@ export function buildWorkflowCanvas(root) {
       if (lastInteractionWasDrag) return;
       e.preventDefault();
       e.stopPropagation();
-      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
         const id = n.dataset.nodeId || '';
-        const content = subsetContentByNodeId.get(id);
-        const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+        const content = datasetContentByNodeId.get(id);
+        const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
         const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
         return {
           nodeId: id,
-          name: (n.dataset.subsetName || '').trim() || 'Dataset',
+          name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
           headers: content?.headers ? content.headers.slice() : [],
           color,
         };
@@ -2343,7 +2336,7 @@ export function buildWorkflowCanvas(root) {
         const outputFields = deriveOutputFields(results, schemaFields);
         outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
         const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-        const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
+        const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
         const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
         cols.push({ key: '[#]', label: 'Input: #' });
         wsHeaders.forEach((h) => {
@@ -2353,7 +2346,7 @@ export function buildWorkflowCanvas(root) {
         return cols;
       }
       function getGroundTruthHeaders(wsNodeId) {
-        const c = subsetContentByNodeId.get(wsNodeId || '');
+        const c = datasetContentByNodeId.get(wsNodeId || '');
         return (c && c.headers) ? c.headers.slice() : [];
       }
       function getRunResults() {
@@ -2376,11 +2369,11 @@ export function buildWorkflowCanvas(root) {
       }
       function getRunWorkingSetContent() {
         const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-        const c = wsId ? subsetContentByNodeId.get(wsId) : null;
+        const c = wsId ? datasetContentByNodeId.get(wsId) : null;
         return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
       }
       function getGroundTruthContent(wsNodeId) {
-        const c = subsetContentByNodeId.get(wsNodeId || '');
+        const c = datasetContentByNodeId.get(wsNodeId || '');
         if (!c) return { headers: [], rows: [] };
         return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
       }
@@ -2420,7 +2413,7 @@ export function buildWorkflowCanvas(root) {
             };
           }
         } catch (_) {}
-        const comparison_rows = buildReviewComparisonRows(node, runNode, subsetContentByNodeId);
+        const comparison_rows = buildReviewComparisonRows(node, runNode, datasetContentByNodeId);
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
@@ -2549,7 +2542,7 @@ export function buildWorkflowCanvas(root) {
           runResults = JSON.parse(runNode.dataset.runResults || '[]');
           outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
         } catch (_) {}
-        const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId);
+        const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId);
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
@@ -2610,11 +2603,11 @@ export function buildWorkflowCanvas(root) {
   function findNextWorkingDatasetVersionName(baseName, excludeNodeId) {
     const raw = (baseName || 'Dataset').trim() || 'Dataset';
     const versionBase = stripVersionSuffixOnly(raw).trim() || 'Dataset';
-    const subsetNodes = nodesLayer.querySelectorAll('.workflow-node--subset');
+    const datasetNodes = nodesLayer.querySelectorAll('.workflow-node--dataset');
     let nextV = 2;
     const versionPrefix = versionBase + ' v';
-    for (const n of subsetNodes) {
-      const name = (n.dataset.subsetName || '').trim();
+    for (const n of datasetNodes) {
+      const name = (n.dataset.datasetName || n.dataset.subsetName || '').trim();
       const nBase = stripVersionSuffixOnly(name).trim();
       if (nBase !== versionBase) continue;
       if (name === versionBase) {
@@ -2636,7 +2629,6 @@ export function buildWorkflowCanvas(root) {
 
     const isDataset = node.dataset.nodeType === 'dataset';
     const isSampler = node.dataset.nodeType === 'sampler';
-    const isSubset = node.dataset.nodeType === 'subset';
     const isRun = node.dataset.nodeType === 'run';
     const isScore = node.dataset.nodeType === 'score';
     const isPromptReview = node.dataset.nodeType === 'promptReview';
@@ -2694,7 +2686,7 @@ export function buildWorkflowCanvas(root) {
         <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem" ${reviewHasAccepted ? '' : 'disabled'}>Export</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
       `;
-    } else if (isSubset) {
+    } else if (isDataset) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="add-sampler" role="menuitem">Sample</button>
         <button type="button" class="workflow-node-context-item" data-action="duplicate-working-dataset" role="menuitem">Duplicate this dataset</button>
@@ -2788,14 +2780,14 @@ export function buildWorkflowCanvas(root) {
       'score-add-review': async () => {
         if (node.dataset.nodeType !== 'score') return;
         const scoreNode = node;
-        const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--subset')).map((n) => {
+        const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
           const id = n.dataset.nodeId || '';
-          const content = subsetContentByNodeId.get(id);
-          const colorIndex = n.dataset.subsetColorIndex != null ? parseInt(n.dataset.subsetColorIndex, 10) : 0;
+          const content = datasetContentByNodeId.get(id);
+          const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
           const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
           return {
             nodeId: id,
-            name: (n.dataset.subsetName || '').trim() || 'Dataset',
+            name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
             headers: content?.headers ? content.headers.slice() : [],
             color,
           };
@@ -2816,7 +2808,7 @@ export function buildWorkflowCanvas(root) {
           } catch (_) {}
           outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-          const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
+          const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
           cols.push({ key: '[#]', label: 'Input: #' });
           wsHeaders.forEach((h) => {
@@ -2826,7 +2818,7 @@ export function buildWorkflowCanvas(root) {
           return cols;
         }
         function getGroundTruthHeaders(wsNodeId) {
-          const c = subsetContentByNodeId.get(wsNodeId || '');
+          const c = datasetContentByNodeId.get(wsNodeId || '');
           return (c && c.headers) ? c.headers.slice() : [];
         }
         function getRunResults() {
@@ -2841,11 +2833,11 @@ export function buildWorkflowCanvas(root) {
         }
         function getRunWorkingSetContent() {
           const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-          const c = wsId ? subsetContentByNodeId.get(wsId) : null;
+          const c = wsId ? datasetContentByNodeId.get(wsId) : null;
           return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
         }
         function getGroundTruthContent(wsNodeId) {
-          const c = subsetContentByNodeId.get(wsNodeId || '');
+          const c = datasetContentByNodeId.get(wsNodeId || '');
           if (!c) return { headers: [], rows: [] };
           return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
         }
@@ -2879,7 +2871,7 @@ export function buildWorkflowCanvas(root) {
               };
             }
           } catch (_) {}
-          const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, subsetContentByNodeId);
+          const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId);
           return {
             prompt_sections: sections,
             prompt_full_text: promptFullText,
@@ -2911,7 +2903,7 @@ export function buildWorkflowCanvas(root) {
         });
       },
       'add-sampler': () => {
-        if (node.dataset.nodeType !== 'subset') return;
+        if (node.dataset.nodeType !== 'dataset') return;
         const sourceNodeId = node.dataset.nodeId || '';
         const left = (parseFloat(node.style.left) || 0) + (node.offsetWidth || 280) + NEW_NODE_OFFSET;
         const top = parseFloat(node.style.top) || 0;
@@ -2939,7 +2931,7 @@ export function buildWorkflowCanvas(root) {
       'create-working-dataset': () => {
         const samplerNodeId = node.dataset.nodeId || '';
         const colorIndex = node.dataset.samplerColorIndex != null ? parseInt(node.dataset.samplerColorIndex, 10) : undefined;
-        document.dispatchEvent(new CustomEvent('workflow:add-subset-node', { detail: { samplerNodeId, colorIndex } }));
+        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId, colorIndex } }));
       },
       'run-this-prompt': () => {
         const left = parseFloat(node.style.left) || 0;
@@ -3033,16 +3025,16 @@ export function buildWorkflowCanvas(root) {
         }
         function getRunWorkingSetContent() {
           const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-          const c = wsId ? subsetContentByNodeId.get(wsId) : null;
+          const c = wsId ? datasetContentByNodeId.get(wsId) : null;
           return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
         }
         function getGroundTruthContent(wsNodeId) {
-          const c = subsetContentByNodeId.get(wsNodeId || '');
+          const c = datasetContentByNodeId.get(wsNodeId || '');
           if (!c) return { headers: [], rows: [] };
           return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
         }
         function getGroundTruthHeaders(wsNodeId) {
-          const c = subsetContentByNodeId.get(wsNodeId || '');
+          const c = datasetContentByNodeId.get(wsNodeId || '');
           return (c && c.headers) ? c.headers.slice() : [];
         }
         function getRunResultColumns() {
@@ -3057,7 +3049,7 @@ export function buildWorkflowCanvas(root) {
           } catch (_) {}
           outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-          const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
+          const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
           cols.push({ key: '[#]', label: 'Input: #' });
           wsHeaders.forEach((h) => cols.push({ key: `[${h}]`, label: `Input: ${h}` }));
@@ -3125,15 +3117,15 @@ export function buildWorkflowCanvas(root) {
         const left = parseFloat(node.style.left) || 0;
         const top = parseFloat(node.style.top) || 0;
         const height = node.offsetHeight || 80;
-        const currentName = (node.dataset.subsetName || '').trim() || 'Dataset';
+        const currentName = (node.dataset.datasetName || node.dataset.subsetName || '').trim() || 'Dataset';
         const newName = findUniqueWorkingDatasetName(currentName, false);
-        const content = subsetContentByNodeId.get(node.dataset.nodeId);
+        const content = datasetContentByNodeId.get(node.dataset.nodeId);
         const headers = content?.headers ? content.headers.slice() : [];
         const rows = content?.rows ? content.rows.map((r) => r.slice()) : [];
         const samplerNodeId = node.dataset.samplerNodeId || '';
         const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
-        const notes = (node.dataset.subsetNote ?? '').trim() || formatSamplerDescription(samplerNode);
-        const newNode = createSubsetNode({
+        const notes = (node.dataset.datasetNote ?? node.dataset.subsetNote ?? '').trim() || formatSamplerDescription(samplerNode);
+        const newNode = createDatasetNode({
           name: newName,
           notes,
           left,
@@ -3155,15 +3147,15 @@ export function buildWorkflowCanvas(root) {
         const left = parseFloat(node.style.left) || 0;
         const top = parseFloat(node.style.top) || 0;
         const width = node.offsetWidth || 280;
-        const currentName = (node.dataset.subsetName || '').trim() || 'Dataset';
+        const currentName = (node.dataset.datasetName || node.dataset.subsetName || '').trim() || 'Dataset';
         const versionName = findNextWorkingDatasetVersionName(currentName, node.dataset.nodeId);
-        const content = subsetContentByNodeId.get(node.dataset.nodeId);
+        const content = datasetContentByNodeId.get(node.dataset.nodeId);
         const headers = content?.headers ? content.headers.slice() : [];
         const rows = content?.rows ? content.rows.map((r) => r.slice()) : [];
         const samplerNodeId = node.dataset.samplerNodeId || '';
         const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
-        const notes = (node.dataset.subsetNote ?? '').trim() || formatSamplerDescription(samplerNode);
-        const newNode = createSubsetNode({
+        const notes = (node.dataset.datasetNote ?? node.dataset.subsetNote ?? '').trim() || formatSamplerDescription(samplerNode);
+        const newNode = createDatasetNode({
           name: versionName,
           notes,
           left: left + width + NEW_NODE_OFFSET,
@@ -3176,7 +3168,7 @@ export function buildWorkflowCanvas(root) {
           connections.push({
             fromId: node.dataset.nodeId,
             toId: newNode.dataset.nodeId,
-            type: EDGE_TYPE_SUBSET_TO_SUBSET,
+            type: EDGE_TYPE_DATASET_TO_DATASET,
           });
           updateEdges();
         }
@@ -3402,8 +3394,8 @@ export function buildWorkflowCanvas(root) {
    * @param {HTMLElement} node - The subset workflow node
    */
   function openEditDatasetNameModal(node) {
-    const currentName = (node.dataset.subsetName || '').trim() || '';
-    const currentNote = (node.dataset.subsetNote ?? '').trim() || '';
+    const currentName = (node.dataset.datasetName || node.dataset.subsetName || '').trim() || '';
+    const currentNote = (node.dataset.datasetNote ?? node.dataset.subsetNote ?? '').trim() || '';
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay modal-overlay--edit-dataset-name';
     overlay.setAttribute('aria-modal', 'true');
@@ -3473,19 +3465,19 @@ export function buildWorkflowCanvas(root) {
         showError('Dataset description is required.');
         return;
       }
-      if (isSubsetNameAlreadyUsed(name, node.dataset.nodeId || undefined)) {
+      if (isDatasetNameAlreadyUsed(name, node.dataset.nodeId || undefined)) {
         showError('This dataset name is already used on the canvas. Please choose another.');
         return;
       }
-      node.dataset.subsetName = name;
-      node.dataset.subsetNote = notes;
+      node.dataset.datasetName = name;
+      node.dataset.datasetNote = notes;
       const titleEl = node.querySelector('.workflow-node__title');
       if (titleEl) titleEl.textContent = name;
       if (node.getAttribute('aria-label') != null) node.setAttribute('aria-label', `Dataset node: ${name}`);
       const samplerNodeId = node.dataset.samplerNodeId;
       const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
       const bodyText = formatSamplerDescription(samplerNode) || (notes || '').trim() || '';
-      const bodyEl = node.querySelector('.workflow-node__subset-desc');
+      const bodyEl = node.querySelector('.workflow-node__dataset-desc');
       if (bodyEl) bodyEl.innerHTML = bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>';
       close();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -3547,22 +3539,82 @@ export function buildWorkflowCanvas(root) {
   });
 
   document.addEventListener('workflow:add-dataset-node', (e) => {
-    const { name = '', notes = '', headers, rows, left: detailLeft, top: detailTop } = e.detail || {};
+    const { name = '', notes = '', headers, rows, left: detailLeft, top: detailTop, samplerNodeId = '', colorIndex: detailColorIndex } = e.detail || {};
     const VISIBLE_PADDING = 40;
-    const startLeft = typeof detailLeft === 'number' ? detailLeft : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
-    const startTop = typeof detailTop === 'number' ? detailTop : (scrollWrapper.scrollTop + VISIBLE_PADDING);
-    const datasetName = (name && name.trim()) ? name.trim() : findUniqueWorkingDatasetName('Dataset', false);
-    const subsetHeaders = Array.isArray(headers) ? headers.slice() : [];
-    const subsetRows = Array.isArray(rows) ? rows.map((r) => r.slice()) : [];
-    const subsetNode = createSubsetNode({
+    let startLeft = typeof detailLeft === 'number' ? detailLeft : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
+    let startTop = typeof detailTop === 'number' ? detailTop : (scrollWrapper.scrollTop + VISIBLE_PADDING);
+    let datasetHeaders = Array.isArray(headers) ? headers.slice() : [];
+    let datasetRows = Array.isArray(rows) ? rows.map((r) => r.slice()) : [];
+    let datasetName = (name && name.trim()) ? name.trim() : '';
+    let datasetNotes = notes || '';
+
+    if (samplerNodeId) {
+      const samplerNode = getNodeById(samplerNodeId);
+      if (samplerNode) {
+        startLeft = (parseFloat(samplerNode.style.left) || 0) + (samplerNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+        startTop = parseFloat(samplerNode.style.top) || 0;
+        const sourceNodeId = samplerNode.dataset.sourceNodeId;
+        const sourceContent = sourceNodeId ? datasetContentByNodeId.get(sourceNodeId) : null;
+        if (sourceContent?.headers?.length && Array.isArray(sourceContent.rows)) {
+          datasetHeaders = sourceContent.headers.slice();
+          const samplingType = samplerNode.dataset.samplerSamplingType || 'without-replacement';
+          if (samplingType === 'specify-rows') {
+            const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
+            const totalRows = sourceContent.rows.length;
+            const indices = parseRowSpec(rowSpec, totalRows);
+            datasetRows = indices.map((i) => sourceContent.rows[i].slice());
+          } else {
+            const sampleSize = parseInt(samplerNode.dataset.samplerSampleSize, 10) || 100;
+            const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'rows';
+            const totalRows = sourceContent.rows.length;
+            const requestedCount = sampleSizeType === 'rows'
+              ? Math.max(0, Math.floor(sampleSize))
+              : Math.max(0, Math.floor((totalRows * sampleSize) / 100));
+            if (samplingType === 'without-replacement' && requestedCount > 0) {
+              let alreadyUsed = 0;
+              nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
+                if ((dsNode.dataset.samplerNodeId || '') === samplerNodeId) {
+                  const content = datasetContentByNodeId.get(dsNode.dataset.nodeId);
+                  if (content?.rows?.length) alreadyUsed += content.rows.length;
+                }
+              });
+              const remaining = totalRows - alreadyUsed;
+              if (remaining < requestedCount) {
+                showAppAlert(
+                  'Not enough remaining data to create a new dataset when sampling without replacement.',
+                  'Cannot create dataset'
+                );
+                return;
+              }
+            }
+            datasetRows = sampleRows(sourceContent.rows, sampleSize, sampleSizeType, samplingType);
+          }
+        }
+        datasetName = findNextWorkingDatasetName(samplerNodeId);
+        datasetNotes = formatSamplerDescription(samplerNode);
+      }
+    } else {
+      datasetName = datasetName || findUniqueWorkingDatasetName('Dataset', false);
+    }
+
+    const newNode = createDatasetNode({
       name: datasetName,
-      notes: notes || '',
+      notes: datasetNotes,
       left: startLeft,
       top: startTop,
-      samplerNodeId: '',
-      headers: subsetHeaders,
-      rows: subsetRows,
+      samplerNodeId: samplerNodeId || '',
+      colorIndex: detailColorIndex,
+      headers: datasetHeaders,
+      rows: datasetRows,
     });
+    if (samplerNodeId && newNode?.dataset?.nodeId) {
+      connections.push({
+        fromId: samplerNodeId,
+        toId: newNode.dataset.nodeId,
+        type: EDGE_TYPE_SAMPLER_TO_DATASET,
+      });
+      updateEdges();
+    }
     updateContentSize();
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
@@ -3582,68 +3634,6 @@ export function buildWorkflowCanvas(root) {
         fromId: sourceNodeId,
         toId: newNode.dataset.nodeId,
         type: EDGE_TYPE_DATASET_TO_SAMPLER,
-      });
-      updateEdges();
-    }
-    updateContentSize();
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-  });
-
-  document.addEventListener('workflow:add-subset-node', (e) => {
-    const { samplerNodeId = '' } = e.detail || {};
-    let left, top;
-    let headers = [];
-    let rows = [];
-    const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
-    if (samplerNode) {
-      left = (parseFloat(samplerNode.style.left) || 0) + (samplerNode.offsetWidth || 280) + NEW_NODE_OFFSET;
-      top = parseFloat(samplerNode.style.top) || 0;
-      const sourceNodeId = samplerNode.dataset.sourceNodeId;
-      const sourceContent = sourceNodeId ? subsetContentByNodeId.get(sourceNodeId) : null;
-      if (sourceContent?.headers?.length && Array.isArray(sourceContent.rows)) {
-        headers = sourceContent.headers.slice();
-        const samplingType = samplerNode.dataset.samplerSamplingType || 'without-replacement';
-        if (samplingType === 'specify-rows') {
-          const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
-          const totalRows = sourceContent.rows.length;
-          const indices = parseRowSpec(rowSpec, totalRows);
-          rows = indices.map((i) => sourceContent.rows[i].slice());
-        } else {
-          const sampleSize = parseInt(samplerNode.dataset.samplerSampleSize, 10) || 100;
-          const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'rows';
-          const totalRows = sourceContent.rows.length;
-          const requestedCount = sampleSizeType === 'rows'
-            ? Math.max(0, Math.floor(sampleSize))
-            : Math.max(0, Math.floor((totalRows * sampleSize) / 100));
-          if (samplingType === 'without-replacement' && requestedCount > 0) {
-            let alreadyUsed = 0;
-            nodesLayer.querySelectorAll('.workflow-node--subset').forEach((subNode) => {
-              if ((subNode.dataset.samplerNodeId || '') === samplerNodeId) {
-                const content = subsetContentByNodeId.get(subNode.dataset.nodeId);
-                if (content?.rows?.length) alreadyUsed += content.rows.length;
-              }
-            });
-            const remaining = totalRows - alreadyUsed;
-            if (remaining < requestedCount) {
-              showAppAlert(
-                'Not enough remaining data to create a new dataset when sampling without replacement.',
-                'Cannot create dataset'
-              );
-              return;
-            }
-          }
-          rows = sampleRows(sourceContent.rows, sampleSize, sampleSizeType, samplingType);
-        }
-      }
-    }
-    const subsetName = samplerNodeId ? findNextWorkingDatasetName(samplerNodeId) : 'Dataset';
-    const notes = formatSamplerDescription(samplerNode || null);
-    const newNode = createSubsetNode({ name: subsetName, notes, left, top, samplerNodeId, headers, rows });
-    if (samplerNodeId && newNode?.dataset?.nodeId) {
-      connections.push({
-        fromId: samplerNodeId,
-        toId: newNode.dataset.nodeId,
-        type: EDGE_TYPE_SAMPLER_TO_SUBSET,
       });
       updateEdges();
     }
@@ -3817,18 +3807,19 @@ export function buildWorkflowCanvas(root) {
       const left = parseFloat(node.style.left) || 0;
       const top = parseFloat(node.style.top) || 0;
       const nodeId = node.dataset.nodeId || '';
-      if (node.classList.contains('workflow-node--subset')) {
-        const subsetContent = subsetContentByNodeId.get(nodeId);
+      if (node.classList.contains('workflow-node--dataset')) {
+        const content = datasetContentByNodeId.get(nodeId);
         return {
           type: 'dataset',
           nodeId,
           left,
           top,
-          name: node.dataset.subsetName || '',
-          note: node.dataset.subsetNote || '',
+          name: node.dataset.datasetName || node.dataset.subsetName || '',
+          note: node.dataset.datasetNote ?? node.dataset.subsetNote ?? '',
           samplerNodeId: node.dataset.samplerNodeId || '',
-          colorIndex: node.dataset.subsetColorIndex != null ? parseInt(node.dataset.subsetColorIndex, 10) : undefined,
-          subsetContent: subsetContent ? { headers: subsetContent.headers, rows: subsetContent.rows } : undefined,
+          colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
+          subsetContent: content ? { headers: content.headers, rows: content.rows } : undefined,
+          datasetContent: content ? { headers: content.headers, rows: content.rows } : undefined,
         };
       }
       if (node.classList.contains('workflow-node--sampler')) {
@@ -3981,7 +3972,7 @@ export function buildWorkflowCanvas(root) {
     list.forEach((n) => {
       if (n.type === 'dataset' || n.type === 'subset') {
         const content = n.subsetContent || n.datasetContent;
-        const node = createSubsetNode({
+        const node = createDatasetNode({
           name: n.name || '',
           notes: n.note || '',
           left: n.left,
@@ -4111,8 +4102,8 @@ export function buildWorkflowCanvas(root) {
     createdNodes.forEach((runNode) => {
       if (runNode.classList.contains('workflow-node--run') && runNode.dataset.runWorkingSetId) {
         const wsNode = getNodeById(runNode.dataset.runWorkingSetId);
-        if (wsNode && wsNode.classList.contains('workflow-node--subset')) {
-          const colorIndex = wsNode.dataset.subsetColorIndex != null ? parseInt(wsNode.dataset.subsetColorIndex, 10) : 0;
+        if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
+          const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
           const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
           runNode.style.borderColor = color;
           const progressBar = runNode.querySelector('.workflow-node__run-progress');
@@ -4125,26 +4116,26 @@ export function buildWorkflowCanvas(root) {
       const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
       if (!gtId) return;
       const wsNode = getNodeById(gtId);
-      if (wsNode && wsNode.classList.contains('workflow-node--subset')) {
-        const colorIndex = wsNode.dataset.subsetColorIndex != null ? parseInt(wsNode.dataset.subsetColorIndex, 10) : 0;
+      if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
+        const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
         const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
         scoreNode.style.borderColor = color;
       }
     });
-    // Refresh subset node description: sampler desc or dataset notes (always show body)
-    nodesLayer.querySelectorAll('.workflow-node--subset').forEach((subNode) => {
-      const samplerNodeId = subNode.dataset.samplerNodeId;
+    // Refresh dataset node description: sampler desc or dataset notes (always show body)
+    nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
+      const samplerNodeId = dsNode.dataset.samplerNodeId;
       const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
       const samplerDesc = formatSamplerDescription(samplerNode);
-      const notesTrimmed = (subNode.dataset.subsetNote || '').trim();
+      const notesTrimmed = (dsNode.dataset.datasetNote || dsNode.dataset.subsetNote || '').trim();
       const bodyText = samplerDesc || notesTrimmed || '';
-      let bodyEl = subNode.querySelector('.workflow-node__subset-desc');
+      let bodyEl = dsNode.querySelector('.workflow-node__dataset-desc');
       if (!bodyEl) {
         bodyEl = document.createElement('div');
-        bodyEl.className = 'workflow-node__body workflow-node__subset-desc';
-        subNode.appendChild(bodyEl);
+        bodyEl.className = 'workflow-node__body workflow-node__dataset-desc';
+        dsNode.appendChild(bodyEl);
       }
-      subNode.classList.remove('workflow-node--no-body');
+      dsNode.classList.remove('workflow-node--no-body');
       bodyEl.innerHTML = bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>';
     });
     // Normalize connections: support old { from, to } indices and new { fromId, toId, type }; drop edges whose nodes were removed (e.g. sampler)
@@ -4155,6 +4146,8 @@ export function buildWorkflowCanvas(root) {
         if (type === 'run-to-assessment') type = EDGE_TYPE_RUN_TO_SCORE;
         if (type === 'score-to-prompt-review') type = EDGE_TYPE_SCORE_TO_PROMPT_REVIEW;
         if (type === 'prompt-review-to-prompt') type = EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT;
+        if (type === 'sampler-to-subset') type = EDGE_TYPE_SAMPLER_TO_DATASET;
+        if (type === 'subset-to-subset') type = EDGE_TYPE_DATASET_TO_DATASET;
         return { fromId: c.fromId, toId: c.toId, type };
       }
       if (typeof c.from === 'number' && typeof c.to === 'number') {
