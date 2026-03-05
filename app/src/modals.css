@@ -3534,9 +3534,12 @@
   color: var(--text);
   border-color: var(--border);
 }
-.run-detail-main--locked .run-detail-run-btn {
+.run-detail-main--locked .run-detail-run-btn:disabled {
   opacity: 0.8;
   cursor: not-allowed;
+}
+.run-detail-main--locked .run-detail-run-btn:not(:disabled) {
+  cursor: pointer;
 }
 
 .run-detail-ws-picker {

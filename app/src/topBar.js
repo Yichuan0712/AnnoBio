@@ -3,6 +3,7 @@
  */
 
 import { setTheme, THEME_LIGHT, THEME_DARK, THEME_SEPIA, THEME_HIGH_CONTRAST } from './theme.js';
+import { openSettingsModal } from './settingsModal.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
@@ -100,6 +101,13 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   credentialsOpt.textContent = 'My credentials...';
   credentialsOpt.addEventListener('click', openCredentialsModal);
   settingsDrop.appendChild(credentialsOpt);
+  const runReviewDefaultsOpt = document.createElement('button');
+  runReviewDefaultsOpt.type = 'button';
+  runReviewDefaultsOpt.className = 'menu-option';
+  runReviewDefaultsOpt.setAttribute('data-action', 'run-review-defaults');
+  runReviewDefaultsOpt.textContent = 'Model defaults...';
+  runReviewDefaultsOpt.addEventListener('click', openSettingsModal);
+  settingsDrop.appendChild(runReviewDefaultsOpt);
   const displayModeOpt = document.createElement('button');
   displayModeOpt.type = 'button';
   displayModeOpt.className = 'menu-option has-submenu';

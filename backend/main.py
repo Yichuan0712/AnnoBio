@@ -8,10 +8,6 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, List, Literal, Optional
 
-RUN_MAX_CONCURRENCY = 4
-REVIEW_STEP2_MAX_CONCURRENCY = 4  # Parallel per-row analysis
-
-
 # ANSI codes for terminal highlight (all yellow; supported on Windows 10+ and Unix)
 _HL = "\033[1;33m"   # bold yellow
 _R = "\033[0m"       # reset
@@ -48,6 +44,16 @@ app.add_middleware(
 DATA_DIR = Path(__file__).resolve().parent / "data"
 CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 RUN_JOBS_FILE = DATA_DIR / "run_jobs.json"
+SETTINGS_FILE = DATA_DIR / "settings.json"
+
+DEFAULT_SETTINGS = {
+    "default_run_credential_id": "",
+    "default_review_credential_id": "",
+    "run_concurrency": 4,
+    "review_concurrency": 4,
+    "run_max_tokens": 8192,
+    "review_max_tokens": 32768,
+}
 
 
 # 支持的提供商与模型（扩展时在此维护，前端通过 GET /api/credentials/models 获取）
@@ -124,6 +130,16 @@ class CredentialCreate(BaseModel):
 
 class CredentialRenameBody(BaseModel):
     name: str = Field(..., min_length=1, description="New name")
+
+
+class SettingsPatch(BaseModel):
+    """Partial settings update; only provided fields are updated."""
+    default_run_credential_id: str | None = None
+    default_review_credential_id: str | None = None
+    run_concurrency: int | None = Field(default=None, ge=1, le=16)
+    review_concurrency: int | None = Field(default=None, ge=1, le=16)
+    run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
+    review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
 
 
 class CredentialResponse(BaseModel):
@@ -260,6 +276,33 @@ def _build_table_output_model(row_model: type[BaseModel]) -> type[BaseModel]:
 
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_settings() -> dict:
+    """Load settings from disk; return defaults if missing or invalid."""
+    _ensure_data_dir()
+    if not SETTINGS_FILE.exists():
+        return dict(DEFAULT_SETTINGS)
+    try:
+        raw = SETTINGS_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        out = dict(DEFAULT_SETTINGS)
+        for k in DEFAULT_SETTINGS:
+            if k in data:
+                out[k] = data[k]
+        return out
+    except (json.JSONDecodeError, OSError):
+        return dict(DEFAULT_SETTINGS)
+
+
+def _save_settings(data: dict) -> None:
+    """Save settings to disk."""
+    _ensure_data_dir()
+    out = dict(DEFAULT_SETTINGS)
+    for k in DEFAULT_SETTINGS:
+        if k in data:
+            out[k] = data[k]
+    SETTINGS_FILE.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _load_credentials() -> list[dict]:
@@ -458,6 +501,25 @@ def delete_credential(credential_id: str):
     return {"ok": True}
 
 
+# ---------- Settings ----------
+@app.get("/api/settings")
+def get_settings():
+    """返回当前设置（默认模型、并发数、max_tokens）。"""
+    return _load_settings()
+
+
+@app.patch("/api/settings")
+def patch_settings(body: SettingsPatch):
+    """部分更新设置；仅更新提供的字段。"""
+    data = _load_settings()
+    updates = body.model_dump(exclude_none=True)
+    for k, v in updates.items():
+        if k in DEFAULT_SETTINGS:
+            data[k] = v
+    _save_settings(data)
+    return data
+
+
 # ---------- Run (execute prompts with structured output) ----------
 # Run progress is persisted to RUN_JOBS_FILE (data/run_jobs.json). Load on startup, save after every update.
 # If the client stops polling (e.g. user force-quits), the worker abandons the run within RUN_ABANDON_TIMEOUT_SEC.
@@ -583,6 +645,9 @@ def _do_run_work(
             output_fields.append({"display": display, "key": name})
 
         total = len(prompts)
+        run_settings = _load_settings()
+        run_concurrency = run_settings.get("run_concurrency") or DEFAULT_SETTINGS["run_concurrency"]
+        run_max_tokens = run_settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"]
         with _run_jobs_lock:
             _run_jobs[run_id]["total"] = total
             _run_jobs[run_id]["completed"] = 0
@@ -604,7 +669,7 @@ def _do_run_work(
                     api_key=api_key,
                     prompt=prompt,
                     response_model=ResponseModel,
-                    max_tokens=8192,
+                    max_tokens=run_max_tokens,
                     return_shape=return_shape,
                 )
                 _safe_print(_HL + _SEP + _R)
@@ -624,7 +689,7 @@ def _do_run_work(
             return (row_index, items)
 
         cancelled_early = False
-        with ThreadPoolExecutor(max_workers=RUN_MAX_CONCURRENCY) as ex:
+        with ThreadPoolExecutor(max_workers=run_concurrency) as ex:
             futures = {ex.submit(process_one, i, p): i for i, p in enumerate(prompts)}
             for future in as_completed(futures):
                 row_index, items = future.result()
@@ -637,12 +702,18 @@ def _do_run_work(
                 with _run_jobs_lock:
                     if cancelled_early:
                         break
-                    merged = []
+                    # 只加入从 0 开始的连续 input 前缀：1,2 完成但 3 未完成则只显示 1,2；4 完成也不显示
+                    max_contiguous = 0
                     for i in range(total):
                         if i in results_by_input:
-                            for r in results_by_input[i]:
-                                merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
-                    completed = max((i + 1 for i in range(total) if i in results_by_input), default=0)
+                            max_contiguous = i + 1
+                        else:
+                            break
+                    merged = []
+                    for i in range(max_contiguous):
+                        for r in results_by_input[i]:
+                            merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
+                    completed = max_contiguous
                     _run_jobs[run_id]["results"] = merged
                     _run_jobs[run_id]["completed"] = completed
                 _persist_run_jobs()
@@ -650,12 +721,18 @@ def _do_run_work(
         with _run_jobs_lock:
             if run_id in _run_cancelled:
                 _run_cancelled.discard(run_id)
-            merged = []
+            # 同上：只加入连续前缀
+            max_contiguous = 0
             for i in range(total):
                 if i in results_by_input:
-                    for r in results_by_input[i]:
-                        merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
-            completed = max((i + 1 for i in range(total) if i in results_by_input), default=0)
+                    max_contiguous = i + 1
+                else:
+                    break
+            merged = []
+            for i in range(max_contiguous):
+                for r in results_by_input[i]:
+                    merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
+            completed = max_contiguous
             nid = _run_jobs.get(run_id, {}).get("run_node_id")
             _run_jobs[run_id] = {
                 "status": "cancelled" if cancelled_early else "done",
@@ -1106,6 +1183,9 @@ def review_analyze(body: ReviewRequest):
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
     provider = cred.get("provider", "openai")
+    review_settings = _load_settings()
+    review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
+    review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     try:
         # Step 1: Gatekeeper (static, no LLM)
         gatekeeper_prompt = _build_step1_gatekeeper_prompt(body)
@@ -1136,7 +1216,7 @@ def review_analyze(body: ReviewRequest):
                 api_key=api_key,
                 prompt=step3_prompt,
                 response_model=Step3SynthesisResult,
-                max_tokens=32768,
+                max_tokens=review_max_tokens,
             )
             _safe_print(_HL + _SEP + _R)
             _safe_print(_HL + "[Review] Step 3 (REWRITE) LLM OUTPUT:" + _R)
@@ -1174,7 +1254,7 @@ def review_analyze(body: ReviewRequest):
                         api_key=api_key,
                         prompt=prompt,
                         response_model=PerRowDiagnosis,
-                        max_tokens=4096,
+                        max_tokens=review_max_tokens,
                     )
                     d = result if isinstance(result, PerRowDiagnosis) else PerRowDiagnosis(**(result if isinstance(result, dict) else result.model_dump()))
                     d.row_index = row.row_index
@@ -1185,7 +1265,7 @@ def review_analyze(body: ReviewRequest):
                     _safe_print(_HL + _SEP + _R + "\n")
                     return d
 
-                with ThreadPoolExecutor(max_workers=REVIEW_STEP2_MAX_CONCURRENCY) as ex:
+                with ThreadPoolExecutor(max_workers=review_concurrency) as ex:
                     futures = {ex.submit(analyze_one, r): r for r in to_analyze}
                     for future in as_completed(futures):
                         diagnoses_list.append(future.result())
@@ -1206,7 +1286,7 @@ def review_analyze(body: ReviewRequest):
                 api_key=api_key,
                 prompt=step3_prompt,
                 response_model=Step3SynthesisResult,
-                max_tokens=32768,
+                max_tokens=review_max_tokens,
             )
             _safe_print(_HL + _SEP + _R)
             _safe_print(_HL + "[Review] Step 3 (synthesis) LLM OUTPUT:" + _R)
@@ -1252,6 +1332,9 @@ def _review_analyze_stream_generator(body: ReviewRequest):
         yield (json.dumps({"type": "error", "detail": "Missing API key"}) + "\n").encode("utf-8")
         return
     provider = cred.get("provider", "openai")
+    review_settings = _load_settings()
+    review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
+    review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     try:
         # Step 1: Gatekeeper (static)
         gatekeeper_prompt = _build_step1_gatekeeper_prompt(body)
@@ -1282,7 +1365,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
                 api_key=api_key,
                 prompt=step3_prompt,
                 response_model=Step3SynthesisResult,
-                max_tokens=32768,
+                max_tokens=review_max_tokens,
             )
             _safe_print(_HL + _SEP + _R)
             _safe_print(_HL + "[Review stream] Step 3 (REWRITE) LLM OUTPUT:" + _R)
@@ -1323,7 +1406,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
                         api_key=api_key,
                         prompt=prompt,
                         response_model=PerRowDiagnosis,
-                        max_tokens=4096,
+                        max_tokens=review_max_tokens,
                     )
                     d = result if isinstance(result, PerRowDiagnosis) else PerRowDiagnosis(**(result if isinstance(result, dict) else result.model_dump()))
                     d.row_index = row.row_index
@@ -1334,7 +1417,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
                     _safe_print(_HL + _SEP + _R + "\n")
                     return d
 
-                with ThreadPoolExecutor(max_workers=REVIEW_STEP2_MAX_CONCURRENCY) as ex:
+                with ThreadPoolExecutor(max_workers=review_concurrency) as ex:
                     futures = {ex.submit(analyze_one, r): r for r in to_analyze}
                     done = 0
                     for future in as_completed(futures):
@@ -1357,7 +1440,7 @@ def _review_analyze_stream_generator(body: ReviewRequest):
                 api_key=api_key,
                 prompt=step3_prompt,
                 response_model=Step3SynthesisResult,
-                max_tokens=32768,
+                max_tokens=review_max_tokens,
             )
             _safe_print(_HL + _SEP + _R)
             _safe_print(_HL + "[Review stream] Step 3 (synthesis) LLM OUTPUT:" + _R)

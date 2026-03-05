@@ -5,7 +5,8 @@
  */
 
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
-import { openRunDetailModal } from './runDetailModal.js';
+import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
+import { mergeResumeResults, embedInputRow, ensureResultsZeroBased, countCompletedInputRows } from './runResumeUtils.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
 import { openScoreDetailModal, runReviewFromScore, getScoreExportData, getMatchFlags, normalizeForMatch } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
@@ -439,9 +440,6 @@ export function buildWorkflowCanvas(root) {
   function registerPendingRun(nodeId, runId) {
     if (nodeId && runId) pendingRuns.set(nodeId, runId);
   }
-  function unregisterPendingRun(nodeId) {
-    if (nodeId) pendingRuns.delete(nodeId);
-  }
   function setRunNodeProgress(node, completed, total) {
     const bar = node?.querySelector('.workflow-node__run-progress');
     if (!bar) return;
@@ -456,31 +454,6 @@ export function buildWorkflowCanvas(root) {
     bar.style.width = pct + '%';
     bar.setAttribute('aria-valuenow', String(pct));
     if (node) node.dataset.reviewProgress = String(pct);
-  }
-
-  /**
-   * Resume 时合并已有结果与新结果。
-   * @param {Array} existing - 已有结果
-   * @param {Array} newResults - 新批次结果
-   * @param {number} inputRowOffset - 输入行偏移（nextRowIndex），用于 input_row_index
-   * @param {number} rowIndexOffset - 展示行偏移（= existing.length），用于 row_index
-   */
-  function mergeResumeResults(existing, newResults, inputRowOffset, rowIndexOffset) {
-    if (!Array.isArray(existing)) existing = [];
-    if (!Array.isArray(newResults)) newResults = [];
-    const rOffset = typeof rowIndexOffset === 'number' ? rowIndexOffset : existing.length;
-    const iOffset = typeof inputRowOffset === 'number' ? inputRowOffset : 0;
-    const adjusted = newResults.map((r) => ({
-      ...r,
-      row_index: (r.row_index ?? 0) + rOffset,
-      input_row_index: (r.input_row_index ?? r.row_index ?? 0) + iOffset,
-    }));
-    const byIndex = new Map();
-    existing.forEach((r) => byIndex.set(r.row_index ?? -1, r));
-    adjusted.forEach((r) => byIndex.set(r.row_index ?? -1, r));
-    const merged = Array.from(byIndex.values()).filter((r) => (r.row_index ?? -1) >= 0);
-    merged.sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0));
-    return merged;
   }
 
   /** When true, run poll is stopped (app closing); do not start new API calls. */
@@ -500,21 +473,38 @@ export function buildWorkflowCanvas(root) {
           continue;
         }
         if (res.status === 202) {
-          let partialResults = data.results;
+          let partialResults = data.results || [];
           let outputFields = data.output_fields;
           const startIndex = node.dataset.runResumeStartIndex != null ? parseInt(node.dataset.runResumeStartIndex, 10) : 0;
           const totalRows = node.dataset.runResumeTotalRows != null ? parseInt(node.dataset.runResumeTotalRows, 10) : (data.total || 0);
+          let content = null;
+          try {
+            const raw = node.dataset.runInputContent;
+            if (raw) content = JSON.parse(raw);
+          } catch (_) {}
           if (startIndex > 0 && node.dataset.runResumeExistingResults) {
             try {
               const existing = JSON.parse(node.dataset.runResumeExistingResults);
-              partialResults = mergeResumeResults(existing, partialResults || [], startIndex, existing.length);
-              if (!Array.isArray(outputFields) || outputFields.length === 0) {
-                const of = node.dataset.runOutputFields;
-                if (of) outputFields = JSON.parse(of);
-              }
+              partialResults = mergeResumeResults(existing, partialResults, startIndex, content);
             } catch (_) {
-              continue;
+              partialResults = mergeResumeResults([], partialResults, startIndex, content);
             }
+          } else {
+            partialResults = embedInputRow(partialResults, content);
+          }
+          partialResults = ensureResultsZeroBased(partialResults);
+          if (!Array.isArray(outputFields) || outputFields.length === 0) {
+            const promptEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+            const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+            let schemaFields = [];
+            if (promptNode) {
+              try {
+                const raw = promptNode.dataset.promptOutputFormat || '[]';
+                schemaFields = JSON.parse(raw);
+                if (!Array.isArray(schemaFields)) schemaFields = [];
+              } catch (_) {}
+            }
+            outputFields = deriveOutputFields(partialResults || [], schemaFields);
           }
           if (Array.isArray(partialResults) && Array.isArray(outputFields)) {
             const inputRowsCompleted = (startIndex || 0) + (data.completed ?? 0);
@@ -525,7 +515,6 @@ export function buildWorkflowCanvas(root) {
               if (bar && !bar.style.background) bar.style.background = node.style.borderColor;
             }
             node.dataset.runResults = JSON.stringify(partialResults);
-            node.dataset.runOutputFields = JSON.stringify(outputFields);
             document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: partialResults, outputFields, isComplete: false } }));
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           }
@@ -537,38 +526,47 @@ export function buildWorkflowCanvas(root) {
           let outputFields = data.output_fields || [];
           const startIndex = node.dataset.runResumeStartIndex != null ? parseInt(node.dataset.runResumeStartIndex, 10) : 0;
           const totalRows = node.dataset.runResumeTotalRows != null ? parseInt(node.dataset.runResumeTotalRows, 10) : (data.total || 0);
+          let content = null;
+          try {
+            const raw = node.dataset.runInputContent;
+            if (raw) content = JSON.parse(raw);
+          } catch (_) {}
           if (startIndex > 0 && node.dataset.runResumeExistingResults) {
             try {
               const existing = JSON.parse(node.dataset.runResumeExistingResults);
-              results = mergeResumeResults(existing, results, startIndex, existing.length);
-              if (!Array.isArray(outputFields) || outputFields.length === 0) {
-                const of = node.dataset.runOutputFields;
-                if (of) outputFields = JSON.parse(of);
-              }
+              results = mergeResumeResults(existing, results, startIndex, content);
             } catch (_) {
-              try {
-                const existing = JSON.parse(node.dataset.runResumeExistingResults || '[]');
-                results = Array.isArray(existing) ? existing : [];
-              } catch (_) { results = []; }
-              try {
-                if (node.dataset.runOutputFields) outputFields = JSON.parse(node.dataset.runOutputFields);
-              } catch (_) {}
+              results = mergeResumeResults([], results, startIndex, content);
             }
             delete node.dataset.runResumeStartIndex;
             delete node.dataset.runResumeExistingResults;
             delete node.dataset.runResumeTotalRows;
+          } else {
+            results = embedInputRow(results, content);
           }
-          const total = totalRows || data.total || results.length;
-          const inputRowsCompleted = (data.status === 'done' || data.status === 'cancelled') ? total : (totalRows ?? data.completed ?? data.total ?? results.length);
+          results = ensureResultsZeroBased(results);
+          if (!Array.isArray(outputFields) || outputFields.length === 0) {
+            const promptEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+            const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+            let schemaFields = [];
+            if (promptNode) {
+              try {
+                const raw = promptNode.dataset.promptOutputFormat || '[]';
+                schemaFields = JSON.parse(raw);
+                if (!Array.isArray(schemaFields)) schemaFields = [];
+              } catch (_) {}
+            }
+            outputFields = deriveOutputFields(results, schemaFields);
+          }
+          const total = totalRows || data.total || countCompletedInputRows(results);
+          const inputRowsCompleted = (data.status === 'done' || data.status === 'cancelled') ? total : (totalRows ?? data.completed ?? data.total ?? countCompletedInputRows(results));
           setRunNodeProgress(node, inputRowsCompleted, total);
           if (data.status === 'done') node.dataset.runCompleted = '1';
           if (data.status === 'done' && data.error && results.length === 0) {
             node.dataset.runResults = JSON.stringify([{ row_index: 0, output: null, error: data.error }]);
-            node.dataset.runOutputFields = JSON.stringify([]);
             document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: [{ row_index: 0, output: null, error: data.error }], outputFields: [], isComplete: true } }));
           } else {
             node.dataset.runResults = JSON.stringify(results);
-            node.dataset.runOutputFields = JSON.stringify(outputFields);
             document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results, outputFields, isComplete: true, cancelled: data.status === 'cancelled' } }));
           }
           pendingRuns.delete(nodeId);
@@ -1312,19 +1310,20 @@ export function buildWorkflowCanvas(root) {
           if (!runNode) return [];
           const cols = [];
           cols.push({ key: '#', label: '#' });
-          let outputFields = [];
+          let results = [];
           try {
-            const raw = runNode.dataset.runOutputFields || '[]';
-            const arr = JSON.parse(raw);
-            outputFields = Array.isArray(arr) ? arr : [];
+            results = JSON.parse(runNode.dataset.runResults || '[]');
+            if (!Array.isArray(results)) results = [];
           } catch (_) {}
-          if (outputFields.length === 0 && promptNodeForScore) {
+          let schemaFields = [];
+          if (promptNodeForScore) {
             try {
-              const rawOf = promptNodeForScore.dataset.promptOutputFormat || '[]';
-              const ofArr = JSON.parse(rawOf);
-              outputFields = Array.isArray(ofArr) ? ofArr.map((o) => ({ key: o.key || '', display: (o.display || o.key || '').trim() || o.key })) : [];
+              const raw = promptNodeForScore.dataset.promptOutputFormat || '[]';
+              schemaFields = JSON.parse(raw);
+              if (!Array.isArray(schemaFields)) schemaFields = [];
             } catch (_) {}
           }
+          const outputFields = deriveOutputFields(results, schemaFields);
           outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
           const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
@@ -1343,12 +1342,20 @@ export function buildWorkflowCanvas(root) {
         function getRunResults() {
           if (!runNode) return { results: [], outputFields: [] };
           let results = [];
-          let outputFields = [];
           try {
             results = JSON.parse(runNode.dataset.runResults || '[]');
-            outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+            if (!Array.isArray(results)) results = [];
           } catch (_) {}
-          return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
+          let schemaFields = [];
+          if (promptNodeForScore) {
+            try {
+              const raw = promptNodeForScore.dataset.promptOutputFormat || '[]';
+              schemaFields = JSON.parse(raw);
+              if (!Array.isArray(schemaFields)) schemaFields = [];
+            } catch (_) {}
+          }
+          const outputFields = deriveOutputFields(results, schemaFields);
+          return { results, outputFields };
         }
         function getRunWorkingSetContent() {
           const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
@@ -1425,6 +1432,8 @@ export function buildWorkflowCanvas(root) {
         getSubsetContent,
         getPromptTemplate,
         registerPendingRun,
+        unregisterPendingRun,
+        getPendingRunId: () => pendingRuns.get(runNode.dataset.nodeId) || null,
         getPromptName: () => {
           if (!promptNode) return '';
           return (promptNode.dataset.promptName || '').trim() || (promptNode.querySelector('.workflow-node__title')?.textContent?.trim() || '');
@@ -2190,7 +2199,6 @@ export function buildWorkflowCanvas(root) {
         getSubsetContent,
         getPromptTemplate,
         registerPendingRun,
-        unregisterPendingRun,
         getPendingRunId: () => pendingRuns.get(node.dataset.nodeId) || null,
         getPromptName: () => {
           if (!promptNode) return '';
@@ -2319,19 +2327,20 @@ export function buildWorkflowCanvas(root) {
         if (!runNode) return [];
         const cols = [];
         cols.push({ key: '#', label: '#' });
-        let outputFields = [];
+        let results = [];
         try {
-          const raw = runNode.dataset.runOutputFields || '[]';
-          const arr = JSON.parse(raw);
-          outputFields = Array.isArray(arr) ? arr : [];
+          results = JSON.parse(runNode.dataset.runResults || '[]');
+          if (!Array.isArray(results)) results = [];
         } catch (_) {}
-        if (outputFields.length === 0 && promptNode) {
+        let schemaFields = [];
+        if (promptNode) {
           try {
-            const rawOf = promptNode.dataset.promptOutputFormat || '[]';
-            const ofArr = JSON.parse(rawOf);
-            outputFields = Array.isArray(ofArr) ? ofArr.map((o) => ({ key: o.key || '', display: (o.display || o.key || '').trim() || o.key })) : [];
+            const raw = promptNode.dataset.promptOutputFormat || '[]';
+            schemaFields = JSON.parse(raw);
+            if (!Array.isArray(schemaFields)) schemaFields = [];
           } catch (_) {}
         }
+        const outputFields = deriveOutputFields(results, schemaFields);
         outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
         const wsId = (runNode.dataset.runWorkingSetId || '').trim();
         const wsContent = wsId ? subsetContentByNodeId.get(wsId) : null;
@@ -2350,12 +2359,20 @@ export function buildWorkflowCanvas(root) {
       function getRunResults() {
         if (!runNode) return { results: [], outputFields: [] };
         let results = [];
-        let outputFields = [];
         try {
           results = JSON.parse(runNode.dataset.runResults || '[]');
-          outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+          if (!Array.isArray(results)) results = [];
         } catch (_) {}
-        return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
+        let schemaFields = [];
+        if (promptNode) {
+          try {
+            const raw = promptNode.dataset.promptOutputFormat || '[]';
+            schemaFields = JSON.parse(raw);
+            if (!Array.isArray(schemaFields)) schemaFields = [];
+          } catch (_) {}
+        }
+        const outputFields = deriveOutputFields(results, schemaFields);
+        return { results, outputFields };
       }
       function getRunWorkingSetContent() {
         const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
@@ -2376,11 +2393,17 @@ export function buildWorkflowCanvas(root) {
         if (!Array.isArray(sections) || sections.length === 0) return null;
         const promptFullText = sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
         let runResults = [];
-        let outputFields = [];
         try {
           runResults = JSON.parse(runNode.dataset.runResults || '[]');
-          outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+          if (!Array.isArray(runResults)) runResults = [];
         } catch (_) {}
+        let schemaFields = [];
+        try {
+          const raw = promptNode.dataset.promptOutputFormat || '[]';
+          schemaFields = JSON.parse(raw);
+          if (!Array.isArray(schemaFields)) schemaFields = [];
+        } catch (_) {}
+        const outputFields = deriveOutputFields(runResults, schemaFields);
         let output_schema = null;
         try {
           const raw = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
@@ -2662,7 +2685,7 @@ export function buildWorkflowCanvas(root) {
       const scoreHasGt = (node.dataset.scoreGroundTruthId || '').trim() !== '';
       const canSaveToWorkspace = scoreHasResults && scoreHasGt;
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem" ${scoreHasReviewLlm && scoreHasResults ? '' : 'disabled'}>Review</button>
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem" ${scoreHasReviewLlm && scoreHasResults && scoreHasGt ? '' : 'disabled'}>Review</button>
         <button type="button" class="workflow-node-context-item" data-action="score-save-to-workspace" role="menuitem" ${canSaveToWorkspace ? '' : 'disabled'}>Save results to workspace</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>
       `;
@@ -3833,6 +3856,21 @@ export function buildWorkflowCanvas(root) {
         const bar = node.querySelector('.workflow-node__run-progress');
         let pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : 0;
         const runName = (node.dataset.runName || '').trim() || node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Run';
+        let runResults = node.dataset.runResults || undefined;
+        if (runResults && node.dataset.runInputContent) {
+          try {
+            let results = JSON.parse(runResults);
+            if (Array.isArray(results)) {
+              let content = null;
+              try {
+                content = JSON.parse(node.dataset.runInputContent);
+              } catch (_) {}
+              results = embedInputRow(results, content);
+              results = ensureResultsZeroBased(results);
+              runResults = JSON.stringify(results);
+            }
+          } catch (_) {}
+        }
         const out = {
           type: 'run',
           nodeId,
@@ -3842,14 +3880,19 @@ export function buildWorkflowCanvas(root) {
           runWorkingSetId: (node.dataset.runWorkingSetId || '').trim() || undefined,
           runCredentialId: (node.dataset.runCredentialId || '').trim() || undefined,
           runInputToColumn: node.dataset.runInputToColumn || undefined,
-          runResults: node.dataset.runResults || undefined,
-          runOutputFields: node.dataset.runOutputFields || undefined,
+          runResults,
           runCompleted: node.dataset.runCompleted || undefined,
+          runInputContent: node.dataset.runInputContent || undefined,
         };
-        if (pct <= 0 && node.dataset.runResults) {
+        if (pct <= 0 && node.dataset.runResults && node.dataset.runInputContent) {
           try {
             const results = JSON.parse(node.dataset.runResults);
-            if (Array.isArray(results) && results.length > 0) pct = Math.min(99, results.length);
+            const content = JSON.parse(node.dataset.runInputContent);
+            const totalInputRows = Array.isArray(content?.rows) ? content.rows.length : 0;
+            if (Array.isArray(results) && results.length > 0 && totalInputRows > 0) {
+              const completed = countCompletedInputRows(results);
+              pct = Math.min(99, Math.round((completed / totalInputRows) * 100));
+            }
           } catch (_) {}
         }
         if (pct > 0) out.runProgress = pct;
@@ -3977,17 +4020,35 @@ export function buildWorkflowCanvas(root) {
         if (n.runWorkingSetId) runNode.dataset.runWorkingSetId = n.runWorkingSetId;
         if (n.runCredentialId) runNode.dataset.runCredentialId = n.runCredentialId;
         if (n.runInputToColumn) runNode.dataset.runInputToColumn = n.runInputToColumn;
-        if (n.runResults) runNode.dataset.runResults = n.runResults;
-        if (n.runOutputFields) runNode.dataset.runOutputFields = n.runOutputFields;
         if (n.runCompleted) runNode.dataset.runCompleted = n.runCompleted;
+        if (n.runInputContent) runNode.dataset.runInputContent = n.runInputContent;
+        if (n.runResults) {
+          let results = [];
+          try {
+            results = JSON.parse(n.runResults);
+            if (Array.isArray(results) && n.runInputContent) {
+              let content = null;
+              try {
+                content = JSON.parse(n.runInputContent);
+              } catch (_) {}
+              results = embedInputRow(results, content);
+              results = ensureResultsZeroBased(results);
+            }
+            runNode.dataset.runResults = JSON.stringify(results);
+          } catch (_) {
+            runNode.dataset.runResults = n.runResults;
+          }
+        }
         if (n.runProgress != null && n.runProgress >= 0 && n.runProgress <= 100) {
           setRunNodeProgress(runNode, n.runProgress, 100);
-        } else if (n.runResults) {
+        } else if (n.runResults && n.runInputContent) {
           try {
             const results = JSON.parse(n.runResults);
-            if (Array.isArray(results) && results.length > 0) {
-              const pct = Math.min(99, results.length);
-              setRunNodeProgress(runNode, pct, 100);
+            const content = typeof n.runInputContent === 'string' ? JSON.parse(n.runInputContent) : n.runInputContent;
+            const totalInputRows = Array.isArray(content?.rows) ? content.rows.length : 0;
+            if (Array.isArray(results) && results.length > 0 && totalInputRows > 0) {
+              const completed = countCompletedInputRows(results);
+              setRunNodeProgress(runNode, completed, totalInputRows);
             }
           } catch (_) {}
         }

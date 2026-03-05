@@ -1630,18 +1630,31 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     updateSaveToWorkspaceButton();
   }
 
+  function updateReviewButtonState() {
+    if (!addPromptReviewBtn) return;
+    const payload = getReviewPayload();
+    addPromptReviewBtn.disabled = !payload || !payload.prompt_sections || payload.prompt_sections.length === 0 || !selectedNodeId;
+    updateSaveToWorkspaceButton();
+  }
+
   async function loadReviewCredentials() {
     try {
-      const res = await fetch(`${API_BASE}/api/credentials`);
-      if (!res.ok) return;
-      const list = await res.json();
+      const [list, settings] = await Promise.all([
+        fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
+        fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
+      ]);
       llmSelect.innerHTML = '<option value="">— Select reviewer model —</option>' + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
-      const savedId = (node?.dataset?.reviewCredentialId || '').trim();
-      if (savedId && list?.some((c) => c.id === savedId)) llmSelect.value = savedId;
+      let credentialId = (node?.dataset?.reviewCredentialId || '').trim();
+      if (!credentialId && settings) {
+        const defaultId = (settings.default_review_credential_id || '').trim();
+        if (defaultId && (list || []).some((c) => c.id === defaultId)) credentialId = defaultId;
+      }
+      if (credentialId) {
+        llmSelect.value = credentialId;
+        if (node) node.dataset.reviewCredentialId = credentialId;
+      }
     } catch (_) {}
-    const payload = getReviewPayload();
-    addPromptReviewBtn.disabled = !payload || !payload.prompt_sections || payload.prompt_sections.length === 0;
-    updateSaveToWorkspaceButton();
+    updateReviewButtonState();
   }
 
   function updateSaveToWorkspaceButton() {
@@ -1757,6 +1770,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     updateScoreNodeBorder();
     closeDropdown();
     dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.nodeId === selectedNodeId ? 'true' : 'false'));
+    updateReviewButtonState();
     if (selectedNodeId) {
       const gtSet = new Set(getGroundTruthHeaders(selectedNodeId) || []);
       let root = getRoot();
