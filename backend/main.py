@@ -686,6 +686,8 @@ def _do_run_work(
                     items.append({"input_row_index": row_index, "output": out, "error": None})
             except Exception as e:
                 items.append({"input_row_index": row_index, "output": None, "error": str(e)})
+            if not items:
+                items.append({"input_row_index": row_index, "output": None, "error": "Empty output"})
             return (row_index, items)
 
         cancelled_early = False
@@ -699,23 +701,28 @@ def _do_run_work(
                     elif (time.time() - _run_last_activity.get(run_id, 0)) > RUN_ABANDON_TIMEOUT_SEC:
                         cancelled_early = True
                 results_by_input[row_index] = items
-                with _run_jobs_lock:
-                    if cancelled_early:
+                if cancelled_early:
+                    for f in futures:
+                        f.cancel()
+                    break
+                # 只加入从 0 开始的连续 input 前缀：1,2 完成但 3 未完成则只显示 1,2；4 完成也不显示
+                max_contiguous = 0
+                for i in range(total):
+                    if i in results_by_input:
+                        max_contiguous = i + 1
+                    else:
                         break
-                    # 只加入从 0 开始的连续 input 前缀：1,2 完成但 3 未完成则只显示 1,2；4 完成也不显示
-                    max_contiguous = 0
-                    for i in range(total):
-                        if i in results_by_input:
-                            max_contiguous = i + 1
-                        else:
-                            break
-                    merged = []
-                    for i in range(max_contiguous):
-                        for r in results_by_input[i]:
+                merged = []
+                for i in range(max_contiguous):
+                    items_i = results_by_input.get(i) or []
+                    if not items_i:
+                        merged.append({"row_index": len(merged), "input_row_index": i, "output": None, "error": "Empty output"})
+                    else:
+                        for r in items_i:
                             merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
-                    completed = max_contiguous
-                    _run_jobs[run_id]["results"] = merged
-                    _run_jobs[run_id]["completed"] = completed
+                completed = max_contiguous
+                _run_jobs[run_id]["results"] = merged
+                _run_jobs[run_id]["completed"] = completed
                 _persist_run_jobs()
 
         with _run_jobs_lock:
@@ -730,8 +737,12 @@ def _do_run_work(
                     break
             merged = []
             for i in range(max_contiguous):
-                for r in results_by_input[i]:
-                    merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
+                items_i = results_by_input.get(i) or []
+                if not items_i:
+                    merged.append({"row_index": len(merged), "input_row_index": i, "output": None, "error": "Empty output"})
+                else:
+                    for r in items_i:
+                        merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
             completed = max_contiguous
             nid = _run_jobs.get(run_id, {}).get("run_node_id")
             _run_jobs[run_id] = {

@@ -6,7 +6,7 @@
 
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
-import { mergeResumeResults, embedInputRow, ensureResultsZeroBased, countCompletedInputRows } from './runResumeUtils.js';
+import { mergeResumeResults, embedInputRow, countCompletedInputRows, markEmptyOutputAsError } from './runResumeUtils.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
 import { openScoreDetailModal, runReviewFromScore, getScoreExportData, getMatchFlags, normalizeForMatch } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
@@ -490,7 +490,7 @@ export function buildWorkflowCanvas(root) {
           } else {
             partialResults = embedInputRow(partialResults, content);
           }
-          partialResults = ensureResultsZeroBased(partialResults);
+          partialResults = markEmptyOutputAsError(partialResults);
           if (!Array.isArray(outputFields) || outputFields.length === 0) {
             const promptEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
             const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
@@ -542,7 +542,7 @@ export function buildWorkflowCanvas(root) {
           } else {
             results = embedInputRow(results, content);
           }
-          results = ensureResultsZeroBased(results);
+          results = markEmptyOutputAsError(results);
           if (!Array.isArray(outputFields) || outputFields.length === 0) {
             const promptEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
             const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
@@ -3848,16 +3848,15 @@ export function buildWorkflowCanvas(root) {
         let pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : 0;
         const runName = (node.dataset.runName || '').trim() || node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Run';
         let runResults = node.dataset.runResults || undefined;
-        if (runResults && node.dataset.runInputContent) {
+        if (runResults) {
           try {
             let results = JSON.parse(runResults);
-            if (Array.isArray(results)) {
+            if (Array.isArray(results) && node.dataset.runInputContent) {
               let content = null;
               try {
                 content = JSON.parse(node.dataset.runInputContent);
               } catch (_) {}
               results = embedInputRow(results, content);
-              results = ensureResultsZeroBased(results);
               runResults = JSON.stringify(results);
             }
           } catch (_) {}
@@ -4023,9 +4022,8 @@ export function buildWorkflowCanvas(root) {
                 content = JSON.parse(n.runInputContent);
               } catch (_) {}
               results = embedInputRow(results, content);
-              results = ensureResultsZeroBased(results);
             }
-            runNode.dataset.runResults = JSON.stringify(results);
+            runNode.dataset.runResults = Array.isArray(results) ? JSON.stringify(results) : n.runResults;
           } catch (_) {
             runNode.dataset.runResults = n.runResults;
           }

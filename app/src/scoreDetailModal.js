@@ -607,9 +607,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
     (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
+    const nonErrorResults = (results || []).filter((r) => !r.error);
     const inputRowCount = runWs?.rows?.length ?? 0;
     const gtCount = gtRows.length;
-    const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
+    const runRowIndices = [...new Set(nonErrorResults.map((r) => r.row_index))];
     const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
     const runCount = Math.max(inputRowCount, maxRunRowIndex + 1);
     const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
@@ -635,7 +636,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       matched.push(i < runCount && runToGt[i] >= 0);
     }
     const matchedCount = runToGt.slice(0, runCount).filter((j) => j >= 0).length;
-    const total = (results || []).length;
+    const total = nonErrorResults.length;
     return {
       matched,
       runToGt,
