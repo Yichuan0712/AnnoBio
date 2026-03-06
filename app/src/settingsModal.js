@@ -87,6 +87,10 @@ export function openSettingsModal() {
               <label class="dataset-meta-label" for="settings-run-max-tokens">Max tokens (256–131072)</label>
               <input type="number" id="settings-run-max-tokens" class="dataset-meta-input" min="256" max="131072" value="8192" aria-label="Run max tokens" />
             </div>
+            <div class="defaults-field">
+              <label class="dataset-meta-label" for="settings-run-max-retries">Max retries on error (0–10)</label>
+              <input type="number" id="settings-run-max-retries" class="dataset-meta-input" min="0" max="10" value="2" aria-label="Run max retries" />
+            </div>
           </div>
         </div>
         <div class="defaults-divider" aria-hidden="true"></div>
@@ -119,6 +123,7 @@ export function openSettingsModal() {
   const reviewConcurrencyInp = overlay.querySelector('#settings-review-concurrency');
   const runMaxTokensInp = overlay.querySelector('#settings-run-max-tokens');
   const reviewMaxTokensInp = overlay.querySelector('#settings-review-max-tokens');
+  const runMaxRetriesInp = overlay.querySelector('#settings-run-max-retries');
 
   async function loadCredentials() {
     try {
@@ -159,6 +164,7 @@ export function openSettingsModal() {
     reviewConcurrencyInp.value = String(settings.review_concurrency ?? 4);
     runMaxTokensInp.value = String(settings.run_max_tokens ?? 8192);
     reviewMaxTokensInp.value = String(settings.review_max_tokens ?? 32768);
+    runMaxRetriesInp.value = String(settings.run_max_retries ?? 2);
   }
 
   async function init() {
@@ -174,6 +180,7 @@ export function openSettingsModal() {
     review_concurrency: 4,
     run_max_tokens: 8192,
     review_max_tokens: 32768,
+    run_max_retries: 2,
   };
 
   function getPatchFromForm() {
@@ -181,6 +188,7 @@ export function openSettingsModal() {
     const reviewConcurrency = Math.min(16, Math.max(1, parseInt(reviewConcurrencyInp.value, 10) || 4));
     const runMaxTokens = Math.min(131072, Math.max(256, parseInt(runMaxTokensInp.value, 10) || 8192));
     const reviewMaxTokens = Math.min(131072, Math.max(256, parseInt(reviewMaxTokensInp.value, 10) || 32768));
+    const runMaxRetries = Math.min(10, Math.max(0, parseInt(runMaxRetriesInp.value, 10) ?? 2));
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
@@ -188,6 +196,7 @@ export function openSettingsModal() {
       review_concurrency: reviewConcurrency,
       run_max_tokens: runMaxTokens,
       review_max_tokens: reviewMaxTokens,
+      run_max_retries: runMaxRetries,
     };
   }
 
@@ -226,7 +235,7 @@ export function openSettingsModal() {
   });
 
   [runCredSelect, reviewCredSelect].forEach((el) => el.addEventListener('change', scheduleSave));
-  [runConcurrencyInp, reviewConcurrencyInp, runMaxTokensInp, reviewMaxTokensInp].forEach((el) => {
+  [runConcurrencyInp, reviewConcurrencyInp, runMaxTokensInp, reviewMaxTokensInp, runMaxRetriesInp].forEach((el) => {
     el.addEventListener('change', scheduleSave);
     el.addEventListener('input', scheduleSave);
   });

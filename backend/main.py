@@ -53,6 +53,7 @@ DEFAULT_SETTINGS = {
     "review_concurrency": 4,
     "run_max_tokens": 8192,
     "review_max_tokens": 32768,
+    "run_max_retries": 2,
 }
 
 
@@ -140,6 +141,7 @@ class SettingsPatch(BaseModel):
     review_concurrency: int | None = Field(default=None, ge=1, le=16)
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
+    run_max_retries: int | None = Field(default=None, ge=0, le=10)
 
 
 class CredentialResponse(BaseModel):
@@ -655,39 +657,52 @@ def _do_run_work(
             _run_jobs[run_id]["output_fields"] = output_fields
         results_by_input: dict[int, list[dict]] = {}
 
+        run_max_retries = max(0, int(run_settings.get("run_max_retries", 0)))
+
         def process_one(row_index: int, prompt: str) -> tuple[int, list[dict]]:
             items: list[dict] = []
-            try:
-                _safe_print("\n" + _HL + _SEP + _R)
-                _safe_print(_HL + f"[Run] Row {row_index} PROMPT SENT TO LLM:" + _R)
-                _safe_print(_HL + _SEP + _R)
-                _safe_print(prompt)
-                _safe_print(_HL + _SEP + _R + "\n")
-                out, used_fallback = llm_run_structured(
-                    provider=provider,
-                    model=model,
-                    api_key=api_key,
-                    prompt=prompt,
-                    response_model=ResponseModel,
-                    max_tokens=run_max_tokens,
-                    return_shape=return_shape,
-                )
-                _safe_print(_HL + _SEP + _R)
-                _safe_print(_HL + f"[Run] Row {row_index} LLM OUTPUT:" + _R)
-                _safe_print(_HL + _SEP + _R)
-                _safe_print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
-                _safe_print(_HL + _SEP + _R + "\n")
-                if return_shape == "table" and isinstance(out, dict) and "rows" in out:
-                    out = out["rows"]
-                if return_shape == "table" and isinstance(out, list):
-                    for row in out:
-                        items.append({"input_row_index": row_index, "output": row if isinstance(row, dict) else {}, "error": None})
+            err_msg: str | None = None
+            for attempt in range(run_max_retries + 1):
+                items = []
+                err_msg = None
+                try:
+                    _safe_print("\n" + _HL + _SEP + _R)
+                    _safe_print(_HL + f"[Run] Row {row_index} PROMPT SENT TO LLM:" + _R)
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(prompt)
+                    _safe_print(_HL + _SEP + _R + "\n")
+                    out, used_fallback = llm_run_structured(
+                        provider=provider,
+                        model=model,
+                        api_key=api_key,
+                        prompt=prompt,
+                        response_model=ResponseModel,
+                        max_tokens=run_max_tokens,
+                        return_shape=return_shape,
+                    )
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(_HL + f"[Run] Row {row_index} LLM OUTPUT:" + _R)
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+                    _safe_print(_HL + _SEP + _R + "\n")
+                    if return_shape == "table" and isinstance(out, dict) and "rows" in out:
+                        out = out["rows"]
+                    if return_shape == "table" and isinstance(out, list):
+                        for row in out:
+                            items.append({"input_row_index": row_index, "output": row if isinstance(row, dict) else {}, "error": None})
+                    else:
+                        items.append({"input_row_index": row_index, "output": out, "error": None})
+                    is_empty = not items or (out is None) or (isinstance(out, dict) and len(out) == 0)
+                    if is_empty:
+                        err_msg = "Empty output"
+                    else:
+                        break
+                except Exception as e:
+                    err_msg = str(e)
+                if attempt < run_max_retries:
+                    _safe_print(_HL + f"[Run] Row {row_index} {'empty' if err_msg == 'Empty output' else 'error'}, retry {attempt + 1}/{run_max_retries}: {err_msg}" + _R + "\n")
                 else:
-                    items.append({"input_row_index": row_index, "output": out, "error": None})
-            except Exception as e:
-                items.append({"input_row_index": row_index, "output": None, "error": str(e)})
-            if not items:
-                items.append({"input_row_index": row_index, "output": None, "error": "Empty output"})
+                    items.append({"input_row_index": row_index, "output": None, "error": err_msg or "Empty output"})
             return (row_index, items)
 
         cancelled_early = False
