@@ -2683,7 +2683,7 @@ export function buildWorkflowCanvas(root) {
       `;
     } else if (isPromptReview) {
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem" ${reviewHasAccepted ? '' : 'disabled'}>Export</button>
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem" ${reviewHasAccepted ? '' : 'disabled'}>Apply</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
       `;
     } else if (isDataset) {
@@ -3711,23 +3711,34 @@ export function buildWorkflowCanvas(root) {
       let toWrite = typeof data === 'string' ? (() => { try { return JSON.parse(data); } catch (_) { return null; } })() : data;
       if (!toWrite || typeof toWrite !== 'object') return;
       const existingRaw = (reviewNode.dataset.reviewResult || '').trim();
-      if (existingRaw && Array.isArray(toWrite.suggestions)) {
-        let existing = null;
+      let existing = null;
+      if (existingRaw) {
         try {
           existing = JSON.parse(existingRaw);
         } catch (_) {}
-        if (existing && typeof existing === 'object' && Array.isArray(existing.suggestions)) {
-          const merged = { ...toWrite };
-          if (Array.isArray(existing.workingSections) && existing.workingSections.length > 0) {
-            merged.workingSections = existing.workingSections.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+      }
+      if (existingRaw && Array.isArray(toWrite.suggestions) && existing && typeof existing === 'object' && Array.isArray(existing.suggestions)) {
+        const merged = { ...toWrite };
+        if (Array.isArray(existing.workingSections) && existing.workingSections.length > 0) {
+          merged.workingSections = existing.workingSections.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+        }
+        const existSug = existing.suggestions;
+        merged.suggestions = (toWrite.suggestions || []).map((s, i) => {
+          const prev = existSug[i];
+          if (prev && prev.applied === true) return { ...s, applied: true };
+          return { ...s };
+        });
+        toWrite = merged;
+      }
+      // Preserve chatHistory and chatRequestInProgress when stream/other updates would overwrite them
+      if (existing && typeof existing === 'object') {
+        if (!Array.isArray(toWrite.chatHistory) || toWrite.chatHistory.length === 0) {
+          if (Array.isArray(existing.chatHistory) && existing.chatHistory.length > 0) {
+            toWrite = { ...toWrite, chatHistory: existing.chatHistory };
           }
-          const existSug = existing.suggestions;
-          merged.suggestions = (toWrite.suggestions || []).map((s, i) => {
-            const prev = existSug[i];
-            if (prev && prev.applied === true) return { ...s, applied: true };
-            return { ...s };
-          });
-          toWrite = merged;
+        }
+        if (toWrite.chatRequestInProgress !== true && existing.chatRequestInProgress === true) {
+          toWrite = { ...toWrite, chatRequestInProgress: true };
         }
       }
       reviewNode.dataset.reviewResult = JSON.stringify(toWrite);

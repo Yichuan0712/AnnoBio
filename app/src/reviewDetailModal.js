@@ -605,7 +605,7 @@ function buildReviewResultUI(overlay, options) {
     const exportBtn = document.createElement('button');
     exportBtn.type = 'button';
     exportBtn.className = 'btn btn-primary review-detail-export-btn';
-    exportBtn.textContent = 'Export';
+    exportBtn.textContent = 'Apply';
     exportBtn.addEventListener('click', () => {
       const sections = working.map((s) => ({ name: s.name || '', content: s.content || '' }));
       if (!sections.length) return;
@@ -618,10 +618,10 @@ function buildReviewResultUI(overlay, options) {
         if (text) {
           navigator.clipboard.writeText(text).then(() => {
             exportBtn.textContent = 'Copied';
-            setTimeout(() => { exportBtn.textContent = 'Export'; }, 1500);
+            setTimeout(() => { exportBtn.textContent = 'Apply'; }, 1500);
           }).catch(() => {
             exportBtn.textContent = 'Copy failed';
-            setTimeout(() => { exportBtn.textContent = 'Export'; }, 1500);
+            setTimeout(() => { exportBtn.textContent = 'Apply'; }, 1500);
           });
         }
       }
@@ -708,12 +708,14 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
     getIsReviewStreaming: getIsReviewStreaming || null,
   };
 
+  const chatRefreshRef = { current: null };
   function refreshFromSaved(data) {
     if (!data || typeof data !== 'object') return;
     baseOptions.saved = data;
     baseOptions.promptSections = (Array.isArray(data.promptSections) && data.promptSections.length > 0) ? data.promptSections : baseOptions.promptSections;
     baseOptions.suggestions = Array.isArray(data.suggestions) ? data.suggestions : baseOptions.suggestions;
     buildReviewResultUI(overlay, baseOptions);
+    if (chatRefreshRef.current) chatRefreshRef.current(data);
   }
 
   function onSaveReviewResult(e) {
@@ -749,6 +751,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
     getReviewResult,
     onReviewResultChange: updateReviewResult || null,
     refreshFromSaved,
+    chatRefreshRef,
   });
 }
 
@@ -844,17 +847,19 @@ function buildReviewAssistantContext(getPayload, getReviewResult) {
     lines.push('');
   }
   lines.push('## Adding suggestions');
+  lines.push('[ASSISTANT_SUGGESTION] adds edits to the PROMPT (old_sentence → new_sentence). It does NOT remove items from the suggestions list. To remove suggestions from the list, use [ASSISTANT_REMOVE_SUGGESTION] (see Removing section).');
   lines.push('Do NOT add suggestions when the user is only asking a question, seeking clarification, or discussing. Just answer in text. Only use [ASSISTANT_SUGGESTION] when the user explicitly asks you to make a change, add a suggestion, or edit the prompt.');
   lines.push('When you decide to suggest a concrete edit, include one or more blocks in this exact format:');
   lines.push('[ASSISTANT_SUGGESTION]');
   lines.push('{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "reason": "why", "name": "Short title"}');
   lines.push('[/ASSISTANT_SUGGESTION]');
+  lines.push('When adding suggestions, also write a brief comment (e.g. what you changed or why it helps). The user will see this instead of a generic message. If you omit the comment, we show "Added. Please check the Suggestions panel on the left and choose Accept or Revert."');
   lines.push('Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.');
   lines.push('');
   lines.push('## Removing suggestions');
-  lines.push('When the user asks to delete a suggestion:');
+  lines.push('When the user asks to DELETE or REMOVE suggestions (e.g. 删除, 移除, remove, delete, "delete #6 and #7"): use [ASSISTANT_REMOVE_SUGGESTION]. Do NOT use [ASSISTANT_SUGGESTION] — that is for adding edits to the prompt, not for removing suggestions from the list.');
   lines.push('1. If it is [not removable] (Design, Data refinement, or Edit from the initial Review): say you cannot remove it — only suggestions you added in this chat can be removed.');
-  lines.push('2. If it is [removable]: confirm "Do you want me to remove suggestion #N? Please confirm.", then only when they confirm, output [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION].');
+  lines.push('2. If it is [removable]: confirm "Do you want me to remove suggestion #N? Please confirm.", then only when they confirm, output [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION]. For multiple removals (e.g. #6 and #7), output one block per suggestion.');
   lines.push('Never output ASSISTANT_REMOVE_SUGGESTION for a [not removable] suggestion — it will be ignored.');
   lines.push('');
   lines.push('Stay focused ONLY on improving the current prompt. Answer directly and solve problems. Do not describe your context or internal structure to the user. If the user asks something unrelated to this prompt, briefly redirect to prompt improvement.');
@@ -910,7 +915,7 @@ function stripAssistantSuggestionBlocks(text) {
 
 /** Init Review assistant chat: uses default_review_credential_id from settings. */
 function initReviewAssistantChat(overlay, contextOptions = {}) {
-  const { getPayload, getReviewResult, onReviewResultChange, refreshFromSaved } = contextOptions;
+  const { getPayload, getReviewResult, onReviewResultChange, refreshFromSaved, chatRefreshRef } = contextOptions;
   const messagesEl = overlay.querySelector('.review-assistant-messages');
   const inputEl = overlay.querySelector('.review-assistant-input');
   const sendBtn = overlay.querySelector('.review-assistant-send-inline');
@@ -982,6 +987,17 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
     tick();
   }
 
+  function isModalOpen() {
+    return overlay.isConnected;
+  }
+
+  function persistChatResult(merged) {
+    if (typeof onReviewResultChange === 'function' && typeof refreshFromSaved === 'function' && merged) {
+      onReviewResultChange(merged);
+      if (isModalOpen()) refreshFromSaved(merged);
+    }
+  }
+
   async function sendMessage() {
     const text = (inputEl.value || '').trim();
     if (!text || !credentialId) return;
@@ -989,10 +1005,18 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
     sendBtn.disabled = true;
     appendMessage('user', text);
     chatHistory.push({ role: 'user', content: text });
-    const placeholder = document.createElement('div');
-    placeholder.className = 'review-assistant-msg review-assistant-msg--assistant review-assistant-msg--loading';
-    placeholder.innerHTML = '<span class="review-assistant-msg-label">Assistant</span><div class="review-assistant-msg-body"><span class="review-assistant-spinner" aria-hidden="true"></span><span class="review-assistant-loading-text">Thinking…</span></div>';
-    messagesEl.appendChild(placeholder);
+    const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+    if (saved && typeof saved === 'object') {
+      persistChatResult({ ...saved, chatHistory: chatHistory.slice(), chatRequestInProgress: true });
+    }
+    // Only add placeholder when we didn't persist: persistChatResult+refreshFromSaved already adds one when modal is open
+    const placeholder = (!saved || typeof saved !== 'object') ? (() => {
+      const el = document.createElement('div');
+      el.className = 'review-assistant-msg review-assistant-msg--assistant review-assistant-msg--loading';
+      el.innerHTML = '<span class="review-assistant-msg-label">Assistant</span><div class="review-assistant-msg-body"><span class="review-assistant-spinner" aria-hidden="true"></span><span class="review-assistant-loading-text">Thinking…</span></div>';
+      messagesEl.appendChild(el);
+      return el;
+    })() : null;
     messagesEl.scrollTop = messagesEl.scrollHeight;
     const systemContext = getSystemContext();
     const messagesToSend = systemContext
@@ -1004,20 +1028,14 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ credential_id: credentialId, messages: messagesToSend }),
       });
-      placeholder.remove();
+      if (isModalOpen() && placeholder) placeholder.remove();
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         const errMsg = `Error: ${err.detail || res.statusText}`;
-        appendMessage('assistant', errMsg);
         chatHistory.push({ role: 'assistant', content: errMsg });
-        if (typeof onReviewResultChange === 'function' && typeof refreshFromSaved === 'function') {
-          const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
-          if (saved && typeof saved === 'object') {
-            const merged = { ...saved, chatHistory: chatHistory.slice() };
-            onReviewResultChange(merged);
-            refreshFromSaved(merged);
-          }
-        }
+        if (isModalOpen()) appendMessage('assistant', errMsg);
+        const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+        if (saved && typeof saved === 'object') persistChatResult({ ...saved, chatHistory: chatHistory.slice(), chatRequestInProgress: false });
         return;
       }
       const data = await res.json();
@@ -1032,48 +1050,38 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
             ? 'Removed. The suggestion has been deleted from the list.'
             : '(No response)';
       }
-      appendMessageWithTypewriter('assistant', displayContent);
       chatHistory.push({ role: 'assistant', content: displayContent });
-      if (typeof onReviewResultChange === 'function' && typeof refreshFromSaved === 'function') {
-        const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
-        if (saved && typeof saved === 'object') {
-          let suggestions = (saved.suggestions || []).slice();
-          if (removeIndices.length > 0) {
-            const designCount = (saved.design_suggestions || []).length;
-            const dataRefinementCount = (saved.data_refinement || []).length;
-            const editStartGlobal = designCount + dataRefinementCount + 1;
-            const toRemoveGlobal = new Set(removeIndices);
-            suggestions = suggestions.filter((s, i) => {
-              const globalIndex = editStartGlobal + i;
-              if (!toRemoveGlobal.has(globalIndex)) return true;
-              return s.source !== 'assistant';
-            });
-          }
-          if (parsedSuggestions.length > 0) {
-            const sections = saved.workingSections || saved.promptSections || [];
-            const validSuggestions = parsedSuggestions.filter((s) => s.section_index >= 0 && s.section_index < sections.length);
-            suggestions = suggestions.concat(validSuggestions);
-          }
-          const merged = { ...saved, suggestions, chatHistory: chatHistory.slice() };
-          onReviewResultChange(merged);
-          refreshFromSaved(merged);
+      if (isModalOpen()) appendMessageWithTypewriter('assistant', displayContent);
+      const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+      if (saved && typeof saved === 'object') {
+        let suggestions = (saved.suggestions || []).slice();
+        if (removeIndices.length > 0) {
+          const designCount = (saved.design_suggestions || []).length;
+          const dataRefinementCount = (saved.data_refinement || []).length;
+          const editStartGlobal = designCount + dataRefinementCount + 1;
+          const toRemoveGlobal = new Set(removeIndices);
+          suggestions = suggestions.filter((s, i) => {
+            const globalIndex = editStartGlobal + i;
+            if (!toRemoveGlobal.has(globalIndex)) return true;
+            return s.source !== 'assistant';
+          });
         }
+        if (parsedSuggestions.length > 0) {
+          const sections = saved.workingSections || saved.promptSections || [];
+          const validSuggestions = parsedSuggestions.filter((s) => s.section_index >= 0 && s.section_index < sections.length);
+          suggestions = suggestions.concat(validSuggestions);
+        }
+        persistChatResult({ ...saved, suggestions, chatHistory: chatHistory.slice(), chatRequestInProgress: false });
       }
     } catch (e) {
-      placeholder.remove();
+      if (isModalOpen() && placeholder) placeholder.remove();
       const errMsg = `Error: ${e.message || 'Request failed'}`;
-      appendMessage('assistant', errMsg);
       chatHistory.push({ role: 'assistant', content: errMsg });
-      if (typeof onReviewResultChange === 'function' && typeof refreshFromSaved === 'function') {
-        const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
-        if (saved && typeof saved === 'object') {
-          const merged = { ...saved, chatHistory: chatHistory.slice() };
-          onReviewResultChange(merged);
-          refreshFromSaved(merged);
-        }
-      }
+      if (isModalOpen()) appendMessage('assistant', errMsg);
+      const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+      if (saved && typeof saved === 'object') persistChatResult({ ...saved, chatHistory: chatHistory.slice(), chatRequestInProgress: false });
     } finally {
-      sendBtn.disabled = false;
+      if (isModalOpen()) sendBtn.disabled = false;
     }
   }
 
@@ -1107,6 +1115,33 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
   }
 
   chatHistory.forEach((m) => appendMessage(m.role, m.content || '(empty)'));
+
+  const inProgress = saved0?.chatRequestInProgress === true;
+  if (inProgress) {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'review-assistant-msg review-assistant-msg--assistant review-assistant-msg--loading';
+    placeholder.dataset.chatLoadingPlaceholder = '1';
+    placeholder.innerHTML = '<span class="review-assistant-msg-label">Assistant</span><div class="review-assistant-msg-body"><span class="review-assistant-spinner" aria-hidden="true"></span><span class="review-assistant-loading-text">Thinking…</span></div>';
+    messagesEl.appendChild(placeholder);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  if (chatRefreshRef && typeof chatRefreshRef === 'object') {
+    chatRefreshRef.current = (data) => {
+      if (!overlay.isConnected) return;
+      const hist = Array.isArray(data?.chatHistory) ? data.chatHistory : [];
+      const loading = data?.chatRequestInProgress === true;
+      messagesEl.innerHTML = '';
+      hist.forEach((m) => appendMessage(m.role, m.content || '(empty)'));
+      if (loading) {
+        const ph = document.createElement('div');
+        ph.className = 'review-assistant-msg review-assistant-msg--assistant review-assistant-msg--loading';
+        ph.innerHTML = '<span class="review-assistant-msg-label">Assistant</span><div class="review-assistant-msg-body"><span class="review-assistant-spinner" aria-hidden="true"></span><span class="review-assistant-loading-text">Thinking…</span></div>';
+        messagesEl.appendChild(ph);
+      }
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    };
+  }
 
   loadCredential().then(() => {
     if (!credentialId) {
@@ -1213,6 +1248,7 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
     onExportNewPrompt: onExportNewPrompt || null,
     streamRef: streamRef || null,
   };
+  const chatRefreshRef = { current: null };
   const refreshFromSaved = (data) => {
     if (!data || typeof data !== 'object') return;
     savedRef.current = data;
@@ -1223,6 +1259,7 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
       suggestions: data.suggestions || [],
       saved: data,
     });
+    if (chatRefreshRef.current) chatRefreshRef.current(data);
   };
 
   overlay.querySelector('.modal-close').addEventListener('click', () => { overlay.remove(); document.body.style.overflow = ''; });
@@ -1233,6 +1270,7 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
     getReviewResult: () => savedRef.current,
     onReviewResultChange: (reviewNodeId || scoreNode) ? persistResult : null,
     refreshFromSaved,
+    chatRefreshRef,
   });
 
   buildReviewResultUI(overlay, baseOptions);
