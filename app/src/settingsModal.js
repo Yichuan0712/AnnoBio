@@ -103,6 +103,12 @@ export function openSettingsModal() {
                 <option value="">— None (select each time) —</option>
               </select>
             </div>
+            <div class="defaults-field defaults-field--full">
+              <label class="dataset-meta-label" for="settings-default-review-assistant-credential">Assistant model (chat)</label>
+              <select id="settings-default-review-assistant-credential" class="credentials-select dataset-meta-input" aria-label="Model for Review assistant chat">
+                <option value="">— Same as Default model —</option>
+              </select>
+            </div>
             <div class="defaults-field">
               <label class="dataset-meta-label" for="settings-review-concurrency">Concurrency (1–16)</label>
               <input type="number" id="settings-review-concurrency" class="dataset-meta-input" min="1" max="16" value="4" aria-label="Review concurrency" />
@@ -119,6 +125,7 @@ export function openSettingsModal() {
 
   const runCredSelect = overlay.querySelector('#settings-default-run-credential');
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
+  const reviewAssistantCredSelect = overlay.querySelector('#settings-default-review-assistant-credential');
   const runConcurrencyInp = overlay.querySelector('#settings-run-concurrency');
   const reviewConcurrencyInp = overlay.querySelector('#settings-review-concurrency');
   const runMaxTokensInp = overlay.querySelector('#settings-run-max-tokens');
@@ -154,12 +161,14 @@ export function openSettingsModal() {
     ).join('');
     runCredSelect.innerHTML = '<option value="">— None (select each time) —</option>' + optHtml;
     reviewCredSelect.innerHTML = '<option value="">— None (select each time) —</option>' + optHtml;
+    reviewAssistantCredSelect.innerHTML = '<option value="">— Same as Default model —</option>' + optHtml;
   }
 
   function applySettings(settings) {
     if (!settings) return;
     if (settings.default_run_credential_id) runCredSelect.value = settings.default_run_credential_id;
     if (settings.default_review_credential_id) reviewCredSelect.value = settings.default_review_credential_id;
+    if (settings.default_review_assistant_credential_id) reviewAssistantCredSelect.value = settings.default_review_assistant_credential_id;
     runConcurrencyInp.value = String(settings.run_concurrency ?? 4);
     reviewConcurrencyInp.value = String(settings.review_concurrency ?? 4);
     runMaxTokensInp.value = String(settings.run_max_tokens ?? 8192);
@@ -176,6 +185,7 @@ export function openSettingsModal() {
   const DEFAULT_VALUES = {
     default_run_credential_id: '',
     default_review_credential_id: '',
+    default_review_assistant_credential_id: '',
     run_concurrency: 4,
     review_concurrency: 4,
     run_max_tokens: 8192,
@@ -192,6 +202,7 @@ export function openSettingsModal() {
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
+      default_review_assistant_credential_id: (reviewAssistantCredSelect.value || '').trim() || '',
       run_concurrency: runConcurrency,
       review_concurrency: reviewConcurrency,
       run_max_tokens: runMaxTokens,
@@ -230,11 +241,8 @@ export function openSettingsModal() {
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', closeModal);
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeModal();
-  });
 
-  [runCredSelect, reviewCredSelect].forEach((el) => el.addEventListener('change', scheduleSave));
+  [runCredSelect, reviewCredSelect, reviewAssistantCredSelect].forEach((el) => el.addEventListener('change', scheduleSave));
   [runConcurrencyInp, reviewConcurrencyInp, runMaxTokensInp, reviewMaxTokensInp, runMaxRetriesInp].forEach((el) => {
     el.addEventListener('change', scheduleSave);
     el.addEventListener('input', scheduleSave);

@@ -4,6 +4,8 @@
  * Result is saved on the Score node and persisted with the project.
  */
 
+import { showConfirm } from './alertModal.js';
+
 const API_BASE = 'http://localhost:8000';
 
 function escapeHtml(str) {
@@ -382,26 +384,26 @@ function buildReviewResultUI(overlay, options) {
 
   const statusEl = overlay.querySelector('.review-detail-stream-status');
 
-  function addOneDesignCard(d) {
+  function addOneDesignCard(d, displayNum) {
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card review-detail-design-card';
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <strong class="review-detail-suggestion-section-name">${escapeHtml((d.name || '').trim() || 'Design')}</strong>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion number">#${displayNum}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml((d.name || '').trim() || 'Design')}</strong></span>
         <p class="review-detail-suggestion-reason">${escapeHtml((d.reason || '').trim())}</p>
       </div>
     `;
     designContainer.appendChild(card);
   }
 
-  function addOneDataRefinementCard(item) {
+  function addOneDataRefinementCard(item, displayNum) {
     const rowIndices = Array.isArray(item.row_indices) ? item.row_indices : [];
     const rowsText = rowIndices.length > 0 ? `Rows ${rowIndices.join(', ')}` : 'Some rows';
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card review-detail-data-refinement-card';
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <strong class="review-detail-suggestion-section-name">Possible ground truth issue</strong>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion number">#${displayNum}</span> <strong class="review-detail-suggestion-section-name">Possible ground truth issue</strong></span>
         <p class="review-detail-suggestion-reason"><span class="review-detail-data-refinement-rows">${escapeHtml(rowsText)}</span>: ${escapeHtml((item.reason || '').trim())}</p>
       </div>
     `;
@@ -421,7 +423,7 @@ function buildReviewResultUI(overlay, options) {
     });
   }
 
-  function addOneSuggestionCard(sug, sugIdx) {
+  function addOneSuggestionCard(sug, sugIdx, displayNum) {
     const secIdx = Math.max(0, Math.min(sug.section_index, (promptSections || []).length - 1));
     const name = sectionNames[secIdx] || `Section ${secIdx}`;
     const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
@@ -444,7 +446,7 @@ function buildReviewResultUI(overlay, options) {
     card.dataset.suggestionIndex = String(sugIdx);
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion number">#${displayNum}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong></span>
         <p class="review-detail-suggestion-reason">${escapeHtml(fullReason)}</p>
       </div>
       <div class="review-detail-suggestion-card__actions">
@@ -503,8 +505,9 @@ function buildReviewResultUI(overlay, options) {
     editContainer.appendChild(card);
   }
 
-  designSuggestions.forEach((d) => addOneDesignCard(d));
-  dataRefinement.forEach((item) => addOneDataRefinementCard(item));
+  let displayNum = 0;
+  designSuggestions.forEach((d) => { displayNum += 1; addOneDesignCard(d, displayNum); });
+  dataRefinement.forEach((item) => { displayNum += 1; addOneDataRefinementCard(item, displayNum); });
   function updateSuggestionsDesignEmptyClass() {
     if (suggestionsEl) suggestionsEl.classList.toggle('review-detail-suggestions--design-empty', designContainer.children.length === 0);
   }
@@ -516,7 +519,7 @@ function buildReviewResultUI(overlay, options) {
       if (!Array.isArray(arr)) return;
       designSuggestions = arr.slice();
       designContainer.innerHTML = '';
-      designSuggestions.forEach((d) => addOneDesignCard(d));
+      designSuggestions.forEach((d, i) => addOneDesignCard(d, i + 1));
       updateSuggestionsDesignEmptyClass();
       saved.design_suggestions = designSuggestions;
       if (typeof onReviewResultChange === 'function') {
@@ -527,7 +530,7 @@ function buildReviewResultUI(overlay, options) {
       if (!Array.isArray(arr)) return;
       dataRefinement = arr.slice();
       dataRefinementContainer.innerHTML = '';
-      dataRefinement.forEach((item) => addOneDataRefinementCard(item));
+      dataRefinement.forEach((item, i) => addOneDataRefinementCard(item, designSuggestions.length + i + 1));
       saved.data_refinement = dataRefinement;
       if (typeof onReviewResultChange === 'function') {
         onReviewResultChange({ ...saved, data_refinement: dataRefinement });
@@ -535,10 +538,11 @@ function buildReviewResultUI(overlay, options) {
     };
     streamRef.appendSuggestions = (batch) => {
       if (statusEl) statusEl.textContent = 'Generating suggestions…';
-      batch.forEach((sug) => {
+      batch.forEach((sug, i) => {
         const sugIdx = allSuggestions.length;
         allSuggestions.push(sug);
-        addOneSuggestionCard(sug, sugIdx);
+        const displayNum = designSuggestions.length + dataRefinement.length + i + 1;
+        addOneSuggestionCard(sug, sugIdx, displayNum);
       });
       saved.suggestions = allSuggestions.slice();
       if (typeof onReviewResultChange === 'function') {
@@ -564,7 +568,10 @@ function buildReviewResultUI(overlay, options) {
       }
     };
   } else {
-    (initialSuggestions || []).forEach((sug, sugIdx) => addOneSuggestionCard(sug, sugIdx));
+    (initialSuggestions || []).forEach((sug, sugIdx) => {
+      displayNum += 1;
+      addOneSuggestionCard(sug, sugIdx, displayNum);
+    });
     if (!initialSuggestions || initialSuggestions.length === 0) {
       if (designSuggestions.length === 0) {
         editContainer.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
@@ -666,6 +673,21 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
           </div>
           <div class="review-detail-prompt-footer" id="review-detail-prompt-footer"></div>
         </div>
+        <div class="review-detail-third-column">
+          <h3 class="review-detail-preview-title">Review assistant</h3>
+          <div class="review-assistant-chat-wrap">
+            <div class="review-assistant-messages" id="review-detail-assistant-messages"></div>
+            <div class="review-assistant-clear-bar">
+              <button type="button" class="review-assistant-clear-btn" aria-label="Clear chat history">Clear chat history</button>
+            </div>
+            <div class="review-assistant-input-wrap">
+              <div class="review-assistant-input-inner">
+                <textarea class="review-assistant-input" id="review-detail-assistant-input" placeholder="Ask anything..." rows="2"></textarea>
+                <button type="button" class="review-assistant-send-inline" id="review-detail-assistant-send" aria-label="Send">↑</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -722,10 +744,386 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
+  initReviewAssistantChat(overlay, {
+    getPayload,
+    getReviewResult,
+    onReviewResultChange: updateReviewResult || null,
+    refreshFromSaved,
+  });
+}
+
+/** Build context text for Review assistant from saved + payload. */
+function buildReviewAssistantContext(getPayload, getReviewResult) {
+  const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+  const payload = typeof getPayload === 'function' ? getPayload() : null;
+  const lines = [
+    'You are a prompt improvement assistant. Your ONLY job is to help improve the current prompt below. Do not discuss general prompt engineering, other prompts, or unrelated topics. Everything you say and do must directly serve improving this prompt.',
+    '',
+    'Do NOT expose internal context to the user. Do not mention sections, run results structure, or how you receive data. Just answer directly and focus on solving the problem. Be concise and actionable.',
+    '',
+    'STRICT: Follow the user request exactly. If they ask to delete a segment, use new_sentence: "" (empty) — do NOT add any replacement. If they ask to add something, add only that. Never combine delete+add or add extra changes the user did not ask for.',
+    '',
+    '## Current Prompt (working copy)',
+  ];
+  const sections = saved?.workingSections || saved?.promptSections || [];
+  if (sections.length === 0) {
+    lines.push('(No sections)');
+  } else {
+    sections.forEach((s, i) => {
+      const name = (s.name || '').trim() || '(unnamed)';
+      const content = (s.content || '').trim() || '(empty)';
+      lines.push(`[Section ${i}: ${name}]`);
+      lines.push(content);
+      lines.push('');
+    });
+  }
+  const comparisonRows = saved?.comparison_rows || payload?.comparison_rows || [];
+  const runResults = saved?.run_results || payload?.run_results || [];
+  if (comparisonRows.length > 0 || runResults.length > 0) {
+    lines.push('## Run Results');
+    const failed = comparisonRows.filter((r) => !r.matched);
+    if (failed.length > 0) {
+      lines.push(`Sample failed rows (${failed.length} of ${comparisonRows.length} total):`);
+      failed.slice(0, 10).forEach((r, i) => {
+        lines.push(`Row ${r.row_index}: NOT matched`);
+        if (r.row_input && Object.keys(r.row_input || {}).length > 0) {
+          lines.push(`  Input: ${JSON.stringify(r.row_input)}`);
+        }
+        lines.push(`  Model output: ${JSON.stringify(r.run_output || {})}`);
+        lines.push(`  Expected: ${JSON.stringify(r.expected || '')}`);
+        if (r.comparison_types?.length) {
+          lines.push(`  Comparison: ${r.comparison_types.join(', ')}`);
+        }
+        lines.push('');
+      });
+      if (failed.length > 10) lines.push(`... and ${failed.length - 10} more failed rows`);
+    } else if (comparisonRows.length > 0) {
+      lines.push('All rows matched.');
+    }
+    lines.push('');
+  }
+  const suggestions = saved?.suggestions || [];
+  const designSuggestions = saved?.design_suggestions || [];
+  const dataRefinement = saved?.data_refinement || [];
+  lines.push('## Your permissions');
+  lines.push('ADD: You can add new edit suggestions anytime via [ASSISTANT_SUGGESTION].');
+  lines.push('REMOVE: You can ONLY remove suggestions marked [removable]. These are edit suggestions YOU added in this chat.');
+  lines.push('CANNOT REMOVE: [Design], [Data refinement], and [Edit] marked [not removable] — these come from the initial Review and you must not delete them.');
+  lines.push('');
+  if (suggestions.length > 0 || designSuggestions.length > 0 || dataRefinement.length > 0) {
+    lines.push('## Suggestions (in display order, same numbering as UI)');
+    const removableNums = [];
+    let num = 0;
+    designSuggestions.forEach((d) => {
+      num += 1;
+      const title = (d.name || '').trim() || (d.reason || '').trim().slice(0, 80);
+      lines.push(`#${num}. [Design] ${title} [not removable]`);
+      if ((d.reason || '').trim()) lines.push(`   Reason: ${(d.reason || '').trim()}`);
+    });
+    dataRefinement.forEach((d) => {
+      num += 1;
+      const rows = (d.row_indices || []).length > 0 ? `Rows ${(d.row_indices || []).join(', ')}: ` : '';
+      const title = rows + ((d.reason || '').trim().slice(0, 100) || 'Possible ground truth issue');
+      lines.push(`#${num}. [Data refinement] ${title} [not removable]`);
+      if ((d.reason || '').trim().length > 100) lines.push(`   Full: ${(d.reason || '').trim()}`);
+    });
+    suggestions.forEach((s) => {
+      num += 1;
+      if (s.source === 'assistant') removableNums.push(num);
+      const title = (s.name || '').trim() || (s.reason || '').trim().slice(0, 80) || `[Section ${s.section_index ?? 0}] "${(s.old_sentence || '').slice(0, 40)}..." → "${(s.new_sentence || '').slice(0, 40)}..."`;
+      const applied = s.applied === true ? ' [applied]' : '';
+      const removable = s.source === 'assistant' ? ' [removable]' : ' [not removable]';
+      lines.push(`#${num}. [Edit] ${title}${applied}${removable}`);
+      lines.push(`   Reason: ${(s.reason || '').trim()}`);
+    });
+    if (removableNums.length > 0) {
+      lines.push(`You may remove only: #${removableNums.join(', #')}.`);
+    } else {
+      lines.push('You may remove: none (no suggestions were added by you in this chat).');
+    }
+    lines.push('');
+  }
+  lines.push('## Adding suggestions');
+  lines.push('Do NOT add suggestions when the user is only asking a question, seeking clarification, or discussing. Just answer in text. Only use [ASSISTANT_SUGGESTION] when the user explicitly asks you to make a change, add a suggestion, or edit the prompt.');
+  lines.push('When you decide to suggest a concrete edit, include one or more blocks in this exact format:');
+  lines.push('[ASSISTANT_SUGGESTION]');
+  lines.push('{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "reason": "why", "name": "Short title"}');
+  lines.push('[/ASSISTANT_SUGGESTION]');
+  lines.push('Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.');
+  lines.push('');
+  lines.push('## Removing suggestions');
+  lines.push('When the user asks to delete a suggestion:');
+  lines.push('1. If it is [not removable] (Design, Data refinement, or Edit from the initial Review): say you cannot remove it — only suggestions you added in this chat can be removed.');
+  lines.push('2. If it is [removable]: confirm "Do you want me to remove suggestion #N? Please confirm.", then only when they confirm, output [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION].');
+  lines.push('Never output ASSISTANT_REMOVE_SUGGESTION for a [not removable] suggestion — it will be ignored.');
+  lines.push('');
+  lines.push('Stay focused ONLY on improving the current prompt. Answer directly and solve problems. Do not describe your context or internal structure to the user. If the user asks something unrelated to this prompt, briefly redirect to prompt improvement.');
+  return lines.join('\n');
+}
+
+/** Parse [ASSISTANT_SUGGESTION]...[/ASSISTANT_SUGGESTION] blocks from assistant response. */
+function parseAssistantSuggestions(text) {
+  const blocks = [];
+  const re = /\[ASSISTANT_SUGGESTION\]\s*([\s\S]*?)\s*\[\/ASSISTANT_SUGGESTION\]/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const obj = JSON.parse(m[1].trim());
+      if (obj && typeof obj.section_index === 'number') {
+        blocks.push({
+          section_index: obj.section_index,
+          old_sentence: String(obj.old_sentence || '').trim(),
+          new_sentence: String(obj.new_sentence || '').trim(),
+          reason: String(obj.reason || '').trim(),
+          name: String(obj.name || '').trim(),
+          source: 'assistant',
+        });
+      }
+    } catch (_) {}
+  }
+  return blocks;
+}
+
+/** Parse [ASSISTANT_REMOVE_SUGGESTION]...[/ASSISTANT_REMOVE_SUGGESTION] blocks. Returns 1-based indices to remove. */
+function parseAssistantRemoveSuggestions(text) {
+  const indices = [];
+  const re = /\[ASSISTANT_REMOVE_SUGGESTION\]\s*([\s\S]*?)\s*\[\/ASSISTANT_REMOVE_SUGGESTION\]/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const obj = JSON.parse(m[1].trim());
+      const idx = obj?.suggestion_index;
+      if (typeof idx === 'number' && idx >= 1) indices.push(idx);
+    } catch (_) {}
+  }
+  return indices;
+}
+
+/** Strip [ASSISTANT_SUGGESTION] and [ASSISTANT_REMOVE_SUGGESTION] blocks for display. */
+function stripAssistantSuggestionBlocks(text) {
+  return text
+    .replace(/\[ASSISTANT_SUGGESTION\][\s\S]*?\[\/ASSISTANT_SUGGESTION\]/g, '')
+    .replace(/\[ASSISTANT_REMOVE_SUGGESTION\][\s\S]*?\[\/ASSISTANT_REMOVE_SUGGESTION\]/g, '')
+    .trim()
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+/** Init Review assistant chat: uses default_review_credential_id from settings. */
+function initReviewAssistantChat(overlay, contextOptions = {}) {
+  const { getPayload, getReviewResult, onReviewResultChange, refreshFromSaved } = contextOptions;
+  const messagesEl = overlay.querySelector('.review-assistant-messages');
+  const inputEl = overlay.querySelector('.review-assistant-input');
+  const sendBtn = overlay.querySelector('.review-assistant-send-inline');
+  if (!messagesEl || !inputEl || !sendBtn) return;
+
+  let credentialId = '';
+  const saved0 = typeof getReviewResult === 'function' ? getReviewResult() : null;
+  const initialChat = Array.isArray(saved0?.chatHistory) ? saved0.chatHistory : [];
+  const chatHistory = initialChat.map((m) => ({ role: m.role, content: String(m.content || '').trim() }));
+
+  function getSystemContext() {
+    const ctx = buildReviewAssistantContext(getPayload, getReviewResult);
+    return ctx.trim() ? ctx : null;
+  }
+
+  async function loadCredential() {
+    try {
+      const [list, settings] = await Promise.all([
+        fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
+        fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
+      ]);
+      const assistantId = (settings?.default_review_assistant_credential_id || '').trim();
+      const reviewId = (settings?.default_review_credential_id || '').trim();
+      const candidateId = assistantId || reviewId;
+      if (candidateId && (list || []).some((c) => c.id === candidateId)) {
+        credentialId = candidateId;
+      }
+    } catch (_) {}
+  }
+
+  const TYPEWRITER_MS_PER_CHAR = 10;
+
+  function appendMessage(role, content) {
+    const div = document.createElement('div');
+    div.className = `review-assistant-msg review-assistant-msg--${role}`;
+    const label = document.createElement('span');
+    label.className = 'review-assistant-msg-label';
+    label.textContent = role === 'user' ? 'You' : 'Assistant';
+    const body = document.createElement('div');
+    body.className = 'review-assistant-msg-body';
+    body.textContent = content;
+    div.appendChild(label);
+    div.appendChild(body);
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function appendMessageWithTypewriter(role, content) {
+    const div = document.createElement('div');
+    div.className = `review-assistant-msg review-assistant-msg--${role}`;
+    const label = document.createElement('span');
+    label.className = 'review-assistant-msg-label';
+    label.textContent = role === 'user' ? 'You' : 'Assistant';
+    const body = document.createElement('div');
+    body.className = 'review-assistant-msg-body';
+    div.appendChild(label);
+    div.appendChild(body);
+    messagesEl.appendChild(div);
+
+    let i = 0;
+    function tick() {
+      if (i < content.length) {
+        body.textContent = content.slice(0, i + 1);
+        i += 1;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        setTimeout(tick, TYPEWRITER_MS_PER_CHAR);
+      }
+    }
+    tick();
+  }
+
+  async function sendMessage() {
+    const text = (inputEl.value || '').trim();
+    if (!text || !credentialId) return;
+    inputEl.value = '';
+    sendBtn.disabled = true;
+    appendMessage('user', text);
+    chatHistory.push({ role: 'user', content: text });
+    const placeholder = document.createElement('div');
+    placeholder.className = 'review-assistant-msg review-assistant-msg--assistant review-assistant-msg--loading';
+    placeholder.innerHTML = '<span class="review-assistant-msg-label">Assistant</span><div class="review-assistant-msg-body"><span class="review-assistant-spinner" aria-hidden="true"></span><span class="review-assistant-loading-text">Thinking…</span></div>';
+    messagesEl.appendChild(placeholder);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    const systemContext = getSystemContext();
+    const messagesToSend = systemContext
+      ? [{ role: 'system', content: systemContext }, ...chatHistory]
+      : chatHistory;
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential_id: credentialId, messages: messagesToSend }),
+      });
+      placeholder.remove();
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const errMsg = `Error: ${err.detail || res.statusText}`;
+        appendMessage('assistant', errMsg);
+        chatHistory.push({ role: 'assistant', content: errMsg });
+        if (typeof onReviewResultChange === 'function' && typeof refreshFromSaved === 'function') {
+          const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+          if (saved && typeof saved === 'object') {
+            const merged = { ...saved, chatHistory: chatHistory.slice() };
+            onReviewResultChange(merged);
+            refreshFromSaved(merged);
+          }
+        }
+        return;
+      }
+      const data = await res.json();
+      const rawContent = (data.content || '').trim() || '(No response)';
+      const parsedSuggestions = parseAssistantSuggestions(rawContent);
+      const removeIndices = parseAssistantRemoveSuggestions(rawContent);
+      let displayContent = stripAssistantSuggestionBlocks(rawContent);
+      if (!displayContent || !displayContent.trim()) {
+        displayContent = parsedSuggestions.length > 0
+          ? 'Added. Please check the Suggestions panel on the left and choose Accept or Revert.'
+          : removeIndices.length > 0
+            ? 'Removed. The suggestion has been deleted from the list.'
+            : '(No response)';
+      }
+      appendMessageWithTypewriter('assistant', displayContent);
+      chatHistory.push({ role: 'assistant', content: displayContent });
+      if (typeof onReviewResultChange === 'function' && typeof refreshFromSaved === 'function') {
+        const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+        if (saved && typeof saved === 'object') {
+          let suggestions = (saved.suggestions || []).slice();
+          if (removeIndices.length > 0) {
+            const designCount = (saved.design_suggestions || []).length;
+            const dataRefinementCount = (saved.data_refinement || []).length;
+            const editStartGlobal = designCount + dataRefinementCount + 1;
+            const toRemoveGlobal = new Set(removeIndices);
+            suggestions = suggestions.filter((s, i) => {
+              const globalIndex = editStartGlobal + i;
+              if (!toRemoveGlobal.has(globalIndex)) return true;
+              return s.source !== 'assistant';
+            });
+          }
+          if (parsedSuggestions.length > 0) {
+            const sections = saved.workingSections || saved.promptSections || [];
+            const validSuggestions = parsedSuggestions.filter((s) => s.section_index >= 0 && s.section_index < sections.length);
+            suggestions = suggestions.concat(validSuggestions);
+          }
+          const merged = { ...saved, suggestions, chatHistory: chatHistory.slice() };
+          onReviewResultChange(merged);
+          refreshFromSaved(merged);
+        }
+      }
+    } catch (e) {
+      placeholder.remove();
+      const errMsg = `Error: ${e.message || 'Request failed'}`;
+      appendMessage('assistant', errMsg);
+      chatHistory.push({ role: 'assistant', content: errMsg });
+      if (typeof onReviewResultChange === 'function' && typeof refreshFromSaved === 'function') {
+        const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+        if (saved && typeof saved === 'object') {
+          const merged = { ...saved, chatHistory: chatHistory.slice() };
+          onReviewResultChange(merged);
+          refreshFromSaved(merged);
+        }
+      }
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
+
+  sendBtn.addEventListener('click', sendMessage);
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  const clearBtn = overlay.querySelector('.review-assistant-clear-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+      const ok = await showConfirm('Clear all chat history? This cannot be undone.', { title: 'Clear chat', confirmText: 'Clear' });
+      if (!ok) return;
+      chatHistory.length = 0;
+      messagesEl.innerHTML = '';
+      if (typeof onReviewResultChange === 'function' && typeof refreshFromSaved === 'function') {
+        const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+        if (saved && typeof saved === 'object') {
+          const merged = { ...saved, chatHistory: [] };
+          onReviewResultChange(merged);
+          refreshFromSaved(merged);
+        }
+      }
+      if (credentialId) {
+        appendMessage('assistant', 'You can chat with me to discuss how to improve the prompt. Ask questions, request edits, or ask me to add or remove suggestions.');
+      }
+    });
+  }
+
+  chatHistory.forEach((m) => appendMessage(m.role, m.content || '(empty)'));
+
+  loadCredential().then(() => {
+    if (!credentialId) {
+      if (chatHistory.length === 0) {
+        appendMessage('assistant', 'Please select a model in Settings → Prompt Reviewer (Default model or Assistant model) to use the Assistant.');
+      }
+      inputEl.disabled = true;
+      inputEl.placeholder = 'Select a model in Settings first';
+      sendBtn.disabled = true;
+    } else if (chatHistory.length === 0) {
+      appendMessage('assistant', 'You can chat with me to discuss how to improve the prompt. Ask questions, request edits, or ask me to add or remove suggestions.');
+    }
+  });
 }
 
 /** Open modal with review result (from Score Add Review). Saves result to reviewNode (via reviewNodeId) or scoreNode. Pass streamRef to show suggestions incrementally. 右侧 Prompt sections 一打开就填好，左侧 Suggestions 流式一条条出现。 */
-export function openReviewResultModal({ summary, suggestions = [], promptSections = [], promptFullText = '', scoreNode, reviewNodeId, onExportNewPrompt, streamRef }) {
+export function openReviewResultModal({ summary, suggestions = [], promptSections = [], promptFullText = '', scoreNode, reviewNodeId, onExportNewPrompt, streamRef, saved: initialSaved }) {
   const workingSections = Array.isArray(promptSections) && promptSections.length > 0
     ? promptSections.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }))
     : [];
@@ -761,18 +1159,38 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
           </div>
           <div class="review-detail-prompt-footer" id="review-result-prompt-footer"></div>
         </div>
+        <div class="review-detail-third-column">
+          <h3 class="review-detail-preview-title">Review assistant</h3>
+          <div class="review-assistant-chat-wrap">
+            <div class="review-assistant-messages" id="review-result-assistant-messages"></div>
+            <div class="review-assistant-clear-bar">
+              <button type="button" class="review-assistant-clear-btn" aria-label="Clear chat history">Clear chat history</button>
+            </div>
+            <div class="review-assistant-input-wrap">
+              <div class="review-assistant-input-inner">
+                <textarea class="review-assistant-input" id="review-result-assistant-input" placeholder="Ask anything..." rows="2"></textarea>
+                <button type="button" class="review-assistant-send-inline" id="review-result-assistant-send" aria-label="Send">↑</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   `;
 
-  const saved = {
+  const baseSaved = {
     summary: summary || '',
     suggestions: suggestions || [],
     promptSections: (promptSections || []).slice(),
     promptFullText: promptFullText || sectionsToFullText(promptSections || []),
     workingSections: workingSections.length ? workingSections.map((s) => ({ name: s.name, content: s.content })) : [],
   };
+  const savedRef = {
+    current: initialSaved && typeof initialSaved === 'object' ? { ...baseSaved, ...initialSaved } : baseSaved,
+  };
+  const saved = savedRef.current;
   const persistResult = (updated) => {
+    savedRef.current = updated;
     if (reviewNodeId) {
       document.dispatchEvent(new CustomEvent('workflow:save-review-result', { detail: { reviewNodeId, data: updated } }));
     } else if (scoreNode) {
@@ -784,19 +1202,38 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
   };
   if (reviewNodeId || scoreNode) persistResult(saved);
 
-  overlay.querySelector('.modal-close').addEventListener('click', () => { overlay.remove(); document.body.style.overflow = ''; });
-  document.body.style.overflow = 'hidden';
-  document.body.appendChild(overlay);
-
-  buildReviewResultUI(overlay, {
+  const baseOptions = {
     promptSections: saved.promptSections.length ? saved.promptSections : workingSections,
-    suggestions,
-    promptFullText,
+    suggestions: saved.suggestions || [],
+    promptFullText: saved.promptFullText || '',
     title: 'Review result',
     resultId: 'result',
     saved,
     onReviewResultChange: (reviewNodeId || scoreNode) ? persistResult : null,
     onExportNewPrompt: onExportNewPrompt || null,
     streamRef: streamRef || null,
+  };
+  const refreshFromSaved = (data) => {
+    if (!data || typeof data !== 'object') return;
+    savedRef.current = data;
+    if (reviewNodeId || scoreNode) persistResult(data);
+    buildReviewResultUI(overlay, {
+      ...baseOptions,
+      promptSections: (data.promptSections || []).length ? data.promptSections : workingSections,
+      suggestions: data.suggestions || [],
+      saved: data,
+    });
+  };
+
+  overlay.querySelector('.modal-close').addEventListener('click', () => { overlay.remove(); document.body.style.overflow = ''; });
+  document.body.style.overflow = 'hidden';
+  document.body.appendChild(overlay);
+  initReviewAssistantChat(overlay, {
+    getPayload: () => null,
+    getReviewResult: () => savedRef.current,
+    onReviewResultChange: (reviewNodeId || scoreNode) ? persistResult : null,
+    refreshFromSaved,
   });
+
+  buildReviewResultUI(overlay, baseOptions);
 }

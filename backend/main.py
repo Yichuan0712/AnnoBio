@@ -49,6 +49,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
     "default_review_credential_id": "",
+    "default_review_assistant_credential_id": "",
     "run_concurrency": 4,
     "review_concurrency": 4,
     "run_max_tokens": 8192,
@@ -137,6 +138,7 @@ class SettingsPatch(BaseModel):
     """Partial settings update; only provided fields are updated."""
     default_run_credential_id: str | None = None
     default_review_credential_id: str | None = None
+    default_review_assistant_credential_id: str | None = None
     run_concurrency: int | None = Field(default=None, ge=1, le=16)
     review_concurrency: int | None = Field(default=None, ge=1, le=16)
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
@@ -490,6 +492,49 @@ def test_credential(credential_id: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}
+
+
+# ---------- Chat (Review Assistant) ----------
+class ChatMessage(BaseModel):
+    role: str = Field(..., description="user | assistant | system")
+    content: str = Field(default="", description="Message content")
+
+
+class ChatRequest(BaseModel):
+    credential_id: str = Field(..., description="Credential id (uses reviewer settings)")
+    messages: list[ChatMessage] = Field(..., min_length=1, description="Conversation history; last message should be user")
+
+
+@app.post("/api/chat")
+def chat(body: ChatRequest):
+    """Simple chat using the given credential. Uses review_max_tokens from settings."""
+    items = _load_credentials()
+    cred = None
+    for item in items:
+        if item.get("id") == body.credential_id:
+            cred = item
+            break
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    model = cred.get("llm", "")
+    api_key = cred.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing API key")
+    provider = cred.get("provider", "openai")
+    settings = _load_settings()
+    max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
+    msgs = [{"role": m.role, "content": m.content or ""} for m in body.messages]
+    try:
+        content = llm_chat(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            messages=msgs,
+            max_tokens=max_tokens,
+        )
+        return {"content": content}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.delete("/api/credentials/{credential_id}")

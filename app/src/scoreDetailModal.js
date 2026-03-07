@@ -120,6 +120,8 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
         promptFullText: promptFullText || '',
         workingSections: workingSectionsInitial,
         reviewProgress: 0,
+        run_results: body.run_results || [],
+        comparison_rows: body.comparison_rows || [],
       },
     },
   }));
@@ -145,6 +147,8 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
       promptFullText: promptFullText || '',
       workingSections,
       reviewProgress: 0,
+      run_results: body.run_results || [],
+      comparison_rows: body.comparison_rows || [],
     };
     let focusCount = 0;
     let focusDone = 0;
@@ -200,6 +204,8 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
             workingSections,
             streamComplete: false,
             reviewProgress: 20,
+            run_results: streamSaved.run_results || [],
+            comparison_rows: streamSaved.comparison_rows || [],
           };
           setProgress(20);
           persistToNode(streamSaved);

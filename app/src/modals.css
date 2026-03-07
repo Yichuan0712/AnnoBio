@@ -2548,6 +2548,162 @@
   overflow-x: hidden;
 }
 
+/* Third column: Review Assistant chat */
+.review-detail-third-column {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.review-assistant-clear-bar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 0;
+}
+
+.review-assistant-clear-btn {
+  font-size: 11px;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.review-assistant-clear-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.review-assistant-chat-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 16px;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.review-assistant-messages {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-assistant-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.review-assistant-msg-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.review-assistant-msg-body {
+  font-size: 13px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-assistant-msg--user .review-assistant-msg-body {
+  background: var(--bg-bar);
+  padding: 8px 10px;
+  border-radius: 4px;
+}
+
+.review-assistant-msg--loading .review-assistant-msg-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.review-assistant-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: review-assistant-spin 0.7s linear infinite;
+}
+
+.review-assistant-loading-text {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+@keyframes review-assistant-spin {
+  to { transform: rotate(360deg); }
+}
+
+.review-assistant-input-wrap {
+  flex-shrink: 0;
+}
+
+.review-assistant-input-inner {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+}
+
+.review-assistant-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 36px 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  resize: none;
+  box-sizing: border-box;
+}
+
+.review-assistant-input::placeholder {
+  color: var(--text-muted);
+}
+
+.review-assistant-send-inline {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.review-assistant-send-inline:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
 .review-detail-suggestions-footer {
   flex-shrink: 0;
   margin: 0 -20px;
@@ -2658,8 +2814,24 @@
   min-width: 0;
 }
 
-.review-detail-suggestion-section-name {
+.review-detail-suggestion-header {
   display: block;
+  margin-bottom: 4px;
+}
+
+.review-detail-suggestion-num {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-right: 8px;
+  padding: 2px 6px;
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.review-detail-suggestion-section-name {
+  font-weight: 600;
 }
 
 .review-detail-suggestion-card__actions {
