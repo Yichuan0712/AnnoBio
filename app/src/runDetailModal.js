@@ -293,7 +293,8 @@ export function openRunDetailModal({
     runBtn.classList.remove('btn-danger');
     runBtn.classList.add('btn-primary');
     runBtn.textContent = isResumeState ? 'Resume' : 'Run';
-    runBtn.disabled = !(selectedNodeId && selectedCredentialId);
+    const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
+    runBtn.disabled = !(selectedNodeId && selectedCredentialId && allMapped);
   }
 
   function getInputHeaders() {
@@ -579,7 +580,7 @@ export function openRunDetailModal({
     const headers = (content?.headers || ws?.headers || []).slice();
     const headerSet = new Set(headers);
     inputsListEl.innerHTML = '';
-    if (inputFields.length === 0) { inputsListEl.innerHTML = '<p class="run-detail-placeholder">No prompt inputs.</p>'; return; }
+    if (inputFields.length === 0) { inputsListEl.innerHTML = '<p class="run-detail-placeholder">No prompt inputs.</p>'; refreshButton(); return; }
     inputFields.forEach((inputName) => {
       let col = inputToColumn[inputName] || '';
       if (col && !headerSet.has(col)) { col = ''; inputToColumn[inputName] = ''; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
@@ -598,10 +599,12 @@ export function openRunDetailModal({
       row.querySelector('.run-detail-column-select').addEventListener('change', (e) => {
         inputToColumn[inputName] = (e.target.value || '').trim() || '';
         if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
+        refreshButton();
       });
       table.appendChild(row);
     });
     inputsListEl.appendChild(table);
+    refreshButton();
   }
 
   function onRunResultsUpdated(e) {
@@ -712,6 +715,12 @@ export function openRunDetailModal({
       if (node && existingResults.length > 0) writeNodeRunState({ results: existingResults, completed: rows.length, total: rows.length, runCompleted: true });
       showResults(existingResults, existingFields, 'complete', 'All rows already completed.');
       refreshButton();
+      return;
+    }
+
+    const unmapped = inputFields.filter((name) => !(inputToColumn[name] || '').trim());
+    if (unmapped.length > 0) {
+      showResults([], [], 'complete', `Please map all prompt inputs. Unmapped: ${unmapped.join(', ')}`);
       return;
     }
 
