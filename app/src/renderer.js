@@ -60,7 +60,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const canvasAPI = buildWorkflowCanvas(appMain);
     let currentProjectPath = null;
 
-  const APP_TITLE = 'Prompt Workflow Demo';
+  const APP_TITLE = 'Prompt Studio';
   function updateWindowTitle(projectPath) {
     const name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
     document.title = name ? `${name} - ${APP_TITLE}` : APP_TITLE;
