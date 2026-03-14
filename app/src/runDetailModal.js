@@ -84,6 +84,7 @@ export function openRunDetailModal({
   getSubsetContent = () => ({ headers: [], rows: [] }),
   getPromptTemplate = () => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }),
   registerPendingRun = () => {},
+  unregisterPendingRun = () => {},
   getPendingRunId = () => null,
   getPromptName = () => '',
   getUniqueDatasetExportName = (n) => n,
@@ -245,10 +246,10 @@ export function openRunDetailModal({
   }
 
   function applyRunningLock() {
-    runBtn.disabled = true;
-    runBtn.textContent = 'Running';
-    runBtn.classList.remove('btn-primary', 'btn-danger');
-    runBtn.classList.add('btn-secondary');
+    runBtn.disabled = false;
+    runBtn.textContent = 'Running, click to stop';
+    runBtn.classList.remove('btn-primary');
+    runBtn.classList.add('btn-secondary', 'btn-danger');
     llmSelectEl.disabled = true;
     pickerEl.classList.add('run-detail-ws-picker--locked');
     pickerEl.setAttribute('aria-disabled', 'true');
@@ -290,7 +291,7 @@ export function openRunDetailModal({
     } else {
       applyUnlock();
     }
-    runBtn.classList.remove('btn-danger');
+    runBtn.classList.remove('btn-secondary', 'btn-danger');
     runBtn.classList.add('btn-primary');
     runBtn.textContent = isResumeState ? 'Resume' : 'Run';
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
@@ -684,7 +685,18 @@ export function openRunDetailModal({
   });
 
   runBtn.addEventListener('click', async () => {
-    if (isCompleted() || runId) return;
+    if (isCompleted()) return;
+    if (runId) {
+      try {
+        await fetch(`${API_BASE}/api/run/cancel/${runId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      } catch (_) {}
+      unregisterPendingRun(nodeId);
+      runId = null;
+      const { results, outputFields } = getNodeResults();
+      showResults(results, outputFields, 'incomplete');
+      refreshButton();
+      return;
+    }
     if (!selectedNodeId || !selectedCredentialId) return;
 
     const content = getSubsetContent(selectedNodeId);

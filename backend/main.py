@@ -50,8 +50,8 @@ DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
     "default_review_credential_id": "",
     "default_review_assistant_credential_id": "",
-    "run_concurrency": 4,
-    "review_concurrency": 4,
+    "run_concurrency": 1,
+    "review_concurrency": 1,
     "run_max_tokens": 8192,
     "review_max_tokens": 32768,
     "run_max_retries": 2,
@@ -139,8 +139,8 @@ class SettingsPatch(BaseModel):
     default_run_credential_id: str | None = None
     default_review_credential_id: str | None = None
     default_review_assistant_credential_id: str | None = None
-    run_concurrency: int | None = Field(default=None, ge=1, le=16)
-    review_concurrency: int | None = Field(default=None, ge=1, le=16)
+    run_concurrency: int | None = Field(default=None, ge=1, le=4)
+    review_concurrency: int | None = Field(default=None, ge=1, le=4)
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=10)
@@ -705,9 +705,15 @@ def _do_run_work(
         run_max_retries = max(0, int(run_settings.get("run_max_retries", 0)))
 
         def process_one(row_index: int, prompt: str) -> tuple[int, list[dict]]:
+            with _run_jobs_lock:
+                if run_id in _run_cancelled:
+                    return (row_index, [{"input_row_index": row_index, "output": None, "error": "Cancelled"}])
             items: list[dict] = []
             err_msg: str | None = None
             for attempt in range(run_max_retries + 1):
+                with _run_jobs_lock:
+                    if run_id in _run_cancelled:
+                        return (row_index, [{"input_row_index": row_index, "output": None, "error": "Cancelled"}])
                 items = []
                 err_msg = None
                 try:

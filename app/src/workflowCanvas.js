@@ -438,6 +438,9 @@ export function buildWorkflowCanvas(root) {
   function registerPendingRun(nodeId, runId) {
     if (nodeId && runId) pendingRuns.set(nodeId, runId);
   }
+  function unregisterPendingRun(nodeId) {
+    if (nodeId) pendingRuns.delete(nodeId);
+  }
   function setRunNodeProgress(node, completed, total) {
     const bar = node?.querySelector('.workflow-node__run-progress');
     if (!bar) return;
@@ -1778,6 +1781,8 @@ export function buildWorkflowCanvas(root) {
               getSubsetContent,
               getPromptTemplate,
               registerPendingRun,
+              unregisterPendingRun,
+              getPendingRunId: () => pendingRuns.get(runNode.dataset.nodeId) || null,
               getPromptName: () => (node.dataset.promptName || '').trim() || (node.querySelector('.workflow-node__title')?.textContent?.trim() || ''),
               getUniqueDatasetExportName: findUniqueDatasetExportName,
               isRunNameAlreadyUsedForPrompt,
@@ -2192,6 +2197,7 @@ export function buildWorkflowCanvas(root) {
         getSubsetContent,
         getPromptTemplate,
         registerPendingRun,
+        unregisterPendingRun,
         getPendingRunId: () => pendingRuns.get(node.dataset.nodeId) || null,
         getPromptName: () => {
           if (!promptNode) return '';
