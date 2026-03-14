@@ -64,11 +64,11 @@ Create a Prompt node. Write your prompt in structured sections (System, User, Co
 
 ### 4. Run
 
-Add a Run node. Connect it to your Prompt and Dataset (or Sampler). Map dataset columns to prompt placeholders, choose an LLM (OpenAI, Anthropic, etc.), and click Run. The app executes your prompt row-by-row and shows results in a table. If interrupted, you can Resume from the last checkpoint.
+Add a Run node. Connect it to your Prompt and Dataset. Map dataset columns to prompt placeholders, choose an LLM (OpenAI, Anthropic, etc.), and click Run. The app executes your prompt row-by-row and shows results in a table. If interrupted, you can Resume from the last checkpoint.
 
 ### 5. Score
 
-Add a Score node. Connect it to the Run output and a ground-truth Dataset. Map output fields (e.g. `answer`) to ground-truth columns and choose match rules (exact, contains, numeric). The Score view shows match/mismatch for each row.
+Add a Score node. Connect it to a ground-truth Dataset. Map output fields (e.g. `answer`) to ground-truth columns and choose match rules (exact, contains, numeric). The Score view shows match/mismatch for each row.
 
 ### 6. Review
 
