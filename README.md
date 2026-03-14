@@ -2,6 +2,8 @@
 
 A desktop application for prompt engineering and evaluation. Build prompts, run them against datasets with LLMs, score results against ground truth, and get AI-powered suggestions to improve your prompts.
 
+![Screenshot](images/screenshot.png)
+
 ## Features
 
 - **Prompt nodes** – Create multi-section prompts with placeholders and structured output schemas
