@@ -128,6 +128,10 @@
       letter-spacing: -0.02em;
     }
 
+    .hero-h1-nowrap {
+      white-space: nowrap;
+    }
+
     .hero-content p {
       font-size: 1.1rem;
       color: var(--text-muted);
@@ -363,8 +367,16 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 1.5rem;
       margin-bottom: 1rem;
+      color: var(--primary);
+    }
+    .feature-icon i,
+    .feature-icon svg {
+      width: 28px;
+      height: 28px;
+    }
+    .feature-icon svg {
+      stroke: currentColor;
     }
 
     .feature-card h3 {
@@ -693,6 +705,7 @@
     .overview-overlay .review-detail-suggestion-reason { margin: 0; font-size: 13px; line-height: 1.45; }
     .overview-overlay .sampler-radio-group { display: flex; gap: 12px; flex-wrap: wrap; }
     .overview-overlay .sampler-radio-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
+    .overview-overlay .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 16px; }
 
     /* Node explanation: below overlay, outside modal, slides in on click */
     .overview-explanation {
@@ -1081,6 +1094,13 @@
       border-color: var(--border);
     }
 
+    .model-provider-card__logo {
+      width: 48px;
+      height: 48px;
+      object-fit: contain;
+      margin-bottom: 0.75rem;
+    }
+
     .model-provider-card__name {
       font-size: 1rem;
       font-weight: 600;
@@ -1131,6 +1151,9 @@
     }
 
     .use-case-card {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
       padding: 1.25rem 1.25rem;
       background: var(--bg-white);
       border: 1px solid var(--border-light);
@@ -1141,6 +1164,20 @@
     .use-case-card:hover {
       box-shadow: var(--shadow-sm);
       border-color: var(--border);
+    }
+
+    .use-case-card__icon {
+      display: inline-block;
+      width: 32px;
+      height: 32px;
+      margin-bottom: 0.75rem;
+      color: var(--primary);
+      flex-shrink: 0;
+    }
+    .use-case-card__icon svg {
+      width: 100%;
+      height: 100%;
+      stroke: currentColor;
     }
 
     .use-case-card__title {
@@ -1369,10 +1406,10 @@
   <section class="hero">
     <div class="hero-inner">
       <div class="hero-content">
-        <h1>Human-in-the-Loop Prompt Engineering, Traceable Iteration</h1>
-        <p>A visual workflow that keeps you in the loop: design prompts, run evaluations, score against ground truth, and refine with AI suggestions. Human and machine work together. <strong>No coding required</strong>.</p>
+        <h1>Human in the Loop Prompt Engineering. <span class="hero-h1-nowrap">Every Iteration Traceable.</span></h1>
+        <p>Design prompts. Run evaluations. Score against ground truth. Refine with AI. A visual workflow that keeps you in control, every change traceable, every decision intentional. Human expertise meets machine precision. <strong>No coding required</strong>.</p>
         <div class="hero-cta">
-          <a href="#" class="btn btn-primary">Download for Free</a>
+          <a href="#" class="btn btn-primary">Download Prompt Studio</a>
           <a href="#features" class="btn btn-secondary">See features</a>
         </div>
         <div class="hero-badges">
@@ -1427,22 +1464,22 @@
       </div>
       <div class="features-grid">
       <div class="feature-card">
-        <div class="feature-icon">≡</div>
+        <div class="feature-icon"><i data-lucide="layout-list"></i></div>
         <h3>Section-based Prompt Design</h3>
         <p>Edit prompts in structured sections with version linking. Clear hierarchy for systematic iteration.</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon">▶</div>
+        <div class="feature-icon"><i data-lucide="play-circle"></i></div>
         <h3>Batch Run & Resume</h3>
         <p>Select datasets, map columns, run prompts in batch. Resume from where you left off.</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon">✓</div>
+        <div class="feature-icon"><i data-lucide="target"></i></div>
         <h3>Score Against Ground Truth</h3>
         <p>Configure rules and compare outputs. Match and mismatch at a glance.</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon">◆</div>
+        <div class="feature-icon"><i data-lucide="sparkles"></i></div>
         <h3>AI Review Suggestions</h3>
         <p>LLM analyzes results and suggests prompt edits. Accept or reject to iterate quickly.</p>
       </div>
@@ -1733,26 +1770,32 @@
       <p>Connect your API keys and run prompts with any supported provider. Switch between models for Run, Score, and Review, or compare outputs across providers.</p>
       <div class="model-providers-grid">
         <div class="model-provider-card">
+          <img class="model-provider-card__logo" src="openai.png" alt="OpenAI" />
           <span class="model-provider-card__name">OpenAI</span>
           <span class="model-provider-card__models">GPT-5, GPT-5-mini…</span>
         </div>
         <div class="model-provider-card">
+          <img class="model-provider-card__logo" src="anthropic.png" alt="Anthropic" />
           <span class="model-provider-card__name">Anthropic</span>
           <span class="model-provider-card__models">Claude Opus, Sonnet…</span>
         </div>
         <div class="model-provider-card">
+          <img class="model-provider-card__logo" src="gemini-color.png" alt="Google" />
           <span class="model-provider-card__name">Google</span>
           <span class="model-provider-card__models">Gemini Pro, Flash…</span>
         </div>
         <div class="model-provider-card">
+          <img class="model-provider-card__logo" src="deepseek-color.png" alt="DeepSeek" />
           <span class="model-provider-card__name">DeepSeek</span>
           <span class="model-provider-card__models">Chat, Reasoner…</span>
         </div>
         <div class="model-provider-card">
+          <img class="model-provider-card__logo" src="mistral-color.png" alt="Mistral" />
           <span class="model-provider-card__name">Mistral</span>
           <span class="model-provider-card__models">Large, Small…</span>
         </div>
         <div class="model-provider-card">
+          <img class="model-provider-card__logo" src="bedrock-color.png" alt="Amazon Bedrock" />
           <span class="model-provider-card__name">Amazon Bedrock</span>
           <span class="model-provider-card__models">Claude, Llama…</span>
         </div>
@@ -1766,30 +1809,37 @@
       <p>Structured prompt engineering with datasets and evaluation fits many domains. Build, run, score, and iterate, whether you work in research or production.</p>
       <div class="use-cases-grid">
         <div class="use-case-card">
+          <i data-lucide="activity" class="use-case-card__icon"></i>
           <div class="use-case-card__title">Medicine</div>
           <div class="use-case-card__desc">Medical Q&amp;A, clinical note summarization, diagnosis support. Ground prompts on guidelines and evaluate against expert answers.</div>
         </div>
         <div class="use-case-card">
+          <i data-lucide="leaf" class="use-case-card__icon"></i>
           <div class="use-case-card__title">Biology</div>
           <div class="use-case-card__desc">Literature summarization, experiment data extraction, gene/protein analysis. Iterate prompts on curated scientific datasets.</div>
         </div>
         <div class="use-case-card">
+          <i data-lucide="scale" class="use-case-card__icon"></i>
           <div class="use-case-card__title">Legal</div>
           <div class="use-case-card__desc">Contract review, clause extraction, legal research. Map outputs to ground truth and refine prompts for accuracy.</div>
         </div>
         <div class="use-case-card">
+          <i data-lucide="trending-up" class="use-case-card__icon"></i>
           <div class="use-case-card__title">Finance</div>
           <div class="use-case-card__desc">Report analysis, risk assessment, compliance checks. Run on sample data, score against expected outputs, iterate.</div>
         </div>
         <div class="use-case-card">
+          <i data-lucide="book-open" class="use-case-card__icon"></i>
           <div class="use-case-card__title">Education</div>
           <div class="use-case-card__desc">Grading, tutoring, curriculum generation. Build datasets of questions and ideal answers; tune prompts for consistency.</div>
         </div>
         <div class="use-case-card">
+          <i data-lucide="headset" class="use-case-card__icon"></i>
           <div class="use-case-card__title">Customer Service</div>
           <div class="use-case-card__desc">FAQ extraction, ticket classification, knowledge-base QA. Use Run, Score, and Review to improve support automation.</div>
         </div>
         <div class="use-case-card">
+          <i data-lucide="file-text" class="use-case-card__icon"></i>
           <div class="use-case-card__title">Research</div>
           <div class="use-case-card__desc">Literature review, hypothesis generation, structured data extraction. Version prompts and compare models on benchmarks.</div>
         </div>
@@ -1818,7 +1868,7 @@
   </section>
 
   <footer>
-    <p>Prompt Studio (name TBD) · Traceable iteration for prompt engineering</p>
+    <p>Prompt Studio · Traceable iteration for prompt engineering</p>
   </footer>
 
   <script>
@@ -1859,7 +1909,7 @@
             <div class="dataset-meta-wrap"><div class="dataset-meta-field"><span class="dataset-meta-label">Sampling method</span><div class="sampler-radio-group"><label class="sampler-radio-label"><input type="radio" checked disabled /> Without replacement</label></div></div>
             <div class="dataset-meta-field"><span class="dataset-meta-label">Sample size</span><div class="sampler-radio-group"><label class="sampler-radio-label"><input type="radio" checked disabled /> Rows</label></div><input type="number" class="dataset-meta-input" value="20" disabled style="max-width:120px;" /></div>
             <div class="dataset-meta-field"><span class="dataset-meta-label">From dataset</span><input type="text" class="dataset-meta-input" value="faq_ground_truth" disabled /></div></div>
-            <div style="margin-top:16px;"><button type="button" class="btn btn-primary" disabled>Create sample</button></div>
+            <div class="modal-actions"><button type="button" class="btn btn-primary" disabled>Create sample</button></div>
           </div>
         </div>`,
         prompt: `<div class="modal-panel modal-panel--prompt-detail" style="width:min(800px,94vw);min-width:min(800px,94vw);max-height:80vh;">
@@ -1873,7 +1923,7 @@
               <div class="preview-field-block"><div class="preview-field-divider"><span class="preview-field-line"></span><span class="preview-field-name">System</span><span class="preview-field-line"></span></div><div class="preview-field-content"><div class="preview-field-content-line">You are an expert customer support assistant. Your task is to extract accurate answers from the provided documentation.</div><div class="preview-field-content-line"></div><div class="preview-field-content-line">Rules:</div><div class="preview-field-content-line">- Answer ONLY based on the context. Do not infer or guess.</div><div class="preview-field-content-line">- Be concise. Use bullet points if the answer has multiple parts.</div><div class="preview-field-content-line">- If the answer is not in the context, respond with exactly: "Not found in documentation."</div><div class="preview-field-content-line">- Include a confidence score (0-100) based on how clearly the context supports your answer.</div></div></div>
               <div class="preview-field-block"><div class="preview-field-divider"><span class="preview-field-line"></span><span class="preview-field-name">Context</span><span class="preview-field-line"></span></div><div class="preview-field-content"><div class="preview-field-content-line">{context}</div></div></div>
               <div class="preview-field-block"><div class="preview-field-divider"><span class="preview-field-line"></span><span class="preview-field-name">User</span><span class="preview-field-line"></span></div><div class="preview-field-content"><div class="preview-field-content-line">Answer the following question based on the context above:</div><div class="preview-field-content-line"></div><div class="preview-field-content-line">{question}</div></div></div>
-              <div style="margin-top:16px;"><button type="button" class="btn btn-secondary">Edit</button> <button type="button" class="btn btn-primary">Run</button></div>
+              <div class="modal-actions"><button type="button" class="btn btn-secondary">Edit</button><button type="button" class="btn btn-primary">Run</button></div>
             </div>
           </div>
         </div>`,
@@ -1917,7 +1967,7 @@
               <div class="preview-field-block"><div class="preview-field-divider"><span class="preview-field-line"></span><span class="preview-field-name">System</span><span class="preview-field-line"></span></div><div class="preview-field-content"><div class="preview-field-content-line">You are an expert customer support assistant. Your task is to extract accurate answers from the provided documentation.</div><div class="preview-field-content-line"></div><div class="preview-field-content-line">Rules:</div><div class="preview-field-content-line">- Answer ONLY based on the context. Do not infer or guess.</div><div class="preview-field-content-line">- Be concise. Use bullet points if the answer has multiple parts.</div><div class="preview-field-content-line">- If the answer is not in the context, respond with exactly: "Not found in documentation."</div><div class="preview-field-content-line">- Include a confidence score (0-100) based on how clearly the context supports your answer.</div></div></div>
               <div class="preview-field-block"><div class="preview-field-divider"><span class="preview-field-line"></span><span class="preview-field-name">Context</span><span class="preview-field-line"></span></div><div class="preview-field-content"><div class="preview-field-content-line">{context}</div></div></div>
               <div class="preview-field-block"><div class="preview-field-divider"><span class="preview-field-line"></span><span class="preview-field-name">User</span><span class="preview-field-line"></span></div><div class="preview-field-content"><div class="preview-field-content-line">Answer the following question based on the context above:</div><div class="preview-field-content-line"></div><div class="preview-field-content-line">{question}</div></div></div>
-              <div style="margin-top:16px;"><button type="button" class="btn btn-primary" disabled>Apply</button></div>
+              <div class="modal-actions"><button type="button" class="btn btn-primary" disabled>Apply</button></div>
             </div>
             <div class="review-detail-third-column"><h3 class="prompt-preview-title">Review assistant</h3>
               <div class="review-assistant-chat-wrap">
@@ -2028,5 +2078,7 @@
       requestAnimationFrame(tick);
     })();
   </script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>lucide.createIcons();</script>
 </body>
 </html>
