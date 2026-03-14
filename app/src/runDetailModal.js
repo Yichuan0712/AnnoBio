@@ -313,6 +313,8 @@ export function openRunDetailModal({
     resultsState.outputFields = outputFields || [];
     resultsState.inputHeaders = getInputHeaders();
     resultsState.status = status || 'complete';
+    const scrollWrap = rightCol.querySelector('.run-detail-results-table-wrap');
+    const savedScrollLeft = scrollWrap ? scrollWrap.scrollLeft : 0;
     rightCol.innerHTML = '';
     if (!resultsState.results.length) {
       const card = document.createElement('div');
@@ -321,6 +323,8 @@ export function openRunDetailModal({
       rightCol.appendChild(card);
     } else {
       rightCol.appendChild(buildResultsCard(resultsState.results, resultsState.outputFields, resultsState.status));
+      const newScrollWrap = rightCol.querySelector('.run-detail-results-table-wrap');
+      if (newScrollWrap && savedScrollLeft > 0) newScrollWrap.scrollLeft = savedScrollLeft;
     }
     if (runDetailPanel) runDetailPanel.classList.add('run-detail-panel--expanded');
   }
@@ -460,8 +464,10 @@ export function openRunDetailModal({
         if (node) node.dataset.runBracketColsCollapsed = resultsState.bracketColsCollapsed ? '1' : '0';
         refreshTable();
       };
+      const savedScrollLeft = tableWrap.scrollLeft;
       tableWrap.innerHTML = '';
       tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields, resultsState.inputHeaders || [], resultsState.bracketColsCollapsed, onToggle));
+      if (savedScrollLeft > 0) tableWrap.scrollLeft = savedScrollLeft;
       const totalFiltered = filtered.length;
       const totalRows = resultsState.results.length;
       paginationInfo.textContent = totalFiltered === 0 ? (totalRows === 0 ? '0 rows' : `0 rows (filtered from ${totalRows})`) : `Showing ${start + 1}–${Math.min(start + resultsState.rowsPerPage, totalFiltered)} of ${totalRows} rows`;
@@ -624,8 +630,12 @@ export function openRunDetailModal({
     resultsState.inputHeaders = getInputHeaders();
     resultsState.status = status;
     resultsState.currentPage = 1;
+    const scrollWrap = rightCol.querySelector('.run-detail-results-table-wrap');
+    const savedScrollLeft = scrollWrap ? scrollWrap.scrollLeft : 0;
     rightCol.innerHTML = '';
     rightCol.appendChild(buildResultsCard(resultsState.results, outputFields, status));
+    const newScrollWrap = rightCol.querySelector('.run-detail-results-table-wrap');
+    if (newScrollWrap && savedScrollLeft > 0) newScrollWrap.scrollLeft = savedScrollLeft;
     if (runDetailPanel) runDetailPanel.classList.add('run-detail-panel--expanded');
     if (isComplete) refreshButton();
     else refreshButton();
