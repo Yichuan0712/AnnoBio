@@ -88,8 +88,8 @@ export function openSettingsModal() {
               <input type="number" id="settings-run-max-tokens" class="dataset-meta-input" min="256" max="131072" value="8192" aria-label="Run max tokens" />
             </div>
             <div class="defaults-field">
-              <label class="dataset-meta-label" for="settings-run-max-retries">Max retries on error (0–10)</label>
-              <input type="number" id="settings-run-max-retries" class="dataset-meta-input" min="0" max="10" value="2" aria-label="Run max retries" />
+              <label class="dataset-meta-label" for="settings-run-max-retries">Max retries on error (0–5)</label>
+              <input type="number" id="settings-run-max-retries" class="dataset-meta-input" min="0" max="5" value="2" aria-label="Run max retries" />
             </div>
           </div>
         </div>
@@ -198,7 +198,7 @@ export function openSettingsModal() {
     const reviewConcurrency = Math.min(4, Math.max(1, parseInt(reviewConcurrencyInp.value, 10) || 1));
     const runMaxTokens = Math.min(131072, Math.max(256, parseInt(runMaxTokensInp.value, 10) || 8192));
     const reviewMaxTokens = Math.min(131072, Math.max(256, parseInt(reviewMaxTokensInp.value, 10) || 32768));
-    const runMaxRetries = Math.min(10, Math.max(0, parseInt(runMaxRetriesInp.value, 10) ?? 2));
+    const runMaxRetries = Math.min(5, Math.max(0, parseInt(runMaxRetriesInp.value, 10) ?? 2));
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',

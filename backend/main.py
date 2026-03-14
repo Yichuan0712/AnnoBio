@@ -143,7 +143,7 @@ class SettingsPatch(BaseModel):
     review_concurrency: int | None = Field(default=None, ge=1, le=4)
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
-    run_max_retries: int | None = Field(default=None, ge=0, le=10)
+    run_max_retries: int | None = Field(default=None, ge=0, le=5)
 
 
 class CredentialResponse(BaseModel):
@@ -702,7 +702,7 @@ def _do_run_work(
             _run_jobs[run_id]["output_fields"] = output_fields
         results_by_input: dict[int, list[dict]] = {}
 
-        run_max_retries = max(0, int(run_settings.get("run_max_retries", 0)))
+        run_max_retries = min(5, max(0, int(run_settings.get("run_max_retries", 0))))
 
         def process_one(row_index: int, prompt: str) -> tuple[int, list[dict]]:
             with _run_jobs_lock:
