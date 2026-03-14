@@ -6147,8 +6147,18 @@ body.wd-row-resizing {
   border-color: var(--primary-btn-text, #2563eb);
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   filter: brightness(0.95);
+}
+
+.btn:disabled,
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  color: var(--text-muted);
+  background: var(--bg-bar);
+  border-color: var(--border);
+  cursor: not-allowed;
+  filter: none;
 }
 
 .btn-secondary {
@@ -6156,7 +6166,7 @@ body.wd-row-resizing {
   background: var(--bg-bar);
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   background: var(--hover);
 }
 

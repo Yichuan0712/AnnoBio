@@ -434,6 +434,14 @@ export function buildWorkflowCanvas(root) {
 
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
+  /** Pending Review jobs: reviewNodeId -> reviewId. Poll backend and update Review node when done (like Run). */
+  const pendingReviews = new Map();
+  function registerPendingReview(nodeId, reviewId) {
+    if (nodeId && reviewId) pendingReviews.set(nodeId, reviewId);
+  }
+  function unregisterPendingReview(nodeId) {
+    if (nodeId) pendingReviews.delete(nodeId);
+  }
   const RUN_API_BASE = 'http://localhost:8000';
   function registerPendingRun(nodeId, runId) {
     if (nodeId && runId) pendingRuns.set(nodeId, runId);
@@ -575,9 +583,100 @@ export function buildWorkflowCanvas(root) {
         }
       } catch (_) {}
     }
+    for (const [reviewNodeId, reviewId] of pendingReviews) {
+      try {
+        const res = await fetch(`${RUN_API_BASE}/api/review/result/${reviewId}`);
+        const data = await res.json().catch(() => ({}));
+        const node = getNodeById(reviewNodeId);
+        if (!node) {
+          pendingReviews.delete(reviewNodeId);
+          continue;
+        }
+        const events = data.events || [];
+        if (res.status === 202) {
+          processReviewEvents(reviewNodeId, events);
+          continue;
+        }
+        if (res.status !== 200) continue;
+        processReviewEvents(reviewNodeId, events);
+        if (data.error) {
+          alert(data.error || 'Review failed.');
+        }
+        if (data.status === 'done' || data.status === 'cancelled') {
+          pendingReviews.delete(reviewNodeId);
+          pendingReviewNodeIds.delete(reviewNodeId);
+          document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        }
+      } catch (_) {}
+    }
   }, 2000);
 
-  /** On app close: stop polling and tell backend to cancel every pending run. Sync XHR so the request is sent before process exits (sendBeacon does not wait). */
+  function processReviewEvents(reviewNodeId, events) {
+    const node = getNodeById(reviewNodeId);
+    if (!node) return;
+    let streamSaved = {};
+    try {
+      streamSaved = JSON.parse(node.dataset.reviewResult || '{}');
+    } catch (_) {}
+    const sectionsCopy = Array.isArray(streamSaved.promptSections) && streamSaved.promptSections.length > 0
+      ? streamSaved.promptSections
+      : [];
+    streamSaved = {
+      ...streamSaved,
+      summary: streamSaved.summary || '',
+      suggestions: streamSaved.suggestions || [],
+      design_suggestions: streamSaved.design_suggestions || [],
+      data_refinement: streamSaved.data_refinement || [],
+      promptSections: sectionsCopy,
+      promptFullText: sectionsCopy.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n'),
+      workingSections: sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() })),
+      reviewProgress: streamSaved.reviewProgress || 0,
+      run_results: streamSaved.run_results || [],
+      comparison_rows: streamSaved.comparison_rows || [],
+    };
+    let focusCount = 0, step2Total = 0, focusDone = 0, step2Done = 0;
+    for (const ev of events) {
+      if (ev.type === 'error') {
+        pendingReviews.delete(reviewNodeId);
+        pendingReviewNodeIds.delete(reviewNodeId);
+        document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
+        alert(ev.detail || 'Review failed.');
+        return;
+      }
+      if (ev.type === 'design' && Array.isArray(ev.design_suggestions)) {
+        streamSaved.design_suggestions = ev.design_suggestions;
+        setReviewNodeProgress(getNodeById(reviewNodeId), 10);
+      } else if (ev.type === 'plan') {
+        focusCount = ev.focus_count != null ? Math.max(0, parseInt(ev.focus_count, 10)) : 0;
+        step2Total = ev.per_row_count != null ? Math.max(0, parseInt(ev.per_row_count, 10)) : 0;
+        focusDone = 0;
+        step2Done = 0;
+        streamSaved = { ...streamSaved, summary: ev.summary || '', suggestions: [], streamComplete: false, reviewProgress: 20 };
+        setReviewNodeProgress(getNodeById(reviewNodeId), 20);
+      } else if (ev.type === 'step2_row') {
+        step2Done = ev.done != null ? parseInt(ev.done, 10) : step2Done + 1;
+        const total = ev.total != null ? parseInt(ev.total, 10) : step2Total;
+        const pct = total > 0 ? 20 + Math.floor(60 * step2Done / total) : 80;
+        setReviewNodeProgress(getNodeById(reviewNodeId), pct);
+        streamSaved.reviewProgress = pct;
+      } else if (ev.type === 'suggestions' && Array.isArray(ev.suggestions) && ev.suggestions.length) {
+        streamSaved.suggestions = (streamSaved.suggestions || []).concat(ev.suggestions);
+        focusDone += 1;
+        const pct = focusCount > 0 ? 20 + (80 * focusDone / focusCount) : (step2Total > 0 ? 85 : 90);
+        setReviewNodeProgress(getNodeById(reviewNodeId), pct);
+      } else if (ev.type === 'data_refinement' && Array.isArray(ev.data_refinement)) {
+        streamSaved.data_refinement = ev.data_refinement;
+        setReviewNodeProgress(getNodeById(reviewNodeId), 95);
+      } else if (ev.type === 'done') {
+        setReviewNodeProgress(getNodeById(reviewNodeId), 100);
+        streamSaved = { ...streamSaved, streamComplete: true, reviewProgress: 100 };
+      }
+      document.dispatchEvent(new CustomEvent('workflow:save-review-result', { detail: { reviewNodeId, data: streamSaved } }));
+    }
+  }
+
+  /** On app close: stop polling and tell backend to cancel every pending run/review. Sync XHR so the request is sent before process exits (sendBeacon does not wait). */
   function shutdownRunPoll() {
     runPollStopped = true;
     clearInterval(runPollIntervalId);
@@ -586,6 +685,15 @@ export function buildWorkflowCanvas(root) {
       try {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', `${RUN_API_BASE}/api/run/cancel/${runId}`, false);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.send('{}');
+      } catch (_) {}
+    }
+    const reviewIds = Array.from(pendingReviews.values());
+    for (const reviewId of reviewIds) {
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${RUN_API_BASE}/api/review/cancel/${reviewId}`, false);
         xhr.setRequestHeader('Content-Type', 'application/json');
         xhr.send('{}');
       } catch (_) {}
@@ -2093,6 +2201,15 @@ export function buildWorkflowCanvas(root) {
         showAlert('This Run node is used by one or more Score nodes. Remove the Score nodes before deleting this Run.', { title: 'Cannot delete Run node' });
         return;
       }
+      const runId = pendingRuns.get(nodeId);
+      if (runId) {
+        unregisterPendingRun(nodeId);
+        fetch(`${RUN_API_BASE}/api/run/cancel/${runId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        }).catch(() => {});
+      }
       removeConnectionsInvolvingNodeId(nodeId);
       node.remove();
       updateContentSize();
@@ -2473,6 +2590,14 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      const reviewId = pendingReviews.get(nodeId);
+      if (reviewId) {
+        unregisterPendingReview(nodeId);
+        fetch(`${RUN_API_BASE}/api/review/cancel/${reviewId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+      } else {
+        fetch(`${RUN_API_BASE}/api/review/cancel/by-node/${encodeURIComponent(nodeId)}`, { method: 'POST' }).catch(() => {});
+      }
+      pendingReviewNodeIds.delete(nodeId);
       removeConnectionsInvolvingNodeId(nodeId);
       node.remove();
       updateContentSize();
@@ -2658,14 +2783,15 @@ export function buildWorkflowCanvas(root) {
       }
       scoreHasReviewLlm = (node.dataset.reviewCredentialId || '').trim() !== '';
     }
-    let reviewHasAccepted = false;
+    let reviewHasResult = false;
     if (isPromptReview) {
       try {
         const raw = (node.dataset.reviewResult || '').trim();
         if (raw) {
           const data = JSON.parse(raw);
-          const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
-          reviewHasAccepted = suggestions.some((s) => s.applied === true);
+          const isComplete = data?.streamComplete === true;
+          const sections = Array.isArray(data?.workingSections) ? data.workingSections : (Array.isArray(data?.promptSections) ? data.promptSections : []);
+          reviewHasResult = isComplete && sections.length > 0;
         }
       } catch (_) {}
     }
@@ -2689,7 +2815,7 @@ export function buildWorkflowCanvas(root) {
       `;
     } else if (isPromptReview) {
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem" ${reviewHasAccepted ? '' : 'disabled'}>Apply</button>
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem" ${reviewHasResult ? '' : 'disabled'}>Apply</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
       `;
     } else if (isDataset) {
@@ -3674,14 +3800,16 @@ export function buildWorkflowCanvas(root) {
     const top = parseFloat(scoreNode.style.top) || 0;
     const promptReviewNode = createPromptReviewNode({ left, top, title: 'Review' });
     if (promptReviewNode?.dataset?.nodeId) {
+      const reviewNodeId = promptReviewNode.dataset.nodeId;
       connections.push({
         fromId: scoreNodeId,
-        toId: promptReviewNode.dataset.nodeId,
+        toId: reviewNodeId,
         type: EDGE_TYPE_SCORE_TO_PROMPT_REVIEW,
       });
       updateEdges();
       if (!e.detail) e.detail = {};
-      e.detail.reviewNodeId = promptReviewNode.dataset.nodeId;
+      e.detail.reviewNodeId = reviewNodeId;
+      e.detail.registerPendingReview = registerPendingReview;
     }
     updateContentSize();
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -3694,7 +3822,10 @@ export function buildWorkflowCanvas(root) {
   });
   document.addEventListener('workflow:review-stream-ended', (e) => {
     const id = e.detail?.reviewNodeId;
-    if (id) pendingReviewNodeIds.delete(id);
+    if (id) {
+      pendingReviewNodeIds.delete(id);
+      unregisterPendingReview(id);
+    }
   });
 
   document.addEventListener('workflow:review-progress', (e) => {

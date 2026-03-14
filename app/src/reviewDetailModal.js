@@ -606,6 +606,8 @@ function buildReviewResultUI(overlay, options) {
     exportBtn.type = 'button';
     exportBtn.className = 'btn btn-primary review-detail-export-btn';
     exportBtn.textContent = 'Apply';
+    const isComplete = saved.streamComplete === true || (saved.streamComplete === undefined && !streamRef);
+    exportBtn.disabled = !isComplete;
     exportBtn.addEventListener('click', () => {
       const sections = working.map((s) => ({ name: s.name || '', content: s.content || '' }));
       if (!sections.length) return;
@@ -752,6 +754,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
     onReviewResultChange: updateReviewResult || null,
     refreshFromSaved,
     chatRefreshRef,
+    getIsReviewStreaming: getIsReviewStreaming || null,
   });
 }
 
@@ -915,13 +918,30 @@ function stripAssistantSuggestionBlocks(text) {
 
 /** Init Review assistant chat: uses default_review_credential_id from settings. */
 function initReviewAssistantChat(overlay, contextOptions = {}) {
-  const { getPayload, getReviewResult, onReviewResultChange, refreshFromSaved, chatRefreshRef } = contextOptions;
+  const { getPayload, getReviewResult, onReviewResultChange, refreshFromSaved, chatRefreshRef, getIsReviewStreaming } = contextOptions;
   const messagesEl = overlay.querySelector('.review-assistant-messages');
   const inputEl = overlay.querySelector('.review-assistant-input');
   const sendBtn = overlay.querySelector('.review-assistant-send-inline');
   if (!messagesEl || !inputEl || !sendBtn) return;
 
   let credentialId = '';
+
+  function updateInputState() {
+    const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
+    if (!credentialId) {
+      inputEl.disabled = true;
+      inputEl.placeholder = 'Select a model in Settings first';
+      sendBtn.disabled = true;
+    } else if (streaming) {
+      inputEl.disabled = true;
+      inputEl.placeholder = 'Wait for review to complete...';
+      sendBtn.disabled = true;
+    } else {
+      inputEl.disabled = false;
+      inputEl.placeholder = 'Ask anything...';
+      sendBtn.disabled = false;
+    }
+  }
   const saved0 = typeof getReviewResult === 'function' ? getReviewResult() : null;
   const initialChat = Array.isArray(saved0?.chatHistory) ? saved0.chatHistory : [];
   const chatHistory = initialChat.map((m) => ({ role: m.role, content: String(m.content || '').trim() }));
@@ -1000,7 +1020,8 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
 
   async function sendMessage() {
     const text = (inputEl.value || '').trim();
-    if (!text || !credentialId) return;
+    const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
+    if (!text || !credentialId || streaming) return;
     inputEl.value = '';
     sendBtn.disabled = true;
     appendMessage('user', text);
@@ -1116,6 +1137,8 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
 
   chatHistory.forEach((m) => appendMessage(m.role, m.content || '(empty)'));
 
+  updateInputState();
+
   const inProgress = saved0?.chatRequestInProgress === true;
   if (inProgress) {
     const placeholder = document.createElement('div');
@@ -1140,19 +1163,21 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
         messagesEl.appendChild(ph);
       }
       messagesEl.scrollTop = messagesEl.scrollHeight;
+      updateInputState();
     };
   }
 
   loadCredential().then(() => {
+    updateInputState();
     if (!credentialId) {
       if (chatHistory.length === 0) {
         appendMessage('assistant', 'Please select a model in Settings → Prompt Reviewer (Default model or Assistant model) to use the Assistant.');
       }
-      inputEl.disabled = true;
-      inputEl.placeholder = 'Select a model in Settings first';
-      sendBtn.disabled = true;
     } else if (chatHistory.length === 0) {
-      appendMessage('assistant', 'You can chat with me to discuss how to improve the prompt. Ask questions, request edits, or ask me to add or remove suggestions.');
+      const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
+      if (!streaming) {
+        appendMessage('assistant', 'You can chat with me to discuss how to improve the prompt. Ask questions, request edits, or ask me to add or remove suggestions.');
+      }
     }
   });
 }

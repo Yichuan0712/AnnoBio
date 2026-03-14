@@ -763,7 +763,7 @@
       color: var(--text-muted);
     }
 
-    /* Traceable optimization chain */
+    /* Traceable optimization chain — 独立节点样式 */
     .trace-chain {
       padding: 4.5rem 2rem 5rem;
       background: var(--bg-white);
@@ -854,45 +854,58 @@
       padding: 0.5rem 0;
     }
 
+    /* 节点基础：圆角矩形 */
     .trace-chain-node {
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      background: var(--bg-white);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      box-shadow: 0 1px 3px rgba(15,23,42,0.06);
+      border-radius: 8px;
       min-width: 52px;
       animation: trace-chain-pulse 2.5s ease-in-out infinite;
     }
 
+    /* P vX：紫色实心，白字 */
     .trace-chain-node--prompt {
-      background: linear-gradient(180deg, rgba(99, 102, 241, 0.15) 0%, #ffffff 100%);
-      border-color: var(--primary);
-      box-shadow: 0 1px 3px rgba(15,23,42,0.06), 0 0 0 1px rgba(99, 102, 241, 0.1);
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      border: 2px solid #4338ca;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+    }
+
+    .trace-chain-node--prompt .trace-chain-node__bar {
+      background: rgba(255,255,255,0.3);
+      border-bottom: none;
+    }
+
+    .trace-chain-node--prompt .trace-chain-node__label {
+      color: #fff;
+    }
+
+    /* Run/Score/Review：白底灰边，深灰字 */
+    .trace-chain-node--action {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border: 2px solid #64748b;
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+    }
+
+    .trace-chain-node--action .trace-chain-node__bar {
+      background: #e2e8f0;
+      border-bottom: 1px solid #cbd5e1;
+    }
+
+    .trace-chain-node--action .trace-chain-node__label {
+      color: #334155;
     }
 
     .trace-chain-node__bar {
       height: 4px;
-      background: var(--bg-elevated);
-      border-bottom: 1px solid var(--border-light);
-    }
-
-    .trace-chain-node--prompt .trace-chain-node__bar {
-      background: var(--primary);
-      border-bottom-color: var(--primary);
+      border-radius: 8px 8px 0 0;
     }
 
     .trace-chain-node__label {
       padding: 6px 10px;
       font-size: 11px;
       font-weight: 600;
-      color: var(--text);
       white-space: nowrap;
-    }
-
-    .trace-chain-node--prompt .trace-chain-node__label {
-      color: var(--primary);
     }
 
     .trace-chain-node:nth-child(1) { animation-delay: 0s; }
@@ -911,41 +924,18 @@
       50% { opacity: 1; box-shadow: 0 2px 8px rgba(99,102,241,0.2); }
     }
 
-    .trace-chain-arrow:nth-of-type(1) { animation-delay: 0.1s; }
-    .trace-chain-arrow:nth-of-type(2) { animation-delay: 0.35s; }
-    .trace-chain-arrow:nth-of-type(3) { animation-delay: 0.6s; }
-    .trace-chain-arrow:nth-of-type(4) { animation-delay: 0.85s; }
-    .trace-chain-arrow:nth-of-type(5) { animation-delay: 1.1s; }
-    .trace-chain-arrow:nth-of-type(6) { animation-delay: 1.35s; }
-    .trace-chain-arrow:nth-of-type(7) { animation-delay: 1.6s; }
-    .trace-chain-arrow:nth-of-type(8) { animation-delay: 1.85s; }
-    .trace-chain-arrow:nth-of-type(9) { animation-delay: 2.1s; }
-
-    .trace-chain-arrow {
+    .trace-chain-connector {
       flex-shrink: 0;
       display: flex;
       align-items: center;
-      justify-content: center;
-      width: 20px;
       color: var(--text-muted);
-      animation: trace-arrow-flow 2.5s ease-in-out infinite;
+      opacity: 0.6;
     }
 
-    .trace-chain-arrow svg {
+    .trace-chain-connector svg {
       width: 16px;
       height: 10px;
-      color: inherit;
-    }
-
-    @keyframes trace-arrow-flow {
-      0%, 100% { opacity: 0.6; transform: scale(0.95); }
-      50% { opacity: 1; transform: scale(1.05); }
-    }
-
-    .trace-chain-ellipsis {
-      padding: 0 0.5rem;
-      color: var(--text-muted);
-      font-size: 1rem;
+      display: block;
     }
 
     /* Network */
@@ -965,33 +955,6 @@
       min-width: 520px;
       height: 260px;
       display: block;
-    }
-
-    .trace-network-edges path {
-      animation: trace-network-path 3s linear infinite;
-    }
-
-    .trace-network-edges path:nth-child(1) { animation-delay: 0s; }
-    .trace-network-edges path:nth-child(2) { animation-delay: 0.2s; }
-    .trace-network-edges path:nth-child(3) { animation-delay: 0.4s; }
-    .trace-network-edges path:nth-child(4) { animation-delay: 0.6s; }
-    .trace-network-edges path:nth-child(5) { animation-delay: 0.8s; }
-    .trace-network-edges path:nth-child(6) { animation-delay: 1s; }
-    .trace-network-edges path:nth-child(7) { animation-delay: 0.1s; }
-    .trace-network-edges path:nth-child(8) { animation-delay: 0.3s; }
-    .trace-network-edges path:nth-child(9) { animation-delay: 0.5s; }
-    .trace-network-edges path:nth-child(10) { animation-delay: 0.2s; }
-    .trace-network-edges path:nth-child(11) { animation-delay: 0.4s; }
-    .trace-network-edges path:nth-child(12) { animation-delay: 0.6s; }
-    .trace-network-edges path:nth-child(13) { animation-delay: 0.1s; }
-    .trace-network-edges path:nth-child(14) { animation-delay: 0.3s; }
-    .trace-network-edges path:nth-child(15) { animation-delay: 0.5s; }
-    .trace-network-edges path:nth-child(16) { animation-delay: 0.2s; }
-
-    @keyframes trace-network-path {
-      0% { stroke-dashoffset: 0; opacity: 0.5; }
-      50% { stroke-dashoffset: -11; opacity: 1; }
-      100% { stroke-dashoffset: -22; opacity: 0.5; }
     }
 
     .trace-network-nodes > g {
@@ -1017,8 +980,7 @@
       50% { opacity: 1; }
     }
 
-    .trace-network-node rect.trace-node-bar { fill: #cbd5e1; }
-    .trace-network-node.trace-network-node--prompt rect.trace-node-bar { fill: #6366f1; }
+    .trace-network-node rect.trace-node-bar { }
 
     @media (max-width: 900px) {
       .trace-chain-inner {
@@ -1614,148 +1576,174 @@
           <div class="trace-chain-visual-label">Chain</div>
           <div class="trace-chain-flow">
             <span class="trace-chain-node trace-chain-node--prompt"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">P v1</span></span>
-            <span class="trace-chain-arrow"><svg width="16" height="10" viewBox="0 0 16 10" fill="none"><path d="M1 5h12m0 0l-4-4m4 4l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-            <span class="trace-chain-node"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Run</span></span>
-            <span class="trace-chain-arrow"><svg width="16" height="10" viewBox="0 0 16 10" fill="none"><path d="M1 5h12m0 0l-4-4m4 4l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-            <span class="trace-chain-node"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Score</span></span>
-            <span class="trace-chain-arrow"><svg width="16" height="10" viewBox="0 0 16 10" fill="none"><path d="M1 5h12m0 0l-4-4m4 4l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-            <span class="trace-chain-node"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Review</span></span>
-            <span class="trace-chain-arrow"><svg width="16" height="10" viewBox="0 0 16 10" fill="none"><path d="M1 5h12m0 0l-4-4m4 4l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="trace-chain-connector"><svg width="16" height="10" viewBox="0 0 16 10"><line x1="0" y1="5" x2="16" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 5" stroke-linecap="round"/></svg></span>
+            <span class="trace-chain-node trace-chain-node--action"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Run</span></span>
+            <span class="trace-chain-connector"><svg width="16" height="10" viewBox="0 0 16 10"><line x1="0" y1="5" x2="16" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 5" stroke-linecap="round"/></svg></span>
+            <span class="trace-chain-node trace-chain-node--action"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Score</span></span>
+            <span class="trace-chain-connector"><svg width="16" height="10" viewBox="0 0 16 10"><line x1="0" y1="5" x2="16" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 5" stroke-linecap="round"/></svg></span>
+            <span class="trace-chain-node trace-chain-node--action"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Review</span></span>
+            <span class="trace-chain-connector"><svg width="16" height="10" viewBox="0 0 16 10"><line x1="0" y1="5" x2="16" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 5" stroke-linecap="round"/></svg></span>
             <span class="trace-chain-node trace-chain-node--prompt"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">P v2</span></span>
-            <span class="trace-chain-arrow"><svg width="16" height="10" viewBox="0 0 16 10" fill="none"><path d="M1 5h12m0 0l-4-4m4 4l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-            <span class="trace-chain-node"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Run</span></span>
-            <span class="trace-chain-arrow"><svg width="16" height="10" viewBox="0 0 16 10" fill="none"><path d="M1 5h12m0 0l-4-4m4 4l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-            <span class="trace-chain-node"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Score</span></span>
-            <span class="trace-chain-arrow"><svg width="16" height="10" viewBox="0 0 16 10" fill="none"><path d="M1 5h12m0 0l-4-4m4 4l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-            <span class="trace-chain-node"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Review</span></span>
-            <span class="trace-chain-arrow"><svg width="16" height="10" viewBox="0 0 16 10" fill="none"><path d="M1 5h12m0 0l-4-4m4 4l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="trace-chain-connector"><svg width="16" height="10" viewBox="0 0 16 10"><line x1="0" y1="5" x2="16" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 5" stroke-linecap="round"/></svg></span>
+            <span class="trace-chain-node trace-chain-node--action"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Run</span></span>
+            <span class="trace-chain-connector"><svg width="16" height="10" viewBox="0 0 16 10"><line x1="0" y1="5" x2="16" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 5" stroke-linecap="round"/></svg></span>
+            <span class="trace-chain-node trace-chain-node--action"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Score</span></span>
+            <span class="trace-chain-connector"><svg width="16" height="10" viewBox="0 0 16 10"><line x1="0" y1="5" x2="16" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 5" stroke-linecap="round"/></svg></span>
+            <span class="trace-chain-node trace-chain-node--action"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">Review</span></span>
+            <span class="trace-chain-connector"><svg width="16" height="10" viewBox="0 0 16 10"><line x1="0" y1="5" x2="16" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 5" stroke-linecap="round"/></svg></span>
             <span class="trace-chain-node trace-chain-node--prompt"><span class="trace-chain-node__bar"></span><span class="trace-chain-node__label">P v3</span></span>
-            <span class="trace-chain-ellipsis">⋯</span>
           </div>
         </div>
         <div class="trace-network-visual">
           <div class="trace-chain-visual-label">Network</div>
           <svg class="trace-network-svg" viewBox="0 0 600 260" xmlns="http://www.w3.org/2000/svg">
             <defs>
-              <linearGradient id="trace-node-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8fafc"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
-              <linearGradient id="trace-prompt-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="rgba(99,102,241,0.15)"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
+              <linearGradient id="trace-node-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f8fafc"/></linearGradient>
+              <linearGradient id="trace-prompt-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#4f46e5"/></linearGradient>
+              <linearGradient id="trace-prompt-alt-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef2ff"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
+              <linearGradient id="trace-action-alt-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8fafc"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
               <filter id="trace-node-shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="1" stdDeviation="2" flood-opacity="0.1"/></filter>
+              <filter id="trace-prompt-shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.2" flood-color="#6366f1"/></filter>
             </defs>
             <g class="trace-network-edges">
-              <path d="M 54 130 L 70 130" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 110 130 L 126 130" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 166 130 L 182 130" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 226 130 L 268 40" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 226 130 L 268 130" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 226 130 L 268 220" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 312 40 L 324 40" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 364 40 L 396 40" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 436 40 L 468 40" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 512 40 L 544 40" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 312 130 L 324 130" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 364 130 L 396 130" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 436 130 L 468 130" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 512 130 L 544 130" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 312 220 L 324 220" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 364 220 L 396 220" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 436 220 L 468 220" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
-              <path d="M 512 220 L 544 220" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-dasharray="6 5" />
+              <path d="M 54 130 L 70 130" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 110 130 L 126 130" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 166 130 L 182 130" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 226 130 L 268 40" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 226 130 L 268 130" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 226 130 L 268 220" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 312 40 L 324 40" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 364 40 L 396 40" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 436 40 L 468 40" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 512 40 L 544 40" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 312 130 L 324 130" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 364 130 L 396 130" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 436 130 L 468 130" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 512 130 L 544 130" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 312 220 L 324 220" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 364 220 L 396 220" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 436 220 L 468 220" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
+              <path d="M 512 220 L 544 220" stroke="#64748b" stroke-width="2" stroke-opacity="0.6" fill="none" stroke-dasharray="6 5" />
             </g>
             <g class="trace-network-nodes">
+              <!-- 主链：P v1, Run, Score, Review -->
               <g class="trace-network-node trace-network-node--prompt" transform="translate(10, 116)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-prompt-bg)" stroke="#6366f1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#6366f1">P v1</text>
+                <rect width="44" height="28" rx="8" fill="url(#trace-prompt-bg)" filter="url(#trace-prompt-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="rgba(255,255,255,0.35)" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#4338ca" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">P v1</text>
               </g>
-              <g class="trace-network-node" transform="translate(70, 116)">
-                <rect width="40" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="40" height="4" x="0" y="0"/>
-                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Run</text>
+              <g class="trace-network-node trace-network-node--action" transform="translate(70, 116)">
+                <rect width="40" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="40" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="40" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Run</text>
               </g>
-              <g class="trace-network-node" transform="translate(126, 116)">
-                <rect width="40" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="40" height="4" x="0" y="0"/>
-                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Score</text>
+              <g class="trace-network-node trace-network-node--action" transform="translate(126, 116)">
+                <rect width="40" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="40" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="40" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Score</text>
               </g>
-              <g class="trace-network-node" transform="translate(182, 116)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Review</text>
+              <g class="trace-network-node trace-network-node--action" transform="translate(182, 116)">
+                <rect width="44" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Review</text>
               </g>
+              <!-- 分支：上/中/下 三个 P v2 -->
               <g class="trace-network-node trace-network-node--prompt" transform="translate(268, 26)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-prompt-bg)" stroke="#6366f1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#6366f1">P v2</text>
+                <rect width="44" height="28" rx="8" fill="url(#trace-prompt-bg)" filter="url(#trace-prompt-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="rgba(255,255,255,0.35)" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#4338ca" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">P v2</text>
               </g>
               <g class="trace-network-node trace-network-node--prompt" transform="translate(268, 116)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-prompt-bg)" stroke="#6366f1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#6366f1">P v2</text>
+                <rect width="44" height="28" rx="8" fill="url(#trace-prompt-bg)" filter="url(#trace-prompt-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="rgba(255,255,255,0.35)" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#4338ca" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">P v2</text>
               </g>
               <g class="trace-network-node trace-network-node--prompt" transform="translate(268, 206)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-prompt-bg)" stroke="#6366f1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#6366f1">P v2</text>
+                <rect width="44" height="28" rx="8" fill="url(#trace-prompt-bg)" filter="url(#trace-prompt-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="rgba(255,255,255,0.35)" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#4338ca" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">P v2</text>
               </g>
-              <g class="trace-network-node" transform="translate(324, 26)">
-                <rect width="40" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="40" height="4" x="0" y="0"/>
-                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Run</text>
+              <!-- 上分支：Run, Score, Review -->
+              <g class="trace-network-node trace-network-node--action" transform="translate(324, 26)">
+                <rect width="40" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="40" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="40" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Run</text>
               </g>
-              <g class="trace-network-node" transform="translate(396, 26)">
-                <rect width="40" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="40" height="4" x="0" y="0"/>
-                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Score</text>
+              <g class="trace-network-node trace-network-node--action" transform="translate(396, 26)">
+                <rect width="40" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="40" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="40" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Score</text>
               </g>
-              <g class="trace-network-node" transform="translate(468, 26)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Review</text>
+              <g class="trace-network-node trace-network-node--action" transform="translate(468, 26)">
+                <rect width="44" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Review</text>
               </g>
               <g class="trace-network-node trace-network-node--prompt" transform="translate(544, 26)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-prompt-bg)" stroke="#6366f1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#6366f1">P v3</text>
+                <rect width="44" height="28" rx="8" fill="url(#trace-prompt-bg)" filter="url(#trace-prompt-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="rgba(255,255,255,0.35)" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#4338ca" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">P v3</text>
               </g>
-              <g class="trace-network-node" transform="translate(324, 116)">
-                <rect width="40" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="40" height="4" x="0" y="0"/>
-                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Run</text>
+              <!-- 中分支(主路径)：Run, Score, Review, P v3 -->
+              <g class="trace-network-node trace-network-node--action" transform="translate(324, 116)">
+                <rect width="40" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="40" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="40" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Run</text>
               </g>
-              <g class="trace-network-node" transform="translate(396, 116)">
-                <rect width="40" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="40" height="4" x="0" y="0"/>
-                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Score</text>
+              <g class="trace-network-node trace-network-node--action" transform="translate(396, 116)">
+                <rect width="40" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="40" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="40" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Score</text>
               </g>
-              <g class="trace-network-node" transform="translate(468, 116)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Review</text>
+              <g class="trace-network-node trace-network-node--action" transform="translate(468, 116)">
+                <rect width="44" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Review</text>
               </g>
               <g class="trace-network-node trace-network-node--prompt" transform="translate(544, 116)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-prompt-bg)" stroke="#6366f1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#6366f1">P v3</text>
+                <rect width="44" height="28" rx="8" fill="url(#trace-prompt-bg)" filter="url(#trace-prompt-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="rgba(255,255,255,0.35)" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#4338ca" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">P v3</text>
               </g>
-              <g class="trace-network-node" transform="translate(324, 206)">
-                <rect width="40" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="40" height="4" x="0" y="0"/>
-                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Run</text>
+              <!-- 下分支：Run, Score, Review, P v3 -->
+              <g class="trace-network-node trace-network-node--action" transform="translate(324, 206)">
+                <rect width="40" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="40" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="40" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Run</text>
               </g>
-              <g class="trace-network-node" transform="translate(396, 206)">
-                <rect width="40" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="40" height="4" x="0" y="0"/>
-                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Score</text>
+              <g class="trace-network-node trace-network-node--action" transform="translate(396, 206)">
+                <rect width="40" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="40" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="40" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="20" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Score</text>
               </g>
-              <g class="trace-network-node" transform="translate(468, 206)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-node-bg)" stroke="#cbd5e1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#0f172a">Review</text>
+              <g class="trace-network-node trace-network-node--action" transform="translate(468, 206)">
+                <rect width="44" height="28" rx="8" fill="url(#trace-node-bg)" filter="url(#trace-node-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="#e2e8f0" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#64748b" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Review</text>
               </g>
               <g class="trace-network-node trace-network-node--prompt" transform="translate(544, 206)">
-                <rect width="44" height="28" rx="6" fill="url(#trace-prompt-bg)" stroke="#6366f1" stroke-width="1.5" filter="url(#trace-node-shadow)"/>
-                <rect class="trace-node-bar" width="44" height="4" x="0" y="0"/>
-                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#6366f1">P v3</text>
+                <rect width="44" height="28" rx="8" fill="url(#trace-prompt-bg)" filter="url(#trace-prompt-shadow)"/>
+                <rect class="trace-node-bar" width="44" height="4" x="0" y="0" fill="rgba(255,255,255,0.35)" rx="8"/>
+                <rect width="44" height="28" rx="8" fill="none" stroke="#4338ca" stroke-width="2"/>
+                <text x="22" y="19" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">P v3</text>
               </g>
             </g>
           </svg>
@@ -1770,32 +1758,32 @@
       <p>Connect your API keys and run prompts with any supported provider. Switch between models for Run, Score, and Review, or compare outputs across providers.</p>
       <div class="model-providers-grid">
         <div class="model-provider-card">
-          <img class="model-provider-card__logo" src="openai.png" alt="OpenAI" />
+          <img class="model-provider-card__logo" src="../images/openai.png" alt="OpenAI" />
           <span class="model-provider-card__name">OpenAI</span>
           <span class="model-provider-card__models">GPT-5, GPT-5-mini…</span>
         </div>
         <div class="model-provider-card">
-          <img class="model-provider-card__logo" src="anthropic.png" alt="Anthropic" />
+          <img class="model-provider-card__logo" src="../images/anthropic.png" alt="Anthropic" />
           <span class="model-provider-card__name">Anthropic</span>
           <span class="model-provider-card__models">Claude Opus, Sonnet…</span>
         </div>
         <div class="model-provider-card">
-          <img class="model-provider-card__logo" src="gemini-color.png" alt="Google" />
+          <img class="model-provider-card__logo" src="../images/gemini-color.png" alt="Google" />
           <span class="model-provider-card__name">Google</span>
           <span class="model-provider-card__models">Gemini Pro, Flash…</span>
         </div>
         <div class="model-provider-card">
-          <img class="model-provider-card__logo" src="deepseek-color.png" alt="DeepSeek" />
+          <img class="model-provider-card__logo" src="../images/deepseek-color.png" alt="DeepSeek" />
           <span class="model-provider-card__name">DeepSeek</span>
           <span class="model-provider-card__models">Chat, Reasoner…</span>
         </div>
         <div class="model-provider-card">
-          <img class="model-provider-card__logo" src="mistral-color.png" alt="Mistral" />
+          <img class="model-provider-card__logo" src="../images/mistral-color.png" alt="Mistral" />
           <span class="model-provider-card__name">Mistral</span>
           <span class="model-provider-card__models">Large, Small…</span>
         </div>
         <div class="model-provider-card">
-          <img class="model-provider-card__logo" src="bedrock-color.png" alt="Amazon Bedrock" />
+          <img class="model-provider-card__logo" src="../images/bedrock-color.png" alt="Amazon Bedrock" />
           <span class="model-provider-card__name">Amazon Bedrock</span>
           <span class="model-provider-card__models">Claude, Llama…</span>
         </div>

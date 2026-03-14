@@ -41,7 +41,7 @@ pip install -r requirements.txt
 # 2. Frontend
 cd ../app
 npm install
-npm run start
+npm start
 ```
 
 The app launches with the workflow UI. Credentials and settings live in `backend/data/`.

@@ -63,7 +63,7 @@ function escapeAttr(str) {
 }
 
 /**
- * Create Review node and run review API stream (no modal).
+ * Create Review node and start review API (job-based, like Run). Polling is handled by workflowCanvas.
  * @param {{ scoreNodeId: string, getReviewPayload: () => { prompt_sections, prompt_full_text?, run_results, output_fields, comparison_rows } | null, credentialId: string }} options
  * @returns {Promise<{ reviewNodeId: string } | null>} reviewNodeId after node is created; null if payload/credential invalid
  */
@@ -74,18 +74,19 @@ export function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId
   document.dispatchEvent(addEvent);
   const reviewNodeId = addEvent.detail?.reviewNodeId || '';
   if (!reviewNodeId) return Promise.resolve(null);
-  return runReviewStream({ reviewNodeId, payload, credentialId }).then(() => ({ reviewNodeId }));
+  return runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview: addEvent.detail?.registerPendingReview }).then(() => ({ reviewNodeId }));
 }
 
 /**
- * Run review API stream and persist to node via workflow:save-review-result / review-stream-ended.
- * @param {{ reviewNodeId: string, payload: object, credentialId: string }} options
+ * Start review API (POST 202). Polling and event processing done by workflowCanvas.
+ * @param {{ reviewNodeId: string, payload: object, credentialId: string, registerPendingReview?: (nodeId: string, reviewId: string) => void }} options
  */
-export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
+export async function runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview }) {
   const comparisonRows = payload.comparison_rows || [];
   const allRowsMatched = comparisonRows.length === 0 || comparisonRows.every((r) => r.matched === true);
   const body = {
     credential_id: credentialId,
+    review_session_id: reviewNodeId,
     prompt_sections: payload.prompt_sections,
     run_results: payload.run_results || [],
     output_fields: payload.output_fields || [],
@@ -127,7 +128,7 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
   }));
   document.dispatchEvent(new CustomEvent('workflow:review-stream-started', { detail: { reviewNodeId } }));
   try {
-    const res = await fetch(`${API_BASE}/api/review/analyze/stream`, {
+    const res = await fetch(`${API_BASE}/api/review/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -137,153 +138,11 @@ export async function runReviewStream({ reviewNodeId, payload, credentialId }) {
       alert(res.statusText || 'Review request failed.');
       return;
     }
-    const workingSections = sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
-    let streamSaved = {
-      summary: '',
-      suggestions: [],
-      design_suggestions: [],
-      data_refinement: [],
-      promptSections: sectionsCopy,
-      promptFullText: promptFullText || '',
-      workingSections,
-      reviewProgress: 0,
-      run_results: body.run_results || [],
-      comparison_rows: body.comparison_rows || [],
-    };
-    let focusCount = 0;
-    let focusDone = 0;
-    let step2Total = 0;
-    let step2Done = 0;
-    const setProgress = (percent) => {
-      const pct = Math.min(100, Math.max(0, Math.round(percent)));
-      streamSaved.reviewProgress = pct;
-      document.dispatchEvent(new CustomEvent('workflow:review-progress', { detail: { reviewNodeId, percent: pct } }));
-    };
-    const persistToNode = (data) => {
-      document.dispatchEvent(new CustomEvent('workflow:save-review-result', { detail: { reviewNodeId, data: { ...data, reviewProgress: streamSaved.reviewProgress } } }));
-    };
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        let data;
-        try {
-          data = JSON.parse(trimmed);
-        } catch (_) {
-          continue;
-        }
-        if (data.type === 'error') {
-          document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
-          alert(data.detail || 'Review failed.');
-          return;
-        }
-        if (data.type === 'design' && Array.isArray(data.design_suggestions)) {
-          streamSaved.design_suggestions = data.design_suggestions;
-          setProgress(10);
-          persistToNode({ ...streamSaved, design_suggestions: streamSaved.design_suggestions });
-        } else if (data.type === 'plan') {
-          focusCount = data.focus_count != null ? Math.max(0, parseInt(data.focus_count, 10)) : 0;
-          step2Total = data.per_row_count != null ? Math.max(0, parseInt(data.per_row_count, 10)) : 0;
-          focusDone = 0;
-          step2Done = 0;
-          streamSaved = {
-            summary: data.summary || '',
-            suggestions: [],
-            design_suggestions: streamSaved.design_suggestions || [],
-            data_refinement: streamSaved.data_refinement || [],
-            promptSections: sectionsCopy,
-            promptFullText: promptFullText || '',
-            workingSections,
-            streamComplete: false,
-            reviewProgress: 20,
-            run_results: streamSaved.run_results || [],
-            comparison_rows: streamSaved.comparison_rows || [],
-          };
-          setProgress(20);
-          persistToNode(streamSaved);
-        } else if (data.type === 'step2_row') {
-          step2Done = data.done != null ? parseInt(data.done, 10) : step2Done + 1;
-          const total = data.total != null ? parseInt(data.total, 10) : step2Total;
-          const pct = total > 0 ? 20 + Math.floor(60 * step2Done / total) : 80;
-          setProgress(pct);
-          persistToNode({ ...streamSaved, reviewProgress: pct });
-        } else if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
-          streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
-          focusDone += 1;
-          const pct = focusCount > 0 ? 20 + (80 * focusDone / focusCount) : (step2Total > 0 ? 85 : 90);
-          setProgress(pct);
-          persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
-        } else if (data.type === 'data_refinement' && Array.isArray(data.data_refinement)) {
-          streamSaved.data_refinement = data.data_refinement;
-          setProgress(95);
-          persistToNode({ ...streamSaved, data_refinement: streamSaved.data_refinement });
-        } else if (data.type === 'done') {
-          setProgress(100);
-          persistToNode({
-            ...streamSaved,
-            suggestions: streamSaved.suggestions || [],
-            design_suggestions: streamSaved.design_suggestions || [],
-            data_refinement: streamSaved.data_refinement || [],
-            streamComplete: true,
-            reviewProgress: 100,
-          });
-        }
-      }
+    const data = await res.json().catch(() => ({}));
+    const reviewId = data.review_id;
+    if (reviewId && typeof registerPendingReview === 'function') {
+      registerPendingReview(reviewNodeId, reviewId);
     }
-    if (buf.trim()) {
-      try {
-        const data = JSON.parse(buf.trim());
-        if (data.type === 'design' && Array.isArray(data.design_suggestions)) {
-          streamSaved.design_suggestions = data.design_suggestions;
-          setProgress(10);
-          persistToNode({ ...streamSaved, design_suggestions: streamSaved.design_suggestions });
-        }
-        if (data.type === 'plan') {
-          focusCount = data.focus_count != null ? Math.max(0, parseInt(data.focus_count, 10)) : 0;
-          step2Total = data.per_row_count != null ? Math.max(0, parseInt(data.per_row_count, 10)) : 0;
-          focusDone = 0;
-          step2Done = 0;
-          streamSaved.reviewProgress = 20;
-          setProgress(20);
-        }
-        if (data.type === 'step2_row') {
-          step2Done = data.done != null ? parseInt(data.done, 10) : step2Done + 1;
-          const total = data.total != null ? parseInt(data.total, 10) : step2Total;
-          setProgress(total > 0 ? 20 + Math.floor(60 * step2Done / total) : 80);
-        }
-        if (data.type === 'suggestions' && Array.isArray(data.suggestions) && data.suggestions.length) {
-          streamSaved.suggestions = (streamSaved.suggestions || []).concat(data.suggestions);
-          focusDone += 1;
-          setProgress(focusCount > 0 ? 20 + (80 * focusDone / focusCount) : (step2Total > 0 ? 85 : 90));
-          persistToNode({ ...streamSaved, suggestions: streamSaved.suggestions });
-        }
-        if (data.type === 'data_refinement' && Array.isArray(data.data_refinement)) {
-          streamSaved.data_refinement = data.data_refinement;
-          setProgress(95);
-          persistToNode({ ...streamSaved, data_refinement: streamSaved.data_refinement });
-        }
-        if (data.type === 'done') {
-          setProgress(100);
-          persistToNode({
-            ...streamSaved,
-            suggestions: streamSaved.suggestions || [],
-            design_suggestions: streamSaved.design_suggestions || [],
-            data_refinement: streamSaved.data_refinement || [],
-            streamComplete: true,
-            reviewProgress: 100,
-          });
-        }
-      } catch (_) {}
-    }
-    document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
   } catch (e) {
     document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
     alert(e?.message || 'Review request failed.');
@@ -1703,7 +1562,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     document.dispatchEvent(addEvent);
     const reviewNodeId = addEvent.detail?.reviewNodeId || '';
     close();
-    if (reviewNodeId) await runReviewStream({ reviewNodeId, payload, credentialId });
+    if (reviewNodeId) await runReviewStream({ reviewNodeId, payload, credentialId, signal: addEvent.detail?.signal });
   });
 
   /** Filter group for memory apply: keep only rules valid for runKeys/gtSet, update existingSet. Returns null if empty. */

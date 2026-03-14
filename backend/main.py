@@ -24,7 +24,6 @@ def _safe_print(s: str) -> None:
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, create_model
 
 from llm import chat as llm_chat, run_structured as llm_run_structured
@@ -184,6 +183,7 @@ class ReviewComparisonRow(BaseModel):
 
 class ReviewRequest(BaseModel):
     credential_id: str
+    review_session_id: str | None = Field(default=None, description="Frontend session id for cancellation; pass reviewNodeId")
     prompt_sections: list[dict] = Field(..., description="List of {name, content} for each section")
     run_results: list[dict] = Field(default_factory=list, description="List of {row_index, output}")
     output_fields: list[dict] = Field(default_factory=list, description="List of {key, display}; used when output_schema not provided")
@@ -581,6 +581,11 @@ _run_last_activity: dict[str, float] = {}  # run_id -> time.time(); updated on e
 _run_jobs_lock = threading.Lock()
 _run_cancelled: set[str] = set()  # run_ids client asked to cancel; worker checks each row
 
+_review_jobs: dict[str, dict] = {}  # review_id -> { status, events, review_node_id, error? }
+_review_jobs_by_node: dict[str, str] = {}  # review_node_id -> review_id
+_review_jobs_lock = threading.Lock()
+_review_cancelled: set[str] = set()  # review_ids client asked to cancel; worker checks each step
+
 
 def _touch_run_activity(run_id: str) -> None:
     """Call while holding _run_jobs_lock (or from a single-threaded request)."""
@@ -896,6 +901,91 @@ def get_run_result(run_id: str):
         "completed": completed,
         "total": total,
     }
+
+
+@app.post("/api/review/analyze")
+def review_analyze(body: ReviewRequest):
+    """Start review in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Worker stops when cancelled."""
+    review_id = str(uuid.uuid4())
+    review_node_id = body.review_session_id or ""
+    with _review_jobs_lock:
+        _review_jobs[review_id] = {"status": "running", "events": [], "review_node_id": review_node_id}
+        if review_node_id:
+            _review_jobs_by_node[review_node_id] = review_id
+    thread = threading.Thread(target=_do_review_work, args=(review_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"review_id": review_id, "review_node_id": review_node_id})
+
+
+@app.get("/api/review/result/{review_id}")
+def get_review_result(review_id: str):
+    """Return 202 while running, 200 when done. Each poll returns events so far."""
+    with _review_jobs_lock:
+        job = _review_jobs.get(review_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Review not found")
+        status = job.get("status")
+        events = (job.get("events") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={"status": "running", "events": events})
+    if status == "cancelled":
+        return {"status": "cancelled", "events": events}
+    if error:
+        return {"status": "done", "error": error, "events": events}
+    return {"status": "done", "events": events}
+
+
+@app.get("/api/review/result/by-node/{review_node_id}")
+def get_review_result_by_node(review_node_id: str):
+    """Return latest review state for this node."""
+    with _review_jobs_lock:
+        review_id = _review_jobs_by_node.get(review_node_id)
+        if not review_id:
+            raise HTTPException(status_code=404, detail="No review found for this node")
+        job = _review_jobs.get(review_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Review not found")
+        status = job.get("status")
+        events = (job.get("events") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={"review_id": review_id, "status": "running", "events": events})
+    if status == "cancelled":
+        return {"review_id": review_id, "status": "cancelled", "events": events}
+    if error:
+        return {"review_id": review_id, "status": "done", "error": error, "events": events}
+    return {"review_id": review_id, "status": "done", "events": events}
+
+
+@app.post("/api/review/cancel/{review_id}")
+def cancel_review(review_id: str):
+    """Mark review as cancelled; worker stops after current step."""
+    with _review_jobs_lock:
+        if review_id not in _review_jobs:
+            raise HTTPException(status_code=404, detail="Review not found")
+        job = _review_jobs[review_id]
+        if job.get("status") != "running":
+            return {"ok": True, "status": job.get("status")}
+        _review_cancelled.add(review_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+@app.post("/api/review/cancel/by-node/{review_node_id}")
+def cancel_review_by_node(review_node_id: str):
+    """Mark review as cancelled by node id."""
+    with _review_jobs_lock:
+        review_id = _review_jobs_by_node.get(review_node_id)
+        if not review_id:
+            raise HTTPException(status_code=404, detail="No review found for this node")
+        job = _review_jobs.get(review_id)
+        if job and job.get("status") == "running":
+            _review_cancelled.add(review_id)
+            return {"ok": True, "status": "cancelling"}
+        return {"ok": True, "status": job.get("status") if job else "done"}
 
 
 @app.post("/api/run/cancel/{run_id}")
@@ -1405,144 +1495,157 @@ def review_analyze(body: ReviewRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def _review_analyze_stream_generator(body: ReviewRequest):
-    """Agent 2.0: gatekeeper -> step2_row (progress) -> suggestions -> data_refinement -> done."""
-    items = _load_credentials()
-    cred = None
-    for item in items:
-        if item.get("id") == body.credential_id:
-            cred = item
-            break
-    if not cred:
-        yield (json.dumps({"type": "error", "detail": "Credential not found"}) + "\n").encode("utf-8")
-        return
-    model = cred.get("llm", "")
-    api_key = cred.get("api_key", "")
-    if not api_key:
-        yield (json.dumps({"type": "error", "detail": "Missing API key"}) + "\n").encode("utf-8")
-        return
-    provider = cred.get("provider", "openai")
-    review_settings = _load_settings()
-    review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
-    review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
+def _review_is_cancelled(review_id: str | None) -> bool:
+    """Check if client requested cancellation for this review job."""
+    if not review_id:
+        return False
+    with _review_jobs_lock:
+        return review_id in _review_cancelled
+
+
+def _do_review_work(review_id: str, body: ReviewRequest) -> None:
+    """Background worker: same logic as stream generator but appends events to job. Stops when cancelled."""
+    def append_event(ev: dict) -> None:
+        with _review_jobs_lock:
+            job = _review_jobs.get(review_id)
+            if job and isinstance(job.get("events"), list):
+                job["events"].append(ev)
+
     try:
-        # Step 1: Gatekeeper (static)
+        if _review_is_cancelled(review_id):
+            return
+        items = _load_credentials()
+        cred = None
+        for item in items:
+            if item.get("id") == body.credential_id:
+                cred = item
+                break
+        if not cred:
+            append_event({"type": "error", "detail": "Credential not found"})
+            with _review_jobs_lock:
+                if review_id in _review_jobs:
+                    _review_jobs[review_id]["status"] = "done"
+                    _review_jobs[review_id]["error"] = "Credential not found"
+            return
+        model = cred.get("llm", "")
+        api_key = cred.get("api_key", "")
+        if not api_key:
+            append_event({"type": "error", "detail": "Missing API key"})
+            with _review_jobs_lock:
+                if review_id in _review_jobs:
+                    _review_jobs[review_id]["status"] = "done"
+                    _review_jobs[review_id]["error"] = "Missing API key"
+            return
+        provider = cred.get("provider", "openai")
+        review_settings = _load_settings()
+        review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
+        review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
+
+        # Step 1: Gatekeeper
         gatekeeper_prompt = _build_step1_gatekeeper_prompt(body)
         route, design_suggestions = _gatekeeper_route(body)
         all_matched = _review_all_matched(body)
         design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in design_suggestions]
         _safe_print("\n" + _HL + _SEP + _R)
-        _safe_print(_HL + "[Review stream] Step 1 (Gatekeeper) COMPLETE PROMPT (route + design_suggestions):" + _R)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(gatekeeper_prompt)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(_HL + "[Review stream] Step 1 (Gatekeeper) OUTPUT (route + design_suggestions):" + _R)
-        _safe_print(_HL + _SEP + _R)
+        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) OUTPUT:" + _R)
         _safe_print("route: " + route + ", design_suggestions: " + json.dumps(design_list, ensure_ascii=False, indent=2))
         _safe_print(_HL + _SEP + _R + "\n")
-        yield (json.dumps({"type": "design", "design_suggestions": design_list, "route": route}, ensure_ascii=False) + "\n").encode("utf-8")
+        if _review_is_cancelled(review_id):
+            return
+        append_event({"type": "design", "design_suggestions": design_list, "route": route})
 
         if route == "REWRITE":
+            if _review_is_cancelled(review_id):
+                return
             step3_prompt = _build_step3_rewrite_prompt(body)
-            _safe_print("\n" + _HL + _SEP + _R)
-            _safe_print(_HL + "[Review stream] Step 3 (REWRITE) COMPLETE PROMPT SENT TO LLM:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(step3_prompt)
-            _safe_print(_HL + _SEP + _R + "\n")
             step3_result, _ = llm_run_structured(
-                provider=provider,
-                model=model,
-                api_key=api_key,
-                prompt=step3_prompt,
-                response_model=Step3SynthesisResult,
-                max_tokens=review_max_tokens,
+                provider=provider, model=model, api_key=api_key, prompt=step3_prompt,
+                response_model=Step3SynthesisResult, max_tokens=review_max_tokens,
             )
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(_HL + "[Review stream] Step 3 (REWRITE) LLM OUTPUT:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2))
-            _safe_print(_HL + _SEP + _R + "\n")
             fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
             raw_suggestions = list(getattr(fs, "suggestions", []) or [])
             data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
-            yield (json.dumps({"type": "plan", "summary": "REWRITE: generating expert template.", "per_row_count": 0}, ensure_ascii=False) + "\n").encode("utf-8")
+            if _review_is_cancelled(review_id):
+                return
+            append_event({"type": "plan", "summary": "REWRITE: generating expert template.", "per_row_count": 0})
         else:
-            # ANALYZE path
             unmatched = [r for r in (body.comparison_rows or []) if not r.matched]
             schema_lines, _ = _review_output_schema_lines(body)
             _, rules_block = _review_compared_fields_and_rules(body.comparison_rows or [])
 
             if all_matched:
                 diagnoses = [PerRowDiagnosis(row_index=0, root_cause="all matched", gt_questioned=False, section_index_suggestions=[0], micro_suggestion="Optional polish")]
-                yield (json.dumps({"type": "plan", "summary": "All rows matched.", "per_row_count": 0}, ensure_ascii=False) + "\n").encode("utf-8")
+                if _review_is_cancelled(review_id):
+                    return
+                append_event({"type": "plan", "summary": "All rows matched.", "per_row_count": 0})
             elif not unmatched:
-                yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
+                if _review_is_cancelled(review_id):
+                    return
+                append_event({"type": "done"})
+                with _review_jobs_lock:
+                    if review_id in _review_jobs:
+                        _review_jobs[review_id]["status"] = "done"
                 return
             else:
                 to_analyze = unmatched[:30]
-                yield (json.dumps({"type": "plan", "summary": f"Analyzing {len(to_analyze)} failed rows.", "per_row_count": len(to_analyze)}, ensure_ascii=False) + "\n").encode("utf-8")
-                diagnoses_list: list[PerRowDiagnosis] = []
+                if _review_is_cancelled(review_id):
+                    return
+                append_event({"type": "plan", "summary": f"Analyzing {len(to_analyze)} failed rows.", "per_row_count": len(to_analyze)})
+                if _review_is_cancelled(review_id):
+                    return
 
                 def analyze_one(row: ReviewComparisonRow) -> PerRowDiagnosis:
                     prompt = _build_per_row_analysis_prompt(row, rules_block, schema_lines)
-                    _safe_print("\n" + _HL + _SEP + _R)
-                    _safe_print(_HL + f"[Review stream] Step 2 Row {row.row_index} COMPLETE PROMPT SENT TO LLM:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(prompt)
-                    _safe_print(_HL + _SEP + _R + "\n")
                     result, _ = llm_run_structured(
-                        provider=provider,
-                        model=model,
-                        api_key=api_key,
-                        prompt=prompt,
-                        response_model=PerRowDiagnosis,
-                        max_tokens=review_max_tokens,
+                        provider=provider, model=model, api_key=api_key, prompt=prompt,
+                        response_model=PerRowDiagnosis, max_tokens=review_max_tokens,
                     )
                     d = result if isinstance(result, PerRowDiagnosis) else PerRowDiagnosis(**(result if isinstance(result, dict) else result.model_dump()))
                     d.row_index = row.row_index
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(_HL + f"[Review stream] Step 2 Row {row.row_index} LLM OUTPUT:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(json.dumps(d.model_dump(), ensure_ascii=False, indent=2))
-                    _safe_print(_HL + _SEP + _R + "\n")
                     return d
 
+                diagnoses_list: list[PerRowDiagnosis] = []
                 with ThreadPoolExecutor(max_workers=review_concurrency) as ex:
                     futures = {ex.submit(analyze_one, r): r for r in to_analyze}
                     done = 0
                     for future in as_completed(futures):
+                        if _review_is_cancelled(review_id):
+                            break
                         diagnoses_list.append(future.result())
                         done += 1
-                        yield (json.dumps({"type": "step2_row", "row_index": future.result().row_index, "done": done, "total": len(to_analyze)}, ensure_ascii=False) + "\n").encode("utf-8")
+                        if _review_is_cancelled(review_id):
+                            break
+                        append_event({"type": "step2_row", "row_index": future.result().row_index, "done": done, "total": len(to_analyze)})
+                if _review_is_cancelled(review_id):
+                    with _review_jobs_lock:
+                        if review_id in _review_jobs:
+                            _review_jobs[review_id]["status"] = "cancelled"
+                    return
                 diagnoses_list.sort(key=lambda d: d.row_index)
                 diagnoses = diagnoses_list
 
             # Step 3: synthesis
+            if _review_is_cancelled(review_id):
+                with _review_jobs_lock:
+                    if review_id in _review_jobs:
+                        _review_jobs[review_id]["status"] = "cancelled"
+                return
             step3_prompt = _build_step3_synthesis_prompt(body, diagnoses)
-            _safe_print("\n" + _HL + _SEP + _R)
-            _safe_print(_HL + "[Review stream] Step 3 (synthesis) COMPLETE PROMPT SENT TO LLM:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(step3_prompt)
-            _safe_print(_HL + _SEP + _R + "\n")
             step3_result, _ = llm_run_structured(
-                provider=provider,
-                model=model,
-                api_key=api_key,
-                prompt=step3_prompt,
-                response_model=Step3SynthesisResult,
-                max_tokens=review_max_tokens,
+                provider=provider, model=model, api_key=api_key, prompt=step3_prompt,
+                response_model=Step3SynthesisResult, max_tokens=review_max_tokens,
             )
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(_HL + "[Review stream] Step 3 (synthesis) LLM OUTPUT:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2))
-            _safe_print(_HL + _SEP + _R + "\n")
             fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
             raw_suggestions = list(getattr(fs, "suggestions", []) or [])
             if all_matched and len(raw_suggestions) > 2:
                 raw_suggestions = raw_suggestions[:2]
             data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
 
+        if _review_is_cancelled(review_id):
+            with _review_jobs_lock:
+                if review_id in _review_jobs:
+                    _review_jobs[review_id]["status"] = "cancelled"
+            return
         batch = []
         for s in raw_suggestions:
             s_dict = s.model_dump() if hasattr(s, "model_dump") else s
@@ -1551,19 +1654,27 @@ def _review_analyze_stream_generator(body: ReviewRequest):
                     s_dict["section_index"] = 0
                 batch.append(s_dict)
         if batch:
-            yield (json.dumps({"type": "suggestions", "suggestions": batch}, ensure_ascii=False) + "\n").encode("utf-8")
+            append_event({"type": "suggestions", "suggestions": batch})
         if data_refinement:
-            yield (json.dumps({"type": "data_refinement", "data_refinement": data_refinement}, ensure_ascii=False) + "\n").encode("utf-8")
-        yield (json.dumps({"type": "done"}, ensure_ascii=False) + "\n").encode("utf-8")
+            if _review_is_cancelled(review_id):
+                with _review_jobs_lock:
+                    if review_id in _review_jobs:
+                        _review_jobs[review_id]["status"] = "cancelled"
+                return
+            append_event({"type": "data_refinement", "data_refinement": data_refinement})
+        append_event({"type": "done"})
+        with _review_jobs_lock:
+            if review_id in _review_jobs:
+                _review_jobs[review_id]["status"] = "done"
     except Exception as e:
         _safe_print(_HL + "[Review] Error: " + _R + str(e))
-        yield (json.dumps({"type": "error", "detail": str(e)}, ensure_ascii=False) + "\n").encode("utf-8")
+        append_event({"type": "error", "detail": str(e)})
+        with _review_jobs_lock:
+            if review_id in _review_jobs:
+                _review_jobs[review_id]["status"] = "done"
+                _review_jobs[review_id]["error"] = str(e)
+    finally:
+        with _review_jobs_lock:
+            _review_cancelled.discard(review_id)
 
 
-@app.post("/api/review/analyze/stream")
-def review_analyze_stream(body: ReviewRequest):
-    """Stream review: first line = plan (summary), then one NDJSON line per focus with suggestions, then done."""
-    return StreamingResponse(
-        _review_analyze_stream_generator(body),
-        media_type="application/x-ndjson",
-    )

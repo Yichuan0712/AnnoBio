@@ -62,7 +62,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
   const APP_TITLE = 'Prompt Studio';
   function updateWindowTitle(projectPath) {
-    const name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
+    let name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
+    if (name && name.endsWith('.json')) name = name.slice(0, -5);
     document.title = name ? `${name} - ${APP_TITLE}` : APP_TITLE;
   }
 
