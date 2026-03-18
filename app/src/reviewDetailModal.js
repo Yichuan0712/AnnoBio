@@ -4,7 +4,8 @@
  * Result is saved on the Score node and persisted with the project.
  */
 
-import { showConfirm } from './alertModal.js';
+import { showConfirm, showAlert } from './alertModal.js';
+import { evaluateMiniTestResults } from './scoreDetailModal.js';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -290,7 +291,7 @@ function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent
 
 /** Build the shared result UI: left = sections (working copy), right = suggestions with accept/revert; full reason shown in card when selected. */
 function buildReviewResultUI(overlay, options) {
-  const { promptSections, suggestions: initialSuggestions, promptFullText, title, resultId, saved = {}, onReviewResultChange, onExportNewPrompt, streamRef, getIsReviewStreaming } = options;
+  const { promptSections, suggestions: initialSuggestions, promptFullText, title, resultId, saved = {}, onReviewResultChange, onExportNewPrompt, streamRef, getIsReviewStreaming, getPayload } = options;
   const promptWrap = overlay.querySelector('.review-detail-prompt-wrap');
   const suggestionsEl = overlay.querySelector('.review-detail-suggestions');
   const suggestionsFooterEl = overlay.querySelector('.review-detail-suggestions-footer');
@@ -440,21 +441,34 @@ function buildReviewResultUI(overlay, options) {
     const fullReason = (sug.reason || '').trim();
     const changeName = (sug.name || '').trim() || name;
 
+    const rowIndices = Array.isArray(sug.row_indices) ? sug.row_indices : [];
+    const hasRowIndices = rowIndices.length > 0;
+    const showMiniTest = !noButton && hasRowIndices;
+    const miniTestBtnHtml = showMiniTest ? '<button type="button" class="btn btn-secondary review-detail-minitest-btn" title="Test this change on a subset of samples">Mini test</button>' : '';
+    const acceptBtnHtml = !noButton ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>' : '';
+    const actionsHtml = miniTestBtnHtml + acceptBtnHtml;
+
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card' + (noButton ? ' review-detail-suggestion-card--unlocatable' : '');
     card.dataset.sectionIndex = String(secIdx);
     card.dataset.suggestionIndex = String(sugIdx);
+    const minitestBadge = sug.miniTestPassed === true
+      ? ' <span class="review-detail-minitest-badge review-detail-minitest-badge--passed" title="Mini test passed" aria-label="Mini verified">Mini verified</span>'
+      : (sug.miniTestRun === true
+        ? ' <span class="review-detail-minitest-badge review-detail-minitest-badge--failed" title="Mini test did not pass" aria-label="Mini test failed">Mini failed</span>'
+        : '');
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion number">#${displayNum}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion number">#${displayNum}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong>${minitestBadge}</span>
         <p class="review-detail-suggestion-reason">${escapeHtml(fullReason)}</p>
       </div>
       <div class="review-detail-suggestion-card__actions">
-        ${noButton ? '' : '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'}
+        ${actionsHtml}
       </div>
     `;
     const mainEl = card.querySelector('.review-detail-suggestion-card__main');
     const acceptBtn = card.querySelector('.review-detail-accept-btn');
+    const miniTestBtn = card.querySelector('.review-detail-minitest-btn');
 
     function getDiffContent() {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
@@ -500,6 +514,134 @@ function buildReviewResultUI(overlay, options) {
         renderLeft(-1);
         persistWorking();
       });
+
+      if (miniTestBtn && typeof getPayload === 'function') {
+        miniTestBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const payload = getPayload();
+          if (!payload || !payload.run_credential_id || !payload.output_schema || !payload.output_schema.fields?.length) {
+            showAlert('Run model and prompt output schema are required for Mini test.');
+            return;
+          }
+          const comparison_rows = payload.comparison_rows || [];
+          const rowByIndex = new Map();
+          comparison_rows.forEach((r) => rowByIndex.set(r.row_index, r));
+          const missing = rowIndices.filter((ri) => !rowByIndex.get(ri)?.row_input);
+          if (missing.length > 0) {
+            showAlert('Missing row input for some rows. Ensure the Run has completed with the same dataset.');
+            return;
+          }
+          const sectionsWithSuggestion = working.map((s, i) => {
+            if (i !== secIdx) return { name: s.name || '', content: (s.content || '').slice() };
+            const c = (s.content || '').slice();
+            const contentWithSuggestion = useSentenceEdit
+              ? (getLocatableSegment(c, oldSentence) ? c.replace(getLocatableSegment(c, oldSentence), newSentence, 1) : c.replace(oldSentence, newSentence, 1))
+              : legacyNewContent;
+            return { name: s.name || '', content: contentWithSuggestion };
+          });
+          const templateText = sectionsWithSuggestion.map((s) => (s.content || '').trim()).filter(Boolean).join('\n\n');
+          if (!templateText) {
+            showAlert('Prompt has no content.');
+            return;
+          }
+          const inputFieldNames = [];
+          const placeholderRe = /\{([^}]+)\}/g;
+          let m;
+          while ((m = placeholderRe.exec(templateText)) !== null) {
+            const name = (m[1] || '').trim();
+            if (name && !inputFieldNames.includes(name)) inputFieldNames.push(name);
+          }
+          const runInputToColumn = payload.run_input_to_column && typeof payload.run_input_to_column === 'object' ? payload.run_input_to_column : {};
+          const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const prompts = rowIndices.map((ri) => {
+            const rowInput = rowByIndex.get(ri)?.row_input || {};
+            let text = templateText;
+            inputFieldNames.forEach((name) => {
+              const columnName = runInputToColumn[name] || name;
+              const value = rowInput[columnName] ?? rowInput[name] ?? '';
+              text = text.replace(new RegExp('\\{' + escapeRegex(name) + '\\}', 'g'), String(value));
+            });
+            return text;
+          });
+          const outputSchema = {
+            return_shape: payload.output_schema.return_shape || 'single',
+            fields: (payload.output_schema.fields || []).map((f) => ({
+              key: f.key || '',
+              type: f.type || 'str',
+              description: f.description,
+              allow_none: f.allow_none === true,
+            })),
+          };
+          miniTestBtn.textContent = 'Testing';
+          miniTestBtn.disabled = true;
+          try {
+            const runRes = await fetch(`${API_BASE}/api/run`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                credential_id: payload.run_credential_id,
+                prompts,
+                output_schema: outputSchema,
+                run_node_id: null,
+              }),
+            });
+            const runData = await runRes.json().catch(() => ({}));
+            if (!runRes.ok || !runData.run_id) {
+              miniTestBtn.textContent = 'Mini test';
+              miniTestBtn.disabled = false;
+              showAlert(runData.detail || runRes.statusText || 'Run failed.');
+              return;
+            }
+            let pollCount = 0;
+            const maxPoll = 120;
+            let results = [];
+            let outputFields = payload.output_fields || [];
+            while (pollCount < maxPoll) {
+              await new Promise((r) => setTimeout(r, 1500));
+              const resRes = await fetch(`${API_BASE}/api/run/result/${runData.run_id}`);
+              const resData = await resRes.json().catch(() => ({}));
+              results = resData.results || [];
+              if (resData.output_fields?.length) outputFields = resData.output_fields;
+              if (resData.status === 'done' || resData.status === 'cancelled') break;
+              pollCount += 1;
+            }
+            const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : { headers: [], rows: [] };
+            const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : { headers: [], rows: [] };
+            const mappedResults = (results || []).map((r, i) => ({
+              ...r,
+              row_index: i,
+              input_row_index: rowIndices[i] !== undefined ? rowIndices[i] : i,
+            }));
+            const allMatch = evaluateMiniTestResults(
+              payload.score_mapping || '[]',
+              mappedResults,
+              rowIndices,
+              runWs,
+              gtContent,
+              outputFields
+            );
+            sug.miniTestRun = true;
+            sug.miniTestPassed = !!allMatch;
+            const headerEl = card.querySelector('.review-detail-suggestion-header');
+            if (headerEl) {
+              const existing = headerEl.querySelector('.review-detail-minitest-badge');
+              if (existing) existing.remove();
+              const badge = document.createElement('span');
+              badge.className = 'review-detail-minitest-badge ' + (allMatch ? 'review-detail-minitest-badge--passed' : 'review-detail-minitest-badge--failed');
+              badge.title = allMatch ? 'Mini test passed' : 'Mini test did not pass';
+              badge.setAttribute('aria-label', allMatch ? 'Mini verified' : 'Mini test failed');
+              badge.textContent = allMatch ? 'Mini verified' : 'Mini failed';
+              headerEl.appendChild(badge);
+            }
+            persistWorking();
+          } catch (err) {
+            showAlert(err?.message || 'Mini test failed.');
+          }
+          miniTestBtn.textContent = 'Mini test';
+          miniTestBtn.disabled = false;
+        });
+      }
     }
 
     editContainer.appendChild(card);
@@ -708,6 +850,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
     onReviewResultChange: updateReviewResult || null,
     onExportNewPrompt: onExportNewPrompt || null,
     getIsReviewStreaming: getIsReviewStreaming || null,
+    getPayload: getPayload || null,
   };
 
   const chatRefreshRef = { current: null };

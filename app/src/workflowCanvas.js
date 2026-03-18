@@ -1579,12 +1579,39 @@ export function buildWorkflowCanvas(root) {
           outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
         } catch (_) {}
         const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId);
+        let output_schema = null;
+        try {
+          const raw = promptNode.dataset.promptOutputFormat || '[]';
+          const fields = (Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : []).map((o) => ({
+            key: o.key || '',
+            type: o.type || 'str',
+            description: o.description,
+            allow_none: o.allowNone === true || o.allow_none === true,
+          })).filter((f) => (f.key || '').trim());
+          if (fields.length > 0) {
+            output_schema = { return_shape: promptNode.dataset.promptOutputReturnShape || 'single', fields };
+          }
+        } catch (_) {}
+        const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
+        const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
+        let run_input_to_column = {};
+        try {
+          const raw = runNode.dataset.runInputToColumn || '{}';
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') run_input_to_column = parsed;
+        } catch (_) {}
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
           run_results: runResults,
           output_fields: outputFields,
           comparison_rows,
+          output_schema,
+          score_mapping: scoreNode.dataset.scoreMapping || '[]',
+          run_credential_id: (runNode.dataset.runCredentialId || '').trim(),
+          run_input_to_column,
+          getRunWorkingSetContent: () => runWsId ? (datasetContentByNodeId.get(runWsId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
+          getGroundTruthContent: () => gtId ? (datasetContentByNodeId.get(gtId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
         };
       }
       function getReviewResult() {
@@ -2674,12 +2701,39 @@ export function buildWorkflowCanvas(root) {
           outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
         } catch (_) {}
         const comparison_rows = buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId);
+        let output_schema = null;
+        try {
+          const raw = promptNode.dataset.promptOutputFormat || '[]';
+          const fields = (Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : []).map((o) => ({
+            key: o.key || '',
+            type: o.type || 'str',
+            description: o.description,
+            allow_none: o.allowNone === true || o.allow_none === true,
+          })).filter((f) => (f.key || '').trim());
+          if (fields.length > 0) {
+            output_schema = { return_shape: promptNode.dataset.promptOutputReturnShape || 'single', fields };
+          }
+        } catch (_) {}
+        const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
+        const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
+        let run_input_to_column = {};
+        try {
+          const raw = runNode.dataset.runInputToColumn || '{}';
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') run_input_to_column = parsed;
+        } catch (_) {}
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
           run_results: runResults,
           output_fields: outputFields,
           comparison_rows,
+          output_schema,
+          score_mapping: scoreNode.dataset.scoreMapping || '[]',
+          run_credential_id: (runNode.dataset.runCredentialId || '').trim(),
+          run_input_to_column,
+          getRunWorkingSetContent: () => runWsId ? (datasetContentByNodeId.get(runWsId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
+          getGroundTruthContent: () => gtId ? (datasetContentByNodeId.get(gtId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
         };
       }
       function getReviewResult() {

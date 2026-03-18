@@ -30,7 +30,7 @@ from llm import chat as llm_chat, run_structured as llm_run_structured
 
 app = FastAPI()
 
-# 允许 Electron 渲染进程（Vite 开发服务器 localhost:5173）跨域请求
+# Allow CORS for Electron renderer (Vite dev server localhost:5173)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -39,7 +39,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 凭证存储路径（不提交到 git）
+# Credential storage path (not committed to git)
 DATA_DIR = Path(__file__).resolve().parent / "data"
 CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 RUN_JOBS_FILE = DATA_DIR / "run_jobs.json"
@@ -57,7 +57,7 @@ DEFAULT_SETTINGS = {
 }
 
 
-# 支持的提供商与模型（扩展时在此维护，前端通过 GET /api/credentials/models 获取）
+# Supported providers and models (maintained here; frontend fetches via GET /api/credentials/models)
 PROVIDERS = [
     {"id": "openai", "name": "OpenAI"},
     {"id": "anthropic", "name": "Anthropic"},
@@ -66,7 +66,7 @@ PROVIDERS = [
     {"id": "mistral", "name": "Mistral"},
     {"id": "bedrock", "name": "Amazon Bedrock"},
 ]
-# name = 下拉框显示名，与 API 传入的模型名一致（GPT 用 id，Anthropic 用 API 实际模型 id）
+# name = display name in dropdown; matches API model id (GPT uses id, Anthropic uses actual API model id)
 MODELS = [
     {"id": "gpt-5", "name": "gpt-5", "provider": "openai"},
     {"id": "gpt-5-mini", "name": "gpt-5-mini", "provider": "openai"},
@@ -87,7 +87,7 @@ ALLOWED_PROVIDERS = {p["id"] for p in PROVIDERS}
 
 
 def _log_backend_version():
-    """启动时打印，便于确认加载的是否为本文件。"""
+    """Print on startup to confirm this file is loaded."""
     print(f"[backend] main.py loaded from: {Path(__file__).resolve()}")
     print(f"[backend] MODELS={len(MODELS)}, PROVIDERS={len(PROVIDERS)}")
 
@@ -96,7 +96,7 @@ _log_backend_version()
 
 
 def _infer_provider(llm: str) -> str:
-    """从 llm 推断 provider，兼容旧数据无 provider 字段。"""
+    """Infer provider from llm; fallback for legacy data without provider field."""
     for m in MODELS:
         if m["id"] == llm:
             return m["provider"]
@@ -104,7 +104,7 @@ def _infer_provider(llm: str) -> str:
 
 
 def _check_model_for_provider(provider: str, llm: str) -> None:
-    """校验 (provider, llm) 在 MODELS 中为合法组合，否则抛出 HTTPException。"""
+    """Validate (provider, llm) is a valid combination in MODELS; raise HTTPException otherwise."""
     for m in MODELS:
         if m["id"] == llm and m["provider"] == provider:
             return
@@ -199,6 +199,7 @@ class ReviewSuggestion(BaseModel):
     old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only)")
     new_sentence: str = Field(..., description="Replacement for that one sentence")
     reason: str = Field(..., description="Why this change is suggested")
+    row_indices: list[int] = Field(default_factory=list, description="0-based row indices this suggestion aims to fix")
 
 
 class DesignSuggestion(BaseModel):
@@ -211,23 +212,23 @@ class ReviewResult(BaseModel):
     summary: str = Field(..., description="Brief overall analysis")
     suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete edit suggestions")
     design_suggestions: list[DesignSuggestion] = Field(default_factory=list, description="Global design guidance only; no accept/revert in UI")
-    data_refinement: list[dict] = Field(default_factory=list, description="GT质疑汇总: [{row_indices, reason}]")
+    data_refinement: list[dict] = Field(default_factory=list, description="GT question summary: [{row_indices, reason}]")
 
 
 # Agent 2.0: Step 2 per-row diagnosis output
 class PerRowDiagnosis(BaseModel):
     row_index: int = Field(..., description="0-based row index")
-    root_cause: str = Field(..., description="根因定位")
-    gt_questioned: bool = Field(default=False, description="是否质疑 GT")
-    gt_reason: str | None = Field(default=None, description="质疑理由（若 gt_questioned）")
+    root_cause: str = Field(..., description="Root cause analysis")
+    gt_questioned: bool = Field(default=False, description="Whether GT is questioned")
+    gt_reason: str | None = Field(default=None, description="Reason for questioning (if gt_questioned)")
     section_index_suggestions: list[int] = Field(default_factory=list, description="0-based section indices to change")
-    micro_suggestion: str = Field(default="", description="针对这一行的微观建议")
+    micro_suggestion: str = Field(default="", description="Micro suggestion for this row")
 
 
 # Agent 2.0: Step 3 synthesis output (data refinement)
 class DataRefinementItem(BaseModel):
-    row_indices: list[int] = Field(default_factory=list, description="需改数据的行号 (1-based for display)")
-    reason: str = Field(default="", description="汇总的质疑理由")
+    row_indices: list[int] = Field(default_factory=list, description="Row indices to fix (1-based for display)")
+    reason: str = Field(default="", description="Aggregated reason for questioning")
 
 
 # Agent 2.0: Step 3 synthesis output
@@ -343,19 +344,19 @@ def _unique_name_for_model(items: list[dict], model: str) -> str:
 
 
 def _credential_provider(item: dict) -> str:
-    """从存储项取 provider，缺省时根据 llm 推断（兼容旧数据）。"""
+    """Get provider from stored item; infer from llm if missing (legacy compatibility)."""
     return item.get("provider") or _infer_provider(item.get("llm", ""))
 
 
 @app.get("/health")
 def health():
-    """健康检查；返回 models/providers 数量便于确认后端是否为新版本。"""
+    """Health check; returns models/providers count to confirm backend version."""
     return {"ok": True, "models": len(MODELS), "providers": len(PROVIDERS)}
 
 
 @app.get("/api/debug/backend-info")
 def debug_backend_info():
-    """调试用：确认当前跑的是否为本仓库新版本。新版本应有 11 个 model_ids。"""
+    """Debug: confirm this is the current repo version. New version should have 11 model_ids."""
     return {
         "main_file": str(Path(__file__).resolve()),
         "models_count": len(MODELS),
@@ -366,13 +367,13 @@ def debug_backend_info():
 
 @app.get("/api/credentials/models")
 def list_credential_models():
-    """返回支持的 providers 与 models，供前端动态渲染下拉等。"""
+    """Return supported providers and models for frontend dropdown."""
     return {"providers": list(PROVIDERS), "models": list(MODELS)}
 
 
 @app.get("/api/credentials", response_model=list[CredentialResponse])
 def list_credentials():
-    """列出所有凭证，API key 以脱敏形式返回。"""
+    """List all credentials; API key returned masked."""
     items = _load_credentials()
     return [
         CredentialResponse(
@@ -388,7 +389,7 @@ def list_credentials():
 
 @app.post("/api/credentials", response_model=CredentialResponse)
 async def add_credential(request: Request):
-    """添加一条凭证。使用原始 JSON 解析，避免 Pydantic 缓存导致只认 gpt-5 三模型。"""
+    """Add a credential. Uses raw JSON parsing to avoid Pydantic cache limiting models."""
     try:
         body = await request.json()
     except Exception as e:
@@ -539,7 +540,7 @@ def chat(body: ChatRequest):
 
 @app.delete("/api/credentials/{credential_id}")
 def delete_credential(credential_id: str):
-    """根据 id 删除一条凭证。"""
+    """Delete a credential by id."""
     items = _load_credentials()
     new_items = [x for x in items if x.get("id") != credential_id]
     if len(new_items) == len(items):
@@ -551,13 +552,13 @@ def delete_credential(credential_id: str):
 # ---------- Settings ----------
 @app.get("/api/settings")
 def get_settings():
-    """返回当前设置（默认模型、并发数、max_tokens）。"""
+    """Return current settings (default model, concurrency, max_tokens)."""
     return _load_settings()
 
 
 @app.patch("/api/settings")
 def patch_settings(body: SettingsPatch):
-    """部分更新设置；仅更新提供的字段。"""
+    """Partially update settings; only update provided fields."""
     data = _load_settings()
     updates = body.model_dump(exclude_none=True)
     for k, v in updates.items():
@@ -1089,21 +1090,21 @@ RouteDecision = Literal["REWRITE", "ANALYZE"]
 
 
 def _gatekeeper_check_instruction_completeness(sections: list[dict]) -> tuple[bool, list[DesignSuggestion]]:
-    """Return (is_ok, design_suggestions). '一句话 Prompt' or missing Role/Task => not ok."""
+    """Return (is_ok, design_suggestions). One-liner prompt or missing Role/Task => not ok."""
     suggestions: list[DesignSuggestion] = []
     if not sections:
         return False, [DesignSuggestion(name="No sections", reason="Prompt has no sections.")]
     full_text = " ".join((s.get("content") or "").strip() for s in sections).lower()
-    role_keywords = ["role", "you are", "作为", "扮演", "act as", "system", "你"]
-    task_keywords = ["task", "instruction", "do", "output", "extract", "analyze", "任务", "指令", "请"]
+    role_keywords = ["role", "you are", "act as", "system"]
+    task_keywords = ["task", "instruction", "do", "output", "extract", "analyze", "please"]
     has_role = any(kw in full_text for kw in role_keywords)
     has_task = any(kw in full_text for kw in task_keywords)
     is_one_liner = len(full_text.strip()) < 50 or len(sections) < 2
     if is_one_liner:
         if not has_role:
-            suggestions.append(DesignSuggestion(name="缺少 Role 定义", reason="Prompt 过于简单，建议添加 Role（如「你是一位...」）以明确模型角色。"))
+            suggestions.append(DesignSuggestion(name="Missing Role", reason="Prompt is too simple; add Role (e.g. 'You are a...') to clarify model role."))
         if not has_task:
-            suggestions.append(DesignSuggestion(name="缺少 Task 定义", reason="Prompt 过于简单，建议添加 Task（如「请...」「输出...」）以明确任务。"))
+            suggestions.append(DesignSuggestion(name="Missing Task", reason="Prompt is too simple; add Task (e.g. 'Please...', 'Output...') to clarify the task."))
         if suggestions:
             return False, suggestions
     return True, suggestions
@@ -1122,8 +1123,8 @@ def _gatekeeper_check_schema_alignment(sections: list[dict], output_schema: dict
     ratio = mentioned / len(schema_keys) if schema_keys else 1.0
     if ratio < 0.3:
         suggestions.append(DesignSuggestion(
-            name="Schema 对齐度低",
-            reason=f"Prompt 与 output_schema 字段关联度低（{mentioned}/{len(schema_keys)} 个字段被提及），可能导致输出不符合预期。",
+            name="Low schema alignment",
+            reason=f"Prompt mentions few output_schema keys ({mentioned}/{len(schema_keys)}); output may not match expected.",
         ))
         return False, suggestions
     return True, suggestions
@@ -1247,7 +1248,7 @@ def _build_per_row_analysis_prompt(row: ReviewComparisonRow, rules_block: str, s
     lines.extend([
         "## Task",
         "1. Root cause: Why did the model fail? (unclear instruction, weak constraint, misleading input, etc.)",
-        "2. GT质疑: If the model output seems more plausible than expected, set gt_questioned=true and explain in gt_reason.",
+        "2. GT questioned: If the model output seems more plausible than expected, set gt_questioned=true and explain in gt_reason.",
         "3. Micro suggestion: Give a brief improvement direction for this row (do NOT write exact new_sentence; describe what to clarify).",
         "",
         "Respond with JSON: {\"row_index\": <0-based>, \"root_cause\": \"...\", \"gt_questioned\": false, \"gt_reason\": null, \"section_index_suggestions\": [0, 1], \"micro_suggestion\": \"...\"}.",
@@ -1268,6 +1269,7 @@ def _build_step3_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDia
         "1. Merge similar root causes (e.g. 20 rows all 'cannot identify negative sentiment' -> one suggestion).",
         "2. Identify global logic gaps.",
         "3. Output: suggestions (old_sentence -> new_sentence) and data_refinement (rows where GT may be wrong).",
+        "4. row_indices (optional): Only include when a suggestion clearly targets specific failed rows. Use 0-based indices (Row 1 -> 0). Omit or use [] when the suggestion is general.",
         "",
         "**Do NOT put correct/expected answers into new_sentence.** Improve instructions, criteria, or wording only.",
         "",
@@ -1276,6 +1278,7 @@ def _build_step3_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDia
         "",
         "## Critical: new_sentence",
         "Must not contain expected output. Change instructions or criteria only.",
+        "**new_sentence is for the user's prompt (extraction/evaluation model), NOT for this review.** Do NOT add meta-instructions like 'merge root causes', 'identify global logic gaps', 'consolidate suggestions'—those describe the synthesis task, not the user's task.",
         "",
     ]
     if all_matched:
@@ -1303,13 +1306,13 @@ def _build_step3_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDia
         lines.append("")
     lines.append("## Ground truth issues")
     lines.append(
-        "For rows where gt_questioned=true, add one data_refinement item: {\"row_indices\": [2, 5], \"reason\": \"...\"} (1-based for display). "
+        "For rows where gt_questioned=true, add one data_refinement item with row_indices (1-based, from the diagnoses above) and reason. "
         "Do not add data_refinement for prompt/extraction issues."
     )
     lines.append("")
     lines.append(
-        "Respond with JSON: {\"suggestions\": [{\"name\": \"...\", \"section_index\": 0, \"old_sentence\": \"...\", \"new_sentence\": \"...\", \"reason\": \"...\"}, ...], "
-        "\"data_refinement\": [{\"row_indices\": [2, 5], \"reason\": \"...\"}, ...]}."
+        "Respond with JSON: {\"suggestions\": [{\"name\": \"...\", \"section_index\": 0, \"old_sentence\": \"...\", \"new_sentence\": \"...\", \"reason\": \"...\", \"row_indices\": []}, ...], "
+        "\"data_refinement\": [{\"row_indices\": [1, 3], \"reason\": \"...\"}, ...]}. Put actual 1-based row numbers from the diagnoses in row_indices, not literal 1,3. Use row_indices: [] for suggestions when not targeting specific rows."
     )
     return "\n".join(lines)
 
@@ -1547,6 +1550,10 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
         all_matched = _review_all_matched(body)
         design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in design_suggestions]
         _safe_print("\n" + _HL + _SEP + _R)
+        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) PROMPT:" + _R)
+        _safe_print(_HL + _SEP + _R)
+        _safe_print(gatekeeper_prompt)
+        _safe_print(_HL + _SEP + _R)
         _safe_print(_HL + "[Review] Step 1 (Gatekeeper) OUTPUT:" + _R)
         _safe_print("route: " + route + ", design_suggestions: " + json.dumps(design_list, ensure_ascii=False, indent=2))
         _safe_print(_HL + _SEP + _R + "\n")
@@ -1558,10 +1565,20 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             if _review_is_cancelled(review_id):
                 return
             step3_prompt = _build_step3_rewrite_prompt(body)
+            _safe_print("\n" + _HL + _SEP + _R)
+            _safe_print(_HL + "[Review] Step 3 (REWRITE) PROMPT SENT TO LLM:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(step3_prompt)
+            _safe_print(_HL + _SEP + _R + "\n")
             step3_result, _ = llm_run_structured(
                 provider=provider, model=model, api_key=api_key, prompt=step3_prompt,
                 response_model=Step3SynthesisResult, max_tokens=review_max_tokens,
             )
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(_HL + "[Review] Step 3 (REWRITE) LLM OUTPUT:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2, default=str))
+            _safe_print(_HL + _SEP + _R + "\n")
             fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
             raw_suggestions = list(getattr(fs, "suggestions", []) or [])
             data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
@@ -1596,12 +1613,22 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
 
                 def analyze_one(row: ReviewComparisonRow) -> PerRowDiagnosis:
                     prompt = _build_per_row_analysis_prompt(row, rules_block, schema_lines)
+                    _safe_print("\n" + _HL + _SEP + _R)
+                    _safe_print(_HL + f"[Review] Step 2 Row {row.row_index} PROMPT SENT TO LLM:" + _R)
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(prompt)
+                    _safe_print(_HL + _SEP + _R + "\n")
                     result, _ = llm_run_structured(
                         provider=provider, model=model, api_key=api_key, prompt=prompt,
                         response_model=PerRowDiagnosis, max_tokens=review_max_tokens,
                     )
                     d = result if isinstance(result, PerRowDiagnosis) else PerRowDiagnosis(**(result if isinstance(result, dict) else result.model_dump()))
                     d.row_index = row.row_index
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(_HL + f"[Review] Step 2 Row {row.row_index} LLM OUTPUT:" + _R)
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(json.dumps(d.model_dump(), ensure_ascii=False, indent=2))
+                    _safe_print(_HL + _SEP + _R + "\n")
                     return d
 
                 diagnoses_list: list[PerRowDiagnosis] = []
@@ -1631,10 +1658,20 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                         _review_jobs[review_id]["status"] = "cancelled"
                 return
             step3_prompt = _build_step3_synthesis_prompt(body, diagnoses)
+            _safe_print("\n" + _HL + _SEP + _R)
+            _safe_print(_HL + "[Review] Step 3 (synthesis) PROMPT SENT TO LLM:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(step3_prompt)
+            _safe_print(_HL + _SEP + _R + "\n")
             step3_result, _ = llm_run_structured(
                 provider=provider, model=model, api_key=api_key, prompt=step3_prompt,
                 response_model=Step3SynthesisResult, max_tokens=review_max_tokens,
             )
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(_HL + "[Review] Step 3 (synthesis) LLM OUTPUT:" + _R)
+            _safe_print(_HL + _SEP + _R)
+            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2, default=str))
+            _safe_print(_HL + _SEP + _R + "\n")
             fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
             raw_suggestions = list(getattr(fs, "suggestions", []) or [])
             if all_matched and len(raw_suggestions) > 2:

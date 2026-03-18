@@ -2837,6 +2837,7 @@
 .review-detail-suggestion-card__actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn {
@@ -2848,7 +2849,7 @@
 }
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn:hover {
-  filter: brightness(0.95);
+  filter: brightness(0.85);
 }
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn--revert {
@@ -2900,6 +2901,25 @@
   margin: 6px 0 0;
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* Mini test result badges (bubbles) */
+.review-detail-minitest-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.review-detail-minitest-badge--passed {
+  background: #d4edda;
+  color: #155724;
+}
+.review-detail-minitest-badge--failed {
+  background: #f8d7da;
+  color: #721c24;
 }
 
 .review-detail-suggestion-reason {
@@ -6139,6 +6159,7 @@ body.wd-row-resizing {
   cursor: pointer;
   border: 1px solid var(--border);
   border-radius: var(--control-radius, 3px);
+  transition: filter 0.15s ease, background 0.15s ease;
 }
 
 .btn-primary {
@@ -6148,7 +6169,7 @@ body.wd-row-resizing {
 }
 
 .btn-primary:hover:not(:disabled) {
-  filter: brightness(0.95);
+  filter: brightness(0.85);
 }
 
 .btn:disabled,
@@ -6177,5 +6198,5 @@ body.wd-row-resizing {
 }
 
 .btn-danger:hover:not(:disabled) {
-  filter: brightness(0.95);
+  filter: brightness(0.85);
 }
