@@ -237,6 +237,11 @@ class Step3SynthesisResult(BaseModel):
     data_refinement: list[DataRefinementItem] = Field(default_factory=list)
 
 
+# Agent 2.0: Step 1 Gatekeeper LLM output (routing only; no design_suggestions)
+class GatekeeperResult(BaseModel):
+    route: Literal["REWRITE", "ANALYZE"] = Field(..., description="REWRITE = prompt broken; ANALYZE = prompt ok, run per-row analysis")
+
+
 def _sanitize_field_name(key: str) -> str:
     """Turn schema key into valid Pydantic field name (alphanumeric + underscore)."""
     s = re.sub(r"[^\w]", "_", str(key).strip())
@@ -1085,65 +1090,8 @@ def _review_all_matched(body: ReviewRequest) -> bool:
     return all(r.matched for r in comparison_rows) if comparison_rows else True
 
 
-# ---------- Agent 2.0: Step 1 Gatekeeper (static pre-check, no LLM) ----------
+# Step 1 Gatekeeper is LLM-only (see _run_gatekeeper_llm).
 RouteDecision = Literal["REWRITE", "ANALYZE"]
-
-
-def _gatekeeper_check_instruction_completeness(sections: list[dict]) -> tuple[bool, list[DesignSuggestion]]:
-    """Return (is_ok, design_suggestions). One-liner prompt or missing Role/Task => not ok."""
-    suggestions: list[DesignSuggestion] = []
-    if not sections:
-        return False, [DesignSuggestion(name="No sections", reason="Prompt has no sections.")]
-    full_text = " ".join((s.get("content") or "").strip() for s in sections).lower()
-    role_keywords = ["role", "you are", "act as", "system"]
-    task_keywords = ["task", "instruction", "do", "output", "extract", "analyze", "please"]
-    has_role = any(kw in full_text for kw in role_keywords)
-    has_task = any(kw in full_text for kw in task_keywords)
-    is_one_liner = len(full_text.strip()) < 50 or len(sections) < 2
-    if is_one_liner:
-        if not has_role:
-            suggestions.append(DesignSuggestion(name="Missing Role", reason="Prompt is too simple; add Role (e.g. 'You are a...') to clarify model role."))
-        if not has_task:
-            suggestions.append(DesignSuggestion(name="Missing Task", reason="Prompt is too simple; add Task (e.g. 'Please...', 'Output...') to clarify the task."))
-        if suggestions:
-            return False, suggestions
-    return True, suggestions
-
-
-def _gatekeeper_check_schema_alignment(sections: list[dict], output_schema: dict | None) -> tuple[bool, list[DesignSuggestion]]:
-    """Return (is_ok, design_suggestions). Schema keys not mentioned in prompt => not ok."""
-    suggestions: list[DesignSuggestion] = []
-    schema = output_schema if isinstance(output_schema, dict) else {}
-    fields = schema.get("fields") or []
-    schema_keys = [(f.get("key") or "").strip() for f in fields if (f.get("key") or "").strip()]
-    if not schema_keys:
-        return True, suggestions
-    full_text = " ".join((s.get("content") or "").strip() for s in sections)
-    mentioned = sum(1 for k in schema_keys if k and k in full_text)
-    ratio = mentioned / len(schema_keys) if schema_keys else 1.0
-    if ratio < 0.3:
-        suggestions.append(DesignSuggestion(
-            name="Low schema alignment",
-            reason=f"Prompt mentions few output_schema keys ({mentioned}/{len(schema_keys)}); output may not match expected.",
-        ))
-        return False, suggestions
-    return True, suggestions
-
-
-def _gatekeeper_route(body: ReviewRequest) -> tuple[RouteDecision, list[DesignSuggestion]]:
-    """Static pre-check. Return (REWRITE|ANALYZE, design_suggestions from check)."""
-    sections = body.prompt_sections or []
-    output_schema = body.output_schema if isinstance(body.output_schema, dict) else {}
-    if not output_schema and body.output_fields:
-        output_schema = {"fields": body.output_fields}
-    design_suggestions: list[DesignSuggestion] = []
-    complete_ok, complete_sug = _gatekeeper_check_instruction_completeness(sections)
-    design_suggestions.extend(complete_sug)
-    aligned_ok, aligned_sug = _gatekeeper_check_schema_alignment(sections, output_schema)
-    design_suggestions.extend(aligned_sug)
-    if not complete_ok or not aligned_ok:
-        return "REWRITE", design_suggestions
-    return "ANALYZE", design_suggestions
 
 
 # Comparison rule labels (must match frontend MATCH_TYPE_LABELS) and their definitions for LLM prompts.
@@ -1178,19 +1126,18 @@ def _review_compared_fields_and_rules(comparison_rows: list[ReviewComparisonRow]
 
 
 def _build_step1_gatekeeper_prompt(body: ReviewRequest) -> str:
-    """Agent 2.0 Step 1: Complete prompt for Gatekeeper (static, no LLM). Describes routing logic + input + output."""
+    """Agent 2.0 Step 1: Prompt for LLM-based Gatekeeper (routing only)."""
     lines = [
-        "## Step 1: Gatekeeper (static pre-check, no LLM call)",
+        "You are a Gatekeeper for a prompt-review pipeline. Evaluate the prompt under review and output only the route.",
         "",
-        "## Routing logic",
-        "Evaluate the prompt under review. Output: route (REWRITE | ANALYZE) + design_suggestions.",
-        "",
-        "1. Instruction completeness: REWRITE if missing Role/Task, or prompt is one-liner (<50 chars or <2 sections).",
-        "2. Schema alignment: REWRITE if <30% of output_schema keys are mentioned in prompt content.",
+        "## Routing rules",
+        "1. Instruction completeness: Choose REWRITE if the prompt is missing Role/Task, or is too short (e.g. one-liner, <50 chars, or <2 sections).",
+        "2. Schema alignment: Choose REWRITE if the prompt mentions fewer than 30% of the output_schema field keys (so the model may not produce the expected fields).",
+        "3. Otherwise choose ANALYZE.",
         "",
         "Route meanings:",
-        "- REWRITE: Prompt is broken; skip Step 2, go to Step 3 to generate expert template from scratch.",
-        "- ANALYZE: Prompt is ok; run Step 2 parallel per-row analysis, then Step 3 synthesis.",
+        "- REWRITE: Prompt is structurally broken; the pipeline will generate an expert template from scratch.",
+        "- ANALYZE: Prompt is acceptable; the pipeline will run per-row analysis and then synthesize edit suggestions.",
         "",
         "## Input under review",
         "",
@@ -1213,9 +1160,27 @@ def _build_step1_gatekeeper_prompt(body: ReviewRequest) -> str:
         lines.append(json.dumps(schema, ensure_ascii=False, indent=2) if schema else "(none)")
     lines.append("")
     lines.append("## Output format")
-    lines.append('route: "REWRITE" | "ANALYZE"')
-    lines.append('design_suggestions: [{"name": "...", "reason": "..."}, ...]')
+    lines.append("Respond with JSON only: {\"route\": \"REWRITE\" or \"ANALYZE\"}.")
     return "\n".join(lines)
+
+
+def _run_gatekeeper_llm(body: ReviewRequest, provider: str, model: str, api_key: str, max_tokens: int) -> tuple[RouteDecision, list[DesignSuggestion]]:
+    """Call LLM for Step 1 Gatekeeper (routing only). Returns (route, []) — design_suggestions always empty."""
+    prompt = _build_step1_gatekeeper_prompt(body)
+    out, _ = llm_run_structured(
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        prompt=prompt,
+        response_model=GatekeeperResult,
+        max_tokens=max_tokens,
+    )
+    if not isinstance(out, dict):
+        out = out.model_dump() if hasattr(out, "model_dump") else {}
+    route = out.get("route") or "ANALYZE"
+    if route not in ("REWRITE", "ANALYZE"):
+        route = "ANALYZE"
+    return route, []
 
 
 # ---------- Agent 2.0: Step 2 per-row analysis prompt ----------
@@ -1370,13 +1335,13 @@ def review_analyze(body: ReviewRequest):
     review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
     review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     try:
-        # Step 1: Gatekeeper (static, no LLM)
+        # Step 1: Gatekeeper (LLM-based; fallback to rule-based on error)
         gatekeeper_prompt = _build_step1_gatekeeper_prompt(body)
-        route, design_suggestions = _gatekeeper_route(body)
+        route, design_suggestions = _run_gatekeeper_llm(body, provider, model, api_key, review_max_tokens)
         all_matched = _review_all_matched(body)
         design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in design_suggestions]
         _safe_print("\n" + _HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) COMPLETE PROMPT (route + design_suggestions):" + _R)
+        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) COMPLETE PROMPT SENT TO LLM:" + _R)
         _safe_print(_HL + _SEP + _R)
         _safe_print(gatekeeper_prompt)
         _safe_print(_HL + _SEP + _R)
@@ -1544,9 +1509,9 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
         review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
         review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
 
-        # Step 1: Gatekeeper
+        # Step 1: Gatekeeper (LLM only)
         gatekeeper_prompt = _build_step1_gatekeeper_prompt(body)
-        route, design_suggestions = _gatekeeper_route(body)
+        route, design_suggestions = _run_gatekeeper_llm(body, provider, model, api_key, review_max_tokens)
         all_matched = _review_all_matched(body)
         design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in design_suggestions]
         _safe_print("\n" + _HL + _SEP + _R)
