@@ -54,6 +54,7 @@ DEFAULT_SETTINGS = {
     "run_max_tokens": 8192,
     "review_max_tokens": 32768,
     "run_max_retries": 2,
+    "review_max_failed_rows": 30,
 }
 
 
@@ -143,6 +144,12 @@ class SettingsPatch(BaseModel):
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
+    review_max_failed_rows: int | None = Field(
+        default=None,
+        ge=1,
+        le=200,
+        description="Max unmatched rows to diagnose per Review batch (per-LLM-call row analysis)",
+    )
 
 
 class CredentialResponse(BaseModel):
@@ -1360,6 +1367,12 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
         review_settings = _load_settings()
         review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
         review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
+        review_max_failed_rows = review_settings.get("review_max_failed_rows") or DEFAULT_SETTINGS["review_max_failed_rows"]
+        try:
+            review_max_failed_rows = int(review_max_failed_rows)
+        except (TypeError, ValueError):
+            review_max_failed_rows = DEFAULT_SETTINGS["review_max_failed_rows"]
+        review_max_failed_rows = max(1, min(200, review_max_failed_rows))
 
         # Screening (LLM only)
         screening_prompt = _build_screening_prompt(body)
@@ -1421,7 +1434,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                         _review_jobs[review_id]["status"] = "done"
                 return
             else:
-                to_analyze = unmatched[:30]
+                to_analyze = unmatched[:review_max_failed_rows]
                 if _review_is_cancelled(review_id):
                     return
                 append_event({"type": "plan", "summary": f"Analyzing {len(to_analyze)} failed rows.", "diagnosis_total": len(to_analyze)})

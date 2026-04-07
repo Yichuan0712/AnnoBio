@@ -104,8 +104,8 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   const runReviewDefaultsOpt = document.createElement('button');
   runReviewDefaultsOpt.type = 'button';
   runReviewDefaultsOpt.className = 'menu-option';
-  runReviewDefaultsOpt.setAttribute('data-action', 'run-review-defaults');
-  runReviewDefaultsOpt.textContent = 'Model defaults...';
+  runReviewDefaultsOpt.setAttribute('data-action', 'model-settings');
+  runReviewDefaultsOpt.textContent = 'Model settings...';
   runReviewDefaultsOpt.addEventListener('click', openSettingsModal);
   settingsDrop.appendChild(runReviewDefaultsOpt);
   const displayModeOpt = document.createElement('button');

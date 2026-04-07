@@ -327,6 +327,90 @@
   min-width: min(1000px, 92vw);
 }
 
+/* Model settings modal: paged layout (style aligned with Create prompt / Create dataset) */
+.modal-panel--defaults {
+  max-height: 98vh;
+  display: flex;
+  flex-direction: column;
+  transition: width 0.25s ease, min-width 0.25s ease;
+}
+
+.modal-panel--defaults[data-defaults-page="1"] {
+  width: min(400px, 92vw);
+  min-width: min(400px, 92vw);
+}
+
+.modal-panel--defaults[data-defaults-page="2"] {
+  width: min(520px, 92vw);
+  min-width: min(520px, 92vw);
+}
+
+.modal-body--defaults {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.defaults-add-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0 20px 0;
+}
+
+.defaults-add-page {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 20px;
+}
+
+.modal-panel--defaults[data-defaults-page="1"] .defaults-add-page-1 {
+  display: flex;
+}
+
+.modal-panel--defaults[data-defaults-page="2"] .defaults-add-page-2 {
+  display: flex;
+}
+
+.defaults-page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.defaults-page-label {
+  margin: 0 -20px;
+  padding: 6px 20px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.defaults-add-page-1 .prompt-actions,
+.defaults-add-page-2 .prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+.defaults-add-page-1 .prompt-actions {
+  justify-content: flex-end;
+}
+
 .modal-body--dataset {
   flex: 1;
   min-height: 0;
