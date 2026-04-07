@@ -5,6 +5,7 @@
  */
 
 import { showConfirm, showAlert } from './alertModal.js';
+import { comparisonRowIsMatched } from './scoreDetailModal.js';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -400,6 +401,8 @@ function buildReviewResultUI(overlay, options) {
   const sectionNames = (promptSections || []).map((s, i) => (s.name || '').trim() || `Section ${i}`);
 
   const statusEl = overlay.querySelector('.review-detail-stream-status');
+  const reviewStreaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
+  const reviewStillGenerating = saved.streamComplete === false || reviewStreaming;
 
   function addOneDesignCard(d, displayNum) {
     const card = document.createElement('div');
@@ -572,7 +575,7 @@ function buildReviewResultUI(overlay, options) {
     streamRef.streamDone = () => {
       if (statusEl) statusEl.textContent = 'Suggestions complete.';
       if (allSuggestions.length === 0 && designSuggestions.length === 0 && dataRefinement.length === 0) {
-        editContainer.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
+        editContainer.innerHTML = '<p class="review-detail-placeholder">No suggestions.</p>';
       }
       saved.suggestions = allSuggestions.slice();
       saved.design_suggestions = designSuggestions;
@@ -593,8 +596,13 @@ function buildReviewResultUI(overlay, options) {
       addOneSuggestionCard(sug, sugIdx, displayNum);
     });
     if (!initialSuggestions || initialSuggestions.length === 0) {
-      if (designSuggestions.length === 0) {
-        editContainer.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
+      const noDesign = designSuggestions.length === 0;
+      const noData = dataRefinement.length === 0;
+      if (noDesign && noData) {
+        const showNoSuggestions = saved.streamComplete === true || !reviewStillGenerating;
+        editContainer.innerHTML = showNoSuggestions
+          ? '<p class="review-detail-placeholder">No suggestions.</p>'
+          : '<p class="review-detail-placeholder">Generating suggestions…</p>';
       }
     }
   }
@@ -626,7 +634,8 @@ function buildReviewResultUI(overlay, options) {
     exportBtn.type = 'button';
     exportBtn.className = 'btn btn-primary review-detail-export-btn';
     exportBtn.textContent = 'Apply';
-    const isComplete = saved.streamComplete === true || (saved.streamComplete === undefined && !streamRef);
+    const isComplete =
+      saved.streamComplete === true || (saved.streamComplete !== false && !reviewStillGenerating);
     exportBtn.disabled = !isComplete;
     exportBtn.addEventListener('click', () => {
       const sections = working.map((s) => ({ name: s.name || '', content: s.content || '' }));
@@ -808,7 +817,7 @@ function buildReviewAssistantContext(getPayload, getReviewResult) {
   const runResults = saved?.run_results || payload?.run_results || [];
   if (comparisonRows.length > 0 || runResults.length > 0) {
     lines.push('## Run Results');
-    const failed = comparisonRows.filter((r) => !r.matched);
+    const failed = comparisonRows.filter((r) => !comparisonRowIsMatched(r));
     if (failed.length > 0) {
       lines.push(`Sample failed rows (${failed.length} of ${comparisonRows.length} total):`);
       failed.slice(0, 10).forEach((r, i) => {
@@ -834,40 +843,32 @@ function buildReviewAssistantContext(getPayload, getReviewResult) {
   const dataRefinement = saved?.data_refinement || [];
   lines.push('## Your permissions');
   lines.push('ADD: You can add new edit suggestions anytime via [ASSISTANT_SUGGESTION].');
-  lines.push('REMOVE: You can ONLY remove suggestions marked [removable]. These are edit suggestions YOU added in this chat.');
-  lines.push('CANNOT REMOVE: [Design], [Data refinement], and [Edit] marked [not removable] — these come from the initial Review and you must not delete them.');
+  lines.push('REMOVE: You can remove ANY listed item by its global number (#1, #2, …): [Design], [Data refinement], and [Edit] (including items from the initial Review or from this chat).');
   lines.push('');
   if (suggestions.length > 0 || designSuggestions.length > 0 || dataRefinement.length > 0) {
     lines.push('## Suggestions (in display order, same numbering as UI)');
-    const removableNums = [];
     let num = 0;
     designSuggestions.forEach((d) => {
       num += 1;
       const title = (d.name || '').trim() || (d.reason || '').trim().slice(0, 80);
-      lines.push(`#${num}. [Design] ${title} [not removable]`);
+      lines.push(`#${num}. [Design] ${title} [removable]`);
       if ((d.reason || '').trim()) lines.push(`   Reason: ${(d.reason || '').trim()}`);
     });
     dataRefinement.forEach((d) => {
       num += 1;
       const rows = (d.row_indices || []).length > 0 ? `Rows ${(d.row_indices || []).join(', ')}: ` : '';
       const title = rows + ((d.reason || '').trim().slice(0, 100) || 'Possible ground truth issue');
-      lines.push(`#${num}. [Data refinement] ${title} [not removable]`);
+      lines.push(`#${num}. [Data refinement] ${title} [removable]`);
       if ((d.reason || '').trim().length > 100) lines.push(`   Full: ${(d.reason || '').trim()}`);
     });
     suggestions.forEach((s) => {
       num += 1;
-      if (s.source === 'assistant') removableNums.push(num);
       const title = (s.name || '').trim() || (s.reason || '').trim().slice(0, 80) || `[Section ${s.section_index ?? 0}] "${(s.old_sentence || '').slice(0, 40)}..." → "${(s.new_sentence || '').slice(0, 40)}..."`;
       const applied = s.applied === true ? ' [applied]' : '';
-      const removable = s.source === 'assistant' ? ' [removable]' : ' [not removable]';
-      lines.push(`#${num}. [Edit] ${title}${applied}${removable}`);
+      lines.push(`#${num}. [Edit] ${title}${applied} [removable]`);
       lines.push(`   Reason: ${(s.reason || '').trim()}`);
     });
-    if (removableNums.length > 0) {
-      lines.push(`You may remove only: #${removableNums.join(', #')}.`);
-    } else {
-      lines.push('You may remove: none (no suggestions were added by you in this chat).');
-    }
+    lines.push('You may remove any # above using [ASSISTANT_REMOVE_SUGGESTION] (see Removing section).');
     lines.push('');
   }
   lines.push('## Adding suggestions');
@@ -882,9 +883,8 @@ function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('');
   lines.push('## Removing suggestions');
   lines.push('When the user asks to DELETE or REMOVE suggestions (e.g. 删除, 移除, remove, delete, "delete #6 and #7"): use [ASSISTANT_REMOVE_SUGGESTION]. Do NOT use [ASSISTANT_SUGGESTION] — that is for adding edits to the prompt, not for removing suggestions from the list.');
-  lines.push('1. If it is [not removable] (Design, Data refinement, or Edit from the initial Review): say you cannot remove it — only suggestions you added in this chat can be removed.');
-  lines.push('2. If it is [removable]: confirm "Do you want me to remove suggestion #N? Please confirm.", then only when they confirm, output [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION]. For multiple removals (e.g. #6 and #7), output one block per suggestion.');
-  lines.push('Never output ASSISTANT_REMOVE_SUGGESTION for a [not removable] suggestion — it will be ignored.');
+  lines.push('You may remove any # from the list above (Design, Data refinement, or Edit). Prefer confirming "Do you want me to remove suggestion #N? Please confirm." when the request is ambiguous; when the user is explicit, output the remove block directly.');
+  lines.push('Output [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION] with the global number N from the list. For multiple removals, output one block per index.');
   lines.push('');
   lines.push('Stay focused ONLY on improving the current prompt. Answer directly and solve problems. Do not describe your context or internal structure to the user. If the user asks something unrelated to this prompt, briefly redirect to prompt improvement.');
   return lines.join('\n');
@@ -1090,31 +1090,51 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
         displayContent = parsedSuggestions.length > 0
           ? 'Added. Please check the Suggestions panel on the left and choose Accept or Revert.'
           : removeIndices.length > 0
-            ? 'Removed. The suggestion has been deleted from the list.'
+            ? removeIndices.length > 1
+              ? 'Removed. The suggestions have been deleted from the list.'
+              : 'Removed. The suggestion has been deleted from the list.'
             : '(No response)';
       }
       chatHistory.push({ role: 'assistant', content: displayContent });
       if (isModalOpen()) appendMessageWithTypewriter('assistant', displayContent);
       const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
       if (saved && typeof saved === 'object') {
+        let designSuggestions = (saved.design_suggestions || []).slice();
+        let dataRefinement = (saved.data_refinement || []).slice();
         let suggestions = (saved.suggestions || []).slice();
         if (removeIndices.length > 0) {
-          const designCount = (saved.design_suggestions || []).length;
-          const dataRefinementCount = (saved.data_refinement || []).length;
-          const editStartGlobal = designCount + dataRefinementCount + 1;
-          const toRemoveGlobal = new Set(removeIndices);
-          suggestions = suggestions.filter((s, i) => {
-            const globalIndex = editStartGlobal + i;
-            if (!toRemoveGlobal.has(globalIndex)) return true;
-            return s.source !== 'assistant';
-          });
+          const D = (saved.design_suggestions || []).length;
+          const R = (saved.data_refinement || []).length;
+          const editStartGlobal = D + R + 1;
+          const removeDesign = removeIndices
+            .filter((g) => g >= 1 && g <= D)
+            .map((g) => g - 1)
+            .sort((a, b) => b - a);
+          const removeData = removeIndices
+            .filter((g) => g >= D + 1 && g <= D + R)
+            .map((g) => g - D - 1)
+            .sort((a, b) => b - a);
+          const removeEdit = removeIndices
+            .filter((g) => g >= editStartGlobal)
+            .map((g) => g - editStartGlobal)
+            .sort((a, b) => b - a);
+          removeDesign.forEach((i) => designSuggestions.splice(i, 1));
+          removeData.forEach((i) => dataRefinement.splice(i, 1));
+          removeEdit.forEach((i) => suggestions.splice(i, 1));
         }
         if (parsedSuggestions.length > 0) {
           const sections = saved.workingSections || saved.promptSections || [];
           const validSuggestions = parsedSuggestions.filter((s) => s.section_index >= 0 && s.section_index < sections.length);
           suggestions = suggestions.concat(validSuggestions);
         }
-        persistChatResult({ ...saved, suggestions, chatHistory: chatHistory.slice(), chatRequestInProgress: false });
+        persistChatResult({
+          ...saved,
+          design_suggestions: designSuggestions,
+          data_refinement: dataRefinement,
+          suggestions,
+          chatHistory: chatHistory.slice(),
+          chatRequestInProgress: false,
+        });
       }
     } catch (e) {
       if (isModalOpen() && placeholder) placeholder.remove();

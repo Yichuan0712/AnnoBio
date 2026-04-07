@@ -3197,9 +3197,6 @@
   border-left: 4px solid var(--text-muted);
   width: 3em;
   min-width: 3em;
-  text-align: center;
-  font-weight: 600;
-  vertical-align: middle;
 }
 
 .score-detail-results-table thead .score-detail-results-th--match {

@@ -8,6 +8,17 @@ import { showAlert } from './alertModal.js';
 const API_BASE = 'http://localhost:8000';
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 
+/**
+ * Normalize row match for logic and API. Accepts boolean, legacy 1/0, or string "true"/"false".
+ * Persist as JSON boolean (true/false); never rely on string "false" with !matched (non-empty string is truthy).
+ */
+export function comparisonRowIsMatched(row) {
+  const m = row && row.matched;
+  if (m === true || m === 'true' || m === 1 || m === '1') return true;
+  if (m === false || m === 'false' || m === 0 || m === '0') return false;
+  return false;
+}
+
 /** Comparison type (single choice) */
 const MATCH_TYPES = [
   { value: 'exact', label: 'Exact match' },
@@ -83,7 +94,7 @@ export function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId
  */
 export async function runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview }) {
   const comparisonRows = payload.comparison_rows || [];
-  const allRowsMatched = comparisonRows.length === 0 || comparisonRows.every((r) => r.matched === true);
+  const allRowsMatched = comparisonRows.length === 0 || comparisonRows.every((r) => comparisonRowIsMatched(r));
   const body = {
     credential_id: credentialId,
     review_session_id: reviewNodeId,
@@ -95,7 +106,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     all_rows_matched: allRowsMatched,
     comparison_rows: comparisonRows.map((r) => ({
       row_index: r.row_index,
-      matched: r.matched,
+      matched: comparisonRowIsMatched(r),
       run_output: r.run_output || {},
       expected: r.expected || '',
       comparison_types: r.comparison_types ?? null,
@@ -1256,7 +1267,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         outputKeysUsed.forEach((outputKey) => {
           parts.push(runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : '');
         });
-        parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? '1' : '0');
+        parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
         parts.push(comments[String(j)] ?? '');
       } else {
         const i = d.i;
@@ -1264,7 +1275,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         parts.push('—', String(i + 1));
         gtColsUsed.forEach(() => { parts.push('—'); });
         outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
-        parts.push('0');
+        parts.push('false');
         parts.push(comments['run:' + i] ?? '');
       }
       return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
@@ -1363,7 +1374,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const runVal = runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : null;
         tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
       }
-      tr += `<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="${isMatch ? 'Matched' : 'Not matched'}">${isMatch ? '1' : '0'}</td>`;
+      tr += `<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="${isMatch ? 'Matched' : 'Not matched'}">${isMatch ? 'true' : 'false'}</td>`;
       tr += '<td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
@@ -1383,7 +1394,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const runVal = runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : '';
         tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
       }
-      tr += '<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="Run result row without ground truth match">0</td>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="Run result row without ground truth match">false</td>';
       tr += '<td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
@@ -2005,7 +2016,7 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       gtColsUsed.forEach((col) => { parts.push(getGtValue(gtContent, j, col)); });
       parts.push(runRowIndex >= 0 ? String(runRowIndex + 1) : '—');
       outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : ''); });
-      parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? '1' : '0');
+      parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
       parts.push(comments[String(j)] ?? '');
     } else {
       const i = d.i;
@@ -2015,7 +2026,7 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       gtColsUsed.forEach(() => { parts.push('—'); });
       parts.push(String(i + 1));
       outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
-      parts.push('0');
+      parts.push('false');
       parts.push(comments['run:' + i] ?? '');
     }
     return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
