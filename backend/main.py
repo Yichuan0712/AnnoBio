@@ -178,7 +178,7 @@ class ReviewComparisonRow(BaseModel):
     expected: str = Field(default="", description="Expected value(s) from ground truth")
     comparison_types: list[str] | None = Field(default=None, description="Per-rule comparison: e.g. ['field_key: Exact match', 'field_key: Result contains ground truth']")
     comment: str | None = Field(default=None, description="User comment if any")
-    row_input: dict | None = Field(default=None, description="Input key-values used to fill the prompt for this row; used in Step 1b when LLM requests it")
+    row_input: dict | None = Field(default=None, description="Input key-values used to fill the prompt for this row; used during screening when LLM requests it")
 
 
 class ReviewRequest(BaseModel):
@@ -215,7 +215,7 @@ class ReviewResult(BaseModel):
     data_refinement: list[dict] = Field(default_factory=list, description="GT question summary: [{row_indices, reason}]")
 
 
-# Agent 2.0: Step 2 per-row diagnosis output
+# Review pipeline — diagnosis phase: per-row LLM output
 class PerRowDiagnosis(BaseModel):
     row_index: int = Field(..., description="0-based row index")
     root_cause: str = Field(..., description="Root cause analysis")
@@ -225,21 +225,21 @@ class PerRowDiagnosis(BaseModel):
     micro_suggestion: str = Field(default="", description="Micro suggestion for this row")
 
 
-# Agent 2.0: Step 3 synthesis output (data refinement)
+# Review pipeline — repair phase: data refinement item
 class DataRefinementItem(BaseModel):
     row_indices: list[int] = Field(default_factory=list, description="Row indices to fix (1-based for display)")
     reason: str = Field(default="", description="Aggregated reason for questioning")
 
 
-# Agent 2.0: Step 3 synthesis output
-class Step3SynthesisResult(BaseModel):
+# Review pipeline — repair phase: structured LLM output
+class RepairSynthesisResult(BaseModel):
     suggestions: list[ReviewSuggestion] = Field(default_factory=list)
     data_refinement: list[DataRefinementItem] = Field(default_factory=list)
 
 
-# Agent 2.0: Step 1 Gatekeeper LLM output (routing only; no design_suggestions)
-class GatekeeperResult(BaseModel):
-    route: Literal["REWRITE", "ANALYZE"] = Field(..., description="REWRITE = prompt broken; ANALYZE = prompt ok, run per-row analysis")
+# Review pipeline — screening phase: routing only (no design_suggestions)
+class ScreeningResult(BaseModel):
+    route: Literal["REWRITE", "ANALYZE"] = Field(..., description="REWRITE = prompt broken, repair via full rewrite; ANALYZE = run diagnosis then repair")
 
 
 def _sanitize_field_name(key: str) -> str:
@@ -911,7 +911,7 @@ def get_run_result(run_id: str):
 
 @app.post("/api/review/analyze")
 def review_analyze(body: ReviewRequest):
-    """Start review in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Worker stops when cancelled."""
+    """Start review in background (screening → diagnosis if ANALYZE → repair); returns 202 with review_id. Poll GET /api/review/result/{review_id}. Worker stops when cancelled."""
     review_id = str(uuid.uuid4())
     review_node_id = body.review_session_id or ""
     with _review_jobs_lock:
@@ -1053,7 +1053,7 @@ def get_run_result_by_node(run_node_id: str):
     return {"run_id": run_id, "status": "done", "results": results, "output_fields": output_fields}
 
 
-# ---------- Review: step0 design check (optional), then step1 plan + step2 per-focus suggestions ----------
+# ---------- Review: screening -> diagnosis -> repair (see _do_review_work) ----------
 def _review_output_schema_lines(body: ReviewRequest) -> tuple[list[str], list[str]]:
     """Return (lines for prompt, list of field keys for constraints). When output_schema present use it; else derive keys from output_fields."""
     schema = body.output_schema if isinstance(body.output_schema, dict) else None
@@ -1090,7 +1090,7 @@ def _review_all_matched(body: ReviewRequest) -> bool:
     return all(r.matched for r in comparison_rows) if comparison_rows else True
 
 
-# Step 1 Gatekeeper is LLM-only (see _run_gatekeeper_llm).
+# Screening phase is LLM-only (see _run_screening_llm).
 RouteDecision = Literal["REWRITE", "ANALYZE"]
 
 
@@ -1125,10 +1125,10 @@ def _review_compared_fields_and_rules(comparison_rows: list[ReviewComparisonRow]
     return [], ""
 
 
-def _build_step1_gatekeeper_prompt(body: ReviewRequest) -> str:
-    """Agent 2.0 Step 1: Prompt for LLM-based Gatekeeper (routing only)."""
+def _build_screening_prompt(body: ReviewRequest) -> str:
+    """Screening phase: LLM prompt for routing only (REWRITE vs ANALYZE)."""
     lines = [
-        "You are a Gatekeeper for a prompt-review pipeline. Evaluate the prompt under review and output only the route.",
+        "You are screening prompts for a review pipeline. Evaluate the prompt under review and output only the route.",
         "",
         "## Routing rules",
         "1. Instruction completeness: Choose REWRITE if the prompt is missing Role/Task, or is too short (e.g. one-liner, <50 chars, or <2 sections).",
@@ -1137,7 +1137,7 @@ def _build_step1_gatekeeper_prompt(body: ReviewRequest) -> str:
         "",
         "Route meanings:",
         "- REWRITE: Prompt is structurally broken; the pipeline will generate an expert template from scratch.",
-        "- ANALYZE: Prompt is acceptable; the pipeline will run per-row analysis and then synthesize edit suggestions.",
+        "- ANALYZE: Prompt is acceptable; the pipeline will run per-row diagnosis and then repair (synthesize targeted edit suggestions).",
         "",
         "## Input under review",
         "",
@@ -1164,15 +1164,15 @@ def _build_step1_gatekeeper_prompt(body: ReviewRequest) -> str:
     return "\n".join(lines)
 
 
-def _run_gatekeeper_llm(body: ReviewRequest, provider: str, model: str, api_key: str, max_tokens: int) -> tuple[RouteDecision, list[DesignSuggestion]]:
-    """Call LLM for Step 1 Gatekeeper (routing only). Returns (route, []) — design_suggestions always empty."""
-    prompt = _build_step1_gatekeeper_prompt(body)
+def _run_screening_llm(body: ReviewRequest, provider: str, model: str, api_key: str, max_tokens: int) -> tuple[RouteDecision, list[DesignSuggestion]]:
+    """Call LLM for screening (routing only). Returns (route, []) — design_suggestions always empty."""
+    prompt = _build_screening_prompt(body)
     out, _ = llm_run_structured(
         provider=provider,
         model=model,
         api_key=api_key,
         prompt=prompt,
-        response_model=GatekeeperResult,
+        response_model=ScreeningResult,
         max_tokens=max_tokens,
     )
     if not isinstance(out, dict):
@@ -1183,8 +1183,8 @@ def _run_gatekeeper_llm(body: ReviewRequest, provider: str, model: str, api_key:
     return route, []
 
 
-# ---------- Agent 2.0: Step 2 per-row analysis prompt ----------
-def _build_per_row_analysis_prompt(row: ReviewComparisonRow, rules_block: str, schema_lines: list[str]) -> str:
+# ---------- Diagnosis phase: per-row prompt ----------
+def _build_diagnosis_prompt(row: ReviewComparisonRow, rules_block: str, schema_lines: list[str]) -> str:
     """Single failed row: Full Input + Full Output + GT + Matching Rules."""
     lines = [
         "You are a Prompt debugging expert. Analyze this single failed case to find the root cause.",
@@ -1221,8 +1221,8 @@ def _build_per_row_analysis_prompt(row: ReviewComparisonRow, rules_block: str, s
     return "\n".join(lines)
 
 
-# ---------- Agent 2.0: Step 3 synthesis prompts ----------
-def _build_step3_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDiagnosis]) -> str:
+# ---------- Repair phase: synthesis prompt (after diagnosis) ----------
+def _build_repair_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDiagnosis]) -> str:
     """ANALYZE path: aggregate diagnoses, output suggestions + data_refinement."""
     all_matched = _review_all_matched(body)
     _, schema_keys = _review_output_schema_lines(body)
@@ -1282,7 +1282,7 @@ def _build_step3_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDia
     return "\n".join(lines)
 
 
-def _build_step3_rewrite_prompt(body: ReviewRequest) -> str:
+def _build_repair_rewrite_prompt(body: ReviewRequest) -> str:
     """REWRITE path: prompt is broken; generate expert template from scratch."""
     schema_lines, schema_keys = _review_output_schema_lines(body)
     lines = [
@@ -1315,154 +1315,6 @@ def _build_step3_rewrite_prompt(body: ReviewRequest) -> str:
     return "\n".join(lines)
 
 
-@app.post("/api/review/analyze", response_model=ReviewResult)
-def review_analyze(body: ReviewRequest):
-    """Agent 2.0: Step 1 Gatekeeper (static) -> Step 2 parallel per-row analysis -> Step 3 global synthesis."""
-    items = _load_credentials()
-    cred = None
-    for item in items:
-        if item.get("id") == body.credential_id:
-            cred = item
-            break
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    model = cred.get("llm", "")
-    api_key = cred.get("api_key", "")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing API key")
-    provider = cred.get("provider", "openai")
-    review_settings = _load_settings()
-    review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
-    review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
-    try:
-        # Step 1: Gatekeeper (LLM-based; fallback to rule-based on error)
-        gatekeeper_prompt = _build_step1_gatekeeper_prompt(body)
-        route, design_suggestions = _run_gatekeeper_llm(body, provider, model, api_key, review_max_tokens)
-        all_matched = _review_all_matched(body)
-        design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in design_suggestions]
-        _safe_print("\n" + _HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) COMPLETE PROMPT SENT TO LLM:" + _R)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(gatekeeper_prompt)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) OUTPUT (route + design_suggestions):" + _R)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print("route: " + route + ", design_suggestions: " + json.dumps(design_list, ensure_ascii=False, indent=2))
-        _safe_print(_HL + _SEP + _R + "\n")
-
-        if route == "REWRITE":
-            # Skip Step 2, go straight to Step 3 rewrite
-            step3_prompt = _build_step3_rewrite_prompt(body)
-            _safe_print("\n" + _HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Step 3 (REWRITE) COMPLETE PROMPT SENT TO LLM:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(step3_prompt)
-            _safe_print(_HL + _SEP + _R + "\n")
-            step3_result, _ = llm_run_structured(
-                provider=provider,
-                model=model,
-                api_key=api_key,
-                prompt=step3_prompt,
-                response_model=Step3SynthesisResult,
-                max_tokens=review_max_tokens,
-            )
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Step 3 (REWRITE) LLM OUTPUT:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2))
-            _safe_print(_HL + _SEP + _R + "\n")
-            fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
-            raw_suggestions = list(getattr(fs, "suggestions", []) or [])
-            data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
-        else:
-            # ANALYZE path: Step 2 parallel per-row, then Step 3 synthesis
-            unmatched = [r for r in (body.comparison_rows or []) if not r.matched]
-            schema_lines, _ = _review_output_schema_lines(body)
-            _, rules_block = _review_compared_fields_and_rules(body.comparison_rows or [])
-
-            if all_matched:
-                diagnoses = [PerRowDiagnosis(row_index=0, root_cause="all matched", gt_questioned=False, section_index_suggestions=[0], micro_suggestion="Optional polish")]
-            elif not unmatched:
-                return ReviewResult(summary="No failed rows to analyze.", suggestions=[], design_suggestions=design_suggestions, data_refinement=[])
-            else:
-                # Step 2: parallel per-row analysis (cap at 30 rows to avoid cost explosion)
-                to_analyze = unmatched[:30]
-                diagnoses_list: list[PerRowDiagnosis] = []
-
-                def analyze_one(row: ReviewComparisonRow) -> PerRowDiagnosis:
-                    prompt = _build_per_row_analysis_prompt(row, rules_block, schema_lines)
-                    _safe_print("\n" + _HL + _SEP + _R)
-                    _safe_print(_HL + f"[Review] Step 2 Row {row.row_index} COMPLETE PROMPT SENT TO LLM:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(prompt)
-                    _safe_print(_HL + _SEP + _R + "\n")
-                    result, _ = llm_run_structured(
-                        provider=provider,
-                        model=model,
-                        api_key=api_key,
-                        prompt=prompt,
-                        response_model=PerRowDiagnosis,
-                        max_tokens=review_max_tokens,
-                    )
-                    d = result if isinstance(result, PerRowDiagnosis) else PerRowDiagnosis(**(result if isinstance(result, dict) else result.model_dump()))
-                    d.row_index = row.row_index
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(_HL + f"[Review] Step 2 Row {row.row_index} LLM OUTPUT:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(json.dumps(d.model_dump(), ensure_ascii=False, indent=2))
-                    _safe_print(_HL + _SEP + _R + "\n")
-                    return d
-
-                with ThreadPoolExecutor(max_workers=review_concurrency) as ex:
-                    futures = {ex.submit(analyze_one, r): r for r in to_analyze}
-                    for future in as_completed(futures):
-                        diagnoses_list.append(future.result())
-
-                diagnoses_list.sort(key=lambda d: d.row_index)
-                diagnoses = diagnoses_list
-
-            # Step 3: global synthesis
-            step3_prompt = _build_step3_synthesis_prompt(body, diagnoses)
-            _safe_print("\n" + _HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Step 3 (synthesis) COMPLETE PROMPT SENT TO LLM:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(step3_prompt)
-            _safe_print(_HL + _SEP + _R + "\n")
-            step3_result, _ = llm_run_structured(
-                provider=provider,
-                model=model,
-                api_key=api_key,
-                prompt=step3_prompt,
-                response_model=Step3SynthesisResult,
-                max_tokens=review_max_tokens,
-            )
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Step 3 (synthesis) LLM OUTPUT:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2))
-            _safe_print(_HL + _SEP + _R + "\n")
-            fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
-            raw_suggestions = list(getattr(fs, "suggestions", []) or [])
-            if all_matched and len(raw_suggestions) > 2:
-                raw_suggestions = raw_suggestions[:2]
-            data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
-
-        out_suggestions: list[ReviewSuggestion] = []
-        for s in raw_suggestions:
-            s_dict = s.model_dump() if hasattr(s, "model_dump") else s
-            if not isinstance(s_dict, dict):
-                continue
-            if (s_dict.get("section_index") or 0) < 0 and body.prompt_sections:
-                s_dict["section_index"] = 0
-            out_suggestions.append(ReviewSuggestion(**s_dict))
-
-        summary = "REWRITE: expert template generated." if route == "REWRITE" else "ANALYZE: synthesis from per-row diagnoses."
-        return ReviewResult(summary=summary, suggestions=out_suggestions, design_suggestions=design_suggestions, data_refinement=data_refinement)
-    except Exception as e:
-        _safe_print(_HL + "[Review] Error: " + _R + str(e))
-        raise HTTPException(status_code=400, detail=str(e))
-
-
 def _review_is_cancelled(review_id: str | None) -> bool:
     """Check if client requested cancellation for this review job."""
     if not review_id:
@@ -1472,7 +1324,7 @@ def _review_is_cancelled(review_id: str | None) -> bool:
 
 
 def _do_review_work(review_id: str, body: ReviewRequest) -> None:
-    """Background worker: same logic as stream generator but appends events to job. Stops when cancelled."""
+    """Background worker: screening → diagnosis (if ANALYZE) → repair; appends events to job. Stops when cancelled."""
     def append_event(ev: dict) -> None:
         with _review_jobs_lock:
             job = _review_jobs.get(review_id)
@@ -1509,17 +1361,17 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
         review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
         review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
 
-        # Step 1: Gatekeeper (LLM only)
-        gatekeeper_prompt = _build_step1_gatekeeper_prompt(body)
-        route, design_suggestions = _run_gatekeeper_llm(body, provider, model, api_key, review_max_tokens)
+        # Screening (LLM only)
+        screening_prompt = _build_screening_prompt(body)
+        route, design_suggestions = _run_screening_llm(body, provider, model, api_key, review_max_tokens)
         all_matched = _review_all_matched(body)
         design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in design_suggestions]
         _safe_print("\n" + _HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) PROMPT:" + _R)
+        _safe_print(_HL + "[Review] Screening PROMPT:" + _R)
         _safe_print(_HL + _SEP + _R)
-        _safe_print(gatekeeper_prompt)
+        _safe_print(screening_prompt)
         _safe_print(_HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Step 1 (Gatekeeper) OUTPUT:" + _R)
+        _safe_print(_HL + "[Review] Screening OUTPUT:" + _R)
         _safe_print("route: " + route + ", design_suggestions: " + json.dumps(design_list, ensure_ascii=False, indent=2))
         _safe_print(_HL + _SEP + _R + "\n")
         if _review_is_cancelled(review_id):
@@ -1529,27 +1381,27 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
         if route == "REWRITE":
             if _review_is_cancelled(review_id):
                 return
-            step3_prompt = _build_step3_rewrite_prompt(body)
+            repair_prompt = _build_repair_rewrite_prompt(body)
             _safe_print("\n" + _HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Step 3 (REWRITE) PROMPT SENT TO LLM:" + _R)
+            _safe_print(_HL + "[Review] Repair (rewrite) PROMPT SENT TO LLM:" + _R)
             _safe_print(_HL + _SEP + _R)
-            _safe_print(step3_prompt)
+            _safe_print(repair_prompt)
             _safe_print(_HL + _SEP + _R + "\n")
-            step3_result, _ = llm_run_structured(
-                provider=provider, model=model, api_key=api_key, prompt=step3_prompt,
-                response_model=Step3SynthesisResult, max_tokens=review_max_tokens,
+            repair_result, _ = llm_run_structured(
+                provider=provider, model=model, api_key=api_key, prompt=repair_prompt,
+                response_model=RepairSynthesisResult, max_tokens=review_max_tokens,
             )
             _safe_print(_HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Step 3 (REWRITE) LLM OUTPUT:" + _R)
+            _safe_print(_HL + "[Review] Repair (rewrite) LLM OUTPUT:" + _R)
             _safe_print(_HL + _SEP + _R)
-            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2, default=str))
+            _safe_print(json.dumps(repair_result.model_dump() if hasattr(repair_result, "model_dump") else repair_result, ensure_ascii=False, indent=2, default=str))
             _safe_print(_HL + _SEP + _R + "\n")
-            fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
+            fs = repair_result if hasattr(repair_result, "suggestions") else RepairSynthesisResult(**(repair_result if isinstance(repair_result, dict) else {}))
             raw_suggestions = list(getattr(fs, "suggestions", []) or [])
             data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
             if _review_is_cancelled(review_id):
                 return
-            append_event({"type": "plan", "summary": "REWRITE: generating expert template.", "per_row_count": 0})
+            append_event({"type": "plan", "summary": "REWRITE: generating expert template.", "diagnosis_total": 0})
         else:
             unmatched = [r for r in (body.comparison_rows or []) if not r.matched]
             schema_lines, _ = _review_output_schema_lines(body)
@@ -1559,7 +1411,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                 diagnoses = [PerRowDiagnosis(row_index=0, root_cause="all matched", gt_questioned=False, section_index_suggestions=[0], micro_suggestion="Optional polish")]
                 if _review_is_cancelled(review_id):
                     return
-                append_event({"type": "plan", "summary": "All rows matched.", "per_row_count": 0})
+                append_event({"type": "plan", "summary": "All rows matched.", "diagnosis_total": 0})
             elif not unmatched:
                 if _review_is_cancelled(review_id):
                     return
@@ -1572,14 +1424,14 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                 to_analyze = unmatched[:30]
                 if _review_is_cancelled(review_id):
                     return
-                append_event({"type": "plan", "summary": f"Analyzing {len(to_analyze)} failed rows.", "per_row_count": len(to_analyze)})
+                append_event({"type": "plan", "summary": f"Analyzing {len(to_analyze)} failed rows.", "diagnosis_total": len(to_analyze)})
                 if _review_is_cancelled(review_id):
                     return
 
                 def analyze_one(row: ReviewComparisonRow) -> PerRowDiagnosis:
-                    prompt = _build_per_row_analysis_prompt(row, rules_block, schema_lines)
+                    prompt = _build_diagnosis_prompt(row, rules_block, schema_lines)
                     _safe_print("\n" + _HL + _SEP + _R)
-                    _safe_print(_HL + f"[Review] Step 2 Row {row.row_index} PROMPT SENT TO LLM:" + _R)
+                    _safe_print(_HL + f"[Review] Diagnosis row {row.row_index} PROMPT SENT TO LLM:" + _R)
                     _safe_print(_HL + _SEP + _R)
                     _safe_print(prompt)
                     _safe_print(_HL + _SEP + _R + "\n")
@@ -1590,7 +1442,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                     d = result if isinstance(result, PerRowDiagnosis) else PerRowDiagnosis(**(result if isinstance(result, dict) else result.model_dump()))
                     d.row_index = row.row_index
                     _safe_print(_HL + _SEP + _R)
-                    _safe_print(_HL + f"[Review] Step 2 Row {row.row_index} LLM OUTPUT:" + _R)
+                    _safe_print(_HL + f"[Review] Diagnosis row {row.row_index} LLM OUTPUT:" + _R)
                     _safe_print(_HL + _SEP + _R)
                     _safe_print(json.dumps(d.model_dump(), ensure_ascii=False, indent=2))
                     _safe_print(_HL + _SEP + _R + "\n")
@@ -1603,11 +1455,12 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                     for future in as_completed(futures):
                         if _review_is_cancelled(review_id):
                             break
-                        diagnoses_list.append(future.result())
+                        d_row = future.result()
+                        diagnoses_list.append(d_row)
                         done += 1
                         if _review_is_cancelled(review_id):
                             break
-                        append_event({"type": "step2_row", "row_index": future.result().row_index, "done": done, "total": len(to_analyze)})
+                        append_event({"type": "diagnosis_row", "row_index": d_row.row_index, "done": done, "total": len(to_analyze)})
                 if _review_is_cancelled(review_id):
                     with _review_jobs_lock:
                         if review_id in _review_jobs:
@@ -1616,28 +1469,28 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                 diagnoses_list.sort(key=lambda d: d.row_index)
                 diagnoses = diagnoses_list
 
-            # Step 3: synthesis
+            # Repair (synthesis from diagnoses, or polish when all matched)
             if _review_is_cancelled(review_id):
                 with _review_jobs_lock:
                     if review_id in _review_jobs:
                         _review_jobs[review_id]["status"] = "cancelled"
                 return
-            step3_prompt = _build_step3_synthesis_prompt(body, diagnoses)
+            repair_prompt = _build_repair_synthesis_prompt(body, diagnoses)
             _safe_print("\n" + _HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Step 3 (synthesis) PROMPT SENT TO LLM:" + _R)
+            _safe_print(_HL + "[Review] Repair (synthesis) PROMPT SENT TO LLM:" + _R)
             _safe_print(_HL + _SEP + _R)
-            _safe_print(step3_prompt)
+            _safe_print(repair_prompt)
             _safe_print(_HL + _SEP + _R + "\n")
-            step3_result, _ = llm_run_structured(
-                provider=provider, model=model, api_key=api_key, prompt=step3_prompt,
-                response_model=Step3SynthesisResult, max_tokens=review_max_tokens,
+            repair_result, _ = llm_run_structured(
+                provider=provider, model=model, api_key=api_key, prompt=repair_prompt,
+                response_model=RepairSynthesisResult, max_tokens=review_max_tokens,
             )
             _safe_print(_HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Step 3 (synthesis) LLM OUTPUT:" + _R)
+            _safe_print(_HL + "[Review] Repair (synthesis) LLM OUTPUT:" + _R)
             _safe_print(_HL + _SEP + _R)
-            _safe_print(json.dumps(step3_result.model_dump() if hasattr(step3_result, "model_dump") else step3_result, ensure_ascii=False, indent=2, default=str))
+            _safe_print(json.dumps(repair_result.model_dump() if hasattr(repair_result, "model_dump") else repair_result, ensure_ascii=False, indent=2, default=str))
             _safe_print(_HL + _SEP + _R + "\n")
-            fs = step3_result if hasattr(step3_result, "suggestions") else Step3SynthesisResult(**(step3_result if isinstance(step3_result, dict) else {}))
+            fs = repair_result if hasattr(repair_result, "suggestions") else RepairSynthesisResult(**(repair_result if isinstance(repair_result, dict) else {}))
             raw_suggestions = list(getattr(fs, "suggestions", []) or [])
             if all_matched and len(raw_suggestions) > 2:
                 raw_suggestions = raw_suggestions[:2]

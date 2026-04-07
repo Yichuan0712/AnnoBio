@@ -635,7 +635,7 @@ export function buildWorkflowCanvas(root) {
       run_results: streamSaved.run_results || [],
       comparison_rows: streamSaved.comparison_rows || [],
     };
-    let focusCount = 0, step2Total = 0, focusDone = 0, step2Done = 0;
+    let focusCount = 0, diagnosisTotal = 0, focusDone = 0, diagnosisDone = 0;
     for (const ev of events) {
       if (ev.type === 'error') {
         pendingReviews.delete(reviewNodeId);
@@ -649,21 +649,22 @@ export function buildWorkflowCanvas(root) {
         setReviewNodeProgress(getNodeById(reviewNodeId), 10);
       } else if (ev.type === 'plan') {
         focusCount = ev.focus_count != null ? Math.max(0, parseInt(ev.focus_count, 10)) : 0;
-        step2Total = ev.per_row_count != null ? Math.max(0, parseInt(ev.per_row_count, 10)) : 0;
+        const dt = ev.diagnosis_total != null ? ev.diagnosis_total : ev.per_row_count;
+        diagnosisTotal = dt != null ? Math.max(0, parseInt(dt, 10)) : 0;
         focusDone = 0;
-        step2Done = 0;
+        diagnosisDone = 0;
         streamSaved = { ...streamSaved, summary: ev.summary || '', suggestions: [], streamComplete: false, reviewProgress: 20 };
         setReviewNodeProgress(getNodeById(reviewNodeId), 20);
-      } else if (ev.type === 'step2_row') {
-        step2Done = ev.done != null ? parseInt(ev.done, 10) : step2Done + 1;
-        const total = ev.total != null ? parseInt(ev.total, 10) : step2Total;
-        const pct = total > 0 ? 20 + Math.floor(60 * step2Done / total) : 80;
+      } else if (ev.type === 'diagnosis_row' || ev.type === 'step2_row') {
+        diagnosisDone = ev.done != null ? parseInt(ev.done, 10) : diagnosisDone + 1;
+        const total = ev.total != null ? parseInt(ev.total, 10) : diagnosisTotal;
+        const pct = total > 0 ? 20 + Math.floor(60 * diagnosisDone / total) : 80;
         setReviewNodeProgress(getNodeById(reviewNodeId), pct);
         streamSaved.reviewProgress = pct;
       } else if (ev.type === 'suggestions' && Array.isArray(ev.suggestions) && ev.suggestions.length) {
         streamSaved.suggestions = (streamSaved.suggestions || []).concat(ev.suggestions);
         focusDone += 1;
-        const pct = focusCount > 0 ? 20 + (80 * focusDone / focusCount) : (step2Total > 0 ? 85 : 90);
+        const pct = focusCount > 0 ? 20 + (80 * focusDone / focusCount) : (diagnosisTotal > 0 ? 85 : 90);
         setReviewNodeProgress(getNodeById(reviewNodeId), pct);
       } else if (ev.type === 'data_refinement' && Array.isArray(ev.data_refinement)) {
         streamSaved.data_refinement = ev.data_refinement;
