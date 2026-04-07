@@ -1,27 +1,110 @@
 # Editor / IDE
 *.code-workspace
-.cursor/
+.idea/
+*.swp
+*.swo
+*~
 
-# Node / Electron
+# Cursor: 忽略本地状态；若使用团队规则可提交 .cursor/rules/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+
+# Node / npm / yarn / pnpm
 node_modules/
+jspm_packages/
+.npm
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+.yarn-integrity
+.eslintcache
+*.tsbuildinfo
+typings/
+
+# Node diagnostic reports
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Pack
+*.tgz
+
+# Vite / Electron Forge
 .vite/
 app/out/
 app/dist/
 
-# Env / secrets
+# electron-builder（落在 app 目录）
+app/builder-effective-config.yaml
+app/builder-debug.yml
+
+# 通用前端/工具缓存（若在其他子目录使用）
+.cache/
+.parcel-cache/
+.webpack/
+.next/
+.nuxt/
+.vuepress/dist
+.serverless/
+.fusebox/
+.dynamodb/
+
+# Env / secrets（允许提交示例 env）
 .env
 .env.*
+!.env.example
 
 # Python
 .venv/
 backend/.venv/
 backend/data/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+*.egg-info/
+*.egg
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.pytype/
+pip-log.txt
+pip-delete-this-directory.txt
+backend/build/
+backend/dist/
 
 # Logs
+logs/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime / 测试覆盖率
+pids/
+*.pid
+*.seed
+*.pid.lock
+lib-cov/
+coverage/
+*.lcov
+.nyc_output/
 
 # OS
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.Zone.Identifier
+
+# 本地覆盖配置
+*.local
