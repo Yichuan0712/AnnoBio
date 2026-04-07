@@ -155,11 +155,6 @@ const createWindow = () => {
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`)
     );
   }
-
-  // Open the DevTools only when not packaged (e.g. npm run start).
-  if (!app.isPackaged) {
-    mainWindow.webContents.openDevTools();
-  }
 };
 
 // Project file IPC
