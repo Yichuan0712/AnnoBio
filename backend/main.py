@@ -183,7 +183,10 @@ class ReviewComparisonRow(BaseModel):
     matched: bool
     run_output: dict = Field(default_factory=dict, description="Model output for this row")
     expected: str = Field(default="", description="Expected value(s) from ground truth")
-    comparison_types: list[str] | None = Field(default=None, description="Per-rule comparison: e.g. ['field_key: Exact match', 'field_key: Result contains ground truth']")
+    comparison_types: list[str] | None = Field(
+        default=None,
+        description="Per-rule comparison labels from the UI, e.g. ['field_key: String match (Contains, Ignore case)', 'field_key: Numeric equality']",
+    )
     comment: str | None = Field(default=None, description="User comment if any")
     row_input: dict | None = Field(default=None, description="Input key-values used to fill the prompt for this row; used during screening when LLM requests it")
 
@@ -1101,12 +1104,10 @@ def _review_all_matched(body: ReviewRequest) -> bool:
 RouteDecision = Literal["REWRITE", "ANALYZE"]
 
 
-# Comparison rule labels (must match frontend MATCH_TYPE_LABELS) and their definitions for LLM prompts.
+# Comparison rule labels (align with frontend: matchType + optional matchFlags in parentheses).
 REVIEW_COMPARISON_RULES_BLOCK = """
-- **Exact match**: Model output must equal the expected value exactly (after trimming). No extra or missing characters.
-- **Result contains ground truth**: The model output string must contain the expected value (expected is a substring of run output).
-- **Ground truth contains result**: The expected value string must contain the model output (run output is a substring of expected).
-- **Numeric equality**: Both sides are normalized and compared as numbers; they must be numerically equal.
+- **String match**: Compare as text after any listed normalizations. Parentheses list active options for that field, e.g. **Contains** (mutual substring: either side contains the other), **Ignore case**, **Ignore symbols**, **Ignore whitespace**. If none are listed, require exact equality after trim only.
+- **Numeric equality**: Both sides are trimmed, then parsed as numbers when possible. Parentheses describe the mode: exact **==**; **abs ε≤x** means |a-b|≤x; **rel≤r** means |a-b|≤r×max(|a|,|b|); **N dp** means round both to N decimal places (half-up) then require equality. If parsing fails, the trimmed strings are compared for equality.
 """
 
 
@@ -1219,8 +1220,8 @@ def _build_diagnosis_prompt(row: ReviewComparisonRow, rules_block: str, schema_l
         lines.append("")
     lines.extend([
         "## Task",
-        "1. Root cause: Why did the model fail? (unclear instruction, weak constraint, misleading input, etc.)",
-        "2. GT questioned: If the model output seems more plausible than expected, set gt_questioned=true and explain in gt_reason.",
+        "1. Root cause: Why did the model fail? Prefer prompt/extraction issues first: missing or wrong output fields vs schema, empty values where GT expects content, extra keys, wrong types, format not matching comparison rules—then unclear instruction, weak constraint, or misleading input.",
+        "2. GT questioned: Set gt_questioned=true ONLY if expected/GT is internally inconsistent, contradicts the row input, or is clearly mislabeled—not merely because run output differs. Mismatch due to missing/extra/wrong-field extraction => gt_questioned=false.",
         "3. Micro suggestion: Give a brief improvement direction for this row (do NOT write exact new_sentence; describe what to clarify).",
         "",
         "Respond with JSON: {\"row_index\": <0-based>, \"root_cause\": \"...\", \"gt_questioned\": false, \"gt_reason\": null, \"section_index_suggestions\": [0, 1], \"micro_suggestion\": \"...\"}.",
@@ -1240,7 +1241,7 @@ def _build_repair_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDi
         "## Task",
         "1. Merge similar root causes (e.g. 20 rows all 'cannot identify negative sentiment' -> one suggestion).",
         "2. Identify global logic gaps.",
-        "3. Output: suggestions (old_sentence -> new_sentence) and data_refinement (rows where GT may be wrong).",
+        "3. Output: suggestions (old_sentence -> new_sentence) and data_refinement ONLY for rows where diagnosis explicitly questioned GT (gt_questioned=true), not for extraction or prompt issues.",
         "4. row_indices (optional): Only include when a suggestion clearly targets specific failed rows. Use 0-based indices (Row 1 -> 0). Omit or use [] when the suggestion is general.",
         "",
         "**Do NOT put correct/expected answers into new_sentence.** Improve instructions, criteria, or wording only.",
@@ -1276,10 +1277,10 @@ def _build_repair_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDi
         lines.append("## Constraints")
         lines.append("Do NOT rename output schema field keys or section names.")
         lines.append("")
-    lines.append("## Ground truth issues")
+    lines.append("## Ground truth issues (rare)")
     lines.append(
-        "For rows where gt_questioned=true, add one data_refinement item with row_indices (1-based, from the diagnoses above) and reason. "
-        "Do not add data_refinement for prompt/extraction issues."
+        "Add data_refinement only when gt_questioned=true in the diagnoses (evidence that labels/expected values are wrong). "
+        "If failures are due to model output shape, missing fields, or format vs comparison rules, omit data_refinement entirely."
     )
     lines.append("")
     lines.append(

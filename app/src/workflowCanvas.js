@@ -16,7 +16,18 @@ import {
   parseNumericSuggestionId,
   syncReviewSuggestionSeqNext,
 } from './reviewSuggestionIds.js';
-import { openScoreDetailModal, runReviewFromScore, getScoreExportData, getMatchFlags, normalizeForMatch } from './scoreDetailModal.js';
+import {
+  openScoreDetailModal,
+  runReviewFromScore,
+  getScoreExportData,
+  canonicalizeMatchFlags,
+  getMatchFlags,
+  legacyMatchTypeWasContains,
+  migrateLegacyMatchType,
+  normalizeForMatch,
+  numericPairMatches,
+  stringsMatchContains,
+} from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { showAlert } from './alertModal.js';
@@ -42,18 +53,34 @@ const EDGE_TYPE_RUN_TO_SCORE = 'run-to-score';
 const EDGE_TYPE_SCORE_TO_PROMPT_REVIEW = 'score-to-prompt-review';
 const EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT = 'prompt-review-to-prompt';
 
-/** Normalize score mapping to rules: [ { outputKey, gtColumns: string[], matchType } ]. Migrate from old groups/flat format. */
+const DEFAULT_SCORE_MATCH_FLAGS = {
+  contains: false,
+  ignoreCase: false,
+  ignoreSymbols: false,
+  ignoreWhitespace: false,
+  numericMode: 'exact',
+  numericAbsEpsilon: 0,
+  numericRelEpsilon: 0,
+  numericDecimalPlaces: 2,
+};
+
+/** Normalize score mapping to rules: [ { outputKey, gtColumns, matchType, matchFlags } ]. Migrate from old groups/flat format. */
 function normalizeScoreMappingToRules(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return [];
   const first = arr[0];
   if (first && typeof first === 'object' && Array.isArray(first.gtColumns)) {
     return arr.map((r) => {
-      const f = r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {};
+      const raw = r.matchType || 'exact';
+      const baseF = r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {};
       return {
         outputKey: r.outputKey || '',
         gtColumns: Array.isArray(r.gtColumns) ? r.gtColumns.filter(Boolean) : [],
-        matchType: r.matchType || 'exact',
-        matchFlags: { ignoreCase: !!(f.ignoreCase), ignoreSymbols: !!(f.ignoreSymbols), ignoreWhitespace: !!(f.ignoreWhitespace) },
+        matchType: migrateLegacyMatchType(raw),
+        matchFlags: {
+          ...DEFAULT_SCORE_MATCH_FLAGS,
+          ...baseF,
+          contains: !!(baseF.contains || legacyMatchTypeWasContains(raw)),
+        },
       };
     }).filter((r) => r.outputKey || r.gtColumns.length > 0);
   }
@@ -73,10 +100,27 @@ function normalizeScoreMappingToRules(arr) {
   }
   const byKey = {};
   pairs.forEach((p) => {
-    if (!byKey[p.outputKey]) byKey[p.outputKey] = { outputKey: p.outputKey, gtColumns: [], matchType: p.matchType || 'exact' };
+    const raw = p.matchType || 'exact';
+    if (!byKey[p.outputKey]) {
+      byKey[p.outputKey] = {
+        outputKey: p.outputKey,
+        gtColumns: [],
+        matchType: migrateLegacyMatchType(raw),
+        anyContains: false,
+      };
+    }
+    if (legacyMatchTypeWasContains(raw)) byKey[p.outputKey].anyContains = true;
+    byKey[p.outputKey].matchType = migrateLegacyMatchType(raw);
     if (p.gtColumn && !byKey[p.outputKey].gtColumns.includes(p.gtColumn)) byKey[p.outputKey].gtColumns.push(p.gtColumn);
   });
-  return Object.values(byKey).filter((r) => r.outputKey || r.gtColumns.length > 0);
+  return Object.values(byKey)
+    .filter((r) => r.outputKey || r.gtColumns.length > 0)
+    .map((r) => ({
+      outputKey: r.outputKey,
+      gtColumns: r.gtColumns,
+      matchType: r.matchType,
+      matchFlags: { ...DEFAULT_SCORE_MATCH_FLAGS, contains: r.anyContains },
+    }));
 }
 
 function ensureScoreGroupOps(data, children) {
@@ -100,13 +144,12 @@ function parseScoreMappingToTree(data) {
     return { type: 'group', ops, children };
   }
   const rules = normalizeScoreMappingToRules(Array.isArray(data) ? data : []);
-  const defaultFlags = { ignoreCase: false, ignoreSymbols: false, ignoreWhitespace: false };
   const children = rules.map((r) => ({
     type: 'rule',
     outputKey: r.outputKey || '',
     gtColumns: (r.gtColumns || []).slice(),
-    matchType: r.matchType || 'exact',
-    matchFlags: r.matchFlags && typeof r.matchFlags === 'object' ? { ...r.matchFlags } : defaultFlags,
+    matchType: migrateLegacyMatchType(r.matchType || 'exact'),
+    matchFlags: { ...DEFAULT_SCORE_MATCH_FLAGS, ...(r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {}) },
   }));
   const ops = Array(Math.max(0, children.length - 1)).fill('AND');
   return { type: 'group', ops, children };
@@ -120,13 +163,15 @@ function normalizeScoreGroupChild(c) {
 
 function normalizeScoreChild(c) {
   if (!c || c.type === 'rule') {
-    const f = c && c.matchFlags && typeof c.matchFlags === 'object' ? c.matchFlags : {};
+    const rawMt = (c && c.matchType) || 'exact';
+    const f = { ...DEFAULT_SCORE_MATCH_FLAGS, ...((c && c.matchFlags && typeof c.matchFlags === 'object') ? c.matchFlags : {}) };
+    if (legacyMatchTypeWasContains(rawMt)) f.contains = true;
     return {
       type: 'rule',
       outputKey: (c && c.outputKey) || '',
       gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
-      matchType: (c && c.matchType) || 'exact',
-      matchFlags: { ignoreCase: !!(f.ignoreCase), ignoreSymbols: !!(f.ignoreSymbols), ignoreWhitespace: !!(f.ignoreWhitespace) },
+      matchType: migrateLegacyMatchType(rawMt),
+      matchFlags: canonicalizeMatchFlags(f),
     };
   }
   return normalizeScoreGroupChild(c);
@@ -203,24 +248,22 @@ function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId) {
     const runResult = resultsByIndex.get(runRowIndex) || null;
     const runValRaw = getRunValue(runResult, rule.outputKey, runWs, outputFields);
     const gtValsRaw = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
-    const matchType = rule.matchType || 'exact';
+    const matchType = migrateLegacyMatchType(rule.matchType);
     const flags = getMatchFlags(rule);
     if (matchType === 'numeric') {
       const runNorm = normalizeForMatch(runValRaw, flags, true);
-      const runNum = parseFloat(runNorm);
       return gtValsRaw.some((g) => {
         const gtNorm = normalizeForMatch(g, flags, true);
-        const gtNum = parseFloat(gtNorm);
-        if (Number.isFinite(runNum) && Number.isFinite(gtNum)) return runNum === gtNum;
-        return runNorm === gtNorm;
+        return numericPairMatches(runNorm, gtNorm, flags);
       });
     }
     const runVal = normalizeForMatch(runValRaw, flags, false);
     return gtValsRaw.some((g) => {
       const gtVal = normalizeForMatch(g, flags, false);
-      if (matchType === 'exact') return runVal === gtVal;
-      if (matchType === 'contains') return runVal.includes(gtVal);
-      if (matchType === 'gt-contains-run') return gtVal.includes(runVal);
+      if (matchType === 'exact') {
+        if (flags.contains) return stringsMatchContains(runVal, gtVal);
+        return runVal === gtVal;
+      }
       return runVal === gtVal;
     });
   };
@@ -246,66 +289,159 @@ function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId) {
   const gtContent = gtId ? datasetContentByNodeId.get(gtId) : null;
   const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
   const gtSafe = gtContent ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
-  const gtRows = gtSafe.rows || [];
   let comments = {};
   try {
     comments = JSON.parse(scoreNode.dataset.scoreResultComments || '{}');
   } catch (_) {}
-  /** resultsByIndex: key = result index (0..len-1), value = result. 每个输出都参与比较。 */
+  let excludedFromScoring = {};
+  try {
+    excludedFromScoring = JSON.parse(scoreNode.dataset.scoreRowExcludedFromScoring || '{}');
+  } catch (_) {}
+
+  const rulesFlat = flattenScoreTreeToRules(scoreRoot);
+  const gtColsUsed = [];
+  const outputKeysUsed = [];
+  for (const rule of rulesFlat) {
+    for (const c of (rule.gtColumns || [])) {
+      if (c && !gtColsUsed.includes(c)) gtColsUsed.push(c);
+    }
+    const k = (rule.outputKey || '').trim();
+    if (k && !outputKeysUsed.includes(k)) outputKeysUsed.push(k);
+  }
+  const dedupeGt = (gtC) => {
+    if (!gtColsUsed.length) return gtC;
+    const rows = gtC.rows || [];
+    const seen = new Set();
+    const dedupRows = [];
+    for (let i = 0; i < rows.length; i++) {
+      const key = JSON.stringify(gtColsUsed.map((col) => getGtValue(gtC, i, col)));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedupRows.push(rows[i]);
+    }
+    return { ...gtC, rows: dedupRows };
+  };
+  const dedupeRunResults = (resList) => {
+    if (!outputKeysUsed.length) return resList || [];
+    const seen = new Set();
+    const out = [];
+    for (const res of resList || []) {
+      const key = JSON.stringify(outputKeysUsed.map((k) => getRunValue(res, k, runWsSafe, outputFields)));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(res);
+    }
+    return out;
+  };
+
+  const gtDeduped = dedupeGt(gtSafe);
+  const gtRows = gtDeduped.rows || [];
+  const resultsNoErr = (results || []).filter((r) => r && !r.error);
+  const dedupedResults = dedupeRunResults(resultsNoErr);
+
   const resultsByIndex = new Map();
-  (results || []).forEach((r, i) => resultsByIndex.set(i, r));
-  /** Same logic as Score table Match column: full tree with matchType + matchFlags. */
+  (dedupedResults || []).forEach((res) => { resultsByIndex.set(res.row_index, res); });
+
+  const nonErrorResults = dedupedResults || [];
+  const runRowIndices = [...new Set(nonErrorResults.map((r) => r.row_index))];
+  const inputRowCount = runWsSafe?.rows?.length ?? 0;
+  const gtCount = gtRows.length;
+  const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
+  const runCount = Math.max(inputRowCount, maxRunRowIndex + 1);
+  const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
+  const gtUsed = new Array(gtCount).fill(false);
+  const pairs = [];
+  for (const i of runRowIndices) {
+    for (let j = 0; j < gtCount; j++) {
+      const scoreN = countMatchingRules(scoreRoot, i, j, resultsByIndex, runWsSafe, outputFields, gtDeduped);
+      if (scoreN > 0) pairs.push({ i, j, score: scoreN });
+    }
+  }
+  pairs.sort((a, b) => b.score - a.score);
+  for (const { i, j } of pairs) {
+    if (runToGt[i] >= 0 || gtUsed[j]) continue;
+    runToGt[i] = j;
+    gtUsed[j] = true;
+  }
+
   function evaluateNodeLocal(node, runRowIndex, gtRowIndex) {
     if (!node) return false;
     if (node.type === 'rule') {
-      return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWsSafe, outputFields, gtSafe);
+      return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWsSafe, outputFields, gtDeduped);
     }
     if (node.type === 'group' && Array.isArray(node.children)) {
       if (node.children.length === 0) return false;
       const ops = node.ops || Array(Math.max(0, node.children.length - 1)).fill('AND');
-      let r = evaluateNodeLocal(node.children[0], runRowIndex, gtRowIndex);
+      let rr = evaluateNodeLocal(node.children[0], runRowIndex, gtRowIndex);
       for (let c = 1; c < node.children.length; c++) {
         const next = evaluateNodeLocal(node.children[c], runRowIndex, gtRowIndex);
-        r = (ops[c - 1] === 'OR') ? (r || next) : (r && next);
+        rr = (ops[c - 1] === 'OR') ? (rr || next) : (rr && next);
       }
-      return r;
+      return rr;
     }
     return false;
   }
-  const MATCH_TYPE_LABELS = { exact: 'Exact match', contains: 'Result contains ground truth', 'gt-contains-run': 'Ground truth contains result', numeric: 'Numeric equality' };
+
+  const MATCH_TYPE_LABELS = { exact: 'String match', numeric: 'Numeric equality' };
   const rows = [];
-  for (let i = 0; i < (results || []).length; i++) {
-    const r = results[i];
-    const inpIdx = r?.input_row_index ?? r?.row_index ?? i;
-    const gtRowIndex = inpIdx >= 0 && inpIdx < gtRows.length ? inpIdx : -1;
+  let outRowIdx = 0;
+  for (const r of dedupedResults) {
+    const runR = r.row_index;
+    const inpIdx = r.input_row_index ?? runR;
+    const jPaired = runR >= 0 && runR < runToGt.length ? runToGt[runR] : -1;
+    const modalKey = jPaired >= 0 ? String(jPaired) : `run:${runR}`;
+    if (excludedFromScoring[modalKey]) continue;
+
     const runOutput = r?.output && typeof r.output === 'object' ? r.output : {};
     const expectedParts = [];
     const comparisonTypes = [];
-    if (gtRowIndex >= 0) {
-      const rulesFlat = flattenScoreTreeToRules(scoreRoot);
+    const gtIdxForRules = jPaired >= 0 ? jPaired : -1;
+    if (gtIdxForRules >= 0) {
       for (const rule of rulesFlat) {
-        const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtSafe, gtRowIndex, col));
+        const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtDeduped, gtIdxForRules, col));
         expectedParts.push(`${rule.outputKey}: ${gtVals.join(' | ') || '—'}`);
-        const label = MATCH_TYPE_LABELS[rule.matchType || 'exact'] || rule.matchType || 'Exact match';
+        const mt = migrateLegacyMatchType(rule.matchType);
+        let label = MATCH_TYPE_LABELS[mt] || rule.matchType || 'String match';
+        if (mt === 'exact') {
+          const fl = getMatchFlags(rule);
+          const normParts = [];
+          if (fl.contains) normParts.push('Contains');
+          if (fl.ignoreCase) normParts.push('Ignore case');
+          if (fl.ignoreSymbols) normParts.push('Ignore symbols');
+          if (fl.ignoreWhitespace) normParts.push('Ignore whitespace');
+          if (normParts.length) label += ` (${normParts.join(', ')})`;
+        } else if (mt === 'numeric') {
+          const fl = getMatchFlags(rule);
+          if (fl.numericMode === 'abs') label += ` (abs ε≤${fl.numericAbsEpsilon})`;
+          else if (fl.numericMode === 'rel') label += ` (rel≤${fl.numericRelEpsilon})`;
+          else if (fl.numericMode === 'decimals') label += ` (${fl.numericDecimalPlaces} dp)`;
+        }
         comparisonTypes.push(`${rule.outputKey}: ${label}`);
       }
     }
-    const isFullMatch = gtRowIndex >= 0 && evaluateNodeLocal(scoreRoot, i, gtRowIndex);
-    const commentKey = gtRowIndex >= 0 ? `${gtRowIndex}_${i}` : 'run:' + i;
+    const isFullMatch = gtIdxForRules >= 0 && evaluateNodeLocal(scoreRoot, runR, gtIdxForRules);
+    const legacyCommentKey = gtIdxForRules >= 0 ? `${gtIdxForRules}_${outRowIdx}` : `run:${outRowIdx}`;
+    const comment = comments[modalKey]
+      ?? comments[legacyCommentKey]
+      ?? (gtIdxForRules >= 0 ? comments[String(gtIdxForRules)] : null)
+      ?? comments[`run:${runR}`]
+      ?? null;
     const wsRow = runWsSafe.rows && runWsSafe.rows[inpIdx] ? runWsSafe.rows[inpIdx] : [];
-    const headers = runWsSafe.headers || [];
-    const row_input = headers.length
-      ? Object.fromEntries(headers.map((h, j) => [String(h).trim(), wsRow[j] ?? '']))
+    const hdrs = runWsSafe.headers || [];
+    const row_input = hdrs.length
+      ? Object.fromEntries(hdrs.map((h, jj) => [String(h).trim(), wsRow[jj] ?? '']))
       : null;
+    const rawIndex = (results || []).indexOf(r);
     rows.push({
-      row_index: i,
+      row_index: rawIndex >= 0 ? rawIndex : outRowIdx,
       matched: isFullMatch,
       run_output: runOutput,
       expected: expectedParts.length ? expectedParts.join('; ') : '—',
       comparison_types: comparisonTypes.length ? comparisonTypes : null,
-      comment: comments[commentKey] ?? comments[String(gtRowIndex)] ?? comments['run:' + i] ?? null,
+      comment,
       row_input: row_input,
     });
+    outRowIdx++;
   }
   return rows;
 }
@@ -4142,6 +4278,11 @@ export function buildWorkflowCanvas(root) {
         } catch (_) {}
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const reviewCredentialId = (node.dataset.reviewCredentialId || '').trim() || undefined;
+        const scoreRowExcludedFromScoring = (node.dataset.scoreRowExcludedFromScoring || '').trim();
+        let scoreRowExcludedFromScoringObj;
+        try {
+          scoreRowExcludedFromScoringObj = scoreRowExcludedFromScoring ? JSON.parse(scoreRowExcludedFromScoring) : undefined;
+        } catch (_) {}
         return {
           type: 'score',
           nodeId,
@@ -4151,6 +4292,7 @@ export function buildWorkflowCanvas(root) {
           scoreGroundTruthId,
           scoreMapping,
           scoreResultComments: scoreResultCommentsObj,
+          scoreRowExcludedFromScoring: scoreRowExcludedFromScoringObj,
           reviewResult: reviewResult || undefined,
           reviewCredentialId,
         };
@@ -4296,6 +4438,11 @@ export function buildWorkflowCanvas(root) {
         if (n.scoreResultComments && typeof n.scoreResultComments === 'object') {
           try {
             scoreNode.dataset.scoreResultComments = JSON.stringify(n.scoreResultComments);
+          } catch (_) {}
+        }
+        if (n.scoreRowExcludedFromScoring && typeof n.scoreRowExcludedFromScoring === 'object') {
+          try {
+            scoreNode.dataset.scoreRowExcludedFromScoring = JSON.stringify(n.scoreRowExcludedFromScoring);
           } catch (_) {}
         }
         if (n.reviewResult && typeof n.reviewResult === 'string') {

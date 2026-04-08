@@ -3281,6 +3281,8 @@
   border-left: 4px solid var(--text-muted);
   width: 3em;
   min-width: 3em;
+  text-align: center;
+  vertical-align: middle;
 }
 
 .score-detail-results-table thead .score-detail-results-th--match {
@@ -3306,6 +3308,23 @@
 
 .score-detail-results-tr--run-only .score-detail-results-td--match {
   color: var(--danger, #c00);
+}
+
+.score-detail-results-th--review,
+.score-detail-results-td--review {
+  width: 52px;
+  min-width: 52px;
+  max-width: 64px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.score-detail-results-review-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  cursor: pointer;
 }
 
 .score-detail-results-th--comment,

@@ -19,35 +19,109 @@ export function comparisonRowIsMatched(row) {
   return false;
 }
 
-/** Comparison type (single choice) */
+/** Comparison type (single choice). Legacy `contains` / `gt-contains-run` become String match + matchFlags.contains. */
 const MATCH_TYPES = [
-  { value: 'exact', label: 'Exact match' },
-  { value: 'contains', label: 'Result contains ground truth' },
-  { value: 'gt-contains-run', label: 'Ground truth contains result' },
+  { value: 'exact', label: 'String match' },
   { value: 'numeric', label: 'Numeric equality' },
 ];
 
-/** Normalization options (multi-select; not applied for numeric, only trim before compare) */
+/** String match option flags (multi-select; ignored when comparison type is numeric) */
 const MATCH_FLAGS = [
+  { key: 'contains', label: 'Contains' },
   { key: 'ignoreCase', label: 'Ignore case' },
   { key: 'ignoreSymbols', label: 'Ignore symbols' },
   { key: 'ignoreWhitespace', label: 'Ignore whitespace' },
 ];
 
-const DEFAULT_MATCH_FLAGS = { ignoreCase: false, ignoreSymbols: false, ignoreWhitespace: false };
+const DEFAULT_MATCH_FLAGS = {
+  contains: false,
+  ignoreCase: false,
+  ignoreSymbols: false,
+  ignoreWhitespace: false,
+  numericMode: 'exact',
+  numericAbsEpsilon: 0,
+  numericRelEpsilon: 0,
+  numericDecimalPlaces: 2,
+};
+
+/** Numeric compare mode (only when matchType === 'numeric'); single choice in the rule editor. */
+const NUMERIC_COMPARE_MODES = [
+  { value: 'exact', label: 'Exact: values must be numerically equal' },
+  { value: 'abs', label: 'Absolute margin: |result - GT| ≤ ε' },
+  { value: 'rel', label: 'Relative margin: proportional difference (r)' },
+  { value: 'decimals', label: 'Decimal rounding: equal after rounding to N places' },
+];
 
 /** Session-only: (outputKey + '\t' + gtColumn) -> { matchType, matchFlags }. Not persisted. */
 const ruleEditorMemory = {};
 /** Session-only: ordered list of top-level items { type: 'rule', ... } | { type: 'group', ops, children }. Preserves original order. */
 const ruleEditorMemoryOrdered = [];
 
+export function canonicalizeMatchFlags(f) {
+  const merged = { ...DEFAULT_MATCH_FLAGS, ...(f && typeof f === 'object' ? f : {}) };
+  const mode = ['exact', 'abs', 'rel', 'decimals'].includes(merged.numericMode) ? merged.numericMode : 'exact';
+  let absE = Number(merged.numericAbsEpsilon);
+  if (!Number.isFinite(absE) || absE < 0) absE = 0;
+  let relE = Number(merged.numericRelEpsilon);
+  if (!Number.isFinite(relE) || relE < 0) relE = 0;
+  let dec = Math.floor(Number(merged.numericDecimalPlaces));
+  if (!Number.isFinite(dec)) dec = 2;
+  dec = Math.max(0, Math.min(20, dec));
+  return {
+    contains: !!merged.contains,
+    ignoreCase: !!merged.ignoreCase,
+    ignoreSymbols: !!merged.ignoreSymbols,
+    ignoreWhitespace: !!merged.ignoreWhitespace,
+    numericMode: mode,
+    numericAbsEpsilon: absE,
+    numericRelEpsilon: relE,
+    numericDecimalPlaces: dec,
+  };
+}
+
 function getMatchFlags(rule) {
   const f = rule && rule.matchFlags;
-  return {
-    ignoreCase: !!(f && f.ignoreCase),
-    ignoreSymbols: !!(f && f.ignoreSymbols),
-    ignoreWhitespace: !!(f && f.ignoreWhitespace),
-  };
+  return canonicalizeMatchFlags(f);
+}
+
+/** Round half-up to `places` decimal places (0-20). */
+function roundToDecimals(n, places) {
+  const p = Math.max(0, Math.min(20, Math.floor(places)));
+  const m = 10 ** p;
+  return Math.round(n * m) / m;
+}
+
+/**
+ * Compare two trimmed string forms of numbers per numericMode (and parameters) on flags.
+ * If either side is not a finite number, falls back to string equality.
+ */
+export function numericPairMatches(runTrimmedStr, gtTrimmedStr, flags) {
+  const runNorm = runTrimmedStr == null ? '' : String(runTrimmedStr).trim();
+  const gtNorm = gtTrimmedStr == null ? '' : String(gtTrimmedStr).trim();
+  const runNum = parseFloat(runNorm);
+  const gtNum = parseFloat(gtNorm);
+  if (!Number.isFinite(runNum) || !Number.isFinite(gtNum)) {
+    return runNorm === gtNorm;
+  }
+  const mode = flags.numericMode || 'exact';
+  if (mode === 'abs') {
+    const eps = Number(flags.numericAbsEpsilon);
+    const e = Number.isFinite(eps) && eps >= 0 ? eps : 0;
+    return Math.abs(runNum - gtNum) <= e;
+  }
+  if (mode === 'rel') {
+    const rel = Number(flags.numericRelEpsilon);
+    const r = Number.isFinite(rel) && rel >= 0 ? rel : 0;
+    const denom = Math.max(Math.abs(runNum), Math.abs(gtNum), 1e-15);
+    return Math.abs(runNum - gtNum) / denom <= r;
+  }
+  if (mode === 'decimals') {
+    let p = Math.floor(Number(flags.numericDecimalPlaces));
+    if (!Number.isFinite(p)) p = 2;
+    p = Math.max(0, Math.min(20, p));
+    return roundToDecimals(runNum, p) === roundToDecimals(gtNum, p);
+  }
+  return runNum === gtNum;
 }
 
 /** 对字符串应用规范化（用于比较前）；numeric 时不使用 flags，仅 trim 后按数值比较。 */
@@ -58,6 +132,29 @@ function normalizeForMatch(str, flags, isNumeric) {
   if (flags.ignoreCase) s = s.toLowerCase();
   if (flags.ignoreSymbols) s = s.replace(/[^\w\s]/gu, '').replace(/\s+/g, ' ').trim();
   return s;
+}
+
+/** Map deprecated comparison types to current values (`contains` / `gt-contains-run` → `exact` + flag). */
+export function migrateLegacyMatchType(matchType) {
+  if (matchType === 'contains' || matchType === 'gt-contains-run') return 'exact';
+  return matchType || 'exact';
+}
+
+/** True if legacy matchType used substring rules (now matchFlags.contains). */
+export function legacyMatchTypeWasContains(matchType) {
+  return matchType === 'contains' || matchType === 'gt-contains-run';
+}
+
+/**
+ * Mutual substring match after normalization (replaces "result contains GT" OR "GT contains result").
+ * Empty vs empty matches; one empty vs non-empty does not.
+ */
+export function stringsMatchContains(runVal, gtVal) {
+  const r = runVal == null ? '' : String(runVal);
+  const g = gtVal == null ? '' : String(gtVal);
+  if (r.length === 0 && g.length === 0) return true;
+  if (r.length === 0 || g.length === 0) return false;
+  return r.includes(g) || g.includes(r);
 }
 
 export { getMatchFlags, normalizeForMatch };
@@ -71,6 +168,16 @@ function escapeHtml(str) {
 function escapeAttr(str) {
   const s = String(str ?? '');
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+/** Parse a non-negative number from rule-editor text (decimals, optional single comma as decimal separator). */
+function parseFlexibleNonNegativeNumber(raw) {
+  let s = String(raw == null ? '' : raw).trim().replace(/\s+/g, '');
+  if (s === '') return NaN;
+  if (/^\d+,\d+$/.test(s)) s = s.replace(',', '.');
+  const n = parseFloat(s);
+  if (!Number.isFinite(n)) return NaN;
+  return n;
 }
 
 /**
@@ -182,11 +289,20 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!Array.isArray(arr) || arr.length === 0) return [];
     const first = arr[0];
     if (first && typeof first === 'object' && Array.isArray(first.gtColumns)) {
-      return arr.map((r) => ({
-        outputKey: r.outputKey || '',
-        gtColumns: Array.isArray(r.gtColumns) ? r.gtColumns.filter(Boolean) : [],
-        matchType: r.matchType || 'exact',
-      })).filter((r) => r.outputKey || r.gtColumns.length > 0);
+      return arr.map((r) => {
+        const raw = r.matchType || 'exact';
+        const baseF = r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {};
+        return {
+          outputKey: r.outputKey || '',
+          gtColumns: Array.isArray(r.gtColumns) ? r.gtColumns.filter(Boolean) : [],
+          matchType: migrateLegacyMatchType(raw),
+          matchFlags: {
+            ...DEFAULT_MATCH_FLAGS,
+            ...baseF,
+            contains: !!(baseF.contains || legacyMatchTypeWasContains(raw)),
+          },
+        };
+      }).filter((r) => r.outputKey || r.gtColumns.length > 0);
     }
     const pairs = [];
     if (first && first.outputKey !== undefined && !first.rules) {
@@ -204,10 +320,27 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
     const byKey = {};
     pairs.forEach((p) => {
-      if (!byKey[p.outputKey]) byKey[p.outputKey] = { outputKey: p.outputKey, gtColumns: [], matchType: p.matchType || 'exact' };
+      const raw = p.matchType || 'exact';
+      if (!byKey[p.outputKey]) {
+        byKey[p.outputKey] = {
+          outputKey: p.outputKey,
+          gtColumns: [],
+          matchType: migrateLegacyMatchType(raw),
+          anyContains: false,
+        };
+      }
+      if (legacyMatchTypeWasContains(raw)) byKey[p.outputKey].anyContains = true;
+      byKey[p.outputKey].matchType = migrateLegacyMatchType(raw);
       if (p.gtColumn && !byKey[p.outputKey].gtColumns.includes(p.gtColumn)) byKey[p.outputKey].gtColumns.push(p.gtColumn);
     });
-    return Object.values(byKey).filter((r) => r.outputKey || r.gtColumns.length > 0);
+    return Object.values(byKey)
+      .filter((r) => r.outputKey || r.gtColumns.length > 0)
+      .map((r) => ({
+        outputKey: r.outputKey,
+        gtColumns: r.gtColumns,
+        matchType: r.matchType,
+        matchFlags: { ...DEFAULT_MATCH_FLAGS, contains: r.anyContains },
+      }));
   }
 
   /** Parse stored value: array (legacy) -> tree root; keep tree (groups allowed). */
@@ -230,8 +363,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       type: 'rule',
       outputKey: r.outputKey || '',
       gtColumns: (r.gtColumns || []).slice(),
-      matchType: r.matchType || 'exact',
-      matchFlags: r.matchFlags && typeof r.matchFlags === 'object' ? { ...r.matchFlags } : DEFAULT_MATCH_FLAGS,
+      matchType: migrateLegacyMatchType(r.matchType || 'exact'),
+      matchFlags: { ...DEFAULT_MATCH_FLAGS, ...(r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {}) },
     }));
     return { type: 'group', ops: Array(Math.max(0, children.length - 1)).fill('AND'), children };
   }
@@ -254,17 +387,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   function normalizeChild(c) {
     if (!c || c.type === 'rule') {
-      const f = c && c.matchFlags && typeof c.matchFlags === 'object' ? c.matchFlags : {};
+      const rawMt = (c && c.matchType) || 'exact';
+      const f = { ...DEFAULT_MATCH_FLAGS, ...((c && c.matchFlags && typeof c.matchFlags === 'object') ? c.matchFlags : {}) };
+      if (legacyMatchTypeWasContains(rawMt)) f.contains = true;
       return {
         type: 'rule',
         outputKey: (c && c.outputKey) || '',
         gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
-        matchType: (c && c.matchType) || 'exact',
-        matchFlags: {
-          ignoreCase: !!(f.ignoreCase),
-          ignoreSymbols: !!(f.ignoreSymbols),
-          ignoreWhitespace: !!(f.ignoreWhitespace),
-        },
+        matchType: migrateLegacyMatchType(rawMt),
+        matchFlags: canonicalizeMatchFlags(f),
       };
     }
     return normalizeGroupChild(c);
@@ -308,7 +439,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           type: 'rule',
           outputKey: (ch.outputKey || '').trim(),
           gtColumns: (ch.gtColumns || []).slice(),
-          matchType: ch.matchType || 'exact',
+          matchType: migrateLegacyMatchType(ch.matchType || 'exact'),
           matchFlags: getMatchFlags(ch),
         };
       }
@@ -331,8 +462,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
             const flags = getMatchFlags(ch);
             const gtCols = (ch.gtColumns || []).map((c) => String(c || '').trim()).filter(Boolean);
             if (outputKey && gtCols.length > 0) {
-              ruleEditorMemoryOrdered.push({ type: 'rule', outputKey, gtColumns: gtCols, matchType: ch.matchType || 'exact', matchFlags: { ...flags } });
-              gtCols.forEach((g) => { ruleEditorMemory[outputKey + '\t' + g] = { matchType: ch.matchType || 'exact', matchFlags: { ...flags } }; });
+              ruleEditorMemoryOrdered.push({ type: 'rule', outputKey, gtColumns: gtCols, matchType: migrateLegacyMatchType(ch.matchType || 'exact'), matchFlags: { ...flags } });
+              gtCols.forEach((g) => { ruleEditorMemory[outputKey + '\t' + g] = { matchType: migrateLegacyMatchType(ch.matchType || 'exact'), matchFlags: { ...flags } }; });
             }
           } else if (ch.type === 'group') {
             const collected = collectGroupForMemory(ch);
@@ -421,27 +552,24 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const runResult = resultsByIndex.get(runRowIndex) || null;
     const runValRaw = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
     const gtValsRaw = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
-    const matchType = rule.matchType || 'exact';
+    const matchType = migrateLegacyMatchType(rule.matchType);
     const flags = getMatchFlags(rule);
-    const isNumeric = matchType === 'numeric';
 
     if (matchType === 'numeric') {
       const runNorm = normalizeForMatch(runValRaw, flags, true);
-      const runNum = parseFloat(runNorm);
       return gtValsRaw.some((g) => {
         const gtNorm = normalizeForMatch(g, flags, true);
-        const gtNum = parseFloat(gtNorm);
-        if (Number.isFinite(runNum) && Number.isFinite(gtNum)) return runNum === gtNum;
-        return runNorm === gtNorm;
+        return numericPairMatches(runNorm, gtNorm, flags);
       });
     }
 
     const runVal = normalizeForMatch(runValRaw, flags, false);
     return gtValsRaw.some((g) => {
       const gtVal = normalizeForMatch(g, flags, false);
-      if (matchType === 'exact') return runVal === gtVal;
-      if (matchType === 'contains') return runVal.includes(gtVal);
-      if (matchType === 'gt-contains-run') return gtVal.includes(runVal);
+      if (matchType === 'exact') {
+        if (flags.contains) return stringsMatchContains(runVal, gtVal);
+        return runVal === gtVal;
+      }
       return runVal === gtVal;
     });
   }
@@ -600,6 +728,27 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   }
 
+  /** Keys: GT row `String(j)` or run-only `run:${rowIndex}`. Value true = excluded from Review + metrics. */
+  function getScoreRowExcludedFromScoring() {
+    try {
+      const raw = node?.dataset?.scoreRowExcludedFromScoring || '{}';
+      const o = JSON.parse(raw);
+      return o && typeof o === 'object' ? o : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function setScoreRowExcludedFromScoring(excluded) {
+    if (!node) return;
+    node.dataset.scoreRowExcludedFromScoring = JSON.stringify(excluded);
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  }
+
+  function isScoreRowExcludedFromScoring(rowKey) {
+    return !!(getScoreRowExcludedFromScoring()[rowKey]);
+  }
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -732,12 +881,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const gtColumn = key.slice(idx + 1);
         if (runKeys.has(outputKey) && gtSet.has(gtColumn)) {
           const mem = ruleEditorMemory[key];
+          const memMt = (mem && mem.matchType) || 'exact';
+          const memFlags = (mem && mem.matchFlags && typeof mem.matchFlags === 'object') ? { ...DEFAULT_MATCH_FLAGS, ...mem.matchFlags } : { ...DEFAULT_MATCH_FLAGS };
+          if (legacyMatchTypeWasContains(memMt)) memFlags.contains = true;
           ruleData = {
             type: 'rule',
             outputKey,
             gtColumns: [gtColumn],
-            matchType: (mem && mem.matchType) || 'exact',
-            matchFlags: (mem && mem.matchFlags && typeof mem.matchFlags === 'object') ? { ...DEFAULT_MATCH_FLAGS, ...mem.matchFlags } : { ...DEFAULT_MATCH_FLAGS },
+            matchType: migrateLegacyMatchType(memMt),
+            matchFlags: memFlags,
           };
           break;
         }
@@ -752,6 +904,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }).join('');
     const matchSelectOpts = MATCH_TYPES.map((m) => {
       const sel = (m.value || '') === (ruleData.matchType || '') ? ' selected' : '';
+      return `<option value="${escapeAttr(m.value)}"${sel}>${escapeHtml(m.label || m.value)}</option>`;
+    }).join('');
+    const numericModeOpts = NUMERIC_COMPARE_MODES.map((m) => {
+      const sel = (m.value || '') === flags.numericMode ? ' selected' : '';
       return `<option value="${escapeAttr(m.value)}"${sel}>${escapeHtml(m.label || m.value)}</option>`;
     }).join('');
     const currentGtColumn = (ruleData.gtColumns && ruleData.gtColumns[0]) ? ruleData.gtColumns[0] : '';
@@ -788,9 +944,27 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <select id="rule-editor-match-type" class="dataset-meta-input rule-editor-select" aria-label="Comparison type">${matchSelectOpts}</select>
             </div>
             <div class="dataset-meta-field rule-editor-flags-wrap" id="rule-editor-flags-wrap">
-              <span class="dataset-meta-label">Normalization (optional, multiple)</span>
+              <span class="dataset-meta-label">String match options</span>
               <div class="rule-editor-flags">
                 ${MATCH_FLAGS.map((f) => `<label class="rule-editor-flag-label"><input type="checkbox" class="rule-editor-flag-cb" data-flag="${escapeAttr(f.key)}" ${flags[f.key] ? 'checked' : ''} aria-label="${escapeAttr(f.label)}" />${escapeHtml(f.label)}</label>`).join('')}
+              </div>
+            </div>
+            <div class="dataset-meta-field rule-editor-numeric-wrap" id="rule-editor-numeric-wrap" style="display:none;">
+              <label class="dataset-meta-label" for="rule-editor-numeric-mode">Number comparison</label>
+              <select id="rule-editor-numeric-mode" class="dataset-meta-input rule-editor-select" aria-label="How numbers are compared">${numericModeOpts}</select>
+              <div class="rule-editor-numeric-param" id="rule-editor-numeric-abs-wrap" style="display:none;margin-top:0.5rem;">
+                <label class="dataset-meta-label" for="rule-editor-numeric-abs">ε: max absolute gap (result vs GT)</label>
+                <input type="text" id="rule-editor-numeric-abs" class="dataset-meta-input" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="e.g. 0.01 or 1e-3" value="${escapeAttr(String(flags.numericAbsEpsilon))}" aria-describedby="rule-editor-numeric-abs-hint" aria-label="Absolute tolerance epsilon" />
+                <p class="rule-editor-hint" id="rule-editor-numeric-abs-hint">Rows match when <strong>|result - ground truth| ≤ ε</strong>. Use any decimal (e.g. <code>0.05</code>, <code>0.001</code>). ε = 0 means exact numeric equality.</p>
+              </div>
+              <div class="rule-editor-numeric-param" id="rule-editor-numeric-rel-wrap" style="display:none;margin-top:0.5rem;">
+                <label class="dataset-meta-label" for="rule-editor-numeric-rel">r: relative tolerance (e.g. 0.01 ≈ 1%)</label>
+                <input type="text" id="rule-editor-numeric-rel" class="dataset-meta-input" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="e.g. 0.01 (1%)" value="${escapeAttr(String(flags.numericRelEpsilon))}" aria-describedby="rule-editor-numeric-rel-hint" aria-label="Relative tolerance" />
+                <p class="rule-editor-hint" id="rule-editor-numeric-rel-hint">Rows match when <strong>|a - b| ≤ r × max(|a|, |b|)</strong>. Example: <code>0.01</code> ≈ 1% relative difference.</p>
+              </div>
+              <div class="rule-editor-numeric-param" id="rule-editor-numeric-dec-wrap" style="display:none;margin-top:0.5rem;">
+                <label class="dataset-meta-label" for="rule-editor-numeric-dec">N: round both sides to this many decimals (0-20)</label>
+                <input type="number" id="rule-editor-numeric-dec" class="dataset-meta-input" min="0" max="20" step="1" value="${escapeAttr(String(flags.numericDecimalPlaces))}" aria-label="Decimal places" />
               </div>
             </div>
             ${isEdit && editPath.length <= 1 ? `
@@ -847,23 +1021,42 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     gtSelectEl.addEventListener('change', clearError);
     matchSelectEl.addEventListener('change', clearError);
 
-    /** Comparison types that support normalization (exact, contains, gt-contains-run). Numeric does not. */
-    function comparisonTypeSupportsNormalization() {
+    const numericModeEl = editorOverlay.querySelector('#rule-editor-numeric-mode');
+    const numericAbsWrap = editorOverlay.querySelector('#rule-editor-numeric-abs-wrap');
+    const numericRelWrap = editorOverlay.querySelector('#rule-editor-numeric-rel-wrap');
+    const numericDecWrap = editorOverlay.querySelector('#rule-editor-numeric-dec-wrap');
+    const numericAbsEl = editorOverlay.querySelector('#rule-editor-numeric-abs');
+    const numericRelEl = editorOverlay.querySelector('#rule-editor-numeric-rel');
+    const numericDecEl = editorOverlay.querySelector('#rule-editor-numeric-dec');
+
+    function updateNumericParamVisibility() {
+      const mode = (numericModeEl?.value ?? 'exact').trim();
+      if (numericAbsWrap) numericAbsWrap.style.display = mode === 'abs' ? '' : 'none';
+      if (numericRelWrap) numericRelWrap.style.display = mode === 'rel' ? '' : 'none';
+      if (numericDecWrap) numericDecWrap.style.display = mode === 'decimals' ? '' : 'none';
+    }
+
+    /** String match: normalization checkboxes; numeric: numeric mode + parameters. */
+    function updateComparisonTypePanels() {
       const v = (matchSelectEl?.value ?? '').trim() || 'exact';
-      return v !== 'numeric';
-    }
-    function updateNormalizationVisibility() {
       const flagsWrap = editorOverlay.querySelector('#rule-editor-flags-wrap');
-      const show = comparisonTypeSupportsNormalization();
-      if (flagsWrap) flagsWrap.style.display = show ? '' : 'none';
+      const numWrap = editorOverlay.querySelector('#rule-editor-numeric-wrap');
+      const showStr = v === 'exact';
+      const showNum = v === 'numeric';
+      if (flagsWrap) flagsWrap.style.display = showStr ? '' : 'none';
+      if (numWrap) numWrap.style.display = showNum ? '' : 'none';
       editorOverlay.querySelectorAll('.rule-editor-flag-cb').forEach((cb) => {
-        cb.disabled = !show;
+        cb.disabled = !showStr;
       });
+      if (showNum) updateNumericParamVisibility();
     }
-    matchSelectEl.addEventListener('change', updateNormalizationVisibility);
-    updateNormalizationVisibility();
-    // 弹窗挂载后再跑一次，确保“数值相等”时 Normalization 块初始就隐藏
-    requestAnimationFrame(() => updateNormalizationVisibility());
+    matchSelectEl.addEventListener('change', updateComparisonTypePanels);
+    numericModeEl?.addEventListener('change', () => {
+      updateNumericParamVisibility();
+      clearError();
+    });
+    updateComparisonTypePanels();
+    requestAnimationFrame(() => updateComparisonTypePanels());
 
     function save() {
       const outputKey = (resultSelectEl?.value ?? '').trim();
@@ -881,9 +1074,37 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const matchFlags = { ...DEFAULT_MATCH_FLAGS };
       flagCbs.forEach((cb) => {
         const key = cb.getAttribute('data-flag');
-        if (key && (key === 'ignoreCase' || key === 'ignoreSymbols' || key === 'ignoreWhitespace')) matchFlags[key] = !!cb.checked;
+        if (key && (key === 'contains' || key === 'ignoreCase' || key === 'ignoreSymbols' || key === 'ignoreWhitespace')) matchFlags[key] = !!cb.checked;
       });
-      const newRule = { type: 'rule', outputKey, gtColumns: [gtColumn], matchType, matchFlags };
+      if (matchType === 'numeric') {
+        const nm = (numericModeEl?.value ?? 'exact').trim();
+        matchFlags.numericMode = ['exact', 'abs', 'rel', 'decimals'].includes(nm) ? nm : 'exact';
+        const absParsed = parseFlexibleNonNegativeNumber(numericAbsEl?.value);
+        const relParsed = parseFlexibleNonNegativeNumber(numericRelEl?.value);
+        const decParsed = parseInt(String(numericDecEl?.value ?? '').trim(), 10);
+        matchFlags.numericAbsEpsilon = Number.isFinite(absParsed) && absParsed >= 0 ? absParsed : 0;
+        matchFlags.numericRelEpsilon = Number.isFinite(relParsed) && relParsed >= 0 ? relParsed : 0;
+        if (Number.isFinite(decParsed)) matchFlags.numericDecimalPlaces = Math.max(0, Math.min(20, decParsed));
+        else matchFlags.numericDecimalPlaces = 2;
+        if (matchFlags.numericMode === 'abs' && (!Number.isFinite(absParsed) || absParsed < 0)) {
+          showError('Enter a valid ε (≥ 0). Decimals allowed, e.g. 0.01 or 1e-4.');
+          return;
+        }
+        if (matchFlags.numericMode === 'rel' && (!Number.isFinite(relParsed) || relParsed < 0)) {
+          showError('Enter a valid r (≥ 0). Decimals allowed, e.g. 0.01 for ~1%.');
+          return;
+        }
+        if (matchFlags.numericMode === 'decimals' && !Number.isFinite(decParsed)) {
+          showError('Enter decimal places (0-20).');
+          return;
+        }
+      } else {
+        matchFlags.numericMode = 'exact';
+        matchFlags.numericAbsEpsilon = 0;
+        matchFlags.numericRelEpsilon = 0;
+        matchFlags.numericDecimalPlaces = 2;
+      }
+      const newRule = { type: 'rule', outputKey, gtColumns: [gtColumn], matchType, matchFlags: canonicalizeMatchFlags(matchFlags) };
       const root = getRoot();
       const makeGroupEl = editorOverlay.querySelector('#rule-editor-make-group');
       const addAsGroupEl = editorOverlay.querySelector('#rule-editor-add-as-group');
@@ -921,10 +1142,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const runColumns = getRunResultColumns();
     const runLabel = runColumns.find((c) => c.key === (rule.outputKey || ''))?.label || rule.outputKey || '—';
     const gtLabel = (rule.gtColumns || []).length === 0 ? '—' : (rule.gtColumns || []).join(', ');
-    const typeLabel = MATCH_TYPES.find((m) => m.value === (rule.matchType || ''))?.label || 'Exact match';
+    const mt = migrateLegacyMatchType(rule.matchType);
+    const typeLabel = MATCH_TYPES.find((m) => m.value === mt)?.label || 'String match';
     const flags = getMatchFlags(rule);
     const flagLabels = MATCH_FLAGS.filter((f) => flags[f.key]).map((f) => f.label);
-    const flagPart = flagLabels.length > 0 ? ` · ${flagLabels.join(', ')}` : '';
+    let flagPart = flagLabels.length > 0 ? ` · ${flagLabels.join(', ')}` : '';
+    if (mt === 'numeric' && flags.numericMode && flags.numericMode !== 'exact') {
+      if (flags.numericMode === 'abs') flagPart += ` · abs ε≤${flags.numericAbsEpsilon}`;
+      else if (flags.numericMode === 'rel') flagPart += ` · rel≤${flags.numericRelEpsilon}`;
+      else if (flags.numericMode === 'decimals') flagPart += ` · ${flags.numericDecimalPlaces} decimals`;
+    }
     const summary = `${runLabel} → ${gtLabel} ( ${typeLabel}${flagPart} )`;
     const card = document.createElement('div');
     card.className = 'score-rule-card';
@@ -1268,6 +1495,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           parts.push(runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : '');
         });
         parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
+        parts.push(isScoreRowExcludedFromScoring(String(j)) ? 'no' : 'yes');
         parts.push(comments[String(j)] ?? '');
       } else {
         const i = d.i;
@@ -1276,6 +1504,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         gtColsUsed.forEach(() => { parts.push('—'); });
         outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
         parts.push('false');
+        parts.push(isScoreRowExcludedFromScoring(`run:${i}`) ? 'no' : 'yes');
         parts.push(comments['run:' + i] ?? '');
       }
       return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
@@ -1292,15 +1521,31 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const end = Math.min(start + scoreDetailPagination.rowsPerPage, totalRows);
     const pageDescriptors = filteredDescriptors.slice(start, end);
 
-    const runOnlyCount = runCount > 0 ? runCount - matchedCount : 0;
-    const unmatchedGtCount = gtRows.length - matchedCount;
+    const excludedMap = getScoreRowExcludedFromScoring();
+    const isGtExcluded = (j) => !!excludedMap[String(j)];
+    const isRunOnlyExcluded = (runRowIdx) => !!excludedMap[`run:${runRowIdx}`];
+    let recallDenom = 0;
+    for (let j = 0; j < gtRows.length; j++) {
+      if (!isGtExcluded(j)) recallDenom++;
+    }
     let tp = 0;
     for (let j = 0; j < gtRows.length; j++) {
+      if (isGtExcluded(j)) continue;
       const runRowIndex = gtToRun[j];
       if (runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent)) tp++;
     }
-    const precision = runCount > 0 ? (tp / runCount) * 100 : 0;
-    const recall = gtRows.length > 0 ? (tp / gtRows.length) * 100 : 0;
+    const nonErrorRunRowIndices = [...new Set((results || []).filter((r) => !r.error).map((r) => r.row_index))];
+    let precDenom = 0;
+    for (const R of nonErrorRunRowIndices) {
+      const j = R >= 0 && R < (runToGt || []).length ? runToGt[R] : -1;
+      if (j >= 0) {
+        if (!isGtExcluded(j)) precDenom++;
+      } else if (!isRunOnlyExcluded(R)) {
+        precDenom++;
+      }
+    }
+    const precision = precDenom > 0 ? (tp / precDenom) * 100 : 0;
+    const recall = recallDenom > 0 ? (tp / recallDenom) * 100 : 0;
     const f1 = (precision + recall) > 0 ? (2 * (precision / 100) * (recall / 100) / ((precision + recall) / 100)) * 100 : 0;
     const fmt = (x) => (Number.isFinite(x) ? x.toFixed(2) : '—');
     const errorNote = errorRowCount > 0 ? ` · ${errorRowCount} error row${errorRowCount === 1 ? '' : 's'} removed` : '';
@@ -1345,7 +1590,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
     headerRow += '<th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--run-block score-detail-results-th--block-sep" title="Run result row index (matched to this ground truth row)">Run result #</th>';
     runColLabels.forEach((label) => { headerRow += `<th class="score-detail-results-th score-detail-results-th--run score-detail-results-th--run-block">${escapeHtml(label)}</th>`; });
-    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block score-detail-results-th--block-sep">Match</th><th class="score-detail-results-th score-detail-results-th--comment score-detail-results-th--result-block">Comment</th></tr></thead><tbody>';
+    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block score-detail-results-th--block-sep">Match</th><th class="score-detail-results-th score-detail-results-th--review score-detail-results-th--result-block" title="Include in Review API and in Precision / Recall / F1">Review</th><th class="score-detail-results-th score-detail-results-th--comment score-detail-results-th--result-block">Comment</th></tr></thead><tbody>';
     const tableWrap = document.createElement('div');
     tableWrap.className = 'score-detail-results-table-wrap';
     const tbl = document.createElement('table');
@@ -1375,7 +1620,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
       }
       tr += `<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="${isMatch ? 'Matched' : 'Not matched'}">${isMatch ? 'true' : 'false'}</td>`;
-      tr += '<td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td><td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
 
@@ -1395,7 +1640,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
       }
       tr += '<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="Run result row without ground truth match">false</td>';
-      tr += '<td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td><td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
 
@@ -1408,21 +1653,41 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     tbody.querySelectorAll('tr').forEach((tr) => {
       const commentKey = tr.getAttribute('data-comment-key');
       const td = tr.querySelector('.score-detail-results-td--comment');
-      if (!td || commentKey == null) return;
-      const textarea = document.createElement('textarea');
-      textarea.rows = 2;
-      textarea.className = 'score-detail-results-comment-textarea';
-      textarea.placeholder = 'Comment...';
-      textarea.value = comments[commentKey] ?? '';
-      textarea.setAttribute('aria-label', 'Comment');
-      textarea.addEventListener('change', () => {
-        const c = getResultComments();
-        const v = (textarea.value || '').trim();
-        if (v) c[commentKey] = textarea.value;
-        else delete c[commentKey];
-        setResultComments(c);
-      });
-      td.appendChild(textarea);
+      const tdReview = tr.querySelector('.score-detail-results-td--review');
+      if (commentKey == null) return;
+      if (td) {
+        const textarea = document.createElement('textarea');
+        textarea.rows = 2;
+        textarea.className = 'score-detail-results-comment-textarea';
+        textarea.placeholder = 'Comment...';
+        textarea.value = comments[commentKey] ?? '';
+        textarea.setAttribute('aria-label', 'Comment');
+        textarea.addEventListener('change', () => {
+          const c = getResultComments();
+          const v = (textarea.value || '').trim();
+          if (v) c[commentKey] = textarea.value;
+          else delete c[commentKey];
+          setResultComments(c);
+        });
+        td.appendChild(textarea);
+      }
+      if (tdReview) {
+        const wrap = document.createElement('label');
+        wrap.className = 'score-detail-results-review-label';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !isScoreRowExcludedFromScoring(commentKey);
+        cb.setAttribute('aria-label', 'Include in Review and in Precision / Recall / F1');
+        cb.addEventListener('change', () => {
+          const ex = { ...getScoreRowExcludedFromScoring() };
+          if (cb.checked) delete ex[commentKey];
+          else ex[commentKey] = true;
+          setScoreRowExcludedFromScoring(ex);
+          renderResults();
+        });
+        wrap.appendChild(cb);
+        tdReview.appendChild(wrap);
+      }
     });
 
     const commentTh = tbl.querySelector('thead .score-detail-results-th--comment');
@@ -1585,7 +1850,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const cols = (ch.gtColumns || []).map((c) => String(c || '').trim()).filter((c) => runKeys.has(ok) && gtSet.has(c) && !existingSet.has(ok + '\t' + c));
         if (cols.length === 0) return null;
         cols.forEach((c) => existingSet.add(ok + '\t' + c));
-        return { type: 'rule', outputKey: ok, gtColumns: cols, matchType: ch.matchType || 'exact', matchFlags: { ...DEFAULT_MATCH_FLAGS, ...(ch.matchFlags || {}) } };
+        const rawMt = ch.matchType || 'exact';
+        const mf = { ...DEFAULT_MATCH_FLAGS, ...(ch.matchFlags || {}) };
+        if (legacyMatchTypeWasContains(rawMt)) mf.contains = true;
+        return { type: 'rule', outputKey: ok, gtColumns: cols, matchType: migrateLegacyMatchType(rawMt), matchFlags: mf };
       }
       return filterGroupForApply(ch, runKeys, gtSet, existingSet);
     }).filter(Boolean);
@@ -1622,12 +1890,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const cols = (item.gtColumns || []).map((c) => String(c || '').trim()).filter((c) => runKeys.has(outputKey) && gtSet.has(c) && !existingSet.has(outputKey + '\t' + c));
         if (cols.length === 0) continue;
         cols.forEach((c) => existingSet.add(outputKey + '\t' + c));
+        const rawMt = item.matchType || 'exact';
+        const mf = (item.matchFlags && typeof item.matchFlags === 'object') ? { ...DEFAULT_MATCH_FLAGS, ...item.matchFlags } : { ...DEFAULT_MATCH_FLAGS };
+        if (legacyMatchTypeWasContains(rawMt)) mf.contains = true;
         const newRule = {
           type: 'rule',
           outputKey,
           gtColumns: cols,
-          matchType: (item.matchType || 'exact'),
-          matchFlags: (item.matchFlags && typeof item.matchFlags === 'object') ? { ...DEFAULT_MATCH_FLAGS, ...item.matchFlags } : { ...DEFAULT_MATCH_FLAGS },
+          matchType: migrateLegacyMatchType(rawMt),
+          matchFlags: mf,
         };
         root = insertChildAtPath(root, [], newRule, (root.children || []).length);
         added = true;
@@ -1760,11 +2031,20 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
     if (!Array.isArray(arr) || arr.length === 0) return [];
     const first = arr[0];
     if (first && typeof first === 'object' && Array.isArray(first.gtColumns)) {
-      return arr.map((r) => ({
-        outputKey: r.outputKey || '',
-        gtColumns: Array.isArray(r.gtColumns) ? r.gtColumns.filter(Boolean) : [],
-        matchType: r.matchType || 'exact',
-      })).filter((r) => r.outputKey || r.gtColumns.length > 0);
+      return arr.map((r) => {
+        const raw = r.matchType || 'exact';
+        const baseF = r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {};
+        return {
+          outputKey: r.outputKey || '',
+          gtColumns: Array.isArray(r.gtColumns) ? r.gtColumns.filter(Boolean) : [],
+          matchType: migrateLegacyMatchType(raw),
+          matchFlags: {
+            ...DEFAULT_MATCH_FLAGS,
+            ...baseF,
+            contains: !!(baseF.contains || legacyMatchTypeWasContains(raw)),
+          },
+        };
+      }).filter((r) => r.outputKey || r.gtColumns.length > 0);
     }
     const pairs = [];
     if (first && first.outputKey !== undefined && !first.rules) {
@@ -1774,10 +2054,22 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
     } else return [];
     const byKey = {};
     pairs.forEach((p) => {
-      if (!byKey[p.outputKey]) byKey[p.outputKey] = { outputKey: p.outputKey, gtColumns: [], matchType: p.matchType || 'exact' };
+      const raw = p.matchType || 'exact';
+      if (!byKey[p.outputKey]) {
+        byKey[p.outputKey] = { outputKey: p.outputKey, gtColumns: [], matchType: migrateLegacyMatchType(raw), anyContains: false };
+      }
+      if (legacyMatchTypeWasContains(raw)) byKey[p.outputKey].anyContains = true;
+      byKey[p.outputKey].matchType = migrateLegacyMatchType(raw);
       if (p.gtColumn && !byKey[p.outputKey].gtColumns.includes(p.gtColumn)) byKey[p.outputKey].gtColumns.push(p.gtColumn);
     });
-    return Object.values(byKey).filter((r) => r.outputKey || r.gtColumns.length > 0);
+    return Object.values(byKey)
+      .filter((r) => r.outputKey || r.gtColumns.length > 0)
+      .map((r) => ({
+        outputKey: r.outputKey,
+        gtColumns: r.gtColumns,
+        matchType: r.matchType,
+        matchFlags: { ...DEFAULT_MATCH_FLAGS, contains: r.anyContains },
+      }));
   }
   function ensureGroupOps(data, children) {
     const n = (children || []).length;
@@ -1787,13 +2079,15 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
   }
   function normalizeChild(c) {
     if (!c || c.type === 'rule') {
-      const f = c && c.matchFlags && typeof c.matchFlags === 'object' ? c.matchFlags : {};
+      const rawMt = (c && c.matchType) || 'exact';
+      const f = { ...DEFAULT_MATCH_FLAGS, ...((c && c.matchFlags && typeof c.matchFlags === 'object') ? c.matchFlags : {}) };
+      if (legacyMatchTypeWasContains(rawMt)) f.contains = true;
       return {
         type: 'rule',
         outputKey: (c && c.outputKey) || '',
         gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
-        matchType: (c && c.matchType) || 'exact',
-        matchFlags: { ignoreCase: !!(f.ignoreCase), ignoreSymbols: !!(f.ignoreSymbols), ignoreWhitespace: !!(f.ignoreWhitespace) },
+        matchType: migrateLegacyMatchType(rawMt),
+        matchFlags: canonicalizeMatchFlags(f),
       };
     }
     return normalizeGroupChild(c);
@@ -1812,8 +2106,8 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       type: 'rule',
       outputKey: r.outputKey || '',
       gtColumns: (r.gtColumns || []).slice(),
-      matchType: r.matchType || 'exact',
-      matchFlags: r.matchFlags && typeof r.matchFlags === 'object' ? { ...r.matchFlags } : DEFAULT_MATCH_FLAGS,
+      matchType: migrateLegacyMatchType(r.matchType || 'exact'),
+      matchFlags: { ...DEFAULT_MATCH_FLAGS, ...(r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {}) },
     }));
     return { type: 'group', ops: Array(Math.max(0, children.length - 1)).fill('AND'), children };
   }
@@ -1863,25 +2157,22 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
     const runResult = resultsByIndex.get(runRowIndex) || null;
     const runValRaw = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
     const gtValsRaw = (rule.gtColumns || []).map((col) => getGtValue(gtContent, gtRowIndex, col));
-    const matchType = rule.matchType || 'exact';
+    const matchType = migrateLegacyMatchType(rule.matchType);
     const flags = getMatchFlags(rule);
-    const isNumeric = matchType === 'numeric';
     if (matchType === 'numeric') {
       const runNorm = normalizeForMatch(runValRaw, flags, true);
-      const runNum = parseFloat(runNorm);
       return gtValsRaw.some((g) => {
         const gtNorm = normalizeForMatch(g, flags, true);
-        const gtNum = parseFloat(gtNorm);
-        if (Number.isFinite(runNum) && Number.isFinite(gtNum)) return runNum === gtNum;
-        return runNorm === gtNorm;
+        return numericPairMatches(runNorm, gtNorm, flags);
       });
     }
     const runVal = normalizeForMatch(runValRaw, flags, false);
     return gtValsRaw.some((g) => {
       const gtVal = normalizeForMatch(g, flags, false);
-      if (matchType === 'exact') return runVal === gtVal;
-      if (matchType === 'contains') return runVal.includes(gtVal);
-      if (matchType === 'gt-contains-run') return gtVal.includes(runVal);
+      if (matchType === 'exact') {
+        if (flags.contains) return stringsMatchContains(runVal, gtVal);
+        return runVal === gtVal;
+      }
       return runVal === gtVal;
     });
   };
@@ -2002,9 +2293,14 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
   try {
     comments = JSON.parse(node.dataset.scoreResultComments || '{}');
   } catch (_) {}
+  let excludedFromScoring = {};
+  try {
+    excludedFromScoring = JSON.parse(node.dataset.scoreRowExcludedFromScoring || '{}');
+  } catch (_) {}
+  const rowIncludedInReview = (key) => !excludedFromScoring[key];
   const runColumns = typeof getRunResultColumns === 'function' ? getRunResultColumns() : [];
   const runLabels = outputKeysUsed.map((k) => (runColumns.find((c) => c.key === k)?.label || k || '—').trim() || '—');
-  const headers = ['Ground truth #', ...(gtColsUsed.length > 0 ? gtColsUsed : ['Ground truth']), 'Run result #', ...runLabels, 'Match', 'Comment'];
+  const headers = ['Ground truth #', ...(gtColsUsed.length > 0 ? gtColsUsed : ['Ground truth']), 'Run result #', ...runLabels, 'Match', 'Review', 'Comment'];
   const rows = descriptors.map((d) => {
     const parts = [];
     if (d.type === 'gt') {
@@ -2017,6 +2313,7 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       parts.push(runRowIndex >= 0 ? String(runRowIndex + 1) : '—');
       outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : ''); });
       parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
+      parts.push(rowIncludedInReview(String(j)) ? 'yes' : 'no');
       parts.push(comments[String(j)] ?? '');
     } else {
       const i = d.i;
@@ -2027,6 +2324,7 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       parts.push(String(i + 1));
       outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
       parts.push('false');
+      parts.push(rowIncludedInReview(`run:${i}`) ? 'yes' : 'no');
       parts.push(comments['run:' + i] ?? '');
     }
     return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
