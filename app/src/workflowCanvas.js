@@ -8,6 +8,14 @@ import { openPromptDetailModal, extractInputFieldsFromSections } from './promptD
 import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
 import { mergeResumeResults, embedInputRow, countCompletedInputRows, markEmptyOutputAsError } from './runResumeUtils.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
+import {
+  allocNextReviewSuggestionId,
+  ensureReviewResultIds,
+  ensureSuggestionObjectId,
+  normalizeSuggestionIdsToDisplayOrder,
+  parseNumericSuggestionId,
+  syncReviewSuggestionSeqNext,
+} from './reviewSuggestionIds.js';
 import { openScoreDetailModal, runReviewFromScore, getScoreExportData, getMatchFlags, normalizeForMatch } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
@@ -645,7 +653,9 @@ export function buildWorkflowCanvas(root) {
         return;
       }
       if (ev.type === 'design' && Array.isArray(ev.design_suggestions)) {
-        streamSaved.design_suggestions = ev.design_suggestions;
+        streamSaved.design_suggestions = ev.design_suggestions.map((d) =>
+          d && typeof d === 'object' ? ensureSuggestionObjectId({ ...d }, streamSaved) : d
+        );
         setReviewNodeProgress(getNodeById(reviewNodeId), 10);
       } else if (ev.type === 'plan') {
         focusCount = ev.focus_count != null ? Math.max(0, parseInt(ev.focus_count, 10)) : 0;
@@ -662,17 +672,26 @@ export function buildWorkflowCanvas(root) {
         setReviewNodeProgress(getNodeById(reviewNodeId), pct);
         streamSaved.reviewProgress = pct;
       } else if (ev.type === 'suggestions' && Array.isArray(ev.suggestions) && ev.suggestions.length) {
-        streamSaved.suggestions = (streamSaved.suggestions || []).concat(ev.suggestions);
+        const batch = ev.suggestions.map((s) =>
+          s && typeof s === 'object' ? ensureSuggestionObjectId({ ...s }, streamSaved) : s
+        );
+        streamSaved.suggestions = (streamSaved.suggestions || []).concat(batch);
         focusDone += 1;
         const pct = focusCount > 0 ? 20 + (80 * focusDone / focusCount) : (diagnosisTotal > 0 ? 85 : 90);
         setReviewNodeProgress(getNodeById(reviewNodeId), pct);
       } else if (ev.type === 'data_refinement' && Array.isArray(ev.data_refinement)) {
-        streamSaved.data_refinement = ev.data_refinement;
+        streamSaved.data_refinement = ev.data_refinement.map((item) =>
+          item && typeof item === 'object' ? ensureSuggestionObjectId({ ...item }, streamSaved) : item
+        );
         setReviewNodeProgress(getNodeById(reviewNodeId), 95);
       } else if (ev.type === 'done') {
         setReviewNodeProgress(getNodeById(reviewNodeId), 100);
         streamSaved = { ...streamSaved, streamComplete: true, reviewProgress: 100 };
+        // Backend often emits edit suggestions before data_refinement; IDs were allocated in event order.
+        // UI order is design → data refinement → edits; renumber once when the run completes.
+        normalizeSuggestionIdsToDisplayOrder(streamSaved);
       }
+      ensureReviewResultIds(streamSaved);
       document.dispatchEvent(new CustomEvent('workflow:save-review-result', { detail: { reviewNodeId, data: streamSaved } }));
     }
   }
@@ -3902,6 +3921,7 @@ export function buildWorkflowCanvas(root) {
     try {
       let toWrite = typeof data === 'string' ? (() => { try { return JSON.parse(data); } catch (_) { return null; } })() : data;
       if (!toWrite || typeof toWrite !== 'object') return;
+      ensureReviewResultIds(toWrite);
       const existingRaw = (reviewNode.dataset.reviewResult || '').trim();
       let existing = null;
       if (existingRaw) {
@@ -3916,10 +3936,23 @@ export function buildWorkflowCanvas(root) {
         }
         const existSug = existing.suggestions;
         merged.suggestions = (toWrite.suggestions || []).map((s, i) => {
-          const prev = existSug[i];
-          if (prev && prev.applied === true) return { ...s, applied: true };
-          return { ...s };
+          const next = { ...s };
+          const nextNum = parseNumericSuggestionId(next.suggestion_id);
+          const prevById =
+            nextNum != null
+              ? existSug.find((p) => parseNumericSuggestionId(p?.suggestion_id) === nextNum)
+              : null;
+          const prev = prevById || existSug[i];
+          if (prev && prev.applied === true) next.applied = true;
+          if (nextNum == null) {
+            const prevNum = prev ? parseNumericSuggestionId(prev.suggestion_id) : null;
+            next.suggestion_id = prevNum != null ? prevNum : allocNextReviewSuggestionId(merged);
+          } else {
+            next.suggestion_id = nextNum;
+          }
+          return next;
         });
+        syncReviewSuggestionSeqNext(merged);
         toWrite = merged;
       }
       // Preserve chatHistory and chatRequestInProgress when stream/other updates would overwrite them

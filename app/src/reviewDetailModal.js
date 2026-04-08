@@ -6,6 +6,12 @@
 
 import { showConfirm, showAlert } from './alertModal.js';
 import { comparisonRowIsMatched } from './scoreDetailModal.js';
+import {
+  ensureReviewResultIds,
+  ensureSuggestionObjectId,
+  formatSuggestionIdDisplay,
+  parseNumericSuggestionId,
+} from './reviewSuggestionIds.js';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -314,6 +320,13 @@ function buildReviewResultUI(overlay, options) {
   const suggestionsFooterEl = overlay.querySelector('.review-detail-suggestions-footer');
   if (!promptWrap || !suggestionsEl) return;
 
+  if (saved && typeof saved === 'object') {
+    const idsAdded = ensureReviewResultIds(saved);
+    if (idsAdded && typeof onReviewResultChange === 'function') {
+      onReviewResultChange({ ...saved });
+    }
+  }
+
   const PREVIEW_LEN = 60;
   const originals = (promptSections || []).map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
   const savedSuggestions = Array.isArray(saved.suggestions) ? saved.suggestions : [];
@@ -323,7 +336,12 @@ function buildReviewResultUI(overlay, options) {
   const workingFromApplied = rebuildWorkingFromApplied(originals, savedSuggestions);
   /** Working copy: always kept in sync by recomputing from originals + suggestions where .applied === true */
   let working = savedWorking || (workingFromApplied && workingFromApplied.length === originals.length ? workingFromApplied : null) || originals.map((s) => ({ name: s.name, content: s.content }));
-  const allSuggestions = Array.isArray(initialSuggestions) ? initialSuggestions.slice() : [];
+  let allSuggestions =
+    Array.isArray(saved.suggestions) && saved.suggestions.length > 0
+      ? saved.suggestions.slice()
+      : (Array.isArray(initialSuggestions)
+        ? initialSuggestions.slice().map((s) => (s && typeof s === 'object' ? ensureSuggestionObjectId({ ...s }, saved) : null)).filter(Boolean)
+        : []);
   /** Design suggestions: global guidance only, no accept/revert */
   let designSuggestions = Array.isArray(saved.design_suggestions) ? saved.design_suggestions.slice() : [];
   /** Data refinement: GT 质疑汇总 */
@@ -404,26 +422,30 @@ function buildReviewResultUI(overlay, options) {
   const reviewStreaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
   const reviewStillGenerating = saved.streamComplete === false || reviewStreaming;
 
-  function addOneDesignCard(d, displayNum) {
+  function addOneDesignCard(d) {
+    const sid = d && d.suggestion_id != null && d.suggestion_id !== '' ? d.suggestion_id : '';
+    const shortLabel = formatSuggestionIdDisplay(sid);
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card review-detail-design-card';
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion number">#${displayNum}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml((d.name || '').trim() || 'Design')}</strong></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml((d.name || '').trim() || 'Design')}</strong></span>
         <p class="review-detail-suggestion-reason">${escapeHtml((d.reason || '').trim())}</p>
       </div>
     `;
     designContainer.appendChild(card);
   }
 
-  function addOneDataRefinementCard(item, displayNum) {
+  function addOneDataRefinementCard(item) {
+    const sid = item && item.suggestion_id != null && item.suggestion_id !== '' ? item.suggestion_id : '';
+    const shortLabel = formatSuggestionIdDisplay(sid);
     const rowIndices = Array.isArray(item.row_indices) ? item.row_indices : [];
     const rowsText = rowIndices.length > 0 ? `Rows ${rowIndices.join(', ')}` : 'Some rows';
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card review-detail-data-refinement-card';
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion number">#${displayNum}</span> <strong class="review-detail-suggestion-section-name">Possible ground truth issue</strong></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">Possible ground truth issue</strong></span>
         <p class="review-detail-suggestion-reason"><span class="review-detail-data-refinement-rows">${escapeHtml(rowsText)}</span>: ${escapeHtml((item.reason || '').trim())}</p>
       </div>
     `;
@@ -443,7 +465,9 @@ function buildReviewResultUI(overlay, options) {
     });
   }
 
-  function addOneSuggestionCard(sug, sugIdx, displayNum) {
+  function addOneSuggestionCard(sug, sugIdx) {
+    const sid = sug && sug.suggestion_id != null && sug.suggestion_id !== '' ? sug.suggestion_id : '';
+    const shortLabel = formatSuggestionIdDisplay(sid);
     const secIdx = Math.max(0, Math.min(sug.section_index, (promptSections || []).length - 1));
     const name = sectionNames[secIdx] || `Section ${secIdx}`;
     const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
@@ -467,9 +491,10 @@ function buildReviewResultUI(overlay, options) {
     card.className = 'review-detail-suggestion-card' + (noButton ? ' review-detail-suggestion-card--unlocatable' : '');
     card.dataset.sectionIndex = String(secIdx);
     card.dataset.suggestionIndex = String(sugIdx);
+    if (sid !== '' && sid != null) card.dataset.suggestionId = String(sid);
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion number">#${displayNum}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong></span>
         <p class="review-detail-suggestion-reason">${escapeHtml(fullReason)}</p>
       </div>
       <div class="review-detail-suggestion-card__actions">
@@ -528,9 +553,8 @@ function buildReviewResultUI(overlay, options) {
     editContainer.appendChild(card);
   }
 
-  let displayNum = 0;
-  designSuggestions.forEach((d) => { displayNum += 1; addOneDesignCard(d, displayNum); });
-  dataRefinement.forEach((item) => { displayNum += 1; addOneDataRefinementCard(item, displayNum); });
+  designSuggestions.forEach((d) => addOneDesignCard(d));
+  dataRefinement.forEach((item) => addOneDataRefinementCard(item));
   function updateSuggestionsDesignEmptyClass() {
     if (suggestionsEl) suggestionsEl.classList.toggle('review-detail-suggestions--design-empty', designContainer.children.length === 0);
   }
@@ -540,9 +564,11 @@ function buildReviewResultUI(overlay, options) {
     if (statusEl) statusEl.textContent = 'Generating suggestions…';
     streamRef.appendDesignSuggestions = (arr) => {
       if (!Array.isArray(arr)) return;
-      designSuggestions = arr.slice();
+      designSuggestions = arr
+        .map((d) => (d && typeof d === 'object' ? ensureSuggestionObjectId({ ...d }, saved) : null))
+        .filter(Boolean);
       designContainer.innerHTML = '';
-      designSuggestions.forEach((d, i) => addOneDesignCard(d, i + 1));
+      designSuggestions.forEach((d) => addOneDesignCard(d));
       updateSuggestionsDesignEmptyClass();
       saved.design_suggestions = designSuggestions;
       if (typeof onReviewResultChange === 'function') {
@@ -551,9 +577,11 @@ function buildReviewResultUI(overlay, options) {
     };
     streamRef.appendDataRefinement = (arr) => {
       if (!Array.isArray(arr)) return;
-      dataRefinement = arr.slice();
+      dataRefinement = arr
+        .map((item) => (item && typeof item === 'object' ? ensureSuggestionObjectId({ ...item }, saved) : null))
+        .filter(Boolean);
       dataRefinementContainer.innerHTML = '';
-      dataRefinement.forEach((item, i) => addOneDataRefinementCard(item, designSuggestions.length + i + 1));
+      dataRefinement.forEach((item) => addOneDataRefinementCard(item));
       saved.data_refinement = dataRefinement;
       if (typeof onReviewResultChange === 'function') {
         onReviewResultChange({ ...saved, data_refinement: dataRefinement });
@@ -561,11 +589,12 @@ function buildReviewResultUI(overlay, options) {
     };
     streamRef.appendSuggestions = (batch) => {
       if (statusEl) statusEl.textContent = 'Generating suggestions…';
-      batch.forEach((sug, i) => {
+      batch.forEach((sug) => {
+        const s = sug && typeof sug === 'object' ? ensureSuggestionObjectId({ ...sug }, saved) : null;
+        if (!s) return;
         const sugIdx = allSuggestions.length;
-        allSuggestions.push(sug);
-        const displayNum = designSuggestions.length + dataRefinement.length + i + 1;
-        addOneSuggestionCard(sug, sugIdx, displayNum);
+        allSuggestions.push(s);
+        addOneSuggestionCard(s, sugIdx);
       });
       saved.suggestions = allSuggestions.slice();
       if (typeof onReviewResultChange === 'function') {
@@ -591,11 +620,10 @@ function buildReviewResultUI(overlay, options) {
       }
     };
   } else {
-    (initialSuggestions || []).forEach((sug, sugIdx) => {
-      displayNum += 1;
-      addOneSuggestionCard(sug, sugIdx, displayNum);
+    allSuggestions.forEach((sug, sugIdx) => {
+      addOneSuggestionCard(sug, sugIdx);
     });
-    if (!initialSuggestions || initialSuggestions.length === 0) {
+    if (!allSuggestions || allSuggestions.length === 0) {
       const noDesign = designSuggestions.length === 0;
       const noData = dataRefinement.length === 0;
       if (noDesign && noData) {
@@ -843,32 +871,34 @@ function buildReviewAssistantContext(getPayload, getReviewResult) {
   const dataRefinement = saved?.data_refinement || [];
   lines.push('## Your permissions');
   lines.push('ADD: You can add new edit suggestions anytime via [ASSISTANT_SUGGESTION].');
-  lines.push('REMOVE: You can remove ANY listed item by its global number (#1, #2, …): [Design], [Data refinement], and [Edit] (including items from the initial Review or from this chat).');
+  lines.push('REMOVE: Remove items by stable numeric suggestion_id (same as UI #1, #2, …). Legacy: global position (design, then data refinement, then edits) still works via suggestion_index.');
   lines.push('');
   if (suggestions.length > 0 || designSuggestions.length > 0 || dataRefinement.length > 0) {
-    lines.push('## Suggestions (in display order, same numbering as UI)');
-    let num = 0;
+    lines.push('## Suggestions (persistent numeric suggestion_id per review; matches UI #N)');
     designSuggestions.forEach((d) => {
-      num += 1;
+      const sid = (d && d.suggestion_id) ? String(d.suggestion_id) : '';
+      const shortLabel = formatSuggestionIdDisplay(sid);
       const title = (d.name || '').trim() || (d.reason || '').trim().slice(0, 80);
-      lines.push(`#${num}. [Design] ${title} [removable]`);
+      lines.push(`#${shortLabel} [Design] suggestion_id="${sid}" ${title} [removable]`);
       if ((d.reason || '').trim()) lines.push(`   Reason: ${(d.reason || '').trim()}`);
     });
     dataRefinement.forEach((d) => {
-      num += 1;
+      const sid = (d && d.suggestion_id) ? String(d.suggestion_id) : '';
+      const shortLabel = formatSuggestionIdDisplay(sid);
       const rows = (d.row_indices || []).length > 0 ? `Rows ${(d.row_indices || []).join(', ')}: ` : '';
       const title = rows + ((d.reason || '').trim().slice(0, 100) || 'Possible ground truth issue');
-      lines.push(`#${num}. [Data refinement] ${title} [removable]`);
+      lines.push(`#${shortLabel} [Data refinement] suggestion_id="${sid}" ${title} [removable]`);
       if ((d.reason || '').trim().length > 100) lines.push(`   Full: ${(d.reason || '').trim()}`);
     });
     suggestions.forEach((s) => {
-      num += 1;
+      const sid = (s && s.suggestion_id) ? String(s.suggestion_id) : '';
+      const shortLabel = formatSuggestionIdDisplay(sid);
       const title = (s.name || '').trim() || (s.reason || '').trim().slice(0, 80) || `[Section ${s.section_index ?? 0}] "${(s.old_sentence || '').slice(0, 40)}..." → "${(s.new_sentence || '').slice(0, 40)}..."`;
       const applied = s.applied === true ? ' [applied]' : '';
-      lines.push(`#${num}. [Edit] ${title}${applied} [removable]`);
+      lines.push(`#${shortLabel} [Edit] suggestion_id="${sid}" ${title}${applied} [removable]`);
       lines.push(`   Reason: ${(s.reason || '').trim()}`);
     });
-    lines.push('You may remove any # above using [ASSISTANT_REMOVE_SUGGESTION] (see Removing section).');
+    lines.push('You may remove any item using [ASSISTANT_REMOVE_SUGGESTION] with suggestion_id (preferred) or suggestion_index (legacy).');
     lines.push('');
   }
   lines.push('## Adding suggestions');
@@ -882,16 +912,16 @@ function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.');
   lines.push('');
   lines.push('## Removing suggestions');
-  lines.push('When the user asks to DELETE or REMOVE suggestions (e.g. 删除, 移除, remove, delete, "delete #6 and #7"): use [ASSISTANT_REMOVE_SUGGESTION]. Do NOT use [ASSISTANT_SUGGESTION] — that is for adding edits to the prompt, not for removing suggestions from the list.');
-  lines.push('You may remove any # from the list above (Design, Data refinement, or Edit). Prefer confirming "Do you want me to remove suggestion #N? Please confirm." when the request is ambiguous; when the user is explicit, output the remove block directly.');
-  lines.push('Output [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION] with the global number N from the list. For multiple removals, output one block per index.');
+  lines.push('When the user asks to DELETE or REMOVE suggestions (e.g. 删除, 移除, remove, delete): use [ASSISTANT_REMOVE_SUGGESTION]. Do NOT use [ASSISTANT_SUGGESTION] — that is for adding edits to the prompt, not for removing suggestions from the list.');
+  lines.push('Prefer removing by suggestion_id from the list above. Example: [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_id":3}[/ASSISTANT_REMOVE_SUGGESTION]. For multiple removals, output one block per item.');
+  lines.push('Legacy (positional): [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION] where N is 1-based global order (all design items, then all data refinement, then all edits).');
   lines.push('');
   lines.push('Stay focused ONLY on improving the current prompt. Answer directly and solve problems. Do not describe your context or internal structure to the user. If the user asks something unrelated to this prompt, briefly redirect to prompt improvement.');
   return lines.join('\n');
 }
 
 /** Parse [ASSISTANT_SUGGESTION]...[/ASSISTANT_SUGGESTION] blocks from assistant response. */
-function parseAssistantSuggestions(text) {
+function parseAssistantSuggestions(text, dataRoot) {
   const blocks = [];
   const re = /\[ASSISTANT_SUGGESTION\]\s*([\s\S]*?)\s*\[\/ASSISTANT_SUGGESTION\]/g;
   let m;
@@ -899,33 +929,101 @@ function parseAssistantSuggestions(text) {
     try {
       const obj = JSON.parse(m[1].trim());
       if (obj && typeof obj.section_index === 'number') {
-        blocks.push({
-          section_index: obj.section_index,
-          old_sentence: String(obj.old_sentence || '').trim(),
-          new_sentence: String(obj.new_sentence || '').trim(),
-          reason: String(obj.reason || '').trim(),
-          name: String(obj.name || '').trim(),
-          source: 'assistant',
-        });
+        blocks.push(
+          ensureSuggestionObjectId(
+            {
+              section_index: obj.section_index,
+              old_sentence: String(obj.old_sentence || '').trim(),
+              new_sentence: String(obj.new_sentence || '').trim(),
+              reason: String(obj.reason || '').trim(),
+              name: String(obj.name || '').trim(),
+              source: 'assistant',
+            },
+            dataRoot
+          )
+        );
       }
     } catch (_) {}
   }
   return blocks;
 }
 
-/** Parse [ASSISTANT_REMOVE_SUGGESTION]...[/ASSISTANT_REMOVE_SUGGESTION] blocks. Returns 1-based indices to remove. */
+/**
+ * Parse [ASSISTANT_REMOVE_SUGGESTION]...[/ASSISTANT_REMOVE_SUGGESTION] blocks.
+ * Prefers suggestion_id (stable); legacy suggestion_index is 1-based global order (design, then data refinement, then edits).
+ */
 function parseAssistantRemoveSuggestions(text) {
-  const indices = [];
+  const ops = [];
   const re = /\[ASSISTANT_REMOVE_SUGGESTION\]\s*([\s\S]*?)\s*\[\/ASSISTANT_REMOVE_SUGGESTION\]/g;
   let m;
   while ((m = re.exec(text)) !== null) {
     try {
       const obj = JSON.parse(m[1].trim());
+      const sid = obj?.suggestion_id;
+      if (sid != null && sid !== '') {
+        const num = parseNumericSuggestionId(sid);
+        if (num != null) {
+          ops.push({ suggestion_id: num });
+          continue;
+        }
+        if (typeof sid === 'string' && sid.trim()) {
+          ops.push({ suggestion_id: sid.trim() });
+          continue;
+        }
+      }
       const idx = obj?.suggestion_index;
-      if (typeof idx === 'number' && idx >= 1) indices.push(idx);
+      if (typeof idx === 'number' && idx >= 1) ops.push({ suggestion_index: idx });
     } catch (_) {}
   }
-  return indices;
+  return ops;
+}
+
+/** @param {{ design_suggestions?: unknown[], data_refinement?: unknown[], suggestions?: unknown[] }} st */
+function removeSuggestionByGlobalIndexFromState(st, oneBased) {
+  if (!st || typeof oneBased !== 'number' || oneBased < 1) return;
+  const D = (st.design_suggestions || []).length;
+  const R = (st.data_refinement || []).length;
+  const n = Math.floor(oneBased);
+  if (n >= 1 && n <= D) {
+    st.design_suggestions.splice(n - 1, 1);
+    return;
+  }
+  if (n >= D + 1 && n <= D + R) {
+    st.data_refinement.splice(n - D - 1, 1);
+    return;
+  }
+  const editIdx = n - D - R - 1;
+  const sg = st.suggestions || [];
+  if (editIdx >= 0 && editIdx < sg.length) sg.splice(editIdx, 1);
+}
+
+function removeSuggestionByIdFromState(st, suggestionId) {
+  if (!st || suggestionId == null || suggestionId === '') return false;
+  const wantNum = parseNumericSuggestionId(suggestionId);
+  const match = (x) => {
+    if (!x || typeof x !== 'object') return false;
+    if (wantNum != null) return parseNumericSuggestionId(x.suggestion_id) === wantNum;
+    return String(x.suggestion_id) === String(suggestionId).trim();
+  };
+  const ds = st.design_suggestions;
+  const dr = st.data_refinement;
+  const sg = st.suggestions;
+  let i = Array.isArray(ds) ? ds.findIndex(match) : -1;
+  if (i >= 0) {
+    ds.splice(i, 1);
+    return true;
+  }
+  i = Array.isArray(dr) ? dr.findIndex(match) : -1;
+  if (i >= 0) {
+    dr.splice(i, 1);
+    return true;
+  }
+  i = Array.isArray(sg) ? sg.findIndex(match) : -1;
+  if (i >= 0) {
+    sg.splice(i, 1);
+    return true;
+  }
+  return false;
 }
 
 /** Strip [ASSISTANT_SUGGESTION] and [ASSISTANT_REMOVE_SUGGESTION] blocks for display. */
@@ -1083,52 +1181,42 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
       }
       const data = await res.json();
       const rawContent = (data.content || '').trim() || '(No response)';
-      const parsedSuggestions = parseAssistantSuggestions(rawContent);
-      const removeIndices = parseAssistantRemoveSuggestions(rawContent);
+      const reviewSaved = typeof getReviewResult === 'function' ? getReviewResult() : null;
+      const parsedSuggestions = parseAssistantSuggestions(rawContent, reviewSaved);
+      const removeOps = parseAssistantRemoveSuggestions(rawContent);
       let displayContent = stripAssistantSuggestionBlocks(rawContent);
       if (!displayContent || !displayContent.trim()) {
         displayContent = parsedSuggestions.length > 0
           ? 'Added. Please check the Suggestions panel on the left and choose Accept or Revert.'
-          : removeIndices.length > 0
-            ? removeIndices.length > 1
+          : removeOps.length > 0
+            ? removeOps.length > 1
               ? 'Removed. The suggestions have been deleted from the list.'
               : 'Removed. The suggestion has been deleted from the list.'
             : '(No response)';
       }
       chatHistory.push({ role: 'assistant', content: displayContent });
       if (isModalOpen()) appendMessageWithTypewriter('assistant', displayContent);
-      const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
-      if (saved && typeof saved === 'object') {
-        let designSuggestions = (saved.design_suggestions || []).slice();
-        let dataRefinement = (saved.data_refinement || []).slice();
-        let suggestions = (saved.suggestions || []).slice();
-        if (removeIndices.length > 0) {
-          const D = (saved.design_suggestions || []).length;
-          const R = (saved.data_refinement || []).length;
-          const editStartGlobal = D + R + 1;
-          const removeDesign = removeIndices
-            .filter((g) => g >= 1 && g <= D)
-            .map((g) => g - 1)
+      if (reviewSaved && typeof reviewSaved === 'object') {
+        let designSuggestions = (reviewSaved.design_suggestions || []).slice();
+        let dataRefinement = (reviewSaved.data_refinement || []).slice();
+        let suggestions = (reviewSaved.suggestions || []).slice();
+        if (removeOps.length > 0) {
+          const st = { design_suggestions: designSuggestions, data_refinement: dataRefinement, suggestions };
+          const idOps = removeOps.filter((o) => o.suggestion_id).map((o) => o.suggestion_id);
+          const indexOps = removeOps
+            .filter((o) => o.suggestion_index != null)
+            .map((o) => o.suggestion_index)
             .sort((a, b) => b - a);
-          const removeData = removeIndices
-            .filter((g) => g >= D + 1 && g <= D + R)
-            .map((g) => g - D - 1)
-            .sort((a, b) => b - a);
-          const removeEdit = removeIndices
-            .filter((g) => g >= editStartGlobal)
-            .map((g) => g - editStartGlobal)
-            .sort((a, b) => b - a);
-          removeDesign.forEach((i) => designSuggestions.splice(i, 1));
-          removeData.forEach((i) => dataRefinement.splice(i, 1));
-          removeEdit.forEach((i) => suggestions.splice(i, 1));
+          idOps.forEach((id) => removeSuggestionByIdFromState(st, id));
+          indexOps.forEach((n) => removeSuggestionByGlobalIndexFromState(st, n));
         }
         if (parsedSuggestions.length > 0) {
-          const sections = saved.workingSections || saved.promptSections || [];
+          const sections = reviewSaved.workingSections || reviewSaved.promptSections || [];
           const validSuggestions = parsedSuggestions.filter((s) => s.section_index >= 0 && s.section_index < sections.length);
           suggestions = suggestions.concat(validSuggestions);
         }
         persistChatResult({
-          ...saved,
+          ...reviewSaved,
           design_suggestions: designSuggestions,
           data_refinement: dataRefinement,
           suggestions,
@@ -1291,6 +1379,7 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
     current: initialSaved && typeof initialSaved === 'object' ? { ...baseSaved, ...initialSaved } : baseSaved,
   };
   const saved = savedRef.current;
+  ensureReviewResultIds(saved);
   const persistResult = (updated) => {
     savedRef.current = updated;
     if (reviewNodeId) {
