@@ -34,6 +34,8 @@ const MATCH_FLAGS = [
 ];
 
 const DEFAULT_MATCH_FLAGS = {
+  semanticAlign: false,
+  embeddingSimilarity: false,
   contains: false,
   ignoreCase: false,
   ignoreSymbols: false,
@@ -67,11 +69,17 @@ export function canonicalizeMatchFlags(f) {
   let dec = Math.floor(Number(merged.numericDecimalPlaces));
   if (!Number.isFinite(dec)) dec = 2;
   dec = Math.max(0, Math.min(20, dec));
+  let embeddingSimilarity = !!merged.embeddingSimilarity;
+  let semanticAlign = !!merged.semanticAlign;
+  if (embeddingSimilarity && semanticAlign) semanticAlign = false;
+  const softString = embeddingSimilarity || semanticAlign;
   return {
-    contains: !!merged.contains,
-    ignoreCase: !!merged.ignoreCase,
-    ignoreSymbols: !!merged.ignoreSymbols,
-    ignoreWhitespace: !!merged.ignoreWhitespace,
+    semanticAlign,
+    embeddingSimilarity,
+    contains: softString ? false : !!merged.contains,
+    ignoreCase: softString ? false : !!merged.ignoreCase,
+    ignoreSymbols: softString ? false : !!merged.ignoreSymbols,
+    ignoreWhitespace: softString ? false : !!merged.ignoreWhitespace,
     numericMode: mode,
     numericAbsEpsilon: absE,
     numericRelEpsilon: relE,
@@ -157,6 +165,125 @@ export function stringsMatchContains(runVal, gtVal) {
   return r.includes(g) || g.includes(r);
 }
 
+/** Sørensen–Dice on character bigrams; internal normalize: trim, lower case, collapse whitespace. Not a true embedding model. */
+const SEMANTIC_ALIGN_DICE_THRESHOLD = 0.65;
+
+function normalizeSemanticAlignInput(v) {
+  return String(v == null ? '' : v).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function stringCharBigrams(s) {
+  if (s.length < 2) return [];
+  const out = [];
+  for (let i = 0; i < s.length - 1; i++) out.push(s.slice(i, i + 2));
+  return out;
+}
+
+export function stringsMatchSemanticAlign(runVal, gtVal) {
+  const a = normalizeSemanticAlignInput(runVal);
+  const b = normalizeSemanticAlignInput(gtVal);
+  if (a.length === 0 && b.length === 0) return true;
+  if (a.length === 0 || b.length === 0) return false;
+  if (a === b) return true;
+  if (a.length < 2 || b.length < 2) return a === b;
+  const ba = stringCharBigrams(a);
+  const bb = stringCharBigrams(b);
+  const counts = new Map();
+  for (const x of ba) counts.set(x, (counts.get(x) || 0) + 1);
+  let inter = 0;
+  for (const x of bb) {
+    const c = counts.get(x) || 0;
+    if (c > 0) {
+      inter++;
+      counts.set(x, c - 1);
+    }
+  }
+  const dice = (2 * inter) / (ba.length + bb.length);
+  return dice >= SEMANTIC_ALIGN_DICE_THRESHOLD;
+}
+
+/** Cosine threshold for backend FastEmbed (MiniLM) pair similarities; tuned for “close enough” paraphrases. */
+export const EMBEDDING_COSINE_THRESHOLD = 0.76;
+
+export function embeddingPairMatches(runValRaw, gtValRaw, embeddingCosineMap) {
+  const a = runValRaw == null ? '' : String(runValRaw);
+  const b = gtValRaw == null ? '' : String(gtValRaw);
+  if (a.length === 0 && b.length === 0) return true;
+  if (a.length === 0 || b.length === 0) return false;
+  const key = JSON.stringify([a, b]);
+  const c = embeddingCosineMap.get(key);
+  if (typeof c !== 'number' || !Number.isFinite(c)) return false;
+  return c >= EMBEDDING_COSINE_THRESHOLD;
+}
+
+/**
+ * Collect unique (result, GT) string pairs for rules that use embedding similarity, then call the backend once per chunk.
+ * @param {string} apiBase e.g. http://localhost:8000
+ */
+export async function prefetchEmbeddingCosineMap(apiBase, { root, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
+  const leafRules = [];
+  (function walk(n) {
+    if (!n) return;
+    if (n.type === 'rule') leafRules.push(n);
+    if (n.type === 'group' && Array.isArray(n.children)) n.children.forEach(walk);
+  })(root);
+  const embeddingRules = leafRules.filter((rule) => {
+    const f = getMatchFlags(rule);
+    return migrateLegacyMatchType(rule.matchType) === 'exact' && f.embeddingSimilarity;
+  });
+  if (embeddingRules.length === 0) return new Map();
+
+  const resultsByIndex = new Map();
+  (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
+  const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
+  const gtCount = (gtContent.rows || []).length;
+  const seen = new Set();
+  const pairs = [];
+  for (const i of runRowIndices) {
+    const runResult = resultsByIndex.get(i) || null;
+    for (let j = 0; j < gtCount; j++) {
+      for (const rule of embeddingRules) {
+        const runValRaw = getRunValue(runResult, rule.outputKey, i, runWs, outputFields);
+        const gtValsRaw = (rule.gtColumns || []).map((col) => getGtValue(gtContent, j, col));
+        for (const gt of gtValsRaw) {
+          const a = runValRaw == null ? '' : String(runValRaw);
+          const b = gt == null ? '' : String(gt);
+          const key = JSON.stringify([a, b]);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          pairs.push([a, b]);
+        }
+      }
+    }
+  }
+  if (pairs.length === 0) return new Map();
+
+  const map = new Map();
+  const base = String(apiBase || 'http://localhost:8000').replace(/\/$/, '');
+  const CHUNK = 320;
+  for (let off = 0; off < pairs.length; off += CHUNK) {
+    const chunk = pairs.slice(off, off + CHUNK);
+    const res = await fetch(`${base}/api/embeddings/pair-similarities`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairs: chunk }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(t || `Embedding API HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const cosines = data.cosines;
+    if (!Array.isArray(cosines) || cosines.length !== chunk.length) {
+      throw new Error('Invalid embedding API response');
+    }
+    chunk.forEach((p, idx) => {
+      map.set(JSON.stringify(p), cosines[idx]);
+    });
+  }
+  return map;
+}
+
 export { getMatchFlags, normalizeForMatch };
 
 function escapeHtml(str) {
@@ -185,8 +312,8 @@ function parseFlexibleNonNegativeNumber(raw) {
  * @param {{ scoreNodeId: string, getReviewPayload: () => { prompt_sections, prompt_full_text?, run_results, output_fields, comparison_rows } | null, credentialId: string }} options
  * @returns {Promise<{ reviewNodeId: string } | null>} reviewNodeId after node is created; null if payload/credential invalid
  */
-export function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId }) {
-  const payload = getReviewPayload && getReviewPayload();
+export async function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId }) {
+  const payload = await Promise.resolve(getReviewPayload && getReviewPayload());
   if (!credentialId || !payload || !payload.prompt_sections || !payload.prompt_sections.length) return Promise.resolve(null);
   const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } });
   document.dispatchEvent(addEvent);
@@ -281,6 +408,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   const name = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Score';
   const title = `Score: ${name}`;
+
+  /** Populated before pairing when any rule uses embedding similarity (local backend FastEmbed). */
+  let scoreEmbeddingCosineMap = new Map();
 
   let selectedNodeId = (node?.dataset?.scoreGroundTruthId || '').trim();
 
@@ -563,6 +693,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       });
     }
 
+    if (matchType === 'exact' && flags.embeddingSimilarity) {
+      return gtValsRaw.some((g) => embeddingPairMatches(runValRaw, g, scoreEmbeddingCosineMap));
+    }
+    if (matchType === 'exact' && flags.semanticAlign) {
+      return gtValsRaw.some((g) => stringsMatchSemanticAlign(runValRaw, g));
+    }
     const runVal = normalizeForMatch(runValRaw, flags, false);
     return gtValsRaw.some((g) => {
       const gtVal = normalizeForMatch(g, flags, false);
@@ -945,8 +1081,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
             </div>
             <div class="dataset-meta-field rule-editor-flags-wrap" id="rule-editor-flags-wrap">
               <span class="dataset-meta-label">String match options</span>
-              <div class="rule-editor-flags">
+              <div class="rule-editor-flags" id="rule-editor-flags-inner" role="group" aria-label="String match options">
                 ${MATCH_FLAGS.map((f) => `<label class="rule-editor-flag-label"><input type="checkbox" class="rule-editor-flag-cb" data-flag="${escapeAttr(f.key)}" ${flags[f.key] ? 'checked' : ''} aria-label="${escapeAttr(f.label)}" />${escapeHtml(f.label)}</label>`).join('')}
+                <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-fuzzy-bigram-cb" class="rule-editor-flag-cb rule-editor-fuzzy-bigram-cb" ${flags.semanticAlign ? 'checked' : ''} aria-label="Fuzzy text match using character bigrams (Dice), not embeddings" />Fuzzy text</label>
+                <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-embedding-similarity-cb" class="rule-editor-flag-cb rule-editor-embedding-similarity-cb" ${flags.embeddingSimilarity ? 'checked' : ''} aria-label="Semantic match using local fast embedding model (MiniLM via backend)" />Semantic</label>
               </div>
             </div>
             <div class="dataset-meta-field rule-editor-numeric-wrap" id="rule-editor-numeric-wrap" style="display:none;">
@@ -1036,7 +1174,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (numericDecWrap) numericDecWrap.style.display = mode === 'decimals' ? '' : 'none';
     }
 
-    /** String match: normalization checkboxes; numeric: numeric mode + parameters. */
+    /** Only disable string options when comparison type is numeric; mutual exclusivity is by unchecking, not by disabling. */
+    function syncStringModeFlagInputsDisabled() {
+      const showStr = ((matchSelectEl?.value ?? '').trim() || 'exact') === 'exact';
+      const fuzzyCb = editorOverlay.querySelector('#rule-editor-fuzzy-bigram-cb');
+      const embedCb = editorOverlay.querySelector('#rule-editor-embedding-similarity-cb');
+      if (fuzzyCb) fuzzyCb.disabled = !showStr;
+      if (embedCb) embedCb.disabled = !showStr;
+      editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
+        cb.disabled = !showStr;
+      });
+    }
     function updateComparisonTypePanels() {
       const v = (matchSelectEl?.value ?? '').trim() || 'exact';
       const flagsWrap = editorOverlay.querySelector('#rule-editor-flags-wrap');
@@ -1045,9 +1193,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const showNum = v === 'numeric';
       if (flagsWrap) flagsWrap.style.display = showStr ? '' : 'none';
       if (numWrap) numWrap.style.display = showNum ? '' : 'none';
-      editorOverlay.querySelectorAll('.rule-editor-flag-cb').forEach((cb) => {
-        cb.disabled = !showStr;
-      });
+      syncStringModeFlagInputsDisabled();
       if (showNum) updateNumericParamVisibility();
     }
     matchSelectEl.addEventListener('change', updateComparisonTypePanels);
@@ -1057,6 +1203,32 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     });
     updateComparisonTypePanels();
     requestAnimationFrame(() => updateComparisonTypePanels());
+
+    const fuzzyBigramCbEl = editorOverlay.querySelector('#rule-editor-fuzzy-bigram-cb');
+    const embeddingSimilarityCbEl = editorOverlay.querySelector('#rule-editor-embedding-similarity-cb');
+    fuzzyBigramCbEl?.addEventListener('change', () => {
+      if (fuzzyBigramCbEl.checked) {
+        if (embeddingSimilarityCbEl) embeddingSimilarityCbEl.checked = false;
+        editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
+      }
+      clearError();
+    });
+    embeddingSimilarityCbEl?.addEventListener('change', () => {
+      if (embeddingSimilarityCbEl.checked) {
+        if (fuzzyBigramCbEl) fuzzyBigramCbEl.checked = false;
+        editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
+      }
+      clearError();
+    });
+    editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          if (fuzzyBigramCbEl) fuzzyBigramCbEl.checked = false;
+          if (embeddingSimilarityCbEl) embeddingSimilarityCbEl.checked = false;
+        }
+        clearError();
+      });
+    });
 
     function save() {
       const outputKey = (resultSelectEl?.value ?? '').trim();
@@ -1070,8 +1242,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         return;
       }
       const matchType = (matchSelectEl?.value ?? '').trim() || 'exact';
-      const flagCbs = editorOverlay.querySelectorAll('.rule-editor-flag-cb');
+      const flagCbs = editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]');
       const matchFlags = { ...DEFAULT_MATCH_FLAGS };
+      const fuzzyCb = editorOverlay.querySelector('#rule-editor-fuzzy-bigram-cb');
+      const embedCb = editorOverlay.querySelector('#rule-editor-embedding-similarity-cb');
+      matchFlags.semanticAlign = matchType === 'exact' && !!(fuzzyCb && fuzzyCb.checked);
+      matchFlags.embeddingSimilarity = matchType === 'exact' && !!(embedCb && embedCb.checked);
       flagCbs.forEach((cb) => {
         const key = cb.getAttribute('data-flag');
         if (key && (key === 'contains' || key === 'ignoreCase' || key === 'ignoreSymbols' || key === 'ignoreWhitespace')) matchFlags[key] = !!cb.checked;
@@ -1145,8 +1321,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const mt = migrateLegacyMatchType(rule.matchType);
     const typeLabel = MATCH_TYPES.find((m) => m.value === mt)?.label || 'String match';
     const flags = getMatchFlags(rule);
-    const flagLabels = MATCH_FLAGS.filter((f) => flags[f.key]).map((f) => f.label);
-    let flagPart = flagLabels.length > 0 ? ` · ${flagLabels.join(', ')}` : '';
+    let flagPart = '';
+    if (mt === 'exact' && flags.embeddingSimilarity) {
+      flagPart = ' · Semantic';
+    } else if (mt === 'exact' && flags.semanticAlign) {
+      flagPart = ' · Fuzzy text';
+    } else {
+      const flagLabels = MATCH_FLAGS.filter((f) => flags[f.key]).map((f) => f.label);
+      flagPart = flagLabels.length > 0 ? ` · ${flagLabels.join(', ')}` : '';
+    }
     if (mt === 'numeric' && flags.numericMode && flags.numericMode !== 'exact') {
       if (flags.numericMode === 'abs') flagPart += ` · abs ε≤${flags.numericAbsEpsilon}`;
       else if (flags.numericMode === 'rel') flagPart += ` · rel≤${flags.numericRelEpsilon}`;
@@ -1338,7 +1521,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       p.className = 'score-detail-placeholder';
       p.textContent = 'Select a dataset as ground truth, then add rules. Click a rule to edit; use AND/OR to combine.';
       rulesListEl.appendChild(p);
-      renderResults();
+      void renderResults();
       return;
     }
     const runColumns = getRunResultColumns();
@@ -1350,13 +1533,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         ? 'No run connected or run has no result columns (run once with a dataset to see columns).'
         : 'Ground truth dataset has no columns.';
       rulesListEl.appendChild(p);
-      renderResults();
+      void renderResults();
       return;
     }
 
     const root = getRoot();
     if (root.type !== 'group' || !Array.isArray(root.children)) {
-      renderResults();
+      void renderResults();
       return;
     }
     const children = root.children || [];
@@ -1398,13 +1581,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     addRow.appendChild(cardWrap);
     treeWrap.appendChild(addRow);
     rulesListEl.appendChild(treeWrap);
-    renderResults();
+    void renderResults();
   }
 
-  function renderResults() {
+  async function renderResults() {
     if (!resultsBody) return;
     resultsBody.innerHTML = '';
-    updateSaveToWorkspaceButton();
     const root = getRoot();
     const rulesFlat = getRulesFlat();
     if (!selectedNodeId) {
@@ -1455,6 +1637,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
 
     updatePanelExpanded(true);
+    scoreEmbeddingCosineMap = new Map();
+    if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
+      try {
+        scoreEmbeddingCosineMap = await prefetchEmbeddingCosineMap(API_BASE, {
+          root, results, outputFields, runWs, gtContent, getRunValue, getGtValue,
+        });
+      } catch (e) {
+        showAlert(String(e?.message || e), { title: 'Embedding comparison failed' });
+        scoreEmbeddingCosineMap = new Map();
+      }
+    }
     const { runToGt, total: runCount, matchedCount } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
     const gtToRun = new Array(gtRows.length).fill(-1);
     for (let i = 0; i < (runToGt || []).length; i++) {
@@ -1495,7 +1688,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           parts.push(runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : '');
         });
         parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
-        parts.push(isScoreRowExcludedFromScoring(String(j)) ? 'no' : 'yes');
+        parts.push(isScoreRowExcludedFromScoring(String(j)) ? 'false' : 'true');
         parts.push(comments[String(j)] ?? '');
       } else {
         const i = d.i;
@@ -1504,7 +1697,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         gtColsUsed.forEach(() => { parts.push('—'); });
         outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
         parts.push('false');
-        parts.push(isScoreRowExcludedFromScoring(`run:${i}`) ? 'no' : 'yes');
+        parts.push(isScoreRowExcludedFromScoring(`run:${i}`) ? 'false' : 'true');
         parts.push(comments['run:' + i] ?? '');
       }
       return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
@@ -1570,7 +1763,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       searchInp.addEventListener('input', () => {
         scoreDetailPagination.searchQuery = searchInp.value;
         scoreDetailPagination.currentPage = 1;
-        renderResults();
+        void renderResults();
       });
     }
     resultsBody.appendChild(topRow);
@@ -1683,7 +1876,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           if (cb.checked) delete ex[commentKey];
           else ex[commentKey] = true;
           setScoreRowExcludedFromScoring(ex);
-          renderResults();
+          void renderResults();
         });
         wrap.appendChild(cb);
         tdReview.appendChild(wrap);
@@ -1745,38 +1938,38 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         rowsPerPageSelect.addEventListener('change', () => {
           scoreDetailPagination.rowsPerPage = Number(rowsPerPageSelect.value) || 25;
           scoreDetailPagination.currentPage = 1;
-          renderResults();
+          void renderResults();
         });
       }
       if (pageInp) {
         pageInp.addEventListener('change', () => {
           scoreDetailPagination.currentPage = Math.max(1, Math.min(totalPages, parseInt(pageInp.value, 10) || 1));
-          renderResults();
+          void renderResults();
         });
       }
       if (prevBtn) {
         prevBtn.disabled = scoreDetailPagination.currentPage <= 1;
         prevBtn.addEventListener('click', () => {
           scoreDetailPagination.currentPage = Math.max(1, scoreDetailPagination.currentPage - 1);
-          renderResults();
+          void renderResults();
         });
       }
       if (nextBtn) {
         nextBtn.disabled = scoreDetailPagination.currentPage >= totalPages;
         nextBtn.addEventListener('click', () => {
           scoreDetailPagination.currentPage = Math.min(totalPages, scoreDetailPagination.currentPage + 1);
-          renderResults();
+          void renderResults();
         });
       }
     }
-    updateSaveToWorkspaceButton();
+    void updateSaveToWorkspaceButton();
   }
 
-  function updateReviewButtonState() {
+  async function updateReviewButtonState() {
     if (!addPromptReviewBtn) return;
-    const payload = getReviewPayload();
+    const payload = await Promise.resolve(getReviewPayload());
     addPromptReviewBtn.disabled = !payload || !payload.prompt_sections || payload.prompt_sections.length === 0 || !selectedNodeId;
-    updateSaveToWorkspaceButton();
+    await updateSaveToWorkspaceButton();
   }
 
   async function loadReviewCredentials() {
@@ -1796,13 +1989,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         if (node) node.dataset.reviewCredentialId = credentialId;
       }
     } catch (_) {}
-    updateReviewButtonState();
+    void updateReviewButtonState();
   }
 
-  function updateSaveToWorkspaceButton() {
+  async function updateSaveToWorkspaceButton() {
     if (!saveToWorkspaceBtn) return;
-    const payload = getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns });
-    saveToWorkspaceBtn.disabled = !payload || !payload.headers || !payload.rows.length;
+    try {
+      const payload = await getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns });
+      saveToWorkspaceBtn.disabled = !payload || !payload.headers || !payload.rows.length;
+    } catch (_) {
+      saveToWorkspaceBtn.disabled = true;
+    }
   }
 
   llmSelect.addEventListener('change', () => {
@@ -1814,8 +2011,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   });
 
   if (saveToWorkspaceBtn) {
-    saveToWorkspaceBtn.addEventListener('click', () => {
-      const payload = getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns });
+    saveToWorkspaceBtn.addEventListener('click', async () => {
+      const payload = await getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns });
       if (!payload || !payload.headers || !payload.rows) return;
       const scoreName = (node?.querySelector?.('.workflow-node__title')?.textContent || '').trim() || 'Score';
       document.dispatchEvent(new CustomEvent('workflow:score-export-to-workspace', {
@@ -1832,7 +2029,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       showAlert('Please select a Reviewer model first.', { title: 'No model selected' });
       return;
     }
-    const payload = getReviewPayload();
+    const payload = await Promise.resolve(getReviewPayload());
     if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) return;
     const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } });
     document.dispatchEvent(addEvent);
@@ -1918,7 +2115,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     updateScoreNodeBorder();
     closeDropdown();
     dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.nodeId === selectedNodeId ? 'true' : 'false'));
-    updateReviewButtonState();
+    void updateReviewButtonState();
     if (selectedNodeId) {
       const gtSet = new Set(getGroundTruthHeaders(selectedNodeId) || []);
       let root = getRoot();
@@ -2014,9 +2211,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
  * Build score comparison table for export (Save to workspace).
  * Column names and order match the Score page display.
  * @param {{ node: HTMLElement, getRunResults: () => { results, outputFields }, getRunWorkingSetContent: () => { headers, rows }, getGroundTruthContent: (wsNodeId: string) => { headers, rows }, getGroundTruthHeaders: (wsNodeId: string) => string[], getRunResultColumns?: () => Array<{ key: string, label: string }> }} options
- * @returns {{ headers: string[], rows: string[][] } | null}
+ * @returns {Promise<{ headers: string[], rows: string[][] } | null>}
  */
-export function getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns }) {
+export async function getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns }) {
   if (!node) return null;
   const selectedNodeId = (node.dataset.scoreGroundTruthId || '').trim();
   if (!selectedNodeId) return null;
@@ -2153,6 +2350,7 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
     if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
     return '';
   };
+  let exportEmbeddingCosineMap = new Map();
   const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
     const runResult = resultsByIndex.get(runRowIndex) || null;
     const runValRaw = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
@@ -2165,6 +2363,12 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
         const gtNorm = normalizeForMatch(g, flags, true);
         return numericPairMatches(runNorm, gtNorm, flags);
       });
+    }
+    if (matchType === 'exact' && flags.embeddingSimilarity) {
+      return gtValsRaw.some((g) => embeddingPairMatches(runValRaw, g, exportEmbeddingCosineMap));
+    }
+    if (matchType === 'exact' && flags.semanticAlign) {
+      return gtValsRaw.some((g) => stringsMatchSemanticAlign(runValRaw, g));
     }
     const runVal = normalizeForMatch(runValRaw, flags, false);
     return gtValsRaw.some((g) => {
@@ -2268,6 +2472,16 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
   const resultsByIndex = new Map();
   (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
   const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
+  exportEmbeddingCosineMap = new Map();
+  if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
+    try {
+      exportEmbeddingCosineMap = await prefetchEmbeddingCosineMap(API_BASE, {
+        root, results, outputFields, runWs, gtContent, getRunValue, getGtValue,
+      });
+    } catch (_) {
+      exportEmbeddingCosineMap = new Map();
+    }
+  }
   const { runToGt } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
   const gtToRun = new Array(gtRows.length).fill(-1);
   for (let i = 0; i < (runToGt || []).length; i++) {
@@ -2313,7 +2527,7 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       parts.push(runRowIndex >= 0 ? String(runRowIndex + 1) : '—');
       outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : ''); });
       parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
-      parts.push(rowIncludedInReview(String(j)) ? 'yes' : 'no');
+      parts.push(rowIncludedInReview(String(j)) ? 'true' : 'false');
       parts.push(comments[String(j)] ?? '');
     } else {
       const i = d.i;
@@ -2324,7 +2538,7 @@ export function getScoreExportData({ node, getRunResults, getRunWorkingSetConten
       parts.push(String(i + 1));
       outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
       parts.push('false');
-      parts.push(rowIncludedInReview(`run:${i}`) ? 'yes' : 'no');
+      parts.push(rowIncludedInReview(`run:${i}`) ? 'true' : 'false');
       parts.push(comments['run:' + i] ?? '');
     }
     return parts.map((v) => (v === null || v === undefined ? '' : String(v)));

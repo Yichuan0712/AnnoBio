@@ -691,7 +691,6 @@ function buildReviewResultUI(overlay, options) {
 
 /** Review node modal: show saved result (sections + suggestions) or empty state. */
 export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, getIsReviewStreaming }) {
-  const payload = getPayload ? getPayload() : null;
   const saved = getReviewResult ? getReviewResult() : null;
   const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
   const title = `Review: ${reviewName}`;
@@ -817,9 +816,9 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 }
 
 /** Build context text for Review assistant from saved + payload. */
-function buildReviewAssistantContext(getPayload, getReviewResult) {
+async function buildReviewAssistantContext(getPayload, getReviewResult) {
   const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
-  const payload = typeof getPayload === 'function' ? getPayload() : null;
+  const payload = await Promise.resolve(typeof getPayload === 'function' ? getPayload() : null);
   const lines = [
     'You are a prompt improvement assistant. Your ONLY job is to help improve the current prompt below. Do not discuss general prompt engineering, other prompts, or unrelated topics. Everything you say and do must directly serve improving this prompt.',
     '',
@@ -1065,8 +1064,8 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
   const initialChat = Array.isArray(saved0?.chatHistory) ? saved0.chatHistory : [];
   const chatHistory = initialChat.map((m) => ({ role: m.role, content: String(m.content || '').trim() }));
 
-  function getSystemContext() {
-    const ctx = buildReviewAssistantContext(getPayload, getReviewResult);
+  async function getSystemContext() {
+    const ctx = await buildReviewAssistantContext(getPayload, getReviewResult);
     return ctx.trim() ? ctx : null;
   }
 
@@ -1158,7 +1157,7 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
       return el;
     })() : null;
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    const systemContext = getSystemContext();
+    const systemContext = await getSystemContext();
     const historyForApi = sliceChatHistoryForApi(chatHistory);
     const messagesToSend = systemContext
       ? [{ role: 'system', content: systemContext }, ...historyForApi]

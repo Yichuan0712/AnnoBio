@@ -386,6 +386,42 @@ def list_credential_models():
     return {"providers": list(PROVIDERS), "models": list(MODELS)}
 
 
+class EmbeddingPairSimRequest(BaseModel):
+    pairs: list[list[str]] = Field(default_factory=list)
+
+
+class EmbeddingPairSimResponse(BaseModel):
+    cosines: list[float]
+    model: str
+
+
+@app.post("/api/embeddings/pair-similarities", response_model=EmbeddingPairSimResponse)
+def api_embeddings_pair_similarities(body: EmbeddingPairSimRequest):
+    """Batch cosine similarity using local FastEmbed (Sentence-Transformers MiniLM ONNX — fast CPU model)."""
+    pairs = body.pairs
+    if len(pairs) > 2048:
+        raise HTTPException(status_code=400, detail="Too many pairs (max 2048 per request)")
+    for i, ab in enumerate(pairs):
+        if not isinstance(ab, list) or len(ab) != 2:
+            raise HTTPException(status_code=400, detail=f"pairs[{i}] must be [string, string]")
+        for j, t in enumerate(ab):
+            if not isinstance(t, str):
+                raise HTTPException(status_code=400, detail=f"pairs[{i}][{j}] must be a string")
+            if len(t) > 16000:
+                raise HTTPException(status_code=400, detail="Each string must be at most 16000 characters")
+    try:
+        from embedding_service import compute_pair_cosine_similarities, get_loaded_model_id
+
+        cos = compute_pair_cosine_similarities(pairs)
+        return EmbeddingPairSimResponse(cosines=cos, model=get_loaded_model_id())
+    except Exception as e:
+        _safe_print(f"[embeddings] {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Embedding model unavailable. Install backend dependencies (fastembed, numpy) and ensure the model can download.",
+        ) from e
+
+
 @app.get("/api/credentials", response_model=list[CredentialResponse])
 def list_credentials():
     """List all credentials; API key returned masked."""
@@ -1106,7 +1142,7 @@ RouteDecision = Literal["REWRITE", "ANALYZE"]
 
 # Comparison rule labels (align with frontend: matchType + optional matchFlags in parentheses).
 REVIEW_COMPARISON_RULES_BLOCK = """
-- **String match**: Compare as text after any listed normalizations. Parentheses list active options for that field, e.g. **Contains** (mutual substring: either side contains the other), **Ignore case**, **Ignore symbols**, **Ignore whitespace**. If none are listed, require exact equality after trim only.
+- **String match**: Compare as text after any listed normalizations. Parentheses list active options for that field, e.g. **Contains** (mutual substring: either side contains the other), **Ignore case**, **Ignore symbols**, **Ignore whitespace**. If none are listed, require exact equality after trim only. **Fuzzy text (bigrams)** is mutually exclusive with those options: Sørensen–Dice on character bigrams after trim / lowercasing / collapsed whitespace (not embedding-based). **Semantic (embedding)** is also mutually exclusive with those options: cosine similarity of local sentence embeddings (backend FastEmbed, MiniLM-class model).
 - **Numeric equality**: Both sides are trimmed, then parsed as numbers when possible. Parentheses describe the mode: exact **==**; **abs ε≤x** means |a-b|≤x; **rel≤r** means |a-b|≤r×max(|a|,|b|); **N dp** means round both to N decimal places (half-up) then require equality. If parsing fails, the trimmed strings are compared for equality.
 """
 
