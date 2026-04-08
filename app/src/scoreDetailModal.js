@@ -1912,7 +1912,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
 
     tableWrap.appendChild(tbl);
-    resultsBody.appendChild(tableWrap);
+    const tableScroll = document.createElement('div');
+    tableScroll.className = 'score-detail-results-table-scroll';
+    tableScroll.appendChild(tableWrap);
+    resultsBody.appendChild(tableScroll);
 
     if (resultsToolbar) {
       resultsToolbar.style.display = '';

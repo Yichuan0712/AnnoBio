@@ -3018,7 +3018,17 @@
 .score-detail-results-card #score-detail-results-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 仅表格区域纵向滚动，摘要 / 指标 / Search 始终可见 */
+.score-detail-results-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 /* # 列与 Ground truth #、Run result # 右对齐，与 dataset 节点一致 */
@@ -3224,7 +3234,8 @@
 }
 
 .score-detail-results-table-wrap {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .score-detail-results-table {
