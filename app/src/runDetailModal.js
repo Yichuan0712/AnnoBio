@@ -6,6 +6,7 @@
  */
 
 import { getNextRowIndex, mergeResumeResults, embedInputRow, processApiResults, markEmptyOutputAsError } from './runResumeUtils.js';
+import { selectPlaceholderLabel } from './displayTextNormalize.js';
 
 const API_BASE = 'http://localhost:8000';
 const MAX_CELL_CHARS = 40;
@@ -144,7 +145,7 @@ export function openRunDetailModal({
               <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select input dataset">
                 <div class="run-detail-ws-trigger" tabindex="0">
                   <span class="run-detail-ws-trigger-color" id="run-detail-ws-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="run-detail-ws-trigger-text">— Select input dataset —</span>
+                  <span class="run-detail-ws-trigger-text" id="run-detail-ws-trigger-text">${escapeHtml(selectPlaceholderLabel('Select input dataset'))}</span>
                   <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
                 </div>
                 <div class="run-detail-ws-dropdown" id="run-detail-ws-dropdown" role="listbox" hidden></div>
@@ -157,7 +158,7 @@ export function openRunDetailModal({
             <div class="dataset-meta-field">
               <label class="dataset-meta-label" for="run-detail-llm-select">Model for prompt</label>
               <select id="run-detail-llm-select" class="run-detail-llm-select dataset-meta-input" aria-label="Select model for prompt">
-                <option value="">— Select model —</option>
+                <option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>
               </select>
             </div>
           </div>
@@ -550,7 +551,7 @@ export function openRunDetailModal({
     } else {
       triggerColorEl.style.background = '';
       triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = '— Select input dataset —';
+      triggerTextEl.textContent = selectPlaceholderLabel('Select input dataset');
     }
   }
 
@@ -573,7 +574,7 @@ export function openRunDetailModal({
       opt.setAttribute('role', 'option');
       opt.setAttribute('aria-selected', nid === selectedNodeId ? 'true' : 'false');
       opt.dataset.nodeId = nid;
-      opt.innerHTML = nid ? `<span class="run-detail-ws-option-color" style="background:${escapeHtml(workingSets.find((w) => w.nodeId === nid)?.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(label)}</span>` : '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select input dataset —</span>';
+      opt.innerHTML = nid ? `<span class="run-detail-ws-option-color" style="background:${escapeHtml(workingSets.find((w) => w.nodeId === nid)?.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(label)}</span>` : `<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">${escapeHtml(selectPlaceholderLabel('Select input dataset'))}</span>`;
       opt.addEventListener('click', () => selectWorkingSet(nid));
       dropdownEl.appendChild(opt);
     };
@@ -602,7 +603,7 @@ export function openRunDetailModal({
       row.className = 'run-detail-mapping-row';
       row.setAttribute('role', 'row');
       const currentCol = inputToColumn[inputName] || '';
-      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Dataset column for ${escapeAttr(inputName)}"><option value="">— Select column —</option>${headers.map((h) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}</span>`;
+      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Dataset column for ${escapeAttr(inputName)}"><option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>${headers.map((h) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}</span>`;
       row.querySelector('.run-detail-column-select').addEventListener('change', (e) => {
         inputToColumn[inputName] = (e.target.value || '').trim() || '';
         if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
@@ -670,7 +671,7 @@ export function openRunDetailModal({
   overlay.addEventListener('click', (e) => { if (!pickerEl.contains(e.target)) { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); } });
 
   (async () => {
-    llmSelectEl.innerHTML = '<option value="">— Select model —</option>';
+    llmSelectEl.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>`;
     try {
       const [list, settings] = await Promise.all([
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),

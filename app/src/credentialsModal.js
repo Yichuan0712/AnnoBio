@@ -4,6 +4,7 @@
  */
 
 import { showAlert, showConfirm } from './alertModal.js';
+import { selectPlaceholderLabel } from './displayTextNormalize.js';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -366,14 +367,14 @@ export function openCredentialsModal() {
             <div class="credentials-add-field">
               <label class="dataset-meta-label" for="credentials-provider-select">Provider</label>
               <select id="credentials-provider-select" class="credentials-select" aria-label="Select provider">
-                <option value="">— Select provider —</option>
+                <option value="">${selectPlaceholderLabel('Select provider')}</option>
               </select>
             </div>
             <div class="credentials-add-field credentials-model-cell">
               <label class="dataset-meta-label" for="credentials-model-select">Model type</label>
               <div class="credentials-model-preset-wrap">
                 <select id="credentials-model-select" class="credentials-select" aria-label="Select model type">
-                  <option value="">— Select model type —</option>
+                  <option value="">${selectPlaceholderLabel('Select model type')}</option>
                 </select>
               </div>
               <div class="credentials-model-custom-wrap" id="credentials-model-custom-wrap">
@@ -448,7 +449,7 @@ export function openCredentialsModal() {
   function fillProviderSelect() {
     const sel = overlay.querySelector('#credentials-provider-select');
     if (!sel || !overlay._providers) return;
-    const placeholder = '<option value="">— Select provider —</option>';
+    const placeholder = `<option value="">${selectPlaceholderLabel('Select provider')}</option>`;
     const options = overlay._providers.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
     sel.innerHTML = placeholder + options;
     fillModelSelect();
@@ -460,8 +461,8 @@ export function openCredentialsModal() {
     if (!modelSel || !overlay._models) return;
     const providerId = (providerSel && providerSel.value) || '';
     const modelsForProvider = providerId ? overlay._models.filter((m) => m.provider === providerId) : [];
-    const customOption = providerId ? '<option value="__custom__">— Custom —</option>' : '';
-    modelSel.innerHTML = '<option value="">— Select model type —</option>' + modelsForProvider.map((m) => `<option value="${m.id}">${m.name}</option>`).join('') + customOption;
+    const customOption = providerId ? `<option value="__custom__">${selectPlaceholderLabel('Custom')}</option>` : '';
+    modelSel.innerHTML = `<option value="">${selectPlaceholderLabel('Select model type')}</option>` + modelsForProvider.map((m) => `<option value="${m.id}">${m.name}</option>`).join('') + customOption;
     toggleModelCustomVisibility(overlay);
   }
 

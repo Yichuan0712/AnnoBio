@@ -22,6 +22,10 @@ const REVIEW_INCOMPLETE_USER_MSG = 'Last review did not complete. Please run Rev
 /** Sliding window for /api/chat: max user+assistant messages (≈20 turns if strictly alternating). Full history still kept in UI and project JSON. */
 const REVIEW_ASSISTANT_MAX_MESSAGES = 40;
 
+/** Shown when the Review assistant chat is empty (or after clear): Suggested changes add/remove + Accept / Revert. */
+const REVIEW_ASSISTANT_WELCOME_MSG =
+  'Ask questions, propose edits, or ask me to add or remove items in Suggested changes. Use Accept or Revert on each card to apply or roll back the working prompt.';
+
 /**
  * Take only the newest messages so the request stays within context limits.
  * If the slice starts with an assistant message, drop from the front until a user message leads (clearer for the model).
@@ -49,6 +53,26 @@ function truncateWithEllipsis(text, maxChars) {
   if (!t) return '';
   if (t.length <= maxChars) return t;
   return `${t.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+}
+
+/**
+ * Uppercase the first Unicode letter in a short title (skip leading punctuation/digits).
+ * Keeps LLM/phrases like "cross-check …" consistent in the Findings cards.
+ */
+function ensureCardTitleSentenceLead(text) {
+  const s = normalizeUnicodeDashesForDisplay(String(text ?? ''));
+  if (!s.trim()) return s;
+  const chars = Array.from(s);
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i];
+    const lower = c.toLowerCase();
+    const upper = c.toUpperCase();
+    if (upper !== lower) {
+      if (c !== upper) chars[i] = upper;
+      break;
+    }
+  }
+  return chars.join('');
 }
 
 /** 0-based run/comparison row_index → 1-based label (same as Score table “Run result #”). */
@@ -93,14 +117,14 @@ function shortSentenceTitleFromSummary(summary, maxLen = 88) {
 
 function diagnosisCardTitleLine(d) {
   const fromLlm = (d.card_title || '').trim();
-  if (fromLlm) return truncateWithEllipsis(fromLlm, 100);
+  if (fromLlm) return ensureCardTitleSentenceLead(truncateWithEllipsis(fromLlm, 100));
   const fromIssue = shortSentenceTitleFromSummary(d.issue_summary, 88);
-  if (fromIssue) return fromIssue;
+  if (fromIssue) return ensureCardTitleSentenceLead(fromIssue);
   const fromHint = humanizeSnakeCaseHint(d.problem_category_hint);
-  if (fromHint) return fromHint;
+  if (fromHint) return ensureCardTitleSentenceLead(fromHint);
   const fromRough = truncateWithEllipsis(d.rough_modification_opinion, 88);
-  if (fromRough) return fromRough;
-  return 'Error analysis';
+  if (fromRough) return ensureCardTitleSentenceLead(fromRough);
+  return ensureCardTitleSentenceLead('Error analysis');
 }
 
 /** Short sentence-style card title for Suggested changes (mirrors diagnosis list line). */
@@ -108,13 +132,13 @@ function suggestionCardTitleLine({ explicitName, reason, sectionFallback, defaul
   const fromName = String(explicitName || '').trim();
   if (fromName) {
     const sentence = shortSentenceTitleFromSummary(fromName, 100) || fromName;
-    return truncateWithEllipsis(sentence, 100);
+    return ensureCardTitleSentenceLead(truncateWithEllipsis(sentence, 100));
   }
   const fromReason = shortSentenceTitleFromSummary(reason, 88);
-  if (fromReason) return fromReason;
+  if (fromReason) return ensureCardTitleSentenceLead(fromReason);
   const sec = String(sectionFallback || '').trim();
-  if (sec) return truncateWithEllipsis(sec, 88);
-  return defaultLabel;
+  if (sec) return ensureCardTitleSentenceLead(truncateWithEllipsis(sec, 88));
+  return ensureCardTitleSentenceLead(defaultLabel);
 }
 
 /**
@@ -131,7 +155,7 @@ function openRowDiagnosisDetailOverlay(diagnostic, _comparisonRow, displayNumber
   const scoreRowIdx = diagnostic.row_index;
   const scoreRowLabel = formatRunRowIndexForDisplay(scoreRowIdx);
 
-  const mainHeading = cardTitle || `Analysis #${num}`;
+  const mainHeading = ensureCardTitleSentenceLead(cardTitle || `Analysis #${num}`);
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay review-diagnosis-detail-overlay';
@@ -1655,7 +1679,7 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
         }
       }
       if (credentialId) {
-        appendMessage('assistant', 'You can chat with me to discuss how to improve the prompt. Ask questions, request edits, or ask me to add or remove suggestions.');
+        appendMessage('assistant', REVIEW_ASSISTANT_WELCOME_MSG);
       }
     });
   }
@@ -1701,7 +1725,7 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
     } else if (chatHistory.length === 0) {
       const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
       if (!streaming) {
-        appendMessage('assistant', 'You can chat with me to discuss how to improve the prompt. Ask questions, request edits, or ask me to add or remove suggestions.');
+        appendMessage('assistant', REVIEW_ASSISTANT_WELCOME_MSG);
       }
     }
   });

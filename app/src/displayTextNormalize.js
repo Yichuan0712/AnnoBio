@@ -8,6 +8,19 @@
 const DASH_LIKE =
   /[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D\u2043\u2E3A\u2E3B\uFE31]/g;
 
+/** Single em dash (U+2014), used around empty native select option labels (not passed through normalizeUnicodeDashesForDisplay). */
+const SELECT_PLACEHOLDER_EMDASH = '\u2014';
+
+/**
+ * Wrap label as "— text —" (one em dash on each side, spaces inside).
+ * Keeps placeholder options consistent across modals.
+ */
+export function selectPlaceholderLabel(innerLabel) {
+  const t = String(innerLabel ?? '').trim();
+  if (!t) return '';
+  return `${SELECT_PLACEHOLDER_EMDASH} ${t} ${SELECT_PLACEHOLDER_EMDASH}`;
+}
+
 export function normalizeUnicodeDashesForDisplay(str) {
   if (str == null) return '';
   return String(str)

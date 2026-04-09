@@ -1,7 +1,6 @@
 /**
  * Makes all modal panels draggable by header and resizable by corner handle.
  */
-import { snapHalfToSide } from './modalMaximize.js';
 
 function ensureResizeHandle(panel) {
   if (panel.querySelector('.modal-resize-handle')) return;
@@ -30,10 +29,8 @@ export function initModalDrag() {
     const overlay = panel.closest('.modal-overlay');
     if (!overlay) return;
     if (overlay.classList.contains('modal-overlay--maximized')) return;
-    const isHalf = overlay.classList.contains('modal-overlay--half-left') || overlay.classList.contains('modal-overlay--half-right');
-    if (isHalf && e.target.closest('.modal-resize-handle')) return;
 
-    if (!isHalf && e.target.closest('.modal-resize-handle')) {
+    if (e.target.closest('.modal-resize-handle')) {
       e.preventDefault();
       const rect = panel.getBoundingClientRect();
       let startW = rect.width;
@@ -93,9 +90,6 @@ export function initModalDrag() {
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
-      if (overlay.classList.contains('modal-overlay--half-left') || overlay.classList.contains('modal-overlay--half-right')) {
-        snapHalfToSide(overlay);
-      }
       const stopNextClick = (e2) => {
         e2.stopPropagation();
         e2.preventDefault();

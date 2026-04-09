@@ -37,26 +37,12 @@ function sanitizeFilename(name) {
   return s || 'dataset';
 }
 
-/** Apply dataset color to modal panel border (called when opening or re-showing). */
-function applyDatasetDetailBorderColor(panel, color) {
-  if (!panel) return;
-  if (color) {
-    panel.style.borderColor = color;
-    panel.style.borderWidth = '2px';
-  } else {
-    panel.style.borderColor = '';
-    panel.style.borderWidth = '';
-  }
-}
-
-export function openDatasetDetailModal({ node, getContent, saveContent, color }) {
+export function openDatasetDetailModal({ node, getContent, saveContent }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
-    ? document.querySelector(`.modal-overlay[data-modal-half="true"][data-working-dataset-node-id="${CSS.escape(nodeId)}"]`)
+    ? document.querySelector(`.modal-overlay[data-working-dataset-node-id="${CSS.escape(nodeId)}"]`)
     : null;
   if (existing) {
-    const panel = existing.querySelector('.modal-panel');
-    if (panel) applyDatasetDetailBorderColor(panel, color);
     document.body.appendChild(existing);
     return;
   }
@@ -90,7 +76,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, color })
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'working-dataset-detail-title');
-  overlay.dataset.modalHalf = 'true';
   if (nodeId) overlay.dataset.workingDatasetNodeId = nodeId;
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--working-dataset-detail modal-panel--prompt-detail">
@@ -145,9 +130,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, color })
       </div>
     </div>
   `;
-
-  const panel = overlay.querySelector('.modal-panel');
-  applyDatasetDetailBorderColor(panel, color);
 
   const theadRow = overlay.querySelector('.wd-header-row');
   const tbody = overlay.querySelector('.wd-tbody');
@@ -597,15 +579,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, color })
     persistContent();
     overlay.remove();
     document.body.style.overflow = '';
-  }
-
-  // 若已有半屏的 dataset 弹窗，新打开的自动半屏并占另一侧
-  const existingLeft = document.querySelector('.modal-overlay[data-modal-half="true"].modal-overlay--half-left');
-  const existingRight = document.querySelector('.modal-overlay[data-modal-half="true"].modal-overlay--half-right');
-  if (existingRight) {
-    overlay.classList.add('modal-overlay--half-left');
-  } else if (existingLeft) {
-    overlay.classList.add('modal-overlay--half-right');
   }
 
   document.body.style.overflow = 'hidden';

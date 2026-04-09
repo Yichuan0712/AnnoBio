@@ -14,7 +14,8 @@
   background: var(--bg-bar);
   border: 1px solid var(--border);
   border-radius: 0;
-  box-shadow: 0 8px 32px var(--shadow);
+  /* 大模糊阴影在左右两侧会像一道粗竖线；层次靠 1px border 即可 */
+  box-shadow: none;
   min-width: min(360px, 92vw);
   max-width: 92vw;
   max-height: 85vh;
@@ -130,109 +131,6 @@
 
 .modal-overlay--maximized .modal-resize-handle {
   display: none;
-}
-
-/* 全屏时保留底边留白，使 dataset 详情面板的底部颜色描边可见 */
-.modal-overlay--maximized:has(.modal-panel--working-dataset-detail) {
-  padding-bottom: 4px;
-  box-sizing: border-box;
-}
-
-.modal-half {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  font-size: 16px;
-  line-height: 1;
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-.modal-half:hover,
-.modal-half.modal-half--active {
-  color: var(--text);
-  background: var(--hover);
-}
-
-.modal-header-actions .modal-half {
-  margin: 0;
-}
-
-.modal-overlay--half-left,
-.modal-overlay--half-right {
-  pointer-events: none;
-  background: transparent;
-}
-
-.modal-overlay--half-left .modal-panel,
-.modal-overlay--half-right .modal-panel {
-  pointer-events: auto;
-}
-
-.modal-overlay--half-left {
-  justify-content: flex-start;
-  align-items: stretch;
-}
-
-.modal-overlay--half-left .modal-panel {
-  width: 50vw !important;
-  max-width: 50vw !important;
-  height: 100% !important;
-  max-height: 100% !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
-  margin: 0 !important;
-}
-
-.modal-overlay--half-right {
-  justify-content: flex-end;
-  align-items: stretch;
-}
-
-.modal-overlay--half-right .modal-panel {
-  width: 50vw !important;
-  max-width: 50vw !important;
-  height: 100% !important;
-  max-height: 100% !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
-  margin: 0 !important;
-}
-
-/* 双开 dataset 半屏时，中线无缝贴合（缝为 0 时中线只显示一种描边颜色） */
-.modal-overlay--half-left .modal-panel--working-dataset-detail {
-  box-sizing: border-box !important;
-  width: 50vw !important;
-  max-width: 50vw !important;
-  margin-right: 0 !important;
-}
-.modal-overlay--half-right .modal-panel--working-dataset-detail {
-  box-sizing: border-box !important;
-  width: 50vw !important;
-  max-width: 50vw !important;
-  margin-left: 0 !important;
-}
-
-.modal-overlay--half-left .modal-resize-handle,
-.modal-overlay--half-right .modal-resize-handle {
-  display: none;
-}
-
-.modal-overlay--half-left .modal-maximize,
-.modal-overlay--half-right .modal-maximize {
-  display: none;
-}
-
-/* 半屏时半屏键一定显示为选中 */
-.modal-overlay--half-left .modal-half,
-.modal-overlay--half-right .modal-half {
-  color: var(--text);
-  background: var(--hover);
 }
 
 .modal-body {
@@ -376,7 +274,8 @@
   padding: 0;
   border: none;
   background: transparent;
-  justify-content: space-between;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .defaults-page-scroll {
@@ -534,9 +433,10 @@
   margin-top: 16px;
 }
 
-/* search 行与表格间距与 score 页一致；左右无额外内边距，输入框右缘与底部主按钮右缘对齐（同 Score 内容区 20px） */
+/* search 行与表格间距与 score 页一致；左内边距与 .working-dataset-table-wrap 一致，使 “N columns, M rows” 与表格左缘对齐 */
 .dataset-detail-preview-search-wrap.working-dataset-search-wrap {
   padding: 8px 0 4px;
+  padding-left: 12px;
 }
 
 .working-dataset-detail-body .working-dataset-table-wrap {
@@ -4406,14 +4306,17 @@
 }
 
 
-/* Dataset detail modal (subset): prompt/add style, preview only, no name/description edit */
+/* Dataset detail modal (subset): 外框尺寸与 Prompt / Review 详情一致 */
 .modal-panel--working-dataset-detail {
-  min-width: min(720px, 94vw);
+  width: min(1200px, 94vw);
+  min-width: min(1200px, 94vw);
   max-width: 96vw;
+  height: min(85vh, 98vh);
   max-height: 98vh;
-  min-height: min(420px, 70vh);
+  min-height: 70vh;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 /* Body: single column like prompt detail right side */
@@ -4426,7 +4329,7 @@
   overflow: hidden;
 }
 
-/* Full-width preview side (same structure as prompt detail side) */
+/* Full-width preview side：与双列 Prompt 右侧同 class，但此处占满宽度，去掉分隔竖线以免边缘多一道边 */
 .modal-panel--working-dataset-detail .dataset-detail-preview-side.prompt-detail-side {
   flex: 1 1 0;
   min-width: 0;
@@ -4434,6 +4337,7 @@
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  border-right: none;
 }
 
 .modal-panel--working-dataset-detail .dataset-detail-preview-side .prompt-detail-side-scroll {

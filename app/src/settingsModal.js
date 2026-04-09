@@ -5,6 +5,7 @@
  */
 
 import { showAlert } from './alertModal.js';
+import { selectPlaceholderLabel } from './displayTextNormalize.js';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -79,7 +80,7 @@ export function openSettingsModal() {
                     <div class="defaults-field defaults-field--full">
                       <label class="dataset-meta-label" for="settings-default-run-credential">Default model</label>
                       <select id="settings-default-run-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Run">
-                        <option value="">— None (select each time) —</option>
+                        <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                       </select>
                     </div>
                     <div class="defaults-field">
@@ -105,13 +106,13 @@ export function openSettingsModal() {
                     <div class="defaults-field defaults-field--full">
                       <label class="dataset-meta-label" for="settings-default-review-credential">Default model</label>
                       <select id="settings-default-review-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Review">
-                        <option value="">— None (select each time) —</option>
+                        <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                       </select>
                     </div>
                     <div class="defaults-field defaults-field--full">
                       <label class="dataset-meta-label" for="settings-default-review-assistant-credential">Assistant model (chat)</label>
                       <select id="settings-default-review-assistant-credential" class="credentials-select dataset-meta-input" aria-label="Model for Review assistant chat">
-                        <option value="">— Same as Default model —</option>
+                        <option value="">${selectPlaceholderLabel('Same as Default model')}</option>
                       </select>
                     </div>
                     <div class="defaults-field">
@@ -196,9 +197,11 @@ export function openSettingsModal() {
     const optHtml = credentials.map((c) =>
       `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name || c.llm || c.id)}</option>`
     ).join('');
-    runCredSelect.innerHTML = '<option value="">— None (select each time) —</option>' + optHtml;
-    reviewCredSelect.innerHTML = '<option value="">— None (select each time) —</option>' + optHtml;
-    reviewAssistantCredSelect.innerHTML = '<option value="">— Same as Default model —</option>' + optHtml;
+    const optNone = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`;
+    const optSame = `<option value="">${selectPlaceholderLabel('Same as Default model')}</option>`;
+    runCredSelect.innerHTML = optNone + optHtml;
+    reviewCredSelect.innerHTML = optNone + optHtml;
+    reviewAssistantCredSelect.innerHTML = optSame + optHtml;
   }
 
   function applySettings(settings) {

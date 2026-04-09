@@ -1585,8 +1585,6 @@ export function buildWorkflowCanvas(root) {
       e.stopPropagation();
       const dsNode = getNodeById(edge.toId);
       if (dsNode && dsNode.classList.contains('workflow-node--dataset')) {
-        const colorIndex = dsNode.dataset.datasetColorIndex != null ? parseInt(dsNode.dataset.datasetColorIndex, 10) : 0;
-        const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
         openDatasetDetailModal({
           node: dsNode,
           getContent: () => datasetContentByNodeId.get(dsNode.dataset.nodeId) || { headers: [], rows: [] },
@@ -1594,7 +1592,6 @@ export function buildWorkflowCanvas(root) {
             datasetContentByNodeId.set(dsNode.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           },
-          color,
         });
       }
     } else if (edgeType === EDGE_TYPE_DATASET_TO_SAMPLER) {
@@ -2384,8 +2381,6 @@ export function buildWorkflowCanvas(root) {
       if (lastInteractionWasDrag) return;
       e.preventDefault();
       e.stopPropagation();
-      const colorIndex = node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : 0;
-      const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
       openDatasetDetailModal({
         node,
         getContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
@@ -2393,7 +2388,6 @@ export function buildWorkflowCanvas(root) {
           datasetContentByNodeId.set(node.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         },
-        color,
       });
     });
 

@@ -4,6 +4,7 @@
  */
 
 import { showAlert } from './alertModal.js';
+import { selectPlaceholderLabel } from './displayTextNormalize.js';
 
 const API_BASE = 'http://localhost:8000';
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -904,7 +905,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select ground truth dataset">
                 <div class="run-detail-ws-trigger" tabindex="0">
                   <span class="run-detail-ws-trigger-color" id="score-detail-gt-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">— Select ground truth dataset —</span>
+                  <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">${escapeHtml(selectPlaceholderLabel('Select ground truth dataset'))}</span>
                   <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
                 </div>
                 <div class="run-detail-ws-dropdown" id="score-detail-gt-dropdown" role="listbox" hidden></div>
@@ -984,7 +985,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     } else {
       triggerColorEl.style.background = '';
       triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = '— Select —';
+      triggerTextEl.textContent = selectPlaceholderLabel('Select');
     }
   }
 
@@ -1052,7 +1053,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const sel = h === defaultGtColumn ? ' selected' : '';
       return `<option value="${escapeAttr(h)}"${sel}>${escapeHtml(h)}</option>`;
     }).join('');
-    const gtSelectEmptyOpt = (gtHeaders && gtHeaders.length > 0) ? '' : '<option value="">— Select column —</option>';
+    const gtSelectEmptyOpt = (gtHeaders && gtHeaders.length > 0) ? '' : `<option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>`;
 
     const editorOverlay = document.createElement('div');
     editorOverlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
@@ -1981,7 +1982,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
         fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
       ]);
-      llmSelect.innerHTML = '<option value="">— Select reviewer model —</option>' + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
+      llmSelect.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select reviewer model'))}</option>` + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
       let credentialId = (node?.dataset?.reviewCredentialId || '').trim();
       if (!credentialId && settings) {
         const defaultId = (settings.default_review_credential_id || '').trim();
@@ -2138,7 +2139,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     emptyOption.className = 'run-detail-ws-option';
     emptyOption.setAttribute('role', 'option');
     emptyOption.setAttribute('aria-selected', !selectedNodeId ? 'true' : 'false');
-    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select ground truth dataset —</span>';
+    emptyOption.innerHTML = `<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">${escapeHtml(selectPlaceholderLabel('Select ground truth dataset'))}</span>`;
     emptyOption.dataset.nodeId = '';
     emptyOption.addEventListener('click', () => selectGroundTruth(''));
     dropdownEl.appendChild(emptyOption);
