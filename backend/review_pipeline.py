@@ -3,10 +3,7 @@ Review analyze pipeline, separate from FastAPI main module.
 
 Phase 1 — per failed row: full prompt + row I/O; LLM returns rough per-row opinion.
 
-Phase 2 — **two independent LLM calls** (after phase 1):
-  - **Modifications**: one prompt → localized **prompt_edits** only (Accept/Revert in UI).
-  - **Design**: a separate prompt → **design_suggestions** (high-level clusters) **only** when the model
-    sets a strict **fatal / systemic** flag; otherwise clusters must be empty and no design cards are emitted.
+Phase 2 — one LLM call (after phase 1): **Modifications** → localized **prompt_edits** only (Accept/Revert in UI).
 """
 
 from __future__ import annotations
@@ -65,21 +62,6 @@ class PerRowOpinion(BaseModel):
     )
 
 
-class ProblemCluster(BaseModel):
-    """One final recommendation bucket (phase 2)."""
-
-    category_title: str = Field(..., description="Short title for this class of problem")
-    problem_class: str = Field(..., description="What kind of failures this cluster addresses")
-    consolidated_guidance: str = Field(
-        ...,
-        description="Actionable guidance for the prompt author; one coherent theme",
-    )
-    source_row_indices: list[int] = Field(
-        default_factory=list,
-        description="0-based row indices from phase 1 covered by this cluster",
-    )
-
-
 class PromptEditSuggestion(BaseModel):
     """One localized prompt change; old_sentence must exist verbatim in the section (UI highlights red/green)."""
 
@@ -106,26 +88,6 @@ class Phase2Modifications(BaseModel):
     prompt_edits: list[PromptEditSuggestion] = Field(
         default_factory=list,
         description="0–12 concrete edits; each old_sentence must appear exactly once in the given section",
-    )
-
-
-class Phase2DesignOutput(BaseModel):
-    """Structured output for the design-only LLM call (global guidance cards)."""
-
-    fatal_systemic_prompt_issue: bool = Field(
-        default=False,
-        description=(
-            "Set **true** ONLY if the prompt itself has a **severe, systemic** defect that localized edits cannot "
-            "adequately fix—e.g. missing or contradictory core task; no usable role/output contract at all; "
-            "instructions that are dangerously wrong or would systematically mislead the model across many rows; "
-            "or the same fundamental misunderstanding repeated across most failures. "
-            "Set **false** for format mismatches, single-field errors, threshold tuning, one-off wording, "
-            "missing examples, or issues that 1–12 sentence-level edits can address."
-        ),
-    )
-    clusters: list[ProblemCluster] = Field(
-        default_factory=list,
-        description="2–6 buckets only when fatal_systemic_prompt_issue is true; MUST be [] when false",
     )
 
 
@@ -214,43 +176,6 @@ Respond with JSON: **prompt_edits** only.
 """
 
 
-def _build_phase2_design_prompt(*, prompt_text: str, opinions_text: str, sections: list[Any]) -> str:
-    """Third LLM call: optional high-level design cards; must be empty unless truly fatal/systemic."""
-    sections_block = _sections_block_for_phase2(sections)
-    return f"""You have per-row expert notes from failed runs. This call is **only** for **high-level design guidance cards** in the UI—not for sentence-level edits.
-
-## Full prompt (overview)
-
-{prompt_text}
-
-## Sections (context only—you are not producing old_sentence edits here)
-
-{sections_block}
-
-## Per-row rough opinions
-
-{opinions_text}
-
-## Task 0 — **fatal_systemic_prompt_issue** (required boolean)
-
-Be **strict**. Set **true** ONLY if the prompt has a **fatal or deeply systemic** problem, for example:
-- Core task, role, or output contract is **missing, contradictory, or unusable** in a way that would mislead the model on **many** rows.
-- Instructions are **dangerously wrong** or would **systematically** produce bad behavior (not a single bad example).
-- The same **fundamental** misunderstanding appears across **most** failure notes and cannot be fixed by a handful of localized wording tweaks.
-
-Set **false** for: format/schema mismatches, one wrong field, threshold or comparison issues, missing one constraint, vague but fixable wording, or anything addressable with ordinary prompt edits.
-
-When **false**: you **must** set **clusters** to **[]** (empty array). Do not invent design cards for minor issues.
-
-## Task A — **clusters** (only if fatal_systemic_prompt_issue is true)
-
-- If **false**: **clusters MUST be []**.
-- If **true**: output **2 to 6** clusters: **structural / systemic** themes (one clear lesson each; not a dump of per-row complaints). Fields: category_title, problem_class, consolidated_guidance, source_row_indices (0-based, optional).
-
-Respond with JSON: **fatal_systemic_prompt_issue**, **clusters**.
-"""
-
-
 def _sanitize_prompt_edits(sections: list[Any], edits: list[PromptEditSuggestion]) -> list[dict[str, Any]]:
     """Drop edits whose old_sentence is not an exact substring of the section (UI needs a real span)."""
     out: list[dict[str, Any]] = []
@@ -333,7 +258,7 @@ def run_review_pipeline(
     append_event: Callable[[dict], None],
 ) -> None:
     """
-    Drive review. Emits: plan, diagnosis_row, design (optional), suggestions, done.
+    Drive review. Emits: plan, diagnosis_row, suggestions, done.
     Caller handles credential errors and job status.
     """
     sections = list(getattr(body, "prompt_sections", None) or [])
@@ -357,7 +282,7 @@ def run_review_pipeline(
     append_event(
         {
             "type": "plan",
-            "summary": f"Phase 1: analyzing {n} failed row(s); then clustering recommendations.",
+            "summary": f"Phase 1: analyzing {n} failed row(s); then prompt edit suggestions.",
             "diagnosis_total": n,
         }
     )
@@ -468,46 +393,6 @@ def run_review_pipeline(
 
     if is_cancelled():
         return
-
-    design_prompt = _build_phase2_design_prompt(
-        prompt_text=prompt_text,
-        opinions_text=opinions_text,
-        sections=sections,
-    )
-    logger.info("Review phase 2 (design) prompt length: %s chars", len(design_prompt))
-    out_design, _ = llm_run_structured(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        prompt=design_prompt,
-        response_model=Phase2DesignOutput,
-        max_tokens=max_tokens,
-    )
-    if isinstance(out_design, dict):
-        des = Phase2DesignOutput(**out_design)
-    elif isinstance(out_design, Phase2DesignOutput):
-        des = out_design
-    else:
-        des = Phase2DesignOutput(**(out_design.model_dump() if hasattr(out_design, "model_dump") else out_design.dict()))
-
-    fatal = bool(getattr(des, "fatal_systemic_prompt_issue", False))
-    logger.info("Review phase 2 (design): fatal_systemic_prompt_issue=%s", fatal)
-
-    design_list: list[dict[str, str]] = []
-    if fatal and (des.clusters or []):
-        for c in (des.clusters or [])[:6]:
-            rows_note = ""
-            if c.source_row_indices:
-                rows_note = f"\n\nRelated row indices (0-based): {', '.join(str(i) for i in c.source_row_indices)}"
-            design_list.append(
-                {
-                    "name": (c.category_title or "Issue cluster").strip()[:200],
-                    "reason": f"{c.problem_class.strip()}\n\n{c.consolidated_guidance.strip()}{rows_note}".strip(),
-                }
-            )
-
-    if design_list:
-        append_event({"type": "design", "design_suggestions": design_list})
 
     edit_dicts = _sanitize_prompt_edits(sections, list(mod.prompt_edits or []))
     if edit_dicts:

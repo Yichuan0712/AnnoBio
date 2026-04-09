@@ -469,9 +469,10 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     const row_input = hdrs.length
       ? Object.fromEntries(hdrs.map((h, jj) => [String(h).trim(), wsRow[jj] ?? '']))
       : null;
-    const rawIndex = (results || []).indexOf(r);
+    const runRowIdx =
+      typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : outRowIdx;
     rows.push({
-      row_index: rawIndex >= 0 ? rawIndex : outRowIdx,
+      row_index: runRowIdx,
       matched: isFullMatch,
       run_output: runOutput,
       expected: expectedParts.length ? expectedParts.join('; ') : '—',
@@ -808,7 +809,6 @@ export function buildWorkflowCanvas(root) {
       ...streamSaved,
       summary: streamSaved.summary || '',
       suggestions: streamSaved.suggestions || [],
-      design_suggestions: streamSaved.design_suggestions || [],
       data_refinement: streamSaved.data_refinement || [],
       row_diagnostics: Array.isArray(streamSaved.row_diagnostics) ? streamSaved.row_diagnostics : [],
       promptSections: sectionsCopy,
@@ -836,7 +836,6 @@ export function buildWorkflowCanvas(root) {
           ...streamSaved,
           summary: ev.summary || '',
           suggestions: [],
-          design_suggestions: [],
           data_refinement: [],
           row_diagnostics: [],
           streamComplete: false,
@@ -867,12 +866,6 @@ export function buildWorkflowCanvas(root) {
             streamSaved.row_diagnostics = list;
           }
         }
-      } else if (ev.type === 'design' && Array.isArray(ev.design_suggestions)) {
-        streamSaved.design_suggestions = ev.design_suggestions.map((d) =>
-          d && typeof d === 'object' ? ensureSuggestionObjectId({ ...d }, streamSaved) : d
-        );
-        setReviewNodeProgress(getNodeById(reviewNodeId), 85);
-        streamSaved.reviewProgress = 85;
       } else if (ev.type === 'suggestions' && Array.isArray(ev.suggestions) && ev.suggestions.length) {
         const batch = ev.suggestions.map((s) =>
           s && typeof s === 'object' ? ensureSuggestionObjectId({ ...s }, streamSaved) : s

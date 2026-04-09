@@ -327,22 +327,15 @@
   min-width: min(1000px, 92vw);
 }
 
-/* Model settings modal: paged layout (style aligned with Create prompt / Create dataset) */
+/* Model settings: panel size + body padding like My credentials; no bordered “table” wrapper (credentials only) */
 .modal-panel--defaults {
-  max-height: 98vh;
+  min-width: min(960px, 92vw);
+  max-width: 92vw;
+  min-height: min(640px, 80vh);
+  /* Match credentials panel; override generic .modal-panel max-height: 85vh */
+  max-height: min(90vh, 98vh);
   display: flex;
   flex-direction: column;
-  transition: width 0.25s ease, min-width 0.25s ease;
-}
-
-.modal-panel--defaults[data-defaults-page="1"] {
-  width: min(400px, 92vw);
-  min-width: min(400px, 92vw);
-}
-
-.modal-panel--defaults[data-defaults-page="2"] {
-  width: min(520px, 92vw);
-  min-width: min(520px, 92vw);
 }
 
 .modal-body--defaults {
@@ -350,35 +343,40 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 0;
+  gap: 24px;
+  padding: 20px;
+  box-sizing: border-box;
   overflow: hidden;
 }
 
-.defaults-add-main {
-  flex: 1;
+.model-settings-main {
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
-  flex-direction: column;
-  padding: 6px 0 20px 0;
-}
-
-.defaults-add-page {
-  display: none;
   flex-direction: column;
   gap: 12px;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
   overflow: hidden;
-  padding: 0 20px;
 }
 
-.modal-panel--defaults[data-defaults-page="1"] .defaults-add-page-1 {
-  display: flex;
+.model-settings-tab-row {
+  flex-shrink: 0;
 }
 
-.modal-panel--defaults[data-defaults-page="2"] .defaults-add-page-2 {
-  display: flex;
+.modal-body--defaults .review-detail-tab-panels.model-settings-tab-panels {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.model-settings-footer.prompt-actions {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  justify-content: space-between;
 }
 
 .defaults-page-scroll {
@@ -388,27 +386,6 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.defaults-page-label {
-  margin: 0 -20px;
-  padding: 6px 20px 12px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--text);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.defaults-add-page-1 .prompt-actions,
-.defaults-add-page-2 .prompt-actions {
-  margin-top: auto;
-  flex-shrink: 0;
-}
-
-.defaults-add-page-1 .prompt-actions {
-  justify-content: flex-end;
 }
 
 .modal-body--dataset {
@@ -557,9 +534,9 @@
   margin-top: 16px;
 }
 
-/* search 行与表格间距与 score 页一致（约 10px） */
+/* search 行与表格间距与 score 页一致；左右无额外内边距，输入框右缘与底部主按钮右缘对齐（同 Score 内容区 20px） */
 .dataset-detail-preview-search-wrap.working-dataset-search-wrap {
-  padding-bottom: 4px;
+  padding: 8px 0 4px;
 }
 
 .working-dataset-detail-body .working-dataset-table-wrap {
@@ -585,6 +562,20 @@
   font-size: 11px;
   min-height: 26px;
   box-sizing: border-box;
+}
+
+/* Score / Run / Working dataset：表格筛选框同宽；Run+Working 去掉 wrap 左右 padding 后与 Score 一致，右缘与 footer 主按钮对齐 */
+.score-detail-results-search-inline .dataset-detail-preview-search-inp,
+.run-detail-results-search-wrap .dataset-detail-preview-search-inp,
+.working-dataset-search-wrap .dataset-detail-preview-search-right .dataset-detail-preview-search-inp {
+  width: 180px;
+  min-width: 0;
+  max-width: 240px;
+  padding: 4px 8px;
+  font-size: 11px;
+  min-height: 26px;
+  box-sizing: border-box;
+  flex: 0 0 auto;
 }
 
 .dataset-preview {
@@ -2995,7 +2986,7 @@
 }
 
 .review-detail-status-note--incomplete {
-  color: var(--warning, #b8860b);
+  color: var(--text-muted);
 }
 
 /* Export new prompt：放在 Prompt sections 下方 */
@@ -3150,28 +3141,9 @@
   cursor: default;
 }
 
-.review-detail-design-suggestions {
-  padding-top: 0;
-  margin-bottom: 0;
-}
 .review-detail-edit-suggestions {
   padding-top: 0;
   margin-top: 0;
-}
-/* When design has cards: no gap between design block and edit block. */
-.review-detail-design-suggestions + .review-detail-edit-suggestions {
-  margin-top: 0;
-}
-.review-detail-suggestions--design-empty .review-detail-edit-suggestions {
-  margin-top: 0;
-}
-
-.review-detail-design-card .review-detail-suggestion-card__main {
-  cursor: default;
-}
-.review-detail-design-card:hover {
-  border-color: var(--border);
-  background: var(--bg);
 }
 
 .review-detail-suggestion-unlocatable {
@@ -3427,16 +3399,6 @@
   font-weight: 600;
   color: var(--text-muted);
   white-space: nowrap;
-}
-
-.score-detail-results-search-inline .dataset-detail-preview-search-inp {
-  width: 180px;
-  min-width: 0;
-  max-width: 240px;
-  padding: 4px 8px;
-  font-size: 11px;
-  min-height: 26px;
-  box-sizing: border-box;
 }
 
 .score-detail-results-table-wrap {
@@ -4296,9 +4258,10 @@
   color: var(--text);
 }
 
-/* Run results: 搜索框长度与其他页面一致 */
-.run-detail-results-search-wrap .dataset-detail-preview-search-inp {
-  max-width: 240px;
+/* 与 Score 一致：不在此处加左右 padding，否则输入框比 footer 主按钮更靠左 */
+.run-detail-results-search-wrap.dataset-detail-preview-search-wrap {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .run-detail-results-table-wrap {

@@ -360,7 +360,6 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
       data: {
         summary: '',
         suggestions: [],
-        design_suggestions: [],
         data_refinement: [],
         row_diagnostics: [],
         promptSections: sectionsCopy,

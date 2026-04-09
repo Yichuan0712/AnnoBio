@@ -426,7 +426,7 @@ export function openRunDetailModal({
     topRow.appendChild(statusNote);
     const searchWrap = document.createElement('div');
     searchWrap.className = 'dataset-detail-preview-search-wrap run-detail-results-search-wrap';
-    searchWrap.innerHTML = `<label class="dataset-detail-search-label" for="run-detail-results-search">Search</label><input type="text" id="run-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows..." aria-label="Search" />`;
+    searchWrap.innerHTML = `<label class="dataset-detail-search-label" for="run-detail-results-search">Search</label><input type="text" id="run-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" />`;
     topRow.appendChild(searchWrap);
     const tableWrap = document.createElement('div');
     tableWrap.className = 'run-detail-results-table-wrap';

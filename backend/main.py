@@ -207,16 +207,9 @@ class ReviewSuggestion(BaseModel):
     row_indices: list[int] = Field(default_factory=list, description="0-based row indices this suggestion aims to fix")
 
 
-class DesignSuggestion(BaseModel):
-    """Global design guidance only; not sentence-level edits. Shown without accept/revert."""
-    name: str = Field(..., description="Short title (e.g. 'Consider splitting sections')")
-    reason: str = Field(..., description="One or two sentences of design guidance")
-
-
 class ReviewResult(BaseModel):
     summary: str = Field(..., description="Brief overall analysis")
     suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete edit suggestions")
-    design_suggestions: list[DesignSuggestion] = Field(default_factory=list, description="Global design guidance only; no accept/revert in UI")
     data_refinement: list[dict] = Field(default_factory=list, description="GT question summary: [{row_indices, reason}]")
 
 
@@ -925,7 +918,7 @@ def get_run_result(run_id: str):
 
 @app.post("/api/review/analyze")
 def review_analyze(body: ReviewRequest):
-    """Start review job in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Pipeline: review_pipeline.py (per-row analysis → two LLM passes: localized edits, then optional fatal-only design cards)."""
+    """Start review job in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Pipeline: review_pipeline.py (per-row analysis → localized prompt edits)."""
     review_id = str(uuid.uuid4())
     review_node_id = body.review_session_id or ""
     with _review_jobs_lock:

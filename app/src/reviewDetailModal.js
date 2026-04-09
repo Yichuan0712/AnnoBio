@@ -16,6 +16,9 @@ import {
 
 const API_BASE = 'http://localhost:8000';
 
+/** Shown when persisted review has streamComplete:false but no live job (e.g. app closed mid-review). Mirrors Run: “Last run did not complete.” */
+const REVIEW_INCOMPLETE_USER_MSG = 'Last review did not complete. Please run Review again.';
+
 /** Sliding window for /api/chat: max user+assistant messages (≈20 turns if strictly alternating). Full history still kept in UI and project JSON. */
 const REVIEW_ASSISTANT_MAX_MESSAGES = 40;
 
@@ -46,6 +49,13 @@ function truncateWithEllipsis(text, maxChars) {
   if (!t) return '';
   if (t.length <= maxChars) return t;
   return `${t.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+}
+
+/** 0-based run/comparison row_index → 1-based label (same as Score table “Run result #”). */
+function formatRunRowIndexForDisplay(zeroBased) {
+  const n = Number(zeroBased);
+  if (zeroBased === null || zeroBased === undefined || zeroBased === '' || Number.isNaN(n) || n < 0) return '—';
+  return String(n + 1);
 }
 
 /** Turn snake_case category hints into a short phrase (not a “variable”). */
@@ -119,10 +129,7 @@ function openRowDiagnosisDetailOverlay(diagnostic, _comparisonRow, displayNumber
   const rough = (diagnostic.rough_modification_opinion || '').trim();
   const cardTitle = (diagnostic.card_title || '').trim();
   const scoreRowIdx = diagnostic.row_index;
-  const scoreRowLabel =
-    scoreRowIdx != null && scoreRowIdx !== '' && !Number.isNaN(Number(scoreRowIdx))
-      ? String(Number(scoreRowIdx))
-      : '—';
+  const scoreRowLabel = formatRunRowIndexForDisplay(scoreRowIdx);
 
   const mainHeading = cardTitle || `Analysis #${num}`;
 
@@ -446,6 +453,43 @@ function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent
   }).join('');
 }
 
+/** Spans used for suggestion hover / revert preview in the prompt column. */
+const REVIEW_PROMPT_DIFF_MARK_SELECTOR =
+  '.review-removed, .review-added, .review-revert-remove, .review-revert-restore';
+
+/**
+ * Review modal has nested overflow-y regions (.prompt-detail-sections-scroll + .review-detail-prompt-wrap).
+ * scrollIntoView({ block: 'nearest' }) often leaves the actual diff marks off-screen; walk ancestors and adjust scrollTop.
+ */
+function scrollNestedToReveal(el, boundary) {
+  if (!el || !boundary || !boundary.contains(el)) return;
+  const margin = 16;
+  for (let pass = 0; pass < 2; pass++) {
+    let parent = el.parentElement;
+    let adjusted = false;
+    while (parent && parent !== boundary) {
+      const st = getComputedStyle(parent);
+      const oy = st.overflowY;
+      const canY =
+        (oy === 'auto' || oy === 'scroll') &&
+        parent.scrollHeight > parent.clientHeight + 1;
+      if (canY) {
+        const er = el.getBoundingClientRect();
+        const pr = parent.getBoundingClientRect();
+        if (er.top < pr.top + margin) {
+          parent.scrollTop += er.top - pr.top - margin;
+          adjusted = true;
+        } else if (er.bottom > pr.bottom - margin) {
+          parent.scrollTop += er.bottom - pr.bottom + margin;
+          adjusted = true;
+        }
+      }
+      parent = parent.parentElement;
+    }
+    if (!adjusted) break;
+  }
+}
+
 /** Build the shared result UI: left = sections (working copy), right = suggestions with accept/revert; full reason shown in card when selected. */
 function buildReviewResultUI(overlay, options) {
   const { promptSections, suggestions: initialSuggestions, promptFullText, title, resultId, saved = {}, onReviewResultChange, onExportNewPrompt, streamRef, getIsReviewStreaming, getPayload } = options;
@@ -479,8 +523,6 @@ function buildReviewResultUI(overlay, options) {
       : (Array.isArray(initialSuggestions)
         ? initialSuggestions.slice().map((s) => (s && typeof s === 'object' ? ensureSuggestionObjectId({ ...s }, saved) : null)).filter(Boolean)
         : []);
-  /** Design suggestions: global guidance only, no accept/revert */
-  let designSuggestions = Array.isArray(saved.design_suggestions) ? saved.design_suggestions.slice() : [];
   /** Data refinement: GT 质疑汇总 */
   let dataRefinement = Array.isArray(saved.data_refinement) ? saved.data_refinement.slice() : [];
   /** Phase 1 per-row LLM notes (persisted on review node) */
@@ -498,17 +540,22 @@ function buildReviewResultUI(overlay, options) {
   rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
 
   const statusEl = overlay.querySelector('.review-detail-stream-status');
-  const reviewStreaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
-  const reviewStillGenerating = saved.streamComplete === false || reviewStreaming;
+
+  function isReviewStreamingNow() {
+    const byNode = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
+    const byRef = !!streamRef && saved.streamComplete !== true;
+    return byNode || byRef;
+  }
+
+  const reviewStreaming = isReviewStreamingNow();
+  const staleIncompletePersisted = saved.streamComplete === false && !reviewStreaming;
+  const reviewStillGenerating = reviewStreaming;
 
   if (promptWrap) {
     promptWrap.innerHTML = renderSectionsAsPromptDetail(working);
   }
 
   suggestionsEl.innerHTML = '';
-  const designContainer = document.createElement('div');
-  designContainer.className = 'review-detail-design-suggestions';
-  suggestionsEl.appendChild(designContainer);
   const dataRefinementContainer = document.createElement('div');
   dataRefinementContainer.className = 'review-detail-data-refinement';
   suggestionsEl.appendChild(dataRefinementContainer);
@@ -523,7 +570,7 @@ function buildReviewResultUI(overlay, options) {
       ...saved,
       summary: saved.summary ?? '',
       suggestions: suggestionsToSave,
-      design_suggestions: designSuggestions,
+      design_suggestions: [],
       data_refinement: dataRefinement,
       row_diagnostics: rowDiagnostics,
       promptSections: saved.promptSections ?? promptSections,
@@ -545,9 +592,19 @@ function buildReviewResultUI(overlay, options) {
 
   function scrollRightToSection(sectionIndex) {
     requestAnimationFrame(() => {
-      const blocks = promptSectionsEl.querySelectorAll('.preview-field-block');
-      const block = blocks[sectionIndex];
-      if (block) block.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      requestAnimationFrame(() => {
+        const blocks = promptSectionsEl.querySelectorAll('.preview-field-block');
+        const block = blocks[sectionIndex];
+        if (!block) return;
+        const diffEl = block.querySelector(REVIEW_PROMPT_DIFF_MARK_SELECTOR);
+        const target = diffEl || block;
+        const boundary =
+          promptSectionsEl.closest('.review-detail-preview-wrap') ||
+          promptSectionsEl.closest('.modal-panel--review-detail') ||
+          promptSectionsEl.closest('.modal-panel') ||
+          document.body;
+        scrollNestedToReveal(target, boundary);
+      });
     });
   }
 
@@ -576,12 +633,9 @@ function buildReviewResultUI(overlay, options) {
   function updateAnalysisFooter() {
     if (!analysisFooterEl) return;
     const isComplete = saved.streamComplete === true;
-    const inProgress =
-      !isComplete &&
-      (saved.streamComplete === false ||
-        (typeof getIsReviewStreaming === 'function' && getIsReviewStreaming()));
+    const inProgress = !isComplete && isReviewStreamingNow();
     let statusClass = 'review-detail-status-note--incomplete';
-    let statusText = 'Last run did not complete. Please run Review again.';
+    let statusText = REVIEW_INCOMPLETE_USER_MSG;
     if (isComplete) {
       statusClass = 'review-detail-status-note--complete';
       const n = rowDiagnostics.length;
@@ -604,20 +658,15 @@ function buildReviewResultUI(overlay, options) {
   function updateSuggestionsFooter() {
     if (!suggestionsFooterEl) return;
     const isComplete = saved.streamComplete === true;
-    const inProgress =
-      !isComplete &&
-      (saved.streamComplete === false ||
-        (typeof getIsReviewStreaming === 'function' && getIsReviewStreaming()));
+    const inProgress = !isComplete && isReviewStreamingNow();
     let statusClass = 'review-detail-status-note--incomplete';
-    let statusText = 'Last run did not complete. Please run Review again.';
+    let statusText = REVIEW_INCOMPLETE_USER_MSG;
     if (isComplete) {
       statusClass = 'review-detail-status-note--complete';
       const ne = allSuggestions.length;
-      const nd = designSuggestions.length;
       const nr = dataRefinement.length;
       const parts = [];
       if (ne) parts.push(`${ne} prompt edit${ne === 1 ? '' : 's'}`);
-      if (nd) parts.push(`${nd} design note${nd === 1 ? '' : 's'}`);
       if (nr) parts.push(`${nr} data note${nr === 1 ? '' : 's'}`);
       statusText =
         parts.length > 0
@@ -641,9 +690,13 @@ function buildReviewResultUI(overlay, options) {
     if (!rowDiagnostics.length) {
       const p = document.createElement('p');
       p.className = 'review-detail-placeholder';
-      p.textContent = reviewStillGenerating
+      const streaming = isReviewStreamingNow();
+      const stale = saved.streamComplete === false && !streaming;
+      p.textContent = streaming
         ? 'Analyzing failed rows…'
-        : 'No error analysis for this run.';
+        : stale
+          ? REVIEW_INCOMPLETE_USER_MSG
+          : 'No error analysis for this run.';
       diagnosisEl.appendChild(p);
       return;
     }
@@ -689,31 +742,14 @@ function buildReviewResultUI(overlay, options) {
     });
   }
 
-  function addOneDesignCard(d) {
-    const sid = d && d.suggestion_id != null && d.suggestion_id !== '' ? d.suggestion_id : '';
-    const shortLabel = formatSuggestionIdDisplay(sid);
-    const titleLine = suggestionCardTitleLine({
-      explicitName: d.name,
-      reason: d.reason,
-      sectionFallback: '',
-      defaultLabel: 'Design suggestion',
-    });
-    const card = document.createElement('div');
-    card.className = 'review-detail-suggestion-card review-detail-design-card';
-    card.innerHTML = `
-      <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong></span>
-        <p class="review-detail-suggestion-reason">${escapeHtml((d.reason || '').trim())}</p>
-      </div>
-    `;
-    designContainer.appendChild(card);
-  }
-
   function addOneDataRefinementCard(item) {
     const sid = item && item.suggestion_id != null && item.suggestion_id !== '' ? item.suggestion_id : '';
     const shortLabel = formatSuggestionIdDisplay(sid);
     const rowIndices = Array.isArray(item.row_indices) ? item.row_indices : [];
-    const rowsText = rowIndices.length > 0 ? `Rows ${rowIndices.join(', ')}` : 'Some rows';
+    const rowsText =
+      rowIndices.length > 0
+        ? `Rows ${rowIndices.map((x) => formatRunRowIndexForDisplay(x)).join(', ')}`
+        : 'Some rows';
     const titleLine = suggestionCardTitleLine({
       explicitName: item.name || item.card_title,
       reason: item.reason,
@@ -841,28 +877,15 @@ function buildReviewResultUI(overlay, options) {
 
   renderRowDiagnostics();
 
-  designSuggestions.forEach((d) => addOneDesignCard(d));
   dataRefinement.forEach((item) => addOneDataRefinementCard(item));
-  function updateSuggestionsDesignEmptyClass() {
-    if (suggestionsEl) suggestionsEl.classList.toggle('review-detail-suggestions--design-empty', designContainer.children.length === 0);
-  }
-  updateSuggestionsDesignEmptyClass();
 
   if (streamRef) {
-    if (statusEl) statusEl.textContent = 'Generating suggestions…';
-    streamRef.appendDesignSuggestions = (arr) => {
-      if (!Array.isArray(arr)) return;
-      designSuggestions = arr
-        .map((d) => (d && typeof d === 'object' ? ensureSuggestionObjectId({ ...d }, saved) : null))
-        .filter(Boolean);
-      designContainer.innerHTML = '';
-      designSuggestions.forEach((d) => addOneDesignCard(d));
-      updateSuggestionsDesignEmptyClass();
-      saved.design_suggestions = designSuggestions;
-      if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({ ...saved, design_suggestions: designSuggestions, row_diagnostics: rowDiagnostics });
-      }
-    };
+    if (statusEl) {
+      if (isReviewStreamingNow()) statusEl.textContent = 'Generating suggestions…';
+      else if (staleIncompletePersisted) statusEl.textContent = REVIEW_INCOMPLETE_USER_MSG;
+      else if (saved.streamComplete === true) statusEl.textContent = 'Suggestions complete.';
+      else statusEl.textContent = '';
+    }
     streamRef.appendDataRefinement = (arr) => {
       if (!Array.isArray(arr)) return;
       dataRefinement = arr
@@ -891,18 +914,18 @@ function buildReviewResultUI(overlay, options) {
     };
     streamRef.streamDone = () => {
       if (statusEl) statusEl.textContent = 'Suggestions complete.';
-      if (allSuggestions.length === 0 && designSuggestions.length === 0 && dataRefinement.length === 0) {
+      if (allSuggestions.length === 0 && dataRefinement.length === 0) {
         editContainer.innerHTML = '<p class="review-detail-placeholder">No suggestions.</p>';
       }
       saved.suggestions = allSuggestions.slice();
-      saved.design_suggestions = designSuggestions;
+      saved.design_suggestions = [];
       saved.data_refinement = dataRefinement;
       saved.streamComplete = true;
       if (typeof onReviewResultChange === 'function') {
         onReviewResultChange({
           ...saved,
           suggestions: saved.suggestions,
-          design_suggestions: designSuggestions,
+          design_suggestions: [],
           data_refinement: dataRefinement,
           row_diagnostics: rowDiagnostics,
           streamComplete: true,
@@ -913,7 +936,7 @@ function buildReviewResultUI(overlay, options) {
     };
     streamRef.streamError = () => {
       if (statusEl) statusEl.textContent = 'Failed.';
-      if (allSuggestions.length === 0 && designSuggestions.length === 0) {
+      if (allSuggestions.length === 0 && dataRefinement.length === 0) {
         editContainer.innerHTML = '<p class="review-detail-placeholder">Request failed.</p>';
       }
       const failedNote = () => {
@@ -937,13 +960,14 @@ function buildReviewResultUI(overlay, options) {
       addOneSuggestionCard(sug, sugIdx);
     });
     if (!allSuggestions || allSuggestions.length === 0) {
-      const noDesign = designSuggestions.length === 0;
       const noData = dataRefinement.length === 0;
-      if (noDesign && noData) {
+      if (noData) {
         const showNoSuggestions = saved.streamComplete === true || !reviewStillGenerating;
-        editContainer.innerHTML = showNoSuggestions
-          ? '<p class="review-detail-placeholder">No suggestions.</p>'
-          : '<p class="review-detail-placeholder">Generating suggestions…</p>';
+        editContainer.innerHTML = staleIncompletePersisted
+          ? `<p class="review-detail-placeholder">${escapeHtml(REVIEW_INCOMPLETE_USER_MSG)}</p>`
+          : showNoSuggestions
+            ? '<p class="review-detail-placeholder">No suggestions.</p>'
+            : '<p class="review-detail-placeholder">Generating suggestions…</p>';
       }
     }
   }
@@ -975,7 +999,6 @@ function buildReviewResultUI(overlay, options) {
         saved.streamComplete === false &&
         rowDiagnostics.length > 0 &&
         allSuggestions.length === 0 &&
-        designSuggestions.length === 0 &&
         dataRefinement.length === 0;
       initial = phase1Only ? 'analysis' : 'suggestions';
     }
@@ -1139,8 +1162,11 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
   if (hasResult) {
     buildReviewResultUI(overlay, baseOptions);
   } else {
-    if (!promptWrap.innerHTML.trim()) promptWrap.innerHTML = '<p class="review-detail-placeholder">Running analysis…</p>';
-    suggestionsEl.innerHTML = '<p class="review-detail-placeholder">Running analysis…</p>';
+    const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
+    const staleSaved = saved && typeof saved === 'object' && saved.streamComplete === false && !streaming;
+    const msg = staleSaved ? REVIEW_INCOMPLETE_USER_MSG : 'Running analysis…';
+    if (!promptWrap.innerHTML.trim()) promptWrap.innerHTML = `<p class="review-detail-placeholder">${escapeHtml(msg)}</p>`;
+    suggestionsEl.innerHTML = `<p class="review-detail-placeholder">${escapeHtml(msg)}</p>`;
   }
 
   if (reviewNodeId) {
@@ -1171,6 +1197,18 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 async function buildReviewAssistantContext(getPayload, getReviewResult) {
   const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
   const payload = await Promise.resolve(typeof getPayload === 'function' ? getPayload() : null);
+  const rowDiagnostics = Array.isArray(saved?.row_diagnostics)
+    ? saved.row_diagnostics
+        .map((d) => ({
+          row_index: Number(d && d.row_index),
+          card_title: String((d && d.card_title) || ''),
+          issue_summary: String((d && d.issue_summary) || ''),
+          rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
+          problem_category_hint: String((d && d.problem_category_hint) || ''),
+        }))
+        .filter((d) => !Number.isNaN(d.row_index))
+    : [];
+  rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
   const lines = [
     'You are a prompt improvement assistant. Your ONLY job is to help improve the current prompt below. Do not discuss general prompt engineering, other prompts, or unrelated topics. Everything you say and do must directly serve improving this prompt.',
     '',
@@ -1192,6 +1230,25 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
       lines.push('');
     });
   }
+  if (rowDiagnostics.length > 0) {
+    lines.push('## Error analysis (read-only — same as the "Error analysis" tab in the UI)');
+    lines.push(
+      'Use these per-row failure notes as context when reasoning about prompt changes. You CANNOT edit, delete, or replace this list — there is no tool for it. Your only structured actions are [ASSISTANT_SUGGESTION] (prompt edits) and [ASSISTANT_REMOVE_SUGGESTION] (items in "Suggestions" below).',
+    );
+    lines.push('');
+    rowDiagnostics.forEach((d, i) => {
+      const n = i + 1;
+      const rowLabel = formatRunRowIndexForDisplay(d.row_index);
+      lines.push(`### Error analysis #${n} · Score comparison run result row ${rowLabel}`);
+      const ct = (d.card_title || '').trim();
+      if (ct) lines.push(`Headline: ${ct}`);
+      lines.push(`Issue: ${(d.issue_summary || '').trim() || '(none)'}`);
+      lines.push(`Suggested direction (prompt-level): ${(d.rough_modification_opinion || '').trim() || '(none)'}`);
+      const hint = (d.problem_category_hint || '').trim();
+      if (hint) lines.push(`Category hint: ${hint}`);
+      lines.push('');
+    });
+  }
   const comparisonRows = saved?.comparison_rows || payload?.comparison_rows || [];
   const runResults = saved?.run_results || payload?.run_results || [];
   if (comparisonRows.length > 0 || runResults.length > 0) {
@@ -1200,7 +1257,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     if (failed.length > 0) {
       lines.push(`Sample failed rows (${failed.length} of ${comparisonRows.length} total):`);
       failed.slice(0, 10).forEach((r, i) => {
-        lines.push(`Row ${r.row_index}: NOT matched`);
+        lines.push(`Run result row ${formatRunRowIndexForDisplay(r.row_index)}: NOT matched`);
         if (r.row_input && Object.keys(r.row_input || {}).length > 0) {
           lines.push(`  Input: ${JSON.stringify(r.row_input)}`);
         }
@@ -1218,25 +1275,23 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     lines.push('');
   }
   const suggestions = saved?.suggestions || [];
-  const designSuggestions = saved?.design_suggestions || [];
   const dataRefinement = saved?.data_refinement || [];
   lines.push('## Your permissions');
-  lines.push('ADD: You can add new edit suggestions anytime via [ASSISTANT_SUGGESTION].');
-  lines.push('REMOVE: Remove items by stable numeric suggestion_id (same as UI #1, #2, …). Legacy: global position (design, then data refinement, then edits) still works via suggestion_index.');
+  lines.push(
+    'READ: Error analysis (if listed above) is read-only context. Do not tell the user you changed it or try to remove it — you can only change items under "Suggestions" below.',
+  );
+  lines.push('ADD: New prompt edit cards via [ASSISTANT_SUGGESTION] (these appear under Suggested changes).');
+  lines.push('REMOVE: Only suggestion list items — by suggestion_id (same as UI #1, #2, …) or legacy suggestion_index (data refinement first, then edits).');
   lines.push('');
-  if (suggestions.length > 0 || designSuggestions.length > 0 || dataRefinement.length > 0) {
+  if (suggestions.length > 0 || dataRefinement.length > 0) {
     lines.push('## Suggestions (persistent numeric suggestion_id per review; matches UI #N)');
-    designSuggestions.forEach((d) => {
-      const sid = (d && d.suggestion_id) ? String(d.suggestion_id) : '';
-      const shortLabel = formatSuggestionIdDisplay(sid);
-      const title = (d.name || '').trim() || (d.reason || '').trim().slice(0, 80);
-      lines.push(`#${shortLabel} [Design] suggestion_id="${sid}" ${title} [removable]`);
-      if ((d.reason || '').trim()) lines.push(`   Reason: ${(d.reason || '').trim()}`);
-    });
     dataRefinement.forEach((d) => {
       const sid = (d && d.suggestion_id) ? String(d.suggestion_id) : '';
       const shortLabel = formatSuggestionIdDisplay(sid);
-      const rows = (d.row_indices || []).length > 0 ? `Rows ${(d.row_indices || []).join(', ')}: ` : '';
+      const rows =
+        (d.row_indices || []).length > 0
+          ? `Rows ${(d.row_indices || []).map((x) => formatRunRowIndexForDisplay(x)).join(', ')}: `
+          : '';
       const title = rows + ((d.reason || '').trim().slice(0, 100) || 'Possible ground truth issue');
       lines.push(`#${shortLabel} [Data refinement] suggestion_id="${sid}" ${title} [removable]`);
       if ((d.reason || '').trim().length > 100) lines.push(`   Full: ${(d.reason || '').trim()}`);
@@ -1265,7 +1320,8 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('## Removing suggestions');
   lines.push('When the user asks to DELETE or REMOVE suggestions (e.g. 删除, 移除, remove, delete): use [ASSISTANT_REMOVE_SUGGESTION]. Do NOT use [ASSISTANT_SUGGESTION] — that is for adding edits to the prompt, not for removing suggestions from the list.');
   lines.push('Prefer removing by suggestion_id from the list above. Example: [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_id":3}[/ASSISTANT_REMOVE_SUGGESTION]. For multiple removals, output one block per item.');
-  lines.push('Legacy (positional): [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION] where N is 1-based global order (all design items, then all data refinement, then all edits).');
+  lines.push('Legacy (positional): [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION] where N is 1-based global order (all data refinement items, then all edits).');
+  lines.push('Never target error analysis rows with REMOVE — they are not in the suggestion list and cannot be deleted here.');
   lines.push('');
   lines.push('Stay focused ONLY on improving the current prompt. Answer directly and solve problems. Do not describe your context or internal structure to the user. If the user asks something unrelated to this prompt, briefly redirect to prompt improvement.');
   return lines.join('\n');
@@ -1301,7 +1357,7 @@ function parseAssistantSuggestions(text, dataRoot) {
 
 /**
  * Parse [ASSISTANT_REMOVE_SUGGESTION]...[/ASSISTANT_REMOVE_SUGGESTION] blocks.
- * Prefers suggestion_id (stable); legacy suggestion_index is 1-based global order (design, then data refinement, then edits).
+ * Prefers suggestion_id (stable); legacy suggestion_index is 1-based global order (data refinement, then edits).
  */
 function parseAssistantRemoveSuggestions(text) {
   const ops = [];
@@ -1329,21 +1385,16 @@ function parseAssistantRemoveSuggestions(text) {
   return ops;
 }
 
-/** @param {{ design_suggestions?: unknown[], data_refinement?: unknown[], suggestions?: unknown[] }} st */
+/** @param {{ data_refinement?: unknown[], suggestions?: unknown[] }} st */
 function removeSuggestionByGlobalIndexFromState(st, oneBased) {
   if (!st || typeof oneBased !== 'number' || oneBased < 1) return;
-  const D = (st.design_suggestions || []).length;
   const R = (st.data_refinement || []).length;
   const n = Math.floor(oneBased);
-  if (n >= 1 && n <= D) {
-    st.design_suggestions.splice(n - 1, 1);
+  if (n >= 1 && n <= R) {
+    st.data_refinement.splice(n - 1, 1);
     return;
   }
-  if (n >= D + 1 && n <= D + R) {
-    st.data_refinement.splice(n - D - 1, 1);
-    return;
-  }
-  const editIdx = n - D - R - 1;
+  const editIdx = n - R - 1;
   const sg = st.suggestions || [];
   if (editIdx >= 0 && editIdx < sg.length) sg.splice(editIdx, 1);
 }
@@ -1356,15 +1407,9 @@ function removeSuggestionByIdFromState(st, suggestionId) {
     if (wantNum != null) return parseNumericSuggestionId(x.suggestion_id) === wantNum;
     return String(x.suggestion_id) === String(suggestionId).trim();
   };
-  const ds = st.design_suggestions;
   const dr = st.data_refinement;
   const sg = st.suggestions;
-  let i = Array.isArray(ds) ? ds.findIndex(match) : -1;
-  if (i >= 0) {
-    ds.splice(i, 1);
-    return true;
-  }
-  i = Array.isArray(dr) ? dr.findIndex(match) : -1;
+  let i = Array.isArray(dr) ? dr.findIndex(match) : -1;
   if (i >= 0) {
     dr.splice(i, 1);
     return true;
@@ -1548,11 +1593,10 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
       chatHistory.push({ role: 'assistant', content: displayContent });
       if (isModalOpen()) appendMessageWithTypewriter('assistant', displayContent);
       if (reviewSaved && typeof reviewSaved === 'object') {
-        let designSuggestions = (reviewSaved.design_suggestions || []).slice();
         let dataRefinement = (reviewSaved.data_refinement || []).slice();
         let suggestions = (reviewSaved.suggestions || []).slice();
         if (removeOps.length > 0) {
-          const st = { design_suggestions: designSuggestions, data_refinement: dataRefinement, suggestions };
+          const st = { data_refinement: dataRefinement, suggestions };
           const idOps = removeOps.filter((o) => o.suggestion_id).map((o) => o.suggestion_id);
           const indexOps = removeOps
             .filter((o) => o.suggestion_index != null)
@@ -1568,7 +1612,7 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
         }
         persistChatResult({
           ...reviewSaved,
-          design_suggestions: designSuggestions,
+          design_suggestions: [],
           data_refinement: dataRefinement,
           suggestions,
           chatHistory: chatHistory.slice(),
