@@ -100,8 +100,8 @@ export function openSettingsModal() {
                     </select>
                   </div>
                   <div class="defaults-field">
-                    <label class="dataset-meta-label" for="settings-review-concurrency">Concurrency (1–4)</label>
-                    <input type="number" id="settings-review-concurrency" class="dataset-meta-input" min="1" max="4" value="1" aria-label="Review concurrency" />
+                    <label class="dataset-meta-label" for="settings-review-concurrency">Review concurrency (1–4)</label>
+                    <input type="number" id="settings-review-concurrency" class="dataset-meta-input" min="1" max="4" value="1" aria-label="Review phase-1 concurrency" />
                   </div>
                   <div class="defaults-field">
                     <label class="dataset-meta-label" for="settings-review-max-tokens">Max tokens (256–131072)</label>
@@ -109,7 +109,7 @@ export function openSettingsModal() {
                   </div>
                   <div class="defaults-field">
                     <label class="dataset-meta-label" for="settings-review-max-failed-rows">Max failed rows per Review (1–200)</label>
-                    <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max failed rows analyzed per Review batch" />
+                    <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max failed rows analyzed per Review" />
                   </div>
                 </div>
               </div>
@@ -129,8 +129,8 @@ export function openSettingsModal() {
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
   const reviewAssistantCredSelect = overlay.querySelector('#settings-default-review-assistant-credential');
   const runConcurrencyInp = overlay.querySelector('#settings-run-concurrency');
-  const reviewConcurrencyInp = overlay.querySelector('#settings-review-concurrency');
   const runMaxTokensInp = overlay.querySelector('#settings-run-max-tokens');
+  const reviewConcurrencyInp = overlay.querySelector('#settings-review-concurrency');
   const reviewMaxTokensInp = overlay.querySelector('#settings-review-max-tokens');
   const reviewMaxFailedRowsInp = overlay.querySelector('#settings-review-max-failed-rows');
   const runMaxRetriesInp = overlay.querySelector('#settings-run-max-retries');

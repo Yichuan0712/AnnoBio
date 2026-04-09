@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Optional
 
 # ANSI codes for terminal highlight (all yellow; supported on Windows 10+ and Unix)
 _HL = "\033[1;33m"   # bold yellow
@@ -144,12 +144,7 @@ class SettingsPatch(BaseModel):
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
-    review_max_failed_rows: int | None = Field(
-        default=None,
-        ge=1,
-        le=200,
-        description="Max unmatched rows to diagnose per Review batch (per-LLM-call row analysis)",
-    )
+    review_max_failed_rows: int | None = Field(default=None, ge=1, le=200)
 
 
 class CredentialResponse(BaseModel):
@@ -188,7 +183,7 @@ class ReviewComparisonRow(BaseModel):
         description="Per-rule comparison labels from the UI, e.g. ['field_key: String match (Contains, Ignore case)', 'field_key: Numeric equality']",
     )
     comment: str | None = Field(default=None, description="User comment if any")
-    row_input: dict | None = Field(default=None, description="Input key-values used to fill the prompt for this row; used during screening when LLM requests it")
+    row_input: dict | None = Field(default=None, description="Input key-values used to fill the prompt for this row")
 
 
 class ReviewRequest(BaseModel):
@@ -200,7 +195,7 @@ class ReviewRequest(BaseModel):
     output_schema: dict | None = Field(default=None, description="Same as run: return_shape + fields [{ key, type, description?, allow_none? }]; when set, used instead of output_return_shape + output_fields for prompts")
     output_return_shape: str = Field(default="single", description="Fallback when output_schema not provided")
     comparison_rows: list[ReviewComparisonRow] = Field(default_factory=list, description="Per-row match result and context")
-    all_rows_matched: bool | None = Field(default=None, description="If True, frontend says all rows matched; backend will force empty suggestions")
+    all_rows_matched: bool | None = Field(default=None, description="If True, frontend reports every comparison row matched")
 
 
 class ReviewSuggestion(BaseModel):
@@ -223,33 +218,6 @@ class ReviewResult(BaseModel):
     suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete edit suggestions")
     design_suggestions: list[DesignSuggestion] = Field(default_factory=list, description="Global design guidance only; no accept/revert in UI")
     data_refinement: list[dict] = Field(default_factory=list, description="GT question summary: [{row_indices, reason}]")
-
-
-# Review pipeline — diagnosis phase: per-row LLM output
-class PerRowDiagnosis(BaseModel):
-    row_index: int = Field(..., description="0-based row index")
-    root_cause: str = Field(..., description="Root cause analysis")
-    gt_questioned: bool = Field(default=False, description="Whether GT is questioned")
-    gt_reason: str | None = Field(default=None, description="Reason for questioning (if gt_questioned)")
-    section_index_suggestions: list[int] = Field(default_factory=list, description="0-based section indices to change")
-    micro_suggestion: str = Field(default="", description="Micro suggestion for this row")
-
-
-# Review pipeline — repair phase: data refinement item
-class DataRefinementItem(BaseModel):
-    row_indices: list[int] = Field(default_factory=list, description="Row indices to fix (1-based for display)")
-    reason: str = Field(default="", description="Aggregated reason for questioning")
-
-
-# Review pipeline — repair phase: structured LLM output
-class RepairSynthesisResult(BaseModel):
-    suggestions: list[ReviewSuggestion] = Field(default_factory=list)
-    data_refinement: list[DataRefinementItem] = Field(default_factory=list)
-
-
-# Review pipeline — screening phase: routing only (no design_suggestions)
-class ScreeningResult(BaseModel):
-    route: Literal["REWRITE", "ANALYZE"] = Field(..., description="REWRITE = prompt broken, repair via full rewrite; ANALYZE = run diagnosis then repair")
 
 
 def _sanitize_field_name(key: str) -> str:
@@ -957,7 +925,7 @@ def get_run_result(run_id: str):
 
 @app.post("/api/review/analyze")
 def review_analyze(body: ReviewRequest):
-    """Start review in background (screening → diagnosis if ANALYZE → repair); returns 202 with review_id. Poll GET /api/review/result/{review_id}. Worker stops when cancelled."""
+    """Start review job in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Pipeline: review_pipeline.py (per-row analysis → two LLM passes: localized edits, then optional fatal-only design cards)."""
     review_id = str(uuid.uuid4())
     review_node_id = body.review_session_id or ""
     with _review_jobs_lock:
@@ -1099,266 +1067,7 @@ def get_run_result_by_node(run_node_id: str):
     return {"run_id": run_id, "status": "done", "results": results, "output_fields": output_fields}
 
 
-# ---------- Review: screening -> diagnosis -> repair (see _do_review_work) ----------
-def _review_output_schema_lines(body: ReviewRequest) -> tuple[list[str], list[str]]:
-    """Return (lines for prompt, list of field keys for constraints). When output_schema present use it; else derive keys from output_fields."""
-    schema = body.output_schema if isinstance(body.output_schema, dict) else None
-    if schema and (schema.get("fields") or schema.get("return_shape") is not None):
-        shape = (schema.get("return_shape") or "single").strip().lower()
-        if shape not in ("single", "table"):
-            shape = "single"
-        lines = [f"return_shape: {shape} (one object per run)" if shape == "single" else "return_shape: table (array of objects per run)"]
-        keys = []
-        for f in schema.get("fields") or []:
-            key = (f.get("key") or "").strip()
-            if not key:
-                continue
-            keys.append(key)
-            typ = (f.get("type") or "str").strip()
-            desc = (f.get("description") or "").strip()
-            allow_none = f.get("allow_none") or f.get("allowNone") is True
-            part = f"  - {key}: {typ}"
-            if desc:
-                part += f" — {desc}"
-            if allow_none:
-                part += " (allow_none)"
-            lines.append(part)
-        return lines, keys
-    keys = [(f.get("key") or "").strip() for f in (body.output_fields or []) if f and (f.get("key") or "").strip()]
-    return [], keys
-
-
-def _review_all_matched(body: ReviewRequest) -> bool:
-    """True if frontend says all rows matched, or we infer from comparison_rows (empty => True)."""
-    if body.all_rows_matched is not None:
-        return body.all_rows_matched
-    comparison_rows = body.comparison_rows or []
-    return all(r.matched for r in comparison_rows) if comparison_rows else True
-
-
-# Screening phase is LLM-only (see _run_screening_llm).
-RouteDecision = Literal["REWRITE", "ANALYZE"]
-
-
-# Comparison rule labels (align with frontend: matchType + optional matchFlags in parentheses).
-REVIEW_COMPARISON_RULES_BLOCK = """
-- **String match**: Compare as text after any listed normalizations. Parentheses list active options for that field, e.g. **Contains** (mutual substring: either side contains the other), **Ignore case**, **Ignore symbols**, **Ignore whitespace**. If none are listed, require exact equality after trim only. **Fuzzy text (bigrams)** is mutually exclusive with those options: Sørensen–Dice on character bigrams after trim / lowercasing / collapsed whitespace (not embedding-based). **Semantic (embedding)** is also mutually exclusive with those options: cosine similarity of local sentence embeddings (backend FastEmbed, MiniLM-class model).
-- **Numeric equality**: Both sides are trimmed, then parsed as numbers when possible. Parentheses describe the mode: exact **==**; **abs ε≤x** means |a-b|≤x; **rel≤r** means |a-b|≤r×max(|a|,|b|); **N dp** means round both to N decimal places (half-up) then require equality. If parsing fails, the trimmed strings are compared for equality.
-"""
-
-
-def _review_compared_fields_and_rules(comparison_rows: list[ReviewComparisonRow]) -> tuple[list[str], str]:
-    """From comparison_rows, return (list of compared output field names, full comparison rules text for prompt)."""
-    for row in comparison_rows or []:
-        if not row.comparison_types:
-            continue
-        fields: list[str] = []
-        for ct in row.comparison_types:
-            # Format is "outputKey: Label" e.g. "summary: Exact match"
-            if ": " in ct:
-                key = ct.split(": ", 1)[0].strip()
-                if key and key not in fields:
-                    fields.append(key)
-        if fields:
-            block = "## Compared fields (only these were used to decide matched / NOT MATCHED)\n"
-            block += "When giving reasons or suggestions, only refer to these fields. Do not cite or reason about other keys in the model output; they were not part of the scoring.\n"
-            block += "Fields: " + ", ".join(fields) + "\n\n"
-            block += "## Comparison rules (how each field was judged)\n"
-            block += REVIEW_COMPARISON_RULES_BLOCK.strip()
-            return fields, block
-    return [], ""
-
-
-def _build_screening_prompt(body: ReviewRequest) -> str:
-    """Screening phase: LLM prompt for routing only (REWRITE vs ANALYZE)."""
-    lines = [
-        "You are screening prompts for a review pipeline. Evaluate the prompt under review and output only the route.",
-        "",
-        "## Routing rules",
-        "1. Instruction completeness: Choose REWRITE if the prompt is missing Role/Task, or is too short (e.g. one-liner, <50 chars, or <2 sections).",
-        "2. Schema alignment: Choose REWRITE if the prompt mentions fewer than 30% of the output_schema field keys (so the model may not produce the expected fields).",
-        "3. Otherwise choose ANALYZE.",
-        "",
-        "Route meanings:",
-        "- REWRITE: Prompt is structurally broken; the pipeline will generate an expert template from scratch.",
-        "- ANALYZE: Prompt is acceptable; the pipeline will run per-row diagnosis and then repair (synthesize targeted edit suggestions).",
-        "",
-        "## Input under review",
-        "",
-        "### Prompt sections",
-    ]
-    for i, sec in enumerate(body.prompt_sections or []):
-        name = (sec.get("name") or "").strip() or "(unnamed)"
-        content = (sec.get("content") or "").strip() or "(empty)"
-        lines.append(f"--- Section {i}: {name} ---")
-        lines.append(content)
-        lines.append("")
-    schema_lines, _ = _review_output_schema_lines(body)
-    lines.append("### Output schema")
-    if schema_lines:
-        lines.extend(schema_lines)
-    else:
-        schema = body.output_schema if isinstance(body.output_schema, dict) else {}
-        if not schema and body.output_fields:
-            schema = {"fields": body.output_fields}
-        lines.append(json.dumps(schema, ensure_ascii=False, indent=2) if schema else "(none)")
-    lines.append("")
-    lines.append("## Output format")
-    lines.append("Respond with JSON only: {\"route\": \"REWRITE\" or \"ANALYZE\"}.")
-    return "\n".join(lines)
-
-
-def _run_screening_llm(body: ReviewRequest, provider: str, model: str, api_key: str, max_tokens: int) -> tuple[RouteDecision, list[DesignSuggestion]]:
-    """Call LLM for screening (routing only). Returns (route, []) — design_suggestions always empty."""
-    prompt = _build_screening_prompt(body)
-    out, _ = llm_run_structured(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        prompt=prompt,
-        response_model=ScreeningResult,
-        max_tokens=max_tokens,
-    )
-    if not isinstance(out, dict):
-        out = out.model_dump() if hasattr(out, "model_dump") else {}
-    route = out.get("route") or "ANALYZE"
-    if route not in ("REWRITE", "ANALYZE"):
-        route = "ANALYZE"
-    return route, []
-
-
-# ---------- Diagnosis phase: per-row prompt ----------
-def _build_diagnosis_prompt(row: ReviewComparisonRow, rules_block: str, schema_lines: list[str]) -> str:
-    """Single failed row: Full Input + Full Output + GT + Matching Rules."""
-    lines = [
-        "You are a Prompt debugging expert. Analyze this single failed case to find the root cause.",
-        "",
-        "## Full Input (key-values used to fill the prompt for this row)",
-        json.dumps(row.row_input or {}, ensure_ascii=False, indent=2),
-        "",
-        "## Model Output (Full Output)",
-        json.dumps(row.run_output, ensure_ascii=False, indent=2),
-        "",
-        "## Ground Truth (Expected)",
-        str(row.expected or ""),
-        "",
-    ]
-    if row.comparison_types:
-        lines.append("## Comparison types for this row")
-        lines.append(", ".join(row.comparison_types))
-        lines.append("")
-    lines.append("## Matching Rules")
-    lines.append(rules_block)
-    lines.append("")
-    if schema_lines:
-        lines.append("## Output schema")
-        lines.extend(schema_lines)
-        lines.append("")
-    lines.extend([
-        "## Task",
-        "1. Root cause: Why did the model fail? Prefer prompt/extraction issues first: missing or wrong output fields vs schema, empty values where GT expects content, extra keys, wrong types, format not matching comparison rules—then unclear instruction, weak constraint, or misleading input.",
-        "2. GT questioned: Set gt_questioned=true ONLY if expected/GT is internally inconsistent, contradicts the row input, or is clearly mislabeled—not merely because run output differs. Mismatch due to missing/extra/wrong-field extraction => gt_questioned=false.",
-        "3. Micro suggestion: Give a brief improvement direction for this row (do NOT write exact new_sentence; describe what to clarify).",
-        "",
-        "Respond with JSON: {\"row_index\": <0-based>, \"root_cause\": \"...\", \"gt_questioned\": false, \"gt_reason\": null, \"section_index_suggestions\": [0, 1], \"micro_suggestion\": \"...\"}.",
-    ])
-    return "\n".join(lines)
-
-
-# ---------- Repair phase: synthesis prompt (after diagnosis) ----------
-def _build_repair_synthesis_prompt(body: ReviewRequest, diagnoses: list[PerRowDiagnosis]) -> str:
-    """ANALYZE path: aggregate diagnoses, output suggestions + data_refinement."""
-    all_matched = _review_all_matched(body)
-    _, schema_keys = _review_output_schema_lines(body)
-    section_names = [(s.get("name") or "").strip() for s in (body.prompt_sections or []) if s and (s.get("name") or "").strip()]
-    lines = [
-        "You have per-row diagnosis reports. Synthesize them into global edit suggestions.",
-        "",
-        "## Task",
-        "1. Merge similar root causes (e.g. 20 rows all 'cannot identify negative sentiment' -> one suggestion).",
-        "2. Identify global logic gaps.",
-        "3. Output: suggestions (old_sentence -> new_sentence) and data_refinement ONLY for rows where diagnosis explicitly questioned GT (gt_questioned=true), not for extraction or prompt issues.",
-        "4. row_indices (optional): Only include when a suggestion clearly targets specific failed rows. Use 0-based indices (Row 1 -> 0). Omit or use [] when the suggestion is general.",
-        "",
-        "**Do NOT put correct/expected answers into new_sentence.** Improve instructions, criteria, or wording only.",
-        "",
-        "## Critical: old_sentence",
-        "Copy character-for-character from the section text. One sentence or one line per suggestion.",
-        "",
-        "## Critical: new_sentence",
-        "Must not contain expected output. Change instructions or criteria only.",
-        "**new_sentence is for the user's prompt (extraction/evaluation model), NOT for this review.** Do NOT add meta-instructions like 'merge root causes', 'identify global logic gaps', 'consolidate suggestions'—those describe the synthesis task, not the user's task.",
-        "",
-    ]
-    if all_matched:
-        lines.append("**All rows matched.** Output 1–2 optional small improvements.")
-        lines.append("")
-    _, rules_block = _review_compared_fields_and_rules(body.comparison_rows or [])
-    if rules_block:
-        lines.append(rules_block)
-        lines.append("")
-    lines.append("## Sections (copy exact substring for old_sentence)")
-    for i, sec in enumerate(body.prompt_sections or []):
-        name = (sec.get("name") or "").strip() or "(unnamed)"
-        content = (sec.get("content") or "").strip() or "(empty)"
-        lines.append(f"--- Section index {i}: {name} ---")
-        lines.append(content)
-        lines.append("")
-    lines.append("## Per-row diagnoses (for synthesis)")
-    for d in diagnoses:
-        gt_note = f" | GT questioned: {d.gt_reason}" if d.gt_questioned and d.gt_reason else ""
-        lines.append(f"Row {d.row_index + 1}: {d.root_cause} | sections: {d.section_index_suggestions} | micro: {d.micro_suggestion}{gt_note}")
-    lines.append("")
-    if schema_keys or section_names:
-        lines.append("## Constraints")
-        lines.append("Do NOT rename output schema field keys or section names.")
-        lines.append("")
-    lines.append("## Ground truth issues (rare)")
-    lines.append(
-        "Add data_refinement only when gt_questioned=true in the diagnoses (evidence that labels/expected values are wrong). "
-        "If failures are due to model output shape, missing fields, or format vs comparison rules, omit data_refinement entirely."
-    )
-    lines.append("")
-    lines.append(
-        "Respond with JSON: {\"suggestions\": [{\"name\": \"...\", \"section_index\": 0, \"old_sentence\": \"...\", \"new_sentence\": \"...\", \"reason\": \"...\", \"row_indices\": []}, ...], "
-        "\"data_refinement\": [{\"row_indices\": [1, 3], \"reason\": \"...\"}, ...]}. Put actual 1-based row numbers from the diagnoses in row_indices, not literal 1,3. Use row_indices: [] for suggestions when not targeting specific rows."
-    )
-    return "\n".join(lines)
-
-
-def _build_repair_rewrite_prompt(body: ReviewRequest) -> str:
-    """REWRITE path: prompt is broken; generate expert template from scratch."""
-    schema_lines, schema_keys = _review_output_schema_lines(body)
-    lines = [
-        "The user's prompt has serious structural problems (missing Role/Task or schema misalignment). "
-        "Generate an expert-level prompt template from scratch based on the output_schema and the user's intent (inferred from the broken prompt).",
-        "",
-        "## Output schema",
-    ]
-    if schema_lines:
-        lines.extend(schema_lines)
-    else:
-        lines.append(", ".join(schema_keys) if schema_keys else "(none)")
-    lines.append("")
-    lines.append("## Current (broken) prompt (for reference only)")
-    for i, sec in enumerate(body.prompt_sections or []):
-        name = (sec.get("name") or "").strip() or "(unnamed)"
-        content = (sec.get("content") or "").strip() or "(empty)"
-        lines.append(f"--- {i}: {name} ---")
-        lines.append(content)
-        lines.append("")
-    lines.append("## Task")
-    lines.append(
-        "Output suggestions that replace entire sections. Use old_sentence as the full section content to replace, "
-        "and new_sentence as the new expert template for that section. Include Role, Task, and clear instructions."
-    )
-    lines.append("")
-    lines.append(
-        "Respond with JSON: {\"suggestions\": [{\"name\": \"...\", \"section_index\": 0, \"old_sentence\": \"<full section>\", \"new_sentence\": \"<new section>\", \"reason\": \"...\"}, ...], \"data_refinement\": []}."
-    )
-    return "\n".join(lines)
-
-
+# ---------- Review analyze worker (delegates to review_pipeline.py) ----------
 def _review_is_cancelled(review_id: str | None) -> bool:
     """Check if client requested cancellation for this review job."""
     if not review_id:
@@ -1368,7 +1077,8 @@ def _review_is_cancelled(review_id: str | None) -> bool:
 
 
 def _do_review_work(review_id: str, body: ReviewRequest) -> None:
-    """Background worker: screening → diagnosis (if ANALYZE) → repair; appends events to job. Stops when cancelled."""
+    """Validate credential; run review_pipeline.run_review_pipeline; finalize job status."""
+
     def append_event(ev: dict) -> None:
         with _review_jobs_lock:
             job = _review_jobs.get(review_id)
@@ -1391,7 +1101,6 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                     _review_jobs[review_id]["status"] = "done"
                     _review_jobs[review_id]["error"] = "Credential not found"
             return
-        model = cred.get("llm", "")
         api_key = cred.get("api_key", "")
         if not api_key:
             append_event({"type": "error", "detail": "Missing API key"})
@@ -1400,174 +1109,43 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                     _review_jobs[review_id]["status"] = "done"
                     _review_jobs[review_id]["error"] = "Missing API key"
             return
-        provider = cred.get("provider", "openai")
-        review_settings = _load_settings()
-        review_concurrency = review_settings.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"]
-        review_max_tokens = review_settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
-        review_max_failed_rows = review_settings.get("review_max_failed_rows") or DEFAULT_SETTINGS["review_max_failed_rows"]
-        try:
-            review_max_failed_rows = int(review_max_failed_rows)
-        except (TypeError, ValueError):
-            review_max_failed_rows = DEFAULT_SETTINGS["review_max_failed_rows"]
-        review_max_failed_rows = max(1, min(200, review_max_failed_rows))
-
-        # Screening (LLM only)
-        screening_prompt = _build_screening_prompt(body)
-        route, design_suggestions = _run_screening_llm(body, provider, model, api_key, review_max_tokens)
-        all_matched = _review_all_matched(body)
-        design_list = [s.model_dump() if hasattr(s, "model_dump") else s for s in design_suggestions]
-        _safe_print("\n" + _HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Screening PROMPT:" + _R)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(screening_prompt)
-        _safe_print(_HL + _SEP + _R)
-        _safe_print(_HL + "[Review] Screening OUTPUT:" + _R)
-        _safe_print("route: " + route + ", design_suggestions: " + json.dumps(design_list, ensure_ascii=False, indent=2))
-        _safe_print(_HL + _SEP + _R + "\n")
         if _review_is_cancelled(review_id):
             return
-        append_event({"type": "design", "design_suggestions": design_list, "route": route})
 
-        if route == "REWRITE":
-            if _review_is_cancelled(review_id):
-                return
-            repair_prompt = _build_repair_rewrite_prompt(body)
-            _safe_print("\n" + _HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Repair (rewrite) PROMPT SENT TO LLM:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(repair_prompt)
-            _safe_print(_HL + _SEP + _R + "\n")
-            repair_result, _ = llm_run_structured(
-                provider=provider, model=model, api_key=api_key, prompt=repair_prompt,
-                response_model=RepairSynthesisResult, max_tokens=review_max_tokens,
-            )
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Repair (rewrite) LLM OUTPUT:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(json.dumps(repair_result.model_dump() if hasattr(repair_result, "model_dump") else repair_result, ensure_ascii=False, indent=2, default=str))
-            _safe_print(_HL + _SEP + _R + "\n")
-            fs = repair_result if hasattr(repair_result, "suggestions") else RepairSynthesisResult(**(repair_result if isinstance(repair_result, dict) else {}))
-            raw_suggestions = list(getattr(fs, "suggestions", []) or [])
-            data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
-            if _review_is_cancelled(review_id):
-                return
-            append_event({"type": "plan", "summary": "REWRITE: generating expert template.", "diagnosis_total": 0})
-        else:
-            unmatched = [r for r in (body.comparison_rows or []) if not r.matched]
-            schema_lines, _ = _review_output_schema_lines(body)
-            _, rules_block = _review_compared_fields_and_rules(body.comparison_rows or [])
+        from review_pipeline import run_review_pipeline
 
-            if all_matched:
-                diagnoses = [PerRowDiagnosis(row_index=0, root_cause="all matched", gt_questioned=False, section_index_suggestions=[0], micro_suggestion="Optional polish")]
-                if _review_is_cancelled(review_id):
-                    return
-                append_event({"type": "plan", "summary": "All rows matched.", "diagnosis_total": 0})
-            elif not unmatched:
-                if _review_is_cancelled(review_id):
-                    return
-                append_event({"type": "done"})
-                with _review_jobs_lock:
-                    if review_id in _review_jobs:
-                        _review_jobs[review_id]["status"] = "done"
-                return
-            else:
-                to_analyze = unmatched[:review_max_failed_rows]
-                if _review_is_cancelled(review_id):
-                    return
-                append_event({"type": "plan", "summary": f"Analyzing {len(to_analyze)} failed rows.", "diagnosis_total": len(to_analyze)})
-                if _review_is_cancelled(review_id):
-                    return
+        provider = cred.get("provider", "openai")
+        model = cred.get("llm", "") or ""
+        st = _load_settings()
+        max_tokens = int(st.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"])
+        try:
+            max_failed = int(st.get("review_max_failed_rows") or DEFAULT_SETTINGS["review_max_failed_rows"])
+        except (TypeError, ValueError):
+            max_failed = DEFAULT_SETTINGS["review_max_failed_rows"]
+        max_failed = max(1, min(200, max_failed))
+        try:
+            conc = int(st.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"])
+        except (TypeError, ValueError):
+            conc = DEFAULT_SETTINGS["review_concurrency"]
+        conc = max(1, min(4, conc))
 
-                def analyze_one(row: ReviewComparisonRow) -> PerRowDiagnosis:
-                    prompt = _build_diagnosis_prompt(row, rules_block, schema_lines)
-                    _safe_print("\n" + _HL + _SEP + _R)
-                    _safe_print(_HL + f"[Review] Diagnosis row {row.row_index} PROMPT SENT TO LLM:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(prompt)
-                    _safe_print(_HL + _SEP + _R + "\n")
-                    result, _ = llm_run_structured(
-                        provider=provider, model=model, api_key=api_key, prompt=prompt,
-                        response_model=PerRowDiagnosis, max_tokens=review_max_tokens,
-                    )
-                    d = result if isinstance(result, PerRowDiagnosis) else PerRowDiagnosis(**(result if isinstance(result, dict) else result.model_dump()))
-                    d.row_index = row.row_index
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(_HL + f"[Review] Diagnosis row {row.row_index} LLM OUTPUT:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(json.dumps(d.model_dump(), ensure_ascii=False, indent=2))
-                    _safe_print(_HL + _SEP + _R + "\n")
-                    return d
-
-                diagnoses_list: list[PerRowDiagnosis] = []
-                with ThreadPoolExecutor(max_workers=review_concurrency) as ex:
-                    futures = {ex.submit(analyze_one, r): r for r in to_analyze}
-                    done = 0
-                    for future in as_completed(futures):
-                        if _review_is_cancelled(review_id):
-                            break
-                        d_row = future.result()
-                        diagnoses_list.append(d_row)
-                        done += 1
-                        if _review_is_cancelled(review_id):
-                            break
-                        append_event({"type": "diagnosis_row", "row_index": d_row.row_index, "done": done, "total": len(to_analyze)})
-                if _review_is_cancelled(review_id):
-                    with _review_jobs_lock:
-                        if review_id in _review_jobs:
-                            _review_jobs[review_id]["status"] = "cancelled"
-                    return
-                diagnoses_list.sort(key=lambda d: d.row_index)
-                diagnoses = diagnoses_list
-
-            # Repair (synthesis from diagnoses, or polish when all matched)
-            if _review_is_cancelled(review_id):
-                with _review_jobs_lock:
-                    if review_id in _review_jobs:
-                        _review_jobs[review_id]["status"] = "cancelled"
-                return
-            repair_prompt = _build_repair_synthesis_prompt(body, diagnoses)
-            _safe_print("\n" + _HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Repair (synthesis) PROMPT SENT TO LLM:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(repair_prompt)
-            _safe_print(_HL + _SEP + _R + "\n")
-            repair_result, _ = llm_run_structured(
-                provider=provider, model=model, api_key=api_key, prompt=repair_prompt,
-                response_model=RepairSynthesisResult, max_tokens=review_max_tokens,
-            )
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(_HL + "[Review] Repair (synthesis) LLM OUTPUT:" + _R)
-            _safe_print(_HL + _SEP + _R)
-            _safe_print(json.dumps(repair_result.model_dump() if hasattr(repair_result, "model_dump") else repair_result, ensure_ascii=False, indent=2, default=str))
-            _safe_print(_HL + _SEP + _R + "\n")
-            fs = repair_result if hasattr(repair_result, "suggestions") else RepairSynthesisResult(**(repair_result if isinstance(repair_result, dict) else {}))
-            raw_suggestions = list(getattr(fs, "suggestions", []) or [])
-            if all_matched and len(raw_suggestions) > 2:
-                raw_suggestions = raw_suggestions[:2]
-            data_refinement = [x.model_dump() if hasattr(x, "model_dump") else x for x in (getattr(fs, "data_refinement", None) or [])]
+        run_review_pipeline(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            body=body,
+            max_tokens=max_tokens,
+            max_failed_rows=max_failed,
+            concurrency=conc,
+            is_cancelled=lambda: _review_is_cancelled(review_id),
+            append_event=append_event,
+        )
 
         if _review_is_cancelled(review_id):
             with _review_jobs_lock:
                 if review_id in _review_jobs:
                     _review_jobs[review_id]["status"] = "cancelled"
             return
-        batch = []
-        for s in raw_suggestions:
-            s_dict = s.model_dump() if hasattr(s, "model_dump") else s
-            if isinstance(s_dict, dict):
-                if (s_dict.get("section_index") or 0) < 0 and body.prompt_sections:
-                    s_dict["section_index"] = 0
-                batch.append(s_dict)
-        if batch:
-            append_event({"type": "suggestions", "suggestions": batch})
-        if data_refinement:
-            if _review_is_cancelled(review_id):
-                with _review_jobs_lock:
-                    if review_id in _review_jobs:
-                        _review_jobs[review_id]["status"] = "cancelled"
-                return
-            append_event({"type": "data_refinement", "data_refinement": data_refinement})
-        append_event({"type": "done"})
         with _review_jobs_lock:
             if review_id in _review_jobs:
                 _review_jobs[review_id]["status"] = "done"

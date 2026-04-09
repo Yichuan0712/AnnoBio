@@ -7,6 +7,7 @@
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
 import { mergeResumeResults, embedInputRow, countCompletedInputRows, markEmptyOutputAsError } from './runResumeUtils.js';
+import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
 import {
   allocNextReviewSuggestionId,
@@ -809,6 +810,7 @@ export function buildWorkflowCanvas(root) {
       suggestions: streamSaved.suggestions || [],
       design_suggestions: streamSaved.design_suggestions || [],
       data_refinement: streamSaved.data_refinement || [],
+      row_diagnostics: Array.isArray(streamSaved.row_diagnostics) ? streamSaved.row_diagnostics : [],
       promptSections: sectionsCopy,
       promptFullText: sectionsCopy.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n'),
       workingSections: sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() })),
@@ -816,7 +818,8 @@ export function buildWorkflowCanvas(root) {
       run_results: streamSaved.run_results || [],
       comparison_rows: streamSaved.comparison_rows || [],
     };
-    let focusCount = 0, diagnosisTotal = 0, focusDone = 0, diagnosisDone = 0;
+    let diagnosisTotal = 0;
+    let diagnosisDone = 0;
     for (const ev of events) {
       if (ev.type === 'error') {
         pendingReviews.delete(reviewNodeId);
@@ -825,43 +828,67 @@ export function buildWorkflowCanvas(root) {
         alert(ev.detail || 'Review failed.');
         return;
       }
-      if (ev.type === 'design' && Array.isArray(ev.design_suggestions)) {
-        streamSaved.design_suggestions = ev.design_suggestions.map((d) =>
-          d && typeof d === 'object' ? ensureSuggestionObjectId({ ...d }, streamSaved) : d
-        );
-        setReviewNodeProgress(getNodeById(reviewNodeId), 10);
-      } else if (ev.type === 'plan') {
-        focusCount = ev.focus_count != null ? Math.max(0, parseInt(ev.focus_count, 10)) : 0;
-        const dt = ev.diagnosis_total != null ? ev.diagnosis_total : ev.per_row_count;
-        diagnosisTotal = dt != null ? Math.max(0, parseInt(dt, 10)) : 0;
-        focusDone = 0;
+      if (ev.type === 'plan') {
+        const dt = ev.diagnosis_total != null ? Math.max(0, parseInt(ev.diagnosis_total, 10)) : 0;
+        diagnosisTotal = dt;
         diagnosisDone = 0;
-        streamSaved = { ...streamSaved, summary: ev.summary || '', suggestions: [], streamComplete: false, reviewProgress: 20 };
-        setReviewNodeProgress(getNodeById(reviewNodeId), 20);
+        streamSaved = {
+          ...streamSaved,
+          summary: ev.summary || '',
+          suggestions: [],
+          design_suggestions: [],
+          data_refinement: [],
+          row_diagnostics: [],
+          streamComplete: false,
+          reviewProgress: 12,
+        };
+        setReviewNodeProgress(getNodeById(reviewNodeId), 12);
       } else if (ev.type === 'diagnosis_row' || ev.type === 'step2_row') {
         diagnosisDone = ev.done != null ? parseInt(ev.done, 10) : diagnosisDone + 1;
         const total = ev.total != null ? parseInt(ev.total, 10) : diagnosisTotal;
-        const pct = total > 0 ? 20 + Math.floor(60 * diagnosisDone / total) : 80;
+        const pct = total > 0 ? 12 + Math.floor(58 * diagnosisDone / total) : 70;
         setReviewNodeProgress(getNodeById(reviewNodeId), pct);
         streamSaved.reviewProgress = pct;
+        if (ev.opinion && typeof ev.opinion === 'object') {
+          const rid = ev.row_index != null ? parseInt(ev.row_index, 10) : NaN;
+          if (!Number.isNaN(rid)) {
+            const list = Array.isArray(streamSaved.row_diagnostics) ? streamSaved.row_diagnostics.slice() : [];
+            const entry = {
+              row_index: rid,
+              card_title: String(ev.opinion.card_title || ''),
+              issue_summary: String(ev.opinion.issue_summary || ''),
+              rough_modification_opinion: String(ev.opinion.rough_modification_opinion || ''),
+              problem_category_hint: String(ev.opinion.problem_category_hint || ''),
+            };
+            const idx = list.findIndex((x) => x && Number(x.row_index) === rid);
+            if (idx >= 0) list[idx] = entry;
+            else list.push(entry);
+            list.sort((a, b) => (Number(a.row_index) || 0) - (Number(b.row_index) || 0));
+            streamSaved.row_diagnostics = list;
+          }
+        }
+      } else if (ev.type === 'design' && Array.isArray(ev.design_suggestions)) {
+        streamSaved.design_suggestions = ev.design_suggestions.map((d) =>
+          d && typeof d === 'object' ? ensureSuggestionObjectId({ ...d }, streamSaved) : d
+        );
+        setReviewNodeProgress(getNodeById(reviewNodeId), 85);
+        streamSaved.reviewProgress = 85;
       } else if (ev.type === 'suggestions' && Array.isArray(ev.suggestions) && ev.suggestions.length) {
         const batch = ev.suggestions.map((s) =>
           s && typeof s === 'object' ? ensureSuggestionObjectId({ ...s }, streamSaved) : s
         );
         streamSaved.suggestions = (streamSaved.suggestions || []).concat(batch);
-        focusDone += 1;
-        const pct = focusCount > 0 ? 20 + (80 * focusDone / focusCount) : (diagnosisTotal > 0 ? 85 : 90);
-        setReviewNodeProgress(getNodeById(reviewNodeId), pct);
+        setReviewNodeProgress(getNodeById(reviewNodeId), 90);
+        streamSaved.reviewProgress = 90;
       } else if (ev.type === 'data_refinement' && Array.isArray(ev.data_refinement)) {
         streamSaved.data_refinement = ev.data_refinement.map((item) =>
           item && typeof item === 'object' ? ensureSuggestionObjectId({ ...item }, streamSaved) : item
         );
         setReviewNodeProgress(getNodeById(reviewNodeId), 95);
+        streamSaved.reviewProgress = 95;
       } else if (ev.type === 'done') {
         setReviewNodeProgress(getNodeById(reviewNodeId), 100);
         streamSaved = { ...streamSaved, streamComplete: true, reviewProgress: 100 };
-        // Backend often emits edit suggestions before data_refinement; IDs were allocated in event order.
-        // UI order is design → data refinement → edits; renumber once when the run completes.
         normalizeSuggestionIdsToDisplayOrder(streamSaved);
       }
       ensureReviewResultIds(streamSaved);
@@ -3589,7 +3616,7 @@ export function buildWorkflowCanvas(root) {
 
   function escapeHtml(str) {
     const div = document.createElement('div');
-    div.textContent = str;
+    div.textContent = normalizeUnicodeDashesForDisplay(String(str ?? ''));
     return div.innerHTML;
   }
 

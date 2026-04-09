@@ -6,6 +6,7 @@
 
 import { showConfirm, showAlert } from './alertModal.js';
 import { comparisonRowIsMatched } from './scoreDetailModal.js';
+import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import {
   ensureReviewResultIds,
   ensureSuggestionObjectId,
@@ -34,8 +35,130 @@ function sliceChatHistoryForApi(messages) {
 
 function escapeHtml(str) {
   const div = document.createElement('div');
-  div.textContent = str;
+  div.textContent = normalizeUnicodeDashesForDisplay(String(str ?? ''));
   return div.innerHTML;
+}
+
+const DIAG_LIST_PREVIEW_CHARS = 200;
+
+function truncateWithEllipsis(text, maxChars) {
+  const t = normalizeUnicodeDashesForDisplay(String(text ?? '')).trim();
+  if (!t) return '';
+  if (t.length <= maxChars) return t;
+  return `${t.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+}
+
+/** Turn snake_case category hints into a short phrase (not a “variable”). */
+function humanizeSnakeCaseHint(hint) {
+  const h = String(hint || '').trim();
+  if (!h) return '';
+  return h
+    .split(/_+/)
+    .filter(Boolean)
+    .map((w) => {
+      const lower = w.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(' ');
+}
+
+/** First sentence or line of issue_summary as a suggestion-style title (short sentence). */
+function shortSentenceTitleFromSummary(summary, maxLen = 88) {
+  let t = normalizeUnicodeDashesForDisplay(String(summary || '')).trim();
+  if (!t) return '';
+  const firstLine = t.split(/\r?\n/)[0].trim();
+  t = firstLine;
+  const sentMatch = t.match(/^.{1,200}?[.!?](?=\s|$)/);
+  if (sentMatch && sentMatch[0].length <= maxLen + 24) {
+    t = sentMatch[0].trim();
+  }
+  if (t.length > maxLen) {
+    let cut = t.slice(0, maxLen - 1).trimEnd();
+    const sp = cut.lastIndexOf(' ');
+    if (sp >= Math.floor(maxLen * 0.45)) cut = cut.slice(0, sp);
+    t = `${cut}…`;
+  }
+  return t;
+}
+
+function diagnosisCardTitleLine(d) {
+  const fromLlm = (d.card_title || '').trim();
+  if (fromLlm) return truncateWithEllipsis(fromLlm, 100);
+  const fromIssue = shortSentenceTitleFromSummary(d.issue_summary, 88);
+  if (fromIssue) return fromIssue;
+  const fromHint = humanizeSnakeCaseHint(d.problem_category_hint);
+  if (fromHint) return fromHint;
+  const fromRough = truncateWithEllipsis(d.rough_modification_opinion, 88);
+  if (fromRough) return fromRough;
+  return 'Error analysis';
+}
+
+/** Short sentence-style card title for Suggested changes (mirrors diagnosis list line). */
+function suggestionCardTitleLine({ explicitName, reason, sectionFallback, defaultLabel }) {
+  const fromName = String(explicitName || '').trim();
+  if (fromName) {
+    const sentence = shortSentenceTitleFromSummary(fromName, 100) || fromName;
+    return truncateWithEllipsis(sentence, 100);
+  }
+  const fromReason = shortSentenceTitleFromSummary(reason, 88);
+  if (fromReason) return fromReason;
+  const sec = String(sectionFallback || '').trim();
+  if (sec) return truncateWithEllipsis(sec, 88);
+  return defaultLabel;
+}
+
+/**
+ * Second-layer modal: analysis text only + which Score comparison row this refers to.
+ * @param {{ row_index: number, card_title?: string, issue_summary: string, rough_modification_opinion: string, problem_category_hint?: string }} diagnostic
+ * @param {Record<string, unknown> | null} comparisonRow - unused; kept for caller compatibility
+ * @param {number} displayNumber - 1-based order in the Error analysis list (same as # on the card)
+ */
+function openRowDiagnosisDetailOverlay(diagnostic, _comparisonRow, displayNumber) {
+  const num = Math.max(1, parseInt(String(displayNumber), 10) || 1);
+  const issue = (diagnostic.issue_summary || '').trim();
+  const rough = (diagnostic.rough_modification_opinion || '').trim();
+  const cardTitle = (diagnostic.card_title || '').trim();
+  const scoreRowIdx = diagnostic.row_index;
+  const scoreRowLabel =
+    scoreRowIdx != null && scoreRowIdx !== '' && !Number.isNaN(Number(scoreRowIdx))
+      ? String(Number(scoreRowIdx))
+      : '—';
+
+  const mainHeading = cardTitle || `Analysis #${num}`;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay review-diagnosis-detail-overlay';
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'review-diagnosis-detail-title');
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--review-diagnosis-detail">
+      <div class="modal-header">
+        <h2 id="review-diagnosis-detail-title" class="modal-title">${escapeHtml(mainHeading)}</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body review-diagnosis-detail-body">
+        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Source:</span> Score comparison table #${escapeHtml(scoreRowLabel)}</p>
+        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Issue:</span> ${issue ? escapeHtml(issue) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
+        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Suggested direction:</span> ${rough ? escapeHtml(rough) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
+      </div>
+    </div>
+  `;
+
+  function close() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKeyDown);
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'Escape') close();
+  }
+
+  overlay.querySelector('.modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+  document.addEventListener('keydown', onKeyDown);
+  document.body.appendChild(overlay);
 }
 
 /**
@@ -193,20 +316,29 @@ function sentenceDiff(oldStr, newStr) {
   return segments;
 }
 
-/** Render a single line with sentence-level diff (red/green only, no structure change). */
-function renderLineDiff(oldLine, newLine) {
+/** Render a single line with sentence-level diff (red/green only, no structure change).
+ * @param {boolean} revertPreview — true when hovering Revert: show green strikethrough for text being removed (new) and red for restored (old). */
+function renderLineDiff(oldLine, newLine, revertPreview = false) {
   if (oldLine === newLine) return escapeHtml(oldLine || '');
-  if (!newLine) return `<span class="review-removed">${escapeHtml(oldLine)}</span>`;
+  if (!newLine) {
+    return revertPreview
+      ? `<span class="review-revert-remove">${escapeHtml(oldLine)}</span>`
+      : `<span class="review-removed">${escapeHtml(oldLine)}</span>`;
+  }
   const segments = sentenceDiff(oldLine, newLine);
   return segments.map((seg) => {
     if (seg.type === 'equal') return escapeHtml(seg.text);
+    if (revertPreview) {
+      if (seg.type === 'remove') return `<span class="review-revert-remove">${escapeHtml(seg.text)}</span>`;
+      return `<span class="review-revert-restore">${escapeHtml(seg.text)}</span>`;
+    }
     if (seg.type === 'remove') return `<span class="review-removed">${escapeHtml(seg.text)}</span>`;
     return `<span class="review-added">${escapeHtml(seg.text)}</span>`;
   }).join(' ');
 }
 
 /** Render one section's content, optionally with diff or highlight. Preserves line breaks (one div per line). */
-function renderSectionContent(content, newContent, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan) {
+function renderSectionContent(content, newContent, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
   const oldC = (content || '').trim();
   const oldLines = oldC.split('\n');
   const newC = (newContent || '').trim();
@@ -248,6 +380,7 @@ function renderSectionContent(content, newContent, withDiff, removeSpan, highlig
   }
   if (removeSpan != null && (removeSpan = (removeSpan || '').trim()) && oldC.includes(removeSpan)) {
     const idx = oldC.indexOf(removeSpan);
+    const rmCls = revertPreview ? 'review-revert-remove' : 'review-removed';
     let offset = 0;
     const lineHtmls = oldLines.map((line) => {
       const lineStart = offset;
@@ -259,7 +392,7 @@ function renderSectionContent(content, newContent, withDiff, removeSpan, highlig
       const before = line.slice(0, startInLine);
       const span = line.slice(startInLine, endInLine);
       const after = line.slice(endInLine);
-      return escapeHtml(before) + `<span class="review-removed">${escapeHtml(span)}</span>` + escapeHtml(after);
+      return escapeHtml(before) + `<span class="${rmCls}">${escapeHtml(span)}</span>` + escapeHtml(after);
     });
     return lineHtmls.map((html) => `<div class="preview-field-content-line">${html}</div>`).join('');
   }
@@ -269,20 +402,21 @@ function renderSectionContent(content, newContent, withDiff, removeSpan, highlig
       : '<div class="preview-field-content-line"></div>';
   }
   if (newC === '') {
-    return oldLines.map((line) => `<div class="preview-field-content-line"><span class="review-removed">${escapeHtml(line)}</span></div>`).join('');
+    const delCls = revertPreview ? 'review-revert-remove' : 'review-removed';
+    return oldLines.map((line) => `<div class="preview-field-content-line"><span class="${delCls}">${escapeHtml(line)}</span></div>`).join('');
   }
   const numLines = Math.max(oldLines.length, newLines.length);
   const lineHtmls = [];
   for (let i = 0; i < numLines; i++) {
     const oldLine = oldLines[i] || '';
     const newLine = newLines[i] || '';
-    lineHtmls.push(renderLineDiff(oldLine, newLine));
+    lineHtmls.push(renderLineDiff(oldLine, newLine, revertPreview));
   }
   return lineHtmls.map((html) => `<div class="preview-field-content-line">${html}</div>`).join('');
 }
 
 /** Render sections: optionally diff or highlight one section. highlightSpan/highlightAsRemoved: Revert state; highlightAddSpan: green text to show after red (what will be restored). */
-function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan) {
+function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
   if (!Array.isArray(sections) || sections.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
   return sections.map((s, i) => {
     const name = (s.name || '').trim() || 'Unnamed';
@@ -292,7 +426,7 @@ function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent
     const withDiff = isTargetSection && !useHighlightOnly && diffNewContent !== undefined;
     let contentHtml;
     if (useHighlightOnly || withDiff) {
-      contentHtml = renderSectionContent(content, withDiff ? diffNewContent : null, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan);
+      contentHtml = renderSectionContent(content, withDiff ? diffNewContent : null, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, isTargetSection && withDiff ? revertPreview : false);
     } else {
       const lines = content.split('\n');
       const lineEls = lines.length > 0
@@ -316,8 +450,11 @@ function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent
 function buildReviewResultUI(overlay, options) {
   const { promptSections, suggestions: initialSuggestions, promptFullText, title, resultId, saved = {}, onReviewResultChange, onExportNewPrompt, streamRef, getIsReviewStreaming, getPayload } = options;
   const promptWrap = overlay.querySelector('.review-detail-prompt-wrap');
-  const suggestionsEl = overlay.querySelector('.review-detail-suggestions');
-  const suggestionsFooterEl = overlay.querySelector('.review-detail-suggestions-footer');
+  const suggestionsEl = overlay.querySelector('#review-detail-suggestions') || overlay.querySelector('#review-result-suggestions');
+  const suggestionsFooterEl = overlay.querySelector('#review-detail-suggestions-footer') || overlay.querySelector('#review-result-suggestions-footer');
+  const diagnosisEl = overlay.querySelector('#review-detail-row-diagnostics') || overlay.querySelector('#review-result-row-diagnostics');
+  const analysisFooterEl =
+    overlay.querySelector('#review-detail-analysis-footer') || overlay.querySelector('#review-result-analysis-footer');
   if (!promptWrap || !suggestionsEl) return;
 
   if (saved && typeof saved === 'object') {
@@ -346,6 +483,23 @@ function buildReviewResultUI(overlay, options) {
   let designSuggestions = Array.isArray(saved.design_suggestions) ? saved.design_suggestions.slice() : [];
   /** Data refinement: GT 质疑汇总 */
   let dataRefinement = Array.isArray(saved.data_refinement) ? saved.data_refinement.slice() : [];
+  /** Phase 1 per-row LLM notes (persisted on review node) */
+  let rowDiagnostics = Array.isArray(saved.row_diagnostics)
+    ? saved.row_diagnostics
+      .map((d) => ({
+        row_index: Number(d && d.row_index),
+        card_title: String((d && d.card_title) || ''),
+        issue_summary: String((d && d.issue_summary) || ''),
+        rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
+        problem_category_hint: String((d && d.problem_category_hint) || ''),
+      }))
+      .filter((d) => !Number.isNaN(d.row_index))
+    : [];
+  rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
+
+  const statusEl = overlay.querySelector('.review-detail-stream-status');
+  const reviewStreaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
+  const reviewStillGenerating = saved.streamComplete === false || reviewStreaming;
 
   if (promptWrap) {
     promptWrap.innerHTML = renderSectionsAsPromptDetail(working);
@@ -371,6 +525,7 @@ function buildReviewResultUI(overlay, options) {
       suggestions: suggestionsToSave,
       design_suggestions: designSuggestions,
       data_refinement: dataRefinement,
+      row_diagnostics: rowDiagnostics,
       promptSections: saved.promptSections ?? promptSections,
       promptFullText: saved.promptFullText ?? promptFullText,
       workingSections: working.map((s) => ({ name: s.name, content: s.content })),
@@ -398,18 +553,18 @@ function buildReviewResultUI(overlay, options) {
 
   const promptSectionsEl = promptWrap;
 
-  function renderLeft(showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan) {
+  function renderLeft(showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
     const sectionsToRender = working.map((s, i) => ({ name: s.name, content: s.content }));
     if (showDiffSectionIndex >= 0 && showDiffSectionIndex < originals.length && (diffNewContent !== undefined || (highlightSpan !== undefined && highlightSpan !== null))) {
-      promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender, showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan);
+      promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender, showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview);
       scrollRightToSection(showDiffSectionIndex);
     } else {
       promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender);
     }
   }
 
-  function showDiffOnRight(sectionIndex, newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan) {
-    renderLeft(sectionIndex, newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan);
+  function showDiffOnRight(sectionIndex, newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
+    renderLeft(sectionIndex, newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview);
   }
 
   function clearDiffOnRight() {
@@ -418,18 +573,136 @@ function buildReviewResultUI(overlay, options) {
 
   const sectionNames = (promptSections || []).map((s, i) => (s.name || '').trim() || `Section ${i}`);
 
-  const statusEl = overlay.querySelector('.review-detail-stream-status');
-  const reviewStreaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
-  const reviewStillGenerating = saved.streamComplete === false || reviewStreaming;
+  function updateAnalysisFooter() {
+    if (!analysisFooterEl) return;
+    const isComplete = saved.streamComplete === true;
+    const inProgress =
+      !isComplete &&
+      (saved.streamComplete === false ||
+        (typeof getIsReviewStreaming === 'function' && getIsReviewStreaming()));
+    let statusClass = 'review-detail-status-note--incomplete';
+    let statusText = 'Last run did not complete. Please run Review again.';
+    if (isComplete) {
+      statusClass = 'review-detail-status-note--complete';
+      const n = rowDiagnostics.length;
+      statusText =
+        n > 0
+          ? `Error analysis complete. ${n} issue${n === 1 ? '' : 's'} listed.`
+          : 'Error analysis complete. No failed rows.';
+    } else if (inProgress) {
+      statusClass = 'review-detail-status-note--generating';
+      statusText = 'Error analysis in progress…';
+    }
+    analysisFooterEl.innerHTML = '';
+    const statusNote = document.createElement('p');
+    statusNote.className = `review-detail-status-note ${statusClass}`;
+    statusNote.setAttribute('aria-live', 'polite');
+    statusNote.textContent = statusText;
+    analysisFooterEl.appendChild(statusNote);
+  }
+
+  function updateSuggestionsFooter() {
+    if (!suggestionsFooterEl) return;
+    const isComplete = saved.streamComplete === true;
+    const inProgress =
+      !isComplete &&
+      (saved.streamComplete === false ||
+        (typeof getIsReviewStreaming === 'function' && getIsReviewStreaming()));
+    let statusClass = 'review-detail-status-note--incomplete';
+    let statusText = 'Last run did not complete. Please run Review again.';
+    if (isComplete) {
+      statusClass = 'review-detail-status-note--complete';
+      const ne = allSuggestions.length;
+      const nd = designSuggestions.length;
+      const nr = dataRefinement.length;
+      const parts = [];
+      if (ne) parts.push(`${ne} prompt edit${ne === 1 ? '' : 's'}`);
+      if (nd) parts.push(`${nd} design note${nd === 1 ? '' : 's'}`);
+      if (nr) parts.push(`${nr} data note${nr === 1 ? '' : 's'}`);
+      statusText =
+        parts.length > 0
+          ? `Suggested changes complete. ${parts.join(', ')}.`
+          : 'Suggested changes complete. No items.';
+    } else if (inProgress) {
+      statusClass = 'review-detail-status-note--generating';
+      statusText = 'Suggested changes in progress…';
+    }
+    suggestionsFooterEl.innerHTML = '';
+    const statusNote = document.createElement('p');
+    statusNote.className = `review-detail-status-note ${statusClass}`;
+    statusNote.setAttribute('aria-live', 'polite');
+    statusNote.textContent = statusText;
+    suggestionsFooterEl.appendChild(statusNote);
+  }
+
+  function renderRowDiagnostics() {
+    if (!diagnosisEl) return;
+    diagnosisEl.innerHTML = '';
+    if (!rowDiagnostics.length) {
+      const p = document.createElement('p');
+      p.className = 'review-detail-placeholder';
+      p.textContent = reviewStillGenerating
+        ? 'Analyzing failed rows…'
+        : 'No error analysis for this run.';
+      diagnosisEl.appendChild(p);
+      return;
+    }
+    const comparisonRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
+    function findComparisonRow(idx) {
+      const n = Number(idx);
+      return comparisonRows.find((r) => Number(r?.row_index) === n) || null;
+    }
+
+    rowDiagnostics.forEach((d, displayIdx) => {
+      const displayNum = displayIdx + 1;
+      const issue = (d.issue_summary || '').trim();
+      const rough = (d.rough_modification_opinion || '').trim();
+      const primaryBlurb = issue || rough;
+      const preview = truncateWithEllipsis(primaryBlurb, DIAG_LIST_PREVIEW_CHARS);
+      const titleLine = diagnosisCardTitleLine(d);
+      const compRow = findComparisonRow(d.row_index);
+      const badgeLabel = escapeHtml(String(displayNum));
+
+      const card = document.createElement('div');
+      card.className = 'review-detail-suggestion-card review-detail-diagnosis-card';
+      card.innerHTML = `
+        <div class="review-detail-suggestion-card__main review-detail-diagnosis-card__main">
+          <span class="review-detail-suggestion-header">
+            <span class="review-detail-suggestion-num" aria-label="Error analysis id" title="ID ${badgeLabel}">#${badgeLabel}</span>
+            <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong>
+          </span>
+          <p class="review-detail-suggestion-reason review-detail-diagnosis-preview">${escapeHtml(preview || '—')}</p>
+        </div>
+        <div class="review-detail-suggestion-card__actions">
+          <button type="button" class="btn btn-secondary review-detail-diagnosis-detail-btn">View detail</button>
+        </div>
+      `;
+      const detailBtn = card.querySelector('.review-detail-diagnosis-detail-btn');
+      if (detailBtn) {
+        detailBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openRowDiagnosisDetailOverlay(d, compRow, displayNum);
+        });
+      }
+      diagnosisEl.appendChild(card);
+    });
+  }
 
   function addOneDesignCard(d) {
     const sid = d && d.suggestion_id != null && d.suggestion_id !== '' ? d.suggestion_id : '';
     const shortLabel = formatSuggestionIdDisplay(sid);
+    const titleLine = suggestionCardTitleLine({
+      explicitName: d.name,
+      reason: d.reason,
+      sectionFallback: '',
+      defaultLabel: 'Design suggestion',
+    });
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card review-detail-design-card';
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml((d.name || '').trim() || 'Design')}</strong></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong></span>
         <p class="review-detail-suggestion-reason">${escapeHtml((d.reason || '').trim())}</p>
       </div>
     `;
@@ -441,11 +714,17 @@ function buildReviewResultUI(overlay, options) {
     const shortLabel = formatSuggestionIdDisplay(sid);
     const rowIndices = Array.isArray(item.row_indices) ? item.row_indices : [];
     const rowsText = rowIndices.length > 0 ? `Rows ${rowIndices.join(', ')}` : 'Some rows';
+    const titleLine = suggestionCardTitleLine({
+      explicitName: item.name || item.card_title,
+      reason: item.reason,
+      sectionFallback: '',
+      defaultLabel: 'Possible ground truth issue',
+    });
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card review-detail-data-refinement-card';
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">Possible ground truth issue</strong></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong></span>
         <p class="review-detail-suggestion-reason"><span class="review-detail-data-refinement-rows">${escapeHtml(rowsText)}</span>: ${escapeHtml((item.reason || '').trim())}</p>
       </div>
     `;
@@ -482,7 +761,12 @@ function buildReviewResultUI(overlay, options) {
     /* Only show Revert when user has explicitly applied (sug.applied === true from persist). Fresh suggestions must show Accept. */
     const isApplied = sug.applied === true;
     const fullReason = (sug.reason || '').trim();
-    const changeName = (sug.name || '').trim() || name;
+    const titleLine = suggestionCardTitleLine({
+      explicitName: sug.name,
+      reason: sug.reason,
+      sectionFallback: name,
+      defaultLabel: 'Prompt edit',
+    });
 
     const acceptBtnHtml = !noButton ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>' : '';
     const actionsHtml = acceptBtnHtml;
@@ -494,7 +778,7 @@ function buildReviewResultUI(overlay, options) {
     if (sid !== '' && sid != null) card.dataset.suggestionId = String(sid);
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(changeName)}</strong></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong></span>
         <p class="review-detail-suggestion-reason">${escapeHtml(fullReason)}</p>
       </div>
       <div class="review-detail-suggestion-card__actions">
@@ -524,9 +808,11 @@ function buildReviewResultUI(overlay, options) {
     }
     function showPreview() {
       if (sug.applied) {
-        showDiffOnRight(secIdx, getRevertedContent(), getRemoveSpanForDiff());
+        /* Revert hover: green strikethrough on accepted (new) text, red for restored original */
+        showDiffOnRight(secIdx, getRevertedContent(), getRemoveSpanForDiff(), undefined, undefined, undefined, true);
       } else {
-        showDiffOnRight(secIdx, getDiffContent(), getRemoveSpanForDiff());
+        /* Accept hover: red strikethrough on old, green for new */
+        showDiffOnRight(secIdx, getDiffContent(), getRemoveSpanForDiff(), undefined, undefined, undefined, false);
       }
     }
 
@@ -553,6 +839,8 @@ function buildReviewResultUI(overlay, options) {
     editContainer.appendChild(card);
   }
 
+  renderRowDiagnostics();
+
   designSuggestions.forEach((d) => addOneDesignCard(d));
   dataRefinement.forEach((item) => addOneDataRefinementCard(item));
   function updateSuggestionsDesignEmptyClass() {
@@ -572,7 +860,7 @@ function buildReviewResultUI(overlay, options) {
       updateSuggestionsDesignEmptyClass();
       saved.design_suggestions = designSuggestions;
       if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({ ...saved, design_suggestions: designSuggestions });
+        onReviewResultChange({ ...saved, design_suggestions: designSuggestions, row_diagnostics: rowDiagnostics });
       }
     };
     streamRef.appendDataRefinement = (arr) => {
@@ -584,7 +872,7 @@ function buildReviewResultUI(overlay, options) {
       dataRefinement.forEach((item) => addOneDataRefinementCard(item));
       saved.data_refinement = dataRefinement;
       if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({ ...saved, data_refinement: dataRefinement });
+        onReviewResultChange({ ...saved, data_refinement: dataRefinement, row_diagnostics: rowDiagnostics });
       }
     };
     streamRef.appendSuggestions = (batch) => {
@@ -598,7 +886,7 @@ function buildReviewResultUI(overlay, options) {
       });
       saved.suggestions = allSuggestions.slice();
       if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({ ...saved, suggestions: saved.suggestions });
+        onReviewResultChange({ ...saved, suggestions: saved.suggestions, row_diagnostics: rowDiagnostics });
       }
     };
     streamRef.streamDone = () => {
@@ -609,14 +897,39 @@ function buildReviewResultUI(overlay, options) {
       saved.suggestions = allSuggestions.slice();
       saved.design_suggestions = designSuggestions;
       saved.data_refinement = dataRefinement;
+      saved.streamComplete = true;
       if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({ ...saved, suggestions: saved.suggestions, design_suggestions: designSuggestions, data_refinement: dataRefinement });
+        onReviewResultChange({
+          ...saved,
+          suggestions: saved.suggestions,
+          design_suggestions: designSuggestions,
+          data_refinement: dataRefinement,
+          row_diagnostics: rowDiagnostics,
+          streamComplete: true,
+        });
       }
+      updateAnalysisFooter();
+      updateSuggestionsFooter();
     };
     streamRef.streamError = () => {
       if (statusEl) statusEl.textContent = 'Failed.';
       if (allSuggestions.length === 0 && designSuggestions.length === 0) {
         editContainer.innerHTML = '<p class="review-detail-placeholder">Request failed.</p>';
+      }
+      const failedNote = () => {
+        const errNote = document.createElement('p');
+        errNote.className = 'review-detail-status-note review-detail-status-note--incomplete';
+        errNote.setAttribute('aria-live', 'polite');
+        errNote.textContent = 'Review failed.';
+        return errNote;
+      };
+      if (analysisFooterEl) {
+        analysisFooterEl.innerHTML = '';
+        analysisFooterEl.appendChild(failedNote());
+      }
+      if (suggestionsFooterEl) {
+        suggestionsFooterEl.innerHTML = '';
+        suggestionsFooterEl.appendChild(failedNote());
       }
     };
   } else {
@@ -635,25 +948,50 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  if (suggestionsFooterEl && (allSuggestions.length > 0 || designSuggestions.length > 0)) {
-    const isComplete = saved.streamComplete === true;
-    const isStreaming = !isComplete && typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
-    let statusClass = 'review-detail-status-note--incomplete';
-    let statusText = 'Last run did not complete. Please run Review again.';
-    if (isComplete) {
-      statusClass = 'review-detail-status-note--complete';
-      statusText = 'Suggestions complete.';
-    } else if (isStreaming) {
-      statusClass = 'review-detail-status-note--generating';
-      statusText = 'Suggestions are still generating…';
+  function setupRightTabs() {
+    const tabBar = overlay.querySelector('.review-detail-right-tabs');
+    if (!tabBar) return;
+    const tabs = tabBar.querySelectorAll('.review-detail-tab[data-tab]');
+    const panels = overlay.querySelectorAll('.review-detail-tab-panel[data-panel]');
+    if (!tabs.length || !panels.length) return;
+
+    function activate(name) {
+      const n = name === 'analysis' || name === 'suggestions' ? name : 'suggestions';
+      tabs.forEach((btn) => {
+        const on = btn.dataset.tab === n;
+        btn.classList.toggle('review-detail-tab--active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      panels.forEach((p) => {
+        p.classList.toggle('review-detail-tab-panel--active', p.dataset.panel === n);
+      });
+      overlay.dataset.reviewRightTab = n;
     }
-    const statusNote = document.createElement('p');
-    statusNote.className = 'review-detail-status-note ' + statusClass;
-    statusNote.setAttribute('aria-live', 'polite');
-    statusNote.textContent = statusText;
-    suggestionsFooterEl.innerHTML = '';
-    suggestionsFooterEl.appendChild(statusNote);
+
+    const stored = overlay.dataset.reviewRightTab;
+    let initial = stored === 'analysis' || stored === 'suggestions' ? stored : null;
+    if (!initial) {
+      const phase1Only =
+        saved.streamComplete === false &&
+        rowDiagnostics.length > 0 &&
+        allSuggestions.length === 0 &&
+        designSuggestions.length === 0 &&
+        dataRefinement.length === 0;
+      initial = phase1Only ? 'analysis' : 'suggestions';
+    }
+    activate(initial);
+
+    if (tabBar.dataset.reviewTabsWired === '1') return;
+    tabBar.dataset.reviewTabsWired = '1';
+    tabs.forEach((btn) => {
+      btn.addEventListener('click', () => activate(btn.dataset.tab));
+    });
   }
+
+  setupRightTabs();
+
+  updateSuggestionsFooter();
+  updateAnalysisFooter();
 
   const footer = overlay.querySelector('.review-detail-prompt-footer');
   if (footer) {
@@ -716,10 +1054,24 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
       </div>
       <div class="modal-body review-detail-body">
         <div class="review-detail-main">
-          <h3 class="review-detail-preview-title">Suggestions</h3>
+          <h3 class="review-detail-preview-title review-detail-output-title">Findings</h3>
+          <div class="review-detail-output-toolbar">
+            <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-detail-panel-analysis" id="review-detail-tab-analysis" data-tab="analysis">Error analysis</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-suggestions" id="review-detail-tab-suggestions" data-tab="suggestions">Suggested changes</button>
+            </div>
+          </div>
           <div class="review-detail-preview-content">
-            <div class="review-detail-suggestions" id="review-detail-suggestions"></div>
-            <div class="review-detail-suggestions-footer" id="review-detail-suggestions-footer"></div>
+            <div class="review-detail-tab-panels">
+              <div class="review-detail-tab-panel review-detail-tab-panel--active" id="review-detail-panel-analysis" role="tabpanel" aria-labelledby="review-detail-tab-analysis" data-panel="analysis">
+                <div class="review-detail-row-diagnostics" id="review-detail-row-diagnostics"></div>
+                <div class="review-detail-analysis-footer" id="review-detail-analysis-footer"></div>
+              </div>
+              <div class="review-detail-tab-panel" id="review-detail-panel-suggestions" role="tabpanel" aria-labelledby="review-detail-tab-suggestions" data-panel="suggestions">
+                <div class="review-detail-suggestions" id="review-detail-suggestions"></div>
+                <div class="review-detail-suggestions-footer" id="review-detail-suggestions-footer"></div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="review-detail-preview-wrap">
@@ -1332,11 +1684,25 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
       </div>
       <div class="modal-body review-detail-body">
         <div class="review-detail-main">
-          <h3 class="review-detail-preview-title">Suggestions</h3>
+          <h3 class="review-detail-preview-title review-detail-output-title">Findings</h3>
           <p class="review-detail-stream-status" id="review-result-stream-status" aria-live="polite"></p>
+          <div class="review-detail-output-toolbar">
+            <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-result-panel-analysis" id="review-result-tab-analysis" data-tab="analysis">Error analysis</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-suggestions" id="review-result-tab-suggestions" data-tab="suggestions">Suggested changes</button>
+            </div>
+          </div>
           <div class="review-detail-preview-content">
-            <div class="review-detail-suggestions" id="review-result-suggestions"></div>
-            <div class="review-detail-suggestions-footer" id="review-result-suggestions-footer"></div>
+            <div class="review-detail-tab-panels">
+              <div class="review-detail-tab-panel review-detail-tab-panel--active" id="review-result-panel-analysis" role="tabpanel" aria-labelledby="review-result-tab-analysis" data-panel="analysis">
+                <div class="review-detail-row-diagnostics" id="review-result-row-diagnostics"></div>
+                <div class="review-detail-analysis-footer" id="review-result-analysis-footer"></div>
+              </div>
+              <div class="review-detail-tab-panel" id="review-result-panel-suggestions" role="tabpanel" aria-labelledby="review-result-tab-suggestions" data-panel="suggestions">
+                <div class="review-detail-suggestions" id="review-result-suggestions"></div>
+                <div class="review-detail-suggestions-footer" id="review-result-suggestions-footer"></div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="review-detail-preview-wrap">

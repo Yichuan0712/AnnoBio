@@ -2472,18 +2472,21 @@
   gap: 0;
   padding: 0;
   overflow: hidden;
+  background: var(--bg);
 }
 
-/* Left column: Suggestions — 1:1 与右栏均分 */
+/* Left column: Findings — 与 Prompt sections 同底色 (.prompt-detail-main / .review-detail-preview-wrap 用 var(--bg)) */
 .review-detail-main {
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 0;
+  padding: 6px 0 0;
   border-right: 1px solid var(--border);
   overflow: hidden;
+  box-sizing: border-box;
+  background: var(--bg);
 }
 
 /* Review name: 顶部身份条，左侧色条 + 小标签 + 主输入 */
@@ -2548,6 +2551,7 @@
   color: var(--text);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  background: var(--bg);
 }
 
 .review-detail-stream-status {
@@ -2559,7 +2563,57 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--bg-bar, var(--bg));
+  background: var(--bg);
+}
+
+/* Findings title: same bar as Review assistant (.review-detail-preview-title); offset top padding with .review-detail-main */
+.review-detail-main .review-detail-output-title.review-detail-preview-title {
+  padding-top: 6px;
+}
+
+/* Row under Findings: same control language as .btn / toolbars (not pill segment) */
+.review-detail-output-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 10px 20px 12px;
+  box-sizing: border-box;
+  gap: 8px;
+  background: var(--bg);
+}
+
+.review-detail-view-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.review-detail-view-switch__btn.review-detail-tab {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  border-radius: var(--control-radius, 3px);
+}
+
+.review-detail-view-switch__btn.review-detail-tab--active {
+  font-weight: 600;
+  color: var(--primary-btn-text, #2563eb);
+  background: var(--primary-btn-bg, rgba(37, 99, 235, 0.18));
+  border-color: var(--primary-btn-text, #2563eb);
+}
+
+.review-detail-view-switch__btn.review-detail-tab--active:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+  border-color: var(--primary-btn-text);
+  color: var(--primary-btn-text);
 }
 
 .review-detail-main .review-detail-preview-content {
@@ -2570,6 +2624,128 @@
   padding: 0 20px;
   box-sizing: border-box;
   overflow: hidden;
+}
+
+.review-detail-tab-panels {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.review-detail-tab-panel {
+  display: none;
+  flex: 1 1 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.review-detail-tab-panel--active {
+  display: flex;
+}
+
+.review-detail-row-diagnostics {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 0 12px 0;
+}
+
+.review-detail-diagnosis-card {
+  border-left: 3px solid var(--accent-muted, rgba(59, 130, 246, 0.45));
+}
+
+.review-detail-diagnosis-card__main {
+  cursor: default;
+}
+
+.review-detail-diagnosis-preview {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+}
+
+.review-diagnosis-detail-overlay {
+  z-index: 1100;
+}
+
+/* View detail：按内容高度收缩，避免短文案时整块被拉满；过长时在正文内滚动 */
+.modal-panel--review-diagnosis-detail {
+  width: min(720px, 92vw);
+  max-width: 92vw;
+  max-height: min(90vh, 920px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.modal-panel--review-diagnosis-detail .modal-header {
+  flex-shrink: 0;
+}
+
+.modal-body.review-diagnosis-detail-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(calc(90vh - 72px), 848px);
+  overflow-y: auto;
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-sizing: border-box;
+  background: var(--bg);
+}
+
+.review-diagnosis-detail-prose {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-diagnosis-detail-prose code {
+  font-size: 12px;
+  padding: 1px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: var(--bg-bar);
+  border-radius: 2px;
+}
+
+.review-diagnosis-detail-lead {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.review-diagnosis-detail-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.review-detail-diagnosis-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  background: var(--bg-muted, rgba(128, 128, 128, 0.15));
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+
+.review-detail-diagnosis-summary {
+  margin-top: 8px;
+}
+
+.review-detail-diagnosis-rough {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  white-space: pre-wrap;
 }
 
 .review-detail-main .review-detail-preview-content .review-detail-suggestions {
@@ -2788,7 +2964,8 @@
   background: var(--hover);
 }
 
-.review-detail-suggestions-footer {
+.review-detail-suggestions-footer,
+.review-detail-analysis-footer {
   flex-shrink: 0;
   margin: 0 -20px;
   padding: 12px 20px;
@@ -2797,7 +2974,8 @@
   justify-content: flex-end;
 }
 
-.review-detail-suggestions-footer:empty {
+.review-detail-suggestions-footer:empty,
+.review-detail-analysis-footer:empty {
   display: none;
 }
 
@@ -2924,6 +3102,11 @@
   gap: 8px;
 }
 
+.review-detail-suggestion-card__actions .review-detail-diagnosis-detail-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
 .review-detail-suggestion-card__actions .review-detail-accept-btn {
   font-size: 12px;
   padding: 4px 10px;
@@ -2932,8 +3115,18 @@
   border-color: var(--diff-added-text, currentColor) !important;
 }
 
-.review-detail-suggestion-card__actions .review-detail-accept-btn:hover {
-  filter: brightness(0.85);
+.review-detail-suggestion-card__actions .review-detail-accept-btn:hover:not(:disabled) {
+  filter: none !important;
+  background: var(--hover) !important;
+  border-color: var(--diff-added-text, currentColor) !important;
+  color: var(--diff-added-text) !important;
+}
+
+.review-detail-suggestion-card__actions .review-detail-accept-btn.review-detail-accept-btn--revert:hover:not(:disabled) {
+  filter: none !important;
+  background: var(--hover) !important;
+  border-color: var(--diff-removed-text, currentColor) !important;
+  color: var(--diff-removed-text) !important;
 }
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn--revert {
@@ -3013,6 +3206,19 @@
 .review-added {
   background: var(--diff-added-bg);
   color: var(--diff-added-text);
+}
+
+/* Revert hover: what will be undone (accepted new text) = green + strikethrough; restored original = red */
+.review-revert-remove {
+  background: var(--diff-added-bg);
+  color: var(--diff-added-text);
+  text-decoration: line-through;
+}
+
+.review-revert-restore {
+  background: var(--diff-removed-bg);
+  color: var(--diff-removed-text);
+  text-decoration: none;
 }
 
 .score-detail-results-card #score-detail-results-body {
@@ -6251,7 +6457,11 @@ body.wd-row-resizing {
   cursor: pointer;
   border: 1px solid var(--border);
   border-radius: var(--control-radius, 3px);
-  transition: filter 0.15s ease, background 0.15s ease;
+  transition:
+    filter 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .btn-primary {
@@ -6260,8 +6470,20 @@ body.wd-row-resizing {
   border-color: var(--primary-btn-text, #2563eb);
 }
 
+/* Same hover surface as .btn-secondary (var(--hover)); keep blue text+border so it stays a “primary” control */
 .btn-primary:hover:not(:disabled) {
-  filter: brightness(0.85);
+  filter: none;
+  background: var(--hover);
+  border-color: var(--primary-btn-text);
+  color: var(--primary-btn-text);
+}
+
+/* Beats tied-specificity rules like .modal-panel--section-editor .btn:hover when both apply */
+button.btn.btn-primary:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+  border-color: var(--primary-btn-text);
+  color: var(--primary-btn-text);
 }
 
 .btn:disabled,
@@ -6290,5 +6512,15 @@ body.wd-row-resizing {
 }
 
 .btn-danger:hover:not(:disabled) {
-  filter: brightness(0.85);
+  filter: none;
+  background: var(--hover);
+  border-color: var(--diff-removed-text);
+  color: var(--diff-removed-text);
+}
+
+button.btn.btn-danger:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+  border-color: var(--diff-removed-text);
+  color: var(--diff-removed-text);
 }
