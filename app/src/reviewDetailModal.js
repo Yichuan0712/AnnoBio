@@ -1004,7 +1004,7 @@ function buildReviewResultUI(overlay, options) {
       ? `<button type="button" class="btn btn-secondary review-detail-test-btn${testBtnExtra}${verifyLocked ? ' review-detail-test-btn--locked' : ''}" title="${escapeHtml(testBtnTitle)}"${verifyLocked ? ' disabled' : ''}><span class="review-detail-test-btn__label">${testBtnLabel}</span><span class="review-detail-test-btn__icon-slot" aria-hidden="true"><span class="review-detail-test-btn__tick">\u2713</span><span class="review-detail-test-btn__cross">\u2717</span></span></button>`
       : '';
     const refineBtnHtml = !noButton
-      ? '<button type="button" class="btn btn-secondary review-detail-tune-btn" disabled title="Bayesian optimization · coming soon">Finetune</button>'
+      ? '<button type="button" class="btn btn-secondary review-detail-tune-btn" disabled title="After suggestions are generated, optional Bayesian finetuning · coming soon">Finetune</button>'
       : '';
     const actionsHtml = `${detailsBtnHtml}${testBtnHtml ? ` ${testBtnHtml}` : ''}${refineBtnHtml ? ` ${refineBtnHtml}` : ''}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
 
@@ -1376,7 +1376,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
             <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-detail-panel-analysis" id="review-detail-tab-analysis" data-tab="analysis">Issue analysis</button>
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-suggestions" id="review-detail-tab-suggestions" data-tab="suggestions">Suggested changes</button>
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-optimization" id="review-detail-tab-optimization" data-tab="optimization" title="Bayesian optimization · coming soon">Bayesian finetune</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-optimization" id="review-detail-tab-optimization" data-tab="optimization" title="After suggestions are generated, optional Bayesian finetuning · coming soon">Bayesian finetune</button>
             </div>
           </div>
           <div class="review-detail-preview-content">
@@ -1390,7 +1390,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
                 <div class="review-detail-suggestions-footer" id="review-detail-suggestions-footer"></div>
               </div>
               <div class="review-detail-tab-panel" id="review-detail-panel-optimization" role="tabpanel" aria-labelledby="review-detail-tab-optimization" data-panel="optimization">
-                <p class="review-detail-placeholder">Bayesian finetuning — coming soon.</p>
+                <p class="review-detail-placeholder">After suggestions are generated, you can optionally refine further with Bayesian finetuning from this tab. Coming soon.</p>
               </div>
             </div>
           </div>
@@ -2130,7 +2130,7 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
             <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-result-panel-analysis" id="review-result-tab-analysis" data-tab="analysis">Issue analysis</button>
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-suggestions" id="review-result-tab-suggestions" data-tab="suggestions">Suggested changes</button>
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-optimization" id="review-result-tab-optimization" data-tab="optimization" title="Bayesian optimization · coming soon">Bayesian finetune</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-optimization" id="review-result-tab-optimization" data-tab="optimization" title="After suggestions are generated, optional Bayesian finetuning · coming soon">Bayesian finetune</button>
             </div>
           </div>
           <div class="review-detail-preview-content">
@@ -2144,7 +2144,7 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
                 <div class="review-detail-suggestions-footer" id="review-result-suggestions-footer"></div>
               </div>
               <div class="review-detail-tab-panel" id="review-result-panel-optimization" role="tabpanel" aria-labelledby="review-result-tab-optimization" data-panel="optimization">
-                <p class="review-detail-placeholder">Bayesian finetuning — coming soon.</p>
+                <p class="review-detail-placeholder">After suggestions are generated, you can optionally refine further with Bayesian finetuning from this tab. Coming soon.</p>
               </div>
             </div>
           </div>
