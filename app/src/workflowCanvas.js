@@ -219,7 +219,7 @@ function evaluateScoreNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
 }
 
 /** Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow). */
-async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId) {
+async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections = []) {
   const toCompareStr = (v) => {
     if (v === null || v === undefined) return '';
     if (typeof v === 'string') return v.trim();
@@ -305,6 +305,32 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   const gtContent = gtId ? datasetContentByNodeId.get(gtId) : null;
   const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
   const gtSafe = gtContent ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
+  let runInputToColumn = {};
+  try {
+    const rawMap = runNode.dataset.runInputToColumn || '{}';
+    const parsedMap = JSON.parse(rawMap);
+    if (parsedMap && typeof parsedMap === 'object') runInputToColumn = parsedMap;
+  } catch (_) {}
+  const promptPlaceholderNames = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
+  const hdrsForPrompt = runWsSafe.headers || [];
+
+  /** Keys = `{placeholder}` names in prompt section order; values = substituted cell text (Run node mapping). */
+  function rowInputAsPromptPlaceholders(inpIdx) {
+    const wsRow = runWsSafe.rows && runWsSafe.rows[inpIdx] ? runWsSafe.rows[inpIdx] : [];
+    const out = {};
+    for (const name of promptPlaceholderNames) {
+      const col = String(runInputToColumn[name] || '').trim();
+      if (!col) {
+        out[name] = '';
+        continue;
+      }
+      const colIdx = hdrsForPrompt.findIndex((h) => String(h).trim() === col);
+      const val = colIdx >= 0 ? (wsRow[colIdx] ?? '') : '';
+      out[name] = val === null || val === undefined ? '' : String(val);
+    }
+    return out;
+  }
+
   let comments = {};
   try {
     comments = JSON.parse(scoreNode.dataset.scoreResultComments || '{}');
@@ -396,6 +422,12 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     gtUsed[j] = true;
   }
 
+  const gtToRun = new Array(gtCount).fill(-1);
+  for (let ii = 0; ii < runToGt.length; ii++) {
+    const jj = runToGt[ii];
+    if (jj >= 0) gtToRun[jj] = ii;
+  }
+
   function evaluateNodeLocal(node, runRowIndex, gtRowIndex) {
     if (!node) return false;
     if (node.type === 'rule') {
@@ -414,7 +446,88 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     return false;
   }
 
+  /** Same descriptor order as scoreDetailModal.renderResults (unfiltered); 1-based # column when the table is not filtered. */
+  const scoreDetailDescriptors = [];
+  for (let j = 0; j < gtCount; j++) {
+    if (gtToRun[j] >= 0) scoreDetailDescriptors.push({ type: 'gt', j });
+  }
+  for (let j = 0; j < gtCount; j++) {
+    if (gtToRun[j] < 0) scoreDetailDescriptors.push({ type: 'gt', j });
+  }
+  for (const i of runRowIndices) {
+    const paired = i < runToGt.length && runToGt[i] >= 0;
+    if (paired) continue;
+    let matchesAnyGt = false;
+    for (let jj = 0; jj < gtCount; jj++) {
+      if (evaluateNodeLocal(scoreRoot, i, jj)) {
+        matchesAnyGt = true;
+        break;
+      }
+    }
+    if (!matchesAnyGt) scoreDetailDescriptors.push({ type: 'runOnly', i });
+  }
+  const scoreTableRowByKey = new Map();
+  scoreDetailDescriptors.forEach((d, idx) => {
+    const n = idx + 1;
+    if (d.type === 'gt') scoreTableRowByKey.set(`gt:${d.j}`, n);
+    else scoreTableRowByKey.set(`runOnly:${d.i}`, n);
+  });
+
   const MATCH_TYPE_LABELS = { exact: 'String match', numeric: 'Numeric equality' };
+  /** Output keys the model actually sees in JSON output (exclude #[], [worksheet col], etc.). */
+  function isModelFacingOutputKey(key) {
+    const k = String(key || '').trim();
+    if (!k || k === '#' || k === '[#]') return false;
+    if (k.startsWith('[') && k.endsWith(']') && k.length >= 2) return false;
+    return true;
+  }
+  /** Expected string + comparison_types for ground-truth row index j (same as Score detail). */
+  function expectedAndComparisonTypesForGt(gtIdxForRules) {
+    const expectedParts = [];
+    const comparisonTypes = [];
+    if (gtIdxForRules < 0) {
+      return { expected: '—', comparison_types: null, ground_truth_output: {} };
+    }
+    const groundTruthOutput = {};
+    for (const rule of rulesFlat) {
+      const outKey = String(rule.outputKey || '').trim();
+      if (!isModelFacingOutputKey(outKey)) continue;
+      const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtDeduped, gtIdxForRules, col));
+      groundTruthOutput[outKey] = gtVals.length === 1
+        ? (gtVals[0] == null ? '' : String(gtVals[0]))
+        : gtVals.map((x) => (x == null ? '' : String(x))).join(' | ');
+      expectedParts.push(`${outKey}: ${gtVals.join(' | ') || '—'}`);
+      const mt = migrateLegacyMatchType(rule.matchType);
+      let label = MATCH_TYPE_LABELS[mt] || rule.matchType || 'String match';
+      if (mt === 'exact') {
+        const fl = getMatchFlags(rule);
+        if (fl.embeddingSimilarity) {
+          label += ' · Semantic';
+        } else if (fl.semanticAlign) {
+          label += ' · Fuzzy text';
+        } else {
+          const normParts = [];
+          if (fl.contains) normParts.push('Contains');
+          if (fl.ignoreCase) normParts.push('Ignore case');
+          if (fl.ignoreSymbols) normParts.push('Ignore symbols');
+          if (fl.ignoreWhitespace) normParts.push('Ignore whitespace');
+          if (normParts.length) label += ` (${normParts.join(', ')})`;
+        }
+      } else if (mt === 'numeric') {
+        const fl = getMatchFlags(rule);
+        if (fl.numericMode === 'abs') label += ` (abs ε≤${fl.numericAbsEpsilon})`;
+        else if (fl.numericMode === 'rel') label += ` (rel≤${fl.numericRelEpsilon})`;
+        else if (fl.numericMode === 'decimals') label += ` (${fl.numericDecimalPlaces} dp)`;
+      }
+      comparisonTypes.push(`${outKey}: ${label}`);
+    }
+    return {
+      expected: expectedParts.length ? expectedParts.join('; ') : '—',
+      comparison_types: comparisonTypes.length ? comparisonTypes : null,
+      ground_truth_output: groundTruthOutput,
+    };
+  }
+
   const rows = [];
   let outRowIdx = 0;
   for (const r of dedupedResults) {
@@ -425,38 +538,8 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     if (excludedFromScoring[modalKey]) continue;
 
     const runOutput = r?.output && typeof r.output === 'object' ? r.output : {};
-    const expectedParts = [];
-    const comparisonTypes = [];
     const gtIdxForRules = jPaired >= 0 ? jPaired : -1;
-    if (gtIdxForRules >= 0) {
-      for (const rule of rulesFlat) {
-        const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtDeduped, gtIdxForRules, col));
-        expectedParts.push(`${rule.outputKey}: ${gtVals.join(' | ') || '—'}`);
-        const mt = migrateLegacyMatchType(rule.matchType);
-        let label = MATCH_TYPE_LABELS[mt] || rule.matchType || 'String match';
-        if (mt === 'exact') {
-          const fl = getMatchFlags(rule);
-          if (fl.embeddingSimilarity) {
-            label += ' · Semantic';
-          } else if (fl.semanticAlign) {
-            label += ' · Fuzzy text';
-          } else {
-            const normParts = [];
-            if (fl.contains) normParts.push('Contains');
-            if (fl.ignoreCase) normParts.push('Ignore case');
-            if (fl.ignoreSymbols) normParts.push('Ignore symbols');
-            if (fl.ignoreWhitespace) normParts.push('Ignore whitespace');
-            if (normParts.length) label += ` (${normParts.join(', ')})`;
-          }
-        } else if (mt === 'numeric') {
-          const fl = getMatchFlags(rule);
-          if (fl.numericMode === 'abs') label += ` (abs ε≤${fl.numericAbsEpsilon})`;
-          else if (fl.numericMode === 'rel') label += ` (rel≤${fl.numericRelEpsilon})`;
-          else if (fl.numericMode === 'decimals') label += ` (${fl.numericDecimalPlaces} dp)`;
-        }
-        comparisonTypes.push(`${rule.outputKey}: ${label}`);
-      }
-    }
+    const { expected, comparison_types, ground_truth_output } = expectedAndComparisonTypesForGt(gtIdxForRules);
     const isFullMatch = gtIdxForRules >= 0 && evaluateNodeLocal(scoreRoot, runR, gtIdxForRules);
     const legacyCommentKey = gtIdxForRules >= 0 ? `${gtIdxForRules}_${outRowIdx}` : `run:${outRowIdx}`;
     const comment = comments[modalKey]
@@ -464,24 +547,103 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       ?? (gtIdxForRules >= 0 ? comments[String(gtIdxForRules)] : null)
       ?? comments[`run:${runR}`]
       ?? null;
-    const wsRow = runWsSafe.rows && runWsSafe.rows[inpIdx] ? runWsSafe.rows[inpIdx] : [];
-    const hdrs = runWsSafe.headers || [];
-    const row_input = hdrs.length
-      ? Object.fromEntries(hdrs.map((h, jj) => [String(h).trim(), wsRow[jj] ?? '']))
-      : null;
+    const row_input = rowInputAsPromptPlaceholders(inpIdx);
     const runRowIdx =
       typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : outRowIdx;
+    const score_table_row = jPaired >= 0
+      ? (scoreTableRowByKey.get(`gt:${jPaired}`) ?? null)
+      : (scoreTableRowByKey.get(`runOnly:${runR}`) ?? null);
     rows.push({
       row_index: runRowIdx,
+      input_row_index: inpIdx,
       matched: isFullMatch,
       run_output: runOutput,
-      expected: expectedParts.length ? expectedParts.join('; ') : '—',
-      comparison_types: comparisonTypes.length ? comparisonTypes : null,
+      expected,
+      comparison_types,
+      ground_truth_output,
       comment,
-      row_input: row_input,
+      row_input,
+      gt_only: false,
+      source_gt_row_index: jPaired >= 0 ? jPaired : null,
+      score_table_row,
     });
     outRowIdx++;
   }
+
+  /* GT rows with no paired run (Score table shows run columns as —) never appeared in dedupedResults; add synthetic rows for Review / Phase 1. */
+  function findInputRowIndexForUnpairedGt(gtJ) {
+    const gtCells = [];
+    for (const col of gtColsUsed) {
+      const v = String(getGtValue(gtDeduped, gtJ, col) || '').trim();
+      if (v) gtCells.push(v);
+    }
+    if (gtCells.length === 0) {
+      if (dedupedResults[0]) {
+        const r0 = dedupedResults[0];
+        return typeof r0.input_row_index === 'number' && !Number.isNaN(r0.input_row_index) ? r0.input_row_index : r0.row_index;
+      }
+      return 0;
+    }
+    const matchesCell = (s) => {
+      const t = String(s ?? '').trim();
+      if (!t) return false;
+      for (const gv of gtCells) {
+        if (!gv) continue;
+        if (t === gv || t.includes(gv) || gv.includes(t)) return true;
+      }
+      return false;
+    };
+    for (const r of dedupedResults) {
+      const inp = typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index;
+      for (const k of outputKeysUsed) {
+        const rv = getRunValue(r, k, runWsSafe, outputFields);
+        if (matchesCell(rv)) return inp;
+      }
+      const wsRow = runWsSafe.rows && runWsSafe.rows[inp] ? runWsSafe.rows[inp] : [];
+      for (const cell of wsRow) {
+        if (matchesCell(cell)) return inp;
+      }
+    }
+    for (let ii = 0; ii < (runWsSafe.rows || []).length; ii++) {
+      const wsRow = runWsSafe.rows[ii] || [];
+      for (const cell of wsRow) {
+        if (matchesCell(cell)) return ii;
+      }
+    }
+    if (dedupedResults.length > 0) {
+      const r0 = dedupedResults[0];
+      return typeof r0.input_row_index === 'number' && !Number.isNaN(r0.input_row_index) ? r0.input_row_index : r0.row_index;
+    }
+    return 0;
+  }
+
+  let synthRow = maxRunRowIndex + 1;
+  for (let j = 0; j < gtCount; j++) {
+    if (gtToRun[j] >= 0) continue;
+    if (excludedFromScoring[String(j)]) continue;
+    const inpIdx = findInputRowIndexForUnpairedGt(j);
+    const modalKey = String(j);
+    const { expected, comparison_types, ground_truth_output } = expectedAndComparisonTypesForGt(j);
+    const comment = comments[modalKey] ?? comments[String(j)] ?? null;
+    const row_input = rowInputAsPromptPlaceholders(inpIdx);
+    const score_table_row = scoreTableRowByKey.get(`gt:${j}`) ?? null;
+    rows.push({
+      row_index: synthRow,
+      input_row_index: inpIdx,
+      matched: false,
+      run_output: {},
+      expected,
+      comparison_types,
+      ground_truth_output,
+      comment,
+      row_input,
+      gt_only: true,
+      source_gt_row_index: j,
+      score_table_row,
+    });
+    synthRow += 1;
+  }
+
   return rows;
 }
 
@@ -852,8 +1014,11 @@ export function buildWorkflowCanvas(root) {
           const rid = ev.row_index != null ? parseInt(ev.row_index, 10) : NaN;
           if (!Number.isNaN(rid)) {
             const list = Array.isArray(streamSaved.row_diagnostics) ? streamSaved.row_diagnostics.slice() : [];
+            const rowIndicesRaw = Array.isArray(ev.row_indices) ? ev.row_indices : [];
+            const row_indices = rowIndicesRaw.map((x) => parseInt(x, 10)).filter((x) => !Number.isNaN(x));
             const entry = {
               row_index: rid,
+              row_indices: row_indices.length ? row_indices : [rid],
               card_title: String(ev.opinion.card_title || ''),
               issue_summary: String(ev.opinion.issue_summary || ''),
               rough_modification_opinion: String(ev.opinion.rough_modification_opinion || ''),
@@ -868,14 +1033,18 @@ export function buildWorkflowCanvas(root) {
         }
       } else if (ev.type === 'suggestions' && Array.isArray(ev.suggestions) && ev.suggestions.length) {
         const batch = ev.suggestions.map((s) =>
-          s && typeof s === 'object' ? ensureSuggestionObjectId({ ...s }, streamSaved) : s
+          s && typeof s === 'object'
+            ? ensureSuggestionObjectId({ ...s, source: s.source || 'pipeline' }, streamSaved)
+            : s
         );
         streamSaved.suggestions = (streamSaved.suggestions || []).concat(batch);
         setReviewNodeProgress(getNodeById(reviewNodeId), 90);
         streamSaved.reviewProgress = 90;
       } else if (ev.type === 'data_refinement' && Array.isArray(ev.data_refinement)) {
         streamSaved.data_refinement = ev.data_refinement.map((item) =>
-          item && typeof item === 'object' ? ensureSuggestionObjectId({ ...item }, streamSaved) : item
+          item && typeof item === 'object'
+            ? ensureSuggestionObjectId({ ...item, source: item.source || 'pipeline' }, streamSaved)
+            : item
         );
         setReviewNodeProgress(getNodeById(reviewNodeId), 95);
         streamSaved.reviewProgress = 95;
@@ -1788,7 +1957,7 @@ export function buildWorkflowCanvas(root) {
           runResults = JSON.parse(runNode.dataset.runResults || '[]');
           outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
         } catch (_) {}
-        const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId);
+        const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections);
         let output_schema = null;
         try {
           const raw = promptNode.dataset.promptOutputFormat || '[]';
@@ -2770,7 +2939,7 @@ export function buildWorkflowCanvas(root) {
             };
           }
         } catch (_) {}
-        const comparison_rows = await buildReviewComparisonRows(node, runNode, datasetContentByNodeId);
+        const comparison_rows = await buildReviewComparisonRows(node, runNode, datasetContentByNodeId, sections);
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
@@ -2907,7 +3076,7 @@ export function buildWorkflowCanvas(root) {
           runResults = JSON.parse(runNode.dataset.runResults || '[]');
           outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
         } catch (_) {}
-        const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId);
+        const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections);
         let output_schema = null;
         try {
           const raw = promptNode.dataset.promptOutputFormat || '[]';
@@ -3264,7 +3433,7 @@ export function buildWorkflowCanvas(root) {
               };
             }
           } catch (_) {}
-          const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId);
+          const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections);
           return {
             prompt_sections: sections,
             prompt_full_text: promptFullText,

@@ -1,9 +1,11 @@
 """
 Review analyze pipeline, separate from FastAPI main module.
 
-Phase 1 — per failed row: full prompt + row I/O; LLM returns rough per-row opinion.
+Phase 1 — per **failed input**: same dataset input, **all** unmatched model outputs vs their paired expected/scoring context in one LLM call; then rough opinion.
 
 Phase 2 — one LLM call (after phase 1): **Modifications** → localized **prompt_edits** only (Accept/Revert in UI).
+
+Extraction-style tasks: **under-coverage** (required items missing) and **over-coverage** (extra items not in ground truth) are both failures—the prompts below tell the model to diagnose and fix with that rubric.
 """
 
 from __future__ import annotations
@@ -18,6 +20,9 @@ from pydantic import BaseModel, Field
 from llm import run_structured as llm_run_structured
 
 logger = logging.getLogger(__name__)
+
+# Server-side cap on validated edits (response size / UI); not stated in LLM prompts.
+_MAX_VALIDATED_PROMPT_EDITS = 64
 
 
 def _sec_name_content(sec: Any) -> tuple[str, str]:
@@ -40,10 +45,45 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row) if isinstance(row, dict) else {}
 
 
-class PerRowOpinion(BaseModel):
-    """Structured output for phase 1 (single failed row)."""
+def _input_identity_key(d: dict[str, Any]) -> str:
+    """Stable key to group comparison rows that share the same dataset input (1 input → N outputs)."""
+    iri = d.get("input_row_index")
+    if iri is not None:
+        try:
+            return f"in:{int(iri)}"
+        except (TypeError, ValueError):
+            pass
+    ri = d.get("row_input")
+    if isinstance(ri, dict) and ri:
+        return "inp:" + json.dumps(ri, ensure_ascii=False, sort_keys=True, default=str)
+    try:
+        return f"row:{int(d.get('row_index', -1))}"
+    except (TypeError, ValueError):
+        return f"row:{d.get('row_index', -1)!s}"
 
-    row_index: int = Field(..., description="Same row_index as in the request (0-based run/comparison index)")
+
+def _group_comparison_rows_by_input(rows: list[Any]) -> list[list[Any]]:
+    buckets: dict[str, list[Any]] = {}
+    order: list[str] = []
+    for r in rows:
+        key = _input_identity_key(_row_to_dict(r))
+        if key not in buckets:
+            order.append(key)
+            buckets[key] = []
+        buckets[key].append(r)
+    groups = [buckets[k] for k in order]
+    for g in groups:
+        g.sort(key=lambda x: int(_row_to_dict(x).get("row_index", 0)))
+    return groups
+
+
+class PerRowOpinion(BaseModel):
+    """Structured output for phase 1 (one failed input group; row_index = min comparison row_index in that group)."""
+
+    row_index: int = Field(
+        ...,
+        description="Smallest comparison row_index in this input group (0-based; ties the opinion to the score table)",
+    )
     card_title: str = Field(
         default="",
         description=(
@@ -58,7 +98,9 @@ class PerRowOpinion(BaseModel):
     )
     problem_category_hint: str = Field(
         default="",
-        description="Short tag for grouping, e.g. format_mismatch, missing_field, ambiguity, threshold",
+        description=(
+            "Short tag for grouping, e.g. format_mismatch, missing_field, omission, over_extraction, ambiguity, threshold"
+        ),
     )
 
 
@@ -75,7 +117,13 @@ class PromptEditSuggestion(BaseModel):
         default="",
         description="Replacement; empty string for pure deletion",
     )
-    reason: str = Field(..., description="Why this change addresses the failures")
+    reason: str = Field(
+        ...,
+        description=(
+            "Required: quote or paraphrase a concrete Phase 1 finding from section 3 that this edit resolves; "
+            "edits without such a tie are invalid"
+        ),
+    )
     row_indices: list[int] = Field(
         default_factory=list,
         description="Optional 0-based row indices this edit is meant to help",
@@ -87,52 +135,140 @@ class Phase2Modifications(BaseModel):
 
     prompt_edits: list[PromptEditSuggestion] = Field(
         default_factory=list,
-        description="0–12 concrete edits; each old_sentence must appear exactly once in the given section",
+        description=(
+            "Every edit MUST resolve at least one issue named in Phase 1 (section 3); together they MUST cover "
+            "those failures—no unrelated or generic-only improvements; each old_sentence verbatim in section body"
+        ),
     )
 
 
-def _build_phase1_prompt(*, prompt_text: str, row: Any) -> str:
-    d = _row_to_dict(row)
-    row_input = d.get("row_input") or {}
-    run_output = d.get("run_output") or {}
-    expected = d.get("expected") or ""
-    comparison_types = d.get("comparison_types")
-    ct_line = ", ".join(comparison_types) if comparison_types else "(not specified)"
+def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[Any]) -> str:
+    if not group_rows:
+        return ""
+    first = _row_to_dict(group_rows[0])
+    row_input = first.get("row_input") or {}
+    idxs = sorted({int(_row_to_dict(r).get("row_index", -1)) for r in group_rows})
+    failed_idxs = sorted(
+        {
+            int(_row_to_dict(r).get("row_index", -1))
+            for r in group_rows
+            if not _row_to_dict(r).get("matched", False)
+        }
+    )
+    min_idx = min(idxs)
+    min_fail = min(failed_idxs) if failed_idxs else min_idx
+    fail_list = ", ".join(str(i) for i in failed_idxs) if failed_idxs else "(none)"
 
-    return f"""You review one failed model run against a fixed prompt and ground truth.
+    def _ground_truth_output_dict(d: dict[str, Any]) -> dict[str, Any]:
+        gto = d.get("ground_truth_output")
+        if isinstance(gto, dict):
+            return dict(gto)
+        return {}
 
-## Full prompt (all sections — this is what the model was instructed with)
+    def _is_model_facing_output_key(key: str) -> bool:
+        k = str(key or "").strip()
+        if not k or k in ("#", "[#]"):
+            return False
+        if len(k) >= 2 and k.startswith("[") and k.endswith("]"):
+            return False
+        return True
+
+    def _field_scoring_parts_for_row(d: dict[str, Any]) -> list[str]:
+        comparison_types = d.get("comparison_types")
+        parts = [str(x) for x in (comparison_types or []) if isinstance(x, str)]
+        return [x for x in parts if _is_model_facing_output_key(x.split(":", 1)[0].strip())]
+
+    ordered_rows = sorted(group_rows, key=lambda x: int(_row_to_dict(x).get("row_index", 0)))
+    gt_entries: list[dict[str, Any]] = []
+    scoring_ordered: list[str] = []
+    scoring_seen: set[str] = set()
+    outputs_in_order: list[dict[str, Any] | None] = []
+    for r in ordered_rows:
+        d = _row_to_dict(r)
+        gt_only = bool(d.get("gt_only"))
+        run_output = d.get("run_output") or {}
+        for part in _field_scoring_parts_for_row(d):
+            key = part.split(":", 1)[0].strip()
+            if key in scoring_seen:
+                continue
+            scoring_seen.add(key)
+            scoring_ordered.append(part)
+        if gt_only:
+            outputs_in_order.append(None)
+        else:
+            outputs_in_order.append(dict(run_output) if isinstance(run_output, dict) else {})
+        gt_obj = {k: v for k, v in _ground_truth_output_dict(d).items() if _is_model_facing_output_key(k)}
+        gt_entries.append(gt_obj)
+
+    rules_body = "\n".join(f"- {p}" for p in scoring_ordered) if scoring_ordered else "(not specified)"
+    outputs_json = json.dumps(outputs_in_order, ensure_ascii=False, indent=2)
+    multi = len(group_rows) > 1
+    mixed = len(failed_idxs) > 0 and len(failed_idxs) < len(group_rows)
+    if multi:
+        if mixed:
+            scope = (
+                "This is **one dataset input** with **multiple** expectations below. **Some PASSED and some FAILED** scoring. "
+                "Use passing entries as context (what the model got right); focus the diagnosis on failures "
+                "and prompt changes that preserve correct behavior while fixing them."
+            )
+        else:
+            scope = (
+                "This is **one dataset input** with **multiple** expectations (see **sections 3 and 4**). "
+                "Diagnose **holistically** across indices (same array order)."
+            )
+    else:
+        scope = "This is **one** model output for this input that failed scoring."
+    gt_json = json.dumps(gt_entries, ensure_ascii=False, indent=2)
+    idx_list = ", ".join(str(i) for i in idxs)
+
+    return f"""You review model output(s) for **one** dataset input (same placeholders / message as below). Possibly multiple expectations were scored; some may have **passed** and some **failed**.
+
+{scope}
+
+## 1. Prompt template
+
+Full instruction text the model was given (all sections, as in the app):
 
 {prompt_text}
 
-## Input for this row (dataset / placeholders used to build the user message)
+## 2. Input (substituted placeholders)
+
+Keys are `{{placeholder}}` names from the template above; values are the strings substituted into the prompt for this run.
 
 ```json
 {json.dumps(row_input, ensure_ascii=False, indent=2)}
 ```
 
-## Model output (incorrect — this did not satisfy scoring)
+## 3. Model output
+
+JSON **array**: one element per expectation, **same length and index order** as **section 4 (Ground truth)**. Each element is the model `output` object for that expectation, or `null` if no run result was paired (missing extraction).
 
 ```json
-{json.dumps(run_output, ensure_ascii=False, indent=2)}
+{outputs_json}
 ```
 
-## Expected / ground truth (what scoring compared against)
+## 4. Ground truth
 
-{expected!s}
+JSON **array**: one object per expectation. Index `i` matches index `i` in **section 3 (Model output)**. **Keys** are the score-rule **output keys** — the same property names used when comparing model JSON to the GT sheet. Omitted here: row-index rules (`#`, `[#]`) and bracket worksheet selectors (`[…]`) that are not model-output fields.
 
-## How scoring compared fields
+```json
+{gt_json}
+```
 
-{ct_line}
+## 5. Comparison rules (how each output key is scored against ground truth)
+
+For each listed output field, the line describes the match type / options used when comparing **section 3** values to **section 4**.
+
+{rules_body}
 
 ## Your task
 
 0. **card_title**: A **short headline** (about 4–12 words) for a UI list card—plain English, summary-style, readable at a glance. It must **not** be snake_case or look like a code identifier. It is **not** a substitute for the full explanation below.
-1. **issue_summary**: Briefly explain the mismatch (one or two sentences).
-2. **rough_modification_opinion**: Rough modification advice for the **prompt** only—what to clarify, add, or constrain; do NOT paste a full new prompt.
+1. **issue_summary**: Briefly explain the mismatch(es) (one or two sentences, or a bit more if multiple outputs need tying together). If the failure is extractive, mention **missing** and/or **extra** relative to expected when relevant.
+2. **rough_modification_opinion**: Rough modification advice for the **prompt** only—what to clarify, add, or constrain so coverage is exact (no missing required items, no spurious extras); do NOT paste a full new prompt.
 3. **problem_category_hint**: a very short English snake_case or hyphen tag for grouping similar failures (internal use).
 
-Respond with JSON matching the schema (row_index must be {d.get("row_index", -1)}).
+Respond with JSON matching the schema (**row_index** must be **{min_fail}** — anchor to a **failed** row; failed row_index set: {fail_list}; all comparison rows for this input in this prompt: {idx_list}).
 """
 
 
@@ -147,32 +283,49 @@ def _sections_block_for_phase2(sections: list[Any]) -> str:
 def _build_phase2_modifications_prompt(*, prompt_text: str, opinions_text: str, sections: list[Any]) -> str:
     """Second LLM call: localized prompt edits only (no design clusters)."""
     sections_block = _sections_block_for_phase2(sections)
-    return f"""You have per-row expert notes from failed runs. Propose **localized prompt edits** only—no high-level design buckets.
+    return f"""## Phase 2 goal (read first)
 
-## Full prompt (overview)
+**Fix what Phase 1 found, with as little change to the prompt as possible.**
+
+**Hard rule:** Every `prompt_edit` you output **must** directly fix something **Phase 1 already identified** in **section 3** (issue_summary, rough_modification_opinion, category hint, or the same row’s diagnosis). **Do not** output an edit whose only justification is generic “better prompt” or “clarity”—if you cannot point to **which sentence of section 3** it answers, **omit** that edit.
+
+- **Section 3** is the **sole** source of problems to fix. Do **not** redesign the prompt, add unrelated polish, or address failures Phase 1 did not mention.
+- **Coverage:** Taken together, your edits **must** resolve **all** distinct failures Phase 1 calls out for the failed input group(s) in section 3, **unless** the prompt literally has no place to apply a fix (then output fewer edits and let `reason` state the gap—still no generic-only edits).
+- Each `prompt_edit` is a **minimal** change: prefer one sentence / bullet / clause. More edits **only** when Phase 1 clearly names several separate fixes.
+- **Smallest effective diff wins**; do **not** split one fix into many micro-edits.
+- **Extraction / coverage:** tighten only as much as Phase 1 implies—no long new rubrics unless section 3 asks for that scope.
+
+Output format: **only** `prompt_edits`. No clusters, no meta summaries, no full rewritten prompt.
+
+## 1. Prompt template
+
+Full instruction text the model was given (same as Phase 1; use together with **section 2** for locating spans to edit):
 
 {prompt_text}
 
-## Sections by index — **copy old_sentence ONLY from these bodies** (not from headers like "Section index 0")
+## 2. Prompt sections (by index)
+
+Verbatim section bodies only. **`old_sentence` must be copied from here** — not from headers like `--- Section index 0: … ---`, and not from **section 1** if the wording differs.
 
 {sections_block}
 
-## Per-row rough opinions
+## 3. Phase 1 opinions (rough notes per failed input group)
+
+Diagnosis and rough fix hints from the first review pass (use to decide what to change in **section 2**):
 
 {opinions_text}
 
-## Task — **prompt_edits** (in-app diff + Accept/Revert)
+## Your task — **prompt_edits** (in-app diff + Accept/Revert)
 
-1. Output **0 to 12** items. Each is **one localized change**.
-2. **old_sentence** = **character-for-character** copy from one section body above (one contiguous substring; usually one sentence or line).
-3. **new_sentence** replaces it; **""** = pure deletion.
-4. **section_index** matches the section containing old_sentence.
-5. If no exact substring exists, **omit** that edit.
-6. **reason** + optional **row_indices** (0-based).
+1. **Phase 1 traceability (mandatory):** For **each** edit, **`reason`** must make it obvious **which Phase 1 finding (section 3)** is fixed—e.g. quote a short phrase from section 3 or name the failure (missing field X, wrong JSON shape, ambiguous instruction Y). Edits without that link are **wrong** and must not appear.
+2. **Count:** **Minimum** number of edits that still **fully** cover Phase 1’s identified problems for this review. No padding; no edits that do not map to section 3.
+3. **old_sentence:** **Character-for-character** copy from **one** body in **section 2** (one contiguous substring).
+4. **new_sentence:** Replaces `old_sentence`; **""** = deletion. Keep it **short** unless section 3 requires more.
+5. **section_index:** Matches **section 2** where `old_sentence` appears.
+6. If `old_sentence` is **not** an exact substring of that body, **omit** that edit.
+7. **row_indices** (optional): 0-based comparison row indices only to tie an edit to a specific Phase 1 bullet in section 3.
 
-Do **not** output clusters or design-style summaries—only **prompt_edits**.
-
-Respond with JSON: **prompt_edits** only.
+Respond with JSON: **`prompt_edits` only** (no other keys).
 """
 
 
@@ -182,7 +335,7 @@ def _sanitize_prompt_edits(sections: list[Any], edits: list[PromptEditSuggestion
     n = len(sections or [])
     if n == 0:
         return out
-    for e in edits[:16]:
+    for e in edits:
         idx = int(e.section_index)
         idx = max(0, min(idx, n - 1))
         _, content = _sec_name_content(sections[idx])
@@ -210,21 +363,42 @@ def _sanitize_prompt_edits(sections: list[Any], edits: list[PromptEditSuggestion
                 "row_indices": ri,
             }
         )
-        if len(out) >= 12:
+        if len(out) >= _MAX_VALIDATED_PROMPT_EDITS:
             break
     return out
 
 
-def _analyze_one_row(
+def _analyze_input_group(
     *,
-    row: Any,
+    group_rows: list[Any],
     prompt_text: str,
     provider: str,
     model: str,
     api_key: str,
     max_tokens: int,
-) -> PerRowOpinion:
-    prompt = _build_phase1_prompt(prompt_text=prompt_text, row=row)
+) -> tuple[PerRowOpinion, list[int]]:
+    prompt = _build_phase1_prompt_for_input_group(prompt_text=prompt_text, group_rows=group_rows)
+    idxs_all = sorted({int(_row_to_dict(r).get("row_index", -1)) for r in group_rows})
+    failed_idxs = sorted(
+        {
+            int(_row_to_dict(r).get("row_index", -1))
+            for r in group_rows
+            if not _row_to_dict(r).get("matched", False)
+        }
+    )
+    print(
+        "\n"
+        + "=" * 80
+        + "\nREVIEW PHASE 1 PROMPT"
+        + f" (all row_index: {idxs_all}, failed: {failed_idxs}, {len(prompt)} chars)\n"
+        + "=" * 80
+        + "\n"
+        + prompt
+        + "\n"
+        + "=" * 80
+        + "\n",
+        flush=True,
+    )
     out, _ = llm_run_structured(
         provider=provider,
         model=model,
@@ -239,10 +413,8 @@ def _analyze_one_row(
         op = out
     else:
         op = PerRowOpinion(**(out.model_dump() if hasattr(out, "model_dump") else out.dict()))
-    d = _row_to_dict(row)
-    expected_idx = d.get("row_index", op.row_index)
-    op.row_index = int(expected_idx)
-    return op
+    op.row_index = int(min(failed_idxs)) if failed_idxs else int(min(idxs_all))
+    return op, idxs_all
 
 
 def run_review_pipeline(
@@ -278,11 +450,19 @@ def run_review_pipeline(
         return
 
     to_analyze = unmatched[: max(1, min(200, int(max_failed_rows)))]
-    n = len(to_analyze)
+    failed_input_keys = {_input_identity_key(_row_to_dict(r)) for r in to_analyze}
+    all_groups = _group_comparison_rows_by_input(comparison_rows)
+    groups = [g for g in all_groups if _input_identity_key(_row_to_dict(g[0])) in failed_input_keys]
+    n = len(groups)
+    row_count = len(to_analyze)
     append_event(
         {
             "type": "plan",
-            "summary": f"Phase 1: analyzing {n} failed row(s); then prompt edit suggestions.",
+            "summary": (
+                f"Phase 1: analyzing {n} input group(s) with failures ({row_count} failed comparison row(s)); "
+                "each prompt includes every comparison row for that input (matched + unmatched). "
+                "Then prompt edit suggestions."
+            ),
             "diagnosis_total": n,
         }
     )
@@ -290,12 +470,12 @@ def run_review_pipeline(
     if is_cancelled():
         return
 
-    opinions: list[PerRowOpinion] = []
+    opinions: list[tuple[PerRowOpinion, list[int]]] = []
     conc = max(1, min(4, int(concurrency)))
 
-    def one(r: Any) -> PerRowOpinion:
-        return _analyze_one_row(
-            row=r,
+    def one_group(g: list[Any]) -> tuple[PerRowOpinion, list[int]]:
+        return _analyze_input_group(
+            group_rows=g,
             prompt_text=prompt_text,
             provider=provider,
             model=model,
@@ -305,16 +485,17 @@ def run_review_pipeline(
 
     done_n = 0
     if conc <= 1:
-        for r in to_analyze:
+        for g in groups:
             if is_cancelled():
                 return
-            op = one(r)
-            opinions.append(op)
+            op, ridxs = one_group(g)
+            opinions.append((op, ridxs))
             done_n += 1
             append_event(
                 {
                     "type": "diagnosis_row",
                     "row_index": op.row_index,
+                    "row_indices": ridxs,
                     "done": done_n,
                     "total": n,
                     "opinion": {
@@ -327,7 +508,7 @@ def run_review_pipeline(
             )
     else:
         with ThreadPoolExecutor(max_workers=conc) as ex:
-            futures = {ex.submit(one, r): r for r in to_analyze}
+            futures = {ex.submit(one_group, g): g for g in groups}
             for fut in as_completed(futures):
                 if is_cancelled():
                     try:
@@ -335,13 +516,14 @@ def run_review_pipeline(
                     except TypeError:
                         ex.shutdown(wait=False)
                     return
-                op = fut.result()
-                opinions.append(op)
+                op, ridxs = fut.result()
+                opinions.append((op, ridxs))
                 done_n += 1
                 append_event(
                     {
                         "type": "diagnosis_row",
                         "row_index": op.row_index,
+                        "row_indices": ridxs,
                         "done": done_n,
                         "total": n,
                         "opinion": {
@@ -353,20 +535,22 @@ def run_review_pipeline(
                     }
                 )
 
-    opinions.sort(key=lambda x: x.row_index)
+    opinions.sort(key=lambda t: t[0].row_index)
 
     if is_cancelled():
         return
 
     # Compact text for phase 2 (cap each opinion length to limit tokens)
     lines: list[str] = []
-    for op in opinions:
+    for op, ridxs in opinions:
         rough = op.rough_modification_opinion.strip()
         if len(rough) > 1200:
             rough = rough[:1197] + "..."
         head = (op.card_title or "").strip() or op.issue_summary
+        rows_lbl = ", ".join(str(i) for i in ridxs) if len(ridxs) > 1 else str(op.row_index)
         lines.append(
-            f"- Row {op.row_index}: [{op.problem_category_hint or 'uncategorized'}] {head}\n  Detail: {op.issue_summary}\n  Rough fix: {rough}"
+            f"- Comparison row(s) {rows_lbl}: [{op.problem_category_hint or 'uncategorized'}] {head}\n"
+            f"  Detail: {op.issue_summary}\n  Rough fix: {rough}"
         )
     opinions_text = "\n".join(lines)
 
@@ -376,6 +560,19 @@ def run_review_pipeline(
         sections=sections,
     )
     logger.info("Review phase 2 (modifications) prompt length: %s chars", len(mod_prompt))
+    print(
+        "\n"
+        + "=" * 80
+        + "\nREVIEW PHASE 2 PROMPT"
+        + f" ({len(mod_prompt)} chars)\n"
+        + "=" * 80
+        + "\n"
+        + mod_prompt
+        + "\n"
+        + "=" * 80
+        + "\n",
+        flush=True,
+    )
     out_mod, _ = llm_run_structured(
         provider=provider,
         model=model,

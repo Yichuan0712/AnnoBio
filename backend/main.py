@@ -175,15 +175,38 @@ class RunRequest(BaseModel):
 # ---------- Review (prompt analysis from score comparison) ----------
 class ReviewComparisonRow(BaseModel):
     row_index: int
+    input_row_index: int | None = Field(
+        default=None,
+        description="0-based input worksheet row when 1 input maps to multiple run outputs; used to group Phase 1 review",
+    )
     matched: bool
     run_output: dict = Field(default_factory=dict, description="Model output for this row")
-    expected: str = Field(default="", description="Expected value(s) from ground truth")
+    expected: str = Field(default="", description="Expected value(s) from ground truth (human-readable; legacy)")
+    ground_truth_output: dict = Field(
+        default_factory=dict,
+        description="Ground truth values keyed by score-rule outputKey (same JSON keys as run_output for compared fields)",
+    )
     comparison_types: list[str] | None = Field(
         default=None,
-        description="Per-rule comparison labels from the UI, e.g. ['field_key: String match (Contains, Ignore case)', 'field_key: Numeric equality']",
+        description="Per-rule labels from the UI; each entry is `outputKey: …` (same outputKey as scoring / ground_truth_output keys)",
     )
     comment: str | None = Field(default=None, description="User comment if any")
-    row_input: dict | None = Field(default=None, description="Input key-values used to fill the prompt for this row")
+    row_input: dict | None = Field(
+        default=None,
+        description="Placeholder name → substituted value for this run (keys match `{name}` in prompt sections; only inputs that appear in the template)",
+    )
+    gt_only: bool = Field(
+        default=False,
+        description="True when this row is an unpaired ground-truth expectation with no run result (missing extraction in Review)",
+    )
+    source_gt_row_index: int | None = Field(
+        default=None,
+        description="0-based ground truth table row index when gt_only; paired rows may repeat paired GT index",
+    )
+    score_table_row: int | None = Field(
+        default=None,
+        description="1-based row number in Score detail comparison table (# column), unfiltered order",
+    )
 
 
 class ReviewRequest(BaseModel):

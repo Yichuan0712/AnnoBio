@@ -341,12 +341,17 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     all_rows_matched: allRowsMatched,
     comparison_rows: comparisonRows.map((r) => ({
       row_index: r.row_index,
+      input_row_index: typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : null,
       matched: comparisonRowIsMatched(r),
       run_output: r.run_output || {},
       expected: r.expected || '',
+      ground_truth_output: r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {},
       comparison_types: r.comparison_types ?? null,
       comment: r.comment ?? null,
       row_input: r.row_input ?? null,
+      gt_only: r.gt_only === true,
+      source_gt_row_index: typeof r.source_gt_row_index === 'number' && !Number.isNaN(r.source_gt_row_index) ? r.source_gt_row_index : null,
+      score_table_row: typeof r.score_table_row === 'number' && !Number.isNaN(r.score_table_row) ? r.score_table_row : null,
     })),
   };
   const promptFullText = payload.prompt_full_text || (payload.prompt_sections || []).map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');

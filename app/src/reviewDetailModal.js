@@ -24,7 +24,7 @@ const REVIEW_ASSISTANT_MAX_MESSAGES = 40;
 
 /** Shown when the Review assistant chat is empty (or after clear): Suggested changes add/remove + Accept / Revert. */
 const REVIEW_ASSISTANT_WELCOME_MSG =
-  'Ask questions, propose edits, or ask me to add or remove items in Suggested changes. Use Accept or Revert on each card to apply or roll back the working prompt.';
+  'Ask questions or ask me to add new prompt-edit cards. Review-generated cards in Suggested changes cannot be changed from this chat—use Accept or Revert on each card. I can remove only chat-added cards from the list if you ask.';
 
 /**
  * Take only the newest messages so the request stays within context limits.
@@ -143,17 +143,37 @@ function suggestionCardTitleLine({ explicitName, reason, sectionFallback, defaul
 
 /**
  * Second-layer modal: analysis text only + which Score comparison row this refers to.
- * @param {{ row_index: number, card_title?: string, issue_summary: string, rough_modification_opinion: string, problem_category_hint?: string }} diagnostic
- * @param {Record<string, unknown> | null} comparisonRow - unused; kept for caller compatibility
+ * @param {{ row_index: number, row_indices?: number[], card_title?: string, issue_summary: string, rough_modification_opinion: string, problem_category_hint?: string }} diagnostic
+ * @param {Array<Record<string, unknown>>} comparisonRows - saved comparison rows (for score_table_row lookup)
  * @param {number} displayNumber - 1-based order in the Error analysis list (same as # on the card)
  */
-function openRowDiagnosisDetailOverlay(diagnostic, _comparisonRow, displayNumber) {
+function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber) {
   const num = Math.max(1, parseInt(String(displayNumber), 10) || 1);
   const issue = (diagnostic.issue_summary || '').trim();
   const rough = (diagnostic.rough_modification_opinion || '').trim();
   const cardTitle = (diagnostic.card_title || '').trim();
-  const scoreRowIdx = diagnostic.row_index;
-  const scoreRowLabel = formatRunRowIndexForDisplay(scoreRowIdx);
+  const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
+  const findComp = (idx) => rows.find((r) => Number(r?.row_index) === Number(idx));
+  const scoreTableNumFor = (idx) => {
+    const r = findComp(idx);
+    const n = r && r.score_table_row != null ? Number(r.score_table_row) : NaN;
+    if (Number.isFinite(n) && n >= 1) return n;
+    return null;
+  };
+  const multiIdx = Array.isArray(diagnostic.row_indices) && diagnostic.row_indices.length > 1
+    ? diagnostic.row_indices
+    : null;
+  const sourceLine = multiIdx
+    ? `Score table rows ${multiIdx.map((idx) => {
+      const t = scoreTableNumFor(idx);
+      return t != null ? String(t) : `(row_index ${idx})`;
+    }).join(', ')} (same input, multiple outputs)`
+    : (() => {
+      const t = scoreTableNumFor(diagnostic.row_index);
+      return t != null
+        ? `Score table row ${t}`
+        : `Score comparison (row_index ${diagnostic.row_index})`;
+    })();
 
   const mainHeading = ensureCardTitleSentenceLead(cardTitle || `Analysis #${num}`);
 
@@ -168,7 +188,7 @@ function openRowDiagnosisDetailOverlay(diagnostic, _comparisonRow, displayNumber
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body review-diagnosis-detail-body">
-        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Source:</span> Score comparison table #${escapeHtml(scoreRowLabel)}</p>
+        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Source:</span> ${escapeHtml(sourceLine)}</p>
         <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Issue:</span> ${issue ? escapeHtml(issue) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
         <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Suggested direction:</span> ${rough ? escapeHtml(rough) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
       </div>
@@ -552,13 +572,20 @@ function buildReviewResultUI(overlay, options) {
   /** Phase 1 per-row LLM notes (persisted on review node) */
   let rowDiagnostics = Array.isArray(saved.row_diagnostics)
     ? saved.row_diagnostics
-      .map((d) => ({
-        row_index: Number(d && d.row_index),
-        card_title: String((d && d.card_title) || ''),
-        issue_summary: String((d && d.issue_summary) || ''),
-        rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
-        problem_category_hint: String((d && d.problem_category_hint) || ''),
-      }))
+      .map((d) => {
+        const rid = Number(d && d.row_index);
+        const ri = Array.isArray(d && d.row_indices)
+          ? d.row_indices.map((x) => Number(x)).filter((x) => !Number.isNaN(x))
+          : [];
+        return {
+          row_index: rid,
+          row_indices: ri.length ? ri : (!Number.isNaN(rid) ? [rid] : []),
+          card_title: String((d && d.card_title) || ''),
+          issue_summary: String((d && d.issue_summary) || ''),
+          rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
+          problem_category_hint: String((d && d.problem_category_hint) || ''),
+        };
+      })
       .filter((d) => !Number.isNaN(d.row_index))
     : [];
   rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
@@ -759,7 +786,7 @@ function buildReviewResultUI(overlay, options) {
         detailBtn.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          openRowDiagnosisDetailOverlay(d, compRow, displayNum);
+          openRowDiagnosisDetailOverlay(d, comparisonRows, displayNum);
         });
       }
       diagnosisEl.appendChild(card);
@@ -1223,13 +1250,20 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   const payload = await Promise.resolve(typeof getPayload === 'function' ? getPayload() : null);
   const rowDiagnostics = Array.isArray(saved?.row_diagnostics)
     ? saved.row_diagnostics
-        .map((d) => ({
-          row_index: Number(d && d.row_index),
-          card_title: String((d && d.card_title) || ''),
-          issue_summary: String((d && d.issue_summary) || ''),
-          rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
-          problem_category_hint: String((d && d.problem_category_hint) || ''),
-        }))
+        .map((d) => {
+          const rid = Number(d && d.row_index);
+          const ri = Array.isArray(d && d.row_indices)
+            ? d.row_indices.map((x) => Number(x)).filter((x) => !Number.isNaN(x))
+            : [];
+          return {
+            row_index: rid,
+            row_indices: ri.length ? ri : (!Number.isNaN(rid) ? [rid] : []),
+            card_title: String((d && d.card_title) || ''),
+            issue_summary: String((d && d.issue_summary) || ''),
+            rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
+            problem_category_hint: String((d && d.problem_category_hint) || ''),
+          };
+        })
         .filter((d) => !Number.isNaN(d.row_index))
     : [];
   rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
@@ -1262,8 +1296,12 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     lines.push('');
     rowDiagnostics.forEach((d, i) => {
       const n = i + 1;
-      const rowLabel = formatRunRowIndexForDisplay(d.row_index);
-      lines.push(`### Error analysis #${n} · Score comparison run result row ${rowLabel}`);
+      const multi = Array.isArray(d.row_indices) && d.row_indices.length > 1;
+      const rowLabel = multi
+        ? d.row_indices.map((x) => formatRunRowIndexForDisplay(x)).join(', ')
+        : formatRunRowIndexForDisplay(d.row_index);
+      const rowSuffix = multi ? `rows ${rowLabel} (same input)` : `row ${rowLabel}`;
+      lines.push(`### Error analysis #${n} · Score comparison run result ${rowSuffix}`);
       const ct = (d.card_title || '').trim();
       if (ct) lines.push(`Headline: ${ct}`);
       lines.push(`Issue: ${(d.issue_summary || '').trim() || '(none)'}`);
@@ -1304,8 +1342,16 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push(
     'READ: Error analysis (if listed above) is read-only context. Do not tell the user you changed it or try to remove it — you can only change items under "Suggestions" below.',
   );
-  lines.push('ADD: New prompt edit cards via [ASSISTANT_SUGGESTION] (these appear under Suggested changes).');
-  lines.push('REMOVE: Only suggestion list items — by suggestion_id (same as UI #1, #2, …) or legacy suggestion_index (data refinement first, then edits).');
+  lines.push(
+    'CRITICAL — Review-generated suggestions (marked [pipeline] below): You CANNOT change their old_sentence/new_sentence, replace them, or “update” them via chat. There is no tool for that. If the user asks you to modify, rewrite, fix, or adjust those initial cards, reply clearly: **they cannot be edited from this chat** — they must use **Accept** or **Revert** on the card in the Suggested changes panel. Optionally suggest they **Revert** first, then you can add a **new** [ASSISTANT_SUGGESTION] with different wording (that new card is assistant-owned).',
+  );
+  lines.push(
+    'Reply in the user’s language when explaining this (e.g. Chinese: 无法在对话里修改 Review 自动生成的建议卡片，请在左侧「Suggested changes」里对该条使用 Accept 或 Revert；若要换一种改法，可先 Revert，再让我添加一条新的建议).',
+  );
+  lines.push('ADD: New prompt-only edit cards via [ASSISTANT_SUGGESTION] (assistant-owned; source=assistant).');
+  lines.push(
+    'REMOVE via chat: **Only** items marked [assistant — removable]. **Do not** use [ASSISTANT_REMOVE_SUGGESTION] on [pipeline] items — the app will ignore it; tell the user those cards are not deletable from chat.',
+  );
   lines.push('');
   if (suggestions.length > 0 || dataRefinement.length > 0) {
     lines.push('## Suggestions (persistent numeric suggestion_id per review; matches UI #N)');
@@ -1317,7 +1363,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
           ? `Rows ${(d.row_indices || []).map((x) => formatRunRowIndexForDisplay(x)).join(', ')}: `
           : '';
       const title = rows + ((d.reason || '').trim().slice(0, 100) || 'Possible ground truth issue');
-      lines.push(`#${shortLabel} [Data refinement] suggestion_id="${sid}" ${title} [removable]`);
+      lines.push(`#${shortLabel} [Data refinement] [pipeline — not editable via chat] suggestion_id="${sid}" ${title}`);
       if ((d.reason || '').trim().length > 100) lines.push(`   Full: ${(d.reason || '').trim()}`);
     });
     suggestions.forEach((s) => {
@@ -1325,10 +1371,11 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
       const shortLabel = formatSuggestionIdDisplay(sid);
       const title = (s.name || '').trim() || (s.reason || '').trim().slice(0, 80) || `[Section ${s.section_index ?? 0}] "${(s.old_sentence || '').slice(0, 40)}..." → "${(s.new_sentence || '').slice(0, 40)}..."`;
       const applied = s.applied === true ? ' [applied]' : '';
-      lines.push(`#${shortLabel} [Edit] suggestion_id="${sid}" ${title}${applied} [removable]`);
+      const src = String(s?.source || '').trim().toLowerCase();
+      const tag = src === 'assistant' ? '[assistant — removable]' : '[pipeline — not editable via chat]';
+      lines.push(`#${shortLabel} [Edit] ${tag} suggestion_id="${sid}" ${title}${applied}`);
       lines.push(`   Reason: ${(s.reason || '').trim()}`);
     });
-    lines.push('You may remove any item using [ASSISTANT_REMOVE_SUGGESTION] with suggestion_id (preferred) or suggestion_index (legacy).');
     lines.push('');
   }
   lines.push('## Adding suggestions');
@@ -1342,9 +1389,9 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.');
   lines.push('');
   lines.push('## Removing suggestions');
-  lines.push('When the user asks to DELETE or REMOVE suggestions (e.g. 删除, 移除, remove, delete): use [ASSISTANT_REMOVE_SUGGESTION]. Do NOT use [ASSISTANT_SUGGESTION] — that is for adding edits to the prompt, not for removing suggestions from the list.');
-  lines.push('Prefer removing by suggestion_id from the list above. Example: [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_id":3}[/ASSISTANT_REMOVE_SUGGESTION]. For multiple removals, output one block per item.');
-  lines.push('Legacy (positional): [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION] where N is 1-based global order (all data refinement items, then all edits).');
+  lines.push('When the user asks to DELETE or REMOVE **assistant-added** cards only: use [ASSISTANT_REMOVE_SUGGESTION]. Do NOT use [ASSISTANT_SUGGESTION] for list removal.');
+  lines.push('Prefer suggestion_id for items tagged [assistant — removable]. Example: [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_id":3}[/ASSISTANT_REMOVE_SUGGESTION].');
+  lines.push('Legacy (positional): [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION] where N is 1-based global order (data refinement, then edits). **Pipeline** items will not be removed — explain that to the user if they asked to remove a review-generated card.');
   lines.push('Never target error analysis rows with REMOVE — they are not in the suggestion list and cannot be deleted here.');
   lines.push('');
   lines.push('Stay focused ONLY on improving the current prompt. Answer directly and solve problems. Do not describe your context or internal structure to the user. If the user asks something unrelated to this prompt, briefly redirect to prompt improvement.');
@@ -1409,18 +1456,37 @@ function parseAssistantRemoveSuggestions(text) {
   return ops;
 }
 
+/**
+ * Review / stream–originated items are locked for chat: cannot remove or “rewrite” via assistant tools.
+ * Chat-added edits use source === 'assistant'. Legacy items without source are treated as locked.
+ */
+function isPipelineLockedSuggestionItem(item, isDataRefinementRow) {
+  if (!item || typeof item !== 'object') return true;
+  if (isDataRefinementRow) return true;
+  const src = String(item.source || '').trim().toLowerCase();
+  return src !== 'assistant';
+}
+
 /** @param {{ data_refinement?: unknown[], suggestions?: unknown[] }} st */
 function removeSuggestionByGlobalIndexFromState(st, oneBased) {
-  if (!st || typeof oneBased !== 'number' || oneBased < 1) return;
+  if (!st || typeof oneBased !== 'number' || oneBased < 1) return false;
   const R = (st.data_refinement || []).length;
   const n = Math.floor(oneBased);
   if (n >= 1 && n <= R) {
+    const row = st.data_refinement[n - 1];
+    if (isPipelineLockedSuggestionItem(row, true)) return false;
     st.data_refinement.splice(n - 1, 1);
-    return;
+    return true;
   }
   const editIdx = n - R - 1;
   const sg = st.suggestions || [];
-  if (editIdx >= 0 && editIdx < sg.length) sg.splice(editIdx, 1);
+  if (editIdx >= 0 && editIdx < sg.length) {
+    const row = sg[editIdx];
+    if (isPipelineLockedSuggestionItem(row, false)) return false;
+    sg.splice(editIdx, 1);
+    return true;
+  }
+  return false;
 }
 
 function removeSuggestionByIdFromState(st, suggestionId) {
@@ -1435,11 +1501,13 @@ function removeSuggestionByIdFromState(st, suggestionId) {
   const sg = st.suggestions;
   let i = Array.isArray(dr) ? dr.findIndex(match) : -1;
   if (i >= 0) {
+    if (isPipelineLockedSuggestionItem(dr[i], true)) return false;
     dr.splice(i, 1);
     return true;
   }
   i = Array.isArray(sg) ? sg.findIndex(match) : -1;
   if (i >= 0) {
+    if (isPipelineLockedSuggestionItem(sg[i], false)) return false;
     sg.splice(i, 1);
     return true;
   }
