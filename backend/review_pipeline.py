@@ -108,6 +108,14 @@ class PromptEditSuggestion(BaseModel):
     """One localized prompt change; old_sentence must exist verbatim in the section (UI highlights red/green)."""
 
     name: str = Field(..., description="Short title for this edit")
+    phase1_addresses: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=3,
+        description=(
+            "1–3 strings naming Phase 1 findings this edit fixes; if many bullets are the same failure class, merge into fewer strings"
+        ),
+    )
     section_index: int = Field(0, ge=0, description="0-based index of the section to edit")
     old_sentence: str = Field(
         ...,
@@ -119,10 +127,7 @@ class PromptEditSuggestion(BaseModel):
     )
     reason: str = Field(
         ...,
-        description=(
-            "Required: quote or paraphrase a concrete Phase 1 finding from section 3 that this edit resolves; "
-            "edits without such a tie are invalid"
-        ),
+        description="How this old→new change implements the fix for the phase1_addresses items (1–2 sentences)",
     )
     row_indices: list[int] = Field(
         default_factory=list,
@@ -317,13 +322,19 @@ Diagnosis and rough fix hints from the first review pass (use to decide what to 
 
 ## Your task — **prompt_edits** (in-app diff + Accept/Revert)
 
-1. **Phase 1 traceability (mandatory):** For **each** edit, **`reason`** must make it obvious **which Phase 1 finding (section 3)** is fixed—e.g. quote a short phrase from section 3 or name the failure (missing field X, wrong JSON shape, ambiguous instruction Y). Edits without that link are **wrong** and must not appear.
-2. **Count:** **Minimum** number of edits that still **fully** cover Phase 1’s identified problems for this review. No padding; no edits that do not map to section 3.
-3. **old_sentence:** **Character-for-character** copy from **one** body in **section 2** (one contiguous substring).
-4. **new_sentence:** Replaces `old_sentence`; **""** = deletion. Keep it **short** unless section 3 requires more.
-5. **section_index:** Matches **section 2** where `old_sentence` appears.
-6. If `old_sentence` is **not** an exact substring of that body, **omit** that edit.
-7. **row_indices** (optional): 0-based comparison row indices only to tie an edit to a specific Phase 1 bullet in section 3.
+Each edit in `prompt_edits` **must** include:
+
+- **`phase1_addresses`**: **1 to 3 strings** (hard cap **3**). Each string should name a **Phase 1 finding** from **section 3** (short phrase or quote). **Special case:** if Phase 1 lists many bullets that are **the same underlying issue** (same failure mode / one thematic gap), **do not** split into extra edits just to mirror bullet count: **summarize** that cluster in **one to three** strings and fix it with **one** localized edit when one `old_sentence`→`new_sentence` truly addresses that whole class. Split into another `prompt_edit` only when Phase 1 implies **different** change strategies or **different** places in the prompt. **Do not** use vague entries like “improve clarity” unless Phase 1 said so.
+- **`reason`**: 1–2 sentences on **how** the `old_sentence`→`new_sentence` change implements those fixes (implementation detail, not a repeat of the whole section 3).
+
+Other rules:
+
+1. **Count:** **Minimum** edits that still **fully** cover Phase 1’s problems in section 3. No padding.
+2. **old_sentence:** **Character-for-character** from **section 2** (one contiguous substring).
+3. **new_sentence:** Replaces `old_sentence`; **""** = deletion.
+4. **section_index:** Section in **section 2** where `old_sentence` appears.
+5. If `old_sentence` is **not** an exact substring of that body, **omit** that edit.
+6. **row_indices** (optional): 0-based comparison row indices when it ties to a specific Phase 1 row note.
 
 Respond with JSON: **`prompt_edits` only** (no other keys).
 """
@@ -353,9 +364,21 @@ def _sanitize_prompt_edits(sections: list[Any], edits: list[PromptEditSuggestion
                 ri.append(int(x))
             except (TypeError, ValueError):
                 continue
+        p1: list[str] = []
+        raw_p1 = getattr(e, "phase1_addresses", None)
+        if isinstance(raw_p1, list):
+            for x in raw_p1:
+                s = str(x).strip()
+                if s:
+                    p1.append(s[:500])
+                    if len(p1) >= 3:
+                        break
+        if not p1:
+            continue
         out.append(
             {
                 "name": (e.name or "Prompt edit").strip()[:200],
+                "phase1_addresses": p1,
                 "section_index": idx,
                 "old_sentence": old,
                 "new_sentence": new,

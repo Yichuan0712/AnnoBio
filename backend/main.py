@@ -223,6 +223,10 @@ class ReviewRequest(BaseModel):
 
 class ReviewSuggestion(BaseModel):
     name: str = Field(..., description="Short name summarizing this change (e.g. 'Clarify output format')")
+    phase1_addresses: list[str] = Field(
+        default_factory=list,
+        description="Phase 1 findings this edit targets (from automated review; empty for chat-added edits)",
+    )
     section_index: int = Field(..., ge=0, description="0-based index of the section to change")
     old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only)")
     new_sentence: str = Field(..., description="Replacement for that one sentence")

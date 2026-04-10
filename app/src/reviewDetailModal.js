@@ -22,9 +22,8 @@ const REVIEW_INCOMPLETE_USER_MSG = 'Last review did not complete. Please run Rev
 /** Sliding window for /api/chat: max user+assistant messages (≈20 turns if strictly alternating). Full history still kept in UI and project JSON. */
 const REVIEW_ASSISTANT_MAX_MESSAGES = 40;
 
-/** Shown when the Review assistant chat is empty (or after clear): Suggested changes add/remove + Accept / Revert. */
-const REVIEW_ASSISTANT_WELCOME_MSG =
-  'Ask questions or ask me to add new prompt-edit cards. Review-generated cards in Suggested changes cannot be changed from this chat—use Accept or Revert on each card. I can remove only chat-added cards from the list if you ask.';
+/** Shown when the Review assistant chat is empty (or after clear). */
+const REVIEW_ASSISTANT_WELCOME_MSG = 'Chat here about prompt changes.';
 
 /**
  * Take only the newest messages so the request stays within context limits.
@@ -204,6 +203,58 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
     if (e.key === 'Escape') close();
   }
 
+  overlay.querySelector('.modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+  document.addEventListener('keydown', onKeyDown);
+  document.body.appendChild(overlay);
+}
+
+const SUGGESTION_CARD_PREVIEW_TITLE_CHARS = 100;
+const SUGGESTION_CARD_PREVIEW_REASON_CHARS = 220;
+
+/**
+ * Full text for a prompt-edit suggestion (addresses + note only; diff stays on prompt hover / Accept).
+ * @param {Record<string, unknown>} sug
+ * @param {{ sectionLabel: string, titleLine: string }} meta
+ */
+function openPromptEditSuggestionDetailOverlay(sug, meta) {
+  const sectionLabel = String(meta.sectionLabel || '').trim() || '—';
+  const heading = String(meta.titleLine || '').trim() || 'Suggestion';
+  const p1 = Array.isArray(sug.phase1_addresses)
+    ? sug.phase1_addresses.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const reason = String(sug.reason || '').trim();
+  const addressesHtml = p1.length
+    ? `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Addresses:</span></p><ul class="review-suggestion-detail-list">${p1.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+    : '<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Addresses:</span> <span class="review-diagnosis-detail-empty">(none)</span></p>';
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay review-suggestion-detail-overlay';
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'review-suggestion-detail-title');
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--review-diagnosis-detail">
+      <div class="modal-header">
+        <h2 id="review-suggestion-detail-title" class="modal-title">${escapeHtml(ensureCardTitleSentenceLead(heading))}</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body review-diagnosis-detail-body">
+        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Section:</span> ${escapeHtml(sectionLabel)}</p>
+        ${addressesHtml}
+        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Note:</span> ${reason ? escapeHtml(reason) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
+      </div>
+    </div>
+  `;
+
+  function close() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKeyDown);
+  }
+  function onKeyDown(e) {
+    if (e.key === 'Escape') close();
+  }
   overlay.querySelector('.modal-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close();
@@ -854,9 +905,13 @@ function buildReviewResultUI(overlay, options) {
       sectionFallback: name,
       defaultLabel: 'Prompt edit',
     });
+    const previewTitle = truncateWithEllipsis(titleLine, SUGGESTION_CARD_PREVIEW_TITLE_CHARS);
+    const previewReason = truncateWithEllipsis(fullReason, SUGGESTION_CARD_PREVIEW_REASON_CHARS);
 
+    const detailsBtnHtml =
+      '<button type="button" class="btn btn-secondary review-detail-diagnosis-detail-btn">View detail</button>';
     const acceptBtnHtml = !noButton ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>' : '';
-    const actionsHtml = acceptBtnHtml;
+    const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
 
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card' + (noButton ? ' review-detail-suggestion-card--unlocatable' : '');
@@ -865,8 +920,8 @@ function buildReviewResultUI(overlay, options) {
     if (sid !== '' && sid != null) card.dataset.suggestionId = String(sid);
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong></span>
-        <p class="review-detail-suggestion-reason">${escapeHtml(fullReason)}</p>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong></span>
+        <p class="review-detail-suggestion-reason">${escapeHtml(previewReason || '—')}</p>
       </div>
       <div class="review-detail-suggestion-card__actions">
         ${actionsHtml}
@@ -874,6 +929,14 @@ function buildReviewResultUI(overlay, options) {
     `;
     const mainEl = card.querySelector('.review-detail-suggestion-card__main');
     const acceptBtn = card.querySelector('.review-detail-accept-btn');
+    const detailBtn = card.querySelector('.review-detail-diagnosis-detail-btn');
+    if (detailBtn) {
+      detailBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openPromptEditSuggestionDetailOverlay(sug, { sectionLabel: name, titleLine });
+      });
+    }
 
     function getDiffContent() {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
@@ -1350,7 +1413,10 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   );
   lines.push('ADD: New prompt-only edit cards via [ASSISTANT_SUGGESTION] (assistant-owned; source=assistant).');
   lines.push(
-    'REMOVE via chat: **Only** items marked [assistant — removable]. **Do not** use [ASSISTANT_REMOVE_SUGGESTION] on [pipeline] items — the app will ignore it; tell the user those cards are not deletable from chat.',
+    'REMOVE via chat: **Only** items marked [assistant — removable]. **Do not** use [ASSISTANT_REMOVE_SUGGESTION] on [pipeline] items — the app will **not** delete them.',
+  );
+  lines.push(
+    '**Never** tell the user you deleted or removed a suggestion if it was [pipeline] or data refinement. If they ask to delete #1 and #1 is pipeline, **refuse in plain language** (e.g. cannot remove from chat; use Accept/Revert)—**do not** output [ASSISTANT_REMOVE_SUGGESTION] for that id and **do not** say “已删除”.',
   );
   lines.push('');
   if (suggestions.length > 0 || dataRefinement.length > 0) {
@@ -1374,6 +1440,10 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
       const src = String(s?.source || '').trim().toLowerCase();
       const tag = src === 'assistant' ? '[assistant — removable]' : '[pipeline — not editable via chat]';
       lines.push(`#${shortLabel} [Edit] ${tag} suggestion_id="${sid}" ${title}${applied}`);
+      const p1s = Array.isArray(s.phase1_addresses)
+        ? s.phase1_addresses.map((x) => String(x || '').trim()).filter(Boolean)
+        : [];
+      if (p1s.length) lines.push(`   Addresses: ${p1s.join(' · ')}`);
       lines.push(`   Reason: ${(s.reason || '').trim()}`);
     });
     lines.push('');
@@ -1391,7 +1461,10 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('## Removing suggestions');
   lines.push('When the user asks to DELETE or REMOVE **assistant-added** cards only: use [ASSISTANT_REMOVE_SUGGESTION]. Do NOT use [ASSISTANT_SUGGESTION] for list removal.');
   lines.push('Prefer suggestion_id for items tagged [assistant — removable]. Example: [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_id":3}[/ASSISTANT_REMOVE_SUGGESTION].');
-  lines.push('Legacy (positional): [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION] where N is 1-based global order (data refinement, then edits). **Pipeline** items will not be removed — explain that to the user if they asked to remove a review-generated card.');
+  lines.push('Legacy (positional): [ASSISTANT_REMOVE_SUGGESTION]{"suggestion_index": N}[/ASSISTANT_REMOVE_SUGGESTION] where N is 1-based global order (data refinement, then edits).');
+  lines.push(
+    'If the target is **[pipeline]** or **[Data refinement]**: **do not** emit REMOVE blocks. Reply that it **cannot** be deleted from this chat and they must use **Accept** or **Revert** on the card. Claiming deletion when nothing was removed is **forbidden**.',
+  );
   lines.push('Never target error analysis rows with REMOVE — they are not in the suggestion list and cannot be deleted here.');
   lines.push('');
   lines.push('Stay focused ONLY on improving the current prompt. Answer directly and solve problems. Do not describe your context or internal structure to the user. If the user asks something unrelated to this prompt, briefly redirect to prompt improvement.');
@@ -1521,6 +1594,21 @@ function stripAssistantSuggestionBlocks(text) {
     .replace(/\[ASSISTANT_REMOVE_SUGGESTION\][\s\S]*?\[\/ASSISTANT_REMOVE_SUGGESTION\]/g, '')
     .trim()
     .replace(/\n{3,}/g, '\n\n');
+}
+
+/** Shown when the model issued REMOVE but no pipeline/locked items were actually removed (must not claim success). */
+const REVIEW_ASSISTANT_REMOVE_BLOCKED_MSG =
+  'Cannot remove that suggestion from chat. Cards from automated Review are locked here—you must use **Accept** or **Revert** on the card in Suggested changes.\n\n无法在对话中删除该建议。Review 自动生成的条目请直接在左侧「Suggested changes」里对该卡片使用 Accept 或 Revert。';
+
+function reviewAssistantRemoveOutcomeMessage(succeeded, attempted) {
+  if (attempted <= 0) return '';
+  if (succeeded <= 0) return REVIEW_ASSISTANT_REMOVE_BLOCKED_MSG;
+  if (succeeded >= attempted) {
+    return attempted > 1
+      ? 'Removed. The suggestions have been deleted from the list.'
+      : 'Removed. The suggestion has been deleted from the list.';
+  }
+  return `Removed ${succeeded} of ${attempted}. The rest are from automated Review and cannot be removed from chat—use **Accept** or **Revert** on those cards.\n\n其余条目为 Review 自动生成，无法在对话中删除，请在对应卡片上使用 Accept 或 Revert。`;
 }
 
 /** Init Review assistant chat: uses default_review_credential_id from settings. */
@@ -1672,31 +1760,49 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
       const reviewSaved = typeof getReviewResult === 'function' ? getReviewResult() : null;
       const parsedSuggestions = parseAssistantSuggestions(rawContent, reviewSaved);
       const removeOps = parseAssistantRemoveSuggestions(rawContent);
+      const removeAttempted = removeOps.length > 0;
+      const removeOpsCount = removeOps.length;
       let displayContent = stripAssistantSuggestionBlocks(rawContent);
-      if (!displayContent || !displayContent.trim()) {
+
+      let dataRefinement = (reviewSaved && typeof reviewSaved === 'object')
+        ? (reviewSaved.data_refinement || []).slice()
+        : [];
+      let suggestions = (reviewSaved && typeof reviewSaved === 'object')
+        ? (reviewSaved.suggestions || []).slice()
+        : [];
+      let removeSucceeded = 0;
+      if (reviewSaved && typeof reviewSaved === 'object' && removeAttempted) {
+        const st = { data_refinement: dataRefinement, suggestions };
+        const idOps = removeOps.filter((o) => o.suggestion_id != null && o.suggestion_id !== '').map((o) => o.suggestion_id);
+        const indexOps = removeOps
+          .filter((o) => o.suggestion_index != null)
+          .map((o) => o.suggestion_index)
+          .sort((a, b) => b - a);
+        idOps.forEach((id) => {
+          if (removeSuggestionByIdFromState(st, id)) removeSucceeded += 1;
+        });
+        indexOps.forEach((n) => {
+          if (removeSuggestionByGlobalIndexFromState(st, n)) removeSucceeded += 1;
+        });
+        dataRefinement = st.data_refinement;
+        suggestions = st.suggestions;
+      }
+
+      if (removeAttempted && removeSucceeded === 0) {
+        displayContent = REVIEW_ASSISTANT_REMOVE_BLOCKED_MSG;
+      } else if (removeAttempted && removeSucceeded > 0 && removeSucceeded < removeOpsCount) {
+        displayContent = reviewAssistantRemoveOutcomeMessage(removeSucceeded, removeOpsCount);
+      } else if (!displayContent || !displayContent.trim()) {
         displayContent = parsedSuggestions.length > 0
           ? 'Added. Please check the Suggestions panel on the left and choose Accept or Revert.'
-          : removeOps.length > 0
-            ? removeOps.length > 1
-              ? 'Removed. The suggestions have been deleted from the list.'
-              : 'Removed. The suggestion has been deleted from the list.'
+          : removeAttempted && removeSucceeded === removeOpsCount
+            ? reviewAssistantRemoveOutcomeMessage(removeSucceeded, removeOpsCount)
             : '(No response)';
       }
+
       chatHistory.push({ role: 'assistant', content: displayContent });
       if (isModalOpen()) appendMessageWithTypewriter('assistant', displayContent);
       if (reviewSaved && typeof reviewSaved === 'object') {
-        let dataRefinement = (reviewSaved.data_refinement || []).slice();
-        let suggestions = (reviewSaved.suggestions || []).slice();
-        if (removeOps.length > 0) {
-          const st = { data_refinement: dataRefinement, suggestions };
-          const idOps = removeOps.filter((o) => o.suggestion_id).map((o) => o.suggestion_id);
-          const indexOps = removeOps
-            .filter((o) => o.suggestion_index != null)
-            .map((o) => o.suggestion_index)
-            .sort((a, b) => b - a);
-          idOps.forEach((id) => removeSuggestionByIdFromState(st, id));
-          indexOps.forEach((n) => removeSuggestionByGlobalIndexFromState(st, n));
-        }
         if (parsedSuggestions.length > 0) {
           const sections = reviewSaved.workingSections || reviewSaved.promptSections || [];
           const validSuggestions = parsedSuggestions.filter((s) => s.section_index >= 0 && s.section_index < sections.length);
