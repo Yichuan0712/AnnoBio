@@ -155,17 +155,22 @@ export function openRunDetailModal({
               <span class="dataset-meta-label run-detail-section-label">Map input dataset columns to prompt inputs</span>
               <div class="run-detail-mapping-wrap" id="run-detail-inputs-list"></div>
             </div>
-            <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="run-detail-llm-select">Model for prompt</label>
-              <select id="run-detail-llm-select" class="run-detail-llm-select dataset-meta-input" aria-label="Select model for prompt">
-                <option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>
-              </select>
+            <div class="dataset-meta-field run-detail-model-actions-field">
+              <div class="run-detail-llm-actions-row">
+                <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
+                <div class="run-detail-llm-actions-right">
+                  <div class="run-detail-llm-row">
+                    <label class="run-detail-label" for="run-detail-llm-select">Prompt Runner</label>
+                    <select id="run-detail-llm-select" class="run-detail-llm-select dataset-meta-input" aria-label="Select model for Prompt Runner">
+                      <option value="">${escapeHtml(selectPlaceholderLabel('Select Prompt Runner model'))}</option>
+                    </select>
+                  </div>
+                  <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
+                </div>
+              </div>
             </div>
           </div>
           <div class="prompt-form-error prompt-modal-error run-detail-form-error" id="run-detail-form-error" role="alert" aria-live="polite" hidden></div>
-          <div class="prompt-actions run-detail-actions">
-            <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
-          </div>
         </div>
         <div class="run-detail-preview-wrap">
           <h3 class="run-detail-preview-title">Results</h3>
@@ -671,7 +676,7 @@ export function openRunDetailModal({
   overlay.addEventListener('click', (e) => { if (!pickerEl.contains(e.target)) { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); } });
 
   (async () => {
-    llmSelectEl.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>`;
+    llmSelectEl.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select Prompt Runner model'))}</option>`;
     try {
       const [list, settings] = await Promise.all([
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),

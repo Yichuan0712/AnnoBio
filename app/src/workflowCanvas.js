@@ -3455,7 +3455,7 @@ export function buildWorkflowCanvas(root) {
           } catch (_) {}
         }
         if (!credentialId) {
-          alert('Please select a Reviewer model in the Score detail first, or add an API credential.');
+          alert('Please select a model for Prompt reviewer in the Score detail first, or add an API credential.');
           return;
         }
         await runReviewFromScore({

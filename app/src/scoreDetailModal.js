@@ -935,10 +935,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
                   <div class="score-detail-llm-row">
-                    <label class="run-detail-label" for="score-detail-llm-select">Reviewer model</label>
-                    <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select Reviewer model"></select>
+                    <label class="run-detail-label" for="score-detail-llm-select">Prompt reviewer</label>
+                    <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model for Prompt reviewer"></select>
                   </div>
-                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with selected Reviewer model">Review</button>
+                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with the selected Prompt reviewer model">Review</button>
                 </div>
               </div>
             </div>
@@ -1987,7 +1987,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
         fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
       ]);
-      llmSelect.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select reviewer model'))}</option>` + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
+      llmSelect.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select Prompt reviewer model'))}</option>` + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
       let credentialId = (node?.dataset?.reviewCredentialId || '').trim();
       if (!credentialId && settings) {
         const defaultId = (settings.default_review_credential_id || '').trim();
@@ -2035,7 +2035,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!scoreNodeId) return;
     const credentialId = (llmSelect?.value || '').trim();
     if (!credentialId) {
-      showAlert('Please select a Reviewer model first.', { title: 'No model selected' });
+      showAlert('Please select a model for Prompt reviewer first.', { title: 'No model selected' });
       return;
     }
     const payload = await Promise.resolve(getReviewPayload());

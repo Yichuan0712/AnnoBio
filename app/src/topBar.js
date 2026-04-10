@@ -7,10 +7,10 @@ import { openSettingsModal } from './settingsModal.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, openCredentialsModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, undo?: () => void, redo?: () => void, getCanUndo?: () => boolean, getCanRedo?: () => boolean }} options
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, undo?: () => void, redo?: () => void, getCanUndo?: () => boolean, getCanRedo?: () => boolean }} options
  * @returns {{ setAddMenuEnabled: (enabled: boolean) => void }}
  */
-export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openCredentialsModal, onNewProject, onOpenProject, onSaveAsProject, undo, redo, getCanUndo, getCanRedo }) {
+export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, undo, redo, getCanUndo, getCanRedo }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -94,13 +94,6 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   settingsBtn.textContent = 'Settings';
   const settingsDrop = document.createElement('div');
   settingsDrop.className = 'menu-dropdown';
-  const credentialsOpt = document.createElement('button');
-  credentialsOpt.type = 'button';
-  credentialsOpt.className = 'menu-option';
-  credentialsOpt.setAttribute('data-action', 'my-credentials');
-  credentialsOpt.textContent = 'My credentials...';
-  credentialsOpt.addEventListener('click', openCredentialsModal);
-  settingsDrop.appendChild(credentialsOpt);
   const runReviewDefaultsOpt = document.createElement('button');
   runReviewDefaultsOpt.type = 'button';
   runReviewDefaultsOpt.className = 'menu-option';

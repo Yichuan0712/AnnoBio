@@ -247,6 +247,458 @@
   overflow: hidden;
 }
 
+/* Model settings: same dual-column rhythm as review-detail-body / modal-body--dataset (gap 0, border split, pad inside cols) */
+
+.modal-body--defaults.modal-body--model-settings-combined {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+}
+
+.modal-body--model-settings-combined {
+  flex: 1;
+  min-height: 0;
+}
+
+.modal-panel--model-settings-combined .model-settings-preview-wrap--full {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-height: 0;
+  border: none;
+}
+
+/* Single grid: header cells share column tracks with body — vertical rule and widths cannot drift (flex row + separate row was misaligning) */
+.modal-panel--model-settings-combined .model-settings-columns {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(520px, 6fr) minmax(280px, 4fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "cred-head sett-head"
+    "cred-body sett-body";
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.modal-panel--model-settings-combined .model-settings-col-heading {
+  margin: 0;
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  background: var(--bg);
+  align-self: stretch;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-heading--credentials {
+  grid-area: cred-head;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-panel--model-settings-combined .model-settings-col-heading--settings {
+  grid-area: sett-head;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-panel--model-settings-combined .settings-credentials-tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-left {
+  grid-area: cred-body;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 20px 20px;
+  border-right: 1px solid var(--border);
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.modal-panel--model-settings-combined .model-settings-col-left .credentials-panel-host {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-right {
+  grid-area: sett-body;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 20px 20px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--bg);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/*
+ * Tabs change scrollability (New credential short vs Review long) → scrollbar toggles →
+ * content width “jumps”. Reserve gutter so form columns stay the same width.
+ */
+.modal-panel--model-settings-combined .defaults-page-scroll {
+  scrollbar-gutter: stable;
+  overflow-x: hidden;
+}
+
+.modal-panel--model-settings-combined .model-settings-preview-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-right .model-settings-main {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-right .model-settings-footer.prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-panel--model-settings-combined .model-settings-footer__save-restore {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* [hidden] must win over display:flex above, or Save + Restore stay visible on New credential tab */
+.modal-panel--model-settings-combined .model-settings-footer__save-restore[hidden],
+.modal-panel--model-settings-combined #settings-footer-add[hidden] {
+  display: none !important;
+}
+
+.modal-panel--model-settings-combined .model-settings-tab-row {
+  margin-bottom: 8px;
+}
+
+/* Credentials stack (embedded left column): subsection titles + table, no rounded “cards” */
+.credentials-panel-host {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.credentials-panel-host .credentials-panel-inner {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
+
+.credentials-panel-host .credentials-prompt-block--table {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.credentials-panel-host .credentials-prompt-block--table .credentials-table-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  box-sizing: border-box;
+  padding-bottom: 12px;
+}
+
+/* Add credential: flat block (no bg-bar “card” — same surface as tab body) */
+.modal-panel--model-settings-combined .model-settings-credentials-add {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-add-row {
+  display: grid;
+  /* Match .modal-panel--defaults .defaults-row (Runner / Reviewer) */
+  grid-template-columns: 1fr 1fr;
+  row-gap: 0.75rem;
+  column-gap: 1.5rem;
+  align-items: end;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-add-field--full-row {
+  grid-column: 1 / -1;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-add-field {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-select,
+.modal-panel--model-settings-combined .model-settings-credentials-add .dataset-meta-input {
+  height: 40px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-radius: var(--control-radius, 3px);
+}
+
+/* Selects: same padding on all three tabs (avoid dataset-meta-input vs credentials-select fighting) */
+.modal-panel--model-settings-combined .model-settings-credentials-add select.credentials-select,
+.modal-panel--model-settings-combined .model-settings-main .defaults-row select.credentials-select {
+  padding: 0 12px;
+  line-height: normal;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-model-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-model-custom-wrap {
+  display: none;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-model-custom-wrap.is-visible {
+  display: block;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-model-preset-wrap.is-hidden {
+  display: none;
+}
+
+.credentials-panel-host .credentials-name-cell,
+.credentials-panel-host .credentials-key-cell {
+  cursor: pointer;
+  vertical-align: middle;
+  position: relative;
+}
+
+/* Embedded table: override standalone credentials modal (min-width 280px on key forces horizontal scroll) */
+.credentials-panel-host .credentials-name-cell {
+  max-width: none;
+}
+
+.credentials-panel-host .credentials-key-cell {
+  min-width: 0;
+  max-width: none;
+}
+
+.credentials-panel-host .credentials-name-cell:has(.credentials-cell-edit-wrap),
+.credentials-panel-host .credentials-key-cell:has(.credentials-cell-edit-wrap) {
+  min-height: 2.5em;
+}
+
+.credentials-panel-host .credentials-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+/* Sticky thead must sit above tbody or first row text paints on top of “Name” etc. */
+.credentials-panel-host .credentials-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--hover);
+  background-clip: padding-box;
+  box-shadow: 0 1px 0 var(--border);
+  white-space: nowrap;
+}
+
+/* Percentages sum to 100% so the table always fills the scroll area (no empty strip on the right) */
+.credentials-panel-host .credentials-table th:nth-child(1),
+.credentials-panel-host .credentials-table td:nth-child(1) {
+  width: 14%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentials-panel-host .credentials-table th:nth-child(2),
+.credentials-panel-host .credentials-table td:nth-child(2) {
+  width: 13%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentials-panel-host .credentials-table th:nth-child(3),
+.credentials-panel-host .credentials-table td:nth-child(3) {
+  width: 35%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentials-panel-host .credentials-table th:nth-child(4),
+.credentials-panel-host .credentials-table td:nth-child(4) {
+  width: 10%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentials-panel-host .credentials-table th:nth-child(5),
+.credentials-panel-host .credentials-table td:nth-child(5) {
+  width: 28%;
+  min-width: 0;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* Keep <td> as table-cell; global .credentials-actions-cell { display:flex } breaks row height + wraps buttons */
+.credentials-panel-host .credentials-actions-cell {
+  display: table-cell;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+
+.credentials-panel-host .credentials-actions-inline {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.credentials-panel-host .credentials-cell-edit-wrap {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 4px);
+  padding: 2px 6px;
+}
+
+.credentials-panel-host .credentials-cell-edit-wrap input {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 0;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: 0;
+  font: inherit;
+  outline: none;
+}
+
+.credentials-panel-host .credentials-cell-key-wrap input {
+  font-size: 0.9em;
+  overflow-x: auto;
+}
+
+.credentials-panel-host .credentials-actions-inline .btn {
+  margin: 0;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.modal-panel--defaults .defaults-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  row-gap: 0.75rem;
+  column-gap: 1.5rem;
+  align-items: end;
+}
+
+.modal-panel--defaults .defaults-field--full {
+  grid-column: 1 / -1;
+}
+
+.modal-panel--defaults .defaults-field {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.modal-panel--defaults .model-settings-defaults-card .credentials-select,
+.modal-panel--defaults .model-settings-defaults-card .dataset-meta-input {
+  height: 40px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-radius: var(--control-radius, 3px);
+}
+
+.modal-panel--model-settings-combined .model-settings-main .defaults-row .credentials-select,
+.modal-panel--model-settings-combined .model-settings-main .defaults-row .dataset-meta-input {
+  height: 40px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-radius: var(--control-radius, 3px);
+}
+
 .model-settings-main {
   flex: 1 1 0;
   min-height: 0;
@@ -1791,6 +2243,13 @@
   line-height: 1.2;
 }
 
+/* Run / Score 详情：标签、下拉、主按钮的间距与下拉宽度（两处一致） */
+.modal-panel--run-detail,
+.modal-panel--score-detail {
+  --detail-llm-select-width: 165px;
+  --detail-llm-inline-gap: 12px;
+}
+
 /* Score detail modal: layout aligned with Run detail (main + preview-wrap) */
 .modal-panel--score-detail {
   width: min(400px, 92vw);
@@ -2315,7 +2774,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
+  gap: var(--detail-llm-inline-gap);
   margin-top: 8px;
   margin-bottom: 16px;
   padding-left: 0;
@@ -2327,19 +2786,25 @@
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--detail-llm-inline-gap);
   flex-shrink: 0;
 }
 
 .score-detail-llm-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--detail-llm-inline-gap);
   flex-shrink: 0;
 }
 
+/* Prompt Runner / Prompt reviewer：凭据下拉统一宽度 */
+.run-detail-llm-actions-row .run-detail-llm-select,
 .score-detail-llm-row .score-detail-llm-select {
-  min-width: 180px;
+  width: var(--detail-llm-select-width);
+  min-width: min(var(--detail-llm-select-width), 100%);
+  max-width: 100%;
+  box-sizing: border-box;
+  flex: 0 0 auto;
 }
 
 /* Review detail modal: 与 Prompt 详情高度一致（height / min-height / max-height 同 .modal-panel--prompt-detail） */
@@ -3009,6 +3474,9 @@
 .review-detail-suggestion-card__actions .review-detail-accept-btn {
   font-size: 12px;
   padding: 4px 10px;
+  min-width: 5.25rem;
+  box-sizing: border-box;
+  text-align: center;
   background: var(--diff-added-bg) !important;
   color: var(--diff-added-text) !important;
   border-color: var(--diff-added-text, currentColor) !important;
@@ -3137,7 +3605,7 @@
   border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
 }
 
-/* Reviewer model 选择框与 Review 按钮同高 */
+/* Prompt reviewer 选择框与 Review 按钮同高 */
 .score-detail-llm-row .score-detail-llm-select {
   height: 36px;
   min-height: 36px;
@@ -3779,11 +4247,50 @@
   flex-shrink: 0;
   margin: 0 0 8px 0;
 }
-.run-detail-main .prompt-actions.run-detail-actions {
+
+/* Prompt Runner：左侧伸缩占位 + 右侧组（模型行 + 按钮），与 Score footer-right 同构；下拉与按钮仅 gap */
+.run-detail-model-actions-field {
+  gap: 0;
+}
+
+.run-detail-llm-actions-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.run-detail-llm-actions-row .run-detail-llm-actions-lead {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 1px;
+  align-self: stretch;
+  pointer-events: none;
+}
+
+.run-detail-llm-actions-right {
+  display: flex;
+  align-items: center;
+  gap: var(--detail-llm-inline-gap);
   flex-shrink: 0;
-  padding: 12px 0 0 0;
-  margin-top: auto;
-  justify-content: flex-end;
+}
+
+.run-detail-llm-actions-right > .run-detail-llm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--detail-llm-inline-gap);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.run-detail-llm-actions-row .run-detail-label {
+  flex-shrink: 0;
+}
+
+.run-detail-llm-actions-row .run-detail-run-btn {
+  flex-shrink: 0;
 }
 
 /* 未展开时隐藏右半部分（与 add prompt step1 的 prompt-preview-wrap 一致） */
