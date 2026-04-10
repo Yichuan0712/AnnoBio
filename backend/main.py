@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import os
 import re
 import sys
 import threading
@@ -8,19 +9,28 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, List, Optional
 
+# Ensure UTF-8 for subprocess / CLI starts (Electron also sets PYTHONUTF8 when spawning).
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+# Prefer UTF-8 for stdio on Windows so prompts with U+2011 etc. do not raise on print().
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (OSError, ValueError, AttributeError):
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (OSError, ValueError, AttributeError):
+        pass
+
+from safe_stdio import safe_print as _safe_print
+
 # ANSI codes for terminal highlight (all yellow; supported on Windows 10+ and Unix)
 _HL = "\033[1;33m"   # bold yellow
 _R = "\033[0m"       # reset
 _SEP = "=" * 60      # unified separator for LLM prompt/output logs
-
-
-def _safe_print(s: str) -> None:
-    """Print to stdout without UnicodeEncodeError on Windows (GBK console)."""
-    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
-    try:
-        print(s)
-    except UnicodeEncodeError:
-        sys.stdout.write((s + "\n").encode(enc, errors="replace").decode(enc))
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +48,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _reconfigure_stdio_after_uvicorn() -> None:
+    """Uvicorn may install StreamHandlers before our module-level reconfigure; fix Windows GBK consoles."""
+    import logging
+
+    def _recfg(stream) -> None:
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError, AttributeError):
+                pass
+
+    _recfg(sys.stdout)
+    _recfg(sys.stderr)
+    for log_name in ("uvicorn", "uvicorn.error", "uvicorn.access", ""):
+        for handler in logging.getLogger(log_name).handlers:
+            if isinstance(handler, logging.StreamHandler):
+                _recfg(handler.stream)
+
 
 # Credential storage path (not committed to git)
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -89,8 +120,8 @@ ALLOWED_PROVIDERS = {p["id"] for p in PROVIDERS}
 
 def _log_backend_version():
     """Print on startup to confirm this file is loaded."""
-    print(f"[backend] main.py loaded from: {Path(__file__).resolve()}")
-    print(f"[backend] MODELS={len(MODELS)}, PROVIDERS={len(PROVIDERS)}")
+    _safe_print(f"[backend] main.py loaded from: {Path(__file__).resolve()}")
+    _safe_print(f"[backend] MODELS={len(MODELS)}, PROVIDERS={len(PROVIDERS)}")
 
 
 _log_backend_version()
@@ -650,7 +681,7 @@ def _persist_run_jobs() -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         RUN_JOBS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except (OSError, TypeError) as e:
-        print(f"[Run] persist failed: {e}", file=sys.stderr)
+        _safe_print(f"[Run] persist failed: {e}", file=sys.stderr)
 
 
 def _load_run_jobs() -> None:
@@ -669,7 +700,7 @@ def _load_run_jobs() -> None:
             _run_jobs_by_node.update(by_node)
             _run_last_activity.clear()
     except (OSError, json.JSONDecodeError) as e:
-        print(f"[Run] load persisted jobs failed: {e}", file=sys.stderr)
+        _safe_print(f"[Run] load persisted jobs failed: {e}", file=sys.stderr)
 
 
 _load_run_jobs()

@@ -3478,8 +3478,89 @@
 }
 
 .review-detail-suggestion-card__actions .review-detail-test-btn {
+  font-family: inherit;
   font-size: 12px;
-  padding: 4px 10px;
+  padding: 3px 4px;
+  width: 4.1rem;
+  min-width: 4.1rem;
+  max-width: 4.1rem;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+/* No pass/fail yet: hide icon column so "Verify" is centered in the fixed width */
+.review-detail-suggestion-card__actions
+  .review-detail-test-btn:not(.review-detail-test-btn--passed):not(.review-detail-test-btn--failed)
+  .review-detail-test-btn__icon-slot {
+  display: none;
+}
+
+/* Single slot: tick and cross overlap so button width stays fixed */
+.review-detail-suggestion-card__actions .review-detail-test-btn__icon-slot {
+  position: relative;
+  width: 0.65em;
+  height: 1em;
+  flex-shrink: 0;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn__tick,
+.review-detail-suggestion-card__actions .review-detail-test-btn__cross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn--passed .review-detail-test-btn__tick {
+  opacity: 1;
+  color: var(--diff-added-text, #16a34a);
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__cross {
+  opacity: 1;
+  color: var(--diff-removed-text, #dc2626);
+}
+
+/* Fail: label is "Verify×"; hide separate icon slot to avoid double × */
+.review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__icon-slot {
+  display: none;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__label {
+  color: var(--diff-removed-text, #dc2626);
+  font-weight: 700;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn__label {
+  flex: 0 0 auto;
+  text-align: center;
+}
+
+/* After pass/fail, button stays visually distinct (browser default disabled would gray it out). */
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--locked:disabled {
+  opacity: 1;
+  cursor: default;
+  filter: none;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--locked.review-detail-test-btn--passed:disabled {
+  color: var(--diff-added-text, #16a34a);
+  border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--locked.review-detail-test-btn--failed:disabled {
+  color: var(--diff-removed-text, #dc2626);
+  border-color: color-mix(in srgb, var(--diff-removed-text, #dc2626) 55%, var(--border));
 }
 
 .review-detail-suggestion-card__actions .review-detail-tune-btn {
@@ -3488,10 +3569,10 @@
 }
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn {
-  font-size: 12px;
-  padding: 3px 8px;
+  font-size: 11px;
+  padding: 3px 6px;
   /* Same width whether label is "Accept" or "Revert" (Revert is the wider of the two). */
-  min-width: 4.5rem;
+  min-width: 3.65rem;
   white-space: nowrap;
   box-sizing: border-box;
   text-align: center;

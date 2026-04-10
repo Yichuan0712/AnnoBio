@@ -6,6 +6,7 @@
 
 import { showConfirm, showAlert } from './alertModal.js';
 import { comparisonRowIsMatched } from './scoreDetailModal.js';
+import { runSuggestionRowTests } from './reviewSuggestionTest.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import {
   ensureReviewResultIds,
@@ -89,10 +90,26 @@ function suggestionTargetInputRowIndices(sug) {
   return [...new Set(raw.map((x) => Number(x)).filter((x) => !Number.isNaN(x) && x >= 0))].sort((a, b) => a - b);
 }
 
-/** Comma-separated Input # labels (1-based) for card copy. */
-function formatSuggestionInputNumbersLabel(zeroBasedIndices) {
-  if (!Array.isArray(zeroBasedIndices) || zeroBasedIndices.length === 0) return '';
-  return zeroBasedIndices.map((x) => formatRunRowIndexForDisplay(x)).join(', ');
+/** 1-based Score table position from saved comparison row when `score_table_row` is set. */
+function scoreTableRowNumberForComparisonIndex(comparisonRows, rowIndex) {
+  const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
+  const r = rows.find((x) => Number(x?.row_index) === Number(rowIndex));
+  const n = r && r.score_table_row != null ? Number(r.score_table_row) : NaN;
+  if (Number.isFinite(n) && n >= 1) return n;
+  return null;
+}
+
+/**
+ * Labels like "#1, #2" for target comparison `row_index` values (uses `score_table_row` when present).
+ */
+function formatScoreTableTargetLabels(comparisonRows, zeroBasedRowIndices) {
+  if (!Array.isArray(zeroBasedRowIndices) || zeroBasedRowIndices.length === 0) return '';
+  return zeroBasedRowIndices
+    .map((idx) => {
+      const t = scoreTableRowNumberForComparisonIndex(comparisonRows, idx);
+      return t != null ? `#${t}` : `(row_index ${idx})`;
+    })
+    .join(', ');
 }
 
 /** Turn snake_case category hints into a short phrase (not a “variable”). */
@@ -166,25 +183,15 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
   const rough = (diagnostic.rough_modification_opinion || '').trim();
   const cardTitle = (diagnostic.card_title || '').trim();
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
-  const findComp = (idx) => rows.find((r) => Number(r?.row_index) === Number(idx));
-  const scoreTableNumFor = (idx) => {
-    const r = findComp(idx);
-    const n = r && r.score_table_row != null ? Number(r.score_table_row) : NaN;
-    if (Number.isFinite(n) && n >= 1) return n;
-    return null;
-  };
   const multiIdx = Array.isArray(diagnostic.row_indices) && diagnostic.row_indices.length > 1
     ? diagnostic.row_indices
     : null;
   const sourceLine = multiIdx
-    ? `Score table rows ${multiIdx.map((idx) => {
-      const t = scoreTableNumFor(idx);
-      return t != null ? String(t) : `(row_index ${idx})`;
-    }).join(', ')} (same input, multiple outputs)`
+    ? `Score table ${formatScoreTableTargetLabels(rows, multiIdx)} (same input, multiple outputs)`
     : (() => {
-      const t = scoreTableNumFor(diagnostic.row_index);
+      const t = scoreTableRowNumberForComparisonIndex(rows, diagnostic.row_index);
       return t != null
-        ? `Score table row ${t}`
+        ? `Score table #${t}`
         : `Score comparison (row_index ${diagnostic.row_index})`;
     })();
 
@@ -231,7 +238,7 @@ const SUGGESTION_CARD_PREVIEW_REASON_CHARS = 220;
 /**
  * Full text for a prompt-edit suggestion (what the edit responds to in review + note; diff on prompt hover / Accept).
  * @param {Record<string, unknown>} sug
- * @param {{ titleLine: string }} meta
+ * @param {{ titleLine: string, comparisonRows?: Array<Record<string, unknown>> }} meta
  */
 function openPromptEditSuggestionDetailOverlay(sug, meta) {
   const heading = String(meta.titleLine || '').trim() || 'Suggestion';
@@ -240,16 +247,16 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
     : [];
   const reason = String(sug.reason || '').trim();
   const inputIdx = suggestionTargetInputRowIndices(sug);
-  const inputNums = formatSuggestionInputNumbersLabel(inputIdx);
-  const respondsToLead =
-    inputNums !== ''
-      ? inputIdx.length === 1
-        ? `Responds to input # ${inputNums}:`
-        : `Responds to inputs # ${inputNums}:`
-      : 'Responds to:';
+  const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
+  const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
+  const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
+  const respondsToHead =
+    scorePhrase !== ''
+      ? `<span class="review-diagnosis-detail-lead">Respond to:</span> ${escapeHtml(scorePhrase)}`
+      : `<span class="review-diagnosis-detail-lead">Respond to:</span>`;
   const respondsToHtml = p1.length
-    ? `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">${escapeHtml(respondsToLead)}</span></p><ul class="review-suggestion-detail-list">${p1.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
-    : `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">${escapeHtml(respondsToLead)}</span> <span class="review-diagnosis-detail-empty">(none)</span></p>`;
+    ? `<p class="review-diagnosis-detail-prose">${respondsToHead}</p><ul class="review-suggestion-detail-list">${p1.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+    : `<p class="review-diagnosis-detail-prose">${respondsToHead} <span class="review-diagnosis-detail-empty">(none)</span></p>`;
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay review-suggestion-detail-overlay';
@@ -385,6 +392,56 @@ function rebuildWorkingFromApplied(originals, suggestions) {
     }
   }
   return sections;
+}
+
+/** @returns {'pass'|'fail'|null} */
+function getSuggestionTestOutcome(sug) {
+  if (!sug || typeof sug !== 'object') return null;
+  const r = sug.review_test_result;
+  if (r === 'pass' || r === 'fail') return r;
+  if (sug.review_test_passed === true) return 'pass';
+  return null;
+}
+
+function clearSuggestionTestOutcome(sug) {
+  if (!sug || typeof sug !== 'object') return;
+  delete sug.review_test_result;
+  delete sug.review_test_passed;
+  delete sug.review_test_in_progress;
+}
+
+/** True if any suggestion had review_test_in_progress (app killed mid-test); clears flag + test outcome. */
+function stripAbortedReviewTests(suggestions) {
+  if (!Array.isArray(suggestions)) return false;
+  let changed = false;
+  for (const s of suggestions) {
+    if (!s || typeof s !== 'object') continue;
+    if (s.review_test_in_progress === true) {
+      delete s.review_test_in_progress;
+      delete s.review_test_result;
+      delete s.review_test_passed;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function updateSuggestionTestOutcomeVisual(card, sug) {
+  const btn = card.querySelector('.review-detail-test-btn');
+  if (!btn) return;
+  const o = getSuggestionTestOutcome(sug);
+  btn.classList.toggle('review-detail-test-btn--passed', o === 'pass');
+  btn.classList.toggle('review-detail-test-btn--failed', o === 'fail');
+  const labelEl = btn.querySelector('.review-detail-test-btn__label');
+  if (labelEl) {
+    labelEl.textContent = o === 'fail' ? 'Verify×' : 'Verify';
+  }
+  const locked = o === 'pass' || o === 'fail';
+  btn.disabled = locked;
+  btn.classList.toggle('review-detail-test-btn--locked', locked);
+  btn.title = locked
+    ? 'Verification finished; result is fixed for this suggestion.'
+    : 'Re-run with this suggestion applied and check Score rules; pass shows \u2713, fail shows Verify\u00d7 on the button (no popup).';
 }
 
 function sectionsToFullText(sections) {
@@ -702,6 +759,10 @@ function buildReviewResultUI(overlay, options) {
     onReviewResultChange(next);
   }
 
+  if (stripAbortedReviewTests(allSuggestions) && typeof onReviewResultChange === 'function') {
+    persistWorking();
+  }
+
   /** Recompute working from originals by applying every suggestion that has .applied === true (in order). */
   function syncWorkingFromApplied() {
     const next = rebuildWorkingFromApplied(originals, allSuggestions);
@@ -931,11 +992,19 @@ function buildReviewResultUI(overlay, options) {
     const detailsBtnHtml =
       '<button type="button" class="btn btn-secondary review-detail-diagnosis-detail-btn">View detail</button>';
     const acceptBtnHtml = !noButton ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>' : '';
+    const testOutcome = getSuggestionTestOutcome(sug);
+    const testBtnExtra =
+      testOutcome === 'pass' ? ' review-detail-test-btn--passed' : testOutcome === 'fail' ? ' review-detail-test-btn--failed' : '';
+    const testBtnLabel = testOutcome === 'fail' ? 'Verify×' : 'Verify';
+    const verifyLocked = testOutcome === 'pass' || testOutcome === 'fail';
+    const testBtnTitle = verifyLocked
+      ? 'Verification finished; result is fixed for this suggestion.'
+      : 'Re-run with this suggestion applied and check Score rules; pass shows \u2713, fail shows Verify\u00d7 on the button (no popup).';
     const testBtnHtml = !noButton
-      ? '<button type="button" class="btn btn-secondary review-detail-test-btn" disabled title="Coming soon">Test</button>'
+      ? `<button type="button" class="btn btn-secondary review-detail-test-btn${testBtnExtra}${verifyLocked ? ' review-detail-test-btn--locked' : ''}" title="${escapeHtml(testBtnTitle)}"${verifyLocked ? ' disabled' : ''}><span class="review-detail-test-btn__label">${testBtnLabel}</span><span class="review-detail-test-btn__icon-slot" aria-hidden="true"><span class="review-detail-test-btn__tick">\u2713</span><span class="review-detail-test-btn__cross">\u2717</span></span></button>`
       : '';
     const refineBtnHtml = !noButton
-      ? '<button type="button" class="btn btn-secondary review-detail-tune-btn" disabled title="Bayesian optimization · coming soon">Tune</button>'
+      ? '<button type="button" class="btn btn-secondary review-detail-tune-btn" disabled title="Bayesian optimization · coming soon">Finetune</button>'
       : '';
     const actionsHtml = `${detailsBtnHtml}${testBtnHtml ? ` ${testBtnHtml}` : ''}${refineBtnHtml ? ` ${refineBtnHtml}` : ''}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
 
@@ -960,7 +1029,10 @@ function buildReviewResultUI(overlay, options) {
       detailBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        openPromptEditSuggestionDetailOverlay(sug, { titleLine });
+        openPromptEditSuggestionDetailOverlay(sug, {
+          titleLine,
+          comparisonRows: Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [],
+        });
       });
     }
 
@@ -1004,12 +1076,92 @@ function buildReviewResultUI(overlay, options) {
         e.preventDefault();
         e.stopPropagation();
         if (secIdx < 0 || secIdx >= working.length) return;
-        sug.applied = sug.applied !== true;
+        const wasApplied = sug.applied === true;
+        sug.applied = !wasApplied;
+        /* Verify outcome (pass/fail) stays fixed after verification; Accept/Revert does not clear it. */
         syncWorkingFromApplied();
         updateAcceptButtonLabels();
+        updateSuggestionTestOutcomeVisual(card, sug);
         renderLeft(-1);
         persistWorking();
       });
+
+      const testBtn = card.querySelector('.review-detail-test-btn');
+      if (testBtn && typeof getPayload === 'function') {
+        testBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (getSuggestionTestOutcome(sug) === 'pass' || getSuggestionTestOutcome(sug) === 'fail') {
+            return;
+          }
+          if (isReviewStreamingNow()) {
+            showAlert('Wait until the review finishes before running verification.', { title: 'Review in progress' });
+            return;
+          }
+          const targets = suggestionTargetInputRowIndices(sug);
+          if (targets.length === 0) {
+            showAlert('This suggestion has no target input rows to verify.', { title: 'Cannot verify' });
+            return;
+          }
+          testBtn.disabled = true;
+          const labelEl = testBtn.querySelector('.review-detail-test-btn__label');
+          if (labelEl) labelEl.textContent = 'Verifying';
+          try {
+            const payload = await getPayload();
+            if (!payload || !payload.run_credential_id) {
+              showAlert('Configure a Run credential on the Run node, then try again.', { title: 'Missing credential' });
+              return;
+            }
+            if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
+              showAlert('The prompt needs an output schema (Run / prompt settings) to verify.', { title: 'Missing output schema' });
+              return;
+            }
+            const patched = allSuggestions.map((s, i) => ({
+              ...s,
+              applied: i === sugIdx ? true : s.applied === true,
+            }));
+            const testSections = rebuildWorkingFromApplied(originals, patched);
+            if (!testSections || testSections.length !== originals.length) {
+              showAlert('Could not build prompt with this suggestion applied.', { title: 'Verify failed' });
+              return;
+            }
+            const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
+            const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
+            sug.review_test_in_progress = true;
+            persistWorking();
+            const result = await runSuggestionRowTests({
+              apiBase: API_BASE,
+              credentialId: payload.run_credential_id,
+              testSections,
+              targetComparisonRowIndices: targets,
+              comparisonRows: payload.comparison_rows || [],
+              runResults: payload.run_results || [],
+              outputFields: payload.output_fields || [],
+              outputSchema: payload.output_schema,
+              scoreMappingJson: payload.score_mapping || '[]',
+              runWs: runWs || { headers: [], rows: [] },
+              gtContent: gtContent || { headers: [], rows: [] },
+            });
+            if (result.ok) {
+              sug.review_test_result = 'pass';
+              delete sug.review_test_passed;
+              updateSuggestionTestOutcomeVisual(card, sug);
+            } else {
+              sug.review_test_result = 'fail';
+              delete sug.review_test_passed;
+              updateSuggestionTestOutcomeVisual(card, sug);
+            }
+          } catch (err) {
+            sug.review_test_result = 'fail';
+            delete sug.review_test_passed;
+            updateSuggestionTestOutcomeVisual(card, sug);
+          } finally {
+            delete sug.review_test_in_progress;
+            updateSuggestionTestOutcomeVisual(card, sug);
+            persistWorking();
+          }
+        });
+      }
     }
 
     editContainer.appendChild(card);
@@ -1224,7 +1376,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
             <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-detail-panel-analysis" id="review-detail-tab-analysis" data-tab="analysis">Issue analysis</button>
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-suggestions" id="review-detail-tab-suggestions" data-tab="suggestions">Suggested changes</button>
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-optimization" id="review-detail-tab-optimization" data-tab="optimization" title="Bayesian optimization · coming soon">Bayesian tune</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-optimization" id="review-detail-tab-optimization" data-tab="optimization" title="Bayesian optimization · coming soon">Bayesian finetune</button>
             </div>
           </div>
           <div class="review-detail-preview-content">
@@ -1238,7 +1390,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
                 <div class="review-detail-suggestions-footer" id="review-detail-suggestions-footer"></div>
               </div>
               <div class="review-detail-tab-panel" id="review-detail-panel-optimization" role="tabpanel" aria-labelledby="review-detail-tab-optimization" data-panel="optimization">
-                <p class="review-detail-placeholder">Bayesian tuning — coming soon.</p>
+                <p class="review-detail-placeholder">Bayesian finetuning — coming soon.</p>
               </div>
             </div>
           </div>
@@ -1477,8 +1629,8 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
         : [];
       if (p1s.length) lines.push(`   Responds to: ${p1s.join(' · ')}`);
       const tIdx = suggestionTargetInputRowIndices(s);
-      const tLbl = formatSuggestionInputNumbersLabel(tIdx);
-      if (tLbl) lines.push(`   Target input# (UI): ${tLbl}`);
+      const tLbl = formatScoreTableTargetLabels(comparisonRows, tIdx);
+      if (tLbl) lines.push(`   Score table ${tLbl}`);
       lines.push(`   Reason: ${(s.reason || '').trim()}`);
     });
     lines.push('');
@@ -1494,7 +1646,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('[/ASSISTANT_SUGGESTION]');
   lines.push('When adding suggestions, also write a brief comment (e.g. what you changed or why it helps). The user will see this instead of a generic message. If you omit the comment, we show "Added. Please check the Suggestions panel on the left and choose Accept or Revert."');
   lines.push(
-    'Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **0-based comparison row_index** for every input row this edit addresses (same numbering as Run/Review; UI **Input #** = index + 1). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
+    'Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **0-based comparison row_index** for every input row this edit addresses (same as Run/Review). The UI labels those rows **Score table #N** using `score_table_row` when present. Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
   );
   lines.push('');
   lines.push('## Removing suggestions');
@@ -1978,7 +2130,7 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
             <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-result-panel-analysis" id="review-result-tab-analysis" data-tab="analysis">Issue analysis</button>
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-suggestions" id="review-result-tab-suggestions" data-tab="suggestions">Suggested changes</button>
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-optimization" id="review-result-tab-optimization" data-tab="optimization" title="Bayesian optimization · coming soon">Bayesian tune</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-optimization" id="review-result-tab-optimization" data-tab="optimization" title="Bayesian optimization · coming soon">Bayesian finetune</button>
             </div>
           </div>
           <div class="review-detail-preview-content">
@@ -1992,7 +2144,7 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
                 <div class="review-detail-suggestions-footer" id="review-result-suggestions-footer"></div>
               </div>
               <div class="review-detail-tab-panel" id="review-result-panel-optimization" role="tabpanel" aria-labelledby="review-result-tab-optimization" data-panel="optimization">
-                <p class="review-detail-placeholder">Bayesian tuning — coming soon.</p>
+                <p class="review-detail-placeholder">Bayesian finetuning — coming soon.</p>
               </div>
             </div>
           </div>

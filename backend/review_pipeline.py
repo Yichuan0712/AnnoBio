@@ -18,6 +18,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, Field
 
 from llm import run_structured as llm_run_structured
+from safe_stdio import safe_print
 
 logger = logging.getLogger(__name__)
 
@@ -300,8 +301,9 @@ def _build_phase2_modifications_prompt(*, prompt_text: str, opinions_text: str, 
 **Hard rule:** Every `prompt_edit` you output **must** directly fix something **Phase 1 already identified** in **section 3** (issue_summary, rough_modification_opinion, category hint, or the same row’s diagnosis). **Do not** output an edit whose only justification is generic “better prompt” or “clarity”—if you cannot point to **which sentence of section 3** it answers, **omit** that edit.
 
 - **Section 3** is the **sole** source of problems to fix. Do **not** redesign the prompt, add unrelated polish, or address failures Phase 1 did not mention.
+- **One problem → one edit (default):** Usually output **one** `prompt_edit` per **distinct** Phase‑1 failure or fix strategy. **Only merge** when several Phase‑1 notes are **the same underlying issue** (same root cause / same failure mode across rows, e.g. all “drops required field X” or all “ignores the same constraint”) so that **one** localized change fixes **that whole class**. Do **not** pack unrelated issues into a single edit, and do **not** split one real fix into many cosmetic micro-edits.
 - **Coverage:** Taken together, your edits **must** resolve **all** distinct failures Phase 1 calls out for the failed input group(s) in section 3, **unless** the prompt literally has no place to apply a fix (then output fewer edits and let `reason` state the gap—still no generic-only edits).
-- Each `prompt_edit` is a **minimal** change: prefer one sentence / bullet / clause. More edits **only** when Phase 1 clearly names several separate fixes.
+- Each `prompt_edit` is a **minimal** change: prefer one sentence / bullet / clause. Add **more** edits only when Phase 1 clearly implies **several separate** problems or **different** change strategies—not to mirror bullet count one-for-one when bullets repeat the same theme.
 - **Smallest effective diff wins**; do **not** split one fix into many micro-edits.
 - **Extraction / coverage:** tighten only as much as Phase 1 implies—no long new rubrics unless section 3 asks for that scope.
 
@@ -335,7 +337,7 @@ Each edit in `prompt_edits` **must** include:
 
 Other rules:
 
-1. **Count:** **Minimum** edits that still **fully** cover Phase 1’s problems in section 3. No padding.
+1. **Count:** **Minimum** edits that still **fully** cover Phase 1’s problems in section 3—typically **one edit per distinct issue**, except when multiple findings are **one thematic class** (see “One problem → one edit” above). No padding.
 2. **old_sentence:** **Character-for-character** from **section 2** (one contiguous substring).
 3. **new_sentence:** Replaces `old_sentence`; **""** = deletion.
 4. **section_index:** Section in **section 2** where `old_sentence` appears.
@@ -421,7 +423,7 @@ def _analyze_input_group(
             if not _row_to_dict(r).get("matched", False)
         }
     )
-    print(
+    safe_print(
         "\n"
         + "=" * 80
         + "\nREVIEW PHASE 1 PROMPT"
@@ -595,7 +597,7 @@ def run_review_pipeline(
         sections=sections,
     )
     logger.info("Review phase 2 (modifications) prompt length: %s chars", len(mod_prompt))
-    print(
+    safe_print(
         "\n"
         + "=" * 80
         + "\nREVIEW PHASE 2 PROMPT"
