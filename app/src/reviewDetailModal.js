@@ -81,6 +81,20 @@ function formatRunRowIndexForDisplay(zeroBased) {
   return String(n + 1);
 }
 
+/** 0-based comparison indices for which input rows a prompt-edit suggestion targets (`target_input_row_indices` or legacy `row_indices`). */
+function suggestionTargetInputRowIndices(sug) {
+  if (!sug || typeof sug !== 'object') return [];
+  const raw = sug.target_input_row_indices ?? sug.row_indices;
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map((x) => Number(x)).filter((x) => !Number.isNaN(x) && x >= 0))].sort((a, b) => a - b);
+}
+
+/** Comma-separated Input # labels (1-based) for card copy. */
+function formatSuggestionInputNumbersLabel(zeroBasedIndices) {
+  if (!Array.isArray(zeroBasedIndices) || zeroBasedIndices.length === 0) return '';
+  return zeroBasedIndices.map((x) => formatRunRowIndexForDisplay(x)).join(', ');
+}
+
 /** Turn snake_case category hints into a short phrase (not a “variable”). */
 function humanizeSnakeCaseHint(hint) {
   const h = String(hint || '').trim();
@@ -215,20 +229,27 @@ const SUGGESTION_CARD_PREVIEW_TITLE_CHARS = 100;
 const SUGGESTION_CARD_PREVIEW_REASON_CHARS = 220;
 
 /**
- * Full text for a prompt-edit suggestion (addresses + note only; diff stays on prompt hover / Accept).
+ * Full text for a prompt-edit suggestion (what the edit responds to in review + note; diff on prompt hover / Accept).
  * @param {Record<string, unknown>} sug
- * @param {{ sectionLabel: string, titleLine: string }} meta
+ * @param {{ titleLine: string }} meta
  */
 function openPromptEditSuggestionDetailOverlay(sug, meta) {
-  const sectionLabel = String(meta.sectionLabel || '').trim() || '—';
   const heading = String(meta.titleLine || '').trim() || 'Suggestion';
   const p1 = Array.isArray(sug.phase1_addresses)
     ? sug.phase1_addresses.map((x) => String(x || '').trim()).filter(Boolean)
     : [];
   const reason = String(sug.reason || '').trim();
-  const addressesHtml = p1.length
-    ? `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Addresses:</span></p><ul class="review-suggestion-detail-list">${p1.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
-    : '<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Addresses:</span> <span class="review-diagnosis-detail-empty">(none)</span></p>';
+  const inputIdx = suggestionTargetInputRowIndices(sug);
+  const inputNums = formatSuggestionInputNumbersLabel(inputIdx);
+  const respondsToLead =
+    inputNums !== ''
+      ? inputIdx.length === 1
+        ? `Responds to input # ${inputNums}:`
+        : `Responds to inputs # ${inputNums}:`
+      : 'Responds to:';
+  const respondsToHtml = p1.length
+    ? `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">${escapeHtml(respondsToLead)}</span></p><ul class="review-suggestion-detail-list">${p1.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+    : `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">${escapeHtml(respondsToLead)}</span> <span class="review-diagnosis-detail-empty">(none)</span></p>`;
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay review-suggestion-detail-overlay';
@@ -241,8 +262,7 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body review-diagnosis-detail-body">
-        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Section:</span> ${escapeHtml(sectionLabel)}</p>
-        ${addressesHtml}
+        ${respondsToHtml}
         <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Note:</span> ${reason ? escapeHtml(reason) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
       </div>
     </div>
@@ -940,7 +960,7 @@ function buildReviewResultUI(overlay, options) {
       detailBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        openPromptEditSuggestionDetailOverlay(sug, { sectionLabel: name, titleLine });
+        openPromptEditSuggestionDetailOverlay(sug, { titleLine });
       });
     }
 
@@ -1455,7 +1475,10 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
       const p1s = Array.isArray(s.phase1_addresses)
         ? s.phase1_addresses.map((x) => String(x || '').trim()).filter(Boolean)
         : [];
-      if (p1s.length) lines.push(`   Addresses: ${p1s.join(' · ')}`);
+      if (p1s.length) lines.push(`   Responds to: ${p1s.join(' · ')}`);
+      const tIdx = suggestionTargetInputRowIndices(s);
+      const tLbl = formatSuggestionInputNumbersLabel(tIdx);
+      if (tLbl) lines.push(`   Target input# (UI): ${tLbl}`);
       lines.push(`   Reason: ${(s.reason || '').trim()}`);
     });
     lines.push('');
@@ -1465,10 +1488,14 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('Do NOT add suggestions when the user is only asking a question, seeking clarification, or discussing. Just answer in text. Only use [ASSISTANT_SUGGESTION] when the user explicitly asks you to make a change, add a suggestion, or edit the prompt.');
   lines.push('When you decide to suggest a concrete edit, include one or more blocks in this exact format:');
   lines.push('[ASSISTANT_SUGGESTION]');
-  lines.push('{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "reason": "why", "name": "Short title"}');
+  lines.push(
+    '{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "reason": "why", "name": "Short title", "target_input_row_indices": [0]}',
+  );
   lines.push('[/ASSISTANT_SUGGESTION]');
   lines.push('When adding suggestions, also write a brief comment (e.g. what you changed or why it helps). The user will see this instead of a generic message. If you omit the comment, we show "Added. Please check the Suggestions panel on the left and choose Accept or Revert."');
-  lines.push('Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.');
+  lines.push(
+    'Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **0-based comparison row_index** for every input row this edit addresses (same numbering as Run/Review; UI **Input #** = index + 1). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
+  );
   lines.push('');
   lines.push('## Removing suggestions');
   lines.push('When the user asks to DELETE or REMOVE **assistant-added** cards only: use [ASSISTANT_REMOVE_SUGGESTION]. Do NOT use [ASSISTANT_SUGGESTION] for list removal.');
@@ -1492,6 +1519,11 @@ function parseAssistantSuggestions(text, dataRoot) {
     try {
       const obj = JSON.parse(m[1].trim());
       if (obj && typeof obj.section_index === 'number') {
+        const ri = suggestionTargetInputRowIndices({
+          target_input_row_indices: obj.target_input_row_indices,
+          row_indices: obj.row_indices,
+        });
+        if (ri.length === 0) continue;
         blocks.push(
           ensureSuggestionObjectId(
             {
@@ -1500,6 +1532,8 @@ function parseAssistantSuggestions(text, dataRoot) {
               new_sentence: String(obj.new_sentence || '').trim(),
               reason: String(obj.reason || '').trim(),
               name: String(obj.name || '').trim(),
+              target_input_row_indices: ri,
+              row_indices: ri,
               source: 'assistant',
             },
             dataRoot

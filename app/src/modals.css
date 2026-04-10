@@ -3489,8 +3489,10 @@
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn {
   font-size: 12px;
-  padding: 4px 10px;
-  min-width: 5.25rem;
+  padding: 3px 8px;
+  /* Same width whether label is "Accept" or "Revert" (Revert is the wider of the two). */
+  min-width: 4.5rem;
+  white-space: nowrap;
   box-sizing: border-box;
   text-align: center;
   background: var(--diff-added-bg) !important;

@@ -129,9 +129,14 @@ class PromptEditSuggestion(BaseModel):
         ...,
         description="How this old→new change implements the fix for the phase1_addresses items (1–2 sentences)",
     )
-    row_indices: list[int] = Field(
-        default_factory=list,
-        description="Optional 0-based row indices this edit is meant to help",
+    target_input_row_indices: list[int] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Required. 0-based comparison row_index for every input row this edit targets "
+            "(same index as Review / Run results). UI input # = row_index + 1. "
+            "List all rows whose failures this prompt change addresses."
+        ),
     )
 
 
@@ -325,6 +330,7 @@ Diagnosis and rough fix hints from the first review pass (use to decide what to 
 Each edit in `prompt_edits` **must** include:
 
 - **`phase1_addresses`**: **1 to 3 strings** (hard cap **3**). Each string should name a **Phase 1 finding** from **section 3** (short phrase or quote). **Special case:** if Phase 1 lists many bullets that are **the same underlying issue** (same failure mode / one thematic gap), **do not** split into extra edits just to mirror bullet count: **summarize** that cluster in **one to three** strings and fix it with **one** localized edit when one `old_sentence`→`new_sentence` truly addresses that whole class. Split into another `prompt_edit` only when Phase 1 implies **different** change strategies or **different** places in the prompt. **Do not** use vague entries like “improve clarity” unless Phase 1 said so.
+- **`target_input_row_indices`**: **Non-empty** list of **0-based comparison row_index** values naming **which input rows** this edit is for (same numbering as Phase 1 / Run results; UI **Input #** = `row_index + 1`; multiple rows → list each once, e.g. `[2, 5]`).
 - **`reason`**: 1–2 sentences on **how** the `old_sentence`→`new_sentence` change implements those fixes (implementation detail, not a repeat of the whole section 3).
 
 Other rules:
@@ -334,7 +340,6 @@ Other rules:
 3. **new_sentence:** Replaces `old_sentence`; **""** = deletion.
 4. **section_index:** Section in **section 2** where `old_sentence` appears.
 5. If `old_sentence` is **not** an exact substring of that body, **omit** that edit.
-6. **row_indices** (optional): 0-based comparison row indices when it ties to a specific Phase 1 row note.
 
 Respond with JSON: **`prompt_edits` only** (no other keys).
 """
@@ -359,11 +364,17 @@ def _sanitize_prompt_edits(sections: list[Any], edits: list[PromptEditSuggestion
         if not isinstance(new, str):
             new = str(new)
         ri: list[int] = []
-        for x in e.row_indices or []:
+        raw_targets = getattr(e, "target_input_row_indices", None)
+        if not isinstance(raw_targets, list):
+            raw_targets = []
+        for x in raw_targets:
             try:
                 ri.append(int(x))
             except (TypeError, ValueError):
                 continue
+        ri = sorted({i for i in ri if i >= 0})
+        if not ri:
+            continue
         p1: list[str] = []
         raw_p1 = getattr(e, "phase1_addresses", None)
         if isinstance(raw_p1, list):
@@ -383,6 +394,7 @@ def _sanitize_prompt_edits(sections: list[Any], edits: list[PromptEditSuggestion
                 "old_sentence": old,
                 "new_sentence": new,
                 "reason": (e.reason or "").strip(),
+                "target_input_row_indices": ri,
                 "row_indices": ri,
             }
         )

@@ -536,9 +536,9 @@ export function openSettingsModal() {
                 <div class="prompt-actions model-settings-footer">
                   <div id="model-settings-footer-save-restore" class="model-settings-footer__save-restore" hidden>
                     <button type="button" class="btn btn-secondary" id="settings-restore-defaults">Restore defaults</button>
-                    <button type="button" class="btn btn-secondary" id="settings-save">Save</button>
+                    <button type="button" class="btn btn-primary" id="settings-save">Save</button>
                   </div>
-                  <button type="button" class="btn btn-secondary" id="settings-footer-add">Add</button>
+                  <button type="button" class="btn btn-primary" id="settings-footer-add">Add</button>
                 </div>
               </div>
             </div>

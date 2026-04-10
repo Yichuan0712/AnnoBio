@@ -231,7 +231,11 @@ class ReviewSuggestion(BaseModel):
     old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only)")
     new_sentence: str = Field(..., description="Replacement for that one sentence")
     reason: str = Field(..., description="Why this change is suggested")
-    row_indices: list[int] = Field(default_factory=list, description="0-based row indices this suggestion aims to fix")
+    target_input_row_indices: list[int] = Field(
+        ...,
+        min_length=1,
+        description="0-based comparison row_index for each input this edit targets; UI input # = index + 1",
+    )
 
 
 class ReviewResult(BaseModel):
