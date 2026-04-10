@@ -763,17 +763,6 @@ export function buildWorkflowCanvas(root) {
   /** @type {{ fromId: string, toId: string, type: string }[]} */
   let connections = [];
 
-  /** Undo/redo: stacks of serialized canvas state */
-  const UNDO_MAX = 50;
-  const UNDO_DEBOUNCE_MS = 400;
-  let undoStack = [];
-  let redoStack = [];
-  let isUndoRedo = false;
-  let skipNextPush = false;
-  let undoDebounceTimer = null;
-  /** 上一次保存的完整状态（变更前），用于在下次变更时压入 undo */
-  let lastSavedState = null;
-
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content (imported or sampled) */
   const datasetContentByNodeId = new Map();
 
@@ -4766,99 +4755,10 @@ export function buildWorkflowCanvas(root) {
     }).filter(Boolean).filter((c) => getNodeById(c.fromId) && getNodeById(c.toId));
     updateContentSize();
     updateEdges();
-    if (!isUndoRedo) {
-      try {
-        lastSavedState = JSON.parse(JSON.stringify(getCanvasState()));
-      } catch (_) {}
-    }
   }
-
-  function pushUndoState() {
-    if (isUndoRedo || skipNextPush) return;
-    try {
-      const currentState = getCanvasState();
-      const currentSnapshot = JSON.parse(JSON.stringify(currentState));
-      /* 压入的是“变更前”的状态，即上一次保存的 lastSavedState */
-      if (lastSavedState != null) {
-        if (undoStack.length >= UNDO_MAX) undoStack.shift();
-        undoStack.push(lastSavedState);
-        redoStack.length = 0;
-      }
-      lastSavedState = currentSnapshot;
-      updateUndoRedoButtons();
-    } catch (_) {}
-  }
-
-  function performUndo() {
-    if (undoStack.length === 0) return;
-    try {
-      redoStack.push(JSON.parse(JSON.stringify(getCanvasState())));
-      const state = undoStack.pop();
-      isUndoRedo = true;
-      skipNextPush = true;
-      loadCanvasState(state);
-      lastSavedState = JSON.parse(JSON.stringify(state));
-      isUndoRedo = false;
-      updateUndoRedoButtons();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      if (undoDebounceTimer) clearTimeout(undoDebounceTimer);
-      undoDebounceTimer = setTimeout(() => { skipNextPush = false; undoDebounceTimer = null; }, UNDO_DEBOUNCE_MS + 50);
-    } catch (_) {}
-  }
-
-  function performRedo() {
-    if (redoStack.length === 0) return;
-    try {
-      undoStack.push(JSON.parse(JSON.stringify(getCanvasState())));
-      const state = redoStack.pop();
-      isUndoRedo = true;
-      skipNextPush = true;
-      loadCanvasState(state);
-      lastSavedState = JSON.parse(JSON.stringify(state));
-      isUndoRedo = false;
-      updateUndoRedoButtons();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      if (undoDebounceTimer) clearTimeout(undoDebounceTimer);
-      undoDebounceTimer = setTimeout(() => { skipNextPush = false; undoDebounceTimer = null; }, UNDO_DEBOUNCE_MS + 50);
-    } catch (_) {}
-  }
-
-  let onUndoRedoChange = null;
-  function updateUndoRedoButtons() {
-    onUndoRedoChange?.();
-  }
-  function setOnUndoRedoChange(fn) {
-    onUndoRedoChange = fn;
-  }
-
-  document.addEventListener('workflow:canvas-changed', () => {
-    if (isUndoRedo) return;
-    if (undoDebounceTimer) clearTimeout(undoDebounceTimer);
-    undoDebounceTimer = setTimeout(() => {
-      undoDebounceTimer = null;
-      pushUndoState();
-    }, UNDO_DEBOUNCE_MS);
-  });
-
-  /* 初始化：当前画布状态视为“变更前”，这样第一次用户操作后能正确压入 undo */
-  try {
-    lastSavedState = JSON.parse(JSON.stringify(getCanvasState()));
-  } catch (_) {}
-  requestAnimationFrame(() => {
-    try {
-      if (lastSavedState == null) lastSavedState = JSON.parse(JSON.stringify(getCanvasState()));
-    } catch (_) {}
-  });
 
   function setOnCanvasChange(fn) {
     document.addEventListener('workflow:canvas-changed', fn);
-  }
-
-  function getCanUndo() {
-    return undoStack.length > 0;
-  }
-  function getCanRedo() {
-    return redoStack.length > 0;
   }
 
   root.appendChild(canvas);
@@ -4866,13 +4766,8 @@ export function buildWorkflowCanvas(root) {
     getCanvasState,
     loadCanvasState,
     setOnCanvasChange,
-    setOnUndoRedoChange,
     isPromptNameAlreadyUsed,
     isDatasetNameAlreadyUsed,
-    undo: performUndo,
-    redo: performRedo,
-    getCanUndo,
-    getCanRedo,
     shutdownRunPoll,
   };
 }

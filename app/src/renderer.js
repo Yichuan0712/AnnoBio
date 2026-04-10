@@ -111,14 +111,8 @@ window.addEventListener('DOMContentLoaded', () => {
     onNewProject,
     onOpenProject,
     onSaveAsProject,
-    undo: () => canvasAPI.undo?.(),
-    redo: () => canvasAPI.redo?.(),
-    getCanUndo: () => canvasAPI.getCanUndo?.() ?? false,
-    getCanRedo: () => canvasAPI.getCanRedo?.() ?? false,
   });
   topBarAPI.setAddMenuEnabled(false);
-
-  canvasAPI.setOnUndoRedoChange?.(() => topBarAPI.updateUndoRedoState?.());
 
   let saveTimeout = null;
   canvasAPI.setOnCanvasChange(() => {

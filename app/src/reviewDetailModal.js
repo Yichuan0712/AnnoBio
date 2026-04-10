@@ -123,7 +123,7 @@ function diagnosisCardTitleLine(d) {
   if (fromHint) return ensureCardTitleSentenceLead(fromHint);
   const fromRough = truncateWithEllipsis(d.rough_modification_opinion, 88);
   if (fromRough) return ensureCardTitleSentenceLead(fromRough);
-  return ensureCardTitleSentenceLead('Error analysis');
+  return ensureCardTitleSentenceLead('Issue analysis');
 }
 
 /** Short sentence-style card title for Suggested changes (mirrors diagnosis list line). */
@@ -144,7 +144,7 @@ function suggestionCardTitleLine({ explicitName, reason, sectionFallback, defaul
  * Second-layer modal: analysis text only + which Score comparison row this refers to.
  * @param {{ row_index: number, row_indices?: number[], card_title?: string, issue_summary: string, rough_modification_opinion: string, problem_category_hint?: string }} diagnostic
  * @param {Array<Record<string, unknown>>} comparisonRows - saved comparison rows (for score_table_row lookup)
- * @param {number} displayNumber - 1-based order in the Error analysis list (same as # on the card)
+ * @param {number} displayNumber - 1-based order in the Issue analysis list (same as # on the card)
  */
 function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber) {
   const num = Math.max(1, parseInt(String(displayNumber), 10) || 1);
@@ -743,11 +743,11 @@ function buildReviewResultUI(overlay, options) {
       const n = rowDiagnostics.length;
       statusText =
         n > 0
-          ? `Error analysis complete. ${n} issue${n === 1 ? '' : 's'} listed.`
-          : 'Error analysis complete. No failed rows.';
+          ? `Issue analysis complete. ${n} issue${n === 1 ? '' : 's'} listed.`
+          : 'Issue analysis complete. No failed rows.';
     } else if (inProgress) {
       statusClass = 'review-detail-status-note--generating';
-      statusText = 'Error analysis in progress…';
+      statusText = 'Issue analysis in progress…';
     }
     analysisFooterEl.innerHTML = '';
     const statusNote = document.createElement('p');
@@ -823,7 +823,7 @@ function buildReviewResultUI(overlay, options) {
       card.innerHTML = `
         <div class="review-detail-suggestion-card__main review-detail-diagnosis-card__main">
           <span class="review-detail-suggestion-header">
-            <span class="review-detail-suggestion-num" aria-label="Error analysis id" title="ID ${badgeLabel}">#${badgeLabel}</span>
+            <span class="review-detail-suggestion-num" aria-label="Issue analysis id" title="ID ${badgeLabel}">#${badgeLabel}</span>
             <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong>
           </span>
           <p class="review-detail-suggestion-reason review-detail-diagnosis-preview">${escapeHtml(preview || '—')}</p>
@@ -911,7 +911,13 @@ function buildReviewResultUI(overlay, options) {
     const detailsBtnHtml =
       '<button type="button" class="btn btn-secondary review-detail-diagnosis-detail-btn">View detail</button>';
     const acceptBtnHtml = !noButton ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>' : '';
-    const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
+    const testBtnHtml = !noButton
+      ? '<button type="button" class="btn btn-secondary review-detail-test-btn" disabled title="Coming soon">Test</button>'
+      : '';
+    const refineBtnHtml = !noButton
+      ? '<button type="button" class="btn btn-secondary review-detail-tune-btn" disabled title="Bayesian optimization · coming soon">Tune</button>'
+      : '';
+    const actionsHtml = `${detailsBtnHtml}${testBtnHtml ? ` ${testBtnHtml}` : ''}${refineBtnHtml ? ` ${refineBtnHtml}` : ''}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
 
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card' + (noButton ? ' review-detail-suggestion-card--unlocatable' : '');
@@ -1094,7 +1100,8 @@ function buildReviewResultUI(overlay, options) {
     if (!tabs.length || !panels.length) return;
 
     function activate(name) {
-      const n = name === 'analysis' || name === 'suggestions' ? name : 'suggestions';
+      const n =
+        name === 'analysis' || name === 'suggestions' || name === 'optimization' ? name : 'suggestions';
       tabs.forEach((btn) => {
         const on = btn.dataset.tab === n;
         btn.classList.toggle('review-detail-tab--active', on);
@@ -1107,7 +1114,8 @@ function buildReviewResultUI(overlay, options) {
     }
 
     const stored = overlay.dataset.reviewRightTab;
-    let initial = stored === 'analysis' || stored === 'suggestions' ? stored : null;
+    let initial =
+      stored === 'analysis' || stored === 'suggestions' || stored === 'optimization' ? stored : null;
     if (!initial) {
       const phase1Only =
         saved.streamComplete === false &&
@@ -1194,8 +1202,9 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
           <h3 class="review-detail-preview-title review-detail-output-title">Findings</h3>
           <div class="review-detail-output-toolbar">
             <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-detail-panel-analysis" id="review-detail-tab-analysis" data-tab="analysis">Error analysis</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-detail-panel-analysis" id="review-detail-tab-analysis" data-tab="analysis">Issue analysis</button>
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-suggestions" id="review-detail-tab-suggestions" data-tab="suggestions">Suggested changes</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-optimization" id="review-detail-tab-optimization" data-tab="optimization" title="Bayesian optimization · coming soon">Bayesian tune</button>
             </div>
           </div>
           <div class="review-detail-preview-content">
@@ -1207,6 +1216,9 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
               <div class="review-detail-tab-panel" id="review-detail-panel-suggestions" role="tabpanel" aria-labelledby="review-detail-tab-suggestions" data-panel="suggestions">
                 <div class="review-detail-suggestions" id="review-detail-suggestions"></div>
                 <div class="review-detail-suggestions-footer" id="review-detail-suggestions-footer"></div>
+              </div>
+              <div class="review-detail-tab-panel" id="review-detail-panel-optimization" role="tabpanel" aria-labelledby="review-detail-tab-optimization" data-panel="optimization">
+                <p class="review-detail-placeholder">Bayesian tuning — coming soon.</p>
               </div>
             </div>
           </div>
@@ -1352,7 +1364,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     });
   }
   if (rowDiagnostics.length > 0) {
-    lines.push('## Error analysis (read-only — same as the "Error analysis" tab in the UI)');
+    lines.push('## Issue analysis (read-only — same as the "Issue analysis" tab in the UI)');
     lines.push(
       'Use these per-row failure notes as context when reasoning about prompt changes. You CANNOT edit, delete, or replace this list — there is no tool for it. Your only structured actions are [ASSISTANT_SUGGESTION] (prompt edits) and [ASSISTANT_REMOVE_SUGGESTION] (items in "Suggestions" below).',
     );
@@ -1364,7 +1376,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
         ? d.row_indices.map((x) => formatRunRowIndexForDisplay(x)).join(', ')
         : formatRunRowIndexForDisplay(d.row_index);
       const rowSuffix = multi ? `rows ${rowLabel} (same input)` : `row ${rowLabel}`;
-      lines.push(`### Error analysis #${n} · Score comparison run result ${rowSuffix}`);
+      lines.push(`### Issue analysis #${n} · Score comparison run result ${rowSuffix}`);
       const ct = (d.card_title || '').trim();
       if (ct) lines.push(`Headline: ${ct}`);
       lines.push(`Issue: ${(d.issue_summary || '').trim() || '(none)'}`);
@@ -1403,7 +1415,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   const dataRefinement = saved?.data_refinement || [];
   lines.push('## Your permissions');
   lines.push(
-    'READ: Error analysis (if listed above) is read-only context. Do not tell the user you changed it or try to remove it — you can only change items under "Suggestions" below.',
+    'READ: Issue analysis (if listed above) is read-only context. Do not tell the user you changed it or try to remove it — you can only change items under "Suggestions" below.',
   );
   lines.push(
     'CRITICAL — Review-generated suggestions (marked [pipeline] below): You CANNOT change their old_sentence/new_sentence, replace them, or “update” them via chat. There is no tool for that. If the user asks you to modify, rewrite, fix, or adjust those initial cards, reply clearly: **they cannot be edited from this chat** — they must use **Accept** or **Revert** on the card in the Suggested changes panel. Optionally suggest they **Revert** first, then you can add a **new** [ASSISTANT_SUGGESTION] with different wording (that new card is assistant-owned).',
@@ -1930,8 +1942,9 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
           <p class="review-detail-stream-status" id="review-result-stream-status" aria-live="polite"></p>
           <div class="review-detail-output-toolbar">
             <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-result-panel-analysis" id="review-result-tab-analysis" data-tab="analysis">Error analysis</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-result-panel-analysis" id="review-result-tab-analysis" data-tab="analysis">Issue analysis</button>
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-suggestions" id="review-result-tab-suggestions" data-tab="suggestions">Suggested changes</button>
+              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-optimization" id="review-result-tab-optimization" data-tab="optimization" title="Bayesian optimization · coming soon">Bayesian tune</button>
             </div>
           </div>
           <div class="review-detail-preview-content">
@@ -1943,6 +1956,9 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
               <div class="review-detail-tab-panel" id="review-result-panel-suggestions" role="tabpanel" aria-labelledby="review-result-tab-suggestions" data-panel="suggestions">
                 <div class="review-detail-suggestions" id="review-result-suggestions"></div>
                 <div class="review-detail-suggestions-footer" id="review-result-suggestions-footer"></div>
+              </div>
+              <div class="review-detail-tab-panel" id="review-result-panel-optimization" role="tabpanel" aria-labelledby="review-result-tab-optimization" data-panel="optimization">
+                <p class="review-detail-placeholder">Bayesian tuning — coming soon.</p>
               </div>
             </div>
           </div>

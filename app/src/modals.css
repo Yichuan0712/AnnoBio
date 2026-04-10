@@ -2930,46 +2930,52 @@
 /* Row under Findings: same control language as .btn / toolbars (not pill segment) */
 .review-detail-output-toolbar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   flex-shrink: 0;
   padding: 10px 20px 12px;
   box-sizing: border-box;
   gap: 8px;
   background: var(--bg);
+  min-width: 0;
 }
 
 .review-detail-view-switch {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 
 .review-detail-view-switch__btn.review-detail-tab {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  padding: 4px 12px;
+  padding: 4px 8px;
   font-size: 12px;
   font-weight: 500;
   line-height: 1.35;
   border-radius: var(--control-radius, 3px);
+  white-space: nowrap;
 }
 
+/* 选中态：中性高亮（Review Findings / Model settings 共用，避免主色蓝） */
 .review-detail-view-switch__btn.review-detail-tab--active {
   font-weight: 600;
-  color: var(--primary-btn-text, #2563eb);
-  background: var(--primary-btn-bg, rgba(37, 99, 235, 0.18));
-  border-color: var(--primary-btn-text, #2563eb);
+  color: var(--text);
+  background: var(--hover);
+  border-color: var(--text-muted);
 }
 
 .review-detail-view-switch__btn.review-detail-tab--active:hover:not(:disabled) {
   filter: none;
   background: var(--hover);
-  border-color: var(--primary-btn-text);
-  color: var(--primary-btn-text);
+  border-color: var(--text);
+  color: var(--text);
 }
 
 .review-detail-main .review-detail-preview-content {
@@ -3467,6 +3473,16 @@
 }
 
 .review-detail-suggestion-card__actions .review-detail-diagnosis-detail-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.review-detail-suggestion-card__actions .review-detail-tune-btn {
   font-size: 12px;
   padding: 4px 10px;
 }

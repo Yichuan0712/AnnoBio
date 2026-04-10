@@ -7,10 +7,10 @@ import { openSettingsModal } from './settingsModal.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, undo?: () => void, redo?: () => void, getCanUndo?: () => boolean, getCanRedo?: () => boolean }} options
- * @returns {{ setAddMenuEnabled: (enabled: boolean) => void }}
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void }} options
+ * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void }}
  */
-export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, undo, redo, getCanUndo, getCanRedo }) {
+export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -39,37 +39,11 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
   const editDrop = document.createElement('div');
   editDrop.className = 'menu-dropdown';
   editDrop.innerHTML = `
-    <button type="button" class="menu-option" data-action="undo">Undo</button>
-    <button type="button" class="menu-option" data-action="redo">Redo</button>
-    <div class="menu-separator"></div>
     <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt...</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new dataset...</button>
   `;
-  const undoOpt = editDrop.querySelector('[data-action="undo"]');
-  const redoOpt = editDrop.querySelector('[data-action="redo"]');
   const createPromptOpt = editDrop.querySelector('[data-action="new-prompt"]');
   const createDatasetOpt = editDrop.querySelector('[data-action="new-dataset"]');
-  function updateEditMenuState() {
-    try {
-      if (typeof getCanUndo === 'function') undoOpt.disabled = !getCanUndo();
-      if (typeof getCanRedo === 'function') redoOpt.disabled = !getCanRedo();
-    } catch (_) {
-      undoOpt.disabled = false;
-      redoOpt.disabled = false;
-    }
-  }
-  editBtn.addEventListener('mouseenter', updateEditMenuState);
-  editBtn.addEventListener('click', updateEditMenuState);
-  undoOpt.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    undo?.();
-  });
-  redoOpt.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    redo?.();
-  });
   createPromptOpt.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -127,5 +101,5 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
     saveAsOpt.disabled = !enabled;
   }
 
-  return { setAddMenuEnabled, setSaveAsEnabled, updateUndoRedoState: updateEditMenuState };
+  return { setAddMenuEnabled, setSaveAsEnabled };
 }
