@@ -6,7 +6,20 @@
 
 import { showConfirm, showAlert } from './alertModal.js';
 import { comparisonRowIsMatched } from './scoreDetailModal.js';
-import { runSuggestionRowTests } from './reviewSuggestionTest.js';
+import {
+  runSuggestionRowTests,
+  abortAllVerifyJobs,
+  registerVerifySession,
+  unregisterVerifySession,
+  hasActiveVerifySessions,
+} from './reviewSuggestionTest.js';
+import {
+  runSuggestionFinetuneBayesian,
+  abortAllFinetuneJobs,
+  registerFinetuneSession,
+  hasActiveFinetuneSessions,
+} from './reviewSuggestionFinetune.js';
+import { rebuildWorkingFromApplied, getLocatableSegment } from './reviewWorkingSections.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import {
   ensureReviewResultIds,
@@ -16,6 +29,23 @@ import {
 } from './reviewSuggestionIds.js';
 
 const API_BASE = 'http://localhost:8000';
+
+/** Only on full app/tab unload: cancel in-flight Verify + Finetune HTTP/poll. Closing the review modal does NOT call this — jobs keep running and persist when done. */
+function abortReviewBackgroundJobsOnAppUnload() {
+  abortAllFinetuneJobs();
+  abortAllVerifyJobs();
+}
+
+/** Card Finetune button labels */
+const REVIEW_FINETUNE_LABEL_IDLE = 'Finetune';
+const REVIEW_FINETUNE_LABEL_TUNING = 'Tuning';
+const REVIEW_FINETUNE_LABEL_DONE = 'Finetune \u2713';
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    abortReviewBackgroundJobsOnAppUnload();
+  });
+}
 
 /** Shown when persisted review has streamComplete:false but no live job (e.g. app closed mid-review). Mirrors Run: “Last run did not complete.” */
 const REVIEW_INCOMPLETE_USER_MSG = 'Last review did not complete. Please run Review again.';
@@ -258,6 +288,8 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
     ? `<p class="review-diagnosis-detail-prose">${respondsToHead}</p><ul class="review-suggestion-detail-list">${p1.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
     : `<p class="review-diagnosis-detail-prose">${respondsToHead} <span class="review-diagnosis-detail-empty">(none)</span></p>`;
 
+  const finetuneLogHtml = buildSuggestionFinetuneDetailSectionHtml(sug);
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay review-suggestion-detail-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -271,6 +303,7 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
       <div class="modal-body review-diagnosis-detail-body">
         ${respondsToHtml}
         <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Note:</span> ${reason ? escapeHtml(reason) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
+        ${finetuneLogHtml}
       </div>
     </div>
   `;
@@ -290,110 +323,6 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
   document.body.appendChild(overlay);
 }
 
-/**
- * Find the segment in content that matches oldSentence, so we can replace it even if whitespace differs.
- * Returns the exact substring in content to replace, or null if not found.
- */
-function findSegmentInContent(content, oldSentence) {
-  if (content == null || content === '' || oldSentence == null) return null;
-  const trimmed = String(oldSentence).trim();
-  if (trimmed === '') return null;
-  if (content.includes(trimmed)) return trimmed;
-  const pattern = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-  try {
-    const regex = new RegExp(pattern);
-    const m = content.match(regex);
-    return m ? m[0] : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-/**
- * Fallback: find the segment in content that best matches oldSentence (e.g. by sentence boundaries).
- * Returns a substring of content, or null if no good match.
- */
-function findBestMatchingSegment(content, oldSentence) {
-  if (content == null || content === '' || oldSentence == null) return null;
-  const trimmed = String(oldSentence).trim();
-  if (trimmed === '') return null;
-  const norm = (s) => String(s).replace(/\s+/g, ' ').trim();
-  const normOld = norm(trimmed);
-  const parts = content.split(/(?<=[.!?\n])\s*|\n/);
-  let best = null;
-  let bestScore = 0;
-  for (const part of parts) {
-    const seg = part.trim();
-    if (seg.length < 2) continue;
-    const normSeg = norm(seg);
-    if (normSeg === normOld) return seg;
-    const segInOld = normOld.includes(normSeg);
-    const oldInSeg = normSeg.includes(normOld);
-    if (segInOld || oldInSeg) {
-      const score = segInOld ? normSeg.length : normOld.length;
-      if (score > bestScore) {
-        bestScore = score;
-        best = seg;
-      }
-    }
-  }
-  if (best) return best;
-  const words = normOld.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return null;
-  for (const part of parts) {
-    const seg = part.trim();
-    if (seg.length < 2) continue;
-    let match = 0;
-    for (const w of words) {
-      if (seg.includes(w) || norm(seg).includes(w)) match += 1;
-    }
-    const score = match / words.length;
-    if (score >= 0.6 && score > bestScore) {
-      bestScore = score;
-      best = seg;
-    }
-  }
-  return best;
-}
-
-/** Get segment in content for replacement: exact/flexible first, then best-match fallback. */
-function getLocatableSegment(content, oldSentence) {
-  return findSegmentInContent(content, oldSentence) || findBestMatchingSegment(content, oldSentence);
-}
-
-/**
- * Rebuild working sections from originals by applying all suggestions that have applied === true.
- * Used when reopening review so Accept/Revert state is correct even if workingSections was lost.
- */
-function rebuildWorkingFromApplied(originals, suggestions) {
-  if (!Array.isArray(originals) || !Array.isArray(suggestions)) return null;
-  const sections = originals.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
-  for (let i = 0; i < suggestions.length; i++) {
-    const s = suggestions[i];
-    if (s.applied !== true) continue;
-    const secIdx = Math.max(0, Math.min(s.section_index ?? 0, sections.length - 1));
-    const useSentenceEdit = s.old_sentence != null && s.new_sentence != null;
-    const oldSentence = (s.old_sentence || '').trim();
-    const newSentence = (s.new_sentence || '').trim();
-    const legacyNewContent = (s.new_content || '').trim();
-    const content = sections[secIdx] ? (sections[secIdx].content || '') : '';
-    if (useSentenceEdit) {
-      const seg = getLocatableSegment(content, oldSentence);
-      const toReplace = seg || oldSentence;
-      if (content.includes(toReplace)) {
-        sections[secIdx].content = content.replace(toReplace, newSentence);
-      } else {
-        const segNew = getLocatableSegment(content, newSentence);
-        if (segNew) sections[secIdx].content = content.replace(segNew, oldSentence);
-        else sections[secIdx].content = content.replace(newSentence, oldSentence);
-      }
-    } else {
-      sections[secIdx].content = legacyNewContent;
-    }
-  }
-  return sections;
-}
-
 /** @returns {'pass'|'fail'|null} */
 function getSuggestionTestOutcome(sug) {
   if (!sug || typeof sug !== 'object') return null;
@@ -410,16 +339,42 @@ function clearSuggestionTestOutcome(sug) {
   delete sug.review_test_in_progress;
 }
 
-/** True if any suggestion had review_test_in_progress (app killed mid-test); clears flag + test outcome. */
+/**
+ * Clear stale `review_test_in_progress` only when no Verify session is active (e.g. app killed).
+ * If a job is still running in the background, keep the flag so reopen shows "Verifying".
+ */
 function stripAbortedReviewTests(suggestions) {
   if (!Array.isArray(suggestions)) return false;
+  if (hasActiveVerifySessions()) return false;
   let changed = false;
   for (const s of suggestions) {
     if (!s || typeof s !== 'object') continue;
     if (s.review_test_in_progress === true) {
       delete s.review_test_in_progress;
-      delete s.review_test_result;
-      delete s.review_test_passed;
+      const terminal = s.review_test_result === 'pass' || s.review_test_result === 'fail';
+      if (!terminal) {
+        delete s.review_test_result;
+        delete s.review_test_passed;
+      }
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Drop persisted finetune-in-progress only when no finetune session is active (crash / stale JSON).
+ * While Finetune runs in the background after closing the modal, keep flags so reopen shows "Tuning".
+ */
+function clearStaleFinetuneRunningFlags(suggestions) {
+  if (!Array.isArray(suggestions)) return false;
+  if (hasActiveFinetuneSessions()) return false;
+  let changed = false;
+  for (const s of suggestions) {
+    if (!s || typeof s !== 'object') continue;
+    if (s.review_finetune_in_progress === true || s.review_finetune_progress != null) {
+      delete s.review_finetune_in_progress;
+      delete s.review_finetune_progress;
       changed = true;
     }
   }
@@ -429,19 +384,78 @@ function stripAbortedReviewTests(suggestions) {
 function updateSuggestionTestOutcomeVisual(card, sug) {
   const btn = card.querySelector('.review-detail-test-btn');
   if (!btn) return;
+  if (sug.review_test_in_progress === true) {
+    btn.disabled = true;
+    btn.classList.remove('review-detail-test-btn--passed', 'review-detail-test-btn--failed');
+    const labelEl = btn.querySelector('.review-detail-test-btn__label');
+    if (labelEl) labelEl.textContent = 'Verifying';
+    btn.removeAttribute('title');
+    return;
+  }
   const o = getSuggestionTestOutcome(sug);
+  btn.disabled = false;
   btn.classList.toggle('review-detail-test-btn--passed', o === 'pass');
   btn.classList.toggle('review-detail-test-btn--failed', o === 'fail');
   const labelEl = btn.querySelector('.review-detail-test-btn__label');
   if (labelEl) {
-    labelEl.textContent = o === 'fail' ? 'Verify×' : 'Verify';
+    labelEl.textContent = o === 'pass' ? `Verify \u2713` : o === 'fail' ? `Verify \u2717` : 'Verify';
   }
-  const locked = o === 'pass' || o === 'fail';
-  btn.disabled = locked;
-  btn.classList.toggle('review-detail-test-btn--locked', locked);
-  btn.title = locked
-    ? 'Verification finished; result is fixed for this suggestion.'
-    : 'Re-run with this suggestion applied and check Score rules; pass shows \u2713, fail shows Verify\u00d7 on the button (no popup).';
+  btn.removeAttribute('title');
+}
+
+/** Keep Finetune button in sync with persisted flags (e.g. after Accept/Revert must not clobber Tuning / Finetune ��). */
+function updateSuggestionFinetuneButtonVisual(card, sug) {
+  const tuneBtn = card.querySelector('.review-detail-tune-btn');
+  if (!tuneBtn) return;
+  if (sug.review_finetune_completed === true) {
+    tuneBtn.textContent = REVIEW_FINETUNE_LABEL_DONE;
+    tuneBtn.removeAttribute('title');
+    tuneBtn.disabled = true;
+    tuneBtn.classList.add('review-detail-tune-btn--done');
+    return;
+  }
+  if (sug.review_finetune_in_progress === true) {
+    tuneBtn.textContent = REVIEW_FINETUNE_LABEL_TUNING;
+    tuneBtn.removeAttribute('title');
+    tuneBtn.disabled = true;
+    tuneBtn.classList.remove('review-detail-tune-btn--done');
+    return;
+  }
+  tuneBtn.textContent = REVIEW_FINETUNE_LABEL_IDLE;
+  tuneBtn.removeAttribute('title');
+  tuneBtn.disabled = false;
+  tuneBtn.classList.remove('review-detail-tune-btn--done');
+}
+
+function formatSuggestionFinetuneLineText(sug) {
+  if (!sug || sug.review_finetune_completed !== true) return '';
+  const meta = sug.review_finetune_meta && typeof sug.review_finetune_meta === 'object' ? sug.review_finetune_meta : null;
+  const n = meta && meta.bestPassPct != null ? Number(meta.bestPassPct) : NaN;
+  if (!Number.isNaN(n)) return `Finetune: ${n}% best pass`;
+  return 'Finetune: complete';
+}
+
+/** HTML fragment for View detail overlay when finetune has completed; label styled like Note: */
+function buildSuggestionFinetuneDetailSectionHtml(sug) {
+  const line = formatSuggestionFinetuneLineText(sug);
+  if (!line) return '';
+  const rest = line.startsWith('Finetune:') ? line.slice('Finetune:'.length).trim() : line.trim();
+  return `<p class="review-diagnosis-detail-prose review-suggestion-finetune-detail-line"><span class="review-diagnosis-detail-lead">Finetune:</span> ${
+    rest ? escapeHtml(rest) : '<span class="review-diagnosis-detail-empty">(none)</span>'
+  }</p>`;
+}
+
+function updateSuggestionCardFinetuneLine(card, sug) {
+  const line = card.querySelector('.review-detail-suggestion-finetune-line');
+  if (!line) return;
+  const txt = formatSuggestionFinetuneLineText(sug);
+  if (txt) {
+    line.textContent = txt;
+    line.hidden = false;
+  } else {
+    line.textContent = '';
+    line.hidden = true;
+  }
 }
 
 function sectionsToFullText(sections) {
@@ -744,7 +758,12 @@ function buildReviewResultUI(overlay, options) {
 
   function persistWorking() {
     if (typeof onReviewResultChange !== 'function') return;
-    const suggestionsToSave = allSuggestions.map((s) => ({ ...s, applied: s.applied === true }));
+    const suggestionsToSave = allSuggestions.map((s) => {
+      const next = { ...s, applied: s.applied === true };
+      delete next._finetuneAbort;
+      delete next._finetunePersistScheduled;
+      return next;
+    });
     const next = {
       ...saved,
       summary: saved.summary ?? '',
@@ -756,6 +775,7 @@ function buildReviewResultUI(overlay, options) {
       promptFullText: saved.promptFullText ?? promptFullText,
       workingSections: working.map((s) => ({ name: s.name, content: s.content })),
     };
+    delete next.review_finetune_last_result;
     onReviewResultChange(next);
   }
 
@@ -995,18 +1015,22 @@ function buildReviewResultUI(overlay, options) {
     const testOutcome = getSuggestionTestOutcome(sug);
     const testBtnExtra =
       testOutcome === 'pass' ? ' review-detail-test-btn--passed' : testOutcome === 'fail' ? ' review-detail-test-btn--failed' : '';
-    const testBtnLabel = testOutcome === 'fail' ? 'Verify×' : 'Verify';
-    const verifyLocked = testOutcome === 'pass' || testOutcome === 'fail';
-    const testBtnTitle = verifyLocked
-      ? 'Verification finished; result is fixed for this suggestion.'
-      : 'Re-run with this suggestion applied and check Score rules; pass shows \u2713, fail shows Verify\u00d7 on the button (no popup).';
+    const testBtnLabel =
+      testOutcome === 'pass' ? `Verify \u2713` : testOutcome === 'fail' ? `Verify \u2717` : 'Verify';
     const testBtnHtml = !noButton
-      ? `<button type="button" class="btn btn-secondary review-detail-test-btn${testBtnExtra}${verifyLocked ? ' review-detail-test-btn--locked' : ''}" title="${escapeHtml(testBtnTitle)}"${verifyLocked ? ' disabled' : ''}><span class="review-detail-test-btn__label">${testBtnLabel}</span><span class="review-detail-test-btn__icon-slot" aria-hidden="true"><span class="review-detail-test-btn__tick">\u2713</span><span class="review-detail-test-btn__cross">\u2717</span></span></button>`
+      ? `<button type="button" class="btn btn-secondary review-detail-test-btn${testBtnExtra}"><span class="review-detail-test-btn__label">${testBtnLabel}</span><span class="review-detail-test-btn__icon-slot" aria-hidden="true"><span class="review-detail-test-btn__tick">\u2713</span><span class="review-detail-test-btn__cross">\u2717</span></span></button>`
       : '';
+    const finetuneDone = sug.review_finetune_completed === true;
+    const finetuneBtnLabel = finetuneDone ? REVIEW_FINETUNE_LABEL_DONE : REVIEW_FINETUNE_LABEL_IDLE;
     const refineBtnHtml = !noButton
-      ? '<button type="button" class="btn btn-secondary review-detail-tune-btn" disabled title="After suggestions are generated, optional Bayesian finetuning · coming soon">Finetune</button>'
+      ? `<button type="button" class="btn btn-secondary review-detail-tune-btn${finetuneDone ? ' review-detail-tune-btn--done' : ''}"${finetuneDone ? ' disabled' : ''}>${escapeHtml(finetuneBtnLabel)}</button>`
       : '';
     const actionsHtml = `${detailsBtnHtml}${testBtnHtml ? ` ${testBtnHtml}` : ''}${refineBtnHtml ? ` ${refineBtnHtml}` : ''}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
+    const finetuneLineText = formatSuggestionFinetuneLineText(sug);
+    const finetuneLineBlock =
+      finetuneLineText !== ''
+        ? `<p class="review-detail-suggestion-finetune-line">${escapeHtml(finetuneLineText)}</p>`
+        : '<p class="review-detail-suggestion-finetune-line" hidden></p>';
 
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card' + (noButton ? ' review-detail-suggestion-card--unlocatable' : '');
@@ -1017,6 +1041,7 @@ function buildReviewResultUI(overlay, options) {
       <div class="review-detail-suggestion-card__main">
         <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong></span>
         <p class="review-detail-suggestion-reason">${escapeHtml(previewReason || '—')}</p>
+        ${finetuneLineBlock}
       </div>
       <div class="review-detail-suggestion-card__actions">
         ${actionsHtml}
@@ -1036,14 +1061,18 @@ function buildReviewResultUI(overlay, options) {
       });
     }
 
+    function currentNewSentence() {
+      return (sug.new_sentence || '').trim();
+    }
     function getDiffContent() {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
       if (!useSentenceEdit) return legacyNewContent;
+      const ns = currentNewSentence();
       const seg = getLocatableSegment(c, oldSentence);
-      return seg ? c.replace(seg, newSentence, 1) : c.replace(oldSentence, newSentence, 1);
+      return seg ? c.replace(seg, ns, 1) : c.replace(oldSentence, ns, 1);
     }
     function getRemoveSpanForDiff() {
-      if (!useSentenceEdit || newSentence !== '') return undefined;
+      if (!useSentenceEdit || currentNewSentence() !== '') return undefined;
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
       return getLocatableSegment(c, oldSentence) || oldSentence;
     }
@@ -1051,8 +1080,9 @@ function buildReviewResultUI(overlay, options) {
     function getRevertedContent() {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
       if (!useSentenceEdit) return originalContent || '';
-      const seg = getLocatableSegment(c, newSentence);
-      return seg ? c.replace(seg, oldSentence, 1) : c.replace(newSentence, oldSentence, 1);
+      const ns = currentNewSentence();
+      const seg = getLocatableSegment(c, ns);
+      return seg ? c.replace(seg, oldSentence, 1) : c.replace(ns, oldSentence, 1);
     }
     function showPreview() {
       if (sug.applied) {
@@ -1066,7 +1096,6 @@ function buildReviewResultUI(overlay, options) {
 
     mainEl.removeAttribute('role');
     mainEl.tabIndex = -1;
-    const deleteOnly = useSentenceEdit && newSentence === '';
 
     if (!noButton) {
       card.addEventListener('mouseenter', () => showPreview());
@@ -1078,10 +1107,11 @@ function buildReviewResultUI(overlay, options) {
         if (secIdx < 0 || secIdx >= working.length) return;
         const wasApplied = sug.applied === true;
         sug.applied = !wasApplied;
-        /* Verify outcome (pass/fail) stays fixed after verification; Accept/Revert does not clear it. */
+        /* Accept/Revert does not clear verify outcome; user can re-run Verify anytime. */
         syncWorkingFromApplied();
         updateAcceptButtonLabels();
         updateSuggestionTestOutcomeVisual(card, sug);
+        updateSuggestionFinetuneButtonVisual(card, sug);
         renderLeft(-1);
         persistWorking();
       });
@@ -1091,9 +1121,6 @@ function buildReviewResultUI(overlay, options) {
         testBtn.addEventListener('click', async (e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (getSuggestionTestOutcome(sug) === 'pass' || getSuggestionTestOutcome(sug) === 'fail') {
-            return;
-          }
           if (isReviewStreamingNow()) {
             showAlert('Wait until the review finishes before running verification.', { title: 'Review in progress' });
             return;
@@ -1104,8 +1131,12 @@ function buildReviewResultUI(overlay, options) {
             return;
           }
           testBtn.disabled = true;
+          testBtn.classList.remove('review-detail-test-btn--passed', 'review-detail-test-btn--failed');
           const labelEl = testBtn.querySelector('.review-detail-test-btn__label');
           if (labelEl) labelEl.textContent = 'Verifying';
+          testBtn.removeAttribute('title');
+          const verifyAc = new AbortController();
+          registerVerifySession(verifyAc);
           try {
             const payload = await getPayload();
             if (!payload || !payload.run_credential_id) {
@@ -1141,27 +1172,147 @@ function buildReviewResultUI(overlay, options) {
               scoreMappingJson: payload.score_mapping || '[]',
               runWs: runWs || { headers: [], rows: [] },
               gtContent: gtContent || { headers: [], rows: [] },
+              signal: verifyAc.signal,
             });
-            if (result.ok) {
+            if (result.aborted) {
+              delete sug.review_test_result;
+              delete sug.review_test_passed;
+            } else if (result.ok) {
               sug.review_test_result = 'pass';
               delete sug.review_test_passed;
-              updateSuggestionTestOutcomeVisual(card, sug);
             } else {
               sug.review_test_result = 'fail';
               delete sug.review_test_passed;
-              updateSuggestionTestOutcomeVisual(card, sug);
             }
           } catch (err) {
-            sug.review_test_result = 'fail';
-            delete sug.review_test_passed;
-            updateSuggestionTestOutcomeVisual(card, sug);
+            if (err && err.name === 'AbortError') {
+              delete sug.review_test_result;
+              delete sug.review_test_passed;
+            } else {
+              sug.review_test_result = 'fail';
+              delete sug.review_test_passed;
+            }
           } finally {
+            unregisterVerifySession(verifyAc);
             delete sug.review_test_in_progress;
             updateSuggestionTestOutcomeVisual(card, sug);
             persistWorking();
           }
         });
       }
+
+      const tuneBtn = card.querySelector('.review-detail-tune-btn');
+      if (tuneBtn && typeof getPayload === 'function') {
+        tuneBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (sug.review_finetune_completed === true) return;
+          if (sug.review_finetune_in_progress === true) return;
+          if (isReviewStreamingNow()) {
+            showAlert('Wait until the review finishes before running finetune.', { title: 'Review in progress' });
+            return;
+          }
+          const targets = suggestionTargetInputRowIndices(sug);
+          if (targets.length === 0) {
+            showAlert('This suggestion has no target input rows.', { title: 'Cannot finetune' });
+            return;
+          }
+          try {
+            const payload = await getPayload();
+            if (!payload || !payload.run_credential_id) {
+              showAlert('Configure a Run credential on the Run node, then try again.', { title: 'Missing credential' });
+              return;
+            }
+            if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
+              showAlert('The prompt needs an output schema (Run / prompt settings) to finetune.', { title: 'Missing output schema' });
+              return;
+            }
+            const finetuneAc = new AbortController();
+            registerFinetuneSession(finetuneAc);
+            sug._finetuneAbort = finetuneAc;
+            sug.review_finetune_in_progress = true;
+            updateSuggestionFinetuneButtonVisual(card, sug);
+            persistWorking();
+            const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
+            const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
+            let ftMaxTrials = 22;
+            let ftNumCandidates = 10;
+            try {
+              const sres = await fetch(`${API_BASE}/api/settings`);
+              if (sres.ok) {
+                const s = await sres.json();
+                ftMaxTrials = Math.min(200, Math.max(4, Number(s.review_finetune_max_trials) || 22));
+                ftNumCandidates = Math.min(18, Math.max(4, Number(s.review_finetune_num_candidates) || 10));
+              }
+            } catch (_) {
+              /* use defaults */
+            }
+            const proposalNew = (sug.new_sentence || '').trim();
+            const result = await runSuggestionFinetuneBayesian({
+              apiBase: API_BASE,
+              llmCredentialId: payload.run_credential_id,
+              runCredentialId: payload.run_credential_id,
+              oldSentence: oldSentence,
+              newSentence: proposalNew,
+              numCandidates: ftNumCandidates,
+              maxTrials: ftMaxTrials,
+              allSuggestions,
+              sugIdx,
+              originals,
+              targets,
+              comparisonRows: payload.comparison_rows || [],
+              runResults: payload.run_results || [],
+              outputFields: payload.output_fields || [],
+              outputSchema: payload.output_schema,
+              scoreMappingJson: payload.score_mapping || '[]',
+              runWs: runWs || { headers: [], rows: [] },
+              gtContent: gtContent || { headers: [], rows: [] },
+              abortController: finetuneAc,
+              onProgress: ({ trial, trials }) => {
+                sug.review_finetune_progress = { trial, trials };
+                if (!sug._finetunePersistScheduled) {
+                  sug._finetunePersistScheduled = true;
+                  requestAnimationFrame(() => {
+                    delete sug._finetunePersistScheduled;
+                    persistWorking();
+                  });
+                }
+              },
+            });
+            sug.new_sentence = result.bestText;
+            sug.review_finetune_meta = {
+              bestPassPct: Math.round(Number(result.bestObservedRate) * 100),
+              candidatesCount: result.candidates.length,
+              trialsRun: Array.isArray(result.trialLog) ? result.trialLog.length : 0,
+              bestArmIndex: result.bestIndex,
+            };
+            delete saved.review_finetune_last_result;
+            sug.review_finetune_completed = true;
+            if (sug.applied === true) syncWorkingFromApplied();
+            updateSuggestionCardFinetuneLine(card, sug);
+            updateSuggestionFinetuneButtonVisual(card, sug);
+            renderLeft(-1);
+            persistWorking();
+          } catch (err) {
+            if (err && err.name === 'AbortError') {
+              /* user cancelled or window closed */
+            } else {
+              showAlert(String(err?.message || err || 'Finetune failed'), { title: 'Finetune failed' });
+            }
+          } finally {
+            delete sug.review_finetune_in_progress;
+            delete sug._finetuneAbort;
+            delete sug.review_finetune_progress;
+            updateSuggestionFinetuneButtonVisual(card, sug);
+            persistWorking();
+          }
+        });
+      }
+
+      const tbSync = card.querySelector('.review-detail-test-btn');
+      if (tbSync) updateSuggestionTestOutcomeVisual(card, sug);
+      const fbSync = card.querySelector('.review-detail-tune-btn');
+      if (fbSync) updateSuggestionFinetuneButtonVisual(card, sug);
     }
 
     editContainer.appendChild(card);
@@ -1272,8 +1423,7 @@ function buildReviewResultUI(overlay, options) {
     if (!tabs.length || !panels.length) return;
 
     function activate(name) {
-      const n =
-        name === 'analysis' || name === 'suggestions' || name === 'optimization' ? name : 'suggestions';
+      const n = name === 'analysis' || name === 'suggestions' ? name : 'suggestions';
       tabs.forEach((btn) => {
         const on = btn.dataset.tab === n;
         btn.classList.toggle('review-detail-tab--active', on);
@@ -1286,8 +1436,7 @@ function buildReviewResultUI(overlay, options) {
     }
 
     const stored = overlay.dataset.reviewRightTab;
-    let initial =
-      stored === 'analysis' || stored === 'suggestions' || stored === 'optimization' ? stored : null;
+    let initial = stored === 'analysis' || stored === 'suggestions' ? stored : null;
     if (!initial) {
       const phase1Only =
         saved.streamComplete === false &&
@@ -1347,6 +1496,11 @@ function buildReviewResultUI(overlay, options) {
 /** Review node modal: show saved result (sections + suggestions) or empty state. */
 export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, getIsReviewStreaming }) {
   const saved = getReviewResult ? getReviewResult() : null;
+  if (saved && typeof saved === 'object' && clearStaleFinetuneRunningFlags(saved.suggestions) && typeof updateReviewResult === 'function') {
+    try {
+      updateReviewResult({ ...saved });
+    } catch (_) {}
+  }
   const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
   const title = `Review: ${reviewName}`;
   const sectionsForDisplay = saved && (
@@ -1376,7 +1530,6 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
             <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-detail-panel-analysis" id="review-detail-tab-analysis" data-tab="analysis">Issue analysis</button>
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-suggestions" id="review-detail-tab-suggestions" data-tab="suggestions">Suggested changes</button>
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-optimization" id="review-detail-tab-optimization" data-tab="optimization" title="After suggestions are generated, optional Bayesian finetuning · coming soon">Bayesian finetune</button>
             </div>
           </div>
           <div class="review-detail-preview-content">
@@ -1388,9 +1541,6 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
               <div class="review-detail-tab-panel" id="review-detail-panel-suggestions" role="tabpanel" aria-labelledby="review-detail-tab-suggestions" data-panel="suggestions">
                 <div class="review-detail-suggestions" id="review-detail-suggestions"></div>
                 <div class="review-detail-suggestions-footer" id="review-detail-suggestions-footer"></div>
-              </div>
-              <div class="review-detail-tab-panel" id="review-detail-panel-optimization" role="tabpanel" aria-labelledby="review-detail-tab-optimization" data-panel="optimization">
-                <p class="review-detail-placeholder">After suggestions are generated, you can optionally refine further with Bayesian finetuning from this tab. Coming soon.</p>
               </div>
             </div>
           </div>
@@ -2130,7 +2280,6 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
             <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-result-panel-analysis" id="review-result-tab-analysis" data-tab="analysis">Issue analysis</button>
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-suggestions" id="review-result-tab-suggestions" data-tab="suggestions">Suggested changes</button>
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-optimization" id="review-result-tab-optimization" data-tab="optimization" title="After suggestions are generated, optional Bayesian finetuning · coming soon">Bayesian finetune</button>
             </div>
           </div>
           <div class="review-detail-preview-content">
@@ -2142,9 +2291,6 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
               <div class="review-detail-tab-panel" id="review-result-panel-suggestions" role="tabpanel" aria-labelledby="review-result-tab-suggestions" data-panel="suggestions">
                 <div class="review-detail-suggestions" id="review-result-suggestions"></div>
                 <div class="review-detail-suggestions-footer" id="review-result-suggestions-footer"></div>
-              </div>
-              <div class="review-detail-tab-panel" id="review-result-panel-optimization" role="tabpanel" aria-labelledby="review-result-tab-optimization" data-panel="optimization">
-                <p class="review-detail-placeholder">After suggestions are generated, you can optionally refine further with Bayesian finetuning from this tab. Coming soon.</p>
               </div>
             </div>
           </div>
@@ -2189,6 +2335,7 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
   };
   const saved = savedRef.current;
   ensureReviewResultIds(saved);
+  clearStaleFinetuneRunningFlags(saved.suggestions);
   const persistResult = (updated) => {
     savedRef.current = updated;
     if (reviewNodeId) {
@@ -2227,7 +2374,10 @@ export function openReviewResultModal({ summary, suggestions = [], promptSection
     if (chatRefreshRef.current) chatRefreshRef.current(data);
   };
 
-  overlay.querySelector('.modal-close').addEventListener('click', () => { overlay.remove(); document.body.style.overflow = ''; });
+  overlay.querySelector('.modal-close').addEventListener('click', () => {
+    overlay.remove();
+    document.body.style.overflow = '';
+  });
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
   initReviewAssistantChat(overlay, {

@@ -202,8 +202,9 @@
 }
 
 .modal-panel--prompt[data-add-prompt-step="3"] {
-  width: min(1200px, 92vw);
-  min-width: min(1200px, 92vw);
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
 }
 
 /* Add dataset: same layout and style as Add prompt */
@@ -221,8 +222,9 @@
 }
 
 .modal-panel--dataset[data-add-dataset-step="2"] {
-  width: min(1000px, 92vw);
-  min-width: min(1000px, 92vw);
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
 }
 
 /* Model settings: panel size + body padding like My credentials; no bordered “table” wrapper (credentials only) */
@@ -385,7 +387,6 @@
   margin-top: auto;
   flex-shrink: 0;
   padding-top: 12px;
-  border-top: 1px solid var(--border);
   background: transparent;
   display: flex;
   flex-wrap: wrap;
@@ -677,6 +678,12 @@
 .modal-panel--defaults .defaults-field {
   min-width: 0;
   overflow: hidden;
+}
+
+/* Review → Finetune number fields: 两列须用相同 padding-bottom，否则 .defaults-row的 align-items:end 会让两个输入框上下错开 */
+.modal-panel--defaults .defaults-field--review-finetune-input,
+.modal-panel--model-settings-combined .defaults-row .defaults-field--review-finetune-input {
+  padding-bottom: 0.5rem;
 }
 
 .modal-panel--defaults .model-settings-defaults-card .credentials-select,
@@ -1501,17 +1508,18 @@
   color: var(--text);
 }
 
-/* Prompt details modal: same panel size as add prompt for consistency */
+/* Prompt details modal: 与 Run 详情展开态同宽 */
 /* Review detail 与此处尺寸一致，见下方合并规则 */
 .modal-panel--prompt-detail {
-  width: min(1200px, 94vw);
-  min-width: min(1200px, 94vw);
-  max-width: 96vw;
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
   height: min(85vh, 98vh);
   max-height: 98vh;
   min-height: 70vh;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 .modal-panel--prompt-detail .modal-body.prompt-detail-body {
@@ -1742,14 +1750,16 @@
   gap: 10px;
 }
 
-/* Dataset detail modal (click dataset node) */
+/* Dataset detail modal (click dataset node)：与 Run 详情展开态同宽 */
 .modal-panel--dataset-detail {
-  min-width: min(1080px, 95vw);
-  max-width: 96vw;
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
   max-height: 98vh;
   min-height: min(420px, 70vh);
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 .modal-panel--dataset-detail .modal-body.dataset-detail-body {
@@ -2267,6 +2277,8 @@
   width: 88%;
   min-width: min(960px, 85%);
   max-width: 88%;
+  height: min(85vh, 98vh);
+  min-height: 70vh;
 }
 
 .modal-panel--score-detail .modal-body.score-detail-body,
@@ -2807,11 +2819,11 @@
   flex: 0 0 auto;
 }
 
-/* Review detail modal: 与 Prompt 详情高度一致（height / min-height / max-height 同 .modal-panel--prompt-detail） */
+/* Review detail modal: 高度同 Prompt 详情；宽度与 Run 详情展开态一致 */
 .modal-panel--review-detail {
-  width: min(1200px, 94vw);
-  min-width: min(1200px, 94vw);
-  max-width: 96vw;
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
   height: min(85vh, 98vh);
   max-height: 98vh;
   min-height: 70vh;
@@ -2831,9 +2843,9 @@
   background: var(--bg);
 }
 
-/* Left column: Findings — 与 Prompt sections 同底色 (.prompt-detail-main / .review-detail-preview-wrap 用 var(--bg)) */
+/* Left column: Findings — 与 Prompt sections 同底色；三列 flex29:42:29（中间 42%，左右各 29%） */
 .review-detail-main {
-  flex: 1 1 0;
+  flex: 29 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -3112,6 +3124,7 @@
 
 .review-detail-main .review-detail-preview-content .review-detail-suggestions {
   flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: 12px 0 0 0;
@@ -3121,9 +3134,9 @@
   margin-bottom: 12px;
 }
 
-/* Right column: Prompt sections — 1:1 与左栏均分，样式同 .prompt-detail-main */
+/* Middle column: Prompt sections — 占行宽 42% */
 .review-detail-preview-wrap {
-  flex: 1 1 0;
+  flex: 42 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -3170,9 +3183,9 @@
   overflow-x: hidden;
 }
 
-/* Third column: Review Assistant chat */
+/* Third column: Review Assistant chat — 与左栏同宽（各占余下 58% 的一半） */
 .review-detail-third-column {
-  flex: 1 1 0;
+  flex: 29 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -3408,6 +3421,11 @@
   color: var(--text);
 }
 
+/* View detail: Finetune line uses same typography as .review-diagnosis-detail-prose (only a hook if needed) */
+.review-suggestion-finetune-detail-line {
+  margin: 0;
+}
+
 .review-detail-export-btn {
   font-size: 12px;
 }
@@ -3438,6 +3456,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .review-detail-suggestion-card__main {
@@ -3468,18 +3488,23 @@
 
 .review-detail-suggestion-card__actions {
   display: flex;
-  justify-content: flex-end;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .review-detail-suggestion-card__actions .review-detail-diagnosis-detail-btn {
   font-size: 12px;
   padding: 4px 10px;
+  white-space: nowrap;
 }
 
 .review-detail-suggestion-card__actions .review-detail-test-btn {
   font-family: inherit;
   font-size: 12px;
+  font-weight: 400;
   padding: 3px 4px;
   width: 4.1rem;
   min-width: 4.1rem;
@@ -3514,7 +3539,7 @@
   transform: translate(-50%, -50%);
   font-size: 12px;
   line-height: 1;
-  font-weight: 700;
+  font-weight: inherit;
   opacity: 0;
   transition: opacity 0.12s ease;
   pointer-events: none;
@@ -3531,14 +3556,18 @@
   color: var(--diff-removed-text, #dc2626);
 }
 
-/* Fail: label is "Verify×"; hide separate icon slot to avoid double × */
+/* Pass: checkmark is in the label; hide icon slot (same idea as fail). */
+.review-detail-suggestion-card__actions .review-detail-test-btn--passed .review-detail-test-btn__icon-slot {
+  display: none;
+}
+
+/* Fail: label uses ballot X U+2717 (pairs with check U+2713); hide icon slot */
 .review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__icon-slot {
   display: none;
 }
 
 .review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__label {
   color: var(--diff-removed-text, #dc2626);
-  font-weight: 700;
 }
 
 .review-detail-suggestion-card__actions .review-detail-test-btn__label {
@@ -3546,26 +3575,65 @@
   text-align: center;
 }
 
-/* After pass/fail, button stays visually distinct (browser default disabled would gray it out). */
-.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--locked:disabled {
-  opacity: 1;
-  cursor: default;
-  filter: none;
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--locked.review-detail-test-btn--passed:disabled {
+/* Last pass/fail shown on label; button stays clickable for re-verify */
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--passed {
+  font-weight: 400;
   color: var(--diff-added-text, #16a34a);
   border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
 }
 
-.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--locked.review-detail-test-btn--failed:disabled {
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--passed:hover:not(:disabled) {
+  color: var(--diff-added-text, #16a34a);
+  border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--failed {
+  font-weight: 400;
   color: var(--diff-removed-text, #dc2626);
   border-color: color-mix(in srgb, var(--diff-removed-text, #dc2626) 55%, var(--border));
 }
 
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--failed:hover:not(:disabled) {
+  color: var(--diff-removed-text, #dc2626);
+  border-color: color-mix(in srgb, var(--diff-removed-text, #dc2626) 55%, var(--border));
+}
+
+/*
+ * Finetune / Tuning / Finetune ��: fixed width so the label swap does not jump the row.
+ * Keep roughly the same scale as Verify (4.1rem fits “Verifying”); +0.4rem for the check state.
+ */
 .review-detail-suggestion-card__actions .review-detail-tune-btn {
+  font-family: inherit;
   font-size: 12px;
-  padding: 4px 10px;
+  font-weight: 400;
+  padding: 3px 4px;
+  width: 4.5rem;
+  min-width: 4.5rem;
+  max-width: 4.5rem;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.review-detail-suggestion-card__actions .review-detail-tune-btn.review-detail-tune-btn--done:disabled {
+  opacity: 1;
+  cursor: default;
+  filter: none;
+  font-weight: 400;
+  color: var(--diff-added-text, #16a34a);
+  border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
+}
+
+.review-detail-suggestion-finetune-line {
+  margin: 0.35rem 0 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted);
+  word-break: break-word;
 }
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn {
@@ -3619,6 +3687,7 @@
 .review-detail-edit-suggestions {
   padding-top: 0;
   margin-top: 0;
+  min-width: 0;
 }
 
 .review-detail-suggestion-unlocatable {
@@ -4295,6 +4364,8 @@
   width: 88%;
   min-width: min(960px, 85%);
   max-width: 92vw;
+  height: min(85vh, 98vh);
+  min-height: 70vh;
 }
 
 .modal-panel--run-detail .modal-body.run-detail-body,
@@ -4920,11 +4991,11 @@
 }
 
 
-/* Dataset detail modal (subset): 外框尺寸与 Prompt / Review 详情一致 */
+/* Dataset detail modal（画布上 dataset节点表格）：与 Run 详情展开态 / Prompt 详情同宽 */
 .modal-panel--working-dataset-detail {
-  width: min(1200px, 94vw);
-  min-width: min(1200px, 94vw);
-  max-width: 96vw;
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
   height: min(85vh, 98vh);
   max-height: 98vh;
   min-height: 70vh;

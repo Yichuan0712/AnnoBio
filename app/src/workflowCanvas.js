@@ -39,6 +39,18 @@ import { showAlert } from './alertModal.js';
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = 'http://localhost:8000';
 
+/** Run node may not have dataset.runCredentialId until user opens Run modal; fall back to Settings default. */
+async function resolveRunCredentialId(runNode) {
+  let id = (runNode?.dataset?.runCredentialId || '').trim();
+  if (id) return id;
+  try {
+    const res = await fetch(`${SCORE_BACKEND_BASE}/api/settings`);
+    const s = res.ok ? await res.json() : null;
+    id = s && s.default_run_credential_id ? String(s.default_run_credential_id).trim() : '';
+  } catch (_) {}
+  return id;
+}
+
 const MIN_CONTENT_PADDING = 200;
 /** Minimum canvas content size (width, height) so there is plenty of room to work and zoom. */
 const MIN_CANVAS_WIDTH = 4000;
@@ -1968,6 +1980,7 @@ export function buildWorkflowCanvas(root) {
           const parsed = JSON.parse(raw);
           if (parsed && typeof parsed === 'object') run_input_to_column = parsed;
         } catch (_) {}
+        const run_credential_id = await resolveRunCredentialId(runNode);
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
@@ -1976,7 +1989,7 @@ export function buildWorkflowCanvas(root) {
           comparison_rows,
           output_schema,
           score_mapping: scoreNode.dataset.scoreMapping || '[]',
-          run_credential_id: (runNode.dataset.runCredentialId || '').trim(),
+          run_credential_id,
           run_input_to_column,
           getRunWorkingSetContent: () => runWsId ? (datasetContentByNodeId.get(runWsId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
           getGroundTruthContent: () => gtId ? (datasetContentByNodeId.get(gtId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
@@ -1998,7 +2011,10 @@ export function buildWorkflowCanvas(root) {
         try {
           node.dataset.reviewResult = JSON.stringify(updated);
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-        } catch (_) {}
+        } catch (e) {
+          console.error('reviewResult save failed', e);
+          showAlert(String(e?.message || e || 'Could not save review data.'), { title: 'Save error' });
+        }
       }
       function onExportNewPrompt(sections) {
         document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
@@ -3087,6 +3103,7 @@ export function buildWorkflowCanvas(root) {
           const parsed = JSON.parse(raw);
           if (parsed && typeof parsed === 'object') run_input_to_column = parsed;
         } catch (_) {}
+        const run_credential_id = await resolveRunCredentialId(runNode);
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
@@ -3095,7 +3112,7 @@ export function buildWorkflowCanvas(root) {
           comparison_rows,
           output_schema,
           score_mapping: scoreNode.dataset.scoreMapping || '[]',
-          run_credential_id: (runNode.dataset.runCredentialId || '').trim(),
+          run_credential_id,
           run_input_to_column,
           getRunWorkingSetContent: () => runWsId ? (datasetContentByNodeId.get(runWsId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
           getGroundTruthContent: () => gtId ? (datasetContentByNodeId.get(gtId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
@@ -3117,7 +3134,10 @@ export function buildWorkflowCanvas(root) {
         try {
           node.dataset.reviewResult = JSON.stringify(updated);
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-        } catch (_) {}
+        } catch (e) {
+          console.error('reviewResult save failed', e);
+          showAlert(String(e?.message || e || 'Could not save review data.'), { title: 'Save error' });
+        }
       }
       function onExportNewPrompt(sections) {
         document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
@@ -4289,6 +4309,25 @@ export function buildWorkflowCanvas(root) {
               : null;
           const prev = prevById || existSug[i];
           if (prev && prev.applied === true) next.applied = true;
+          if (prev && prev.review_finetune_completed === true) {
+            next.review_finetune_completed = true;
+            const pm = prev.review_finetune_meta;
+            const nm = next.review_finetune_meta;
+            const keepPrevMeta =
+              pm &&
+              typeof pm === 'object' &&
+              (!nm || typeof nm !== 'object' || (nm.bestPassPct == null && pm.bestPassPct != null));
+            if (keepPrevMeta) next.review_finetune_meta = pm;
+          }
+          if (prev) {
+            const pt = prev.review_test_result;
+            if (pt === 'pass' || pt === 'fail') {
+              const nt = next.review_test_result;
+              if (nt !== 'pass' && nt !== 'fail') {
+                next.review_test_result = pt;
+              }
+            }
+          }
           if (nextNum == null) {
             const prevNum = prev ? parseNumericSuggestionId(prev.suggestion_id) : null;
             next.suggestion_id = prevNum != null ? prevNum : allocNextReviewSuggestionId(merged);

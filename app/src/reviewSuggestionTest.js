@@ -16,6 +16,31 @@ import {
   legacyMatchTypeWasContains,
 } from './scoreDetailModal.js';
 
+/** AbortControllers for in-flight Verify runs (close modal / beforeunload cancels fetch + poll). */
+const verifyAbortControllers = new Set();
+
+export function registerVerifySession(ac) {
+  if (ac && typeof ac.abort === 'function') verifyAbortControllers.add(ac);
+}
+
+export function unregisterVerifySession(ac) {
+  verifyAbortControllers.delete(ac);
+}
+
+export function abortAllVerifyJobs() {
+  for (const c of verifyAbortControllers) {
+    try {
+      c.abort();
+    } catch (_) {}
+  }
+  verifyAbortControllers.clear();
+}
+
+/** True while any Verify run has a registered AbortController (review modal may be closed). */
+export function hasActiveVerifySessions() {
+  return verifyAbortControllers.size > 0;
+}
+
 const DEFAULT_SCORE_MATCH_FLAGS = {
   semanticAlign: false,
   embeddingSimilarity: false,
@@ -348,24 +373,67 @@ function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
   return { rows: expanded };
 }
 
-async function pollRunUntilDone(apiBase, runId) {
+function sleepMs(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const t = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function requestRunCancel(apiBase, runId) {
+  if (!runId) return;
+  const base = String(apiBase || 'http://localhost:8000').replace(/\/$/, '');
+  try {
+    await fetch(`${base}/api/run/cancel/${runId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+  } catch (_) {}
+}
+
+/**
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{ ok: boolean, results: unknown[], error: string|null, aborted?: boolean }>}
+ */
+async function pollRunUntilDone(apiBase, runId, signal) {
   const base = String(apiBase || 'http://localhost:8000').replace(/\/$/, '');
   const deadline = Date.now() + 900000;
-  while (Date.now() < deadline) {
-    const res = await fetch(`${base}/api/run/result/${runId}`);
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 202) {
-      await new Promise((r) => setTimeout(r, 350));
-      continue;
+  try {
+    while (Date.now() < deadline) {
+      if (signal?.aborted) {
+        await requestRunCancel(apiBase, runId);
+        return { ok: false, results: [], error: 'aborted', aborted: true };
+      }
+      const res = await fetch(`${base}/api/run/result/${runId}`, { signal });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 202) {
+        await sleepMs(350, signal);
+        continue;
+      }
+      if (res.status === 200 && (data.status === 'done' || data.status === 'cancelled')) {
+        return {
+          ok: data.status === 'done' && !data.error,
+          results: Array.isArray(data.results) ? data.results : [],
+          error: data.error || null,
+        };
+      }
+      await sleepMs(400, signal);
     }
-    if (res.status === 200 && (data.status === 'done' || data.status === 'cancelled')) {
-      return {
-        ok: data.status === 'done' && !data.error,
-        results: Array.isArray(data.results) ? data.results : [],
-        error: data.error || null,
-      };
+  } catch (e) {
+    if (signal?.aborted || e?.name === 'AbortError') {
+      await requestRunCancel(apiBase, runId);
+      return { ok: false, results: [], error: 'aborted', aborted: true };
     }
-    await new Promise((r) => setTimeout(r, 400));
+    return { ok: false, results: [], error: String(e?.message || e) };
   }
   return { ok: false, results: [], error: 'Run poll timeout' };
 }
@@ -387,6 +455,7 @@ export async function runSuggestionRowTests(opts) {
     scoreMappingJson,
     runWs,
     gtContent,
+    signal,
   } = opts;
 
   if (!credentialId || !outputSchema || !Array.isArray(outputSchema.fields) || outputSchema.fields.length === 0) {
@@ -438,6 +507,7 @@ export async function runSuggestionRowTests(opts) {
     const res = await fetch(`${base}/api/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal,
       body: JSON.stringify({
         credential_id: credentialId,
         prompts,
@@ -452,10 +522,16 @@ export async function runSuggestionRowTests(opts) {
     }
     runId = data.run_id;
   } catch (e) {
+    if (e?.name === 'AbortError' || signal?.aborted) {
+      return { ok: false, detail: 'aborted', aborted: true };
+    }
     return { ok: false, detail: String(e.message || e) };
   }
 
-  const polled = await pollRunUntilDone(apiBase, runId);
+  const polled = await pollRunUntilDone(apiBase, runId, signal);
+  if (polled.aborted) {
+    return { ok: false, detail: 'aborted', aborted: true };
+  }
   if (!polled.ok) {
     return { ok: false, detail: polled.error || 'Run did not complete.' };
   }
@@ -533,4 +609,185 @@ export async function runSuggestionRowTests(opts) {
   }
 
   return { ok: true };
+}
+
+/**
+ * Same pipeline as {@link runSuggestionRowTests} but returns per-row pass rate (for Bayesian finetune objective).
+ * @returns {Promise<{ ok: boolean, passRate?: number, passed?: number, total?: number, allPass?: boolean, detail?: string }>}
+ */
+export async function runSuggestionRowTestsMetrics(opts) {
+  const {
+    apiBase = 'http://localhost:8000',
+    credentialId,
+    testSections,
+    targetComparisonRowIndices,
+    comparisonRows,
+    runResults,
+    outputFields,
+    outputSchema,
+    scoreMappingJson,
+    runWs,
+    gtContent,
+    signal,
+  } = opts;
+
+  if (!credentialId || !outputSchema || !Array.isArray(outputSchema.fields) || outputSchema.fields.length === 0) {
+    return { ok: false, detail: 'Missing credential or output schema.' };
+  }
+
+  let scoreRoot;
+  try {
+    const raw = typeof scoreMappingJson === 'string' ? JSON.parse(scoreMappingJson || '[]') : scoreMappingJson;
+    scoreRoot = parseScoreMappingToTree(raw);
+  } catch (_) {
+    return { ok: false, detail: 'Invalid score mapping.' };
+  }
+
+  const runWsSafe = runWs && typeof runWs === 'object' ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
+  const gtSafe = gtContent && typeof gtContent === 'object' ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
+
+  const templateText = Array.isArray(testSections)
+    ? testSections
+        .map((s) => {
+          const name = (s.name || '').trim() || '(unnamed)';
+          const content = (s.content || '').trim() || '';
+          return `## ${name}\n\n${content}`;
+        })
+        .join('\n\n')
+    : '';
+
+  const seenT = new Set();
+  const orderedTargets = [];
+  for (const x of targetComparisonRowIndices || []) {
+    const n = Number(x);
+    if (Number.isNaN(n) || n < 0) continue;
+    if (seenT.has(n)) continue;
+    seenT.add(n);
+    orderedTargets.push(n);
+  }
+  if (orderedTargets.length === 0) return { ok: false, detail: 'No target rows for verification.' };
+
+  const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets);
+  if (expanded.error) return { ok: false, detail: expanded.error };
+  const expandedRows = expanded.rows;
+  if (!expandedRows.length) return { ok: false, detail: 'No runnable comparison rows to verify.' };
+
+  const prompts = expandedRows.map((row) => substitutePromptPlaceholders(templateText, row.row_input || {}));
+
+  const base = String(apiBase).replace(/\/$/, '');
+  let runId;
+  try {
+    const res = await fetch(`${base}/api/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal,
+      body: JSON.stringify({
+        credential_id: credentialId,
+        prompts,
+        output_schema: outputSchema,
+        run_node_id: null,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status !== 202) {
+      const msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data) || res.statusText;
+      return { ok: false, detail: msg || 'Run request failed' };
+    }
+    runId = data.run_id;
+  } catch (e) {
+    if (signal?.aborted || e?.name === 'AbortError') {
+      return { ok: false, detail: 'aborted', aborted: true };
+    }
+    return { ok: false, detail: String(e.message || e) };
+  }
+
+  const polled = await pollRunUntilDone(apiBase, runId, signal);
+  if (polled.aborted) {
+    return { ok: false, detail: 'aborted', aborted: true };
+  }
+  if (!polled.ok) {
+    return { ok: false, detail: polled.error || 'Run did not complete.' };
+  }
+
+  if (signal?.aborted) {
+    await requestRunCancel(apiBase, runId);
+    return { ok: false, detail: 'aborted', aborted: true };
+  }
+
+  let fresh = markEmptyOutputAsError(polled.results || []);
+  for (let i = 0; i < expandedRows.length; i++) {
+    const r = fresh[i];
+    const compRow = expandedRows[i];
+    const label =
+      compRow && typeof compRow.row_index === 'number'
+        ? `row_index ${compRow.row_index}` + (typeof compRow.input_row_index === 'number' ? ` (Input #${compRow.input_row_index + 1})` : '')
+        : String(i);
+    if (!r || r.error || !r.output) {
+      return { ok: false, detail: `Model error on ${label}: ${r?.error || 'empty output'}` };
+    }
+  }
+
+  const resultsByIndex = new Map();
+  (runResults || []).forEach((r) => {
+    if (r && typeof r.row_index === 'number') resultsByIndex.set(r.row_index, r);
+  });
+
+  const rowIndexToFreshOut = new Map();
+  expandedRows.forEach((compRow, i) => {
+    const out = fresh[i]?.output;
+    if (out && typeof out === 'object' && compRow && typeof compRow.row_index === 'number') {
+      rowIndexToFreshOut.set(compRow.row_index, out);
+    }
+  });
+
+  let embeddingMap = new Map();
+  try {
+    if (signal?.aborted) {
+      return { ok: false, detail: 'aborted', aborted: true };
+    }
+    const patchedForEmb = (runResults || []).map((r) => {
+      if (!r) return r;
+      const out = rowIndexToFreshOut.get(r.row_index);
+      if (out == null) return r;
+      return { ...r, output: typeof out === 'object' ? { ...out } : {}, error: undefined };
+    });
+    embeddingMap = await prefetchEmbeddingCosineMap(apiBase, {
+      root: scoreRoot,
+      results: patchedForEmb,
+      outputFields: outputFields || [],
+      runWs: runWsSafe,
+      gtContent: gtSafe,
+      getRunValue: (runResult, outputKey, _runRowIndex, ws, of) => getRunValue(runResult, outputKey, ws, of),
+      getGtValue,
+    });
+  } catch (_) {
+    embeddingMap = new Map();
+  }
+
+  if (signal?.aborted) {
+    return { ok: false, detail: 'aborted', aborted: true };
+  }
+
+  let passed = 0;
+  const n = expandedRows.length;
+  for (let i = 0; i < expandedRows.length; i++) {
+    const compRow = expandedRows[i];
+    const compIdx = compRow.row_index;
+    const gtJ = compRow.source_gt_row_index;
+    if (gtJ == null || gtJ === undefined || Number.isNaN(Number(gtJ)) || Number(gtJ) < 0) {
+      return { ok: false, detail: `No paired ground truth for row_index ${compIdx}.` };
+    }
+    const synOut = fresh[i].output && typeof fresh[i].output === 'object' ? { ...fresh[i].output } : {};
+    const baseRes = resultsByIndex.get(compIdx) || { row_index: compIdx, output: {} };
+    resultsByIndex.set(compIdx, {
+      ...baseRes,
+      row_index: compIdx,
+      output: synOut,
+      error: undefined,
+    });
+    const pass = evaluateScoreTree(scoreRoot, compIdx, gtJ, resultsByIndex, runWsSafe, outputFields || [], gtSafe, embeddingMap);
+    if (pass) passed += 1;
+  }
+
+  return { ok: true, passRate: n ? passed / n : 0, passed, total: n, allPass: passed === n };
 }
