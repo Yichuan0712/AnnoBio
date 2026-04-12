@@ -10,6 +10,8 @@ import re
 import sys
 import time
 
+from safe_stdio import safe_print
+
 # ANSI: bold yellow for step names (match main.py)
 _HL = "\033[1;33m"
 _R = "\033[0m"
@@ -210,8 +212,7 @@ def _retry_invoke(fn, max_retries: int = 3):
             last_e = e
             if attempt < max_retries and _is_retryable_error(e):
                 delay = 1.0 * (2**attempt)
-                print(_HL + f"[LLM] Retry {attempt + 1}/{max_retries} after {delay:.0f}s: " + _R + str(e))
-                sys.stdout.flush()
+                safe_print(_HL + f"[LLM] Retry {attempt + 1}/{max_retries} after {delay:.0f}s: " + _R + str(e), flush=True)
                 time.sleep(delay)
             else:
                 raise
@@ -321,12 +322,11 @@ def _run_structured_fallback(llm, prompt: str, response_model: type, return_shap
             + json.dumps(item_schema, ensure_ascii=False, indent=2)
         )
         full_prompt = prompt + instruction
-        print("\n" + _HL + _SEP + _R)
-        print(_HL + "[Run] Fallback: prompt + JSON array schema (structured output not supported)" + _R)
-        print(_HL + _SEP + _R)
-        print(instruction)
-        print(_HL + _SEP + _R + "\n")
-        sys.stdout.flush()
+        safe_print("\n" + _HL + _SEP + _R)
+        safe_print(_HL + "[Run] Fallback: prompt + JSON array schema (structured output not supported)" + _R)
+        safe_print(_HL + _SEP + _R)
+        safe_print(instruction)
+        safe_print(_HL + _SEP + _R + "\n", flush=True)
         messages = [HumanMessage(content=full_prompt)]
         response = _retry_invoke(lambda: llm.invoke(messages))
         text = (response.content or "").strip()
@@ -350,12 +350,11 @@ def _run_structured_fallback(llm, prompt: str, response_model: type, return_shap
         + json.dumps(schema, ensure_ascii=False, indent=2)
     )
     full_prompt = prompt + instruction
-    print("\n" + _HL + _SEP + _R)
-    print(_HL + "[Run] Fallback: prompt + JSON schema (structured output not supported)" + _R)
-    print(_HL + _SEP + _R)
-    print(instruction)
-    print(_HL + _SEP + _R + "\n")
-    sys.stdout.flush()
+    safe_print("\n" + _HL + _SEP + _R)
+    safe_print(_HL + "[Run] Fallback: prompt + JSON schema (structured output not supported)" + _R)
+    safe_print(_HL + _SEP + _R)
+    safe_print(instruction)
+    safe_print(_HL + _SEP + _R + "\n", flush=True)
     messages = [HumanMessage(content=full_prompt)]
     response = _retry_invoke(lambda: llm.invoke(messages))
     text = (response.content or "").strip()

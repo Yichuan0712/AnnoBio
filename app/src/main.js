@@ -101,7 +101,8 @@ function startPythonBackendInner() {
     return;
   }
 
-  const args = ['-m', 'uvicorn', 'main:app', '--port', String(BACKEND_PORT)];
+  // -X utf8: force UTF-8 stdio on Windows so prompts with U+2011 etc. never raise UnicodeEncodeError in the backend.
+  const args = ['-X', 'utf8', '-m', 'uvicorn', 'main:app', '--port', String(BACKEND_PORT)];
   if (!app.isPackaged) {
     args.push('--reload');
   }
@@ -111,7 +112,12 @@ function startPythonBackendInner() {
   console.log('[python] main.py path=', mainPy);
   pyProc = spawn(pythonExe, args, {
     cwd,
-    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+    env: {
+      ...process.env,
+      PYTHONUNBUFFERED: '1',
+      PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
+    },
     stdio: 'inherit',
     windowsHide: true,
   });

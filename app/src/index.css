@@ -19,17 +19,18 @@
   --control-radius: 3px;
 }
 
+/* Dark: 以中性灰为主，仅极少量冷色，避免发蓝 */
 html.dark {
-  --bg: #1a1a1a;
-  --bg-bar: #252525;
-  --bg-canvas: #1e1e1e;
-  --grid-color: rgba(255, 255, 255, 0.04);
-  --text: #f0f0f0;
-  --text-muted: #aaa;
-  --border: #404040;
-  --node-border: #404040;
-  --hover: #333;
-  --shadow: rgba(0, 0, 0, 0.3);
+  --bg: #1b1c1e;
+  --bg-bar: #252628;
+  --bg-canvas: #171819;
+  --grid-color: rgba(255, 255, 255, 0.038);
+  --text: #eaeaea;
+  --text-muted: #98989e;
+  --border: #3f4146;
+  --node-border: #4b4d52;
+  --hover: #2d2f34;
+  --shadow: rgba(0, 0, 0, 0.34);
   --diff-removed-bg: rgba(248, 113, 113, 0.25);
   --diff-removed-text: #fca5a5;
   --diff-added-bg: rgba(74, 222, 128, 0.22);
@@ -39,28 +40,7 @@ html.dark {
   --control-radius: 3px;
 }
 
-/* Sepia: 护眼棕褐色，背景柔和、文字与边框对比清晰；画布偏暗使节点更突出 */
-html.sepia {
-  --bg: #e8e0cc;
-  --bg-bar: #e2d8c4;
-  --bg-canvas: #c4b498;
-  --grid-color: rgba(72, 60, 48, 0.14);
-  --text: #2d261e;
-  --text-muted: #5c5042;
-  --border: #a89878;
-  --node-border: #6b5a42;
-  --hover: #d4c8b0;
-  --shadow: rgba(45, 38, 30, 0.22);
-  --diff-removed-bg: rgba(170, 65, 50, 0.28);
-  --diff-removed-text: #a02d1e;
-  --diff-added-bg: rgba(45, 110, 58, 0.28);
-  --diff-added-text: #1e6b32;
-  --primary-btn-bg: rgba(55, 75, 140, 0.3);
-  --primary-btn-text: #2d3d7a;
-  --control-radius: 3px;
-}
-
-/* High contrast: 高对比度，便于阅读与无障碍 */
+/* High contrast: 高对比度（已暂时注释）
 html.high-contrast {
   --bg: #ffffff;
   --bg-bar: #f0f0f0;
@@ -80,6 +60,7 @@ html.high-contrast {
   --primary-btn-text: #0000aa;
   --control-radius: 2px;
 }
+*/
 
 body {
   font-family:

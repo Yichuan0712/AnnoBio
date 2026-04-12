@@ -14,7 +14,8 @@
   background: var(--bg-bar);
   border: 1px solid var(--border);
   border-radius: 0;
-  box-shadow: 0 8px 32px var(--shadow);
+  /* 大模糊阴影在左右两侧会像一道粗竖线；层次靠 1px border 即可 */
+  box-shadow: none;
   min-width: min(360px, 92vw);
   max-width: 92vw;
   max-height: 85vh;
@@ -132,109 +133,6 @@
   display: none;
 }
 
-/* 全屏时保留底边留白，使 dataset 详情面板的底部颜色描边可见 */
-.modal-overlay--maximized:has(.modal-panel--working-dataset-detail) {
-  padding-bottom: 4px;
-  box-sizing: border-box;
-}
-
-.modal-half {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  font-size: 16px;
-  line-height: 1;
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-.modal-half:hover,
-.modal-half.modal-half--active {
-  color: var(--text);
-  background: var(--hover);
-}
-
-.modal-header-actions .modal-half {
-  margin: 0;
-}
-
-.modal-overlay--half-left,
-.modal-overlay--half-right {
-  pointer-events: none;
-  background: transparent;
-}
-
-.modal-overlay--half-left .modal-panel,
-.modal-overlay--half-right .modal-panel {
-  pointer-events: auto;
-}
-
-.modal-overlay--half-left {
-  justify-content: flex-start;
-  align-items: stretch;
-}
-
-.modal-overlay--half-left .modal-panel {
-  width: 50vw !important;
-  max-width: 50vw !important;
-  height: 100% !important;
-  max-height: 100% !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
-  margin: 0 !important;
-}
-
-.modal-overlay--half-right {
-  justify-content: flex-end;
-  align-items: stretch;
-}
-
-.modal-overlay--half-right .modal-panel {
-  width: 50vw !important;
-  max-width: 50vw !important;
-  height: 100% !important;
-  max-height: 100% !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
-  margin: 0 !important;
-}
-
-/* 双开 dataset 半屏时，中线无缝贴合（缝为 0 时中线只显示一种描边颜色） */
-.modal-overlay--half-left .modal-panel--working-dataset-detail {
-  box-sizing: border-box !important;
-  width: 50vw !important;
-  max-width: 50vw !important;
-  margin-right: 0 !important;
-}
-.modal-overlay--half-right .modal-panel--working-dataset-detail {
-  box-sizing: border-box !important;
-  width: 50vw !important;
-  max-width: 50vw !important;
-  margin-left: 0 !important;
-}
-
-.modal-overlay--half-left .modal-resize-handle,
-.modal-overlay--half-right .modal-resize-handle {
-  display: none;
-}
-
-.modal-overlay--half-left .modal-maximize,
-.modal-overlay--half-right .modal-maximize {
-  display: none;
-}
-
-/* 半屏时半屏键一定显示为选中 */
-.modal-overlay--half-left .modal-half,
-.modal-overlay--half-right .modal-half {
-  color: var(--text);
-  background: var(--hover);
-}
-
 .modal-body {
   padding: 20px;
   min-height: 120px;
@@ -304,8 +202,9 @@
 }
 
 .modal-panel--prompt[data-add-prompt-step="3"] {
-  width: min(1200px, 92vw);
-  min-width: min(1200px, 92vw);
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
 }
 
 /* Add dataset: same layout and style as Add prompt */
@@ -323,26 +222,20 @@
 }
 
 .modal-panel--dataset[data-add-dataset-step="2"] {
-  width: min(1000px, 92vw);
-  min-width: min(1000px, 92vw);
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
 }
 
-/* Model settings modal: paged layout (style aligned with Create prompt / Create dataset) */
+/* Model settings: panel size + body padding like My credentials; no bordered “table” wrapper (credentials only) */
 .modal-panel--defaults {
-  max-height: 98vh;
+  min-width: min(960px, 92vw);
+  max-width: 92vw;
+  min-height: min(640px, 80vh);
+  /* Match credentials panel; override generic .modal-panel max-height: 85vh */
+  max-height: min(90vh, 98vh);
   display: flex;
   flex-direction: column;
-  transition: width 0.25s ease, min-width 0.25s ease;
-}
-
-.modal-panel--defaults[data-defaults-page="1"] {
-  width: min(400px, 92vw);
-  min-width: min(400px, 92vw);
-}
-
-.modal-panel--defaults[data-defaults-page="2"] {
-  width: min(520px, 92vw);
-  min-width: min(520px, 92vw);
 }
 
 .modal-body--defaults {
@@ -350,35 +243,498 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 0;
+  gap: 24px;
+  padding: 20px;
+  box-sizing: border-box;
   overflow: hidden;
 }
 
-.defaults-add-main {
+/* Model settings: same dual-column rhythm as review-detail-body / modal-body--dataset (gap 0, border split, pad inside cols) */
+
+.modal-body--defaults.modal-body--model-settings-combined {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 6px 0 20px 0;
+  gap: 0;
+  padding: 0;
 }
 
-.defaults-add-page {
-  display: none;
+.modal-body--model-settings-combined {
+  flex: 1;
+  min-height: 0;
+}
+
+.modal-panel--model-settings-combined .model-settings-preview-wrap--full {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-height: 0;
+  border: none;
+}
+
+/* Single grid: header cells share column tracks with body — vertical rule and widths cannot drift (flex row + separate row was misaligning) */
+.modal-panel--model-settings-combined .model-settings-columns {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(520px, 6fr) minmax(280px, 4fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "cred-head sett-head"
+    "cred-body sett-body";
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.modal-panel--model-settings-combined .model-settings-col-heading {
+  margin: 0;
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  background: var(--bg);
+  align-self: stretch;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-heading--credentials {
+  grid-area: cred-head;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-panel--model-settings-combined .model-settings-col-heading--settings {
+  grid-area: sett-head;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-panel--model-settings-combined .settings-credentials-tab-body {
+  display: flex;
   flex-direction: column;
   gap: 12px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-left {
+  grid-area: cred-body;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 20px 20px;
+  border-right: 1px solid var(--border);
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.modal-panel--model-settings-combined .model-settings-col-left .credentials-panel-host {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-right {
+  grid-area: sett-body;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 20px 20px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--bg);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/*
+ * Tabs change scrollability (New credential short vs Review long) → scrollbar toggles →
+ * content width “jumps”. Reserve gutter so form columns stay the same width.
+ */
+.modal-panel--model-settings-combined .defaults-page-scroll {
+  scrollbar-gutter: stable;
+  overflow-x: hidden;
+}
+
+.modal-panel--model-settings-combined .model-settings-preview-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-right .model-settings-main {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.modal-panel--model-settings-combined .model-settings-col-right .model-settings-footer.prompt-actions {
+  margin-top: auto;
+  flex-shrink: 0;
+  padding-top: 12px;
+  background: transparent;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-panel--model-settings-combined .model-settings-footer__save-restore {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* [hidden] must win over display:flex above, or Save + Restore stay visible on New credential tab */
+.modal-panel--model-settings-combined .model-settings-footer__save-restore[hidden],
+.modal-panel--model-settings-combined #settings-footer-add[hidden] {
+  display: none !important;
+}
+
+.modal-panel--model-settings-combined .model-settings-tab-row {
+  margin-bottom: 8px;
+}
+
+/* Credentials stack (embedded left column): subsection titles + table, no rounded “cards” */
+.credentials-panel-host {
   flex: 1;
   min-height: 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.credentials-panel-host .credentials-panel-inner {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   overflow: hidden;
-  padding: 0 20px;
 }
 
-.modal-panel--defaults[data-defaults-page="1"] .defaults-add-page-1 {
+.credentials-panel-host .credentials-prompt-block--table {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
   display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
-.modal-panel--defaults[data-defaults-page="2"] .defaults-add-page-2 {
+.credentials-panel-host .credentials-prompt-block--table .credentials-table-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  box-sizing: border-box;
+  padding-bottom: 12px;
+}
+
+/* Add credential: flat block (no bg-bar “card” — same surface as tab body) */
+.modal-panel--model-settings-combined .model-settings-credentials-add {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-add-row {
+  display: grid;
+  /* Match .modal-panel--defaults .defaults-row (Runner / Reviewer) */
+  grid-template-columns: 1fr 1fr;
+  row-gap: 0.75rem;
+  column-gap: 1.5rem;
+  align-items: end;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-add-field--full-row {
+  grid-column: 1 / -1;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-add-field {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-select,
+.modal-panel--model-settings-combined .model-settings-credentials-add .dataset-meta-input {
+  height: 40px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-radius: var(--control-radius, 3px);
+}
+
+/* Selects: same padding on all three tabs (avoid dataset-meta-input vs credentials-select fighting) */
+.modal-panel--model-settings-combined .model-settings-credentials-add select.credentials-select,
+.modal-panel--model-settings-combined .model-settings-main .defaults-row select.credentials-select {
+  padding: 0 12px;
+  line-height: normal;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-model-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-model-custom-wrap {
+  display: none;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-model-custom-wrap.is-visible {
+  display: block;
+}
+
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-model-preset-wrap.is-hidden {
+  display: none;
+}
+
+.credentials-panel-host .credentials-name-cell,
+.credentials-panel-host .credentials-key-cell {
+  cursor: pointer;
+  vertical-align: middle;
+  position: relative;
+}
+
+/* Embedded table: override standalone credentials modal (min-width 280px on key forces horizontal scroll) */
+.credentials-panel-host .credentials-name-cell {
+  max-width: none;
+}
+
+.credentials-panel-host .credentials-key-cell {
+  min-width: 0;
+  max-width: none;
+}
+
+.credentials-panel-host .credentials-name-cell:has(.credentials-cell-edit-wrap),
+.credentials-panel-host .credentials-key-cell:has(.credentials-cell-edit-wrap) {
+  min-height: 2.5em;
+}
+
+.credentials-panel-host .credentials-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+/* Sticky thead must sit above tbody or first row text paints on top of “Name” etc. */
+.credentials-panel-host .credentials-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--hover);
+  background-clip: padding-box;
+  box-shadow: 0 1px 0 var(--border);
+  white-space: nowrap;
+}
+
+/* Percentages sum to 100% so the table always fills the scroll area (no empty strip on the right) */
+.credentials-panel-host .credentials-table th:nth-child(1),
+.credentials-panel-host .credentials-table td:nth-child(1) {
+  width: 14%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentials-panel-host .credentials-table th:nth-child(2),
+.credentials-panel-host .credentials-table td:nth-child(2) {
+  width: 13%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentials-panel-host .credentials-table th:nth-child(3),
+.credentials-panel-host .credentials-table td:nth-child(3) {
+  width: 35%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentials-panel-host .credentials-table th:nth-child(4),
+.credentials-panel-host .credentials-table td:nth-child(4) {
+  width: 10%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credentials-panel-host .credentials-table th:nth-child(5),
+.credentials-panel-host .credentials-table td:nth-child(5) {
+  width: 28%;
+  min-width: 0;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* Keep <td> as table-cell; global .credentials-actions-cell { display:flex } breaks row height + wraps buttons */
+.credentials-panel-host .credentials-actions-cell {
+  display: table-cell;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+
+.credentials-panel-host .credentials-actions-inline {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.credentials-panel-host .credentials-cell-edit-wrap {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 4px);
+  padding: 2px 6px;
+}
+
+.credentials-panel-host .credentials-cell-edit-wrap input {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 0;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: 0;
+  font: inherit;
+  outline: none;
+}
+
+.credentials-panel-host .credentials-cell-key-wrap input {
+  font-size: 0.9em;
+  overflow-x: auto;
+}
+
+.credentials-panel-host .credentials-actions-inline .btn {
+  margin: 0;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.modal-panel--defaults .defaults-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  row-gap: 0.75rem;
+  column-gap: 1.5rem;
+  align-items: end;
+}
+
+.modal-panel--defaults .defaults-field--full {
+  grid-column: 1 / -1;
+}
+
+.modal-panel--defaults .defaults-field {
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Review → Finetune number fields: 两列须用相同 padding-bottom，否则 .defaults-row的 align-items:end 会让两个输入框上下错开 */
+.modal-panel--defaults .defaults-field--review-finetune-input,
+.modal-panel--model-settings-combined .defaults-row .defaults-field--review-finetune-input {
+  padding-bottom: 0.5rem;
+}
+
+.modal-panel--defaults .model-settings-defaults-card .credentials-select,
+.modal-panel--defaults .model-settings-defaults-card .dataset-meta-input {
+  height: 40px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-radius: var(--control-radius, 3px);
+}
+
+.modal-panel--model-settings-combined .model-settings-main .defaults-row .credentials-select,
+.modal-panel--model-settings-combined .model-settings-main .defaults-row .dataset-meta-input {
+  height: 40px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border-radius: var(--control-radius, 3px);
+}
+
+.model-settings-main {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.model-settings-tab-row {
+  flex-shrink: 0;
+}
+
+.modal-body--defaults .review-detail-tab-panels.model-settings-tab-panels {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.model-settings-footer.prompt-actions {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .defaults-page-scroll {
@@ -388,27 +744,6 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.defaults-page-label {
-  margin: 0 -20px;
-  padding: 6px 20px 12px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--text);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.defaults-add-page-1 .prompt-actions,
-.defaults-add-page-2 .prompt-actions {
-  margin-top: auto;
-  flex-shrink: 0;
-}
-
-.defaults-add-page-1 .prompt-actions {
-  justify-content: flex-end;
 }
 
 .modal-body--dataset {
@@ -557,9 +892,10 @@
   margin-top: 16px;
 }
 
-/* search 行与表格间距与 score 页一致（约 10px） */
+/* search 行与表格间距与 score 页一致；左内边距与 .working-dataset-table-wrap 一致，使 “N columns, M rows” 与表格左缘对齐 */
 .dataset-detail-preview-search-wrap.working-dataset-search-wrap {
-  padding-bottom: 4px;
+  padding: 8px 0 4px;
+  padding-left: 12px;
 }
 
 .working-dataset-detail-body .working-dataset-table-wrap {
@@ -585,6 +921,20 @@
   font-size: 11px;
   min-height: 26px;
   box-sizing: border-box;
+}
+
+/* Score / Run / Working dataset：表格筛选框同宽；Run+Working 去掉 wrap 左右 padding 后与 Score 一致，右缘与 footer 主按钮对齐 */
+.score-detail-results-search-inline .dataset-detail-preview-search-inp,
+.run-detail-results-search-wrap .dataset-detail-preview-search-inp,
+.working-dataset-search-wrap .dataset-detail-preview-search-right .dataset-detail-preview-search-inp {
+  width: 180px;
+  min-width: 0;
+  max-width: 240px;
+  padding: 4px 8px;
+  font-size: 11px;
+  min-height: 26px;
+  box-sizing: border-box;
+  flex: 0 0 auto;
 }
 
 .dataset-preview {
@@ -1158,17 +1508,18 @@
   color: var(--text);
 }
 
-/* Prompt details modal: same panel size as add prompt for consistency */
+/* Prompt details modal: 与 Run 详情展开态同宽 */
 /* Review detail 与此处尺寸一致，见下方合并规则 */
 .modal-panel--prompt-detail {
-  width: min(1200px, 94vw);
-  min-width: min(1200px, 94vw);
-  max-width: 96vw;
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
   height: min(85vh, 98vh);
   max-height: 98vh;
   min-height: 70vh;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 .modal-panel--prompt-detail .modal-body.prompt-detail-body {
@@ -1399,14 +1750,16 @@
   gap: 10px;
 }
 
-/* Dataset detail modal (click dataset node) */
+/* Dataset detail modal (click dataset node)：与 Run 详情展开态同宽 */
 .modal-panel--dataset-detail {
-  min-width: min(1080px, 95vw);
-  max-width: 96vw;
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
   max-height: 98vh;
   min-height: min(420px, 70vh);
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 .modal-panel--dataset-detail .modal-body.dataset-detail-body {
@@ -1900,6 +2253,13 @@
   line-height: 1.2;
 }
 
+/* Run / Score 详情：标签、下拉、主按钮的间距与下拉宽度（两处一致） */
+.modal-panel--run-detail,
+.modal-panel--score-detail {
+  --detail-llm-select-width: 165px;
+  --detail-llm-inline-gap: 12px;
+}
+
 /* Score detail modal: layout aligned with Run detail (main + preview-wrap) */
 .modal-panel--score-detail {
   width: min(400px, 92vw);
@@ -1917,6 +2277,8 @@
   width: 88%;
   min-width: min(960px, 85%);
   max-width: 88%;
+  height: min(85vh, 98vh);
+  min-height: 70vh;
 }
 
 .modal-panel--score-detail .modal-body.score-detail-body,
@@ -2424,7 +2786,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
+  gap: var(--detail-llm-inline-gap);
   margin-top: 8px;
   margin-bottom: 16px;
   padding-left: 0;
@@ -2436,26 +2798,32 @@
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--detail-llm-inline-gap);
   flex-shrink: 0;
 }
 
 .score-detail-llm-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--detail-llm-inline-gap);
   flex-shrink: 0;
 }
 
+/* Prompt Runner / Prompt reviewer：凭据下拉统一宽度 */
+.run-detail-llm-actions-row .run-detail-llm-select,
 .score-detail-llm-row .score-detail-llm-select {
-  min-width: 180px;
+  width: var(--detail-llm-select-width);
+  min-width: min(var(--detail-llm-select-width), 100%);
+  max-width: 100%;
+  box-sizing: border-box;
+  flex: 0 0 auto;
 }
 
-/* Review detail modal: 与 Prompt 详情高度一致（height / min-height / max-height 同 .modal-panel--prompt-detail） */
+/* Review detail modal: 高度同 Prompt 详情；宽度与 Run 详情展开态一致 */
 .modal-panel--review-detail {
-  width: min(1200px, 94vw);
-  min-width: min(1200px, 94vw);
-  max-width: 96vw;
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
   height: min(85vh, 98vh);
   max-height: 98vh;
   min-height: 70vh;
@@ -2472,18 +2840,21 @@
   gap: 0;
   padding: 0;
   overflow: hidden;
+  background: var(--bg);
 }
 
-/* Left column: Suggestions — 1:1 与右栏均分 */
+/* Left column: Findings — 与 Prompt sections 同底色；三列 flex29:42:29（中间 42%，左右各 29%） */
 .review-detail-main {
-  flex: 1 1 0;
+  flex: 29 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 0;
+  padding: 6px 0 0;
   border-right: 1px solid var(--border);
   overflow: hidden;
+  box-sizing: border-box;
+  background: var(--bg);
 }
 
 /* Review name: 顶部身份条，左侧色条 + 小标签 + 主输入 */
@@ -2548,6 +2919,7 @@
   color: var(--text);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  background: var(--bg);
 }
 
 .review-detail-stream-status {
@@ -2559,7 +2931,63 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--bg-bar, var(--bg));
+  background: var(--bg);
+}
+
+/* Findings title: same bar as Review assistant (.review-detail-preview-title); offset top padding with .review-detail-main */
+.review-detail-main .review-detail-output-title.review-detail-preview-title {
+  padding-top: 6px;
+}
+
+/* Row under Findings: same control language as .btn / toolbars (not pill segment) */
+.review-detail-output-toolbar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 10px 20px 12px;
+  box-sizing: border-box;
+  gap: 8px;
+  background: var(--bg);
+  min-width: 0;
+}
+
+.review-detail-view-switch {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.review-detail-view-switch__btn.review-detail-tab {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  border-radius: var(--control-radius, 3px);
+  white-space: nowrap;
+}
+
+/* 选中态：中性高亮（Review Findings / Model settings 共用，避免主色蓝） */
+.review-detail-view-switch__btn.review-detail-tab--active {
+  font-weight: 600;
+  color: var(--text);
+  background: var(--hover);
+  border-color: var(--text-muted);
+}
+
+.review-detail-view-switch__btn.review-detail-tab--active:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+  border-color: var(--text);
+  color: var(--text);
 }
 
 .review-detail-main .review-detail-preview-content {
@@ -2572,8 +3000,131 @@
   overflow: hidden;
 }
 
+.review-detail-tab-panels {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.review-detail-tab-panel {
+  display: none;
+  flex: 1 1 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.review-detail-tab-panel--active {
+  display: flex;
+}
+
+.review-detail-row-diagnostics {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 0 12px 0;
+}
+
+.review-detail-diagnosis-card {
+  border-left: 3px solid var(--accent-muted, rgba(59, 130, 246, 0.45));
+}
+
+.review-detail-diagnosis-card__main {
+  cursor: default;
+}
+
+.review-detail-diagnosis-preview {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+}
+
+.review-diagnosis-detail-overlay {
+  z-index: 1100;
+}
+
+/* View detail：按内容高度收缩，避免短文案时整块被拉满；过长时在正文内滚动 */
+.modal-panel--review-diagnosis-detail {
+  width: min(720px, 92vw);
+  max-width: 92vw;
+  max-height: min(90vh, 920px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.modal-panel--review-diagnosis-detail .modal-header {
+  flex-shrink: 0;
+}
+
+.modal-body.review-diagnosis-detail-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(calc(90vh - 72px), 848px);
+  overflow-y: auto;
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-sizing: border-box;
+  background: var(--bg);
+}
+
+.review-diagnosis-detail-prose {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-diagnosis-detail-prose code {
+  font-size: 12px;
+  padding: 1px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: var(--bg-bar);
+  border-radius: 2px;
+}
+
+.review-diagnosis-detail-lead {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.review-diagnosis-detail-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.review-detail-diagnosis-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  background: var(--bg-muted, rgba(128, 128, 128, 0.15));
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+
+.review-detail-diagnosis-summary {
+  margin-top: 8px;
+}
+
+.review-detail-diagnosis-rough {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
 .review-detail-main .review-detail-preview-content .review-detail-suggestions {
   flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: 12px 0 0 0;
@@ -2583,9 +3134,9 @@
   margin-bottom: 12px;
 }
 
-/* Right column: Prompt sections — 1:1 与左栏均分，样式同 .prompt-detail-main */
+/* Middle column: Prompt sections — 占行宽 42% */
 .review-detail-preview-wrap {
-  flex: 1 1 0;
+  flex: 42 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -2632,9 +3183,9 @@
   overflow-x: hidden;
 }
 
-/* Third column: Review Assistant chat */
+/* Third column: Review Assistant chat — 与左栏同宽（各占余下 58% 的一半） */
 .review-detail-third-column {
-  flex: 1 1 0;
+  flex: 29 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -2788,7 +3339,8 @@
   background: var(--hover);
 }
 
-.review-detail-suggestions-footer {
+.review-detail-suggestions-footer,
+.review-detail-analysis-footer {
   flex-shrink: 0;
   margin: 0 -20px;
   padding: 12px 20px;
@@ -2797,7 +3349,8 @@
   justify-content: flex-end;
 }
 
-.review-detail-suggestions-footer:empty {
+.review-detail-suggestions-footer:empty,
+.review-detail-analysis-footer:empty {
   display: none;
 }
 
@@ -2817,7 +3370,7 @@
 }
 
 .review-detail-status-note--incomplete {
-  color: var(--warning, #b8860b);
+  color: var(--text-muted);
 }
 
 /* Export new prompt：放在 Prompt sections 下方 */
@@ -2860,6 +3413,19 @@
   word-break: break-word;
 }
 
+.review-suggestion-detail-list {
+  margin: 4px 0 12px 0;
+  padding-left: 1.25rem;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+/* View detail: Finetune line uses same typography as .review-diagnosis-detail-prose (only a hook if needed) */
+.review-suggestion-finetune-detail-line {
+  margin: 0;
+}
+
 .review-detail-export-btn {
   font-size: 12px;
 }
@@ -2890,6 +3456,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .review-detail-suggestion-card__main {
@@ -2920,20 +3488,179 @@
 
 .review-detail-suggestion-card__actions {
   display: flex;
-  justify-content: flex-end;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.review-detail-suggestion-card__actions .review-detail-diagnosis-detail-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  padding: 3px 4px;
+  width: 4.1rem;
+  min-width: 4.1rem;
+  max-width: 4.1rem;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+/* No pass/fail yet: hide icon column so "Verify" is centered in the fixed width */
+.review-detail-suggestion-card__actions
+  .review-detail-test-btn:not(.review-detail-test-btn--passed):not(.review-detail-test-btn--failed)
+  .review-detail-test-btn__icon-slot {
+  display: none;
+}
+
+/* Single slot: tick and cross overlap so button width stays fixed */
+.review-detail-suggestion-card__actions .review-detail-test-btn__icon-slot {
+  position: relative;
+  width: 0.65em;
+  height: 1em;
+  flex-shrink: 0;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn__tick,
+.review-detail-suggestion-card__actions .review-detail-test-btn__cross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: inherit;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn--passed .review-detail-test-btn__tick {
+  opacity: 1;
+  color: var(--diff-added-text, #16a34a);
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__cross {
+  opacity: 1;
+  color: var(--diff-removed-text, #dc2626);
+}
+
+/* Pass: checkmark is in the label; hide icon slot (same idea as fail). */
+.review-detail-suggestion-card__actions .review-detail-test-btn--passed .review-detail-test-btn__icon-slot {
+  display: none;
+}
+
+/* Fail: label uses ballot X U+2717 (pairs with check U+2713); hide icon slot */
+.review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__icon-slot {
+  display: none;
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__label {
+  color: var(--diff-removed-text, #dc2626);
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn__label {
+  flex: 0 0 auto;
+  text-align: center;
+}
+
+/* Last pass/fail shown on label; button stays clickable for re-verify */
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--passed {
+  font-weight: 400;
+  color: var(--diff-added-text, #16a34a);
+  border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--passed:hover:not(:disabled) {
+  color: var(--diff-added-text, #16a34a);
+  border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--failed {
+  font-weight: 400;
+  color: var(--diff-removed-text, #dc2626);
+  border-color: color-mix(in srgb, var(--diff-removed-text, #dc2626) 55%, var(--border));
+}
+
+.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--failed:hover:not(:disabled) {
+  color: var(--diff-removed-text, #dc2626);
+  border-color: color-mix(in srgb, var(--diff-removed-text, #dc2626) 55%, var(--border));
+}
+
+/*
+ * Finetune / Tuning / Finetune ��: fixed width so the label swap does not jump the row.
+ * Keep roughly the same scale as Verify (4.1rem fits “Verifying”); +0.4rem for the check state.
+ */
+.review-detail-suggestion-card__actions .review-detail-tune-btn {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  padding: 3px 4px;
+  width: 4.5rem;
+  min-width: 4.5rem;
+  max-width: 4.5rem;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.review-detail-suggestion-card__actions .review-detail-tune-btn.review-detail-tune-btn--done:disabled {
+  opacity: 1;
+  cursor: default;
+  filter: none;
+  font-weight: 400;
+  color: var(--diff-added-text, #16a34a);
+  border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
+}
+
+.review-detail-suggestion-finetune-line {
+  margin: 0.35rem 0 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted);
+  word-break: break-word;
 }
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn {
-  font-size: 12px;
-  padding: 4px 10px;
+  font-size: 11px;
+  padding: 3px 6px;
+  /* Same width whether label is "Accept" or "Revert" (Revert is the wider of the two). */
+  min-width: 3.65rem;
+  white-space: nowrap;
+  box-sizing: border-box;
+  text-align: center;
   background: var(--diff-added-bg) !important;
   color: var(--diff-added-text) !important;
   border-color: var(--diff-added-text, currentColor) !important;
 }
 
-.review-detail-suggestion-card__actions .review-detail-accept-btn:hover {
-  filter: brightness(0.85);
+.review-detail-suggestion-card__actions .review-detail-accept-btn:hover:not(:disabled) {
+  filter: none !important;
+  background: var(--hover) !important;
+  border-color: var(--diff-added-text, currentColor) !important;
+  color: var(--diff-added-text) !important;
+}
+
+.review-detail-suggestion-card__actions .review-detail-accept-btn.review-detail-accept-btn--revert:hover:not(:disabled) {
+  filter: none !important;
+  background: var(--hover) !important;
+  border-color: var(--diff-removed-text, currentColor) !important;
+  color: var(--diff-removed-text) !important;
 }
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn--revert {
@@ -2957,28 +3684,10 @@
   cursor: default;
 }
 
-.review-detail-design-suggestions {
-  padding-top: 0;
-  margin-bottom: 0;
-}
 .review-detail-edit-suggestions {
   padding-top: 0;
   margin-top: 0;
-}
-/* When design has cards: no gap between design block and edit block. */
-.review-detail-design-suggestions + .review-detail-edit-suggestions {
-  margin-top: 0;
-}
-.review-detail-suggestions--design-empty .review-detail-edit-suggestions {
-  margin-top: 0;
-}
-
-.review-detail-design-card .review-detail-suggestion-card__main {
-  cursor: default;
-}
-.review-detail-design-card:hover {
-  border-color: var(--border);
-  background: var(--bg);
+  min-width: 0;
 }
 
 .review-detail-suggestion-unlocatable {
@@ -3013,6 +3722,19 @@
 .review-added {
   background: var(--diff-added-bg);
   color: var(--diff-added-text);
+}
+
+/* Revert hover: what will be undone (accepted new text) = green + strikethrough; restored original = red */
+.review-revert-remove {
+  background: var(--diff-added-bg);
+  color: var(--diff-added-text);
+  text-decoration: line-through;
+}
+
+.review-revert-restore {
+  background: var(--diff-removed-bg);
+  color: var(--diff-removed-text);
+  text-decoration: none;
 }
 
 .score-detail-results-card #score-detail-results-body {
@@ -3051,7 +3773,7 @@
   border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
 }
 
-/* Reviewer model 选择框与 Review 按钮同高 */
+/* Prompt reviewer 选择框与 Review 按钮同高 */
 .score-detail-llm-row .score-detail-llm-select {
   height: 36px;
   min-height: 36px;
@@ -3221,16 +3943,6 @@
   font-weight: 600;
   color: var(--text-muted);
   white-space: nowrap;
-}
-
-.score-detail-results-search-inline .dataset-detail-preview-search-inp {
-  width: 180px;
-  min-width: 0;
-  max-width: 240px;
-  padding: 4px 8px;
-  font-size: 11px;
-  min-height: 26px;
-  box-sizing: border-box;
 }
 
 .score-detail-results-table-wrap {
@@ -3652,6 +4364,8 @@
   width: 88%;
   min-width: min(960px, 85%);
   max-width: 92vw;
+  height: min(85vh, 98vh);
+  min-height: 70vh;
 }
 
 .modal-panel--run-detail .modal-body.run-detail-body,
@@ -3703,11 +4417,50 @@
   flex-shrink: 0;
   margin: 0 0 8px 0;
 }
-.run-detail-main .prompt-actions.run-detail-actions {
+
+/* Prompt Runner：左侧伸缩占位 + 右侧组（模型行 + 按钮），与 Score footer-right 同构；下拉与按钮仅 gap */
+.run-detail-model-actions-field {
+  gap: 0;
+}
+
+.run-detail-llm-actions-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.run-detail-llm-actions-row .run-detail-llm-actions-lead {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 1px;
+  align-self: stretch;
+  pointer-events: none;
+}
+
+.run-detail-llm-actions-right {
+  display: flex;
+  align-items: center;
+  gap: var(--detail-llm-inline-gap);
   flex-shrink: 0;
-  padding: 12px 0 0 0;
-  margin-top: auto;
-  justify-content: flex-end;
+}
+
+.run-detail-llm-actions-right > .run-detail-llm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--detail-llm-inline-gap);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.run-detail-llm-actions-row .run-detail-label {
+  flex-shrink: 0;
+}
+
+.run-detail-llm-actions-row .run-detail-run-btn {
+  flex-shrink: 0;
 }
 
 /* 未展开时隐藏右半部分（与 add prompt step1 的 prompt-preview-wrap 一致） */
@@ -4090,9 +4843,10 @@
   color: var(--text);
 }
 
-/* Run results: 搜索框长度与其他页面一致 */
-.run-detail-results-search-wrap .dataset-detail-preview-search-inp {
-  max-width: 240px;
+/* 与 Score 一致：不在此处加左右 padding，否则输入框比 footer 主按钮更靠左 */
+.run-detail-results-search-wrap.dataset-detail-preview-search-wrap {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .run-detail-results-table-wrap {
@@ -4237,14 +4991,17 @@
 }
 
 
-/* Dataset detail modal (subset): prompt/add style, preview only, no name/description edit */
+/* Dataset detail modal（画布上 dataset节点表格）：与 Run 详情展开态 / Prompt 详情同宽 */
 .modal-panel--working-dataset-detail {
-  min-width: min(720px, 94vw);
-  max-width: 96vw;
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
+  height: min(85vh, 98vh);
   max-height: 98vh;
-  min-height: min(420px, 70vh);
+  min-height: 70vh;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 /* Body: single column like prompt detail right side */
@@ -4257,7 +5014,7 @@
   overflow: hidden;
 }
 
-/* Full-width preview side (same structure as prompt detail side) */
+/* Full-width preview side：与双列 Prompt 右侧同 class，但此处占满宽度，去掉分隔竖线以免边缘多一道边 */
 .modal-panel--working-dataset-detail .dataset-detail-preview-side.prompt-detail-side {
   flex: 1 1 0;
   min-width: 0;
@@ -4265,6 +5022,7 @@
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  border-right: none;
 }
 
 .modal-panel--working-dataset-detail .dataset-detail-preview-side .prompt-detail-side-scroll {
@@ -6251,7 +7009,11 @@ body.wd-row-resizing {
   cursor: pointer;
   border: 1px solid var(--border);
   border-radius: var(--control-radius, 3px);
-  transition: filter 0.15s ease, background 0.15s ease;
+  transition:
+    filter 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .btn-primary {
@@ -6260,8 +7022,20 @@ body.wd-row-resizing {
   border-color: var(--primary-btn-text, #2563eb);
 }
 
+/* Same hover surface as .btn-secondary (var(--hover)); keep blue text+border so it stays a “primary” control */
 .btn-primary:hover:not(:disabled) {
-  filter: brightness(0.85);
+  filter: none;
+  background: var(--hover);
+  border-color: var(--primary-btn-text);
+  color: var(--primary-btn-text);
+}
+
+/* Beats tied-specificity rules like .modal-panel--section-editor .btn:hover when both apply */
+button.btn.btn-primary:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+  border-color: var(--primary-btn-text);
+  color: var(--primary-btn-text);
 }
 
 .btn:disabled,
@@ -6290,5 +7064,15 @@ body.wd-row-resizing {
 }
 
 .btn-danger:hover:not(:disabled) {
-  filter: brightness(0.85);
+  filter: none;
+  background: var(--hover);
+  border-color: var(--diff-removed-text);
+  color: var(--diff-removed-text);
+}
+
+button.btn.btn-danger:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+  border-color: var(--diff-removed-text);
+  color: var(--diff-removed-text);
 }

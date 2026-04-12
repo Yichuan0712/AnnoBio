@@ -27,7 +27,6 @@ import { buildTopBar } from './topBar.js';
 import { buildWorkflowCanvas } from './workflowCanvas.js';
 import { openAddPromptModal } from './addPromptModal.js';
 import { openAddDatasetModal } from './addDatasetModal.js';
-import { openCredentialsModal } from './credentialsModal.js';
 import { initModalDrag } from './modalDrag.js';
 import { initModalMaximize } from './modalMaximize.js';
 
@@ -109,18 +108,11 @@ window.addEventListener('DOMContentLoaded', () => {
   const topBarAPI = buildTopBar(root, {
     openAddPromptModal: () => openAddPromptModal(canvasAPI),
     openAddDatasetModal: () => openAddDatasetModal(canvasAPI),
-    openCredentialsModal,
     onNewProject,
     onOpenProject,
     onSaveAsProject,
-    undo: () => canvasAPI.undo?.(),
-    redo: () => canvasAPI.redo?.(),
-    getCanUndo: () => canvasAPI.getCanUndo?.() ?? false,
-    getCanRedo: () => canvasAPI.getCanRedo?.() ?? false,
   });
   topBarAPI.setAddMenuEnabled(false);
-
-  canvasAPI.setOnUndoRedoChange?.(() => topBarAPI.updateUndoRedoState?.());
 
   let saveTimeout = null;
   canvasAPI.setOnCanvasChange(() => {
