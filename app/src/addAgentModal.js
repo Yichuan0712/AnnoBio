@@ -2,6 +2,8 @@
  * "Add a new agent" modal: choose agent type, LLM, then Add this agent.
  */
 
+import { selectPlaceholderLabel } from './displayTextNormalize.js';
+
 export function openAddAgentModal() {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -18,7 +20,7 @@ export function openAddAgentModal() {
           <div class="agent-form-field">
             <label class="dataset-meta-label" for="agent-type-select">Agent type</label>
             <select id="agent-type-select" class="credentials-select" aria-label="Select agent type">
-              <option value="">Select an agent type...</option>
+              <option value="">${selectPlaceholderLabel('Select agent type')}</option>
               <option value="task-executor">Task executor</option>
               <option value="result-analyzer">Result analyzer</option>
               <option value="prompt-modifier">Prompt modifier</option>
@@ -27,7 +29,7 @@ export function openAddAgentModal() {
           <div class="agent-form-field">
             <label class="dataset-meta-label" for="agent-model-select">Model</label>
             <select id="agent-model-select" class="credentials-select" aria-label="Select model">
-              <option value="">Select a model...</option>
+              <option value="">${selectPlaceholderLabel('Select model')}</option>
               <option value="gpt-5">gpt-5</option>
               <option value="gpt-5-mini">gpt-5-mini</option>
               <option value="gpt-5-nano">gpt-5-nano</option>

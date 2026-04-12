@@ -4,6 +4,7 @@
  */
 
 import { showAlert } from './alertModal.js';
+import { selectPlaceholderLabel } from './displayTextNormalize.js';
 
 const API_BASE = 'http://localhost:8000';
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -340,12 +341,17 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     all_rows_matched: allRowsMatched,
     comparison_rows: comparisonRows.map((r) => ({
       row_index: r.row_index,
+      input_row_index: typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : null,
       matched: comparisonRowIsMatched(r),
       run_output: r.run_output || {},
       expected: r.expected || '',
+      ground_truth_output: r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {},
       comparison_types: r.comparison_types ?? null,
       comment: r.comment ?? null,
       row_input: r.row_input ?? null,
+      gt_only: r.gt_only === true,
+      source_gt_row_index: typeof r.source_gt_row_index === 'number' && !Number.isNaN(r.source_gt_row_index) ? r.source_gt_row_index : null,
+      score_table_row: typeof r.score_table_row === 'number' && !Number.isNaN(r.score_table_row) ? r.score_table_row : null,
     })),
   };
   const promptFullText = payload.prompt_full_text || (payload.prompt_sections || []).map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
@@ -360,8 +366,8 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
       data: {
         summary: '',
         suggestions: [],
-        design_suggestions: [],
         data_refinement: [],
+        row_diagnostics: [],
         promptSections: sectionsCopy,
         promptFullText: promptFullText || '',
         workingSections: workingSectionsInitial,
@@ -904,7 +910,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select ground truth dataset">
                 <div class="run-detail-ws-trigger" tabindex="0">
                   <span class="run-detail-ws-trigger-color" id="score-detail-gt-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">— Select ground truth dataset —</span>
+                  <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">${escapeHtml(selectPlaceholderLabel('Select ground truth dataset'))}</span>
                   <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
                 </div>
                 <div class="run-detail-ws-dropdown" id="score-detail-gt-dropdown" role="listbox" hidden></div>
@@ -929,10 +935,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
                   <div class="score-detail-llm-row">
-                    <label class="run-detail-label" for="score-detail-llm-select">Reviewer model</label>
-                    <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select Reviewer model"></select>
+                    <label class="run-detail-label" for="score-detail-llm-select">Prompt reviewer</label>
+                    <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model for Prompt reviewer"></select>
                   </div>
-                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with selected Reviewer model">Review</button>
+                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with the selected Prompt reviewer model">Review</button>
                 </div>
               </div>
             </div>
@@ -984,7 +990,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     } else {
       triggerColorEl.style.background = '';
       triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = '— Select —';
+      triggerTextEl.textContent = selectPlaceholderLabel('Select');
     }
   }
 
@@ -1052,7 +1058,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const sel = h === defaultGtColumn ? ' selected' : '';
       return `<option value="${escapeAttr(h)}"${sel}>${escapeHtml(h)}</option>`;
     }).join('');
-    const gtSelectEmptyOpt = (gtHeaders && gtHeaders.length > 0) ? '' : '<option value="">— Select column —</option>';
+    const gtSelectEmptyOpt = (gtHeaders && gtHeaders.length > 0) ? '' : `<option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>`;
 
     const editorOverlay = document.createElement('div');
     editorOverlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
@@ -1981,7 +1987,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
         fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
       ]);
-      llmSelect.innerHTML = '<option value="">— Select reviewer model —</option>' + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
+      llmSelect.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select Prompt reviewer model'))}</option>` + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
       let credentialId = (node?.dataset?.reviewCredentialId || '').trim();
       if (!credentialId && settings) {
         const defaultId = (settings.default_review_credential_id || '').trim();
@@ -2029,7 +2035,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!scoreNodeId) return;
     const credentialId = (llmSelect?.value || '').trim();
     if (!credentialId) {
-      showAlert('Please select a Reviewer model first.', { title: 'No model selected' });
+      showAlert('Please select a model for Prompt reviewer first.', { title: 'No model selected' });
       return;
     }
     const payload = await Promise.resolve(getReviewPayload());
@@ -2138,7 +2144,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     emptyOption.className = 'run-detail-ws-option';
     emptyOption.setAttribute('role', 'option');
     emptyOption.setAttribute('aria-selected', !selectedNodeId ? 'true' : 'false');
-    emptyOption.innerHTML = '<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">— Select ground truth dataset —</span>';
+    emptyOption.innerHTML = `<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">${escapeHtml(selectPlaceholderLabel('Select ground truth dataset'))}</span>`;
     emptyOption.dataset.nodeId = '';
     emptyOption.addEventListener('click', () => selectGroundTruth(''));
     dropdownEl.appendChild(emptyOption);

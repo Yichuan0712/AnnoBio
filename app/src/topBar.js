@@ -2,15 +2,15 @@
  * Top menu bar: File, Edit, Settings.
  */
 
-import { setTheme, THEME_LIGHT, THEME_DARK, THEME_SEPIA, THEME_HIGH_CONTRAST } from './theme.js';
+import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 import { openSettingsModal } from './settingsModal.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, openCredentialsModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, undo?: () => void, redo?: () => void, getCanUndo?: () => boolean, getCanRedo?: () => boolean }} options
- * @returns {{ setAddMenuEnabled: (enabled: boolean) => void }}
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void }} options
+ * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void }}
  */
-export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, openCredentialsModal, onNewProject, onOpenProject, onSaveAsProject, undo, redo, getCanUndo, getCanRedo }) {
+export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -39,37 +39,11 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   const editDrop = document.createElement('div');
   editDrop.className = 'menu-dropdown';
   editDrop.innerHTML = `
-    <button type="button" class="menu-option" data-action="undo">Undo</button>
-    <button type="button" class="menu-option" data-action="redo">Redo</button>
-    <div class="menu-separator"></div>
     <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt...</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new dataset...</button>
   `;
-  const undoOpt = editDrop.querySelector('[data-action="undo"]');
-  const redoOpt = editDrop.querySelector('[data-action="redo"]');
   const createPromptOpt = editDrop.querySelector('[data-action="new-prompt"]');
   const createDatasetOpt = editDrop.querySelector('[data-action="new-dataset"]');
-  function updateEditMenuState() {
-    try {
-      if (typeof getCanUndo === 'function') undoOpt.disabled = !getCanUndo();
-      if (typeof getCanRedo === 'function') redoOpt.disabled = !getCanRedo();
-    } catch (_) {
-      undoOpt.disabled = false;
-      redoOpt.disabled = false;
-    }
-  }
-  editBtn.addEventListener('mouseenter', updateEditMenuState);
-  editBtn.addEventListener('click', updateEditMenuState);
-  undoOpt.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    undo?.();
-  });
-  redoOpt.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    redo?.();
-  });
   createPromptOpt.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -94,13 +68,6 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   settingsBtn.textContent = 'Settings';
   const settingsDrop = document.createElement('div');
   settingsDrop.className = 'menu-dropdown';
-  const credentialsOpt = document.createElement('button');
-  credentialsOpt.type = 'button';
-  credentialsOpt.className = 'menu-option';
-  credentialsOpt.setAttribute('data-action', 'my-credentials');
-  credentialsOpt.textContent = 'My credentials...';
-  credentialsOpt.addEventListener('click', openCredentialsModal);
-  settingsDrop.appendChild(credentialsOpt);
   const runReviewDefaultsOpt = document.createElement('button');
   runReviewDefaultsOpt.type = 'button';
   runReviewDefaultsOpt.className = 'menu-option';
@@ -117,13 +84,12 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
   submenu.innerHTML = `
     <button type="button" class="menu-option" data-mode="light">Light</button>
     <button type="button" class="menu-option" data-mode="dark">Dark</button>
-    <button type="button" class="menu-option" data-mode="sepia">Sepia</button>
-    <button type="button" class="menu-option" data-mode="high-contrast">High contrast</button>
   `;
+  // 高对比模式已注释
+  // <button type="button" class="menu-option" data-mode="high-contrast">High contrast</button>
+  // submenu.querySelector('[data-mode="high-contrast"]').addEventListener('click', () => setTheme(THEME_HIGH_CONTRAST));
   submenu.querySelector('[data-mode="light"]').addEventListener('click', () => setTheme(THEME_LIGHT));
   submenu.querySelector('[data-mode="dark"]').addEventListener('click', () => setTheme(THEME_DARK));
-  submenu.querySelector('[data-mode="sepia"]').addEventListener('click', () => setTheme(THEME_SEPIA));
-  submenu.querySelector('[data-mode="high-contrast"]').addEventListener('click', () => setTheme(THEME_HIGH_CONTRAST));
   displayModeOpt.appendChild(submenu);
   settingsDrop.appendChild(displayModeOpt);
   settingsBtn.appendChild(settingsDrop);
@@ -135,5 +101,5 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, ope
     saveAsOpt.disabled = !enabled;
   }
 
-  return { setAddMenuEnabled, setSaveAsEnabled, updateUndoRedoState: updateEditMenuState };
+  return { setAddMenuEnabled, setSaveAsEnabled };
 }

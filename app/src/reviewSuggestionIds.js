@@ -3,7 +3,7 @@
  * Root field review_suggestion_seq_next = next id to assign (starts at 1; after items 1..n have ids, equals n+1).
  */
 
-const LIST_KEYS = ['design_suggestions', 'data_refinement', 'suggestions'];
+const LIST_KEYS = ['data_refinement', 'suggestions'];
 
 export function parseNumericSuggestionId(v) {
   if (v == null || v === '') return null;
@@ -71,7 +71,7 @@ function hasInvalidNonEmptyId(data) {
 }
 
 /**
- * Reassign suggestion_id to 1..N in UI order: design (no Accept) → data refinement → edit suggestions.
+ * Reassign suggestion_id to 1..N in UI order: data refinement → edit suggestions.
  * Call when a review run finishes so IDs match top-to-bottom order (stream events often append edits before data).
  */
 export function normalizeSuggestionIdsToDisplayOrder(data) {
