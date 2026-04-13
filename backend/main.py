@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field, create_model
 
 from llm import chat as llm_chat, run_structured as llm_run_structured
 from llm import _extract_json_array_from_text
+from review_finetune_miprov2 import run_miprov2_finetune
 
 app = FastAPI()
 
@@ -87,9 +88,12 @@ DEFAULT_SETTINGS = {
     "review_max_tokens": 32768,
     "run_max_retries": 2,
     "review_max_failed_rows": 30,
-    # Review → Finetune (Thompson / Bayesian bandit over LLM rewrites)
+    # Review → Finetune: mode miprov2 | bandit (Thompson sampling over /api/review/finetune-candidates)
+    "review_finetune_mode": "miprov2",
     "review_finetune_max_trials": 22,
     "review_finetune_num_candidates": 10,
+    # DSPy MIPROv2 budget: light | medium | heavy (see dspy.MIPROv2 auto)
+    "review_finetune_miprov2_auto": "light",
 }
 
 
@@ -180,11 +184,17 @@ class SettingsPatch(BaseModel):
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
     review_max_failed_rows: int | None = Field(default=None, ge=1, le=200)
+    review_finetune_mode: str | None = Field(
+        default=None, description="Finetune algorithm: miprov2 | bandit"
+    )
     review_finetune_max_trials: int | None = Field(
         default=None, ge=4, le=200, description="Finetune bandit evaluation rounds (total trials)"
     )
     review_finetune_num_candidates: int | None = Field(
         default=None, ge=4, le=18, description="LLM paraphrases requested (must match finetune-candidates API)"
+    )
+    review_finetune_miprov2_auto: str | None = Field(
+        default=None, description="MIPROv2 run mode: light | medium | heavy"
     )
 
 
@@ -597,6 +607,27 @@ class FinetuneCandidatesRequest(BaseModel):
     num_variants: int = Field(default=10, ge=4, le=18, description="How many paraphrases to generate (JSON array)")
 
 
+class FinetuneMIPROv2Request(BaseModel):
+    finetune_credential_id: str = Field(..., description="DSPy / MIPROv2 optimizer LM (same stack as Review credential)")
+    run_credential_id: str = Field(..., description="Credential for per-row structured Run inside the metric")
+    old_sentence: str = Field(default="", description="Span being replaced")
+    new_sentence: str = Field(default="", description="Current proposal (starting point)")
+    originals: list[dict] = Field(default_factory=list, description="Prompt sections [{name, content}]")
+    all_suggestions: list[dict] = Field(default_factory=list, description="All review suggestions (same shape as saved JSON)")
+    suggestion_index: int = Field(..., ge=0, description="Index of the suggestion being finetuned")
+    expanded_comparison_rows: list[dict] = Field(
+        default_factory=list,
+        description="Pre-expanded comparison rows (same order as Verify / runSuggestionRowTestsMetrics)",
+    )
+    run_results: list[dict] = Field(default_factory=list)
+    output_fields: list[Any] = Field(default_factory=list)
+    output_schema: dict = Field(default_factory=dict)
+    score_mapping_json: Any = None
+    run_ws: dict = Field(default_factory=dict)
+    gt_content: dict = Field(default_factory=dict)
+    miprov2_auto: str = Field(default="light", description="Optimization budget: light | medium | heavy")
+
+
 @app.post("/api/review/finetune-candidates")
 def finetune_candidates(body: FinetuneCandidatesRequest):
     """LLM generates alternative replacements for a prompt span (used by Bayesian finetune in the app)."""
@@ -675,6 +706,70 @@ Return ONLY a JSON array of {n} strings, no markdown, no keys, no commentary. Ex
     return {"candidates": out[:20]}
 
 
+@app.post("/api/review/finetune-miprov2")
+def finetune_miprov2(body: FinetuneMIPROv2Request):
+    """
+    DSPy MIPROv2 optimizer over a span-rewrite module; metric = Review pass rate (server-side mirror of Verify).
+    May take several minutes and many LLM calls (optimizer + metric evaluations).
+    """
+    auto = (body.miprov2_auto or "light").strip().lower()
+    if auto not in ("light", "medium", "heavy"):
+        raise HTTPException(status_code=400, detail="miprov2_auto must be one of: light, medium, heavy")
+
+    items = _load_credentials()
+    fc = next((x for x in items if x.get("id") == body.finetune_credential_id), None)
+    rc = next((x for x in items if x.get("id") == body.run_credential_id), None)
+    if not fc or not rc:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    if not fc.get("api_key") or not rc.get("api_key"):
+        raise HTTPException(status_code=400, detail="Missing API key")
+
+    fp = fc.get("provider") or _infer_provider(fc.get("llm", ""))
+    fm = fc.get("llm", "")
+    rp = rc.get("provider") or _infer_provider(rc.get("llm", ""))
+    rm = rc.get("llm", "")
+    _check_model_for_provider(fp, fm)
+    _check_model_for_provider(rp, rm)
+
+    settings = _load_settings()
+    ft_max = int(settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"])
+    run_max = int(settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"])
+
+    try:
+        result = run_miprov2_finetune(
+            finetune_provider=fp,
+            finetune_model=fm,
+            finetune_api_key=str(fc.get("api_key") or ""),
+            finetune_max_tokens=ft_max,
+            run_provider=rp,
+            run_model=rm,
+            run_api_key=str(rc.get("api_key") or ""),
+            run_max_tokens=run_max,
+            old_sentence=body.old_sentence or "",
+            new_sentence=body.new_sentence or "",
+            originals=list(body.originals or []),
+            all_suggestions=list(body.all_suggestions or []),
+            sug_index=int(body.suggestion_index),
+            expanded_comparison_rows=list(body.expanded_comparison_rows or []),
+            run_results=list(body.run_results or []),
+            output_fields=list(body.output_fields or []),
+            output_schema=dict(body.output_schema or {}),
+            score_mapping_json=body.score_mapping_json,
+            run_ws=dict(body.run_ws or {}),
+            gt_content=dict(body.gt_content or {}),
+            auto=auto,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        _safe_print(_HL + "[finetune-miprov2] " + _R + str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    return result
+
+
 @app.post("/api/chat")
 def chat(body: ChatRequest):
     """Simple chat using the given credential. Uses review_max_tokens from settings."""
@@ -733,6 +828,14 @@ def patch_settings(body: SettingsPatch):
     for k, v in updates.items():
         if k in DEFAULT_SETTINGS:
             data[k] = v
+    mode = data.get("review_finetune_mode")
+    if isinstance(mode, str):
+        ml = mode.strip().lower()
+        data["review_finetune_mode"] = ml if ml in ("miprov2", "bandit") else "miprov2"
+    auto = data.get("review_finetune_miprov2_auto")
+    if isinstance(auto, str):
+        al = auto.strip().lower()
+        data["review_finetune_miprov2_auto"] = al if al in ("light", "medium", "heavy") else "light"
     _save_settings(data)
     return data
 
@@ -918,17 +1021,14 @@ def _do_run_work(
                             items.append({"input_row_index": row_index, "output": row if isinstance(row, dict) else {}, "error": None})
                     else:
                         items.append({"input_row_index": row_index, "output": out, "error": None})
-                    is_empty = not items or (out is None) or (isinstance(out, dict) and len(out) == 0)
-                    if is_empty:
-                        err_msg = "Empty output"
-                    else:
-                        break
+                    # Empty model output is accepted as-is; only exceptions trigger retries.
+                    break
                 except Exception as e:
                     err_msg = str(e)
                 if attempt < run_max_retries:
-                    _safe_print(_HL + f"[Run] Row {row_index} {'empty' if err_msg == 'Empty output' else 'error'}, retry {attempt + 1}/{run_max_retries}: {err_msg}" + _R + "\n")
+                    _safe_print(_HL + f"[Run] Row {row_index} error, retry {attempt + 1}/{run_max_retries}: {err_msg}" + _R + "\n")
                 else:
-                    items.append({"input_row_index": row_index, "output": None, "error": err_msg or "Empty output"})
+                    items.append({"input_row_index": row_index, "output": None, "error": err_msg or "Error"})
             return (row_index, items)
 
         cancelled_early = False
@@ -957,7 +1057,7 @@ def _do_run_work(
                 for i in range(max_contiguous):
                     items_i = results_by_input.get(i) or []
                     if not items_i:
-                        merged.append({"row_index": len(merged), "input_row_index": i, "output": None, "error": "Empty output"})
+                        merged.append({"row_index": len(merged), "input_row_index": i, "output": None, "error": None})
                     else:
                         for r in items_i:
                             merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
@@ -981,7 +1081,7 @@ def _do_run_work(
             for i in range(max_contiguous):
                 items_i = results_by_input.get(i) or []
                 if not items_i:
-                    merged.append({"row_index": len(merged), "input_row_index": i, "output": None, "error": "Empty output"})
+                    merged.append({"row_index": len(merged), "input_row_index": i, "output": None, "error": None})
                 else:
                     for r in items_i:
                         merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})

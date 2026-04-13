@@ -16,7 +16,7 @@ import {
   legacyMatchTypeWasContains,
 } from './scoreDetailModal.js';
 
-/** AbortControllers for in-flight Verify runs (close modal / beforeunload cancels fetch + poll). */
+/** AbortControllers for in-flight Run+Score row checks (close modal / beforeunload cancels fetch + poll). */
 const verifyAbortControllers = new Set();
 
 export function registerVerifySession(ac) {
@@ -36,7 +36,7 @@ export function abortAllVerifyJobs() {
   verifyAbortControllers.clear();
 }
 
-/** True while any Verify run has a registered AbortController (review modal may be closed). */
+/** True while any row-check run has a registered AbortController (review modal may be closed). */
 export function hasActiveVerifySessions() {
   return verifyAbortControllers.size > 0;
 }
@@ -310,7 +310,7 @@ function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
  * Each target t is usually a comparison row_index (Run result index). If no runnable row matches,
  * treat t as input_row_index (0-based worksheet row — same as UI Input # minus 1) and expand to all runnable comparison rows for that input.
  */
-function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
+export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
   const byRowIndex = new Map();
   for (const r of rows) {

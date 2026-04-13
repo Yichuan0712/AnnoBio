@@ -3421,11 +3421,6 @@
   color: var(--text);
 }
 
-/* View detail: Finetune line uses same typography as .review-diagnosis-detail-prose (only a hook if needed) */
-.review-suggestion-finetune-detail-line {
-  margin: 0;
-}
-
 .review-detail-export-btn {
   font-size: 12px;
 }
@@ -3466,30 +3461,183 @@
   min-width: 0;
 }
 
+/*
+ * 行内排版：#1 贴在全文最前；换行后的行从卡片左缘起笔，不会像 flex 第二列那样整段缩进。
+ */
 .review-detail-suggestion-header {
   display: block;
   margin-bottom: 4px;
+  min-width: 0;
+  line-height: 1.45;
 }
 
 .review-detail-suggestion-num {
   display: inline-block;
+  vertical-align: baseline;
+  margin-right: 6px;
   font-size: 13px;
   font-weight: 700;
   color: var(--text);
-  margin-right: 8px;
   padding: 2px 6px;
   background: var(--border);
   border-radius: 4px;
 }
 
+/* Inline flow: full title can wrap; row-check pass pill stays after text (same line when space, or after last line). */
 .review-detail-suggestion-section-name {
+  display: inline;
   font-weight: 600;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.review-detail-suggestion-title-wrap {
+  display: inline;
+  vertical-align: baseline;
+}
+
+/*状态标签：与 .review-detail-diagnosis-tag 同类弱样式，避免像 .btn（无边框、不可点） */
+.review-suggestion-verified-pill {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+  margin-left: 6px;
+  white-space: nowrap;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+  border: none;
+  color: var(--diff-added-text, #15803d);
+  background: var(--diff-added-bg, rgba(22, 163, 74, 0.22));
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Run+Score row-check in progress. */
+.review-suggestion-verifying-pill {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+  margin-left: 6px;
+  white-space: nowrap;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+  border: none;
+  color: var(--text-muted, #64748b);
+  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Finetune optimization in progress (title); same muted gray as Verifying. */
+.review-suggestion-tuning-pill {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+  margin-left: 6px;
+  white-space: nowrap;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+  border: none;
+  color: var(--text-muted, #64748b);
+  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Finetune completed (title). Default: muted when row-check outcome not yet set. */
+.review-suggestion-finetuned-pill {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+  margin-left: 6px;
+  white-space: nowrap;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+  border: none;
+  color: var(--text-muted, #64748b);
+  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
+  user-select: none;
+}
+
+.review-suggestion-finetuned-pill--pass {
+  color: var(--diff-added-text, #15803d);
+  background: var(--diff-added-bg, rgba(22, 163, 74, 0.22));
+}
+
+.review-suggestion-finetuned-pill--fail {
+  color: var(--warning, #b45309);
+  background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
+}
+
+.review-suggestion-finetuned-pill--click-toggle {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.review-suggestion-finetuned-pill--click-toggle:hover {
+  filter: brightness(1.06);
+}
+
+/* Row-check did not pass; often nudges Finetune (amber / warning tone). */
+.review-suggestion-rowcheck-fail-pill {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+  margin-left: 6px;
+  white-space: nowrap;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+  border: none;
+  color: var(--warning, #b45309);
+  background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
+  user-select: none;
+}
+
+.review-suggestion-rowcheck-fail-pill--click-finetune {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.review-suggestion-rowcheck-fail-pill--click-finetune:hover {
+  filter: brightness(1.06);
 }
 
 .review-detail-suggestion-card__actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-start;
+  justify-content: flex-end;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -3499,141 +3647,6 @@
   font-size: 12px;
   padding: 4px 10px;
   white-space: nowrap;
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn {
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 400;
-  padding: 3px 4px;
-  width: 4.1rem;
-  min-width: 4.1rem;
-  max-width: 4.1rem;
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-}
-
-/* No pass/fail yet: hide icon column so "Verify" is centered in the fixed width */
-.review-detail-suggestion-card__actions
-  .review-detail-test-btn:not(.review-detail-test-btn--passed):not(.review-detail-test-btn--failed)
-  .review-detail-test-btn__icon-slot {
-  display: none;
-}
-
-/* Single slot: tick and cross overlap so button width stays fixed */
-.review-detail-suggestion-card__actions .review-detail-test-btn__icon-slot {
-  position: relative;
-  width: 0.65em;
-  height: 1em;
-  flex-shrink: 0;
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn__tick,
-.review-detail-suggestion-card__actions .review-detail-test-btn__cross {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 12px;
-  line-height: 1;
-  font-weight: inherit;
-  opacity: 0;
-  transition: opacity 0.12s ease;
-  pointer-events: none;
-  white-space: nowrap;
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn--passed .review-detail-test-btn__tick {
-  opacity: 1;
-  color: var(--diff-added-text, #16a34a);
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__cross {
-  opacity: 1;
-  color: var(--diff-removed-text, #dc2626);
-}
-
-/* Pass: checkmark is in the label; hide icon slot (same idea as fail). */
-.review-detail-suggestion-card__actions .review-detail-test-btn--passed .review-detail-test-btn__icon-slot {
-  display: none;
-}
-
-/* Fail: label uses ballot X U+2717 (pairs with check U+2713); hide icon slot */
-.review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__icon-slot {
-  display: none;
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn--failed .review-detail-test-btn__label {
-  color: var(--diff-removed-text, #dc2626);
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn__label {
-  flex: 0 0 auto;
-  text-align: center;
-}
-
-/* Last pass/fail shown on label; button stays clickable for re-verify */
-.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--passed {
-  font-weight: 400;
-  color: var(--diff-added-text, #16a34a);
-  border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--passed:hover:not(:disabled) {
-  color: var(--diff-added-text, #16a34a);
-  border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--failed {
-  font-weight: 400;
-  color: var(--diff-removed-text, #dc2626);
-  border-color: color-mix(in srgb, var(--diff-removed-text, #dc2626) 55%, var(--border));
-}
-
-.review-detail-suggestion-card__actions .review-detail-test-btn.review-detail-test-btn--failed:hover:not(:disabled) {
-  color: var(--diff-removed-text, #dc2626);
-  border-color: color-mix(in srgb, var(--diff-removed-text, #dc2626) 55%, var(--border));
-}
-
-/*
- * Finetune / Tuning / Finetune ��: fixed width so the label swap does not jump the row.
- * Keep roughly the same scale as Verify (4.1rem fits “Verifying”); +0.4rem for the check state.
- */
-.review-detail-suggestion-card__actions .review-detail-tune-btn {
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 400;
-  padding: 3px 4px;
-  width: 4.5rem;
-  min-width: 4.5rem;
-  max-width: 4.5rem;
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  text-align: center;
-}
-
-.review-detail-suggestion-card__actions .review-detail-tune-btn.review-detail-tune-btn--done:disabled {
-  opacity: 1;
-  cursor: default;
-  filter: none;
-  font-weight: 400;
-  color: var(--diff-added-text, #16a34a);
-  border-color: color-mix(in srgb, var(--diff-added-text, #16a34a) 55%, var(--border));
-}
-
-.review-detail-suggestion-finetune-line {
-  margin: 0.35rem 0 0 0;
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--text-muted);
-  word-break: break-word;
 }
 
 .review-detail-suggestion-card__actions .review-detail-accept-btn {

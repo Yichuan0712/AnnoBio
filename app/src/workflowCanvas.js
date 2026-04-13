@@ -52,6 +52,15 @@ async function resolveRunCredentialId(runNode) {
 }
 
 const MIN_CONTENT_PADDING = 200;
+/**
+ * Review bar: LLM stream uses 0..PIPELINE_DONE (~quick); Run+Score row checks use the rest (usually most wall time).
+ * Must match reviewDetailModal REVIEW_PROGRESS_PIPELINE_DONE / CHECK_SPAN.
+ */
+const REVIEW_PROGRESS_PIPELINE_DONE = 30;
+const REVIEW_STREAM_PLAN_PCT = 4;
+const REVIEW_STREAM_DIAG_END_PCT = 24;
+const REVIEW_STREAM_SUGGESTIONS_PCT = 26;
+const REVIEW_STREAM_DATA_PCT = 28;
 /** Minimum canvas content size (width, height) so there is plenty of room to work and zoom. */
 const MIN_CANVAS_WIDTH = 4000;
 const MIN_CANVAS_HEIGHT = 2600;
@@ -1002,13 +1011,17 @@ export function buildWorkflowCanvas(root) {
           data_refinement: [],
           row_diagnostics: [],
           streamComplete: false,
-          reviewProgress: 12,
+          reviewProgress: REVIEW_STREAM_PLAN_PCT,
         };
-        setReviewNodeProgress(getNodeById(reviewNodeId), 12);
-      } else if (ev.type === 'diagnosis_row' || ev.type === 'step2_row') {
+        setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_PLAN_PCT);
+      } else if (ev.type === 'diagnosis_row') {
         diagnosisDone = ev.done != null ? parseInt(ev.done, 10) : diagnosisDone + 1;
         const total = ev.total != null ? parseInt(ev.total, 10) : diagnosisTotal;
-        const pct = total > 0 ? 12 + Math.floor(58 * diagnosisDone / total) : 70;
+        const diagSpan = REVIEW_STREAM_DIAG_END_PCT - REVIEW_STREAM_PLAN_PCT;
+        const pct =
+          total > 0
+            ? REVIEW_STREAM_PLAN_PCT + Math.floor((diagSpan * diagnosisDone) / total)
+            : Math.min(REVIEW_STREAM_DIAG_END_PCT, REVIEW_STREAM_PLAN_PCT + diagnosisDone * 4);
         setReviewNodeProgress(getNodeById(reviewNodeId), pct);
         streamSaved.reviewProgress = pct;
         if (ev.opinion && typeof ev.opinion === 'object') {
@@ -1039,19 +1052,23 @@ export function buildWorkflowCanvas(root) {
             : s
         );
         streamSaved.suggestions = (streamSaved.suggestions || []).concat(batch);
-        setReviewNodeProgress(getNodeById(reviewNodeId), 90);
-        streamSaved.reviewProgress = 90;
+        setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_SUGGESTIONS_PCT);
+        streamSaved.reviewProgress = REVIEW_STREAM_SUGGESTIONS_PCT;
       } else if (ev.type === 'data_refinement' && Array.isArray(ev.data_refinement)) {
         streamSaved.data_refinement = ev.data_refinement.map((item) =>
           item && typeof item === 'object'
             ? ensureSuggestionObjectId({ ...item, source: item.source || 'pipeline' }, streamSaved)
             : item
         );
-        setReviewNodeProgress(getNodeById(reviewNodeId), 95);
-        streamSaved.reviewProgress = 95;
+        setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_DATA_PCT);
+        streamSaved.reviewProgress = REVIEW_STREAM_DATA_PCT;
       } else if (ev.type === 'done') {
-        setReviewNodeProgress(getNodeById(reviewNodeId), 100);
-        streamSaved = { ...streamSaved, streamComplete: true, reviewProgress: 100 };
+        setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_PROGRESS_PIPELINE_DONE);
+        streamSaved = {
+          ...streamSaved,
+          streamComplete: true,
+          reviewProgress: REVIEW_PROGRESS_PIPELINE_DONE,
+        };
         normalizeSuggestionIdsToDisplayOrder(streamSaved);
       }
       ensureReviewResultIds(streamSaved);
@@ -4318,13 +4335,18 @@ export function buildWorkflowCanvas(root) {
               typeof pm === 'object' &&
               (!nm || typeof nm !== 'object' || (nm.bestPassPct == null && pm.bestPassPct != null));
             if (keepPrevMeta) next.review_finetune_meta = pm;
+            if (next.review_finetune_use_before === undefined && prev.review_finetune_use_before !== undefined) {
+              next.review_finetune_use_before = prev.review_finetune_use_before;
+            }
           }
           if (prev) {
-            const pt = prev.review_test_result;
-            if (pt === 'pass' || pt === 'fail') {
-              const nt = next.review_test_result;
-              if (nt !== 'pass' && nt !== 'fail') {
-                next.review_test_result = pt;
+            for (const key of ['review_test_result', 'review_test_result_finetune_after', 'review_test_result_finetune_before']) {
+              const pt = prev[key];
+              if (pt === 'pass' || pt === 'fail') {
+                const nt = next[key];
+                if (nt !== 'pass' && nt !== 'fail') {
+                  next[key] = pt;
+                }
               }
             }
           }

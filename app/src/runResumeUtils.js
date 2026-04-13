@@ -81,26 +81,11 @@ export function mergeResumeResults(existing, newResults, startIndex, content) {
 }
 
 /**
- * 判断单条 result 的 output 是否完全为空（仅 null/undefined 或空对象 {}）
- * 保守判断，避免将有内容的行误标为错误
- */
-function isEmptyOutput(r) {
-  if (r.error) return false;
-  const out = r.output;
-  if (out == null) return true;
-  if (typeof out !== 'object') return false;
-  return Object.keys(out).length === 0;
-}
-
-/**
- * 将 output 完全为空的 result 标记为 error，与 Score 中会被排除的错误一致
+ * 保留导出名以兼容调用方。空输出不算错误（与后端 Run 一致）；仅真实异常带 error。
  */
 export function markEmptyOutputAsError(results) {
   if (!Array.isArray(results)) return results;
-  return results.map((r) => {
-    if (!isEmptyOutput(r)) return r;
-    return { ...r, output: null, error: r.error || 'Empty output' };
-  });
+  return results;
 }
 
 /**
