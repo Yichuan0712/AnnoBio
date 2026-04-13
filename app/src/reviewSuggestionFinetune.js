@@ -202,7 +202,7 @@ export async function runSuggestionFinetuneBayesian(options) {
 
       const patched = allSuggestions.map((s, i) => ({
         ...s,
-        applied: i === sugIdx ? true : s.applied === true,
+        applied: i === sugIdx,
         ...(i === sugIdx ? { new_sentence: candidates[pick] } : {}),
       }));
       const testSections = rebuildWorkingFromApplied(originals, patched);

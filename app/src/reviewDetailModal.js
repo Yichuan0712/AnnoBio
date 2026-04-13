@@ -957,11 +957,11 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /** Shared Run+Score check for one suggestion (prompt temporarily as if this row were accepted). */
+  /** Shared Run+Score check: prompt = originals + only this suggestion applied (ignore other accepted rows). */
   async function runRowVerifyWithPayload(sug, sugIdx, payload, signal) {
     const targets = suggestionTargetInputRowIndices(sug);
     if (targets.length === 0) return { emptyTargets: true };
-    const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdx ? true : s.applied === true }));
+    const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdx }));
     const testSections = rebuildWorkingFromApplied(originals, patched);
     if (!testSections || testSections.length !== originals.length) {
       return { buildError: true };

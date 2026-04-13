@@ -624,7 +624,7 @@ def compute_pass_rate(
         if i == sug_index:
             patched.append({**base, "applied": True, "new_sentence": candidate_rewrite})
         else:
-            patched.append({**base, "applied": base.get("applied") is True})
+            patched.append({**base, "applied": False})
     test_sections = rebuild_working_from_applied(originals, patched)
     if not test_sections or len(test_sections) != len(originals):
         return 0.0, False, "prompt rebuild failed"
