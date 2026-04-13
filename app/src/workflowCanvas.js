@@ -34,7 +34,7 @@ import {
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
-import { showAlert } from './alertModal.js';
+import { showAlert, showConfirm } from './alertModal.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = 'http://localhost:8000';
@@ -791,6 +791,8 @@ export function buildWorkflowCanvas(root) {
   const pendingRuns = new Map();
   /** Pending Review jobs: reviewNodeId -> reviewId. Poll backend and update Review node when done (like Run). */
   const pendingReviews = new Map();
+  /** Review nodes currently streaming (UI progress); used for delete-confirm "cancel job" messaging. */
+  const pendingReviewNodeIds = new Set();
   function registerPendingReview(nodeId, reviewId) {
     if (nodeId && reviewId) pendingReviews.set(nodeId, reviewId);
   }
@@ -1111,6 +1113,71 @@ export function buildWorkflowCanvas(root) {
   function getNodeById(nodeId) {
     if (!nodeId) return null;
     return nodesLayer.querySelector(`[data-node-id="${nodeId}"]`) || null;
+  }
+
+  function getOutgoingEdgesFromNode(nodeId) {
+    if (!nodeId) return [];
+    return connections.filter((c) => c.fromId === nodeId);
+  }
+
+  function isDatasetPickedByRunOrScore(datasetNodeId) {
+    if (!datasetNodeId) return false;
+    const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
+      (n) => (n.dataset.runWorkingSetId || '').trim() === datasetNodeId,
+    );
+    const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
+      (n) => (n.dataset.scoreGroundTruthId || '').trim() === datasetNodeId,
+    );
+    return usedByRun || usedByScore;
+  }
+
+  /**
+   * @param {string} nodeId
+   * @param {'prompt'|'sampler'|'dataset'|'run'|'score'|'promptReview'|''} kind
+   * @returns {{ blocked: boolean, reason?: 'downstream'|'dataset_ref' }}
+   */
+  function getWorkflowNodeDeleteBlockReason(nodeId, kind) {
+    if (getOutgoingEdgesFromNode(nodeId).length > 0) {
+      return { blocked: true, reason: 'downstream' };
+    }
+    if (kind === 'dataset' && isDatasetPickedByRunOrScore(nodeId)) {
+      return { blocked: true, reason: 'dataset_ref' };
+    }
+    return { blocked: false };
+  }
+
+  /**
+   * @param {string} nodeId
+   * @param {'prompt'|'sampler'|'dataset'|'run'|'score'|'promptReview'|''} kind
+   * @param {() => void} doDelete
+   */
+  async function handleWorkflowNodeDeleteClick(nodeId, kind, doDelete) {
+    const block = getWorkflowNodeDeleteBlockReason(nodeId, kind);
+    if (block.blocked) {
+      if (block.reason === 'downstream') {
+        showAlert(
+          'This node is connected to downstream node(s). Remove or disconnect those nodes first.',
+          { title: 'Cannot delete node' },
+        );
+      } else {
+        showAlert(
+          'This dataset is selected by one or more Run or Score nodes. Clear the selection in those nodes before deleting.',
+          { title: 'Cannot delete dataset' },
+        );
+      }
+      return;
+    }
+    const runBusy = kind === 'run' && pendingRuns.has(nodeId);
+    const reviewBusy =
+      kind === 'promptReview' && (pendingReviews.has(nodeId) || pendingReviewNodeIds.has(nodeId));
+    let msg = 'Delete this node? This cannot be undone.';
+    if (runBusy || reviewBusy) {
+      msg =
+        'Delete this node? A job is still running on it; deleting will cancel that run or review on the server.';
+    }
+    const ok = await showConfirm(msg, { title: 'Delete node', confirmText: 'Delete' });
+    if (!ok) return;
+    doDelete();
   }
 
   /**
@@ -2179,24 +2246,13 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const runEdges = connections.filter((c) => c.type === EDGE_TYPE_PROMPT_TO_RUN && c.fromId === nodeId);
-      const hasRunWithResults = runEdges.some((edge) => {
-        const runNode = getNodeById(edge.toId);
-        if (!runNode || !runNode.classList.contains('workflow-node--run')) return false;
-        try {
-          const rr = JSON.parse(runNode.dataset.runResults || '[]');
-          return Array.isArray(rr) && rr.length > 0;
-        } catch (_) { return false; }
+      void handleWorkflowNodeDeleteClick(nodeId, 'prompt', () => {
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       });
-      if (hasRunWithResults) {
-        showAlert('This prompt has been run. Remove or clear the one or more Run nodes that use it before deleting the prompt.', { title: 'Cannot delete prompt' });
-        return;
-      }
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     });
 
     let dragStartX = 0;
@@ -2411,11 +2467,13 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'sampler', () => {
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -2513,22 +2571,14 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
-        (n) => (n.dataset.runWorkingSetId || '').trim() === nodeId
-      );
-      const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
-        (n) => (n.dataset.scoreGroundTruthId || '').trim() === nodeId
-      );
-      if (usedByRun || usedByScore) {
-        showAlert('This dataset is selected by one or more Run or Score nodes. Clear the selection in those nodes before deleting.', { title: 'Cannot delete dataset' });
-        return;
-      }
-      removeConnectionsInvolvingNodeId(nodeId);
-      datasetContentByNodeId.delete(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'dataset', () => {
+        removeConnectionsInvolvingNodeId(nodeId);
+        datasetContentByNodeId.delete(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -2621,25 +2671,22 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const usedByScore = connections.some((c) => c.type === EDGE_TYPE_RUN_TO_SCORE && c.fromId === nodeId);
-      if (usedByScore) {
-        showAlert('This Run node is used by one or more Score nodes. Remove the Score nodes before deleting this Run.', { title: 'Cannot delete Run node' });
-        return;
-      }
-      const runId = pendingRuns.get(nodeId);
-      if (runId) {
-        unregisterPendingRun(nodeId);
-        fetch(`${RUN_API_BASE}/api/run/cancel/${runId}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: '{}',
-        }).catch(() => {});
-      }
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'run', () => {
+        const runId = pendingRuns.get(nodeId);
+        if (runId) {
+          unregisterPendingRun(nodeId);
+          fetch(`${RUN_API_BASE}/api/run/cancel/${runId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          }).catch(() => {});
+        }
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -2788,16 +2835,13 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const usedByReview = connections.some((c) => c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW && c.fromId === nodeId);
-      if (usedByReview) {
-        showAlert('This Score node is used by one or more Review nodes. Remove the Review nodes before deleting this Score.', { title: 'Cannot delete Score node' });
-        return;
-      }
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'score', () => {
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -3015,19 +3059,25 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const reviewId = pendingReviews.get(nodeId);
-      if (reviewId) {
-        unregisterPendingReview(nodeId);
-        fetch(`${RUN_API_BASE}/api/review/cancel/${reviewId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
-      } else {
-        fetch(`${RUN_API_BASE}/api/review/cancel/by-node/${encodeURIComponent(nodeId)}`, { method: 'POST' }).catch(() => {});
-      }
-      pendingReviewNodeIds.delete(nodeId);
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'promptReview', () => {
+        const reviewId = pendingReviews.get(nodeId);
+        if (reviewId) {
+          unregisterPendingReview(nodeId);
+          fetch(`${RUN_API_BASE}/api/review/cancel/${reviewId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          }).catch(() => {});
+        } else {
+          fetch(`${RUN_API_BASE}/api/review/cancel/by-node/${encodeURIComponent(nodeId)}`, { method: 'POST' }).catch(() => {});
+        }
+        pendingReviewNodeIds.delete(nodeId);
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -4271,7 +4321,6 @@ export function buildWorkflowCanvas(root) {
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
-  const pendingReviewNodeIds = new Set();
   document.addEventListener('workflow:review-stream-started', (e) => {
     const id = e.detail?.reviewNodeId;
     if (id) pendingReviewNodeIds.add(id);
