@@ -74,21 +74,13 @@ export function getLocatableSegment(content, oldSentence) {
 }
 
 /**
- * `new_sentence` to use when applying a suggestion (respects finetune before/after toggle in Review detail).
+ * `new_sentence` to use when applying a suggestion (finetuned text is always `new_sentence` when completed).
  * @param {Record<string, unknown>} s
  * @returns {string}
  */
 export function effectiveNewSentenceForApply(s) {
   if (!s || typeof s !== 'object') return '';
-  const after = String(s.new_sentence ?? '').trim();
-  if (s.review_finetune_completed !== true) return after;
-  if (s.review_finetune_use_before !== true) return after;
-  const meta = s.review_finetune_meta;
-  const before =
-    meta && typeof meta === 'object' && typeof meta.newSentenceBeforeFinetune === 'string'
-      ? String(meta.newSentenceBeforeFinetune).trim()
-      : '';
-  return before !== '' ? before : after;
+  return String(s.new_sentence ?? '').trim();
 }
 
 /**

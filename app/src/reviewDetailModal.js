@@ -43,10 +43,8 @@ function abortReviewBackgroundJobsOnAppUnload() {
 
 /** After Run+Score row check succeeds (shown next to suggestion title; clearer than “Passed”). */
 const REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL = 'Verified';
-/** Row check failed and Finetune is available (idle); pill is clickable. */
+/** Row check failed (title pill); same label always. Modifier class makes it clickable when finetune can start. */
 const REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE = 'Click to Finetune';
-/** Row check failed but Finetune isn’t actionable (e.g. tuning, or already tuned with no retry path). */
-const REVIEW_SUGGESTION_ROWCHECK_FAIL_NEUTRAL = 'Not verified';
 /** Row-check (Run+Score) in progress for this card. */
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying';
 /** Finetune optimization finished (title pill). */
@@ -54,12 +52,12 @@ const REVIEW_SUGGESTION_FINETUNED_PILL_LABEL = 'Finetuned';
 
 const REVIEW_FINETUNE_LABEL_TUNING = 'Finetuning';
 
-/** When finetune before/after differ, row-check outcomes are stored per slot; legacy `review_test_result` applies to after only. */
+/** Finetuned suggestions may store row-check in `review_test_result_finetune_after`; otherwise legacy `review_test_result`. */
 const REVIEW_TEST_RESULT_FINETUNE_AFTER = 'review_test_result_finetune_after';
 const REVIEW_TEST_RESULT_FINETUNE_BEFORE = 'review_test_result_finetune_before';
 
-/** True when finetune finished and we stored a distinct pre-finetune replacement (can toggle for Accept). */
-function suggestionFinetuneCanToggleBeforeAfter(sug) {
+/** True when finetune finished and meta has a distinct pre-finetune proposal (row-check targets finetuned `new_sentence` only). */
+function suggestionFinetuneHasBeforeAfterText(sug) {
   if (!sug || sug.review_finetune_completed !== true) return false;
   const meta = sug.review_finetune_meta && typeof sug.review_finetune_meta === 'object' ? sug.review_finetune_meta : null;
   const beforeRaw = meta && typeof meta.newSentenceBeforeFinetune === 'string' ? meta.newSentenceBeforeFinetune : '';
@@ -71,17 +69,17 @@ function suggestionFinetuneCanToggleBeforeAfter(sug) {
 /** When true, row-check fail pill must not offer 'Click to Finetune' (tuning, or tuned with no retry). */
 function suggestionFinetuneRowCheckNudgeBlocked(sug) {
   if (sug.review_finetune_in_progress === true) return true;
-  if (sug.review_finetune_completed === true) return !suggestionFinetuneCanToggleBeforeAfter(sug);
+  if (sug.review_finetune_completed === true) return !suggestionFinetuneHasBeforeAfterText(sug);
   return false;
 }
 
-/** Label next to title when row-check fails; nudges finetune when available (title pill). */
-function rowCheckFailPillLabelForCard(sug, noButton) {
-  if (noButton || getSuggestionTestOutcome(sug) !== 'fail') return null;
-  if (sug.review_finetune_in_progress === true) return null;
-  if (suggestionFinetuneRowCheckNudgeBlocked(sug)) return REVIEW_SUGGESTION_ROWCHECK_FAIL_NEUTRAL;
-  if (sug.review_finetune_completed === true) return REVIEW_SUGGESTION_ROWCHECK_FAIL_NEUTRAL;
-  return REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE;
+/** True when row-check fail pill should start finetune on click (idle, locatable, not blocked / already tuned). */
+function rowCheckFailPillCanStartFinetune(sug, noButton) {
+  if (noButton || getSuggestionTestOutcome(sug) !== 'fail') return false;
+  if (sug.review_finetune_in_progress === true) return false;
+  if (suggestionFinetuneRowCheckNudgeBlocked(sug)) return false;
+  if (sug.review_finetune_completed === true) return false;
+  return true;
 }
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
@@ -103,9 +101,7 @@ function collectSuggestionTitlePills(sug, noButton, actionsFull) {
     let finCls = 'review-suggestion-finetuned-pill';
     if (fo === 'pass') finCls += ' review-suggestion-finetuned-pill--pass';
     else if (fo === 'fail') finCls += ' review-suggestion-finetuned-pill--fail';
-    const canToggle = suggestionFinetuneCanToggleBeforeAfter(sug);
-    if (canToggle) finCls += ' review-suggestion-finetuned-pill--click-toggle';
-    return [{ cls: finCls, text: REVIEW_SUGGESTION_FINETUNED_PILL_LABEL, clickToggleFinetune: canToggle }];
+    return [{ cls: finCls, text: REVIEW_SUGGESTION_FINETUNED_PILL_LABEL }];
   }
   if (sug.review_test_in_progress === true) {
     return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL }];
@@ -116,9 +112,8 @@ function collectSuggestionTitlePills(sug, noButton, actionsFull) {
       return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL }];
     }
     if (outcome === 'fail') {
-      const fl = rowCheckFailPillLabelForCard(sug, noButton);
-      const text = fl || REVIEW_SUGGESTION_ROWCHECK_FAIL_NEUTRAL;
-      const clickFinetune = text === REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE;
+      const clickFinetune = rowCheckFailPillCanStartFinetune(sug, noButton);
+      const text = REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE;
       return [
         {
           cls:
@@ -139,12 +134,6 @@ function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull) {
       let attrs = '';
       if (spec.clickFinetune === true) {
         attrs = ' role="button" tabindex="0" aria-label="Finetune this suggestion"';
-      } else if (spec.clickToggleFinetune === true) {
-        const tip =
-          sug.review_finetune_use_before === true
-            ? 'Accept uses text before finetune. Click for finetuned text.'
-            : 'Accept uses finetuned text. Click for text before finetune.';
-        attrs = ` role="button" tabindex="0" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}"`;
       }
       return `<span class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}"${attrs}>${escapeHtml(spec.text)}</span>`;
     })
@@ -440,68 +429,31 @@ function suggestionHasAnyTerminalTestOutcome(s) {
   return false;
 }
 
-/** `forBefore`: true = before finetune text, false = after (ignored when not toggleable). */
-function clearSuggestionTestOutcomeForFinetuneSlot(sug, forBefore) {
+function clearFinetuneRowCheckOutcome(sug) {
   if (!sug || typeof sug !== 'object') return;
-  if (!suggestionFinetuneCanToggleBeforeAfter(sug)) {
+  if (!suggestionFinetuneHasBeforeAfterText(sug)) {
     delete sug.review_test_result;
     delete sug.review_test_passed;
     return;
   }
-  if (forBefore) {
-    delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  } else {
-    delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-    delete sug.review_test_result;
-    delete sug.review_test_passed;
-  }
+  delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
+  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
+  delete sug.review_test_result;
+  delete sug.review_test_passed;
 }
 
-/** Clear row-check result for the finetune version currently selected (or the single legacy field). */
-function clearCurrentSuggestionTestSlot(sug) {
-  if (!sug || typeof sug !== 'object') return;
-  if (!suggestionFinetuneCanToggleBeforeAfter(sug)) {
-    delete sug.review_test_result;
-    delete sug.review_test_passed;
-    return;
-  }
-  clearSuggestionTestOutcomeForFinetuneSlot(sug, sug.review_finetune_use_before === true);
-}
-
-function setSuggestionTestOutcomeForFinetuneSlot(sug, forBefore, outcome) {
+function setFinetuneRowCheckOutcome(sug, outcome) {
   if (!sug || typeof sug !== 'object') return;
   if (outcome !== 'pass' && outcome !== 'fail') return;
-  if (!suggestionFinetuneCanToggleBeforeAfter(sug)) {
+  if (!suggestionFinetuneHasBeforeAfterText(sug)) {
     sug.review_test_result = outcome;
     delete sug.review_test_passed;
     return;
   }
-  if (forBefore) {
-    sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE] = outcome;
-  } else {
-    sug[REVIEW_TEST_RESULT_FINETUNE_AFTER] = outcome;
-    delete sug.review_test_result;
-    delete sug.review_test_passed;
-  }
-}
-
-function setSuggestionTestOutcomeForCurrentSlot(sug, outcome) {
-  if (!sug || typeof sug !== 'object') return;
-  if (outcome !== 'pass' && outcome !== 'fail') return;
-  if (!suggestionFinetuneCanToggleBeforeAfter(sug)) {
-    sug.review_test_result = outcome;
-    delete sug.review_test_passed;
-    return;
-  }
-  setSuggestionTestOutcomeForFinetuneSlot(sug, sug.review_finetune_use_before === true, outcome);
-}
-
-/** @returns {'pass'|'fail'|null} */
-function getSuggestionTestOutcomeBeforeSlot(sug) {
-  if (!sug || typeof sug !== 'object') return null;
-  const r = sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  if (r === 'pass' || r === 'fail') return r;
-  return null;
+  sug[REVIEW_TEST_RESULT_FINETUNE_AFTER] = outcome;
+  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
+  delete sug.review_test_result;
+  delete sug.review_test_passed;
 }
 
 /** @returns {'pass'|'fail'|null} */
@@ -518,11 +470,7 @@ function getSuggestionTestOutcomeAfterSlot(sug) {
 /** @returns {'pass'|'fail'|null} */
 function getSuggestionTestOutcome(sug) {
   if (!sug || typeof sug !== 'object') return null;
-  if (suggestionFinetuneCanToggleBeforeAfter(sug)) {
-    const useBefore = sug.review_finetune_use_before === true;
-    if (useBefore) return getSuggestionTestOutcomeBeforeSlot(sug);
-    return getSuggestionTestOutcomeAfterSlot(sug);
-  }
+  if (suggestionFinetuneHasBeforeAfterText(sug)) return getSuggestionTestOutcomeAfterSlot(sug);
   const r = sug.review_test_result;
   if (r === 'pass' || r === 'fail') return r;
   if (sug.review_test_passed === true) return 'pass';
@@ -542,7 +490,6 @@ function clearSuggestionTestOutcome(sug) {
   delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
   delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
   delete sug.review_test_in_progress;
-  delete sug.review_test_in_progress_for_before;
 }
 
 /**
@@ -557,7 +504,6 @@ function stripAbortedReviewTests(suggestions) {
     if (!s || typeof s !== 'object') continue;
     if (s.review_test_in_progress === true) {
       delete s.review_test_in_progress;
-      delete s.review_test_in_progress_for_before;
       if (!suggestionHasAnyTerminalTestOutcome(s)) {
         delete s.review_test_result;
         delete s.review_test_passed;
@@ -613,15 +559,6 @@ function updateSuggestionTitleAndPassPill(card, sug, actionsFull) {
         span.tabIndex = 0;
         span.setAttribute('aria-label', 'Finetune this suggestion');
         span.removeAttribute('title');
-      } else if (spec.clickToggleFinetune === true) {
-        span.setAttribute('role', 'button');
-        span.tabIndex = 0;
-        const tip =
-          sug.review_finetune_use_before === true
-            ? 'Accept uses text before finetune. Click for finetuned text.'
-            : 'Accept uses finetuned text. Click for text before finetune.';
-        span.title = tip;
-        span.setAttribute('aria-label', tip);
       }
       titleWrap.appendChild(span);
     }
@@ -1024,18 +961,10 @@ function buildReviewResultUI(overlay, options) {
   async function runRowVerifyWithPayload(sug, sugIdx, payload, signal) {
     const targets = suggestionTargetInputRowIndices(sug);
     if (targets.length === 0) return { emptyTargets: true };
-    const canToggleVerify = suggestionFinetuneCanToggleBeforeAfter(sug);
-    const verifyTargetForBefore = canToggleVerify ? sug.review_finetune_use_before === true : false;
-    const patched = allSuggestions.map((s, i) => {
-      let row = { ...s, applied: i === sugIdx ? true : s.applied === true };
-      if (i === sugIdx && canToggleVerify) {
-        row = { ...row, review_finetune_use_before: verifyTargetForBefore };
-      }
-      return row;
-    });
+    const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdx ? true : s.applied === true }));
     const testSections = rebuildWorkingFromApplied(originals, patched);
     if (!testSections || testSections.length !== originals.length) {
-      return { buildError: true, verifyTargetForBefore, canToggleVerify };
+      return { buildError: true };
     }
     const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
     const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
@@ -1053,10 +982,10 @@ function buildReviewResultUI(overlay, options) {
       gtContent: gtContent || { headers: [], rows: [] },
       signal,
     });
-    return { result, verifyTargetForBefore, canToggleVerify };
+    return { result };
   }
 
-  /** Run+Score check for one card (after finetune or before/after toggle); no UI control. */
+  /** Run+Score check for one card (e.g. after finetune completes). */
   async function runAutoRowCheckForSuggestion(card, sug, sugIdx) {
     if (isReviewStreamingNow()) return;
     if (typeof getPayload !== 'function') return;
@@ -1073,42 +1002,36 @@ function buildReviewResultUI(overlay, options) {
     }
     const verifyAc = new AbortController();
     registerVerifySession(verifyAc);
-    let verifyTargetForBefore = false;
     try {
-      const canToggleVerify = suggestionFinetuneCanToggleBeforeAfter(sug);
-      verifyTargetForBefore = canToggleVerify ? sug.review_finetune_use_before === true : false;
       sug.review_test_in_progress = true;
-      if (canToggleVerify) sug.review_test_in_progress_for_before = verifyTargetForBefore;
-      else delete sug.review_test_in_progress_for_before;
       persistWorking();
       if (card) updateSuggestionTestOutcomeVisual(card, sug, suggestionActionsFullForCard(sug));
       const out = await runRowVerifyWithPayload(sug, sugIdx, payload, verifyAc.signal);
       if (out.emptyTargets) {
-        clearSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore);
+        clearFinetuneRowCheckOutcome(sug);
       } else if (out.buildError) {
-        setSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore, 'fail');
+        setFinetuneRowCheckOutcome(sug, 'fail');
       } else {
         const { result } = out;
         if (result.aborted) {
-          clearSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore);
+          clearFinetuneRowCheckOutcome(sug);
         } else if (result.ok) {
-          setSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore, 'pass');
+          setFinetuneRowCheckOutcome(sug, 'pass');
         } else {
-          setSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore, 'fail');
+          setFinetuneRowCheckOutcome(sug, 'fail');
         }
       }
     } catch (err) {
       if (sug.review_test_in_progress === true) {
         if (err && err.name === 'AbortError') {
-          clearSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore);
+          clearFinetuneRowCheckOutcome(sug);
         } else {
-          setSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore, 'fail');
+          setFinetuneRowCheckOutcome(sug, 'fail');
         }
       }
     } finally {
       unregisterVerifySession(verifyAc);
       delete sug.review_test_in_progress;
-      delete sug.review_test_in_progress_for_before;
       if (card) updateSuggestionTestOutcomeVisual(card, sug, suggestionActionsFullForCard(sug));
       persistWorking();
     }
@@ -1133,7 +1056,6 @@ function buildReviewResultUI(overlay, options) {
     for (const sug of allSuggestions) {
       if (!sug || typeof sug !== 'object') continue;
       delete sug.review_test_in_progress;
-      delete sug.review_test_in_progress_for_before;
     }
   }
 
@@ -1194,50 +1116,42 @@ function buildReviewResultUI(overlay, options) {
         let verifyDone = 0;
         const tasks = indicesToVerify.map((sugIdx) => (async () => {
           const sug = allSuggestions[sugIdx];
-          const canToggleVerify = suggestionFinetuneCanToggleBeforeAfter(sug);
-          if (canToggleVerify) sug.review_test_in_progress_for_before = sug.review_finetune_use_before === true;
-          else delete sug.review_test_in_progress_for_before;
           persistWorking();
 
-          let verifyTargetForBefore = false;
           try {
             const out = await runRowVerifyWithPayload(sug, sugIdx, payload, batchAc.signal);
             if (out.emptyTargets) {
               /* no outcome */
             } else if (out.buildError) {
-              verifyTargetForBefore = out.verifyTargetForBefore;
-              setSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore, 'fail');
+              setFinetuneRowCheckOutcome(sug, 'fail');
             } else {
               const { result } = out;
-              verifyTargetForBefore = out.verifyTargetForBefore;
               try {
                 if (result.aborted) {
-                  clearSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore);
+                  clearFinetuneRowCheckOutcome(sug);
                 } else if (result.ok) {
-                  setSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore, 'pass');
+                  setFinetuneRowCheckOutcome(sug, 'pass');
                 } else {
-                  setSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore, 'fail');
+                  setFinetuneRowCheckOutcome(sug, 'fail');
                 }
               } catch (err) {
                 if (err && err.name === 'AbortError') {
-                  clearSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore);
+                  clearFinetuneRowCheckOutcome(sug);
                 } else {
-                  setSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore, 'fail');
+                  setFinetuneRowCheckOutcome(sug, 'fail');
                 }
               }
             }
           } catch (err) {
-            verifyTargetForBefore = canToggleVerify ? sug.review_finetune_use_before === true : false;
             if (sug.review_test_in_progress === true) {
               if (err && err.name === 'AbortError') {
-                clearSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore);
+                clearFinetuneRowCheckOutcome(sug);
               } else {
-                setSuggestionTestOutcomeForFinetuneSlot(sug, verifyTargetForBefore, 'fail');
+                setFinetuneRowCheckOutcome(sug, 'fail');
               }
             }
           } finally {
             delete sug.review_test_in_progress;
-            delete sug.review_test_in_progress_for_before;
             persistWorking();
             verifyDone += 1;
             emitReviewBarProgress(
@@ -1291,7 +1205,6 @@ function buildReviewResultUI(overlay, options) {
       for (const sug of allSuggestions) {
         if (suggestionNeedsAutoRowCheck(sug)) {
           sug.review_test_in_progress = true;
-          delete sug.review_test_in_progress_for_before;
         }
       }
       persistWorking();
@@ -1350,16 +1263,7 @@ function buildReviewResultUI(overlay, options) {
 
   async function handleFinetuneActionForCard(card, sug, sugIdx) {
     const actionsFull = suggestionActionsFullForCard(sug);
-    if (sug.review_finetune_completed === true) {
-      if (!suggestionFinetuneCanToggleBeforeAfter(sug)) return;
-      sug.review_finetune_use_before = sug.review_finetune_use_before !== true;
-      if (sug.applied === true) syncWorkingFromApplied();
-      updateSuggestionTestOutcomeVisual(card, sug, actionsFull);
-      renderLeft(-1);
-      persistWorking();
-      void runAutoRowCheckForSuggestion(card, sug, sugIdx);
-      return;
-    }
+    if (sug.review_finetune_completed === true) return;
     if (sug.review_finetune_in_progress === true) return;
     if (isReviewStreamingNow()) {
       showAlert('Wait until the review finishes before running finetune.', { title: 'Review in progress' });
@@ -1480,18 +1384,11 @@ function buildReviewResultUI(overlay, options) {
       };
       delete saved.review_finetune_last_result;
       sug.review_finetune_completed = true;
-      sug.review_finetune_use_before = false;
-      if (suggestionFinetuneCanToggleBeforeAfter(sug)) {
-        let moveFromLegacy = null;
-        const leg = sug.review_test_result;
-        if (leg === 'pass' || leg === 'fail') moveFromLegacy = leg;
-        else if (sug.review_test_passed === true) moveFromLegacy = 'pass';
-        if (moveFromLegacy != null && sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE] == null) {
-          sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE] = moveFromLegacy;
-        }
-        delete sug.review_test_result;
-        delete sug.review_test_passed;
-      }
+      delete sug.review_finetune_use_before;
+      delete sug.review_test_result;
+      delete sug.review_test_passed;
+      delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
+      delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
       if (sug.applied === true) syncWorkingFromApplied();
       updateSuggestionTestOutcomeVisual(card, sug, actionsFull);
       renderLeft(-1);
@@ -1515,9 +1412,7 @@ function buildReviewResultUI(overlay, options) {
   }
 
   function onTitlePillFinetuneInteraction(e) {
-    const clickFinetune = e.target.closest('.review-suggestion-rowcheck-fail-pill--click-finetune');
-    const toggleFinetuned = e.target.closest('.review-suggestion-finetuned-pill--click-toggle');
-    const pill = clickFinetune || toggleFinetuned;
+    const pill = e.target.closest('.review-suggestion-rowcheck-fail-pill--click-finetune');
     if (!pill || !editContainer.contains(pill)) return;
     e.preventDefault();
     e.stopPropagation();

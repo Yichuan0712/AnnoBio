@@ -4335,9 +4335,6 @@ export function buildWorkflowCanvas(root) {
               typeof pm === 'object' &&
               (!nm || typeof nm !== 'object' || (nm.bestPassPct == null && pm.bestPassPct != null));
             if (keepPrevMeta) next.review_finetune_meta = pm;
-            if (next.review_finetune_use_before === undefined && prev.review_finetune_use_before !== undefined) {
-              next.review_finetune_use_before = prev.review_finetune_use_before;
-            }
           }
           if (prev) {
             for (const key of ['review_test_result', 'review_test_result_finetune_after', 'review_test_result_finetune_before']) {

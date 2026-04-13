@@ -3594,16 +3594,7 @@
   background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
 }
 
-.review-suggestion-finetuned-pill--click-toggle {
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-.review-suggestion-finetuned-pill--click-toggle:hover {
-  filter: brightness(1.06);
-}
-
-/* Row-check did not pass; often nudges Finetune (amber / warning tone). */
+/* Row-check did not pass; label is always “Click to Finetune”; --click-finetune enables pointer/hover. */
 .review-suggestion-rowcheck-fail-pill {
   display: inline-flex;
   align-items: center;
