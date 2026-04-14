@@ -3688,6 +3688,12 @@ button.review-suggestion-title-pill {
   background: var(--hover);
 }
 
+/* Click-pinned preview (Suggested changes): same emphasis as hover (no extra inner ring). */
+.review-detail-suggestion-card--preview-selected {
+  border-color: var(--text-muted);
+  background: var(--hover);
+}
+
 .review-detail-suggestion-card--unlocatable {
   opacity: 0.85;
 }

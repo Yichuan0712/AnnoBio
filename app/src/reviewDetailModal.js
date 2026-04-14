@@ -15,8 +15,10 @@ import {
 } from './reviewSuggestionTest.js';
 import {
   runSuggestionFinetuneMIPROv2,
+  runSuggestionFinetuneCompositional,
   abortAllFinetuneJobs,
   registerFinetuneSession,
+  unregisterFinetuneSession,
   hasActiveFinetuneSessions,
 } from './reviewSuggestionFinetune.js';
 import {
@@ -327,7 +329,7 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
     ? diagnostic.row_indices
     : null;
   const sourceLine = multiIdx
-    ? `Score table ${formatScoreTableTargetLabels(rows, multiIdx)} (same input, multiple outputs)`
+    ? `Score table ${formatScoreTableTargetLabels(rows, multiIdx)}`
     : (() => {
       const t = scoreTableRowNumberForComparisonIndex(rows, diagnostic.row_index);
       return t != null
@@ -869,6 +871,30 @@ function buildReviewResultUI(overlay, options) {
   editContainer.className = 'review-detail-edit-suggestions';
   suggestionsEl.appendChild(editContainer);
 
+  /** Click-to-pin: keep left-column diff visible without hover (Suggested changes cards only). */
+  let previewSelectedSuggestionIndex = null;
+
+  function updateSuggestionPreviewSelectionVisual() {
+    editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
+      const i = parseInt(c.dataset.suggestionIndex, 10);
+      const on = !Number.isNaN(i) && previewSelectedSuggestionIndex === i;
+      c.classList.toggle('review-detail-suggestion-card--preview-selected', on);
+    });
+  }
+
+  function applyPinnedPreviewIfAny() {
+    if (previewSelectedSuggestionIndex == null) return;
+    const c = editContainer.querySelector(
+      `.review-detail-suggestion-card[data-suggestion-index="${previewSelectedSuggestionIndex}"]`,
+    );
+    if (c && typeof c._reviewShowPreview === 'function') {
+      c._reviewShowPreview();
+    } else {
+      previewSelectedSuggestionIndex = null;
+      updateSuggestionPreviewSelectionVisual();
+    }
+  }
+
   function reconcileAllSuggestionsFromSavedData(data) {
     if (!data || !Array.isArray(data.suggestions)) return;
     for (let i = 0; i < allSuggestions.length; i++) {
@@ -1262,6 +1288,8 @@ function buildReviewResultUI(overlay, options) {
   function renderEditSuggestionCards() {
     editContainer.innerHTML = '';
     if (!allSuggestions || allSuggestions.length === 0) {
+      previewSelectedSuggestionIndex = null;
+      clearDiffOnRight();
       if (dataRefinement.length === 0) {
         editContainer.innerHTML = '<p class="review-detail-placeholder">No suggestions.</p>';
       } else {
@@ -1270,6 +1298,17 @@ function buildReviewResultUI(overlay, options) {
       return;
     }
     allSuggestions.forEach((sug, sugIdx) => addOneSuggestionCard(sug, sugIdx));
+    if (previewSelectedSuggestionIndex != null) {
+      const still = previewSelectedSuggestionIndex < allSuggestions.length;
+      if (!still) {
+        previewSelectedSuggestionIndex = null;
+        clearDiffOnRight();
+      }
+      updateSuggestionPreviewSelectionVisual();
+      if (still) applyPinnedPreviewIfAny();
+    } else {
+      updateSuggestionPreviewSelectionVisual();
+    }
   }
 
   /** After stream: show cards (View detail only while that card's check runs), concurrent checks, unlock per card when done. */
@@ -1364,6 +1403,7 @@ function buildReviewResultUI(overlay, options) {
     }
     const oldSentence = (sug.old_sentence || '').trim();
     if (typeof getPayload !== 'function') return;
+    let finetuneAc = null;
     try {
       const payload = await getPayload();
       if (!payload || !payload.run_credential_id) {
@@ -1374,7 +1414,8 @@ function buildReviewResultUI(overlay, options) {
         showAlert('The prompt needs an output schema (Run / prompt settings) to finetune.', { title: 'Missing output schema' });
         return;
       }
-      const finetuneAc = new AbortController();
+      const improvementRationale = String(sug.reason || '').trim();
+      finetuneAc = new AbortController();
       registerFinetuneSession(finetuneAc);
       sug._finetuneAbort = finetuneAc;
       sug.review_finetune_in_progress = true;
@@ -1384,6 +1425,10 @@ function buildReviewResultUI(overlay, options) {
       const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
       let reviewCredForFinetune = '';
       let miprov2Auto = 'light';
+      let finetuneMode = 'miprov2';
+      let compMaxTrials = 40;
+      let compCandidates = 4;
+      let compMaxSegments = 5;
       try {
         const sres = await fetch(`${API_BASE}/api/settings`);
         if (sres.ok) {
@@ -1391,11 +1436,22 @@ function buildReviewResultUI(overlay, options) {
           reviewCredForFinetune = String(s.default_review_credential_id || '').trim();
           const a = String(s.review_finetune_miprov2_auto || 'light').trim().toLowerCase();
           if (a === 'medium' || a === 'heavy') miprov2Auto = a;
+          const m = String(s.review_finetune_mode || 'miprov2').trim().toLowerCase();
+          finetuneMode = m === 'compositional' ? 'compositional' : 'miprov2';
+          compMaxTrials = Math.min(200, Math.max(8, Number(s.review_finetune_comp_max_trials) || 40));
+          compCandidates = Math.min(8, Math.max(2, Number(s.review_finetune_comp_candidates_per_segment) || 4));
+          compMaxSegments = Math.min(8, Math.max(2, Number(s.review_finetune_comp_max_segments) || 5));
         }
       } catch (_) {
         /* use defaults */
       }
       if (!reviewCredForFinetune) reviewCredForFinetune = payload.run_credential_id;
+      if (finetuneMode === 'compositional' && !improvementRationale) {
+        showAlert('Compositional finetune needs this suggestion’s reason (from Review). Re-run review or pick an edit that includes a reason.', {
+          title: 'Missing reason',
+        });
+        return;
+      }
       const proposalNew = (sug.new_sentence || '').trim();
       const onFinetuneProgress = ({ trial, trials }) => {
         sug.review_finetune_progress = { trial, trials };
@@ -1407,34 +1463,62 @@ function buildReviewResultUI(overlay, options) {
           });
         }
       };
-      const result = await runSuggestionFinetuneMIPROv2({
-        apiBase: API_BASE,
-        llmCredentialId: reviewCredForFinetune,
-        runCredentialId: payload.run_credential_id,
-        oldSentence,
-        newSentence: proposalNew,
-        allSuggestions,
-        sugIdx,
-        originals,
-        targets,
-        comparisonRows: payload.comparison_rows || [],
-        runResults: payload.run_results || [],
-        outputFields: payload.output_fields || [],
-        outputSchema: payload.output_schema,
-        scoreMappingJson: payload.score_mapping || '[]',
-        runWs: runWs || { headers: [], rows: [] },
-        gtContent: gtContent || { headers: [], rows: [] },
-        miprov2Auto,
-        abortController: finetuneAc,
-        onProgress: onFinetuneProgress,
-      });
+      let result;
+      if (finetuneMode === 'compositional') {
+        result = await runSuggestionFinetuneCompositional({
+          apiBase: API_BASE,
+          llmCredentialId: reviewCredForFinetune,
+          runCredentialId: payload.run_credential_id,
+          oldSentence,
+          newSentence: proposalNew,
+          improvementRationale,
+          maxSegments: compMaxSegments,
+          candidatesPerSegment: compCandidates,
+          maxTrials: compMaxTrials,
+          allSuggestions,
+          sugIdx,
+          originals,
+          targets,
+          comparisonRows: payload.comparison_rows || [],
+          runResults: payload.run_results || [],
+          outputFields: payload.output_fields || [],
+          outputSchema: payload.output_schema,
+          scoreMappingJson: payload.score_mapping || '[]',
+          runWs: runWs || { headers: [], rows: [] },
+          gtContent: gtContent || { headers: [], rows: [] },
+          abortController: finetuneAc,
+          onProgress: onFinetuneProgress,
+        });
+      } else {
+        result = await runSuggestionFinetuneMIPROv2({
+          apiBase: API_BASE,
+          llmCredentialId: reviewCredForFinetune,
+          runCredentialId: payload.run_credential_id,
+          oldSentence,
+          newSentence: proposalNew,
+          allSuggestions,
+          sugIdx,
+          originals,
+          targets,
+          comparisonRows: payload.comparison_rows || [],
+          runResults: payload.run_results || [],
+          outputFields: payload.output_fields || [],
+          outputSchema: payload.output_schema,
+          scoreMappingJson: payload.score_mapping || '[]',
+          runWs: runWs || { headers: [], rows: [] },
+          gtContent: gtContent || { headers: [], rows: [] },
+          miprov2Auto,
+          abortController: finetuneAc,
+          onProgress: onFinetuneProgress,
+        });
+      }
       sug.new_sentence = result.bestText;
       sug.review_finetune_meta = {
         bestPassPct: Math.round(Number(result.bestObservedRate) * 100),
         candidatesCount: result.candidates.length,
         trialsRun: Array.isArray(result.trialLog) ? result.trialLog.length : 0,
         bestArmIndex: result.bestIndex,
-        optimizer: result.optimizer || 'miprov2',
+        optimizer: result.optimizer || finetuneMode,
         newSentenceBeforeFinetune: proposalNew,
       };
       delete saved.review_finetune_last_result;
@@ -1455,6 +1539,7 @@ function buildReviewResultUI(overlay, options) {
         showAlert(String(err?.message || err || 'Finetune failed'), { title: 'Finetune failed' });
       }
     } finally {
+      if (finetuneAc) unregisterFinetuneSession(finetuneAc);
       delete sug.review_finetune_in_progress;
       delete sug._finetuneAbort;
       delete sug.review_finetune_progress;
@@ -1726,13 +1811,51 @@ function buildReviewResultUI(overlay, options) {
       }
     }
 
-    mainEl.removeAttribute('role');
-    mainEl.tabIndex = -1;
+    card._reviewShowPreview = showPreview;
+
+    if (!noButton) {
+      mainEl.setAttribute('role', 'button');
+      mainEl.tabIndex = 0;
+      mainEl.setAttribute(
+        'aria-label',
+        'Show this change in the prompt; click again to clear. Use Accept or View detail from the buttons below.',
+      );
+      mainEl.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        e.preventDefault();
+        if (previewSelectedSuggestionIndex === sugIdx) {
+          previewSelectedSuggestionIndex = null;
+          updateSuggestionPreviewSelectionVisual();
+          clearDiffOnRight();
+        } else {
+          previewSelectedSuggestionIndex = sugIdx;
+          updateSuggestionPreviewSelectionVisual();
+          showPreview();
+        }
+      });
+      mainEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        if (!mainEl.contains(e.target)) return;
+        if (e.target.closest('button')) return;
+        e.preventDefault();
+        mainEl.click();
+      });
+
+      card.addEventListener('mouseenter', () => showPreview());
+      card.addEventListener('mouseleave', () => {
+        if (previewSelectedSuggestionIndex != null) {
+          applyPinnedPreviewIfAny();
+        } else {
+          clearDiffOnRight();
+        }
+      });
+    } else {
+      mainEl.removeAttribute('role');
+      mainEl.tabIndex = -1;
+      mainEl.removeAttribute('aria-label');
+    }
 
     if (!noButton && actionsFull) {
-      card.addEventListener('mouseenter', () => showPreview());
-      card.addEventListener('mouseleave', () => clearDiffOnRight());
-
       acceptBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1744,6 +1867,9 @@ function buildReviewResultUI(overlay, options) {
         updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
         renderLeft(-1);
         persistWorking();
+        if (previewSelectedSuggestionIndex === sugIdx) {
+          showPreview();
+        }
       });
     }
 

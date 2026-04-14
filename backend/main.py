@@ -13,6 +13,10 @@ from typing import Any, List, Optional
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
+from safe_stdio import ensure_console_utf8_windows, safe_print as _safe_print
+
+ensure_console_utf8_windows()
+
 # Prefer UTF-8 for stdio on Windows so prompts with U+2011 etc. do not raise on print().
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -25,8 +29,6 @@ if hasattr(sys.stderr, "reconfigure"):
     except (OSError, ValueError, AttributeError):
         pass
 
-from safe_stdio import safe_print as _safe_print
-
 # ANSI codes for terminal highlight (all yellow; supported on Windows 10+ and Unix)
 _HL = "\033[1;33m"   # bold yellow
 _R = "\033[0m"       # reset
@@ -37,7 +39,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, create_model
 
 from llm import chat as llm_chat, run_structured as llm_run_structured
+from review_finetune_compositional import (
+    compositional_finetune_segment_candidates,
+    compositional_finetune_segments,
+)
+from review_finetune_compositional_filelog import (
+    inspect_append_lattice,
+    inspect_append_segment_candidates,
+    inspect_append_trial,
+    inspect_write_segments,
+)
 from review_finetune_miprov2 import run_miprov2_finetune
+from run_inspect_filelog import run_inspect_append_note, run_inspect_append_row, run_inspect_begin
 
 app = FastAPI()
 
@@ -88,6 +101,11 @@ DEFAULT_SETTINGS = {
     "review_max_failed_rows": 30,
     # DSPy MIPROv2 budget: light | medium | heavy (see dspy.MIPROv2 auto)
     "review_finetune_miprov2_auto": "light",
+    # Finetune algorithm: miprov2 | compositional (reason-guided segment lattice + Thompson search in app)
+    "review_finetune_mode": "miprov2",
+    "review_finetune_comp_max_trials": 40,
+    "review_finetune_comp_candidates_per_segment": 4,
+    "review_finetune_comp_max_segments": 5,
 }
 
 
@@ -180,6 +198,18 @@ class SettingsPatch(BaseModel):
     review_finetune_miprov2_auto: str | None = Field(
         default=None, description="MIPROv2 run mode: light | medium | heavy"
     )
+    review_finetune_mode: str | None = Field(
+        default=None, description="Finetune algorithm: miprov2 | compositional"
+    )
+    review_finetune_comp_max_trials: int | None = Field(
+        default=None, ge=8, le=200, description="Compositional finetune: max verify rounds"
+    )
+    review_finetune_comp_candidates_per_segment: int | None = Field(
+        default=None, ge=2, le=8, description="Compositional finetune: LLM paraphrases per segment"
+    )
+    review_finetune_comp_max_segments: int | None = Field(
+        default=None, ge=2, le=8, description="Compositional finetune: max segments when splitting"
+    )
 
 
 class CredentialResponse(BaseModel):
@@ -205,6 +235,10 @@ class RunRequest(BaseModel):
     prompts: list[str] = Field(..., min_length=1, description="One prompt per row (placeholders already substituted)")
     output_schema: dict = Field(..., description="return_shape + fields: [{ key, type, description?, allow_none? }]")
     run_node_id: str | None = Field(default=None, description="Frontend Run node id for correlation when polling")
+    inspect_run_id: str = Field(
+        default="",
+        description="Optional: write prompt+output inspect log to data/run_inspect/{id}.md (default: server run_id)",
+    )
 
 
 # ---------- Review (prompt analysis from score comparison) ----------
@@ -669,6 +703,208 @@ def finetune_miprov2(body: FinetuneMIPROv2Request):
     return result
 
 
+class FinetuneCompositionalSegmentsRequest(BaseModel):
+    credential_id: str = Field(..., description="LLM credential for segmentation")
+    old_sentence: str = Field(default="", description="Original span in prompt")
+    new_sentence: str = Field(default="", description="Current improved sentence to split")
+    improvement_rationale: str = Field(default="", description="Review suggestion reason field")
+    max_segments: int = Field(default=5, ge=2, le=8, description="Upper bound on number of parts")
+    inspect_run_id: str = Field(
+        default="",
+        description="Optional id: write split + candidates + trials to data/compositional_finetune_inspect/{id}.md",
+    )
+
+
+class FinetuneCompositionalCandidatesRequest(BaseModel):
+    credential_id: str = Field(..., description="LLM credential for paraphrases")
+    old_sentence: str = Field(default="")
+    new_sentence: str = Field(default="")
+    improvement_rationale: str = Field(default="")
+    segment_text: str = Field(..., description="Focus substring")
+    prefix: str = Field(default="", description="new_sentence[:start] — must satisfy prefix+segment+suffix == new_sentence")
+    suffix: str = Field(default="")
+    num_candidates: int = Field(default=4, ge=2, le=8)
+    segment_index: int = Field(default=0, ge=0, description="0-based segment index (for inspect log)")
+    inspect_run_id: str = Field(default="", description="Same id as segments request to append to the same .md file")
+
+
+@app.post("/api/review/finetune-compositional/segments")
+def finetune_compositional_segments(body: FinetuneCompositionalSegmentsRequest):
+    """LLM splits improved sentence into contiguous substrings for compositional finetune."""
+    items = _load_credentials()
+    cred = next((x for x in items if x.get("id") == body.credential_id), None)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    if not cred.get("api_key"):
+        raise HTTPException(status_code=400, detail="Missing API key")
+    provider = cred.get("provider") or _infer_provider(cred.get("llm", ""))
+    model = cred.get("llm", "")
+    _check_model_for_provider(provider, model)
+    settings = _load_settings()
+    max_tokens = int(settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"])
+    try:
+        segments = compositional_finetune_segments(
+            provider=provider,
+            model=model,
+            api_key=str(cred.get("api_key") or ""),
+            max_tokens=max_tokens,
+            old_sentence=body.old_sentence or "",
+            new_sentence=body.new_sentence or "",
+            improvement_rationale=body.improvement_rationale or "",
+            max_segments=int(body.max_segments),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not segments:
+        raise HTTPException(status_code=400, detail="Segmentation returned no parts.")
+    rid = (body.inspect_run_id or "").strip()
+    if rid:
+        try:
+            p = inspect_write_segments(
+                rid,
+                old_sentence=body.old_sentence or "",
+                new_sentence=body.new_sentence or "",
+                improvement_rationale=body.improvement_rationale or "",
+                segments=segments,
+            )
+            _safe_print(f"[compositional finetune] inspect log file: {p.resolve()}")
+        except OSError as e:
+            _safe_print(f"[compositional finetune] inspect log write failed: {e}")
+    return {"segments": segments}
+
+
+@app.post("/api/review/finetune-compositional/candidates")
+def finetune_compositional_candidates(body: FinetuneCompositionalCandidatesRequest):
+    """LLM generates alternative phrasings for one segment of the improved sentence."""
+    items = _load_credentials()
+    cred = next((x for x in items if x.get("id") == body.credential_id), None)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    if not cred.get("api_key"):
+        raise HTTPException(status_code=400, detail="Missing API key")
+    provider = cred.get("provider") or _infer_provider(cred.get("llm", ""))
+    model = cred.get("llm", "")
+    _check_model_for_provider(provider, model)
+    settings = _load_settings()
+    max_tokens = int(settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"])
+    try:
+        candidates = compositional_finetune_segment_candidates(
+            provider=provider,
+            model=model,
+            api_key=str(cred.get("api_key") or ""),
+            max_tokens=max_tokens,
+            old_sentence=body.old_sentence or "",
+            new_sentence=body.new_sentence or "",
+            improvement_rationale=body.improvement_rationale or "",
+            segment_text=body.segment_text or "",
+            prefix=body.prefix or "",
+            suffix=body.suffix or "",
+            num_candidates=int(body.num_candidates),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not candidates:
+        raise HTTPException(status_code=400, detail="No candidates returned.")
+    rid = (body.inspect_run_id or "").strip()
+    if rid:
+        try:
+            inspect_append_segment_candidates(
+                rid,
+                segment_index=int(body.segment_index),
+                prefix=body.prefix or "",
+                suffix=body.suffix or "",
+                segment_text=body.segment_text or "",
+                candidates=candidates,
+            )
+        except OSError as e:
+            _safe_print(f"[compositional finetune] inspect log append failed: {e}")
+    return {"candidates": candidates}
+
+
+def _compositional_term_preview(s: str, n: int = 140) -> str:
+    t = (s or "").replace("\r\n", "\n").replace("\n", " ").strip()
+    if len(t) <= n:
+        return t
+    return t[: n - 1] + "…"
+
+
+class FinetuneCompositionalLatticeLogRequest(BaseModel):
+    """Dev logging: print full candidate lattice to the backend terminal."""
+
+    segments: list[str] = Field(default_factory=list)
+    lattice: list[list[str]] = Field(default_factory=list)
+    inspect_run_id: str = Field(default="", description="Append lattice grid to the same inspect .md")
+
+
+class FinetuneCompositionalTrialLogRequest(BaseModel):
+    """Dev logging: print each Thompson trial score to the backend terminal."""
+
+    round: int = Field(..., ge=1)
+    picks: list[int] = Field(default_factory=list)
+    composed_preview: str = Field(default="")
+    pass_rate: float | None = None
+    ok: bool = True
+    note: str | None = None
+    inspect_run_id: str = Field(default="", description="Append trial line to the same inspect .md")
+
+
+@app.post("/api/review/finetune-compositional/lattice-log")
+def finetune_compositional_lattice_log(body: FinetuneCompositionalLatticeLogRequest):
+    _safe_print("[compositional finetune] ========== lattice summary (after all LLM calls) ==========")
+    for i, row in enumerate(body.lattice or []):
+        seg = body.segments[i] if i < len(body.segments) else ""
+        _safe_print(
+            f"[compositional finetune] segment[{i}] base ({len(seg)} ch): {_compositional_term_preview(seg, 160)!r}  |  {len(row)} arms"
+        )
+        for j, c in enumerate(row):
+            _safe_print(f"[compositional finetune]   arm [{i}][{j}]: {_compositional_term_preview(c, 160)!r}")
+    _safe_print("[compositional finetune] ========== end lattice — Thompson trials below ==========")
+    rid = (body.inspect_run_id or "").strip()
+    if rid:
+        try:
+            inspect_append_lattice(
+                rid,
+                segments=list(body.segments or []),
+                lattice=list(body.lattice or []),
+            )
+        except OSError as e:
+            _safe_print(f"[compositional finetune] inspect lattice append failed: {e}")
+    return {"ok": True}
+
+
+@app.post("/api/review/finetune-compositional/trial-log")
+def finetune_compositional_trial_log(body: FinetuneCompositionalTrialLogRequest):
+    pr = body.pass_rate
+    if pr is None:
+        pr_s = "n/a"
+    else:
+        try:
+            pr_s = f"{float(pr):.4f}"
+        except (TypeError, ValueError):
+            pr_s = "n/a"
+    pv = _compositional_term_preview(body.composed_preview, 200)
+    note_part = f" note={body.note!r}" if body.note else ""
+    _safe_print(
+        f"[compositional finetune] trial {body.round}  picks={list(body.picks)}  pass_rate={pr_s}  ok={body.ok}  "
+        f"composed={pv!r}{note_part}"
+    )
+    rid = (body.inspect_run_id or "").strip()
+    if rid:
+        try:
+            inspect_append_trial(
+                rid,
+                round_n=int(body.round),
+                picks=list(body.picks),
+                composed_preview=body.composed_preview or "",
+                pass_rate=body.pass_rate,
+                ok=bool(body.ok),
+                note=body.note,
+            )
+        except OSError as e:
+            _safe_print(f"[compositional finetune] inspect trial append failed: {e}")
+    return {"ok": True}
+
+
 @app.post("/api/chat")
 def chat(body: ChatRequest):
     """Simple chat using the given credential. Uses review_max_tokens from settings."""
@@ -731,6 +967,18 @@ def patch_settings(body: SettingsPatch):
     if isinstance(auto, str):
         al = auto.strip().lower()
         data["review_finetune_miprov2_auto"] = al if al in ("light", "medium", "heavy") else "light"
+    mode = data.get("review_finetune_mode")
+    if isinstance(mode, str):
+        ml = mode.strip().lower()
+        data["review_finetune_mode"] = ml if ml in ("miprov2", "compositional") else "miprov2"
+    for key, lo, hi in (
+        ("review_finetune_comp_max_trials", 8, 200),
+        ("review_finetune_comp_candidates_per_segment", 2, 8),
+        ("review_finetune_comp_max_segments", 2, 8),
+    ):
+        v = data.get(key)
+        if isinstance(v, (int, float)):
+            data[key] = max(lo, min(hi, int(v)))
     _save_settings(data)
     return data
 
@@ -804,8 +1052,10 @@ def _do_run_work(
     credential_id: str,
     prompts: list[str],
     output_schema: dict,
+    inspect_file_key: str,
 ) -> None:
     """Background worker: run prompts row by row. Stops when cancelled or when client has not polled for RUN_ABANDON_TIMEOUT_SEC."""
+    inspect_started = False
     try:
         items = _load_credentials()
         cred = None
@@ -873,7 +1123,25 @@ def _do_run_work(
             _run_jobs[run_id]["completed"] = 0
             _run_jobs[run_id]["results"] = []
             _run_jobs[run_id]["output_fields"] = output_fields
+            nid_log = _run_jobs.get(run_id, {}).get("run_node_id")
         results_by_input: dict[int, list[dict]] = {}
+
+        try:
+            p_inspect = run_inspect_begin(
+                inspect_file_key,
+                job_run_id=run_id,
+                run_node_id=nid_log,
+                credential_id=credential_id,
+                provider=str(provider),
+                model=str(model),
+                return_shape=return_shape,
+                total_rows=total,
+                output_schema=output_schema,
+            )
+            inspect_started = True
+            _safe_print(f"[Run] inspect log file: {p_inspect.resolve()}")
+        except OSError as e:
+            _safe_print(f"[Run] inspect log begin failed: {e}")
 
         run_max_retries = min(5, max(0, int(run_settings.get("run_max_retries", 0))))
 
@@ -937,6 +1205,16 @@ def _do_run_work(
                     elif (time.time() - _run_last_activity.get(run_id, 0)) > RUN_ABANDON_TIMEOUT_SEC:
                         cancelled_early = True
                 results_by_input[row_index] = items
+                if inspect_started:
+                    try:
+                        run_inspect_append_row(
+                            inspect_file_key,
+                            row_index=row_index,
+                            prompt=prompts[row_index],
+                            row_items=items,
+                        )
+                    except OSError as log_e:
+                        _safe_print(f"[Run] inspect row append failed: {log_e}")
                 if cancelled_early:
                     for f in futures:
                         f.cancel()
@@ -991,8 +1269,22 @@ def _do_run_work(
                 "total": total,
             }
         _persist_run_jobs()
+        if inspect_started and cancelled_early:
+            try:
+                run_inspect_append_note(
+                    inspect_file_key,
+                    title="Run stopped early",
+                    body="Cancelled by user or client stopped polling (abandoned).",
+                )
+            except OSError as log_e:
+                _safe_print(f"[Run] inspect note append failed: {log_e}")
     except Exception as e:
         _safe_print(_HL + "[Run] Error: " + _R + str(e))
+        if inspect_started:
+            try:
+                run_inspect_append_note(inspect_file_key, title="Run error", body=str(e))
+            except OSError as log_e:
+                _safe_print(f"[Run] inspect error note failed: {log_e}")
         with _run_jobs_lock:
             nid = _run_jobs.get(run_id, {}).get("run_node_id")
             _run_jobs[run_id] = {"status": "done", "error": str(e), "run_node_id": nid}
@@ -1003,6 +1295,8 @@ def _do_run_work(
 def run_prompts(body: RunRequest):
     """Start run in background; returns 202 with run_id. Poll GET /api/run/result/{run_id}. Worker stops if client stops polling."""
     run_id = str(uuid.uuid4())
+    inspect_raw = (body.inspect_run_id or "").strip()
+    inspect_file_key = inspect_raw if inspect_raw else run_id
     with _run_jobs_lock:
         _run_jobs[run_id] = {"status": "running", "run_node_id": body.run_node_id}
         if body.run_node_id:
@@ -1011,14 +1305,18 @@ def run_prompts(body: RunRequest):
     _persist_run_jobs()
     thread = threading.Thread(
         target=_do_run_work,
-        args=(run_id, body.credential_id, body.prompts, body.output_schema),
+        args=(run_id, body.credential_id, body.prompts, body.output_schema, inspect_file_key),
         daemon=True,
     )
     thread.start()
     from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=202,
-        content={"run_id": run_id, "run_node_id": body.run_node_id},
+        content={
+            "run_id": run_id,
+            "run_node_id": body.run_node_id,
+            "inspect_log_key": inspect_file_key,
+        },
     )
 
 

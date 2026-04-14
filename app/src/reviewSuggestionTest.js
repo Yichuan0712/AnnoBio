@@ -504,6 +504,7 @@ export async function runSuggestionRowTests(opts) {
   const base = String(apiBase).replace(/\/$/, '');
   let runId;
   try {
+    const inspectRunId = `verify_${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
     const res = await fetch(`${base}/api/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -513,6 +514,7 @@ export async function runSuggestionRowTests(opts) {
         prompts,
         output_schema: outputSchema,
         run_node_id: null,
+        inspect_run_id: inspectRunId,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -677,6 +679,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
   const base = String(apiBase).replace(/\/$/, '');
   let runId;
   try {
+    const inspectRunId = `verify_${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
     const res = await fetch(`${base}/api/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -686,6 +689,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
         prompts,
         output_schema: outputSchema,
         run_node_id: null,
+        inspect_run_id: inspectRunId,
       }),
     });
     const data = await res.json().catch(() => ({}));
