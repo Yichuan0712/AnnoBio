@@ -32,6 +32,7 @@ import {
   stringsMatchSemanticAlign,
   prefetchEmbeddingCosineMap,
   embeddingPairMatches,
+  isValidRunOutputForScoreRow,
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
@@ -402,18 +403,30 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   const gtRows = gtDeduped.rows || [];
   const resultsNoErr = (results || []).filter((r) => r && !r.error);
   const dedupedResults = dedupeRunResults(resultsNoErr);
+  const validDedupedResults = dedupedResults.filter((r) => isValidRunOutputForScoreRow(r, outputFields));
+
+  function emptyRowInputPlaceholders() {
+    const out = {};
+    for (const name of promptPlaceholderNames) out[name] = '';
+    return out;
+  }
+  const inputIndicesWithValidRun = new Set(
+    validDedupedResults.map((r) =>
+      typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index,
+    ),
+  );
 
   const resultsByIndex = new Map();
-  (dedupedResults || []).forEach((res) => { resultsByIndex.set(res.row_index, res); });
+  (validDedupedResults || []).forEach((res) => { resultsByIndex.set(res.row_index, res); });
 
-  const nonErrorResults = dedupedResults || [];
+  const nonErrorResults = validDedupedResults || [];
   const runRowIndices = [...new Set(nonErrorResults.map((r) => r.row_index))];
   reviewEmbeddingCosineMap = new Map();
   if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
     try {
       reviewEmbeddingCosineMap = await prefetchEmbeddingCosineMap(SCORE_BACKEND_BASE, {
         root: scoreRoot,
-        results: dedupedResults,
+        results: validDedupedResults,
         outputFields,
         runWs: runWsSafe,
         gtContent: gtDeduped,
@@ -552,7 +565,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
 
   const rows = [];
   let outRowIdx = 0;
-  for (const r of dedupedResults) {
+  for (const r of validDedupedResults) {
     const runR = r.row_index;
     const inpIdx = r.input_row_index ?? runR;
     const jPaired = runR >= 0 && runR < runToGt.length ? runToGt[runR] : -1;
@@ -569,7 +582,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       ?? (gtIdxForRules >= 0 ? comments[String(gtIdxForRules)] : null)
       ?? comments[`run:${runR}`]
       ?? null;
-    const row_input = rowInputAsPromptPlaceholders(inpIdx);
+    const row_input = inputIndicesWithValidRun.has(inpIdx) ? rowInputAsPromptPlaceholders(inpIdx) : emptyRowInputPlaceholders();
     const runRowIdx =
       typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : outRowIdx;
     const score_table_row = jPaired >= 0
@@ -592,66 +605,116 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     outRowIdx++;
   }
 
-  /* GT rows with no paired run (Score table shows run columns as —) never appeared in dedupedResults; add synthetic rows for Review / Phase 1. */
+  /**
+   * 0-based worksheet input index for an unpaired GT row, or null if unknown.
+   * Tiered inference so real same-input rows still group (Phase 1 `in:{iri}`), without the old
+   * “first run substring hit” that merged unrelated rows (e.g. #1 + #6).
+   */
   function findInputRowIndexForUnpairedGt(gtJ) {
     const gtCells = [];
     for (const col of gtColsUsed) {
       const v = String(getGtValue(gtDeduped, gtJ, col) || '').trim();
       if (v) gtCells.push(v);
     }
-    if (gtCells.length === 0) {
-      if (dedupedResults[0]) {
-        const r0 = dedupedResults[0];
-        return typeof r0.input_row_index === 'number' && !Number.isNaN(r0.input_row_index) ? r0.input_row_index : r0.row_index;
+    if (gtCells.length === 0) return null;
+
+    const wsRows = runWsSafe.rows || [];
+    const cellsForRow = (ii) => (wsRows[ii] || []).map((c) => String(c ?? '').trim());
+
+    const exactHitsForRow = (ii) => {
+      const cells = cellsForRow(ii);
+      return gtCells.reduce((n, gv) => n + (cells.some((c) => c === gv) ? 1 : 0), 0);
+    };
+
+    /** Unique row index with highest score, or null if tie or all zero. */
+    const uniqueArgmaxRows = (scoreFn) => {
+      let best = -1;
+      const scores = [];
+      for (let ii = 0; ii < wsRows.length; ii++) {
+        const s = scoreFn(ii);
+        scores.push(s);
+        if (s > best) best = s;
       }
-      return 0;
-    }
-    const matchesCell = (s) => {
-      const t = String(s ?? '').trim();
-      if (!t) return false;
-      for (const gv of gtCells) {
-        if (!gv) continue;
-        if (t === gv || t.includes(gv) || gv.includes(t)) return true;
+      if (best <= 0) return null;
+      const winners = [];
+      for (let ii = 0; ii < wsRows.length; ii++) {
+        if (scores[ii] === best) winners.push(ii);
       }
+      return winners.length === 1 ? winners[0] : null;
+    };
+
+    const exactWinner = uniqueArgmaxRows(exactHitsForRow);
+    if (exactWinner != null) return exactWinner;
+
+    const MIN_SUB = 4;
+    const relaxedHit = (gv, cell) => {
+      if (gv === cell) return true;
+      if (gv.length < MIN_SUB && cell.length < MIN_SUB) return false;
+      if (gv.length >= MIN_SUB && cell.includes(gv)) return true;
+      if (cell.length >= MIN_SUB && gv.includes(cell)) return true;
       return false;
     };
-    for (const r of dedupedResults) {
-      const inp = typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index;
-      for (const k of outputKeysUsed) {
-        const rv = getRunValue(r, k, runWsSafe, outputFields);
-        if (matchesCell(rv)) return inp;
+    const relaxedHitsForRow = (ii) => {
+      const cells = cellsForRow(ii);
+      return gtCells.reduce((n, gv) => n + (cells.some((c) => relaxedHit(gv, c)) ? 1 : 0), 0);
+    };
+    const relaxedWinner = uniqueArgmaxRows(relaxedHitsForRow);
+    if (relaxedWinner != null) return relaxedWinner;
+
+    const valueSetForInput = (inp) => {
+      const set = new Set();
+      const wsRow = wsRows[inp] || [];
+      for (const c of wsRow) {
+        const t = String(c ?? '').trim();
+        if (t) set.add(t);
       }
-      const wsRow = runWsSafe.rows && runWsSafe.rows[inp] ? runWsSafe.rows[inp] : [];
-      for (const cell of wsRow) {
-        if (matchesCell(cell)) return inp;
+      for (const r of validDedupedResults) {
+        const rInp = typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index;
+        if (rInp !== inp) continue;
+        for (const k of outputKeysUsed) {
+          const rv = getRunValue(r, k, runWsSafe, outputFields);
+          const t = String(rv ?? '').trim();
+          if (t) set.add(t);
+        }
       }
-    }
-    for (let ii = 0; ii < (runWsSafe.rows || []).length; ii++) {
-      const wsRow = runWsSafe.rows[ii] || [];
-      for (const cell of wsRow) {
-        if (matchesCell(cell)) return ii;
-      }
-    }
-    if (dedupedResults.length > 0) {
-      const r0 = dedupedResults[0];
-      return typeof r0.input_row_index === 'number' && !Number.isNaN(r0.input_row_index) ? r0.input_row_index : r0.row_index;
-    }
-    return 0;
+      return set;
+    };
+
+    const distinctInps = [
+      ...new Set(
+        validDedupedResults.map((r) =>
+          typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index,
+        ),
+      ),
+    ];
+    const allExactInBundle = (inp) => {
+      const set = valueSetForInput(inp);
+      return gtCells.every((gv) => set.has(gv));
+    };
+    const bundleMatches = distinctInps.filter((inp) => allExactInBundle(inp));
+    if (bundleMatches.length === 1) return bundleMatches[0];
+
+    return null;
   }
 
+  /* GT rows with no paired run: synthetic comparison rows. Prefer same `input_row_index` as runnable rows when we can infer it. */
   let synthRow = maxRunRowIndex + 1;
   for (let j = 0; j < gtCount; j++) {
     if (gtToRun[j] >= 0) continue;
     if (excludedFromScoring[String(j)]) continue;
-    const inpIdx = findInputRowIndexForUnpairedGt(j);
     const modalKey = String(j);
     const { expected, comparison_types, ground_truth_output } = expectedAndComparisonTypesForGt(j);
     const comment = comments[modalKey] ?? comments[String(j)] ?? null;
-    const row_input = rowInputAsPromptPlaceholders(inpIdx);
     const score_table_row = scoreTableRowByKey.get(`gt:${j}`) ?? null;
+    const inpResolved = findInputRowIndexForUnpairedGt(j);
+    const useInp = typeof inpResolved === 'number' && !Number.isNaN(inpResolved) ? inpResolved : null;
+    const row_input =
+      useInp != null
+        ? (inputIndicesWithValidRun.has(useInp) ? rowInputAsPromptPlaceholders(useInp) : emptyRowInputPlaceholders())
+        : null;
     rows.push({
       row_index: synthRow,
-      input_row_index: inpIdx,
+      input_row_index: useInp,
       matched: false,
       run_output: {},
       expected,

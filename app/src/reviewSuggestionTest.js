@@ -269,7 +269,9 @@ function runnableRowsWithInputIndex(rows, inputIdx) {
 }
 
 /**
- * When row_index t hits a synthetic gt_only row, resolve runnable rows: same GT pair, same worksheet index, or same row_input.
+ * When row_index t hits a synthetic gt_only row, resolve runnable rows: same GT pair (source_gt_row_index),
+ * worksheet input_row_index t, same input_row_index on the synthetic row, or same row_input.
+ * gt_only may share input_row_index with runnable rows (Phase 1 grouping); if both input_row_index and row_input are null, expand by row_index only.
  */
 function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
   const out = [];
@@ -304,6 +306,13 @@ function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
 
   out.sort((a, b) => (a.row_index || 0) - (b.row_index || 0));
   return out;
+}
+
+/** Optional 1-based Score detail # for a comparison row (saved as `score_table_row`). */
+function scoreTableNumberLabel(rows, comparisonRowIndex) {
+  const r = rows.find((x) => Number(x?.row_index) === Number(comparisonRowIndex));
+  const n = r && r.score_table_row != null ? Number(r.score_table_row) : NaN;
+  return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
 /**
@@ -345,11 +354,13 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
         }
         continue;
       }
+      const st = scoreTableNumberLabel(rows, t);
+      const stPart = st != null ? ` (Score table #${st})` : '';
       return {
         error:
-          `Cannot verify target ${t}: comparison row_index ${t} is ground-truth only (no model output). ` +
-          `No runnable row shares its ground-truth pairing, worksheet Input #${t + 1} (input_row_index ${t}), ` +
-          `or the same prompt placeholders (row_input) as that entry — often caused by one input mapping to multiple outputs with mismatched indices.`,
+          `Cannot verify target ${t}: comparison row_index ${t}${stPart} is ground-truth only (no model output). ` +
+          `Verify needs a runnable row with model output; none shares this row’s GT pairing, worksheet input_row_index, or row_input. ` +
+          `Often caused by unpaired ground-truth rows or one input → multiple outputs with mismatched indices.`,
       };
     }
 

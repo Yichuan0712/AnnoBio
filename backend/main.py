@@ -1047,6 +1047,40 @@ def _load_run_jobs() -> None:
 _load_run_jobs()
 
 
+def _run_field_value_non_empty(v: object) -> bool:
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return bool(v.strip())
+    if isinstance(v, list):
+        return any(_run_field_value_non_empty(x) for x in v)
+    if isinstance(v, dict):
+        return bool(v) and any(_run_field_value_non_empty(x) for x in v.values())
+    return True
+
+
+def _run_structured_output_is_empty(out: object, return_shape: str, output_fields: list[dict]) -> bool:
+    """True if model returned no substantive values for schema fields (same idea as app isValidRunOutputForScoreRow)."""
+    keys = [str(f.get("key") or "").strip() for f in (output_fields or []) if f.get("key")]
+    if return_shape == "table":
+        if not isinstance(out, list) or len(out) == 0:
+            return True
+        for row in out:
+            if not isinstance(row, dict):
+                continue
+            if keys:
+                if any(_run_field_value_non_empty(row.get(k)) for k in keys):
+                    return False
+            elif any(_run_field_value_non_empty(v) for v in row.values()):
+                return False
+        return True
+    if not isinstance(out, dict):
+        return True
+    if keys:
+        return not any(_run_field_value_non_empty(out.get(k)) for k in keys)
+    return not any(_run_field_value_non_empty(v) for v in out.values())
+
+
 def _do_run_work(
     run_id: str,
     credential_id: str,
@@ -1179,12 +1213,21 @@ def _do_run_work(
                     _safe_print(_HL + _SEP + _R + "\n")
                     if return_shape == "table" and isinstance(out, dict) and "rows" in out:
                         out = out["rows"]
+                    if _run_structured_output_is_empty(out, return_shape, output_fields):
+                        err_msg = "Empty model output"
+                        if attempt < run_max_retries:
+                            _safe_print(
+                                _HL + f"[Run] Row {row_index} empty output, retry {attempt + 1}/{run_max_retries}" + _R + "\n"
+                            )
+                            continue
+                        items = []
+                        items.append({"input_row_index": row_index, "output": None, "error": err_msg})
+                        break
                     if return_shape == "table" and isinstance(out, list):
                         for row in out:
                             items.append({"input_row_index": row_index, "output": row if isinstance(row, dict) else {}, "error": None})
                     else:
                         items.append({"input_row_index": row_index, "output": out, "error": None})
-                    # Empty model output is accepted as-is; only exceptions trigger retries.
                     break
                 except Exception as e:
                     err_msg = str(e)

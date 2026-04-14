@@ -134,9 +134,9 @@ class PromptEditSuggestion(BaseModel):
         ...,
         min_length=1,
         description=(
-            "Required. 0-based comparison row_index for every input row this edit targets "
-            "(same index as Review / Run results). UI input # = row_index + 1. "
-            "List all rows whose failures this prompt change addresses."
+            "Required. 0-based comparison row_index only — the same integers as in section 3 "
+            "after 'Comparison row(s)' (not worksheet input_row_index, not 1-based, not Score table #). "
+            "List every comparison row this edit addresses."
         ),
     )
 
@@ -332,7 +332,7 @@ Diagnosis and rough fix hints from the first review pass (use to decide what to 
 Each edit in `prompt_edits` **must** include:
 
 - **`phase1_addresses`**: **1 to 3 strings** (hard cap **3**). Each string should name a **Phase 1 finding** from **section 3** (short phrase or quote). **Special case:** if Phase 1 lists many bullets that are **the same underlying issue** (same failure mode / one thematic gap), **do not** split into extra edits just to mirror bullet count: **summarize** that cluster in **one to three** strings and fix it with **one** localized edit when one `old_sentence`→`new_sentence` truly addresses that whole class. Split into another `prompt_edit` only when Phase 1 implies **different** change strategies or **different** places in the prompt. **Do not** use vague entries like “improve clarity” unless Phase 1 said so.
-- **`target_input_row_indices`**: **Non-empty** list of **0-based comparison row_index** values naming **which input rows** this edit is for (same numbering as Phase 1 / Run results; UI **Input #** = `row_index + 1`; multiple rows → list each once, e.g. `[2, 5]`).
+- **`target_input_row_indices`**: **Non-empty** list of **0-based comparison `row_index`** values — copy the **exact integers** from section 3 after **“Comparison row(s)”** (e.g. if section3 says rows `4, 5, 6`, use `[4, 5, 6]`). Do **not** use 1-based numbering, worksheet `input_row_index`, or Score-table `#`; the app maps these indices to Score # for display.
 - **`reason`**: 1–2 sentences on **how** the `old_sentence`→`new_sentence` change implements those fixes (implementation detail, not a repeat of the whole section 3).
 
 Other rules:

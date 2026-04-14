@@ -4949,18 +4949,15 @@ button.review-suggestion-title-pill {
 
 .run-detail-results-table thead th {
   font-weight: 600;
-  color: var(--text);
-  background: var(--hover);
+  color: var(--text-muted);
+  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
 }
 
 .run-detail-results-table tbody td {
   color: var(--text);
   background: var(--bg);
 }
-.run-detail-results-table tbody tr:nth-child(even) td {
-  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
-}
-/* 中括号列整列与标题行同色，需覆盖上面的斑马纹 */
+/* Input / 折叠列：与展开前一致，保持浅底以区分于输出列 */
 .run-detail-results-table tbody tr td.run-detail-td--dataset-row-col,
 .run-detail-results-table tbody tr td.run-detail-td--error-col {
   background: var(--hover) !important;
