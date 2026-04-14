@@ -15,12 +15,17 @@ import {
 } from './reviewSuggestionTest.js';
 import {
   runSuggestionFinetuneMIPROv2,
-  runSuggestionFinetuneBayesian,
   abortAllFinetuneJobs,
   registerFinetuneSession,
   hasActiveFinetuneSessions,
 } from './reviewSuggestionFinetune.js';
-import { rebuildWorkingFromApplied, getLocatableSegment, effectiveNewSentenceForApply } from './reviewWorkingSections.js';
+import {
+  rebuildWorkingFromApplied,
+  getLocatableSegment,
+  effectiveNewSentenceForApply,
+  suggestionTargetInputRowIndices,
+  suggestionNeedsAutoRowCheck,
+} from './reviewWorkingSections.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import {
   ensureReviewResultIds,
@@ -223,14 +228,6 @@ function formatRunRowIndexForDisplay(zeroBased) {
   const n = Number(zeroBased);
   if (zeroBased === null || zeroBased === undefined || zeroBased === '' || Number.isNaN(n) || n < 0) return '—';
   return String(n + 1);
-}
-
-/** 0-based comparison indices for which input rows a prompt-edit suggestion targets (`target_input_row_indices` or legacy `row_indices`). */
-function suggestionTargetInputRowIndices(sug) {
-  if (!sug || typeof sug !== 'object') return [];
-  const raw = sug.target_input_row_indices ?? sug.row_indices;
-  if (!Array.isArray(raw)) return [];
-  return [...new Set(raw.map((x) => Number(x)).filter((x) => !Number.isNaN(x) && x >= 0))].sort((a, b) => a - b);
 }
 
 /** 1-based Score table position from saved comparison row when `score_table_row` is set. */
@@ -508,26 +505,6 @@ function isReviewRowCheckInProgress(sug) {
   if (!sug || typeof sug !== 'object') return false;
   const v = sug.review_test_in_progress;
   return v === true || v === 1;
-}
-
-/**
- * True when Run+Score row check can run for this suggestion (locatable, has targets, no terminal outcome yet).
- * @param {object} sug
- * @param {{ name: string, content: string }[]} originals
- * @param {unknown[]} promptSections
- */
-function suggestionNeedsAutoRowCheck(sug, originals, promptSections) {
-  if (!sug || typeof sug !== 'object') return false;
-  if (getSuggestionTestOutcome(sug)) return false;
-  const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
-  const oldSentence = (sug.old_sentence || '').trim();
-  const secIdx = Math.max(0, Math.min(Number(sug.section_index) || 0, (promptSections || []).length - 1));
-  const originalContent = originals[secIdx] && originals[secIdx].content ? originals[secIdx].content : '';
-  const segmentInOriginal = useSentenceEdit ? getLocatableSegment(originalContent, oldSentence) : null;
-  const unlocatable = useSentenceEdit && !segmentInOriginal;
-  if (unlocatable) return false;
-  if (suggestionTargetInputRowIndices(sug).length === 0) return false;
-  return true;
 }
 
 /** Truncated title line for suggestion cards (pass/fail shown via pill / not at all, not in the title string). */
@@ -1407,9 +1384,6 @@ function buildReviewResultUI(overlay, options) {
       const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
       let reviewCredForFinetune = '';
       let miprov2Auto = 'light';
-      let finetuneMode = 'miprov2';
-      let ftMaxTrials = 22;
-      let ftNumCandidates = 10;
       try {
         const sres = await fetch(`${API_BASE}/api/settings`);
         if (sres.ok) {
@@ -1417,10 +1391,6 @@ function buildReviewResultUI(overlay, options) {
           reviewCredForFinetune = String(s.default_review_credential_id || '').trim();
           const a = String(s.review_finetune_miprov2_auto || 'light').trim().toLowerCase();
           if (a === 'medium' || a === 'heavy') miprov2Auto = a;
-          const m = String(s.review_finetune_mode || 'miprov2').trim().toLowerCase();
-          finetuneMode = m === 'bandit' ? 'bandit' : 'miprov2';
-          ftMaxTrials = Math.min(200, Math.max(4, Number(s.review_finetune_max_trials) || 22));
-          ftNumCandidates = Math.min(18, Math.max(4, Number(s.review_finetune_num_candidates) || 10));
         }
       } catch (_) {
         /* use defaults */
@@ -1437,60 +1407,34 @@ function buildReviewResultUI(overlay, options) {
           });
         }
       };
-      let result;
-      if (finetuneMode === 'bandit') {
-        result = await runSuggestionFinetuneBayesian({
-          apiBase: API_BASE,
-          llmCredentialId: payload.run_credential_id,
-          runCredentialId: payload.run_credential_id,
-          oldSentence,
-          newSentence: proposalNew,
-          numCandidates: ftNumCandidates,
-          maxTrials: ftMaxTrials,
-          allSuggestions,
-          sugIdx,
-          originals,
-          targets,
-          comparisonRows: payload.comparison_rows || [],
-          runResults: payload.run_results || [],
-          outputFields: payload.output_fields || [],
-          outputSchema: payload.output_schema,
-          scoreMappingJson: payload.score_mapping || '[]',
-          runWs: runWs || { headers: [], rows: [] },
-          gtContent: gtContent || { headers: [], rows: [] },
-          abortController: finetuneAc,
-          onProgress: onFinetuneProgress,
-        });
-      } else {
-        result = await runSuggestionFinetuneMIPROv2({
-          apiBase: API_BASE,
-          llmCredentialId: reviewCredForFinetune,
-          runCredentialId: payload.run_credential_id,
-          oldSentence,
-          newSentence: proposalNew,
-          allSuggestions,
-          sugIdx,
-          originals,
-          targets,
-          comparisonRows: payload.comparison_rows || [],
-          runResults: payload.run_results || [],
-          outputFields: payload.output_fields || [],
-          outputSchema: payload.output_schema,
-          scoreMappingJson: payload.score_mapping || '[]',
-          runWs: runWs || { headers: [], rows: [] },
-          gtContent: gtContent || { headers: [], rows: [] },
-          miprov2Auto,
-          abortController: finetuneAc,
-          onProgress: onFinetuneProgress,
-        });
-      }
+      const result = await runSuggestionFinetuneMIPROv2({
+        apiBase: API_BASE,
+        llmCredentialId: reviewCredForFinetune,
+        runCredentialId: payload.run_credential_id,
+        oldSentence,
+        newSentence: proposalNew,
+        allSuggestions,
+        sugIdx,
+        originals,
+        targets,
+        comparisonRows: payload.comparison_rows || [],
+        runResults: payload.run_results || [],
+        outputFields: payload.output_fields || [],
+        outputSchema: payload.output_schema,
+        scoreMappingJson: payload.score_mapping || '[]',
+        runWs: runWs || { headers: [], rows: [] },
+        gtContent: gtContent || { headers: [], rows: [] },
+        miprov2Auto,
+        abortController: finetuneAc,
+        onProgress: onFinetuneProgress,
+      });
       sug.new_sentence = result.bestText;
       sug.review_finetune_meta = {
         bestPassPct: Math.round(Number(result.bestObservedRate) * 100),
         candidatesCount: result.candidates.length,
         trialsRun: Array.isArray(result.trialLog) ? result.trialLog.length : 0,
         bestArmIndex: result.bestIndex,
-        optimizer: result.optimizer || finetuneMode,
+        optimizer: result.optimizer || 'miprov2',
         newSentenceBeforeFinetune: proposalNew,
       };
       delete saved.review_finetune_last_result;
@@ -1826,6 +1770,7 @@ function buildReviewResultUI(overlay, options) {
   } else {
     renderEditSuggestionCards();
     updateSuggestionsFooter();
+    persistReviewProgressToNode(100);
   }
 
   function setupRightTabs() {

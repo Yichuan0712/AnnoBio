@@ -9,6 +9,7 @@ import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
 import { mergeResumeResults, embedInputRow, countCompletedInputRows, markEmptyOutputAsError } from './runResumeUtils.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
+import { reviewStreamSavedNeedsRowVerifyPhase } from './reviewWorkingSections.js';
 import {
   allocNextReviewSuggestionId,
   ensureReviewResultIds,
@@ -1065,11 +1066,13 @@ export function buildWorkflowCanvas(root) {
         setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_DATA_PCT);
         streamSaved.reviewProgress = REVIEW_STREAM_DATA_PCT;
       } else if (ev.type === 'done') {
-        setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_PROGRESS_PIPELINE_DONE);
+        const needsRowVerifyPhase = reviewStreamSavedNeedsRowVerifyPhase(streamSaved);
+        const finalizePct = needsRowVerifyPhase ? REVIEW_PROGRESS_PIPELINE_DONE : 100;
+        setReviewNodeProgress(getNodeById(reviewNodeId), finalizePct);
         streamSaved = {
           ...streamSaved,
           streamComplete: true,
-          reviewProgress: REVIEW_PROGRESS_PIPELINE_DONE,
+          reviewProgress: finalizePct,
         };
         normalizeSuggestionIdsToDisplayOrder(streamSaved);
       }

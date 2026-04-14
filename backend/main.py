@@ -37,7 +37,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, create_model
 
 from llm import chat as llm_chat, run_structured as llm_run_structured
-from llm import _extract_json_array_from_text
 from review_finetune_miprov2 import run_miprov2_finetune
 
 app = FastAPI()
@@ -87,10 +86,6 @@ DEFAULT_SETTINGS = {
     "review_max_tokens": 32768,
     "run_max_retries": 2,
     "review_max_failed_rows": 30,
-    # Review → Finetune: mode miprov2 | bandit (Thompson sampling over /api/review/finetune-candidates)
-    "review_finetune_mode": "miprov2",
-    "review_finetune_max_trials": 22,
-    "review_finetune_num_candidates": 10,
     # DSPy MIPROv2 budget: light | medium | heavy (see dspy.MIPROv2 auto)
     "review_finetune_miprov2_auto": "light",
 }
@@ -182,15 +177,6 @@ class SettingsPatch(BaseModel):
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
     review_max_failed_rows: int | None = Field(default=None, ge=1, le=200)
-    review_finetune_mode: str | None = Field(
-        default=None, description="Finetune algorithm: miprov2 | bandit"
-    )
-    review_finetune_max_trials: int | None = Field(
-        default=None, ge=4, le=200, description="Finetune bandit evaluation rounds (total trials)"
-    )
-    review_finetune_num_candidates: int | None = Field(
-        default=None, ge=4, le=18, description="LLM paraphrases requested (must match finetune-candidates API)"
-    )
     review_finetune_miprov2_auto: str | None = Field(
         default=None, description="MIPROv2 run mode: light | medium | heavy"
     )
@@ -598,13 +584,6 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1, description="Conversation history; last message should be user")
 
 
-class FinetuneCandidatesRequest(BaseModel):
-    credential_id: str = Field(..., description="LLM credential (Run or Review)")
-    old_sentence: str = Field(default="", description="Exact span in the prompt being replaced")
-    new_sentence: str = Field(default="", description="Current proposed replacement text")
-    num_variants: int = Field(default=10, ge=4, le=18, description="How many paraphrases to generate (JSON array)")
-
-
 class FinetuneMIPROv2Request(BaseModel):
     finetune_credential_id: str = Field(..., description="DSPy / MIPROv2 optimizer LM (same stack as Review credential)")
     run_credential_id: str = Field(..., description="Credential for per-row structured Run inside the metric")
@@ -624,84 +603,6 @@ class FinetuneMIPROv2Request(BaseModel):
     run_ws: dict = Field(default_factory=dict)
     gt_content: dict = Field(default_factory=dict)
     miprov2_auto: str = Field(default="light", description="Optimization budget: light | medium | heavy")
-
-
-@app.post("/api/review/finetune-candidates")
-def finetune_candidates(body: FinetuneCandidatesRequest):
-    """LLM generates alternative replacements for a prompt span (used by Bayesian finetune in the app)."""
-    items = _load_credentials()
-    cred = next((x for x in items if x.get("id") == body.credential_id), None)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    api_key = cred.get("api_key", "")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing API key")
-    provider = cred.get("provider") or _infer_provider(cred.get("llm", ""))
-    model = cred.get("llm", "")
-    _check_model_for_provider(provider, model)
-
-    settings = _load_settings()
-    max_tokens = min(4096, int(settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]))
-
-    old_s = (body.old_sentence or "").strip()
-    new_s = (body.new_sentence or "").strip()
-    n = int(body.num_variants)
-    prompt = f"""You help refine ONE fragment inside a larger LLM system prompt.
-
-The fragment to replace (exact role in the template — keep the same language and tone as this text):
----
-{old_s[:8000]}
----
-
-Current proposed replacement (use as style/intent reference; you will output alternatives of similar length and function):
----
-{new_s[:8000]}
----
-
-Task: output exactly {n} alternative replacement strings. Each must be a drop-in substitute for the first block (same job: instruction, rule, or wording that fits where the old fragment was). Vary wording and structure; do not add unrelated topics. Keep each alternative concise like the proposal unless the old fragment is inherently long.
-
-Return ONLY a JSON array of {n} strings, no markdown, no keys, no commentary. Example: ["...","..."]"""
-
-    try:
-        text = llm_chat(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    try:
-        raw = _extract_json_array_from_text(text)
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Model did not return a valid JSON array of strings.")
-
-    if not isinstance(data, list):
-        raise HTTPException(status_code=400, detail="Expected a JSON array from the model.")
-
-    out: list[str] = []
-    seen: set[str] = set()
-    for x in data:
-        s = str(x).strip() if x is not None else ""
-        if not s:
-            continue
-        key = s.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(s)
-
-    if new_s and new_s.casefold() not in seen:
-        out.insert(0, new_s)
-        seen.add(new_s.casefold())
-
-    if not out:
-        raise HTTPException(status_code=400, detail="No usable candidate strings after parsing.")
-
-    return {"candidates": out[:20]}
 
 
 @app.post("/api/review/finetune-miprov2")
@@ -826,10 +727,6 @@ def patch_settings(body: SettingsPatch):
     for k, v in updates.items():
         if k in DEFAULT_SETTINGS:
             data[k] = v
-    mode = data.get("review_finetune_mode")
-    if isinstance(mode, str):
-        ml = mode.strip().lower()
-        data["review_finetune_mode"] = ml if ml in ("miprov2", "bandit") else "miprov2"
     auto = data.get("review_finetune_miprov2_auto")
     if isinstance(auto, str):
         al = auto.strip().lower()

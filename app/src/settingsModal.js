@@ -18,9 +18,6 @@ const MODEL_SETTINGS_DEFAULTS = {
   review_max_tokens: 32768,
   run_max_retries: 2,
   review_max_failed_rows: 30,
-  review_finetune_mode: 'miprov2',
-  review_finetune_max_trials: 22,
-  review_finetune_num_candidates: 10,
   review_finetune_miprov2_auto: 'light',
 };
 
@@ -529,32 +526,15 @@ export function openSettingsModal() {
                               <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max failed rows analyzed per Review" />
                             </div>
                             <div class="defaults-field defaults-field--full">
-                              <p class="dataset-meta-label" style="margin-bottom:0.35rem;font-weight:600;">Finetune</p>
+                              <p class="dataset-meta-label" style="margin-bottom:0.35rem;font-weight:600;">Finetune (MIPROv2)</p>
                             </div>
                             <div class="defaults-field defaults-field--full">
-                              <label class="dataset-meta-label" for="settings-review-finetune-mode">Mode</label>
-                              <select id="settings-review-finetune-mode" class="credentials-select dataset-meta-input" aria-label="Finetune algorithm">
-                                <option value="miprov2">DSPy MIPROv2 (instruction + demo search)</option>
-                                <option value="bandit">Thompson bandit (fixed candidates, fast iterations)</option>
-                              </select>
-                            </div>
-                            <div id="settings-finetune-mipro-options" class="defaults-field defaults-field--full">
-                              <label class="dataset-meta-label" for="settings-review-finetune-miprov2-auto">MIPROv2 optimization budget</label>
+                              <label class="dataset-meta-label" for="settings-review-finetune-miprov2-auto">Optimization budget</label>
                               <select id="settings-review-finetune-miprov2-auto" class="credentials-select dataset-meta-input" aria-label="MIPROv2 optimization budget">
                                 <option value="light">Light (fewer trials, faster)</option>
                                 <option value="medium">Medium</option>
                                 <option value="heavy">Heavy (more search, slower)</option>
                               </select>
-                            </div>
-                            <div id="settings-finetune-bandit-options">
-                              <div class="defaults-field defaults-field--review-finetune-input">
-                                <label class="dataset-meta-label" for="settings-review-finetune-max-trials">Bandit: max trials (4–200)</label>
-                                <input type="number" id="settings-review-finetune-max-trials" class="dataset-meta-input" min="4" max="200" value="22" aria-label="Finetune max trials" />
-                              </div>
-                              <div class="defaults-field defaults-field--review-finetune-input">
-                                <label class="dataset-meta-label" for="settings-review-finetune-num-candidates">Bandit: candidate paraphrases (4–18)</label>
-                                <input type="number" id="settings-review-finetune-num-candidates" class="dataset-meta-input" min="4" max="18" value="10" aria-label="Finetune number of candidates" />
-                              </div>
                             </div>
                           </div>
                       </div>
@@ -584,12 +564,7 @@ export function openSettingsModal() {
   const reviewMaxTokensInp = overlay.querySelector('#settings-review-max-tokens');
   const reviewMaxFailedRowsInp = overlay.querySelector('#settings-review-max-failed-rows');
   const runMaxRetriesInp = overlay.querySelector('#settings-run-max-retries');
-  const reviewFinetuneModeSel = overlay.querySelector('#settings-review-finetune-mode');
   const reviewFinetuneMiproAutoSel = overlay.querySelector('#settings-review-finetune-miprov2-auto');
-  const reviewFinetuneMiproWrap = overlay.querySelector('#settings-finetune-mipro-options');
-  const reviewFinetuneBanditWrap = overlay.querySelector('#settings-finetune-bandit-options');
-  const reviewFinetuneMaxTrialsInp = overlay.querySelector('#settings-review-finetune-max-trials');
-  const reviewFinetuneNumCandidatesInp = overlay.querySelector('#settings-review-finetune-num-candidates');
 
   const tabBar = overlay.querySelector('.model-settings-view-switch');
   const tabs = tabBar ? tabBar.querySelectorAll('.review-detail-tab[data-tab]') : [];
@@ -615,8 +590,6 @@ export function openSettingsModal() {
   tabs.forEach((btn) => {
     btn.addEventListener('click', () => activateSettingsTab(btn.dataset.tab));
   });
-
-  reviewFinetuneModeSel.addEventListener('change', syncFinetuneModeUi);
 
   async function loadCredentials() {
     try {
@@ -649,13 +622,6 @@ export function openSettingsModal() {
     reviewCredSelect.innerHTML = optNone + optHtml;
   }
 
-  function syncFinetuneModeUi() {
-    const mode = (reviewFinetuneModeSel.value || 'miprov2').trim().toLowerCase();
-    const isBandit = mode === 'bandit';
-    if (reviewFinetuneMiproWrap) reviewFinetuneMiproWrap.hidden = isBandit;
-    if (reviewFinetuneBanditWrap) reviewFinetuneBanditWrap.hidden = !isBandit;
-  }
-
   function applySettings(settings) {
     if (!settings) return;
     runCredSelect.value = settings.default_run_credential_id || '';
@@ -666,17 +632,8 @@ export function openSettingsModal() {
     reviewMaxTokensInp.value = String(settings.review_max_tokens ?? MODEL_SETTINGS_DEFAULTS.review_max_tokens);
     reviewMaxFailedRowsInp.value = String(settings.review_max_failed_rows ?? MODEL_SETTINGS_DEFAULTS.review_max_failed_rows);
     runMaxRetriesInp.value = String(settings.run_max_retries ?? MODEL_SETTINGS_DEFAULTS.run_max_retries);
-    const fm = String(settings.review_finetune_mode || MODEL_SETTINGS_DEFAULTS.review_finetune_mode).toLowerCase();
-    reviewFinetuneModeSel.value = fm === 'bandit' ? 'bandit' : 'miprov2';
     const mauto = String(settings.review_finetune_miprov2_auto || MODEL_SETTINGS_DEFAULTS.review_finetune_miprov2_auto).toLowerCase();
     reviewFinetuneMiproAutoSel.value = mauto === 'medium' || mauto === 'heavy' ? mauto : 'light';
-    reviewFinetuneMaxTrialsInp.value = String(
-      settings.review_finetune_max_trials ?? MODEL_SETTINGS_DEFAULTS.review_finetune_max_trials,
-    );
-    reviewFinetuneNumCandidatesInp.value = String(
-      settings.review_finetune_num_candidates ?? MODEL_SETTINGS_DEFAULTS.review_finetune_num_candidates,
-    );
-    syncFinetuneModeUi();
   }
 
   async function init() {
@@ -711,12 +668,8 @@ export function openSettingsModal() {
       5,
       Math.max(0, Number.isNaN(runMaxRetriesParsed) ? MODEL_SETTINGS_DEFAULTS.run_max_retries : runMaxRetriesParsed),
     );
-    const modeSel = (reviewFinetuneModeSel.value || 'miprov2').trim().toLowerCase();
-    const reviewFinetuneMode = modeSel === 'bandit' ? 'bandit' : 'miprov2';
     const miproSel = (reviewFinetuneMiproAutoSel.value || 'light').trim().toLowerCase();
     const reviewFinetuneMiproAuto = miproSel === 'medium' || miproSel === 'heavy' ? miproSel : 'light';
-    const reviewFinetuneMaxTrials = Math.min(200, Math.max(4, parseInt(reviewFinetuneMaxTrialsInp.value, 10) || 22));
-    const reviewFinetuneNumCandidates = Math.min(18, Math.max(4, parseInt(reviewFinetuneNumCandidatesInp.value, 10) || 10));
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
@@ -726,10 +679,7 @@ export function openSettingsModal() {
       review_max_tokens: reviewMaxTokens,
       review_max_failed_rows: reviewMaxFailedRows,
       run_max_retries: runMaxRetries,
-      review_finetune_mode: reviewFinetuneMode,
       review_finetune_miprov2_auto: reviewFinetuneMiproAuto,
-      review_finetune_max_trials: reviewFinetuneMaxTrials,
-      review_finetune_num_candidates: reviewFinetuneNumCandidates,
     };
   }
 

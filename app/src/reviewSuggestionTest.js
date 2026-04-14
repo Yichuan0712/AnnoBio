@@ -612,7 +612,7 @@ export async function runSuggestionRowTests(opts) {
 }
 
 /**
- * Same pipeline as {@link runSuggestionRowTests} but returns per-row pass rate (for Bayesian finetune objective).
+ * Same pipeline as {@link runSuggestionRowTests} but returns per-row pass rate (e.g. Finetune / metrics).
  * @returns {Promise<{ ok: boolean, passRate?: number, passed?: number, total?: number, allPass?: boolean, detail?: string }>}
  */
 export async function runSuggestionRowTestsMetrics(opts) {
