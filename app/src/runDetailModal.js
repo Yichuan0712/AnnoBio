@@ -248,6 +248,17 @@ export function openRunDetailModal({
       if (results != null) node.dataset.runResults = JSON.stringify(results);
       if (runCompleted !== undefined) node.dataset.runCompleted = runCompleted ? '1' : '';
     } catch (_) {}
+    if (results != null) {
+      let arr = results;
+      if (!Array.isArray(arr)) {
+        try {
+          arr = JSON.parse(node.dataset.runResults || '[]');
+        } catch (_) {
+          arr = [];
+        }
+      }
+      document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: Array.isArray(arr) ? arr : [] } }));
+    }
     if (completed != null && total != null) setNodeProgressBar(completed, total);
   }
 

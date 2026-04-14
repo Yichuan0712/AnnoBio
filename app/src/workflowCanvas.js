@@ -822,6 +822,62 @@ export function buildWorkflowCanvas(root) {
     bar.setAttribute('aria-valuenow', String(pct));
     if (node) node.dataset.reviewProgress = String(pct);
   }
+  /** Score在画布上为本地即时算分：仅当选好 Ground truth、至少一条有效 rule，且上游 Run 已有结果时显示100%。 */
+  function setScoreNodeProgress(node, percent) {
+    const bar = node?.querySelector('.workflow-node__score-progress');
+    if (!bar) return;
+    const pct = Math.min(100, Math.max(0, Math.round(percent)));
+    bar.style.width = pct + '%';
+    bar.setAttribute('aria-valuenow', String(pct));
+    if (node) node.dataset.scoreProgress = String(pct);
+  }
+  function scoreNodeHasCompleteRules(scoreNode) {
+    if (!scoreNode) return false;
+    try {
+      const raw = scoreNode.dataset.scoreMapping || '[]';
+      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const tree = parseScoreMappingToTree(data);
+      const rules = flattenScoreTreeToRules(tree);
+      return rules.some((r) => (r.outputKey || '').trim() && Array.isArray(r.gtColumns) && r.gtColumns.some((c) => String(c || '').trim()));
+    } catch (_) {
+      return false;
+    }
+  }
+  function scoreNodeIsReadyForScoring(scoreNode) {
+    const gtId = (scoreNode?.dataset?.scoreGroundTruthId || '').trim();
+    return !!gtId && scoreNodeHasCompleteRules(scoreNode);
+  }
+  function syncScoreNodeProgressFromUpstreamRun(scoreNode) {
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return;
+    const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+    if (!runEdge) {
+      setScoreNodeProgress(scoreNode, 0);
+      return;
+    }
+    const runNode = getNodeById(runEdge.fromId);
+    if (!runNode) {
+      setScoreNodeProgress(scoreNode, 0);
+      return;
+    }
+    let runResults = [];
+    try {
+      runResults = JSON.parse(runNode.dataset.runResults || '[]');
+    } catch (_) {}
+    const hasResults = Array.isArray(runResults) && runResults.length > 0;
+    const ready = scoreNodeIsReadyForScoring(scoreNode);
+    setScoreNodeProgress(scoreNode, hasResults && ready ? 100 : 0);
+  }
+  function syncScoreNodesProgressForRunId(runNodeId, results) {
+    if (!runNodeId) return;
+    const hasResults = Array.isArray(results) && results.length > 0;
+    for (const c of connections) {
+      if (c.fromId !== runNodeId || c.type !== EDGE_TYPE_RUN_TO_SCORE) continue;
+      const scoreNode = getNodeById(c.toId);
+      if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) continue;
+      const ready = scoreNodeIsReadyForScoring(scoreNode);
+      setScoreNodeProgress(scoreNode, hasResults && ready ? 100 : 0);
+    }
+  }
 
   /** When true, run poll is stopped (app closing); do not start new API calls. */
   let runPollStopped = false;
@@ -2831,6 +2887,7 @@ export function buildWorkflowCanvas(root) {
         <span class="workflow-node__title">${escapeHtml(scoreTitle)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
+      <div class="workflow-node__score-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
     nodesLayer.appendChild(node);
 
@@ -4296,6 +4353,16 @@ export function buildWorkflowCanvas(root) {
         type: EDGE_TYPE_RUN_TO_SCORE,
       });
       updateEdges();
+      const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
+      if (gtId) {
+        const wsNode = getNodeById(gtId);
+        if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
+          const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
+          const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+          const bar = scoreNode.querySelector('.workflow-node__score-progress');
+          if (bar) bar.style.background = color;
+        }
+      }
     }
     updateContentSize();
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -4344,6 +4411,17 @@ export function buildWorkflowCanvas(root) {
     if (!reviewNode || !reviewNode.classList.contains('workflow-node--prompt-review')) return;
     setReviewNodeProgress(reviewNode, percent);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  });
+
+  document.addEventListener('workflow:run-results-updated', (e) => {
+    const runNodeId = e.detail?.nodeId;
+    const results = e.detail?.results;
+    if (!runNodeId) return;
+    syncScoreNodesProgressForRunId(runNodeId, results);
+  });
+
+  document.addEventListener('workflow:canvas-changed', () => {
+    nodesLayer.querySelectorAll('.workflow-node--score').forEach((sn) => syncScoreNodeProgressFromUpstreamRun(sn));
   });
 
   document.addEventListener('workflow:save-review-result', (e) => {
@@ -4826,6 +4904,8 @@ export function buildWorkflowCanvas(root) {
         const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
         const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
         scoreNode.style.borderColor = color;
+        const progressBar = scoreNode.querySelector('.workflow-node__score-progress');
+        if (progressBar) progressBar.style.background = color;
       }
     });
     // Refresh dataset node description: sampler desc or dataset notes (always show body)
@@ -4869,6 +4949,7 @@ export function buildWorkflowCanvas(root) {
       }
       return null;
     }).filter(Boolean).filter((c) => getNodeById(c.fromId) && getNodeById(c.toId));
+    nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => syncScoreNodeProgressFromUpstreamRun(scoreNode));
     updateContentSize();
     updateEdges();
   }

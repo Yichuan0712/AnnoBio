@@ -978,6 +978,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const ws = getSelectedWorkingSet();
     if (node && node.style) {
       node.style.borderColor = ws && ws.color ? ws.color : '';
+      const bar = node.querySelector('.workflow-node__score-progress');
+      if (bar) bar.style.background = ws && ws.color ? ws.color : '';
     }
   }
 
