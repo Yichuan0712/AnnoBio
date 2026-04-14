@@ -49,7 +49,6 @@ from review_finetune_compositional_filelog import (
     inspect_append_trial,
     inspect_write_segments,
 )
-from review_finetune_miprov2 import run_miprov2_finetune
 from run_inspect_filelog import run_inspect_append_note, run_inspect_append_row, run_inspect_begin
 
 app = FastAPI()
@@ -99,10 +98,6 @@ DEFAULT_SETTINGS = {
     "review_max_tokens": 32768,
     "run_max_retries": 2,
     "review_max_failed_rows": 30,
-    # DSPy MIPROv2 budget: light | medium | heavy (see dspy.MIPROv2 auto)
-    "review_finetune_miprov2_auto": "light",
-    # Finetune algorithm: miprov2 | compositional (reason-guided segment lattice + Thompson search in app)
-    "review_finetune_mode": "miprov2",
     "review_finetune_comp_max_trials": 40,
     "review_finetune_comp_candidates_per_segment": 4,
     "review_finetune_comp_max_segments": 5,
@@ -195,12 +190,6 @@ class SettingsPatch(BaseModel):
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
     review_max_failed_rows: int | None = Field(default=None, ge=1, le=200)
-    review_finetune_miprov2_auto: str | None = Field(
-        default=None, description="MIPROv2 run mode: light | medium | heavy"
-    )
-    review_finetune_mode: str | None = Field(
-        default=None, description="Finetune algorithm: miprov2 | compositional"
-    )
     review_finetune_comp_max_trials: int | None = Field(
         default=None, ge=8, le=200, description="Compositional finetune: max verify rounds"
     )
@@ -618,91 +607,6 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1, description="Conversation history; last message should be user")
 
 
-class FinetuneMIPROv2Request(BaseModel):
-    finetune_credential_id: str = Field(..., description="DSPy / MIPROv2 optimizer LM (same stack as Review credential)")
-    run_credential_id: str = Field(..., description="Credential for per-row structured Run inside the metric")
-    old_sentence: str = Field(default="", description="Span being replaced")
-    new_sentence: str = Field(default="", description="Current proposal (starting point)")
-    originals: list[dict] = Field(default_factory=list, description="Prompt sections [{name, content}]")
-    all_suggestions: list[dict] = Field(default_factory=list, description="All review suggestions (same shape as saved JSON)")
-    suggestion_index: int = Field(..., ge=0, description="Index of the suggestion being finetuned")
-    expanded_comparison_rows: list[dict] = Field(
-        default_factory=list,
-        description="Pre-expanded comparison rows (same order as Verify / runSuggestionRowTestsMetrics)",
-    )
-    run_results: list[dict] = Field(default_factory=list)
-    output_fields: list[Any] = Field(default_factory=list)
-    output_schema: dict = Field(default_factory=dict)
-    score_mapping_json: Any = None
-    run_ws: dict = Field(default_factory=dict)
-    gt_content: dict = Field(default_factory=dict)
-    miprov2_auto: str = Field(default="light", description="Optimization budget: light | medium | heavy")
-
-
-@app.post("/api/review/finetune-miprov2")
-def finetune_miprov2(body: FinetuneMIPROv2Request):
-    """
-    DSPy MIPROv2 optimizer over a span-rewrite module; metric = Review pass rate (server-side mirror of Verify).
-    May take several minutes and many LLM calls (optimizer + metric evaluations).
-    """
-    auto = (body.miprov2_auto or "light").strip().lower()
-    if auto not in ("light", "medium", "heavy"):
-        raise HTTPException(status_code=400, detail="miprov2_auto must be one of: light, medium, heavy")
-
-    items = _load_credentials()
-    fc = next((x for x in items if x.get("id") == body.finetune_credential_id), None)
-    rc = next((x for x in items if x.get("id") == body.run_credential_id), None)
-    if not fc or not rc:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    if not fc.get("api_key") or not rc.get("api_key"):
-        raise HTTPException(status_code=400, detail="Missing API key")
-
-    fp = fc.get("provider") or _infer_provider(fc.get("llm", ""))
-    fm = fc.get("llm", "")
-    rp = rc.get("provider") or _infer_provider(rc.get("llm", ""))
-    rm = rc.get("llm", "")
-    _check_model_for_provider(fp, fm)
-    _check_model_for_provider(rp, rm)
-
-    settings = _load_settings()
-    ft_max = int(settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"])
-    run_max = int(settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"])
-
-    try:
-        result = run_miprov2_finetune(
-            finetune_provider=fp,
-            finetune_model=fm,
-            finetune_api_key=str(fc.get("api_key") or ""),
-            finetune_max_tokens=ft_max,
-            run_provider=rp,
-            run_model=rm,
-            run_api_key=str(rc.get("api_key") or ""),
-            run_max_tokens=run_max,
-            old_sentence=body.old_sentence or "",
-            new_sentence=body.new_sentence or "",
-            originals=list(body.originals or []),
-            all_suggestions=list(body.all_suggestions or []),
-            sug_index=int(body.suggestion_index),
-            expanded_comparison_rows=list(body.expanded_comparison_rows or []),
-            run_results=list(body.run_results or []),
-            output_fields=list(body.output_fields or []),
-            output_schema=dict(body.output_schema or {}),
-            score_mapping_json=body.score_mapping_json,
-            run_ws=dict(body.run_ws or {}),
-            gt_content=dict(body.gt_content or {}),
-            auto=auto,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    except Exception as e:
-        _safe_print(_HL + "[finetune-miprov2] " + _R + str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-    return result
-
-
 class FinetuneCompositionalSegmentsRequest(BaseModel):
     credential_id: str = Field(..., description="LLM credential for segmentation")
     old_sentence: str = Field(default="", description="Original span in prompt")
@@ -963,14 +867,6 @@ def patch_settings(body: SettingsPatch):
     for k, v in updates.items():
         if k in DEFAULT_SETTINGS:
             data[k] = v
-    auto = data.get("review_finetune_miprov2_auto")
-    if isinstance(auto, str):
-        al = auto.strip().lower()
-        data["review_finetune_miprov2_auto"] = al if al in ("light", "medium", "heavy") else "light"
-    mode = data.get("review_finetune_mode")
-    if isinstance(mode, str):
-        ml = mode.strip().lower()
-        data["review_finetune_mode"] = ml if ml in ("miprov2", "compositional") else "miprov2"
     for key, lo, hi in (
         ("review_finetune_comp_max_trials", 8, 200),
         ("review_finetune_comp_candidates_per_segment", 2, 8),

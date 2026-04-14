@@ -14,7 +14,6 @@ import {
   hasActiveVerifySessions,
 } from './reviewSuggestionTest.js';
 import {
-  runSuggestionFinetuneMIPROv2,
   runSuggestionFinetuneCompositional,
   abortAllFinetuneJobs,
   registerFinetuneSession,
@@ -1463,8 +1462,6 @@ function buildReviewResultUI(overlay, options) {
       const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
       const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
       let reviewCredForFinetune = '';
-      let miprov2Auto = 'light';
-      let finetuneMode = 'miprov2';
       let compMaxTrials = 40;
       let compCandidates = 4;
       let compMaxSegments = 5;
@@ -1473,10 +1470,6 @@ function buildReviewResultUI(overlay, options) {
         if (sres.ok) {
           const s = await sres.json();
           reviewCredForFinetune = String(s.default_review_credential_id || '').trim();
-          const a = String(s.review_finetune_miprov2_auto || 'light').trim().toLowerCase();
-          if (a === 'medium' || a === 'heavy') miprov2Auto = a;
-          const m = String(s.review_finetune_mode || 'miprov2').trim().toLowerCase();
-          finetuneMode = m === 'compositional' ? 'compositional' : 'miprov2';
           compMaxTrials = Math.min(200, Math.max(8, Number(s.review_finetune_comp_max_trials) || 40));
           compCandidates = Math.min(8, Math.max(2, Number(s.review_finetune_comp_candidates_per_segment) || 4));
           compMaxSegments = Math.min(8, Math.max(2, Number(s.review_finetune_comp_max_segments) || 5));
@@ -1485,8 +1478,8 @@ function buildReviewResultUI(overlay, options) {
         /* use defaults */
       }
       if (!reviewCredForFinetune) reviewCredForFinetune = payload.run_credential_id;
-      if (finetuneMode === 'compositional' && !improvementRationale) {
-        showAlert('Compositional finetune needs this suggestion’s reason (from Review). Re-run review or pick an edit that includes a reason.', {
+      if (!improvementRationale) {
+        showAlert('Finetune needs this suggestion’s reason (from Review). Re-run review or pick an edit that includes a reason.', {
           title: 'Missing reason',
         });
         return;
@@ -1502,62 +1495,37 @@ function buildReviewResultUI(overlay, options) {
           });
         }
       };
-      let result;
-      if (finetuneMode === 'compositional') {
-        result = await runSuggestionFinetuneCompositional({
-          apiBase: API_BASE,
-          llmCredentialId: reviewCredForFinetune,
-          runCredentialId: payload.run_credential_id,
-          oldSentence,
-          newSentence: proposalNew,
-          improvementRationale,
-          maxSegments: compMaxSegments,
-          candidatesPerSegment: compCandidates,
-          maxTrials: compMaxTrials,
-          allSuggestions,
-          sugIdx,
-          originals,
-          targets,
-          comparisonRows: payload.comparison_rows || [],
-          runResults: payload.run_results || [],
-          outputFields: payload.output_fields || [],
-          outputSchema: payload.output_schema,
-          scoreMappingJson: payload.score_mapping || '[]',
-          runWs: runWs || { headers: [], rows: [] },
-          gtContent: gtContent || { headers: [], rows: [] },
-          abortController: finetuneAc,
-          onProgress: onFinetuneProgress,
-        });
-      } else {
-        result = await runSuggestionFinetuneMIPROv2({
-          apiBase: API_BASE,
-          llmCredentialId: reviewCredForFinetune,
-          runCredentialId: payload.run_credential_id,
-          oldSentence,
-          newSentence: proposalNew,
-          allSuggestions,
-          sugIdx,
-          originals,
-          targets,
-          comparisonRows: payload.comparison_rows || [],
-          runResults: payload.run_results || [],
-          outputFields: payload.output_fields || [],
-          outputSchema: payload.output_schema,
-          scoreMappingJson: payload.score_mapping || '[]',
-          runWs: runWs || { headers: [], rows: [] },
-          gtContent: gtContent || { headers: [], rows: [] },
-          miprov2Auto,
-          abortController: finetuneAc,
-          onProgress: onFinetuneProgress,
-        });
-      }
+      const result = await runSuggestionFinetuneCompositional({
+        apiBase: API_BASE,
+        llmCredentialId: reviewCredForFinetune,
+        runCredentialId: payload.run_credential_id,
+        oldSentence,
+        newSentence: proposalNew,
+        improvementRationale,
+        maxSegments: compMaxSegments,
+        candidatesPerSegment: compCandidates,
+        maxTrials: compMaxTrials,
+        allSuggestions,
+        sugIdx,
+        originals,
+        targets,
+        comparisonRows: payload.comparison_rows || [],
+        runResults: payload.run_results || [],
+        outputFields: payload.output_fields || [],
+        outputSchema: payload.output_schema,
+        scoreMappingJson: payload.score_mapping || '[]',
+        runWs: runWs || { headers: [], rows: [] },
+        gtContent: gtContent || { headers: [], rows: [] },
+        abortController: finetuneAc,
+        onProgress: onFinetuneProgress,
+      });
       sug.new_sentence = result.bestText;
       sug.review_finetune_meta = {
         bestPassPct: Math.round(Number(result.bestObservedRate) * 100),
         candidatesCount: result.candidates.length,
         trialsRun: Array.isArray(result.trialLog) ? result.trialLog.length : 0,
         bestArmIndex: result.bestIndex,
-        optimizer: result.optimizer || finetuneMode,
+        optimizer: result.optimizer || 'compositional',
         newSentenceBeforeFinetune: proposalNew,
       };
       delete saved.review_finetune_last_result;
