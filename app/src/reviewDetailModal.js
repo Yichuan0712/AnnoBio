@@ -1255,6 +1255,10 @@ function buildReviewResultUI(overlay, options) {
     const isAssistant = sug && String(sug.source || '').toLowerCase() === 'assistant';
     /* Assistant edits: full actions (View detail + Accept); title shows Proposal tag only. */
     if (isAssistant) return true;
+    /* User may Accept/Revert the current proposal while Finetune runs (optimizer works on a copy server-side until completion). */
+    if (sug && sug.review_finetune_in_progress === true && saved.streamComplete === true) {
+      return true;
+    }
     if (saved.streamComplete !== true) {
       return allSuggestions.length === 0;
     }

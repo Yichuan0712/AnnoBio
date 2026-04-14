@@ -270,14 +270,14 @@ function runnableRowsWithInputIndex(rows, inputIdx) {
 
 /**
  * When row_index t hits a synthetic gt_only row, resolve runnable rows: same GT pair (source_gt_row_index),
- * worksheet input_row_index t, same input_row_index on the synthetic row, or same row_input.
- * gt_only may share input_row_index with runnable rows (Phase 1 grouping); if both input_row_index and row_input are null, expand by row_index only.
+ * worksheet input_row_index on the synthetic row, same row_input, then fallbacks for unpaired GT.
+ * Note: t is comparison row_index — do not use it as worksheet input_row_index (common bug).
  */
 function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
   const out = [];
   const pushUnique = (arr) => {
     for (const r of arr) {
-      if (r && !out.some((x) => x.row_index === r.row_index)) out.push(r);
+      if (r && !r.gt_only && !out.some((x) => x.row_index === r.row_index)) out.push(r);
     }
   };
 
@@ -289,10 +289,8 @@ function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
     pushUnique(bySameGt);
   }
 
-  pushUnique(runnableRowsWithInputIndex(allRows, t));
-
   const synthInp = gtOnlyRow.input_row_index;
-  if (typeof synthInp === 'number' && !Number.isNaN(synthInp) && synthInp !== t) {
+  if (typeof synthInp === 'number' && !Number.isNaN(synthInp) && synthInp >= 0) {
     pushUnique(runnableRowsWithInputIndex(allRows, synthInp));
   }
 
@@ -302,6 +300,16 @@ function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
       (r) => r && !r.gt_only && stableRowInputKey(r.row_input) === wantKey
     );
     pushUnique(byPrompt);
+  }
+
+  /* Unpaired GT: no runnable shares source_gt_row_index; try score-failing runs (same sheet often has ≥1 unmatched run). */
+  if (out.length === 0) {
+    pushUnique(allRows.filter((r) => r && !r.gt_only && r.matched === false));
+  }
+
+  /* Last resort: any runnable row so Verify/Finetune can run (e.g. single-input workflow, inference lost input_row_index). */
+  if (out.length === 0) {
+    pushUnique(allRows.filter((r) => r && !r.gt_only));
   }
 
   out.sort((a, b) => (a.row_index || 0) - (b.row_index || 0));
