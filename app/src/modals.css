@@ -2809,7 +2809,7 @@
   flex-shrink: 0;
 }
 
-/* Prompt Runner / Prompt reviewer：凭据下拉统一宽度 */
+/* Run / Score footer：凭据下拉统一宽度 */
 .run-detail-llm-actions-row .run-detail-llm-select,
 .score-detail-llm-row .score-detail-llm-select {
   width: var(--detail-llm-select-width);
@@ -3791,7 +3791,7 @@ button.review-suggestion-title-pill {
   border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
 }
 
-/* Prompt reviewer 选择框与 Review 按钮同高 */
+/* Score 页脚模型选择框与 Review 按钮同高 */
 .score-detail-llm-row .score-detail-llm-select {
   height: 36px;
   min-height: 36px;
@@ -4403,7 +4403,7 @@ button.review-suggestion-title-pill {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 0 20px 20px 20px;
+  padding: 0 20px 16px 20px;
   border-right: 1px solid var(--border);
   overflow: hidden;
 }
@@ -4436,9 +4436,12 @@ button.review-suggestion-title-pill {
   margin: 0 0 8px 0;
 }
 
-/* Prompt Runner：左侧伸缩占位 + 右侧组（模型行 + 按钮），与 Score footer-right 同构；下拉与按钮仅 gap */
+/* Run 左侧：模型行贴在栏底，与右侧 Results 的 Save/Score 行同高（margin-top: auto） */
 .run-detail-model-actions-field {
   gap: 0;
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 8px;
 }
 
 .run-detail-llm-actions-row {

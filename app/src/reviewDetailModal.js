@@ -2764,7 +2764,7 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
     updateInputState();
     if (!credentialId) {
       if (chatHistory.length === 0) {
-        appendMessage('assistant', 'Please select a default model in Settings → Prompt Reviewer to use the Assistant.');
+        appendMessage('assistant', 'Please select a default model in Settings → Review to use the Assistant.');
       }
     } else if (chatHistory.length === 0) {
       const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
