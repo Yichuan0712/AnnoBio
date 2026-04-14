@@ -145,7 +145,7 @@ function getSuggestionTestOutcomeForAutoCheck(sug) {
   return null;
 }
 
-/** 0-based comparison indices for targeted input rows (`target_input_row_indices` or legacy `row_indices`). */
+/** Stored 0-based comparison `row_index` for targeted rows (API / persistence; prompts use 1-based Score #). */
 export function suggestionTargetInputRowIndices(sug) {
   if (!sug || typeof sug !== 'object') return [];
   const raw = sug.target_input_row_indices ?? sug.row_indices;

@@ -3,7 +3,9 @@ Review analyze pipeline, separate from FastAPI main module.
 
 Phase 1 — per **failed input**: same dataset input, **all** unmatched model outputs vs their paired expected/scoring context in one LLM call; then rough opinion.
 
-Phase 2 — one LLM call (after phase 1): **Modifications** → localized **prompt_edits** only (Accept/Revert in UI).
+Phase 1.5 — **cluster** Phase‑1 issues that share the same root cause / fix strategy (one LLM call). Fallback: group by `problem_category_hint`.
+
+Phase 2 — **one LLM call per issue cluster** (parallel up to `concurrency`), each prompt’s section 3 lists every finding in that cluster; localized `prompt_edits` must cover them. Identical spans are still **deduped** once before emit.
 
 Extraction-style tasks: **under-coverage** (required items missing) and **over-coverage** (extra items not in ground truth) are both failures—the prompts below tell the model to diagnose and fix with that rubric.
 """
@@ -46,6 +48,97 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row) if isinstance(row, dict) else {}
 
 
+def _score_row_one_based(d: dict[str, Any]) -> int:
+    """1-based row label for LLM/UI: Score # when present, else comparison row_index + 1."""
+    st = d.get("score_table_row")
+    if st is not None:
+        try:
+            n = int(st)
+            if n >= 1:
+                return n
+        except (TypeError, ValueError):
+            pass
+    try:
+        return int(d.get("row_index", -1)) + 1
+    except (TypeError, ValueError):
+        return 0
+
+
+def _rows_by_comparison_index(group_rows: list[Any]) -> dict[int, dict[str, Any]]:
+    out: dict[int, dict[str, Any]] = {}
+    for r in group_rows:
+        d = _row_to_dict(r)
+        try:
+            k = int(d.get("row_index", -3))
+        except (TypeError, ValueError):
+            continue
+        if k >= 0:
+            out[k] = d
+    return out
+
+
+def _label_one_based_from_comparison_rows(comparison_rows: list[Any], row_index: int) -> int:
+    for r in comparison_rows or []:
+        d = _row_to_dict(r)
+        try:
+            if int(d.get("row_index", -2)) == int(row_index):
+                return _score_row_one_based(d)
+        except (TypeError, ValueError):
+            continue
+    try:
+        return int(row_index) + 1
+    except (TypeError, ValueError):
+        return 0
+
+
+def _valid_comparison_indices(comparison_rows: list[Any]) -> set[int]:
+    out: set[int] = set()
+    for r in comparison_rows or []:
+        d = _row_to_dict(r)
+        try:
+            out.add(int(d.get("row_index", -3)))
+        except (TypeError, ValueError):
+            continue
+    return {i for i in out if i >= 0}
+
+
+def _targets_zero_based_from_llm(values: list[Any], comparison_rows: list[Any]) -> list[int]:
+    """Map Phase 2 list to 0-based comparison row_index: prefer Score # match, then 1-based, then 0-based."""
+    valid_idx = _valid_comparison_indices(comparison_rows)
+    by_score: dict[int, int] = {}
+    for r in comparison_rows or []:
+        d = _row_to_dict(r)
+        try:
+            ri = int(d.get("row_index", -3))
+        except (TypeError, ValueError):
+            continue
+        if ri < 0:
+            continue
+        st = d.get("score_table_row")
+        if st is not None:
+            try:
+                n = int(st)
+                if n >= 1:
+                    by_score[n] = ri
+            except (TypeError, ValueError):
+                pass
+    ri_out: list[int] = []
+    for x in values or []:
+        try:
+            v = int(x)
+        except (TypeError, ValueError):
+            continue
+        if v < 0:
+            continue
+        if v in by_score:
+            ri_out.append(by_score[v])
+        elif v >= 1 and (v - 1) in valid_idx:
+            ri_out.append(v - 1)
+        elif v in valid_idx:
+            ri_out.append(v)
+    return sorted(set(ri_out))
+
+
 def _input_identity_key(d: dict[str, Any]) -> str:
     """Stable key to group comparison rows that share the same dataset input (1 input → N outputs)."""
     iri = d.get("input_row_index")
@@ -83,7 +176,11 @@ class PerRowOpinion(BaseModel):
 
     row_index: int = Field(
         ...,
-        description="Smallest comparison row_index in this input group (0-based; ties the opinion to the score table)",
+        description=(
+            "**1-based** row number for this group’s anchor failure — same labels as in the prompt "
+            "(Score # when `score_table_row` exists, else comparison row_index + 1). "
+            "Use the **smallest failed** row number listed there."
+        ),
     )
     card_title: str = Field(
         default="",
@@ -134,9 +231,9 @@ class PromptEditSuggestion(BaseModel):
         ...,
         min_length=1,
         description=(
-            "Required. 0-based comparison row_index only — the same integers as in section 3 "
-            "after 'Comparison row(s)' (not worksheet input_row_index, not 1-based, not Score table #). "
-            "List every comparison row this edit addresses."
+            "Required. **1-based** row numbers exactly as in Phase 2 section 3 "
+            "(e.g. `#3` → include integer `3`). Same convention as Issue / Score #. "
+            "Not worksheet input_row_index."
         ),
     )
 
@@ -153,6 +250,161 @@ class Phase2Modifications(BaseModel):
     )
 
 
+class Phase15IssueCluster(BaseModel):
+    """One cluster of Phase‑1 issue indices before Phase 2."""
+
+    member_indices: list[int] = Field(
+        ...,
+        description="0-based indices into the numbered issue list; every index in exactly one cluster across all clusters",
+    )
+    group_label: str = Field(
+        default="",
+        description="Very short English label (e.g. missing required field, format mismatch)",
+    )
+
+
+class Phase15Clustering(BaseModel):
+    """LLM output: partition Phase‑1 issues into non-overlapping clusters."""
+
+    clusters: list[Phase15IssueCluster] = Field(
+        ...,
+        description="Disjoint clusters; merge only issues one prompt change could fix together",
+    )
+
+
+def _heuristic_issue_cluster_indices(opinions: list[tuple[PerRowOpinion, list[int]]]) -> list[list[int]]:
+    """Fallback: group by normalized problem_category_hint (stable order)."""
+    buckets: dict[str, list[int]] = {}
+    order_keys: list[str] = []
+    for i, (op, _) in enumerate(opinions):
+        raw = (op.problem_category_hint or "").strip().lower() or "uncategorized"
+        key = raw.replace(" ", "_")[:80]
+        if key not in buckets:
+            order_keys.append(key)
+            buckets[key] = []
+        buckets[key].append(i)
+    return [sorted(buckets[k]) for k in order_keys]
+
+
+def _normalize_cluster_member_indices(n: int, clusters: list[Phase15IssueCluster]) -> list[list[int]]:
+    """Ensure each index0..n-1 appears at most once; append singletons for gaps."""
+    assigned = [False] * n
+    out: list[list[int]] = []
+    for c in clusters or []:
+        members: list[int] = []
+        for i in c.member_indices or []:
+            try:
+                ii = int(i)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= ii < n and not assigned[ii]:
+                assigned[ii] = True
+                members.append(ii)
+        if members:
+            out.append(sorted(members))
+    for i in range(n):
+        if not assigned[i]:
+            out.append([i])
+    return out
+
+
+def _build_phase15_clustering_prompt(*, opinions: list[tuple[PerRowOpinion, list[int]]], comparison_rows: list[Any]) -> str:
+    lines: list[str] = []
+    for i, (op, ridxs) in enumerate(opinions):
+        head = (op.card_title or "").strip() or op.issue_summary
+        summ = (op.issue_summary or "").strip().replace("\n", " ")
+        if len(summ) > 220:
+            summ = summ[:217] + "..."
+        cat = (op.problem_category_hint or "uncategorized").strip()
+        if len(ridxs) > 1:
+            rows_lbl = ", ".join(
+                f"#{_label_one_based_from_comparison_rows(comparison_rows, j)}" for j in sorted(ridxs)
+            )
+        else:
+            rows_lbl = f"#{_label_one_based_from_comparison_rows(comparison_rows, op.row_index)}"
+        lines.append(
+            f"- **Index {i}** | Score row(s) {rows_lbl} | [{cat}] **{head}**\n"
+            f"  Summary: {summ}"
+        )
+    issues_block = "\n".join(lines) if lines else "(no issues)"
+    return f"""## Task: group Phase‑1 review issues before prompt-edit generation
+
+Each **index** below is one completed Phase‑1 diagnosis (different failed dataset input or failure context). Soon we will run **one** prompt-edit pass **per cluster** of issues.
+
+### Rules
+
+1. Put two indices in the **same cluster** only if **one coherent change to the instruction prompt** (same root cause / same fix strategy) would reasonably address **both** findings together.
+2. **Do not** merge unrelated failures (e.g. missing field vs format mismatch vs threshold), even if they share a category tag.
+3. **Every** index from **0** to **{len(opinions) - 1}** must appear in **exactly one** cluster.
+4. Prefer **fewer, meaningful** clusters when justified; use **singleton** clusters when in doubt.
+
+### Phase‑1 issues (numbered)
+
+{issues_block}
+
+Respond with JSON: **`clusters`** only — each cluster has `member_indices` (list of ints) and optional `group_label`.
+"""
+
+
+def _cluster_opinions_for_phase2(
+    *,
+    opinions: list[tuple[PerRowOpinion, list[int]]],
+    comparison_rows: list[Any],
+    provider: str,
+    model: str,
+    api_key: str,
+    max_tokens: int,
+    is_cancelled: Callable[[], bool],
+) -> list[list[int]]:
+    n = len(opinions)
+    if n <= 1:
+        return [[0]] if n == 1 else []
+    if is_cancelled():
+        return [[i] for i in range(n)]
+    prompt = _build_phase15_clustering_prompt(opinions=opinions, comparison_rows=comparison_rows)
+    safe_print(
+        "\n"
+        + "=" * 80
+        + "\nREVIEW PHASE 1.5 (issue clustering)"
+        + f" ({n} issues, {len(prompt)} chars)\n"
+        + "=" * 80
+        + "\n"
+        + prompt
+        + "\n"
+        + "=" * 80
+        + "\n",
+        flush=True,
+    )
+    try:
+        out, _ = llm_run_structured(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            prompt=prompt,
+            response_model=Phase15Clustering,
+            max_tokens=max_tokens,
+        )
+        if isinstance(out, dict):
+            parsed = Phase15Clustering(**out)
+        elif isinstance(out, Phase15Clustering):
+            parsed = out
+        else:
+            parsed = Phase15Clustering(
+                **(out.model_dump() if hasattr(out, "model_dump") else out.dict())
+            )
+        normalized = _normalize_cluster_member_indices(n, list(parsed.clusters or []))
+        if len(normalized) == 0:
+            return _heuristic_issue_cluster_indices(opinions)
+        covered = sum(len(c) for c in normalized)
+        if covered != n:
+            logger.warning("Phase 1.5 clustering covered %s/%s indices; using heuristic", covered, n)
+            return _heuristic_issue_cluster_indices(opinions)
+        return normalized
+    except Exception as e:
+        logger.warning("Phase 1.5 clustering failed (%s); using heuristic buckets", e)
+        return _heuristic_issue_cluster_indices(opinions)
+
+
 def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[Any]) -> str:
     if not group_rows:
         return ""
@@ -166,9 +418,18 @@ def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[A
             if not _row_to_dict(r).get("matched", False)
         }
     )
-    min_idx = min(idxs)
-    min_fail = min(failed_idxs) if failed_idxs else min_idx
-    fail_list = ", ".join(str(i) for i in failed_idxs) if failed_idxs else "(none)"
+    by_idx = _rows_by_comparison_index(group_rows)
+    fail_list_1 = (
+        ", ".join(str(_score_row_one_based(by_idx[i])) for i in sorted(failed_idxs) if i in by_idx)
+        if failed_idxs
+        else "(none)"
+    )
+    all_list_1 = ", ".join(str(_score_row_one_based(by_idx[i])) for i in sorted(idxs) if i in by_idx)
+    min_fail_1 = (
+        _score_row_one_based(by_idx[min(failed_idxs)])
+        if failed_idxs and min(failed_idxs) in by_idx
+        else (_score_row_one_based(by_idx[min(idxs)]) if idxs and min(idxs) in by_idx else 1)
+    )
 
     def _ground_truth_output_dict(d: dict[str, Any]) -> dict[str, Any]:
         gto = d.get("ground_truth_output")
@@ -230,7 +491,6 @@ def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[A
     else:
         scope = "This is **one** model output for this input that failed scoring."
     gt_json = json.dumps(gt_entries, ensure_ascii=False, indent=2)
-    idx_list = ", ".join(str(i) for i in idxs)
 
     return f"""You review model output(s) for **one** dataset input (same placeholders / message as below). Possibly multiple expectations were scored; some may have **passed** and some **failed**.
 
@@ -272,6 +532,8 @@ For each listed output field, the line describes the match type / options used w
 
 {rules_body}
 
+Note: Sections **3** and **4** use **0-based** array indices `i` only for JSON element order. The response field **row_index** (below) uses **1-based** row numbers like the app.
+
 ## Your task
 
 0. **card_title**: A **short headline** (about 4–12 words) for a UI list card—plain English, summary-style, readable at a glance. It must **not** be snake_case or look like a code identifier. It is **not** a substitute for the full explanation below.
@@ -279,7 +541,9 @@ For each listed output field, the line describes the match type / options used w
 2. **rough_modification_opinion**: Rough modification advice for the **prompt** only—what to clarify, add, or constrain so coverage is exact (no missing required items, no spurious extras); do NOT paste a full new prompt.
 3. **problem_category_hint**: a very short English snake_case or hyphen tag for grouping similar failures (internal use).
 
-Respond with JSON matching the schema (**row_index** must be **{min_fail}** — anchor to a **failed** row; failed row_index set: {fail_list}; all comparison rows for this input in this prompt: {idx_list}).
+Row numbers in this task are **1-based** (same as the app’s Issue / Score **#** column when `score_table_row` is set; otherwise comparison row_index + 1).
+
+Respond with JSON matching the schema (**row_index** must be **{min_fail_1}** — smallest **failed** row number below; failed row number(s): {fail_list_1}; all rows in this group: {all_list_1}).
 """
 
 
@@ -291,21 +555,66 @@ def _sections_block_for_phase2(sections: list[Any]) -> str:
     return "\n\n".join(parts) if parts else "(no sections)"
 
 
-def _build_phase2_modifications_prompt(*, prompt_text: str, opinions_text: str, sections: list[Any]) -> str:
-    """Second LLM call: localized prompt edits only (no design clusters)."""
+def _phase2_single_issue_block(*, comparison_rows: list[Any], op: PerRowOpinion, ridxs: list[int]) -> str:
+    rough = op.rough_modification_opinion.strip()
+    if len(rough) > 1200:
+        rough = rough[:1197] + "..."
+    head = (op.card_title or "").strip() or op.issue_summary
+    if len(ridxs) > 1:
+        rows_lbl = ", ".join(
+            f"#{_label_one_based_from_comparison_rows(comparison_rows, i)}" for i in sorted(ridxs)
+        )
+    else:
+        rows_lbl = f"#{_label_one_based_from_comparison_rows(comparison_rows, op.row_index)}"
+    return (
+        f"- Score row(s) {rows_lbl} (1-based, same as Issue / Score #): [{op.problem_category_hint or 'uncategorized'}] {head}\n"
+        f"  Detail: {op.issue_summary}\n  Rough fix: {rough}"
+    )
+
+
+def _phase2_cluster_label(cluster_pairs: list[tuple[PerRowOpinion, list[int]]]) -> str:
+    hints = sorted(
+        {
+            (op.problem_category_hint or "").strip()
+            for op, _ in cluster_pairs
+            if (op.problem_category_hint or "").strip()
+        }
+    )
+    if hints:
+        return ", ".join(hints[:3])
+    t0 = (cluster_pairs[0][0].card_title or cluster_pairs[0][0].issue_summary or "").strip()
+    return (t0[:120] if t0 else "issue cluster")
+
+
+def _build_phase2_modifications_prompt(
+    *,
+    prompt_text: str,
+    opinions_text: str,
+    sections: list[Any],
+    cluster_context: str = "",
+) -> str:
+    """One Phase 2 LLM call for one **cluster** of Phase 1 issues (single input group or merged related findings)."""
     sections_block = _sections_block_for_phase2(sections)
+    scope_line = (
+        f"**Cluster:** {cluster_context.strip()}\n\n" if (cluster_context or "").strip() else ""
+    )
+    section3_rule = (
+        "- **Section 3** lists **every** Phase‑1 finding in **this cluster** (already grouped as sharing the same fix strategy). "
+        "Do **not** redesign the prompt, add unrelated polish, or address failures not listed there.\n"
+        "- **One problem → one edit (default):** Usually **one** `prompt_edit` per **distinct** failure or fix strategy **in section 3**. "
+        "When **one** localized change fixes **several** bullets in section 3, you may use **one** edit and name all of them in `phase1_addresses` / `target_input_row_indices`.\n"
+        "- **Coverage:** Your edits **must** address **all** distinct failures in **section 3**, unless the prompt has no place to apply a fix (then fewer edits and state the gap in `reason`—still no generic-only edits)."
+    )
     return f"""## Phase 2 goal (read first)
 
-**Fix what Phase 1 found, with as little change to the prompt as possible.**
+**Fix what Phase 1 found for this cluster, with as little change to the prompt as possible.**
 
-**Hard rule:** Every `prompt_edit` you output **must** directly fix something **Phase 1 already identified** in **section 3** (issue_summary, rough_modification_opinion, category hint, or the same row’s diagnosis). **Do not** output an edit whose only justification is generic “better prompt” or “clarity”—if you cannot point to **which sentence of section 3** it answers, **omit** that edit.
+{scope_line}**Hard rule:** Every `prompt_edit` you output **must** directly fix something **Phase 1 already identified** in **section 3** (issue_summary, rough_modification_opinion, category hint, or the row lines). **Do not** output an edit whose only justification is generic “better prompt” or “clarity”—if you cannot point to **which part of section 3** it answers, **omit** that edit.
 
-- **Section 3** is the **sole** source of problems to fix. Do **not** redesign the prompt, add unrelated polish, or address failures Phase 1 did not mention.
-- **One problem → one edit (default):** Usually output **one** `prompt_edit` per **distinct** Phase‑1 failure or fix strategy. **Only merge** when several Phase‑1 notes are **the same underlying issue** (same root cause / same failure mode across rows, e.g. all “drops required field X” or all “ignores the same constraint”) so that **one** localized change fixes **that whole class**. Do **not** pack unrelated issues into a single edit, and do **not** split one real fix into many cosmetic micro-edits.
-- **Coverage:** Taken together, your edits **must** resolve **all** distinct failures Phase 1 calls out for the failed input group(s) in section 3, **unless** the prompt literally has no place to apply a fix (then output fewer edits and let `reason` state the gap—still no generic-only edits).
-- Each `prompt_edit` is a **minimal** change: prefer one sentence / bullet / clause. Add **more** edits only when Phase 1 clearly implies **several separate** problems or **different** change strategies—not to mirror bullet count one-for-one when bullets repeat the same theme.
+{section3_rule}
+- Each `prompt_edit` is a **minimal** change: prefer one sentence / bullet / clause.
 - **Smallest effective diff wins**; do **not** split one fix into many micro-edits.
-- **Extraction / coverage:** tighten only as much as Phase 1 implies—no long new rubrics unless section 3 asks for that scope.
+- **Extraction / coverage:** tighten only as much as Phase 1 implies.
 
 Output format: **only** `prompt_edits`. No clusters, no meta summaries, no full rewritten prompt.
 
@@ -321,9 +630,7 @@ Verbatim section bodies only. **`old_sentence` must be copied from here** — no
 
 {sections_block}
 
-## 3. Phase 1 opinions (rough notes per failed input group)
-
-Diagnosis and rough fix hints from the first review pass (use to decide what to change in **section 2**):
+## 3. Phase 1 findings (**this cluster** — every bullet must be addressed by your edits)
 
 {opinions_text}
 
@@ -331,13 +638,13 @@ Diagnosis and rough fix hints from the first review pass (use to decide what to 
 
 Each edit in `prompt_edits` **must** include:
 
-- **`phase1_addresses`**: **1 to 3 strings** (hard cap **3**). Each string should name a **Phase 1 finding** from **section 3** (short phrase or quote). **Special case:** if Phase 1 lists many bullets that are **the same underlying issue** (same failure mode / one thematic gap), **do not** split into extra edits just to mirror bullet count: **summarize** that cluster in **one to three** strings and fix it with **one** localized edit when one `old_sentence`→`new_sentence` truly addresses that whole class. Split into another `prompt_edit` only when Phase 1 implies **different** change strategies or **different** places in the prompt. **Do not** use vague entries like “improve clarity” unless Phase 1 said so.
-- **`target_input_row_indices`**: **Non-empty** list of **0-based comparison `row_index`** values — copy the **exact integers** from section 3 after **“Comparison row(s)”** (e.g. if section3 says rows `4, 5, 6`, use `[4, 5, 6]`). Do **not** use 1-based numbering, worksheet `input_row_index`, or Score-table `#`; the app maps these indices to Score # for display.
+- **`phase1_addresses`**: **1 to 3 strings** (hard cap **3**). Each string should name a **Phase 1 finding** from **section 3** (short phrase or quote). **Do not** use vague entries like “improve clarity” unless Phase 1 said so.
+- **`target_input_row_indices`**: **Non-empty** list of **1-based integers** — copy the **exact numbers** from section 3 after **“Score row(s)”** (e.g. `#4, #5` → `[4, 5]`). Same numbering as Issue / Score **#**. Not worksheet `input_row_index`.
 - **`reason`**: 1–2 sentences on **how** the `old_sentence`→`new_sentence` change implements those fixes (implementation detail, not a repeat of the whole section 3).
 
 Other rules:
 
-1. **Count:** **Minimum** edits that still **fully** cover Phase 1’s problems in section 3—typically **one edit per distinct issue**, except when multiple findings are **one thematic class** (see “One problem → one edit” above). No padding.
+1. **Count:** **Minimum** edits that still **fully** cover Phase 1’s problems in section 3 for this cluster. No padding.
 2. **old_sentence:** **Character-for-character** from **section 2** (one contiguous substring).
 3. **new_sentence:** Replaces `old_sentence`; **""** = deletion.
 4. **section_index:** Section in **section 2** where `old_sentence` appears.
@@ -347,12 +654,34 @@ Respond with JSON: **`prompt_edits` only** (no other keys).
 """
 
 
-def _sanitize_prompt_edits(sections: list[Any], edits: list[PromptEditSuggestion]) -> list[dict[str, Any]]:
+def _dedupe_prompt_edit_objects(edits: list[PromptEditSuggestion]) -> list[PromptEditSuggestion]:
+    """Drop duplicate (section_index, old_sentence, new_sentence) after parallel Phase 2 merges."""
+    seen: set[tuple[int, str, str]] = set()
+    out: list[PromptEditSuggestion] = []
+    for e in edits:
+        old = (e.old_sentence or "").strip()
+        new = e.new_sentence if e.new_sentence is not None else ""
+        if not isinstance(new, str):
+            new = str(new)
+        key = (int(e.section_index), old, new)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    return out
+
+
+def _sanitize_prompt_edits(
+    sections: list[Any],
+    edits: list[PromptEditSuggestion],
+    comparison_rows: list[Any] | None = None,
+) -> list[dict[str, Any]]:
     """Drop edits whose old_sentence is not an exact substring of the section (UI needs a real span)."""
     out: list[dict[str, Any]] = []
     n = len(sections or [])
     if n == 0:
         return out
+    cr = list(comparison_rows or [])
     for e in edits:
         idx = int(e.section_index)
         idx = max(0, min(idx, n - 1))
@@ -365,16 +694,10 @@ def _sanitize_prompt_edits(sections: list[Any], edits: list[PromptEditSuggestion
         new = e.new_sentence if e.new_sentence is not None else ""
         if not isinstance(new, str):
             new = str(new)
-        ri: list[int] = []
         raw_targets = getattr(e, "target_input_row_indices", None)
         if not isinstance(raw_targets, list):
             raw_targets = []
-        for x in raw_targets:
-            try:
-                ri.append(int(x))
-            except (TypeError, ValueError):
-                continue
-        ri = sorted({i for i in ri if i >= 0})
+        ri = _targets_zero_based_from_llm(raw_targets, cr)
         if not ri:
             continue
         p1: list[str] = []
@@ -450,7 +773,18 @@ def _analyze_input_group(
         op = out
     else:
         op = PerRowOpinion(**(out.model_dump() if hasattr(out, "model_dump") else out.dict()))
-    op.row_index = int(min(failed_idxs)) if failed_idxs else int(min(idxs_all))
+    raw_ri = int(op.row_index)
+    by_idx = _rows_by_comparison_index(group_rows)
+    failed_set = set(failed_idxs)
+    if raw_ri in failed_set:
+        norm = raw_ri
+    elif raw_ri >= 1 and (raw_ri - 1) in failed_set:
+        norm = raw_ri - 1
+    else:
+        label_to_idx = {_score_row_one_based(by_idx[i]): i for i in failed_set if i in by_idx}
+        fallback = int(min(failed_idxs)) if failed_idxs else int(min(idxs_all))
+        norm = label_to_idx.get(raw_ri, fallback)
+    op.row_index = int(norm)
     return op, idxs_all
 
 
@@ -498,7 +832,9 @@ def run_review_pipeline(
             "summary": (
                 f"Phase 1: analyzing {n} input group(s) with failures ({row_count} failed comparison row(s)); "
                 "each prompt includes every comparison row for that input (matched + unmatched). "
-                "Then prompt edit suggestions."
+                "Phase 1.5: cluster related issues (one LLM call; fallback: group by category hint). "
+                f"Phase 2: one prompt-edit pass per cluster in parallel (up to {max(1, min(4, int(concurrency)))} at once); "
+                "duplicate spans are deduped once."
             ),
             "diagnosis_total": n,
         }
@@ -577,58 +913,128 @@ def run_review_pipeline(
     if is_cancelled():
         return
 
-    # Compact text for phase 2 (cap each opinion length to limit tokens)
-    lines: list[str] = []
-    for op, ridxs in opinions:
-        rough = op.rough_modification_opinion.strip()
-        if len(rough) > 1200:
-            rough = rough[:1197] + "..."
-        head = (op.card_title or "").strip() or op.issue_summary
-        rows_lbl = ", ".join(str(i) for i in ridxs) if len(ridxs) > 1 else str(op.row_index)
-        lines.append(
-            f"- Comparison row(s) {rows_lbl}: [{op.problem_category_hint or 'uncategorized'}] {head}\n"
-            f"  Detail: {op.issue_summary}\n  Rough fix: {rough}"
-        )
-    opinions_text = "\n".join(lines)
-
-    mod_prompt = _build_phase2_modifications_prompt(
-        prompt_text=prompt_text,
-        opinions_text=opinions_text,
-        sections=sections,
-    )
-    logger.info("Review phase 2 (modifications) prompt length: %s chars", len(mod_prompt))
-    safe_print(
-        "\n"
-        + "=" * 80
-        + "\nREVIEW PHASE 2 PROMPT"
-        + f" ({len(mod_prompt)} chars)\n"
-        + "=" * 80
-        + "\n"
-        + mod_prompt
-        + "\n"
-        + "=" * 80
-        + "\n",
-        flush=True,
-    )
-    out_mod, _ = llm_run_structured(
+    cluster_members = _cluster_opinions_for_phase2(
+        opinions=opinions,
+        comparison_rows=comparison_rows,
         provider=provider,
         model=model,
         api_key=api_key,
-        prompt=mod_prompt,
-        response_model=Phase2Modifications,
         max_tokens=max_tokens,
+        is_cancelled=is_cancelled,
     )
-    if isinstance(out_mod, dict):
-        mod = Phase2Modifications(**out_mod)
-    elif isinstance(out_mod, Phase2Modifications):
-        mod = out_mod
-    else:
-        mod = Phase2Modifications(**(out_mod.model_dump() if hasattr(out_mod, "model_dump") else out_mod.dict()))
+    n_clusters = len(cluster_members)
+    cluster_labels = [_phase2_cluster_label([opinions[i] for i in cm]) for cm in cluster_members]
 
     if is_cancelled():
         return
 
-    edit_dicts = _sanitize_prompt_edits(sections, list(mod.prompt_edits or []))
+    def run_one_phase2(pair: tuple[int, list[int]]) -> tuple[int, str, list[PromptEditSuggestion]]:
+        cluster_idx, member_indices = pair
+        if is_cancelled():
+            return cluster_idx, cluster_labels[cluster_idx], []
+        cluster_pairs = [opinions[i] for i in member_indices]
+        blocks = [
+            _phase2_single_issue_block(comparison_rows=comparison_rows, op=op, ridxs=ridxs)
+            for op, ridxs in cluster_pairs
+        ]
+        opinions_text = "\n\n".join(blocks)
+        label = cluster_labels[cluster_idx]
+        mod_prompt = _build_phase2_modifications_prompt(
+            prompt_text=prompt_text,
+            opinions_text=opinions_text,
+            sections=sections,
+            cluster_context=label,
+        )
+        logger.info(
+            "Review phase 2 prompt (cluster %s/%s, %s issue(s)) length: %s chars",
+            cluster_idx + 1,
+            n_clusters,
+            len(cluster_pairs),
+            len(mod_prompt),
+        )
+        safe_print(
+            "\n"
+            + "=" * 80
+            + "\nREVIEW PHASE 2 PROMPT"
+            + f" (cluster {cluster_idx + 1}/{n_clusters}, member_indices={member_indices}, {len(mod_prompt)} chars)\n"
+            + "=" * 80
+            + "\n"
+            + mod_prompt
+            + "\n"
+            + "=" * 80
+            + "\n",
+            flush=True,
+        )
+        out_mod, _ = llm_run_structured(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            prompt=mod_prompt,
+            response_model=Phase2Modifications,
+            max_tokens=max_tokens,
+        )
+        if isinstance(out_mod, dict):
+            mod = Phase2Modifications(**out_mod)
+        elif isinstance(out_mod, Phase2Modifications):
+            mod = out_mod
+        else:
+            mod = Phase2Modifications(**(out_mod.model_dump() if hasattr(out_mod, "model_dump") else out_mod.dict()))
+        return cluster_idx, label, list(mod.prompt_edits or [])
+
+    indexed_pairs = list(enumerate(cluster_members))
+    collected: list[tuple[int, str, PromptEditSuggestion]] = []
+    if conc <= 1:
+        for pair in indexed_pairs:
+            if is_cancelled():
+                return
+            cidx, label, edits = run_one_phase2(pair)
+            for e in edits:
+                collected.append((cidx, label, e))
+    else:
+        with ThreadPoolExecutor(max_workers=conc) as ex:
+            futs = {ex.submit(run_one_phase2, pair): pair for pair in indexed_pairs}
+            results: list[tuple[int, str, list[PromptEditSuggestion]]] = []
+            for fut in as_completed(futs):
+                if is_cancelled():
+                    try:
+                        ex.shutdown(wait=False, cancel_futures=True)
+                    except TypeError:
+                        ex.shutdown(wait=False)
+                    return
+                results.append(fut.result())
+            results.sort(key=lambda t: t[0])
+            for cidx, label, edits in results:
+                for e in edits:
+                    collected.append((cidx, label, e))
+
+    if is_cancelled():
+        return
+
+    seen_edit: set[tuple[int, str, str]] = set()
+    deduped_triples: list[tuple[int, str, PromptEditSuggestion]] = []
+    for cidx, label, e in collected:
+        old = (e.old_sentence or "").strip()
+        new = e.new_sentence if e.new_sentence is not None else ""
+        if not isinstance(new, str):
+            new = str(new)
+        key = (int(e.section_index), old, new)
+        if key in seen_edit:
+            continue
+        seen_edit.add(key)
+        deduped_triples.append((cidx, label, e))
+
+    edit_dicts: list[dict[str, Any]] = []
+    for cidx, label, e in deduped_triples:
+        if len(edit_dicts) >= _MAX_VALIDATED_PROMPT_EDITS:
+            break
+        batch = _sanitize_prompt_edits(sections, [e], comparison_rows)
+        for d in batch:
+            d["issue_cluster_index"] = cidx
+            d["issue_cluster_label"] = label
+            edit_dicts.append(d)
+            if len(edit_dicts) >= _MAX_VALIDATED_PROMPT_EDITS:
+                break
+
     if edit_dicts:
         append_event({"type": "suggestions", "suggestions": edit_dicts})
 

@@ -1111,6 +1111,8 @@ export function buildWorkflowCanvas(root) {
       reviewProgress: streamSaved.reviewProgress || 0,
       run_results: streamSaved.run_results || [],
       comparison_rows: streamSaved.comparison_rows || [],
+      /** True once all Phase‑1 diagnosis_row events are done (before clustering / suggestions). Drives Issue analysis footer. */
+      diagnosisComplete: streamSaved.diagnosisComplete === true,
     };
     let diagnosisTotal = 0;
     let diagnosisDone = 0;
@@ -1133,6 +1135,7 @@ export function buildWorkflowCanvas(root) {
           data_refinement: [],
           row_diagnostics: [],
           streamComplete: false,
+          diagnosisComplete: dt === 0,
           reviewProgress: REVIEW_STREAM_PLAN_PCT,
         };
         setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_PLAN_PCT);
@@ -1167,6 +1170,10 @@ export function buildWorkflowCanvas(root) {
             streamSaved.row_diagnostics = list;
           }
         }
+        const totalForPhase1 = total > 0 ? total : diagnosisTotal;
+        if (totalForPhase1 > 0 && diagnosisDone >= totalForPhase1) {
+          streamSaved.diagnosisComplete = true;
+        }
       } else if (ev.type === 'suggestions' && Array.isArray(ev.suggestions) && ev.suggestions.length) {
         const batch = ev.suggestions.map((s) =>
           s && typeof s === 'object'
@@ -1191,6 +1198,7 @@ export function buildWorkflowCanvas(root) {
         streamSaved = {
           ...streamSaved,
           streamComplete: true,
+          diagnosisComplete: true,
           reviewProgress: finalizePct,
         };
         normalizeSuggestionIdsToDisplayOrder(streamSaved);

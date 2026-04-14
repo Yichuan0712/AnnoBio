@@ -303,7 +303,7 @@ class ReviewSuggestion(BaseModel):
     target_input_row_indices: list[int] = Field(
         ...,
         min_length=1,
-        description="0-based comparison row_index for each input this edit targets; UI input # = index + 1",
+        description="0-based comparison row_index in stored/API payloads; automated review prompts use 1-based Score #",
     )
 
 

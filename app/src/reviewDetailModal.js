@@ -254,6 +254,41 @@ function formatScoreTableTargetLabels(comparisonRows, zeroBasedRowIndices) {
     .join(', ');
 }
 
+/**
+ * Assistant / chat may emit 1-based Score # or legacy 0-based row_index.
+ * Returns sorted unique 0-based comparison row_index (same as stored suggestions).
+ */
+function normalizeAssistantTargetsToRowIndex(rawValues, comparisonRows) {
+  const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
+  const validIdx = new Set(
+    rows.map((r) => Number(r?.row_index)).filter((n) => !Number.isNaN(n) && n >= 0),
+  );
+  const byScore = new Map();
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue;
+    const ri = Number(r.row_index);
+    if (Number.isNaN(ri) || ri < 0) continue;
+    const st = r.score_table_row != null ? Number(r.score_table_row) : NaN;
+    if (Number.isFinite(st) && st >= 1) byScore.set(st, ri);
+  }
+  const out = [];
+  const arr = Array.isArray(rawValues) ? rawValues : [];
+  for (const x of arr) {
+    const v = Number(x);
+    if (Number.isNaN(v) || v < 0) continue;
+    if (byScore.has(v)) {
+      out.push(byScore.get(v));
+      continue;
+    }
+    if (v >= 1 && validIdx.has(v - 1)) {
+      out.push(v - 1);
+      continue;
+    }
+    if (validIdx.has(v)) out.push(v);
+  }
+  return [...new Set(out)].sort((a, b) => a - b);
+}
+
 /** Turn snake_case category hints into a short phrase (not a “variable”). */
 function humanizeSnakeCaseHint(hint) {
   const h = String(hint || '').trim();
@@ -1555,11 +1590,12 @@ function buildReviewResultUI(overlay, options) {
 
   function updateAnalysisFooter() {
     if (!analysisFooterEl) return;
-    const isComplete = saved.streamComplete === true;
-    const inProgress = !isComplete && isReviewStreamingNow();
+    const issueAnalysisComplete =
+      saved.streamComplete === true || saved.diagnosisComplete === true;
+    const inProgress = !issueAnalysisComplete && isReviewStreamingNow();
     let statusClass = 'review-detail-status-note--incomplete';
     let statusText = REVIEW_INCOMPLETE_USER_MSG;
-    if (isComplete) {
+    if (issueAnalysisComplete) {
       statusClass = 'review-detail-status-note--complete';
       const n = rowDiagnostics.length;
       statusText =
@@ -1621,8 +1657,10 @@ function buildReviewResultUI(overlay, options) {
       const p = document.createElement('p');
       p.className = 'review-detail-placeholder';
       const streaming = isReviewStreamingNow();
+      const phase1Done =
+        saved.diagnosisComplete === true || saved.streamComplete === true;
       const stale = saved.streamComplete === false && !streaming;
-      p.textContent = streaming
+      p.textContent = streaming && !phase1Done
         ? 'Analyzing row results…'
         : stale
           ? REVIEW_INCOMPLETE_USER_MSG
@@ -1989,6 +2027,8 @@ function buildReviewResultUI(overlay, options) {
         saved[k] = data[k];
       });
       refreshAllEditSuggestionCardsVisuals();
+      updateAnalysisFooter();
+      updateSuggestionsFooter();
     };
   }
 
@@ -2102,16 +2142,23 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 
   function onSaveReviewResult(e) {
     if (e.detail?.reviewNodeId !== reviewNodeId) return;
-    // 使用节点上的最新状态（workflow 已合并 workingSections 与 .applied），避免被流式原始数据覆盖导致 hover 时绿标不显示
-    const data = (getReviewResult && getReviewResult()) ?? e.detail?.data;
-    if (!data) return;
-    if (hasActiveVerifySessions() || hasActiveFinetuneSessions()) {
-      if (typeof overlay._reviewDetailReconcile === 'function') {
-        overlay._reviewDetailReconcile(data);
+    const detailData = e.detail?.data;
+    // 延后到微任务：先让 workflowCanvas 的 save-review-result 监听器把合并后的结果写入 dataset，再读节点，避免监听器顺序导致读到旧快照。
+    queueMicrotask(() => {
+      const data =
+        (typeof getReviewResult === 'function' ? getReviewResult() : null) ?? detailData;
+      if (!data || typeof data !== 'object') return;
+      // 流水线已结束时必须整页 refresh（Issue analysis / 建议列表）；reconcile 只合并已有卡片，不会重建 row_diagnostics。
+      const busySideSession =
+        hasActiveVerifySessions() || hasActiveFinetuneSessions();
+      if (busySideSession && data.streamComplete !== true) {
+        if (typeof overlay._reviewDetailReconcile === 'function') {
+          overlay._reviewDetailReconcile(data);
+        }
+        return;
       }
-      return;
-    }
-    refreshFromSaved(data);
+      refreshFromSaved(data);
+    });
   }
 
   if (hasResult) {
@@ -2307,7 +2354,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('When you decide to suggest a concrete edit, include one or more blocks in this exact format:');
   lines.push('[ASSISTANT_SUGGESTION]');
   lines.push(
-    '{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "focus": "One-line summary from this chat (optional if focus_bullets carry the detail)", "focus_bullets": ["Concrete point from chat, like pipeline phase-1 bullets", "Second point"], "reason": "Why this edit helps (from this chat)", "name": "Short title", "target_input_row_indices": [0]}',
+    '{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "focus": "One-line summary from this chat (optional if focus_bullets carry the detail)", "focus_bullets": ["Concrete point from chat, like pipeline phase-1 bullets", "Second point"], "reason": "Why this edit helps (from this chat)", "name": "Short title", "target_input_row_indices": [1]}',
   );
   lines.push('[/ASSISTANT_SUGGESTION]');
   lines.push(
@@ -2315,7 +2362,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   );
   lines.push('When adding suggestions, also write a brief comment (e.g. what you changed or why it helps). The user will see this instead of a generic message. If you omit the comment, we show "Added. Please check the Suggestions panel on the left and choose Accept or Revert."');
   lines.push(
-    'Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **0-based comparison row_index** for every input row this edit addresses (same as Run/Review). The UI labels those rows **Score table #N** using `score_table_row` when present. Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
+    'Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **1-based** row numbers — same as Issue / Score **#** (and pipeline Phase 2). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
   );
   lines.push('');
   lines.push('## Removing suggestions');
@@ -2340,10 +2387,9 @@ function parseAssistantSuggestions(text, dataRoot) {
     try {
       const obj = JSON.parse(m[1].trim());
       if (obj && typeof obj.section_index === 'number') {
-        const ri = suggestionTargetInputRowIndices({
-          target_input_row_indices: obj.target_input_row_indices,
-          row_indices: obj.row_indices,
-        });
+        const compRows = dataRoot && Array.isArray(dataRoot.comparison_rows) ? dataRoot.comparison_rows : [];
+        const rawRi = obj.target_input_row_indices ?? obj.row_indices;
+        const ri = normalizeAssistantTargetsToRowIndex(Array.isArray(rawRi) ? rawRi : [], compRows);
         if (ri.length === 0) continue;
         const rawBullets = obj.focus_bullets ?? obj.chat_focus_bullets;
         const chat_focus_bullets = Array.isArray(rawBullets)
