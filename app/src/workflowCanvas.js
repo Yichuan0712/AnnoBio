@@ -4385,7 +4385,13 @@ export function buildWorkflowCanvas(root) {
               (!nm || typeof nm !== 'object' || (nm.bestPassPct == null && pm.bestPassPct != null));
             if (keepPrevMeta) next.review_finetune_meta = pm;
           }
-          if (prev) {
+          const prevNumForMerge = prev ? parseNumericSuggestionId(prev.suggestion_id) : null;
+          const sameSuggestionForTestMerge =
+            prevById != null ||
+            (prev != null && nextNum != null && prevNumForMerge != null && prevNumForMerge === nextNum);
+          const nextRowCheckRunning =
+            next.review_test_in_progress === true || next.review_test_in_progress === 1;
+          if (prev && sameSuggestionForTestMerge && !nextRowCheckRunning) {
             for (const key of ['review_test_result', 'review_test_result_finetune_after', 'review_test_result_finetune_before']) {
               const pt = prev[key];
               if (pt === 'pass' || pt === 'fail') {

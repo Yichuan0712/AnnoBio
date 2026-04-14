@@ -12,7 +12,6 @@ const API_BASE = 'http://localhost:8000';
 const MODEL_SETTINGS_DEFAULTS = {
   default_run_credential_id: '',
   default_review_credential_id: '',
-  default_review_assistant_credential_id: '',
   run_concurrency: 1,
   review_concurrency: 1,
   run_max_tokens: 8192,
@@ -517,12 +516,6 @@ export function openSettingsModal() {
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
                             </div>
-                            <div class="defaults-field defaults-field--full">
-                              <label class="dataset-meta-label" for="settings-default-review-assistant-credential">Assistant model (chat)</label>
-                              <select id="settings-default-review-assistant-credential" class="credentials-select dataset-meta-input" aria-label="Model for Review assistant chat">
-                                <option value="">${selectPlaceholderLabel('Same as Default model')}</option>
-                              </select>
-                            </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-review-concurrency">Review concurrency (1–4)</label>
                               <input type="number" id="settings-review-concurrency" class="dataset-meta-input" min="1" max="4" value="1" aria-label="Review phase-1 concurrency" />
@@ -585,7 +578,6 @@ export function openSettingsModal() {
 
   const runCredSelect = overlay.querySelector('#settings-default-run-credential');
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
-  const reviewAssistantCredSelect = overlay.querySelector('#settings-default-review-assistant-credential');
   const runConcurrencyInp = overlay.querySelector('#settings-run-concurrency');
   const runMaxTokensInp = overlay.querySelector('#settings-run-max-tokens');
   const reviewConcurrencyInp = overlay.querySelector('#settings-review-concurrency');
@@ -653,10 +645,8 @@ export function openSettingsModal() {
       `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name || c.llm || c.id)}</option>`
     ).join('');
     const optNone = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`;
-    const optSame = `<option value="">${selectPlaceholderLabel('Same as Default model')}</option>`;
     runCredSelect.innerHTML = optNone + optHtml;
     reviewCredSelect.innerHTML = optNone + optHtml;
-    reviewAssistantCredSelect.innerHTML = optSame + optHtml;
   }
 
   function syncFinetuneModeUi() {
@@ -670,7 +660,6 @@ export function openSettingsModal() {
     if (!settings) return;
     runCredSelect.value = settings.default_run_credential_id || '';
     reviewCredSelect.value = settings.default_review_credential_id || '';
-    reviewAssistantCredSelect.value = settings.default_review_assistant_credential_id || '';
     runConcurrencyInp.value = String(settings.run_concurrency ?? MODEL_SETTINGS_DEFAULTS.run_concurrency);
     reviewConcurrencyInp.value = String(settings.review_concurrency ?? MODEL_SETTINGS_DEFAULTS.review_concurrency);
     runMaxTokensInp.value = String(settings.run_max_tokens ?? MODEL_SETTINGS_DEFAULTS.run_max_tokens);
@@ -698,13 +687,11 @@ export function openSettingsModal() {
         const ids = {
           run: (runCredSelect.value || '').trim(),
           review: (reviewCredSelect.value || '').trim(),
-          assistant: (reviewAssistantCredSelect.value || '').trim(),
         };
         const credentials = await loadCredentials();
         populateCredentialSelects(credentials);
         runCredSelect.value = ids.run;
         reviewCredSelect.value = ids.review;
-        reviewAssistantCredSelect.value = ids.assistant;
       },
     });
     wireCredentialsAddForm(addRoot, credRoot);
@@ -733,7 +720,6 @@ export function openSettingsModal() {
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
-      default_review_assistant_credential_id: (reviewAssistantCredSelect.value || '').trim() || '',
       run_concurrency: runConcurrency,
       review_concurrency: reviewConcurrency,
       run_max_tokens: runMaxTokens,

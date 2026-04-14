@@ -3300,7 +3300,7 @@
 .review-assistant-input {
   flex: 1;
   min-width: 0;
-  padding: 8px 36px 8px 10px;
+  padding: 8px 10px;
   font-size: 13px;
   font-family: inherit;
   color: var(--text);
@@ -3313,30 +3313,6 @@
 
 .review-assistant-input::placeholder {
   color: var(--text-muted);
-}
-
-.review-assistant-send-inline {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  line-height: 1;
-  color: var(--text-muted);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.review-assistant-send-inline:hover {
-  color: var(--text);
-  background: var(--hover);
 }
 
 .review-detail-suggestions-footer,
@@ -3494,6 +3470,38 @@
 .review-detail-suggestion-title-wrap {
   display: inline;
   vertical-align: baseline;
+}
+
+/* Title-line finetune uses native <button>; strip UA chrome. Do not use margin: 0 — it overrides pill margin-left vs title. */
+button.review-suggestion-title-pill {
+  appearance: none;
+  -webkit-appearance: none;
+  margin-top: 0;
+  margin-right: 0;
+  margin-bottom: 0;
+  font-family: inherit;
+}
+
+/* Dialogue proposal (`source=assistant`); non-interactive, distinct from pipeline status pills. */
+.review-suggestion-proposal-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+  margin-left: 6px;
+  white-space: nowrap;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+  border: none;
+  color: var(--review-proposal-tag-text, #1d4ed8);
+  background: color-mix(in srgb, var(--review-proposal-tag-text, #3b82f6) 20%, transparent);
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
+  user-select: none;
 }
 
 /*状态标签：与 .review-detail-diagnosis-tag 同类弱样式，避免像 .btn（无边框、不可点） */

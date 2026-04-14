@@ -81,7 +81,6 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
     "default_review_credential_id": "",
-    "default_review_assistant_credential_id": "",
     "run_concurrency": 1,
     "review_concurrency": 1,
     "run_max_tokens": 8192,
@@ -177,7 +176,6 @@ class SettingsPatch(BaseModel):
     """Partial settings update; only provided fields are updated."""
     default_run_credential_id: str | None = None
     default_review_credential_id: str | None = None
-    default_review_assistant_credential_id: str | None = None
     run_concurrency: int | None = Field(default=None, ge=1, le=4)
     review_concurrency: int | None = Field(default=None, ge=1, le=4)
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
