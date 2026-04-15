@@ -375,6 +375,21 @@ function scoreTableNumberLabel(rows, comparisonRowIndex) {
 }
 
 /**
+ * When every comparison row is gt_only (no paired model line), still allow Verify/Finetune: run inference from
+ * row_input and score vs GT; baseline “had no extractable model output”.
+ */
+function syntheticRunnableFromGtOnlyRow(gtOnlyRow) {
+  if (!gtOnlyRow || !gtOnlyRow.gt_only) return null;
+  const ri = gtOnlyRow.row_index;
+  if (typeof ri !== 'number' || Number.isNaN(ri)) return null;
+  return {
+    ...gtOnlyRow,
+    gt_only: false,
+    synthetic_empty_baseline: true,
+  };
+}
+
+/**
  * Resolve each target t to seed runnable rows (same as before), then **input-close**: include every runnable
  * comparison row that shares the same worksheet input (`input_row_index`) or the same `row_input` key (1 input → N outputs). If no row matches t as row_index, t is treated as input_row_index (worksheet 0-based).
  */
@@ -414,6 +429,11 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
         for (const r of resolved) addSeed(r);
         continue;
       }
+      const syn = syntheticRunnableFromGtOnlyRow(direct);
+      if (syn) {
+        addSeed(syn);
+        continue;
+      }
       const st = scoreTableNumberLabel(rows, t);
       const stPart = st != null ? ` (Score table #${st})` : '';
       return {
@@ -436,7 +456,17 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
     };
   }
 
-  const closureRows = expandInputClosureFromSeedRows(rows, seedRows);
+  let closureRows = expandInputClosureFromSeedRows(rows, seedRows);
+  const seenRi = new Set(
+    closureRows.map((r) => r.row_index).filter((x) => typeof x === 'number' && !Number.isNaN(x)),
+  );
+  for (const s of seedRows) {
+    const ri = s && s.row_index;
+    if (typeof ri !== 'number' || Number.isNaN(ri) || seenRi.has(ri)) continue;
+    closureRows.push(s);
+    seenRi.add(ri);
+  }
+  closureRows.sort((a, b) => (a.row_index || 0) - (b.row_index || 0));
   return { rows: closureRows };
 }
 
