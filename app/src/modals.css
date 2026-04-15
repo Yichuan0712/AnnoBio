@@ -2293,8 +2293,8 @@
 }
 
 .modal-panel--review-selection-preview {
-  min-width: min(640px, 92vw);
-  max-width: 92vw;
+  min-width: min(880px, 96vw);
+  max-width: 96vw;
 }
 .modal-panel--review-selection-preview .modal-body {
   overflow: auto;
@@ -2313,6 +2313,15 @@
 .review-selection-preview-table th,
 .review-selection-preview-table td {
   vertical-align: top;
+}
+.review-selection-preview-table th:nth-child(5),
+.review-selection-preview-table td.review-selection-preview-input-fields {
+  min-width: 200px;
+  max-width: 360px;
+  white-space: normal;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .score-detail-main {
@@ -2443,6 +2452,24 @@
   align-items: center;
   gap: 10px;
   min-height: 40px;
+}
+
+.score-tree-row-card--draggable {
+  cursor: grab;
+}
+
+.score-tree-row-card--draggable:active {
+  cursor: grabbing;
+}
+
+.score-tree-row--drag-source {
+  opacity: 0.65;
+}
+
+.score-tree-row--drop-target {
+  outline: 2px dashed var(--accent, #3b82f6);
+  outline-offset: 2px;
+  border-radius: 8px;
 }
 
 .score-tree-row--flat .score-tree-op-toggle {

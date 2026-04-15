@@ -18,6 +18,7 @@ import {
   parseNumericSuggestionId,
   syncReviewSuggestionSeqNext,
 } from './reviewSuggestionIds.js';
+import { computeGreedyRunToGtPairing } from './scoreRunGtPairing.js';
 import {
   openScoreDetailModal,
   openReviewSelectionPreviewModal,
@@ -308,10 +309,6 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       return runVal === gtVal;
     });
   };
-  const countMatchingRules = (root, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
-    const rules = flattenScoreTreeToRules(root);
-    return rules.filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;
-  };
   let scoreRoot = { type: 'group', op: 'AND', children: [] };
   try {
     const raw = scoreNode.dataset.scoreMapping || '[]';
@@ -435,25 +432,16 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       reviewEmbeddingCosineMap = new Map();
     }
   }
-  const inputRowCount = runWsSafe?.rows?.length ?? 0;
   const gtCount = gtRows.length;
   const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
-  const runCount = Math.max(inputRowCount, maxRunRowIndex + 1);
-  const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
-  const gtUsed = new Array(gtCount).fill(false);
-  const pairs = [];
-  for (const i of runRowIndices) {
-    for (let j = 0; j < gtCount; j++) {
-      const scoreN = countMatchingRules(scoreRoot, i, j, resultsByIndex, runWsSafe, outputFields, gtDeduped);
-      if (scoreN > 0) pairs.push({ i, j, score: scoreN });
-    }
-  }
-  pairs.sort((a, b) => b.score - a.score);
-  for (const { i, j } of pairs) {
-    if (runToGt[i] >= 0 || gtUsed[j]) continue;
-    runToGt[i] = j;
-    gtUsed[j] = true;
-  }
+  const { runToGt } = computeGreedyRunToGtPairing({
+    scoreRoot,
+    results: validDedupedResults,
+    runWs: runWsSafe,
+    gtContent: gtDeduped,
+    outputFields,
+    ruleMatchesRow,
+  });
 
   const gtToRun = new Array(gtCount).fill(-1);
   for (let ii = 0; ii < runToGt.length; ii++) {
