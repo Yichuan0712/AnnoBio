@@ -1372,15 +1372,9 @@ export function buildWorkflowCanvas(root) {
   }
 
   /**
-   * Check if a source dataset name is already used on the canvas (case-insensitive).
+   * Check if a working/subset dataset name is already used on the canvas (case-insensitive).
    * @param {string} nameToCheck
    * @param {string|null} [excludeNodeId=null] - node id to exclude (e.g. when editing that node)
-   * @returns {boolean}
-   */
-  /**
-   * Check if a dataset name is already used on the canvas (case-insensitive).
-   * @param {string} nameToCheck
-   * @param {string|null} [excludeNodeId=null] - node id to exclude
    * @returns {boolean}
    */
   function isDatasetNameAlreadyUsed(nameToCheck, excludeNodeId = null) {
@@ -1388,7 +1382,7 @@ export function buildWorkflowCanvas(root) {
     const datasetNodes = nodesLayer.querySelectorAll('.workflow-node--dataset');
     for (const n of datasetNodes) {
       if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
-      const existing = (n.dataset.datasetName || n.dataset.datasetName || '').trim().toLowerCase();
+      const existing = (n.dataset.datasetName || n.dataset.subsetName || '').trim().toLowerCase();
       if (existing === normalized) return true;
     }
     return false;
@@ -1621,7 +1615,7 @@ export function buildWorkflowCanvas(root) {
     do {
       candidate = isNewVersion ? `${base} v${n}` : `${base} (Copy ${n})`;
       n++;
-    } while (isSubsetNameAlreadyUsed(candidate));
+    } while (isDatasetNameAlreadyUsed(candidate));
     return candidate;
   }
 

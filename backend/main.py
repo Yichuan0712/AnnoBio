@@ -6,7 +6,6 @@ import sys
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, List, Optional
 
 # Ensure UTF-8 for subprocess / CLI starts (Electron also sets PYTHONUTF8 when spawning).
@@ -93,8 +92,6 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
     "default_review_credential_id": "",
-    "run_concurrency": 1,
-    "review_concurrency": 1,
     "run_max_tokens": 8192,
     "review_max_tokens": 32768,
     "run_max_retries": 2,
@@ -186,8 +183,6 @@ class SettingsPatch(BaseModel):
     """Partial settings update; only provided fields are updated."""
     default_run_credential_id: str | None = None
     default_review_credential_id: str | None = None
-    run_concurrency: int | None = Field(default=None, ge=1, le=4)
-    review_concurrency: int | None = Field(default=None, ge=1, le=4)
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
@@ -861,7 +856,7 @@ def delete_credential(credential_id: str):
 # ---------- Settings ----------
 @app.get("/api/settings")
 def get_settings():
-    """Return current settings (default model, concurrency, max_tokens)."""
+    """Return current settings (default model, max_tokens, etc.)."""
     return _load_settings()
 
 
@@ -1052,7 +1047,6 @@ def _do_run_work(
 
         total = len(prompts)
         run_settings = _load_settings()
-        run_concurrency = run_settings.get("run_concurrency") or DEFAULT_SETTINGS["run_concurrency"]
         run_max_tokens = run_settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"]
         with _run_jobs_lock:
             _run_jobs[run_id]["total"] = total
@@ -1181,23 +1175,12 @@ def _do_run_work(
                 _run_jobs[run_id]["completed"] = completed
             _persist_run_jobs()
 
-        # Review Verify (`verify_` inspect id): no thread pool — one LLM row at a time (see reviewSuggestionTest.js).
-        if str(inspect_file_key).startswith("verify_"):
-            for i, prompt in enumerate(prompts):
-                row_index, items = process_one(i, prompt)
-                _row_done_write_progress(row_index, items)
-                if cancelled_early:
-                    break
-        else:
-            with ThreadPoolExecutor(max_workers=run_concurrency) as ex:
-                futures = {ex.submit(process_one, i, p): i for i, p in enumerate(prompts)}
-                for future in as_completed(futures):
-                    row_index, items = future.result()
-                    _row_done_write_progress(row_index, items)
-                    if cancelled_early:
-                        for f in futures:
-                            f.cancel()
-                        break
+        # One LLM in-flight per run job (rows processed in order). Separate run jobs (e.g. different nodes) may still run at once.
+        for i, prompt in enumerate(prompts):
+            row_index, items = process_one(i, prompt)
+            _row_done_write_progress(row_index, items)
+            if cancelled_early:
+                break
 
         with _run_jobs_lock:
             if run_id in _run_cancelled:
@@ -1536,11 +1519,6 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
         except (TypeError, ValueError):
             max_failed = DEFAULT_SETTINGS["review_max_failed_rows"]
         max_failed = max(1, min(200, max_failed))
-        try:
-            conc = int(st.get("review_concurrency") or DEFAULT_SETTINGS["review_concurrency"])
-        except (TypeError, ValueError):
-            conc = DEFAULT_SETTINGS["review_concurrency"]
-        conc = max(1, min(4, conc))
 
         run_review_pipeline(
             provider=provider,
@@ -1549,7 +1527,6 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             body=body,
             max_tokens=max_tokens,
             max_failed_rows=max_failed,
-            concurrency=conc,
             is_cancelled=lambda: _review_is_cancelled(review_id),
             append_event=append_event,
         )
