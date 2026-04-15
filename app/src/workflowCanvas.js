@@ -20,7 +20,7 @@ import {
 } from './reviewSuggestionIds.js';
 import {
   openScoreDetailModal,
-  runReviewFromScore,
+  openReviewSelectionPreviewModal,
   getScoreExportData,
   canonicalizeMatchFlags,
   getMatchFlags,
@@ -3652,26 +3652,7 @@ export function buildWorkflowCanvas(root) {
             comparison_rows,
           };
         }
-        let credentialId = (scoreNode.dataset.reviewCredentialId || '').trim();
-        if (!credentialId) {
-          try {
-            const res = await fetch(`${RUN_API_BASE}/api/credentials`);
-            if (res.ok) {
-              const list = await res.json();
-              const first = Array.isArray(list) && list[0];
-              if (first && first.id) credentialId = String(first.id).trim();
-            }
-          } catch (_) {}
-        }
-        if (!credentialId) {
-          alert('Please select a model in the Score detail first, or add an API credential.');
-          return;
-        }
-        await runReviewFromScore({
-          scoreNodeId: scoreNode.dataset.nodeId,
-          getReviewPayload,
-          credentialId,
-        });
+        await openReviewSelectionPreviewModal({ getReviewPayload });
       },
       'add-sampler': () => {
         if (node.dataset.nodeType !== 'dataset') return;

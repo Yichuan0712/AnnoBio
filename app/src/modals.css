@@ -2292,6 +2292,29 @@
   overflow: hidden;
 }
 
+.modal-panel--review-selection-preview {
+  min-width: min(640px, 92vw);
+  max-width: 92vw;
+}
+.modal-panel--review-selection-preview .modal-body {
+  overflow: auto;
+  padding: 16px 20px 20px;
+}
+.review-selection-preview-intro {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.review-selection-preview-table-wrap {
+  overflow: auto;
+  max-height: min(58vh, 480px);
+  border: 1px solid var(--border);
+}
+.review-selection-preview-table th,
+.review-selection-preview-table td {
+  vertical-align: top;
+}
+
 .score-detail-main {
   flex: 1 1 0;
   min-width: 0;

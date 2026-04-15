@@ -333,6 +333,91 @@ export async function runReviewFromScore({ scoreNodeId, getReviewPayload, creden
   return runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview: addEvent.detail?.registerPendingReview }).then(() => ({ reviewNodeId }));
 }
 
+function summarizeRunOutputForPreview(obj) {
+  if (!obj || typeof obj !== 'object' || Object.keys(obj).length === 0) return '—';
+  const parts = [];
+  for (const [k, v] of Object.entries(obj)) {
+    let s = v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+    s = s.replace(/\s+/g, ' ').trim();
+    if (s.length > 56) s = `${s.slice(0, 56)}…`;
+    parts.push(`${k}: ${s}`);
+  }
+  return parts.join('; ');
+}
+
+/**
+ * Temporary modal: lists comparison rows that would be sent to Review (respects Score results “Review” checkboxes).
+ * Does not add a Review node, an edge, or call the analyze API.
+ * @param {{ getReviewPayload: () => unknown }} options
+ */
+export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
+  if (typeof getReviewPayload !== 'function') return;
+  const payload = await Promise.resolve(getReviewPayload());
+  if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) {
+    showAlert('Cannot build Review data. Ensure the Score node is connected to a Run with a prompt that has sections.', { title: 'Review preview' });
+    return;
+  }
+  const comparisonRows = Array.isArray(payload.comparison_rows) ? payload.comparison_rows : [];
+  if (comparisonRows.length === 0) {
+    showAlert('No rows selected for Review. Turn on the Review checkboxes for the rows you want in the Score results table.', { title: 'Review preview' });
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'review-selection-preview-title');
+
+  const tableRowsHtml = comparisonRows.map((r, idx) => {
+    const scoreTableRow = r.score_table_row != null && r.score_table_row !== '' ? String(r.score_table_row) : '—';
+    const runIdx = r.row_index != null && r.row_index !== '' ? String(r.row_index) : '—';
+    const inpIdx = typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? String(r.input_row_index) : '—';
+    const matched = comparisonRowIsMatched(r) ? 'true' : 'false';
+    const gtOnly = r.gt_only === true ? 'yes' : 'no';
+    const outSummary = summarizeRunOutputForPreview(r.run_output);
+    const expectedShort = (() => {
+      let e = r.expected == null ? '' : String(r.expected);
+      e = e.replace(/\s+/g, ' ').trim();
+      if (e.length > 72) return `${e.slice(0, 72)}…`;
+      return e || '—';
+    })();
+    return `<tr><td>${idx + 1}</td><td>${escapeHtml(scoreTableRow)}</td><td>${escapeHtml(runIdx)}</td><td>${escapeHtml(inpIdx)}</td><td>${escapeHtml(matched)}</td><td>${escapeHtml(gtOnly)}</td><td title="${escapeAttr(expectedShort)}">${escapeHtml(expectedShort)}</td><td title="${escapeAttr(outSummary)}">${escapeHtml(outSummary)}</td></tr>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--review-selection-preview" role="dialog">
+      <div class="modal-header">
+        <h2 id="review-selection-preview-title" class="modal-title">Review preview</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="review-selection-preview-intro">${escapeHtml(String(comparisonRows.length))} row(s) with Review enabled (not creating a Review node yet).</p>
+        <div class="review-selection-preview-table-wrap">
+          <table class="run-detail-results-table review-selection-preview-table">
+            <thead><tr>
+              <th>#</th><th>Score #</th><th>Run row</th><th>Input row</th><th>Match</th><th>GT only</th><th>Expected</th><th>Model output</th>
+            </tr></thead>
+            <tbody>${tableRowsHtml}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  function close() {
+    overlay.remove();
+    if (!document.querySelector('.modal-overlay')) document.body.style.overflow = '';
+  }
+
+  overlay.querySelector('.modal-close')?.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  document.body.style.overflow = 'hidden';
+  document.body.appendChild(overlay);
+}
+
 /**
  * Start review API (POST 202). Polling and event processing done by workflowCanvas.
  * @param {{ reviewNodeId: string, payload: object, credentialId: string, registerPendingReview?: (nodeId: string, reviewId: string) => void }} options
@@ -950,7 +1035,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                   <div class="score-detail-llm-row">
                     <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model"></select>
                   </div>
-                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with the selected model">Review</button>
+                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Preview which rows are included in Review (from the Review column checkboxes)">Review</button>
                 </div>
               </div>
             </div>
@@ -2276,20 +2361,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   addPromptReviewBtn.addEventListener('click', async () => {
-    const scoreNodeId = node?.dataset?.nodeId || '';
-    if (!scoreNodeId) return;
-    const credentialId = (llmSelect?.value || '').trim();
-    if (!credentialId) {
-      showAlert('Please select a model first.', { title: 'No model selected' });
-      return;
-    }
-    const payload = await Promise.resolve(getReviewPayload());
-    if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) return;
-    const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } });
-    document.dispatchEvent(addEvent);
-    const reviewNodeId = addEvent.detail?.reviewNodeId || '';
-    close();
-    if (reviewNodeId) await runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview: addEvent.detail?.registerPendingReview });
+    if (!node?.dataset?.nodeId) return;
+    await openReviewSelectionPreviewModal({ getReviewPayload });
   });
 
   /** Filter group for memory apply: keep only rules valid for runKeys/gtSet, update existingSet. Returns null if empty. */
