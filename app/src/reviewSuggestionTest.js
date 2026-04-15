@@ -439,7 +439,7 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
       return {
         error:
           `Cannot verify target ${t}: comparison row_index ${t}${stPart} is ground-truth only (no model output). ` +
-          `Verify needs a runnable row with model output; none shares this row’s GT pairing, worksheet input_row_index, or row_input. ` +
+          `Verify needs a runnable row with model output; none shares this row’s ground truth pairing, worksheet input_row_index, or row_input. ` +
           `Often caused by unpaired ground-truth rows or one input → multiple outputs with mismatched indices.`,
       };
     }

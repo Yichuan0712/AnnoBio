@@ -21,25 +21,13 @@ export function comparisonRowIsMatched(row) {
 }
 
 /**
- * True when this run row should participate in Score / Review: no error and at least one schema output field
- * has a non-empty value (so we do not send placeholder-only row_input for failed or empty model rows).
+ * True when this run row should participate in Score / Review pairing and tables.
+ * Includes API/runtime errors and empty model output (still comparable via input-column rules and shown in UI).
  */
 export function isValidRunOutputForScoreRow(r, outputFields) {
-  if (!r || r.error) return false;
-  const out = r.output;
-  if (!out || typeof out !== 'object') return false;
-  const fields = Array.isArray(outputFields) ? outputFields : [];
-  if (fields.length === 0) return Object.keys(out).length > 0;
-  for (const f of fields) {
-    const key = String(f.key || '').trim();
-    if (!key || !Object.prototype.hasOwnProperty.call(out, key)) continue;
-    const v = out[key];
-    if (v == null) continue;
-    if (Array.isArray(v)) {
-      if (v.some((x) => x != null && String(x).trim() !== '')) return true;
-    } else if (String(v).trim() !== '') return true;
-  }
-  return false;
+  void outputFields;
+  if (!r) return false;
+  return typeof r.row_index === 'number' && !Number.isNaN(r.row_index);
 }
 
 /** Comparison type (single choice). Legacy `contains` / `gt-contains-run` become String match + matchFlags.contains. */
@@ -72,7 +60,7 @@ const DEFAULT_MATCH_FLAGS = {
 /** Numeric compare mode (only when matchType === 'numeric'); single choice in the rule editor. */
 const NUMERIC_COMPARE_MODES = [
   { value: 'exact', label: 'Exact: values must be numerically equal' },
-  { value: 'abs', label: 'Absolute margin: |result - GT| ≤ ε' },
+  { value: 'abs', label: 'Absolute margin: |result - ground truth| ≤ ε' },
   { value: 'rel', label: 'Relative margin: proportional difference (r)' },
   { value: 'decimals', label: 'Decimal rounding: equal after rounding to N places' },
 ];
@@ -369,7 +357,6 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
       expected: r.expected || '',
       ground_truth_output: r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {},
       comparison_types: r.comparison_types ?? null,
-      comment: r.comment ?? null,
       row_input: r.row_input ?? null,
       gt_only: r.gt_only === true,
       source_gt_row_index: typeof r.source_gt_row_index === 'number' && !Number.isNaN(r.source_gt_row_index) ? r.source_gt_row_index : null,
@@ -548,13 +535,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const rawMt = (c && c.matchType) || 'exact';
       const f = { ...DEFAULT_MATCH_FLAGS, ...((c && c.matchFlags && typeof c.matchFlags === 'object') ? c.matchFlags : {}) };
       if (legacyMatchTypeWasContains(rawMt)) f.contains = true;
-      return {
+      const leaf = {
         type: 'rule',
         outputKey: (c && c.outputKey) || '',
         gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
         matchType: migrateLegacyMatchType(rawMt),
         matchFlags: canonicalizeMatchFlags(f),
       };
+      if (c && c.rowGroupKey === true) leaf.rowGroupKey = true;
+      return leaf;
     }
     return normalizeGroupChild(c);
   }
@@ -567,6 +556,20 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!node) return;
     node.dataset.scoreMapping = JSON.stringify(root);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  }
+
+  /** Remove rowGroupKey from every rule so at most one rule can keep it after save. */
+  function stripAllRowGroupKeys(r) {
+    if (!r) return r;
+    if (r.type === 'rule') {
+      const next = { ...r };
+      delete next.rowGroupKey;
+      return next;
+    }
+    if (r.type === 'group' && Array.isArray(r.children)) {
+      return { ...r, children: r.children.map(stripAllRowGroupKeys) };
+    }
+    return r;
   }
 
   /** Flatten tree to array of rules (depth-first) for results table and rule cards by path. */
@@ -593,13 +596,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!group || group.type !== 'group' || !Array.isArray(group.children)) return null;
     const children = group.children.map((ch) => {
       if (ch.type === 'rule') {
-        return {
+        const leaf = {
           type: 'rule',
           outputKey: (ch.outputKey || '').trim(),
           gtColumns: (ch.gtColumns || []).slice(),
           matchType: migrateLegacyMatchType(ch.matchType || 'exact'),
           matchFlags: getMatchFlags(ch),
         };
+        if (ch.rowGroupKey === true) leaf.rowGroupKey = true;
+        return leaf;
       }
       return collectGroupForMemory(ch);
     }).filter(Boolean);
@@ -695,7 +700,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const seen = new Set();
     const dedupResults = [];
     for (const r of (results || [])) {
-      const key = JSON.stringify(outputKeys.map((k) => getRunValue(r, k, r.row_index, runWs, outputFields)));
+      const key = JSON.stringify([r.row_index, ...outputKeys.map((k) => getRunValue(r, k, r.row_index, runWs, outputFields))]);
       if (seen.has(key)) continue;
       seen.add(key);
       dedupResults.push(r);
@@ -775,10 +780,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
     (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
-    const nonErrorResults = (results || []).filter((r) => !r.error);
+    const scoringResults = (results || []).filter((r) => r);
     const inputRowCount = runWs?.rows?.length ?? 0;
     const gtCount = gtRows.length;
-    const runRowIndices = [...new Set(nonErrorResults.map((r) => r.row_index))];
+    const runRowIndices = [...new Set(scoringResults.map((r) => r.row_index))];
     const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
     const runCount = Math.max(inputRowCount, maxRunRowIndex + 1);
     const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
@@ -804,7 +809,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       matched.push(i < runCount && runToGt[i] >= 0);
     }
     const matchedCount = runToGt.slice(0, runCount).filter((j) => j >= 0).length;
-    const total = nonErrorResults.length;
+    const total = scoringResults.length;
     return {
       matched,
       runToGt,
@@ -876,20 +881,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const group = root.type === 'group' && root.children ? { ...root, children: root.children.slice() } : root;
     group.children[i] = insertChildAtPath(group.children[i], rest, newChild, index);
     return group;
-  }
-
-  function getResultComments() {
-    try {
-      const raw = node?.dataset?.scoreResultComments || '{}';
-      const obj = JSON.parse(raw);
-      return obj && typeof obj === 'object' ? obj : {};
-    } catch (_) { return {}; }
-  }
-
-  function setResultComments(comments) {
-    if (!node) return;
-    node.dataset.scoreResultComments = JSON.stringify(comments);
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   }
 
   /** Keys: GT row `String(j)` or run-only `run:${rowIndex}`. Value true = excluded from Review + metrics. */
@@ -1030,6 +1021,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   /** Open Add rule / Edit rule modal. editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. */
   function openRuleEditor(editPath, parentPath, indexInParent, onDone) {
     const isEdit = Array.isArray(editPath) && editPath.length > 0;
+    /** Same scope as make-group / add-as-group: root list only (not inside a rule group). Use Edit Rule group for groups. */
+    const showRowGroupKeyUi = (isEdit && editPath.length <= 1) || (!isEdit && (!parentPath || parentPath.length === 0));
     const root = getRoot();
     const defaultRule = { type: 'rule', outputKey: '', gtColumns: [], matchType: 'exact', matchFlags: { ...DEFAULT_MATCH_FLAGS } };
     const rule = isEdit ? getNodeAtPath(root, editPath) : defaultRule;
@@ -1120,7 +1113,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <label class="dataset-meta-label" for="rule-editor-numeric-mode">Number comparison</label>
               <select id="rule-editor-numeric-mode" class="dataset-meta-input rule-editor-select" aria-label="How numbers are compared">${numericModeOpts}</select>
               <div class="rule-editor-numeric-param" id="rule-editor-numeric-abs-wrap" style="display:none;margin-top:0.5rem;">
-                <label class="dataset-meta-label" for="rule-editor-numeric-abs">ε: max absolute gap (result vs GT)</label>
+                <label class="dataset-meta-label" for="rule-editor-numeric-abs">ε: max absolute gap (result vs ground truth)</label>
                 <input type="text" id="rule-editor-numeric-abs" class="dataset-meta-input" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="e.g. 0.01 or 1e-3" value="${escapeAttr(String(flags.numericAbsEpsilon))}" aria-describedby="rule-editor-numeric-abs-hint" aria-label="Absolute tolerance epsilon" />
                 <p class="rule-editor-hint" id="rule-editor-numeric-abs-hint">Rows match when <strong>|result - ground truth| ≤ ε</strong>. Use any decimal (e.g. <code>0.05</code>, <code>0.001</code>). ε = 0 means exact numeric equality.</p>
               </div>
@@ -1140,23 +1133,33 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <input type="checkbox" id="rule-editor-make-group" class="rule-editor-checkbox" aria-label="Make this a rule group">
                 Make this a rule group
               </label>
-              <p class="rule-editor-hint">Convert to a group and edit its rules like the score list.</p>
+              <p class="rule-editor-hint">Turning this on replaces this rule with a group that contains it (this dialog closes). Open the group to add more rules and choose <strong>AND</strong> or <strong>OR</strong> between them—the same as on the Score panel.</p>
             </div>
             ` : (!isEdit && (!parentPath || parentPath.length === 0) ? `
             <div class="dataset-meta-field rule-editor-field-group">
               <label class="dataset-meta-label rule-editor-checkbox-label">
-                <input type="checkbox" id="rule-editor-add-as-group" class="rule-editor-checkbox" aria-label="Add as rule group">
-                Add as rule group
+                <input type="checkbox" id="rule-editor-add-as-group" class="rule-editor-checkbox" aria-label="Add as a new group (starts with this rule)">
+                Add as a new group (starts with this rule)
               </label>
-              <p class="rule-editor-hint">Create a group with this rule; you can add more rules to the group after.</p>
+              <p class="rule-editor-hint">Adds a group that contains only this rule at first. Open the group afterward to add more rules and set <strong>AND</strong> or <strong>OR</strong>.</p>
             </div>
             ` : '')}
+            ${showRowGroupKeyUi ? `
+            <div class="dataset-meta-field rule-editor-field-group">
+              <label class="dataset-meta-label rule-editor-checkbox-label">
+                <input type="checkbox" id="rule-editor-row-group-id" class="rule-editor-checkbox" aria-label="Mark this as a shared input key" ${ruleData.rowGroupKey === true ? 'checked' : ''}>
+                Mark this as a shared input key
+              </label>
+              <p class="rule-editor-hint">Use when <strong>one input</strong> lines up with <strong>several ground truth rows</strong>. The <strong>ground truth column(s)</strong> for this rule are the <strong>shared key</strong>: put the <strong>same value</strong> in those cells on every row from that input so the table can group them. <strong>Only one rule</strong> in this score can be marked this way.</p>
+            </div>
+            ` : ''}
           </div>
           <div class="prompt-form-error section-editor-error rule-editor-error" role="alert" aria-live="polite" hidden></div>
+          ${!isEdit ? `
           <div class="modal-footer-actions">
-            <button type="button" class="btn btn-secondary section-editor-cancel rule-editor-cancel">Cancel</button>
-            <button type="button" class="btn btn-secondary section-editor-save rule-editor-save">${isEdit ? 'Save' : 'Add rule'}</button>
+            <button type="button" class="btn btn-secondary section-editor-save rule-editor-save">Add rule</button>
           </div>
+          ` : ''}
         </div>
       </div>
     `;
@@ -1183,10 +1186,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         errorEl.hidden = true;
       }
     }
-
-    resultSelectEl.addEventListener('change', clearError);
-    gtSelectEl.addEventListener('change', clearError);
-    matchSelectEl.addEventListener('change', clearError);
 
     const numericModeEl = editorOverlay.querySelector('#rule-editor-numeric-mode');
     const numericAbsWrap = editorOverlay.querySelector('#rule-editor-numeric-abs-wrap');
@@ -1225,10 +1224,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       syncStringModeFlagInputsDisabled();
       if (showNum) updateNumericParamVisibility();
     }
-    matchSelectEl.addEventListener('change', updateComparisonTypePanels);
+    matchSelectEl.addEventListener('change', () => {
+      updateComparisonTypePanels();
+      clearError();
+      if (isEdit) persistEdit();
+    });
     numericModeEl?.addEventListener('change', () => {
       updateNumericParamVisibility();
       clearError();
+      if (isEdit) persistEdit();
     });
     updateComparisonTypePanels();
     requestAnimationFrame(() => updateComparisonTypePanels());
@@ -1241,6 +1245,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
       }
       clearError();
+      if (isEdit) persistEdit();
     });
     embeddingSimilarityCbEl?.addEventListener('change', () => {
       if (embeddingSimilarityCbEl.checked) {
@@ -1248,6 +1253,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
       }
       clearError();
+      if (isEdit) persistEdit();
     });
     editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
       cb.addEventListener('change', () => {
@@ -1256,19 +1262,20 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           if (embeddingSimilarityCbEl) embeddingSimilarityCbEl.checked = false;
         }
         clearError();
+        if (isEdit) persistEdit();
       });
     });
 
-    function save() {
+    function buildNewRuleFromForm() {
       const outputKey = (resultSelectEl?.value ?? '').trim();
       if (!outputKey) {
         showError('Please select a result column.');
-        return;
+        return null;
       }
       const gtColumn = (gtSelectEl?.value ?? '').trim();
       if (!gtColumn) {
         showError('Please select a ground truth column.');
-        return;
+        return null;
       }
       const matchType = (matchSelectEl?.value ?? '').trim() || 'exact';
       const flagCbs = editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]');
@@ -1293,15 +1300,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         else matchFlags.numericDecimalPlaces = 2;
         if (matchFlags.numericMode === 'abs' && (!Number.isFinite(absParsed) || absParsed < 0)) {
           showError('Enter a valid ε (≥ 0). Decimals allowed, e.g. 0.01 or 1e-4.');
-          return;
+          return null;
         }
         if (matchFlags.numericMode === 'rel' && (!Number.isFinite(relParsed) || relParsed < 0)) {
           showError('Enter a valid r (≥ 0). Decimals allowed, e.g. 0.01 for ~1%.');
-          return;
+          return null;
         }
         if (matchFlags.numericMode === 'decimals' && !Number.isFinite(decParsed)) {
           showError('Enter decimal places (0-20).');
-          return;
+          return null;
         }
       } else {
         matchFlags.numericMode = 'exact';
@@ -1309,35 +1316,84 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         matchFlags.numericRelEpsilon = 0;
         matchFlags.numericDecimalPlaces = 2;
       }
+      const rowGroupIdEl = editorOverlay.querySelector('#rule-editor-row-group-id');
+      const wantRowGroupId = showRowGroupKeyUi && !!(rowGroupIdEl && rowGroupIdEl.checked);
       const newRule = { type: 'rule', outputKey, gtColumns: [gtColumn], matchType, matchFlags: canonicalizeMatchFlags(matchFlags) };
-      const root = getRoot();
+      if (wantRowGroupId) newRule.rowGroupKey = true;
+      return newRule;
+    }
+
+    function persistEdit() {
+      if (!isEdit) return;
+      const newRule = buildNewRuleFromForm();
+      if (!newRule) return;
+      clearError();
+      let nextRoot = stripAllRowGroupKeys(getRoot());
       const makeGroupEl = editorOverlay.querySelector('#rule-editor-make-group');
+      const makeGroup = !!(makeGroupEl && makeGroupEl.checked);
+      if (makeGroup) {
+        setRoot(setNodeAtPath(nextRoot, editPath, { type: 'group', ops: [], children: [newRule] }));
+        closeEditor();
+        onDone();
+        return;
+      }
+      setRoot(setNodeAtPath(nextRoot, editPath, newRule));
+      onDone();
+    }
+
+    function persistAdd() {
+      if (isEdit) return;
+      const newRule = buildNewRuleFromForm();
+      if (!newRule) return;
+      clearError();
+      let nextRoot = stripAllRowGroupKeys(getRoot());
       const addAsGroupEl = editorOverlay.querySelector('#rule-editor-add-as-group');
-      const makeGroup = isEdit && makeGroupEl && makeGroupEl.checked;
-      const addAsGroup = !isEdit && addAsGroupEl && addAsGroupEl.checked;
-      if (isEdit) {
-        if (makeGroup) {
-          setRoot(setNodeAtPath(root, editPath, { type: 'group', ops: [], children: [newRule] }));
-        } else {
-          setRoot(setNodeAtPath(root, editPath, newRule));
-        }
+      const addAsGroup = !!(addAsGroupEl && addAsGroupEl.checked);
+      if (addAsGroup) {
+        setRoot(insertChildAtPath(nextRoot, parentPath, { type: 'group', ops: [], children: [newRule] }, indexInParent));
       } else {
-        if (addAsGroup) {
-          setRoot(insertChildAtPath(root, parentPath, { type: 'group', ops: [], children: [newRule] }, indexInParent));
-        } else {
-          setRoot(insertChildAtPath(root, parentPath, newRule, indexInParent));
-        }
+        setRoot(insertChildAtPath(nextRoot, parentPath, newRule, indexInParent));
       }
       closeEditor();
       onDone();
     }
 
-    editorOverlay.querySelector('.modal-close').addEventListener('click', closeEditor);
-    editorOverlay.querySelector('.rule-editor-cancel').addEventListener('click', closeEditor);
-    editorOverlay.querySelector('.rule-editor-save').addEventListener('click', save);
-    editorOverlay.addEventListener('click', (e) => {
-      if (e.target === editorOverlay) closeEditor();
+    let editApplyTimer = null;
+    function schedulePersistEdit() {
+      if (!isEdit) return;
+      if (editApplyTimer) clearTimeout(editApplyTimer);
+      editApplyTimer = setTimeout(() => {
+        editApplyTimer = null;
+        persistEdit();
+      }, 200);
+    }
+
+    resultSelectEl.addEventListener('change', () => {
+      clearError();
+      if (isEdit) persistEdit();
     });
+    gtSelectEl.addEventListener('change', () => {
+      clearError();
+      if (isEdit) persistEdit();
+    });
+
+    editorOverlay.querySelector('#rule-editor-make-group')?.addEventListener('change', () => {
+      if (isEdit) persistEdit();
+    });
+    editorOverlay.querySelector('#rule-editor-row-group-id')?.addEventListener('change', () => {
+      if (isEdit) persistEdit();
+    });
+
+    numericAbsEl?.addEventListener('input', () => { if (isEdit) schedulePersistEdit(); });
+    numericRelEl?.addEventListener('input', () => { if (isEdit) schedulePersistEdit(); });
+    numericDecEl?.addEventListener('input', () => { if (isEdit) schedulePersistEdit(); });
+    numericAbsEl?.addEventListener('blur', () => { if (isEdit) persistEdit(); });
+    numericRelEl?.addEventListener('blur', () => { if (isEdit) persistEdit(); });
+    numericDecEl?.addEventListener('blur', () => { if (isEdit) persistEdit(); });
+
+    editorOverlay.querySelector('.modal-close').addEventListener('click', closeEditor);
+    const ruleEditorSaveBtn = editorOverlay.querySelector('.rule-editor-save');
+    if (ruleEditorSaveBtn) ruleEditorSaveBtn.addEventListener('click', persistAdd);
     document.body.appendChild(editorOverlay);
     resultSelectEl?.focus();
   }
@@ -1364,7 +1420,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       else if (flags.numericMode === 'rel') flagPart += ` · rel≤${flags.numericRelEpsilon}`;
       else if (flags.numericMode === 'decimals') flagPart += ` · ${flags.numericDecimalPlaces} decimals`;
     }
-    const summary = `${runLabel} → ${gtLabel} ( ${typeLabel}${flagPart} )`;
+    const rowGroupNote = rule.rowGroupKey === true ? ' · Shared input key' : '';
+    const summary = `${runLabel} → ${gtLabel} ( ${typeLabel}${flagPart} )${rowGroupNote}`;
     const card = document.createElement('div');
     card.className = 'score-rule-card';
     const onRuleSaved = opts.onRuleSaved || (() => renderRules());
@@ -1466,6 +1523,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const firstIndex = groupPath[0];
     const groupIndex = (root.children || []).slice(0, firstIndex + 1).filter((c) => c && c.type === 'group').length;
     const title = `Edit Rule group ${groupIndex}`;
+    const showRowGroupInGroupEditor = groupPath.length === 1;
+    const rowGroupInitiallyOn = showRowGroupInGroupEditor && (group.children || []).some((c) => c && c.type === 'rule' && c.rowGroupKey === true);
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
     overlay.setAttribute('aria-modal', 'true');
@@ -1480,6 +1539,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           <div class="score-group-editor-actions">
             <button type="button" class="score-tree-add-rule-box" id="score-group-editor-add-rule">+ Add rule</button>
           </div>
+          ${showRowGroupInGroupEditor ? `
+          <div class="dataset-meta-field rule-editor-field-group score-group-editor-rowgroup">
+            <label class="dataset-meta-label rule-editor-checkbox-label">
+              <input type="checkbox" id="score-group-row-group-cb" class="rule-editor-checkbox" aria-label="Mark this as a shared input key" ${rowGroupInitiallyOn ? 'checked' : ''}>
+              Mark this as a shared input key
+            </label>
+            <p class="rule-editor-hint">Use when <strong>one input</strong> lines up with <strong>several ground truth rows</strong>. The <strong>ground truth column(s)</strong> on the rules above are the <strong>shared key</strong>: put the <strong>same value</strong> in those cells on every row from that input so the table can group them. <strong>Only one rule</strong> in this score can be marked this way.</p>
+          </div>
+          ` : ''}
         </div>
       </div>
     `;
@@ -1524,6 +1592,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           listEl.appendChild(row);
         }
       });
+      const rgCb = overlay.querySelector('#score-group-row-group-cb');
+      if (rgCb) {
+        const g = getGroup();
+        rgCb.checked = (g.children || []).some((c) => c && c.type === 'rule' && c.rowGroupKey === true);
+      }
     }
 
     addBtn.addEventListener('click', () => {
@@ -1533,6 +1606,43 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       });
     });
+
+    const rowGroupCb = overlay.querySelector('#score-group-row-group-cb');
+    if (rowGroupCb) {
+      rowGroupCb.addEventListener('change', () => {
+        const on = rowGroupCb.checked;
+        let nextRoot = getRoot();
+        if (on) {
+          nextRoot = stripAllRowGroupKeys(nextRoot);
+          const g = getNodeAtPath(nextRoot, groupPath);
+          if (!g || g.type !== 'group') return;
+          const children = (g.children || []).slice();
+          const idx = children.findIndex((c) => c && c.type === 'rule');
+          if (idx < 0) {
+            rowGroupCb.checked = false;
+            return;
+          }
+          children[idx] = { ...children[idx], rowGroupKey: true };
+          nextRoot = setNodeAtPath(nextRoot, groupPath, { ...g, children });
+        } else {
+          const g = getNodeAtPath(nextRoot, groupPath);
+          if (!g || g.type !== 'group') return;
+          const children = (g.children || []).map((c) => {
+            if (c && c.type === 'rule') {
+              const nr = { ...c };
+              delete nr.rowGroupKey;
+              return nr;
+            }
+            return c;
+          });
+          nextRoot = setNodeAtPath(nextRoot, groupPath, { ...g, children });
+        }
+        setRoot(nextRoot);
+        renderGroupEditorList();
+        renderRules();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
+    }
 
     overlay.querySelector('.modal-close').addEventListener('click', () => {
       overlay.remove();
@@ -1648,10 +1758,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (k && !outputKeysUsed.includes(k)) outputKeysUsed.push(k);
     }
 
-    const errorRowCount = (rawResults || []).filter((r) => r && r.error).length;
-    const resultsWithoutError = (rawResults || []).filter((r) => !r || !r.error);
+    const resultsForScore = (rawResults || []).filter((r) => r);
     const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
-    const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields).filter((r) =>
+    const results = deduplicateResults(resultsForScore, outputKeysUsed, runWs, outputFields).filter((r) =>
       isValidRunOutputForScoreRow(r, outputFields),
     );
     const gtHeaders = gtContent.headers || [];
@@ -1708,7 +1817,26 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (!matchesAnyGt) descriptors.push({ type: 'runOnly', i });
     }
 
-    const comments = getResultComments();
+    const rowGroupRule = rulesFlat.find((r) => r && r.rowGroupKey === true) || null;
+    function gtOneToManyGroupKey(j) {
+      if (!rowGroupRule) return '';
+      const cols = (rowGroupRule.gtColumns || []).filter(Boolean);
+      if (cols.length === 0) return `\0${j}`;
+      return cols.map((c) => String(getGtValue(gtContent, j, c) ?? '')).join('\u0001');
+    }
+    if (rowGroupRule) {
+      const gtDesc = descriptors.filter((d) => d.type === 'gt');
+      const runOnlyDesc = descriptors.filter((d) => d.type === 'runOnly');
+      gtDesc.sort((a, b) => {
+        const ka = gtOneToManyGroupKey(a.j);
+        const kb = gtOneToManyGroupKey(b.j);
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        return a.j - b.j;
+      });
+      descriptors.length = 0;
+      descriptors.push(...gtDesc, ...runOnlyDesc);
+    }
+
     const q = (scoreDetailPagination.searchQuery || '').trim().toLowerCase();
     function getRowStringsForSearch(d) {
       const parts = [];
@@ -1723,7 +1851,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         });
         parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
         parts.push(isScoreRowExcludedFromScoring(String(j)) ? 'false' : 'true');
-        parts.push(comments[String(j)] ?? '');
       } else {
         const i = d.i;
         const runResult = resultsByIndex.get(i) || null;
@@ -1732,7 +1859,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
         parts.push('false');
         parts.push(isScoreRowExcludedFromScoring(`run:${i}`) ? 'false' : 'true');
-        parts.push(comments['run:' + i] ?? '');
       }
       return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
     }
@@ -1751,6 +1877,20 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const excludedMap = getScoreRowExcludedFromScoring();
     const isGtExcluded = (j) => !!excludedMap[String(j)];
     const isRunOnlyExcluded = (runRowIdx) => !!excludedMap[`run:${runRowIdx}`];
+    /** Count run rows with API/runtime errors among rows still included for Review (not excluded from scoring). */
+    function errorCountAmongReviewIncluded(excluded) {
+      let n = 0;
+      for (const r of rawResults || []) {
+        if (!r || !r.error) continue;
+        const i = r.row_index;
+        if (typeof i !== 'number' || Number.isNaN(i) || i < 0) continue;
+        const j = i < runToGt.length ? runToGt[i] : -1;
+        const rowKey = j >= 0 ? String(j) : `run:${i}`;
+        if (!excluded[rowKey]) n++;
+      }
+      return n;
+    }
+    const errorRowCount = errorCountAmongReviewIncluded(excludedMap);
     let recallDenom = 0;
     for (let j = 0; j < gtRows.length; j++) {
       if (!isGtExcluded(j)) recallDenom++;
@@ -1761,9 +1901,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const runRowIndex = gtToRun[j];
       if (runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent)) tp++;
     }
-    const nonErrorRunRowIndices = [...new Set((results || []).filter((r) => !r.error).map((r) => r.row_index))];
+    const allRunRowIndicesForPrec = [...new Set((results || []).map((r) => r.row_index))];
     let precDenom = 0;
-    for (const R of nonErrorRunRowIndices) {
+    for (const R of allRunRowIndicesForPrec) {
       const j = R >= 0 && R < (runToGt || []).length ? runToGt[R] : -1;
       if (j >= 0) {
         if (!isGtExcluded(j)) precDenom++;
@@ -1775,7 +1915,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const recall = recallDenom > 0 ? (tp / recallDenom) * 100 : 0;
     const f1 = (precision + recall) > 0 ? (2 * (precision / 100) * (recall / 100) / ((precision + recall) / 100)) * 100 : 0;
     const fmt = (x) => (Number.isFinite(x) ? x.toFixed(2) : '—');
-    const errorNote = errorRowCount > 0 ? ` · ${errorRowCount} error row${errorRowCount === 1 ? '' : 's'} removed` : '';
+    const errorNote = errorRowCount > 0 ? ` · ${errorRowCount} row${errorRowCount === 1 ? '' : 's'} with error` : '';
     const metricsText = `Precision ${fmt(precision)}% · Recall ${fmt(recall)}% · F1 ${fmt(f1)}%${errorNote}`;
 
     const summaryText = `Run result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tp} matched`;
@@ -1795,9 +1935,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const runRowIndex = gtToRun[j];
         if (runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent)) tpN++;
       }
-      const nonErrRunIdx = [...new Set((results || []).filter((r) => !r.error).map((r) => r.row_index))];
+      const allRunIdxPrec = [...new Set((results || []).map((r) => r.row_index))];
       let precD = 0;
-      for (const R of nonErrRunIdx) {
+      for (const R of allRunIdxPrec) {
         const j = R >= 0 && R < (runToGt || []).length ? runToGt[R] : -1;
         if (j >= 0) {
           if (!isGtEx(j)) precD++;
@@ -1808,7 +1948,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const prec = precD > 0 ? (tpN / precD) * 100 : 0;
       const rec = recallD > 0 ? (tpN / recallD) * 100 : 0;
       const f1v = (prec + rec) > 0 ? (2 * (prec / 100) * (rec / 100) / ((prec + rec) / 100)) * 100 : 0;
-      const errNote = errorRowCount > 0 ? ` · ${errorRowCount} error row${errorRowCount === 1 ? '' : 's'} removed` : '';
+      const errN = errorCountAmongReviewIncluded(excludedMapNow);
+      const errNote = errN > 0 ? ` · ${errN} row${errN === 1 ? '' : 's'} with error` : '';
       const mTxt = `Precision ${fmt(prec)}% · Recall ${fmt(rec)}% · F1 ${fmt(f1v)}%${errNote}`;
       const sTxt = `Run result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tpN} matched`;
       const summaryEl = resultsBody.querySelector('.score-detail-results-summary');
@@ -1854,7 +1995,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
     headerRow += '<th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--run-block score-detail-results-th--block-sep" title="Run result row index (matched to this ground truth row)">Run result #</th>';
     runColLabels.forEach((label) => { headerRow += `<th class="score-detail-results-th score-detail-results-th--run score-detail-results-th--run-block">${escapeHtml(label)}</th>`; });
-    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block score-detail-results-th--block-sep">Match</th><th class="score-detail-results-th score-detail-results-th--review score-detail-results-th--result-block" title="Include in Review API and in Precision / Recall / F1"><label class="score-detail-results-review-th-label"><span>Review</span><input type="checkbox" class="score-detail-results-review-master-cb" aria-label="Select or clear all Review checkboxes (all rows)" /></label></th><th class="score-detail-results-th score-detail-results-th--comment score-detail-results-th--result-block">Comment</th></tr></thead><tbody>';
+    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block score-detail-results-th--block-sep">Match</th><th class="score-detail-results-th score-detail-results-th--review score-detail-results-th--result-block" title="Include in Review API and in Precision / Recall / F1"><label class="score-detail-results-review-th-label"><span>Review</span><input type="checkbox" class="score-detail-results-review-master-cb" aria-label="Select or clear all Review checkboxes (all rows)" /></label></th></tr></thead><tbody>';
     const tableWrap = document.createElement('div');
     tableWrap.className = 'score-detail-results-table-wrap';
     const tbl = document.createElement('table');
@@ -1862,14 +2003,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     tbl.innerHTML = headerRow;
     const tbody = tbl.querySelector('tbody');
 
-    function appendGtRow(j, rowNum) {
+    function appendGtRow(j, rowNum, extraTrClass = '') {
       const runRowIndex = gtToRun[j];
       const runResult = runRowIndex >= 0 ? resultsByIndex.get(runRowIndex) || null : null;
       const isMatch = runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent);
       const rowClass = isMatch ? 'score-detail-results-tr--match' : 'score-detail-results-tr--unmatch';
       const runNum = runRowIndex >= 0 ? String(runRowIndex + 1) : '—';
-      const commentKey = String(j);
-      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--row-num" title="Row ${rowNum}">${rowNum}</td><td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="GT row ${j + 1}">${j + 1}</td>`;
+      const rowKey = String(j);
+      const trClasses = `score-detail-results-tr ${rowClass}${extraTrClass ? ` ${extraTrClass}` : ''}`;
+      let tr = `<tr class="${trClasses}" data-score-row-key="${escapeAttr(rowKey)}"><td class="score-detail-results-td score-detail-results-td--row-num" title="Row ${rowNum}">${rowNum}</td><td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="Ground truth row ${j + 1}">${j + 1}</td>`;
       if (gtColsUsed.length > 0) {
         gtColsUsed.forEach((col) => {
           const val = getGtValue(gtContent, j, col);
@@ -1884,15 +2026,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
       }
       tr += `<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="${isMatch ? 'Matched' : 'Not matched'}">${isMatch ? 'true' : 'false'}</td>`;
-      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td><td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
 
     function appendRunOnlyRow(i, rowNum) {
       const runResult = resultsByIndex.get(i) || null;
       const rowClass = 'score-detail-results-tr--run-only';
-      const commentKey = 'run:' + i;
-      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--row-num" title="Row ${rowNum}">${rowNum}</td><td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="No GT row">—</td>`;
+      const rowKey = 'run:' + i;
+      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-score-row-key="${escapeAttr(rowKey)}"><td class="score-detail-results-td score-detail-results-td--row-num" title="Row ${rowNum}">${rowNum}</td><td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="No ground truth row">—</td>`;
       if (gtColsUsed.length > 0) {
         gtColsUsed.forEach(() => { tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>'; });
       } else {
@@ -1904,14 +2046,42 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
       }
       tr += '<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="Run result row without ground truth match">false</td>';
-      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td><td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
 
+    /** Shared input key: 0-based group index in filtered GT order (rows with same gt key share one index). */
+    function oneToManyGroupBand(globalIdx) {
+      if (!rowGroupRule) return null;
+      const d = filteredDescriptors[globalIdx];
+      if (!d || d.type !== 'gt') return null;
+      let band = 0;
+      let prevGk = null;
+      for (let k = 0; k <= globalIdx; k++) {
+        const dk = filteredDescriptors[k];
+        if (dk.type !== 'gt') continue;
+        const gk = gtOneToManyGroupKey(dk.j);
+        if (prevGk !== null && gk !== prevGk) band++;
+        prevGk = gk;
+      }
+      return band;
+    }
+
     let rowNum = start + 1;
-    for (const d of pageDescriptors) {
-      if (d.type === 'gt') appendGtRow(d.j, rowNum++);
-      else appendRunOnlyRow(d.i, rowNum++);
+    for (let idx = 0; idx < pageDescriptors.length; idx++) {
+      const d = pageDescriptors[idx];
+      if (d.type === 'gt') {
+        let extraTrClass = '';
+        if (rowGroupRule) {
+          const band = oneToManyGroupBand(start + idx);
+          if (band !== null) {
+            extraTrClass = `score-detail-results-tr--one-to-many-pal-${band % 2}`;
+          }
+        }
+        appendGtRow(d.j, rowNum++, extraTrClass);
+      } else {
+        appendRunOnlyRow(d.i, rowNum++);
+      }
     }
 
     function descriptorToReviewKey(d) {
@@ -1941,37 +2111,20 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
 
     tbody.querySelectorAll('tr').forEach((tr) => {
-      const commentKey = tr.getAttribute('data-comment-key');
-      const td = tr.querySelector('.score-detail-results-td--comment');
+      const rowKey = tr.getAttribute('data-score-row-key');
       const tdReview = tr.querySelector('.score-detail-results-td--review');
-      if (commentKey == null) return;
-      if (td) {
-        const textarea = document.createElement('textarea');
-        textarea.rows = 2;
-        textarea.className = 'score-detail-results-comment-textarea';
-        textarea.placeholder = 'Comment...';
-        textarea.value = comments[commentKey] ?? '';
-        textarea.setAttribute('aria-label', 'Comment');
-        textarea.addEventListener('change', () => {
-          const c = getResultComments();
-          const v = (textarea.value || '').trim();
-          if (v) c[commentKey] = textarea.value;
-          else delete c[commentKey];
-          setResultComments(c);
-        });
-        td.appendChild(textarea);
-      }
+      if (rowKey == null) return;
       if (tdReview) {
         const wrap = document.createElement('label');
         wrap.className = 'score-detail-results-review-label';
         const cb = document.createElement('input');
         cb.type = 'checkbox';
-        cb.checked = !isScoreRowExcludedFromScoring(commentKey);
+        cb.checked = !isScoreRowExcludedFromScoring(rowKey);
         cb.setAttribute('aria-label', 'Include in Review and in Precision / Recall / F1');
         cb.addEventListener('change', () => {
           const ex = { ...getScoreRowExcludedFromScoring() };
-          if (cb.checked) delete ex[commentKey];
-          else ex[commentKey] = true;
+          if (cb.checked) delete ex[rowKey];
+          else ex[rowKey] = true;
           setScoreRowExcludedFromScoring(ex);
           refreshScoreMetricsBanner();
           syncReviewMasterCheckbox();
@@ -1993,9 +2146,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           for (const k of keys) ex[k] = true;
         }
         setScoreRowExcludedFromScoring(ex);
-        tbody.querySelectorAll('tr[data-comment-key] .score-detail-results-td--review input[type="checkbox"]').forEach((el) => {
+        tbody.querySelectorAll('tr[data-score-row-key] .score-detail-results-td--review input[type="checkbox"]').forEach((el) => {
           const row = el.closest('tr');
-          const key = row?.getAttribute('data-comment-key');
+          const key = row?.getAttribute('data-score-row-key');
           if (key == null) return;
           el.checked = !ex[key];
         });
@@ -2003,34 +2156,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         refreshScoreMetricsBanner();
       });
       syncReviewMasterCheckbox();
-    }
-
-    const commentTh = tbl.querySelector('thead .score-detail-results-th--comment');
-    if (commentTh) {
-      const resizeHandle = document.createElement('div');
-      resizeHandle.className = 'score-detail-results-comment-resize-handle';
-      resizeHandle.setAttribute('aria-label', 'Resize column');
-      resizeHandle.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const startX = e.clientX;
-        const startW = commentTh.offsetWidth;
-        document.body.classList.add('wd-col-resizing');
-        const onMove = (moveE) => {
-          const dx = moveE.clientX - startX;
-          const newW = Math.max(100, startW + dx);
-          commentTh.style.width = `${newW}px`;
-          commentTh.style.minWidth = `${newW}px`;
-        };
-        const onUp = () => {
-          document.body.classList.remove('wd-col-resizing');
-          document.removeEventListener('mousemove', onMove);
-          document.removeEventListener('mouseup', onUp);
-        };
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-      });
-      commentTh.appendChild(resizeHandle);
     }
 
     tableWrap.appendChild(tbl);
@@ -2408,13 +2533,15 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
       const rawMt = (c && c.matchType) || 'exact';
       const f = { ...DEFAULT_MATCH_FLAGS, ...((c && c.matchFlags && typeof c.matchFlags === 'object') ? c.matchFlags : {}) };
       if (legacyMatchTypeWasContains(rawMt)) f.contains = true;
-      return {
+      const leaf = {
         type: 'rule',
         outputKey: (c && c.outputKey) || '',
         gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
         matchType: migrateLegacyMatchType(rawMt),
         matchFlags: canonicalizeMatchFlags(f),
       };
+      if (c && c.rowGroupKey === true) leaf.rowGroupKey = true;
+      return leaf;
     }
     return normalizeGroupChild(c);
   }
@@ -2583,7 +2710,7 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     const seen = new Set();
     const dedupResults = [];
     for (const res of (results || [])) {
-      const key = JSON.stringify(outputKeys.map((k) => getRunValue(res, k, res.row_index, runWs, outputFields)));
+      const key = JSON.stringify([res.row_index, ...outputKeys.map((k) => getRunValue(res, k, res.row_index, runWs, outputFields))]);
       if (seen.has(key)) continue;
       seen.add(key);
       dedupResults.push(res);
@@ -2591,9 +2718,9 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     return dedupResults;
   };
 
-  const resultsWithoutError = (rawResults || []).filter((r) => !r || !r.error);
+  const resultsForScore = (rawResults || []).filter((r) => r);
   const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
-  const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields).filter((r) =>
+  const results = deduplicateResults(resultsForScore, outputKeysUsed, runWs, outputFields).filter((r) =>
     isValidRunOutputForScoreRow(r, outputFields),
   );
   const gtRows = gtContent.rows || [];
@@ -2634,10 +2761,25 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     }
     if (!matchesAnyGt) descriptors.push({ type: 'runOnly', i });
   }
-  let comments = {};
-  try {
-    comments = JSON.parse(node.dataset.scoreResultComments || '{}');
-  } catch (_) {}
+  const rowGroupRuleExport = rulesFlat.find((r) => r && r.rowGroupKey === true) || null;
+  function gtOneToManyGroupKeyExport(j) {
+    if (!rowGroupRuleExport) return '';
+    const cols = (rowGroupRuleExport.gtColumns || []).filter(Boolean);
+    if (cols.length === 0) return `\0${j}`;
+    return cols.map((c) => String(getGtValue(gtContent, j, c) ?? '')).join('\u0001');
+  }
+  if (rowGroupRuleExport) {
+    const gtDesc = descriptors.filter((d) => d.type === 'gt');
+    const runOnlyDesc = descriptors.filter((d) => d.type === 'runOnly');
+    gtDesc.sort((a, b) => {
+      const ka = gtOneToManyGroupKeyExport(a.j);
+      const kb = gtOneToManyGroupKeyExport(b.j);
+      if (ka !== kb) return ka < kb ? -1 : 1;
+      return a.j - b.j;
+    });
+    descriptors.length = 0;
+    descriptors.push(...gtDesc, ...runOnlyDesc);
+  }
   let excludedFromScoring = {};
   try {
     excludedFromScoring = JSON.parse(node.dataset.scoreRowExcludedFromScoring || '{}');
@@ -2645,7 +2787,7 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
   const rowIncludedInReview = (key) => !excludedFromScoring[key];
   const runColumns = typeof getRunResultColumns === 'function' ? getRunResultColumns() : [];
   const runLabels = outputKeysUsed.map((k) => (runColumns.find((c) => c.key === k)?.label || k || '—').trim() || '—');
-  const headers = ['Ground truth #', ...(gtColsUsed.length > 0 ? gtColsUsed : ['Ground truth']), 'Run result #', ...runLabels, 'Match', 'Review', 'Comment'];
+  const headers = ['Ground truth #', ...(gtColsUsed.length > 0 ? gtColsUsed : ['Ground truth']), 'Run result #', ...runLabels, 'Match', 'Review'];
   const rows = descriptors.map((d) => {
     const parts = [];
     if (d.type === 'gt') {
@@ -2659,7 +2801,6 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
       outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : ''); });
       parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
       parts.push(rowIncludedInReview(String(j)) ? 'true' : 'false');
-      parts.push(comments[String(j)] ?? '');
     } else {
       const i = d.i;
       const runResult = resultsByIndex.get(i) || null;
@@ -2670,7 +2811,6 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
       outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
       parts.push('false');
       parts.push(rowIncludedInReview(`run:${i}`) ? 'true' : 'false');
-      parts.push(comments['run:' + i] ?? '');
     }
     return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
   });

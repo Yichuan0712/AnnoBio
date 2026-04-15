@@ -198,13 +198,15 @@ function normalizeScoreChild(c) {
     const rawMt = (c && c.matchType) || 'exact';
     const f = { ...DEFAULT_SCORE_MATCH_FLAGS, ...((c && c.matchFlags && typeof c.matchFlags === 'object') ? c.matchFlags : {}) };
     if (legacyMatchTypeWasContains(rawMt)) f.contains = true;
-    return {
+    const leaf = {
       type: 'rule',
       outputKey: (c && c.outputKey) || '',
       gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
       matchType: migrateLegacyMatchType(rawMt),
       matchFlags: canonicalizeMatchFlags(f),
     };
+    if (c && c.rowGroupKey === true) leaf.rowGroupKey = true;
+    return leaf;
   }
   return normalizeScoreGroupChild(c);
 }
@@ -354,10 +356,6 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     return out;
   }
 
-  let comments = {};
-  try {
-    comments = JSON.parse(scoreNode.dataset.scoreResultComments || '{}');
-  } catch (_) {}
   let excludedFromScoring = {};
   try {
     excludedFromScoring = JSON.parse(scoreNode.dataset.scoreRowExcludedFromScoring || '{}');
@@ -391,7 +389,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     const seen = new Set();
     const out = [];
     for (const res of resList || []) {
-      const key = JSON.stringify(outputKeysUsed.map((k) => getRunValue(res, k, runWsSafe, outputFields)));
+      const key = JSON.stringify([res.row_index, ...outputKeysUsed.map((k) => getRunValue(res, k, runWsSafe, outputFields))]);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(res);
@@ -401,8 +399,8 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
 
   const gtDeduped = dedupeGt(gtSafe);
   const gtRows = gtDeduped.rows || [];
-  const resultsNoErr = (results || []).filter((r) => r && !r.error);
-  const dedupedResults = dedupeRunResults(resultsNoErr);
+  const resultsForScore = (results || []).filter((r) => r);
+  const dedupedResults = dedupeRunResults(resultsForScore);
   const validDedupedResults = dedupedResults.filter((r) => isValidRunOutputForScoreRow(r, outputFields));
 
   function emptyRowInputPlaceholders() {
@@ -501,6 +499,25 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     }
     if (!matchesAnyGt) scoreDetailDescriptors.push({ type: 'runOnly', i });
   }
+  const rowGroupRule = rulesFlat.find((r) => r && r.rowGroupKey === true) || null;
+  function gtOneToManyGroupKeyReview(j) {
+    if (!rowGroupRule) return '';
+    const cols = (rowGroupRule.gtColumns || []).filter(Boolean);
+    if (cols.length === 0) return `\0${j}`;
+    return cols.map((c) => String(getGtValue(gtDeduped, j, c) ?? '')).join('\u0001');
+  }
+  if (rowGroupRule) {
+    const gtDesc = scoreDetailDescriptors.filter((d) => d.type === 'gt');
+    const runOnlyDesc = scoreDetailDescriptors.filter((d) => d.type === 'runOnly');
+    gtDesc.sort((a, b) => {
+      const ka = gtOneToManyGroupKeyReview(a.j);
+      const kb = gtOneToManyGroupKeyReview(b.j);
+      if (ka !== kb) return ka < kb ? -1 : 1;
+      return a.j - b.j;
+    });
+    scoreDetailDescriptors.length = 0;
+    scoreDetailDescriptors.push(...gtDesc, ...runOnlyDesc);
+  }
   const scoreTableRowByKey = new Map();
   scoreDetailDescriptors.forEach((d, idx) => {
     const n = idx + 1;
@@ -576,12 +593,6 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     const gtIdxForRules = jPaired >= 0 ? jPaired : -1;
     const { expected, comparison_types, ground_truth_output } = expectedAndComparisonTypesForGt(gtIdxForRules);
     const isFullMatch = gtIdxForRules >= 0 && evaluateNodeLocal(scoreRoot, runR, gtIdxForRules);
-    const legacyCommentKey = gtIdxForRules >= 0 ? `${gtIdxForRules}_${outRowIdx}` : `run:${outRowIdx}`;
-    const comment = comments[modalKey]
-      ?? comments[legacyCommentKey]
-      ?? (gtIdxForRules >= 0 ? comments[String(gtIdxForRules)] : null)
-      ?? comments[`run:${runR}`]
-      ?? null;
     const row_input = inputIndicesWithValidRun.has(inpIdx) ? rowInputAsPromptPlaceholders(inpIdx) : emptyRowInputPlaceholders();
     const runRowIdx =
       typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : outRowIdx;
@@ -596,7 +607,6 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       expected,
       comparison_types,
       ground_truth_output,
-      comment,
       row_input,
       gt_only: false,
       source_gt_row_index: jPaired >= 0 ? jPaired : null,
@@ -704,7 +714,6 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     if (excludedFromScoring[String(j)]) continue;
     const modalKey = String(j);
     const { expected, comparison_types, ground_truth_output } = expectedAndComparisonTypesForGt(j);
-    const comment = comments[modalKey] ?? comments[String(j)] ?? null;
     const score_table_row = scoreTableRowByKey.get(`gt:${j}`) ?? null;
     const inpResolved = findInputRowIndexForUnpairedGt(j);
     const useInp = typeof inpResolved === 'number' && !Number.isNaN(inpResolved) ? inpResolved : null;
@@ -720,7 +729,6 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       expected,
       comparison_types,
       ground_truth_output,
-      comment,
       row_input,
       gt_only: true,
       source_gt_row_index: j,
@@ -4738,11 +4746,6 @@ export function buildWorkflowCanvas(root) {
           const hasRules = (tree.type === 'group' && tree.children && tree.children.length > 0) || flattenScoreTreeToRules(tree).length > 0;
           scoreMapping = hasRules ? tree : undefined;
         } catch (_) {}
-        const scoreResultComments = (node.dataset.scoreResultComments || '').trim();
-        let scoreResultCommentsObj;
-        try {
-          scoreResultCommentsObj = scoreResultComments ? JSON.parse(scoreResultComments) : undefined;
-        } catch (_) {}
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const reviewCredentialId = (node.dataset.reviewCredentialId || '').trim() || undefined;
         const scoreRowExcludedFromScoring = (node.dataset.scoreRowExcludedFromScoring || '').trim();
@@ -4758,7 +4761,6 @@ export function buildWorkflowCanvas(root) {
           scoreName,
           scoreGroundTruthId,
           scoreMapping,
-          scoreResultComments: scoreResultCommentsObj,
           scoreRowExcludedFromScoring: scoreRowExcludedFromScoringObj,
           reviewResult: reviewResult || undefined,
           reviewCredentialId,
@@ -4900,11 +4902,6 @@ export function buildWorkflowCanvas(root) {
             const tree = parseScoreMappingToTree(n.scoreMapping);
             const hasRules = (tree.type === 'group' && tree.children && tree.children.length > 0) || flattenScoreTreeToRules(tree).length > 0;
             if (hasRules) scoreNode.dataset.scoreMapping = JSON.stringify(tree);
-          } catch (_) {}
-        }
-        if (n.scoreResultComments && typeof n.scoreResultComments === 'object') {
-          try {
-            scoreNode.dataset.scoreResultComments = JSON.stringify(n.scoreResultComments);
           } catch (_) {}
         }
         if (n.scoreRowExcludedFromScoring && typeof n.scoreRowExcludedFromScoring === 'object') {

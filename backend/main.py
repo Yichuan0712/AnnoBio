@@ -249,7 +249,6 @@ class ReviewComparisonRow(BaseModel):
         default=None,
         description="Per-rule labels from the UI; each entry is `outputKey: …` (same outputKey as scoring / ground_truth_output keys)",
     )
-    comment: str | None = Field(default=None, description="User comment if any")
     row_input: dict | None = Field(
         default=None,
         description="Placeholder name → substituted value for this run (keys match `{name}` in prompt sections; only inputs that appear in the template)",
@@ -957,7 +956,7 @@ def _run_field_value_non_empty(v: object) -> bool:
 
 
 def _run_structured_output_is_empty(out: object, return_shape: str, output_fields: list[dict]) -> bool:
-    """True if model returned no substantive values for schema fields (same idea as app isValidRunOutputForScoreRow)."""
+    """True if model returned no substantive values for schema fields (used when persisting run rows, not Score filtering)."""
     keys = [str(f.get("key") or "").strip() for f in (output_fields or []) if f.get("key")]
     if return_shape == "table":
         if not isinstance(out, list) or len(out) == 0:
