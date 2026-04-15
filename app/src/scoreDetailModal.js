@@ -5,6 +5,8 @@
 
 import { showAlert } from './alertModal.js';
 import { selectPlaceholderLabel } from './displayTextNormalize.js';
+import { extractInputFieldsFromSections } from './promptDetailModal.js';
+import { computeGreedyRunToGtPairing } from './scoreRunGtPairing.js';
 
 const API_BASE = 'http://localhost:8000';
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -345,6 +347,36 @@ function summarizeRunOutputForPreview(obj) {
   return parts.join('; ');
 }
 
+/** Same placeholder order as Run/Review payload `row_input`; tooltip carries full text. */
+function summarizeRowInputForPreview(rowInput, promptSections) {
+  const obj = rowInput && typeof rowInput === 'object' ? rowInput : null;
+  if (!obj || Object.keys(obj).length === 0) return { cell: '—', title: '' };
+  const ordered = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
+  const seen = new Set();
+  const keys = [];
+  for (const k of ordered) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) {
+      keys.push(k);
+      seen.add(k);
+    }
+  }
+  for (const k of Object.keys(obj).sort()) {
+    if (!seen.has(k)) keys.push(k);
+  }
+  const shortParts = [];
+  const fullParts = [];
+  for (const k of keys) {
+    let v = obj[k];
+    v = v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+    const full = v.replace(/\s+/g, ' ').trim();
+    let s = full;
+    if (s.length > 56) s = `${s.slice(0, 56)}…`;
+    shortParts.push(`${k}: ${s || '—'}`);
+    fullParts.push(`${k}: ${full || '—'}`);
+  }
+  return { cell: shortParts.join('; '), title: fullParts.join('; ') };
+}
+
 /**
  * Temporary modal: lists comparison rows that would be sent to Review (respects Score results “Review” checkboxes).
  * Does not add a Review node, an edge, or call the analyze API.
@@ -368,20 +400,26 @@ export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'review-selection-preview-title');
 
+  const promptSections = Array.isArray(payload.prompt_sections) ? payload.prompt_sections : [];
   const tableRowsHtml = comparisonRows.map((r, idx) => {
     const scoreTableRow = r.score_table_row != null && r.score_table_row !== '' ? String(r.score_table_row) : '—';
     const runIdx = r.row_index != null && r.row_index !== '' ? String(r.row_index) : '—';
-    const inpIdx = typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? String(r.input_row_index) : '—';
+    const inpIdx =
+      typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index)
+        ? String(r.input_row_index + 1)
+        : '—';
     const matched = comparisonRowIsMatched(r) ? 'true' : 'false';
     const gtOnly = r.gt_only === true ? 'yes' : 'no';
     const outSummary = summarizeRunOutputForPreview(r.run_output);
+    const { cell: inputFieldsCell, title: inputFieldsTitle } = summarizeRowInputForPreview(r.row_input, promptSections);
+    const inputFieldsTitleAttr = inputFieldsTitle ? escapeAttr(inputFieldsTitle) : escapeAttr(inputFieldsCell);
     const expectedShort = (() => {
       let e = r.expected == null ? '' : String(r.expected);
       e = e.replace(/\s+/g, ' ').trim();
       if (e.length > 72) return `${e.slice(0, 72)}…`;
       return e || '—';
     })();
-    return `<tr><td>${idx + 1}</td><td>${escapeHtml(scoreTableRow)}</td><td>${escapeHtml(runIdx)}</td><td>${escapeHtml(inpIdx)}</td><td>${escapeHtml(matched)}</td><td>${escapeHtml(gtOnly)}</td><td title="${escapeAttr(expectedShort)}">${escapeHtml(expectedShort)}</td><td title="${escapeAttr(outSummary)}">${escapeHtml(outSummary)}</td></tr>`;
+    return `<tr><td>${idx + 1}</td><td>${escapeHtml(scoreTableRow)}</td><td>${escapeHtml(runIdx)}</td><td>${escapeHtml(inpIdx)}</td><td class="review-selection-preview-input-fields" title="${inputFieldsTitleAttr}">${escapeHtml(inputFieldsCell)}</td><td>${escapeHtml(matched)}</td><td>${escapeHtml(gtOnly)}</td><td title="${escapeAttr(expectedShort)}">${escapeHtml(expectedShort)}</td><td title="${escapeAttr(outSummary)}">${escapeHtml(outSummary)}</td></tr>`;
   }).join('');
 
   overlay.innerHTML = `
@@ -395,7 +433,7 @@ export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
         <div class="review-selection-preview-table-wrap">
           <table class="run-detail-results-table review-selection-preview-table">
             <thead><tr>
-              <th>#</th><th>Score #</th><th>Run row</th><th>Input row</th><th>Match</th><th>GT only</th><th>Expected</th><th>Model output</th>
+              <th>#</th><th>Score #</th><th>Run row</th><th>Input #</th><th>Input fields</th><th>Match</th><th>GT only</th><th>Expected</th><th>Model output</th>
             </tr></thead>
             <tbody>${tableRowsHtml}</tbody>
           </table>
@@ -492,6 +530,40 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
     alert(e?.message || 'Review request failed.');
   }
+}
+
+function mergeScoreGroupOpsAfterChildRemove(ops, idx, n) {
+  if (n <= 1) return [];
+  const o = (ops || []).slice();
+  if (idx === 0) return o.slice(1);
+  if (idx === n - 1) return o.slice(0, -1);
+  o.splice(idx - 1, 2, o[idx - 1]);
+  return o;
+}
+
+function insertScoreGroupOpsAfterChildInsert(ops, idx, nChildrenAfterInsert) {
+  if (nChildrenAfterInsert <= 1) return [];
+  const o = (ops || []).slice();
+  if (idx === 0) return ['AND', ...o];
+  if (idx === nChildrenAfterInsert - 1) return [...o, 'AND'];
+  return [...o.slice(0, idx - 1), 'AND', o[idx - 1], ...o.slice(idx)];
+}
+
+/** Reorder one level of a score group (top-level root or nested group). Keeps AND/OR ops with sensible merge/split defaults. */
+function moveScoreGroupChildren(group, fromIndex, toIndex) {
+  if (!group || group.type !== 'group' || !Array.isArray(group.children)) return group;
+  const ch = group.children.slice();
+  const n = ch.length;
+  const ops =
+    Array.isArray(group.ops) && group.ops.length === n - 1
+      ? group.ops.slice()
+      : Array(Math.max(0, n - 1)).fill('AND');
+  if (fromIndex === toIndex || fromIndex < 0 || fromIndex >= n || toIndex < 0 || toIndex >= n) return group;
+  const [el] = ch.splice(fromIndex, 1);
+  const opsAfterRemove = mergeScoreGroupOpsAfterChildRemove(ops, fromIndex, n);
+  ch.splice(toIndex, 0, el);
+  const newOps = insertScoreGroupOpsAfterChildInsert(opsAfterRemove, toIndex, ch.length);
+  return { ...group, children: ch, ops: newOps };
 }
 
 export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas }) {
@@ -850,57 +922,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /**
-   * Count how many leaf rules match for (run row i, GT row j). Used for pairing only.
-   */
-  function countMatchingRules(root, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) {
-    const rules = collectRulesFlat(root).map((x) => x.rule);
-    return rules.filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;
-  }
-
-  /**
-   * 贪心配对 run 与 GT。resultsByIndex 用 row_index 做 key（每行唯一）。
-   * 1 input → 多 output 时，每行有独立 row_index，不会覆盖。
+   * 贪心配对 run 与 GT（实现见 scoreRunGtPairing.js）。
    */
   function computeMatchPerRow(root, results, outputFields, runWs, gtContent) {
-    const gtRows = gtContent.rows || [];
-    const resultsByIndex = new Map();
-    (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
-    const scoringResults = (results || []).filter((r) => r);
-    const inputRowCount = runWs?.rows?.length ?? 0;
-    const gtCount = gtRows.length;
-    const runRowIndices = [...new Set(scoringResults.map((r) => r.row_index))];
-    const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
-    const runCount = Math.max(inputRowCount, maxRunRowIndex + 1);
-    const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
-    const gtUsed = new Array(gtCount).fill(false);
-
-    const pairs = [];
-    for (const i of runRowIndices) {
-      for (let j = 0; j < gtCount; j++) {
-        const score = countMatchingRules(root, i, j, resultsByIndex, runWs, outputFields, gtContent);
-        if (score > 0) pairs.push({ i, j, score });
-      }
-    }
-    pairs.sort((a, b) => b.score - a.score);
-    for (const { i, j } of pairs) {
-      if (runToGt[i] >= 0 || gtUsed[j]) continue;
-      runToGt[i] = j;
-      gtUsed[j] = true;
-    }
-
-    const matched = [];
-    const maxRow = Math.max(runCount, gtCount);
-    for (let i = 0; i < maxRow; i++) {
-      matched.push(i < runCount && runToGt[i] >= 0);
-    }
-    const matchedCount = runToGt.slice(0, runCount).filter((j) => j >= 0).length;
-    const total = scoringResults.length;
-    return {
-      matched,
-      runToGt,
-      total,
-      matchedCount,
-    };
+    return computeGreedyRunToGtPairing({
+      scoreRoot: root,
+      results,
+      runWs,
+      gtContent,
+      outputFields,
+      ruleMatchesRow,
+    });
   }
 
   /** Get node at path (array of child indices from root). Root = []. */
@@ -1016,7 +1048,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
             </div>
             <div class="dataset-meta-field score-detail-rules-section">
               <span class="dataset-meta-label run-detail-section-label score-detail-rules-label">Rules</span>
-              <p class="score-detail-rules-hint">Use groups to combine rules with AND or OR. Within each rule, run column matches if it equals any selected ground truth column.</p>
+              <p class="score-detail-rules-hint">Use groups to combine rules with AND or OR. Within each rule, run column matches if it equals any selected ground truth column. Drag a rule or group card to change order (earlier rules break ties when pairing run rows to ground truth).</p>
               <div class="score-detail-rules-scroll">
                 <div id="score-detail-rules-list" class="score-detail-rules-list"></div>
               </div>
@@ -1235,7 +1267,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <input type="checkbox" id="rule-editor-row-group-id" class="rule-editor-checkbox" aria-label="Mark this as a shared input key" ${ruleData.rowGroupKey === true ? 'checked' : ''}>
                 Mark this as a shared input key
               </label>
-              <p class="rule-editor-hint">Use when <strong>one input</strong> lines up with <strong>several ground truth rows</strong>. The <strong>ground truth column(s)</strong> for this rule are the <strong>shared key</strong>: put the <strong>same value</strong> in those cells on every row from that input so the table can group them. <strong>Only one rule</strong> in this score can be marked this way.</p>
+              <p class="rule-editor-hint">Use when <strong>one input</strong> lines up with <strong>several ground truth rows</strong>. The <strong>ground truth column(s)</strong> for this rule are the <strong>shared key</strong>: put the <strong>same value</strong> in those cells on every row from that input so the table can group them. When marked, <strong>pairing</strong> a run row to a ground-truth row only happens if this rule matches for that pair (same key), so partial matches on other fields alone cannot misalign rows. <strong>Only one rule</strong> in this score can be marked this way.</p>
             </div>
             ` : ''}
           </div>
@@ -1630,7 +1662,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <input type="checkbox" id="score-group-row-group-cb" class="rule-editor-checkbox" aria-label="Mark this as a shared input key" ${rowGroupInitiallyOn ? 'checked' : ''}>
               Mark this as a shared input key
             </label>
-            <p class="rule-editor-hint">Use when <strong>one input</strong> lines up with <strong>several ground truth rows</strong>. The <strong>ground truth column(s)</strong> on the rules above are the <strong>shared key</strong>: put the <strong>same value</strong> in those cells on every row from that input so the table can group them. <strong>Only one rule</strong> in this score can be marked this way.</p>
+            <p class="rule-editor-hint">Use when <strong>one input</strong> lines up with <strong>several ground truth rows</strong>. The <strong>ground truth column(s)</strong> on the rules above are the <strong>shared key</strong>: put the <strong>same value</strong> in those cells on every row from that input so the table can group them. When marked, <strong>pairing</strong> only links rows where this rule matches (same key). <strong>Only one rule</strong> in this score can be marked this way.</p>
           </div>
           ` : ''}
         </div>
@@ -1674,6 +1706,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           };
           cardWrap.appendChild(createRuleCard(node, pathI, cardOpts));
           row.appendChild(cardWrap);
+          wireScoreRuleRowDrag(row, cardWrap, i, (from, to) => {
+            setGroup(moveScoreGroupChildren(getGroup(), from, to));
+            renderGroupEditorList();
+            renderRules();
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          });
           listEl.appendChild(row);
         }
       });
@@ -1737,13 +1775,51 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     document.body.appendChild(overlay);
   }
 
+  /** Reorder by dragging the rule/group card (not buttons). Greedy run-vs-GT pairing breaks ties by rule tree order. */
+  function wireScoreRuleRowDrag(row, cardWrap, rowIndex, applyMove) {
+    cardWrap.draggable = true;
+    cardWrap.classList.add('score-tree-row-card--draggable');
+    cardWrap.title = 'Drag to reorder. When two run-vs-ground-truth pairs tie on how many rules match, earlier rules in this list win.';
+    cardWrap.addEventListener('dragstart', (e) => {
+      if (e.target.closest('button')) {
+        e.preventDefault();
+        return;
+      }
+      e.stopPropagation();
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(rowIndex));
+      row.classList.add('score-tree-row--drag-source');
+    });
+    cardWrap.addEventListener('dragend', () => {
+      row.classList.remove('score-tree-row--drag-source');
+      document.querySelectorAll('.score-tree-row--drop-target').forEach((el) => el.classList.remove('score-tree-row--drop-target'));
+    });
+
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      row.classList.add('score-tree-row--drop-target');
+    });
+    row.addEventListener('dragleave', (e) => {
+      if (!row.contains(e.relatedTarget)) row.classList.remove('score-tree-row--drop-target');
+    });
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      row.classList.remove('score-tree-row--drop-target');
+      const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+      if (Number.isNaN(from) || from === rowIndex) return;
+      applyMove(from, rowIndex);
+    });
+  }
+
   function renderRules() {
     rulesListEl.innerHTML = '';
 
     if (!selectedNodeId) {
       const p = document.createElement('p');
       p.className = 'score-detail-placeholder';
-      p.textContent = 'Select a dataset as ground truth, then add rules. Click a rule to edit; use AND/OR to combine.';
+      p.textContent = 'Select a dataset as ground truth, then add rules. Drag a rule or group card to reorder (order breaks pairing ties). Click a rule to edit; use AND/OR to combine.';
       rulesListEl.appendChild(p);
       void renderResults();
       return;
@@ -1785,6 +1861,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         cardWrap.appendChild(createRuleCard(node, [i], cardOpts));
       }
       row.appendChild(cardWrap);
+      wireScoreRuleRowDrag(row, cardWrap, i, (from, to) => {
+        const r = getRoot();
+        if (r.type !== 'group') return;
+        setRoot(moveScoreGroupChildren(r, from, to));
+        renderRules();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
       treeWrap.appendChild(row);
     });
     const addRow = document.createElement('div');
@@ -2709,8 +2792,6 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
       return runVal === gtVal;
     });
   };
-  const countMatchingRules = (r, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) =>
-    collectRulesFlat(r).map((x) => x.rule).filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;
   const evaluateNode = (nd, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
     if (!nd) return false;
     if (nd.type === 'rule') return ruleMatchesRow(nd, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent);
@@ -2727,28 +2808,14 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     return false;
   };
   const computeMatchPerRow = (r, results, outputFields, runWs, gtContent) => {
-    const gtRows = gtContent.rows || [];
-    const resultsByIndex = new Map();
-    (results || []).forEach((res) => { resultsByIndex.set(res.row_index, res); });
-    const runRowIndices = [...new Set((results || []).map((res) => res.row_index))];
-    const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
-    const gtCount = gtRows.length;
-    const runToGtSize = Math.max(maxRunRowIndex + 1, gtCount);
-    const runToGt = new Array(runToGtSize).fill(-1);
-    const gtUsed = new Array(gtCount).fill(false);
-    const pairs = [];
-    for (const i of runRowIndices) {
-      for (let j = 0; j < gtCount; j++) {
-        const score = countMatchingRules(r, i, j, resultsByIndex, runWs, outputFields, gtContent);
-        if (score > 0) pairs.push({ i, j, score });
-      }
-    }
-    pairs.sort((a, b) => b.score - a.score);
-    for (const { i, j } of pairs) {
-      if (runToGt[i] >= 0 || gtUsed[j]) continue;
-      runToGt[i] = j;
-      gtUsed[j] = true;
-    }
+    const { runToGt } = computeGreedyRunToGtPairing({
+      scoreRoot: r,
+      results,
+      runWs,
+      gtContent,
+      outputFields,
+      ruleMatchesRow,
+    });
     return { runToGt, total: (results || []).length };
   };
 
