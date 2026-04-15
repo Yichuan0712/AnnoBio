@@ -1854,7 +1854,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
     headerRow += '<th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--run-block score-detail-results-th--block-sep" title="Run result row index (matched to this ground truth row)">Run result #</th>';
     runColLabels.forEach((label) => { headerRow += `<th class="score-detail-results-th score-detail-results-th--run score-detail-results-th--run-block">${escapeHtml(label)}</th>`; });
-    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block score-detail-results-th--block-sep">Match</th><th class="score-detail-results-th score-detail-results-th--review score-detail-results-th--result-block" title="Include in Review API and in Precision / Recall / F1">Review</th><th class="score-detail-results-th score-detail-results-th--comment score-detail-results-th--result-block">Comment</th></tr></thead><tbody>';
+    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block score-detail-results-th--block-sep">Match</th><th class="score-detail-results-th score-detail-results-th--review score-detail-results-th--result-block" title="Include in Review API and in Precision / Recall / F1"><label class="score-detail-results-review-th-label"><span>Review</span><input type="checkbox" class="score-detail-results-review-master-cb" aria-label="Select or clear all Review checkboxes (all rows)" /></label></th><th class="score-detail-results-th score-detail-results-th--comment score-detail-results-th--result-block">Comment</th></tr></thead><tbody>';
     const tableWrap = document.createElement('div');
     tableWrap.className = 'score-detail-results-table-wrap';
     const tbl = document.createElement('table');
@@ -1914,6 +1914,32 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       else appendRunOnlyRow(d.i, rowNum++);
     }
 
+    function descriptorToReviewKey(d) {
+      return d.type === 'gt' ? String(d.j) : `run:${d.i}`;
+    }
+    function allReviewRowKeys() {
+      return descriptors.map(descriptorToReviewKey);
+    }
+    function syncReviewMasterCheckbox() {
+      const masterCb = tbl.querySelector('.score-detail-results-review-master-cb');
+      if (!masterCb) return;
+      const keys = allReviewRowKeys();
+      if (keys.length === 0) {
+        masterCb.checked = false;
+        masterCb.indeterminate = false;
+        masterCb.disabled = true;
+        return;
+      }
+      masterCb.disabled = false;
+      const ex = getScoreRowExcludedFromScoring();
+      let included = 0;
+      for (const k of keys) {
+        if (!ex[k]) included++;
+      }
+      masterCb.checked = included === keys.length;
+      masterCb.indeterminate = included > 0 && included < keys.length;
+    }
+
     tbody.querySelectorAll('tr').forEach((tr) => {
       const commentKey = tr.getAttribute('data-comment-key');
       const td = tr.querySelector('.score-detail-results-td--comment');
@@ -1948,11 +1974,36 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           else ex[commentKey] = true;
           setScoreRowExcludedFromScoring(ex);
           refreshScoreMetricsBanner();
+          syncReviewMasterCheckbox();
         });
         wrap.appendChild(cb);
         tdReview.appendChild(wrap);
       }
     });
+
+    const masterReviewCb = tbl.querySelector('.score-detail-results-review-master-cb');
+    if (masterReviewCb) {
+      masterReviewCb.addEventListener('change', () => {
+        const keys = allReviewRowKeys();
+        if (keys.length === 0) return;
+        const ex = { ...getScoreRowExcludedFromScoring() };
+        if (masterReviewCb.checked) {
+          for (const k of keys) delete ex[k];
+        } else {
+          for (const k of keys) ex[k] = true;
+        }
+        setScoreRowExcludedFromScoring(ex);
+        tbody.querySelectorAll('tr[data-comment-key] .score-detail-results-td--review input[type="checkbox"]').forEach((el) => {
+          const row = el.closest('tr');
+          const key = row?.getAttribute('data-comment-key');
+          if (key == null) return;
+          el.checked = !ex[key];
+        });
+        masterReviewCb.indeterminate = false;
+        refreshScoreMetricsBanner();
+      });
+      syncReviewMasterCheckbox();
+    }
 
     const commentTh = tbl.querySelector('thead .score-detail-results-th--comment');
     if (commentTh) {

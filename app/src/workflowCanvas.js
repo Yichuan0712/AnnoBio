@@ -3693,8 +3693,7 @@ export function buildWorkflowCanvas(root) {
       },
       'create-working-dataset': () => {
         const samplerNodeId = node.dataset.nodeId || '';
-        const colorIndex = node.dataset.samplerColorIndex != null ? parseInt(node.dataset.samplerColorIndex, 10) : undefined;
-        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId, colorIndex } }));
+        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId } }));
       },
       'run-this-prompt': () => {
         const left = parseFloat(node.style.left) || 0;
