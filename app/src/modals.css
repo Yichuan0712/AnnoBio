@@ -3785,7 +3785,7 @@ button.review-suggestion-title-pill {
   min-width: 2.5em;
 }
 
-/* 块分割线：三处完全统一（2px，颜色加深便于区分）——# 后、GT/Run 间、Run/Result 间 */
+/* 块分割线：三处完全统一（2px，颜色加深便于区分）——# 后、ground truth/Run 间、Run/Result 间 */
 .score-detail-results-table .score-detail-results-th--block-sep,
 .score-detail-results-table .score-detail-results-td--block-sep {
   border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
@@ -3810,8 +3810,6 @@ button.review-suggestion-title-pill {
 
 .rule-editor-field-group {
   margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
 }
 
 .rule-editor-checkbox-label {
@@ -4011,7 +4009,7 @@ button.review-suggestion-title-pill {
 }
 
 
-/* 三块分割线：Ground truth | Run result | Match+Comment，加粗加深以更明显 */
+/* 三块分割线：Ground truth | Run result | Match+Review，加粗加深以更明显 */
 .score-detail-results-th--block-sep,
 .score-detail-results-td--block-sep {
   border-left: 4px solid var(--text-muted);
@@ -4051,6 +4049,19 @@ button.review-suggestion-title-pill {
   color: var(--danger, #c00);
 }
 
+/* Mark-as-shared-input-key groups: two bands bracket var(--bg)—wider step than a single tint, still not thead (--hover) */
+.score-detail-results-table tbody tr.score-detail-results-tr--one-to-many-pal-0 .score-detail-results-td {
+  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--one-to-many-pal-1 .score-detail-results-td {
+  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
+}
+
+.score-detail-results-table tbody tr[class*='score-detail-results-tr--one-to-many-pal-']:hover .score-detail-results-td {
+  background: var(--hover);
+}
+
 .score-detail-results-th--review,
 .score-detail-results-td--review {
   width: 52px;
@@ -4080,67 +4091,6 @@ button.review-suggestion-title-pill {
 
 .score-detail-results-review-th-label input {
   margin: 0;
-}
-
-.score-detail-results-th--comment,
-.score-detail-results-td--comment {
-  min-width: 100px;
-  width: 140px;
-  vertical-align: top;
-}
-
-/* Comment 格子内边距缩小，让文本框占满更多空间 */
-.score-detail-results-td--comment {
-  padding: 4px 6px;
-}
-
-.score-detail-results-table thead .score-detail-results-th--comment {
-  position: relative;
-  padding-right: 14px;
-}
-
-.score-detail-results-comment-resize-handle {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 10px;
-  height: 100%;
-  cursor: col-resize;
-  z-index: 2;
-}
-
-.score-detail-results-comment-textarea {
-  width: 100%;
-  min-width: 0;
-  min-height: 2.5em;
-  box-sizing: border-box;
-  padding: 4px 6px;
-  font-size: 12px;
-  font-family: inherit;
-  border: 1px solid transparent;
-  border-radius: 0;
-  background: var(--bg);
-  color: var(--text);
-  resize: vertical;
-  display: block;
-  overflow-y: auto;
-}
-
-.score-detail-results-comment-textarea::-webkit-resizer {
-  display: none;
-}
-
-.score-detail-results-comment-textarea::placeholder {
-  color: var(--text-muted);
-}
-
-.score-detail-results-comment-textarea:hover {
-  border-color: var(--border);
-}
-
-.score-detail-results-comment-textarea:focus {
-  outline: none;
-  border-color: var(--text-muted);
 }
 
 .score-detail-card {
@@ -6536,6 +6486,13 @@ body.wd-row-resizing {
 .modal-panel--section-editor {
   min-width: min(420px, 92vw);
   max-width: 92vw;
+}
+
+/* Score rule / group editor: cap width (section-editor otherwise grows with long hint text) */
+.modal-panel--rule-editor.modal-panel--section-editor {
+  width: min(480px, 92vw);
+  max-width: min(480px, 92vw);
+  min-width: min(360px, 92vw);
 }
 
 /* Edit prompt name & description (from node click or context menu): same as Add prompt step 1 */

@@ -63,8 +63,8 @@ function augmentRationaleForSyntheticGtOnly(baseRationale, expandedRows, gtConte
       typeof gj === 'number' && !Number.isNaN(gj) ? gtWorksheetRowSummary(gtContent, gj) : '';
     const ri = typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : '?';
     bits.push(
-      `[comparison row_index ${ri}] This line is ground-truth-only: there was no paired model output (nothing was extracted for this case). ` +
-        `Expected ground-truth${summary ? `: ${summary}` : ' is in the paired GT row.'} ` +
+      `[comparison row_index ${ri}] This line is ground truth only: there was no paired model output (nothing was extracted for this case). ` +
+        `Expected ground truth${summary ? `: ${summary}` : ' is in the paired ground truth row.'} ` +
         `Improve the prompt so the model actually extracts these expected values.`,
     );
   }
