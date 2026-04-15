@@ -38,6 +38,42 @@ function previewSnippet(s, max = 72) {
   return `${t.slice(0, max)}…`;
 }
 
+function gtWorksheetRowSummary(gtContent, gtRowIndex) {
+  const headers = Array.isArray(gtContent?.headers) ? gtContent.headers : [];
+  const gRows = Array.isArray(gtContent?.rows) ? gtContent.rows : [];
+  const row = gRows[Number(gtRowIndex)];
+  if (!Array.isArray(row)) return '';
+  const parts = [];
+  for (let i = 0; i < headers.length; i++) {
+    const h = String(headers[i] ?? '').trim();
+    const v = row[i];
+    if (!h || v == null || String(v).trim() === '') continue;
+    parts.push(`${h}: ${String(v)}`);
+  }
+  return parts.join('; ');
+}
+
+/** GT-only / unpaired Score rows: tell the segment LLM the model extracted nothing and what GT expects. */
+function augmentRationaleForSyntheticGtOnly(baseRationale, expandedRows, gtContent) {
+  const bits = [];
+  for (const r of expandedRows || []) {
+    if (!r || !r.synthetic_empty_baseline) continue;
+    const gj = r.source_gt_row_index;
+    const summary =
+      typeof gj === 'number' && !Number.isNaN(gj) ? gtWorksheetRowSummary(gtContent, gj) : '';
+    const ri = typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : '?';
+    bits.push(
+      `[comparison row_index ${ri}] This line is ground-truth-only: there was no paired model output (nothing was extracted for this case). ` +
+        `Expected ground-truth${summary ? `: ${summary}` : ' is in the paired GT row.'} ` +
+        `Improve the prompt so the model actually extracts these expected values.`,
+    );
+  }
+  if (!bits.length) return String(baseRationale || '').trim();
+  const extra = bits.join('\n');
+  const base = String(baseRationale || '').trim();
+  return base ? `${base}\n\n${extra}` : extra;
+}
+
 function randomGaussian() {
   return Math.sqrt(-2 * Math.log(Math.random())) * Math.cos(2 * Math.PI * Math.random());
 }
@@ -125,6 +161,8 @@ export async function runSuggestionFinetuneCompositional(options) {
       throw new Error('No runnable comparison rows to verify.');
     }
 
+    const rationaleForLlm = augmentRationaleForSyntheticGtOnly(improvementRationale, expandedRows, gtContent);
+
     throwIfAborted(signal);
     const segRes = await fetch(`${base}/api/review/finetune-compositional/segments`, {
       method: 'POST',
@@ -134,7 +172,7 @@ export async function runSuggestionFinetuneCompositional(options) {
         credential_id: llmCredentialId,
         old_sentence: oldSentence || '',
         new_sentence: proposal,
-        improvement_rationale: improvementRationale || '',
+        improvement_rationale: rationaleForLlm,
         max_segments: Math.min(8, Math.max(2, Number(maxSegments) || 5)),
         inspect_run_id: inspectRunId,
       }),
@@ -166,7 +204,7 @@ export async function runSuggestionFinetuneCompositional(options) {
           credential_id: llmCredentialId,
           old_sentence: oldSentence || '',
           new_sentence: proposal,
-          improvement_rationale: improvementRationale || '',
+          improvement_rationale: rationaleForLlm,
           segment_text: seg,
           prefix,
           suffix,

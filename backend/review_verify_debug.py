@@ -136,6 +136,18 @@ def _score_table_number_label(rows: list[dict], comparison_row_index: int) -> in
     return None
 
 
+def _synthetic_runnable_from_gt_only(gt_only_row: dict) -> dict | None:
+    if not isinstance(gt_only_row, dict) or not gt_only_row.get("gt_only"):
+        return None
+    ri = gt_only_row.get("row_index")
+    if not isinstance(ri, (int, float)) or (isinstance(ri, float) and ri != ri):
+        return None
+    out = dict(gt_only_row)
+    out["gt_only"] = False
+    out["synthetic_empty_baseline"] = True
+    return out
+
+
 def expand_targets_to_runnable_comparison_rows(
     comparison_rows: list[dict], ordered_targets: list[int]
 ) -> tuple[list[dict] | None, str | None]:
@@ -175,6 +187,10 @@ def expand_targets_to_runnable_comparison_rows(
                 for r in resolved:
                     add_seed(r)
                 continue
+            syn = _synthetic_runnable_from_gt_only(direct)
+            if syn:
+                add_seed(syn)
+                continue
             st = _score_table_number_label(rows, t)
             st_part = f" (Score table #{st})" if st is not None else ""
             return None, (
@@ -190,6 +206,21 @@ def expand_targets_to_runnable_comparison_rows(
         return None, f"Cannot verify target {t}: no runnable row with row_index {t} or input_row_index {t}."
 
     closure = _expand_input_closure_from_seed_rows(rows, seed_rows)
+    seen: set[int] = set()
+    for r in closure:
+        ri = r.get("row_index")
+        if isinstance(ri, (int, float)) and not (isinstance(ri, float) and ri != ri):
+            seen.add(int(ri))
+    extra: list[dict] = []
+    for s in seed_rows:
+        ri = s.get("row_index")
+        if not isinstance(ri, (int, float)) or (isinstance(ri, float) and ri != ri):
+            continue
+        rii = int(ri)
+        if rii not in seen:
+            extra.append(s)
+            seen.add(rii)
+    closure = sorted(extra + closure, key=lambda x: int(x.get("row_index", 0)))
     return closure, None
 
 
