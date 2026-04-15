@@ -5,7 +5,7 @@ Phase 1 — per **failed input**: same dataset input, **all** unmatched model ou
 
 Phase 1.5 — **cluster** Phase‑1 issues that share the same root cause / fix strategy (one LLM call). Fallback: group by `problem_category_hint`.
 
-Phase 2 — **one LLM call per issue cluster** (parallel up to `concurrency`), each prompt’s section 3 lists every finding in that cluster; localized `prompt_edits` must cover them. Identical spans are still **deduped** once before emit.
+Phase 2 — **one LLM call per issue cluster** (sequential), each prompt’s section 3 lists every finding in that cluster; localized `prompt_edits` must cover them. Identical spans are still **deduped** once before emit.
 
 Extraction-style tasks: **under-coverage** (required items missing) and **over-coverage** (extra items not in ground truth) are both failures—the prompts below tell the model to diagnose and fix with that rubric.
 """
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 from pydantic import BaseModel, Field
@@ -655,7 +654,7 @@ Respond with JSON: **`prompt_edits` only** (no other keys).
 
 
 def _dedupe_prompt_edit_objects(edits: list[PromptEditSuggestion]) -> list[PromptEditSuggestion]:
-    """Drop duplicate (section_index, old_sentence, new_sentence) after parallel Phase 2 merges."""
+    """Drop duplicate (section_index, old_sentence, new_sentence) after Phase 2 merges."""
     seen: set[tuple[int, str, str]] = set()
     out: list[PromptEditSuggestion] = []
     for e in edits:
@@ -796,7 +795,6 @@ def run_review_pipeline(
     body: Any,
     max_tokens: int,
     max_failed_rows: int,
-    concurrency: int,
     is_cancelled: Callable[[], bool],
     append_event: Callable[[dict], None],
 ) -> None:
@@ -833,7 +831,7 @@ def run_review_pipeline(
                 f"Phase 1: analyzing {n} input group(s) with failures ({row_count} failed comparison row(s)); "
                 "each prompt includes every comparison row for that input (matched + unmatched). "
                 "Phase 1.5: cluster related issues (one LLM call; fallback: group by category hint). "
-                f"Phase 2: one prompt-edit pass per cluster in parallel (up to {max(1, min(4, int(concurrency)))} at once); "
+                "Phase 2: one prompt-edit pass per cluster (sequential); "
                 "duplicate spans are deduped once."
             ),
             "diagnosis_total": n,
@@ -844,7 +842,6 @@ def run_review_pipeline(
         return
 
     opinions: list[tuple[PerRowOpinion, list[int]]] = []
-    conc = max(1, min(4, int(concurrency)))
 
     def one_group(g: list[Any]) -> tuple[PerRowOpinion, list[int]]:
         return _analyze_input_group(
@@ -857,56 +854,27 @@ def run_review_pipeline(
         )
 
     done_n = 0
-    if conc <= 1:
-        for g in groups:
-            if is_cancelled():
-                return
-            op, ridxs = one_group(g)
-            opinions.append((op, ridxs))
-            done_n += 1
-            append_event(
-                {
-                    "type": "diagnosis_row",
-                    "row_index": op.row_index,
-                    "row_indices": ridxs,
-                    "done": done_n,
-                    "total": n,
-                    "opinion": {
-                        "card_title": op.card_title or "",
-                        "issue_summary": op.issue_summary,
-                        "rough_modification_opinion": op.rough_modification_opinion,
-                        "problem_category_hint": op.problem_category_hint or "",
-                    },
-                }
-            )
-    else:
-        with ThreadPoolExecutor(max_workers=conc) as ex:
-            futures = {ex.submit(one_group, g): g for g in groups}
-            for fut in as_completed(futures):
-                if is_cancelled():
-                    try:
-                        ex.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        ex.shutdown(wait=False)
-                    return
-                op, ridxs = fut.result()
-                opinions.append((op, ridxs))
-                done_n += 1
-                append_event(
-                    {
-                        "type": "diagnosis_row",
-                        "row_index": op.row_index,
-                        "row_indices": ridxs,
-                        "done": done_n,
-                        "total": n,
-                        "opinion": {
-                            "card_title": op.card_title or "",
-                            "issue_summary": op.issue_summary,
-                            "rough_modification_opinion": op.rough_modification_opinion,
-                            "problem_category_hint": op.problem_category_hint or "",
-                        },
-                    }
-                )
+    for g in groups:
+        if is_cancelled():
+            return
+        op, ridxs = one_group(g)
+        opinions.append((op, ridxs))
+        done_n += 1
+        append_event(
+            {
+                "type": "diagnosis_row",
+                "row_index": op.row_index,
+                "row_indices": ridxs,
+                "done": done_n,
+                "total": n,
+                "opinion": {
+                    "card_title": op.card_title or "",
+                    "issue_summary": op.issue_summary,
+                    "rough_modification_opinion": op.rough_modification_opinion,
+                    "problem_category_hint": op.problem_category_hint or "",
+                },
+            }
+        )
 
     opinions.sort(key=lambda t: t[0].row_index)
 
@@ -983,29 +951,12 @@ def run_review_pipeline(
 
     indexed_pairs = list(enumerate(cluster_members))
     collected: list[tuple[int, str, PromptEditSuggestion]] = []
-    if conc <= 1:
-        for pair in indexed_pairs:
-            if is_cancelled():
-                return
-            cidx, label, edits = run_one_phase2(pair)
-            for e in edits:
-                collected.append((cidx, label, e))
-    else:
-        with ThreadPoolExecutor(max_workers=conc) as ex:
-            futs = {ex.submit(run_one_phase2, pair): pair for pair in indexed_pairs}
-            results: list[tuple[int, str, list[PromptEditSuggestion]]] = []
-            for fut in as_completed(futs):
-                if is_cancelled():
-                    try:
-                        ex.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        ex.shutdown(wait=False)
-                    return
-                results.append(fut.result())
-            results.sort(key=lambda t: t[0])
-            for cidx, label, edits in results:
-                for e in edits:
-                    collected.append((cidx, label, e))
+    for pair in indexed_pairs:
+        if is_cancelled():
+            return
+        cidx, label, edits = run_one_phase2(pair)
+        for e in edits:
+            collected.append((cidx, label, e))
 
     if is_cancelled():
         return

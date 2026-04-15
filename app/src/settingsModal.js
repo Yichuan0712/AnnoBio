@@ -12,8 +12,6 @@ const API_BASE = 'http://localhost:8000';
 const MODEL_SETTINGS_DEFAULTS = {
   default_run_credential_id: '',
   default_review_credential_id: '',
-  run_concurrency: 1,
-  review_concurrency: 1,
   run_max_tokens: 8192,
   review_max_tokens: 32768,
   run_max_retries: 2,
@@ -490,10 +488,6 @@ export function openSettingsModal() {
                               </select>
                             </div>
                             <div class="defaults-field">
-                              <label class="dataset-meta-label" for="settings-run-concurrency">Concurrency (1–4)</label>
-                              <input type="number" id="settings-run-concurrency" class="dataset-meta-input" min="1" max="4" value="1" aria-label="Run concurrency" />
-                            </div>
-                            <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-run-max-tokens">Max tokens (256–131072)</label>
                               <input type="number" id="settings-run-max-tokens" class="dataset-meta-input" min="256" max="131072" value="8192" aria-label="Run max tokens" />
                             </div>
@@ -515,10 +509,6 @@ export function openSettingsModal() {
                               <select id="settings-default-review-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Review">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
-                            </div>
-                            <div class="defaults-field">
-                              <label class="dataset-meta-label" for="settings-review-concurrency">Review concurrency (1–4)</label>
-                              <input type="number" id="settings-review-concurrency" class="dataset-meta-input" min="1" max="4" value="1" aria-label="Review phase-1 concurrency" />
                             </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-review-max-tokens">Max tokens (256–131072)</label>
@@ -571,9 +561,7 @@ export function openSettingsModal() {
 
   const runCredSelect = overlay.querySelector('#settings-default-run-credential');
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
-  const runConcurrencyInp = overlay.querySelector('#settings-run-concurrency');
   const runMaxTokensInp = overlay.querySelector('#settings-run-max-tokens');
-  const reviewConcurrencyInp = overlay.querySelector('#settings-review-concurrency');
   const reviewMaxTokensInp = overlay.querySelector('#settings-review-max-tokens');
   const reviewMaxFailedRowsInp = overlay.querySelector('#settings-review-max-failed-rows');
   const runMaxRetriesInp = overlay.querySelector('#settings-run-max-retries');
@@ -642,8 +630,6 @@ export function openSettingsModal() {
     if (!settings) return;
     runCredSelect.value = settings.default_run_credential_id || '';
     reviewCredSelect.value = settings.default_review_credential_id || '';
-    runConcurrencyInp.value = String(settings.run_concurrency ?? MODEL_SETTINGS_DEFAULTS.run_concurrency);
-    reviewConcurrencyInp.value = String(settings.review_concurrency ?? MODEL_SETTINGS_DEFAULTS.review_concurrency);
     runMaxTokensInp.value = String(settings.run_max_tokens ?? MODEL_SETTINGS_DEFAULTS.run_max_tokens);
     reviewMaxTokensInp.value = String(settings.review_max_tokens ?? MODEL_SETTINGS_DEFAULTS.review_max_tokens);
     reviewMaxFailedRowsInp.value = String(settings.review_max_failed_rows ?? MODEL_SETTINGS_DEFAULTS.review_max_failed_rows);
@@ -685,8 +671,6 @@ export function openSettingsModal() {
   }
 
   function getPatchFromForm() {
-    const runConcurrency = Math.min(4, Math.max(1, parseInt(runConcurrencyInp.value, 10) || 1));
-    const reviewConcurrency = Math.min(4, Math.max(1, parseInt(reviewConcurrencyInp.value, 10) || 1));
     const runMaxTokens = Math.min(131072, Math.max(256, parseInt(runMaxTokensInp.value, 10) || 8192));
     const reviewMaxTokens = Math.min(131072, Math.max(256, parseInt(reviewMaxTokensInp.value, 10) || 32768));
     const reviewMaxFailedRows = Math.min(200, Math.max(1, parseInt(reviewMaxFailedRowsInp.value, 10) || 30));
@@ -701,8 +685,6 @@ export function openSettingsModal() {
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
-      run_concurrency: runConcurrency,
-      review_concurrency: reviewConcurrency,
       run_max_tokens: runMaxTokens,
       review_max_tokens: reviewMaxTokens,
       review_max_failed_rows: reviewMaxFailedRows,

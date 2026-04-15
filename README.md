@@ -77,7 +77,7 @@ Add a Review node. The LLM analyzes mismatches and suggests concrete prompt edit
 ### Tips
 
 - **Version your prompts**: Each Prompt node tracks changes. Compare different versions by running them on the same dataset.
-- **Branch freely**: You can run the same prompt on multiple datasets, or try multiple refinements in parallel. The canvas supports flexible graphs.
+- **Branch freely**: You can run the same prompt on multiple datasets, or try multiple refinements on separate branches. The canvas supports flexible graphs.
 - **API keys**: Add credentials in Settings (or `backend/data/credentials.json`) for the providers you use.
 
 ## Build
