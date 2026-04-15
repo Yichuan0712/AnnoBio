@@ -12,15 +12,16 @@ const API_BASE = 'http://localhost:8000';
 const MODEL_SETTINGS_DEFAULTS = {
   default_run_credential_id: '',
   default_review_credential_id: '',
-  default_review_assistant_credential_id: '',
   run_concurrency: 1,
   review_concurrency: 1,
   run_max_tokens: 8192,
   review_max_tokens: 32768,
   run_max_retries: 2,
   review_max_failed_rows: 30,
-  review_finetune_max_trials: 22,
-  review_finetune_num_candidates: 10,
+  review_finetune_comp_max_trials: 40,
+  review_finetune_comp_candidates_per_segment: 4,
+  review_finetune_comp_max_segments: 5,
+  review_verify_debug_print: false,
 };
 
 function escapeHtml(str) {
@@ -445,8 +446,8 @@ export function openSettingsModal() {
                   <div class="model-settings-tab-row">
                     <div class="review-detail-view-switch model-settings-view-switch" role="tablist" aria-label="Settings options">
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="settings-panel-credentials" id="settings-tab-credentials" data-tab="credentials">New credential</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Prompt Runner</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Prompt Reviewer</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Run</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Review</button>
                     </div>
                   </div>
                   <div class="review-detail-tab-panels model-settings-tab-panels">
@@ -515,12 +516,6 @@ export function openSettingsModal() {
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
                             </div>
-                            <div class="defaults-field defaults-field--full">
-                              <label class="dataset-meta-label" for="settings-default-review-assistant-credential">Assistant model (chat)</label>
-                              <select id="settings-default-review-assistant-credential" class="credentials-select dataset-meta-input" aria-label="Model for Review assistant chat">
-                                <option value="">${selectPlaceholderLabel('Same as Default model')}</option>
-                              </select>
-                            </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-review-concurrency">Review concurrency (1–4)</label>
                               <input type="number" id="settings-review-concurrency" class="dataset-meta-input" min="1" max="4" value="1" aria-label="Review phase-1 concurrency" />
@@ -534,15 +529,25 @@ export function openSettingsModal() {
                               <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max failed rows analyzed per Review" />
                             </div>
                             <div class="defaults-field defaults-field--full">
-                              <p class="dataset-meta-label" style="margin-bottom:0.35rem;font-weight:600;">Bayesian Finetune</p>
+                              <label class="dataset-meta-label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+                                <input type="checkbox" id="settings-review-verify-debug-print" aria-label="Print Verify snapshots to backend console" />
+                                Print Verify snapshots to backend console (Python stdout)
+                              </label>
+                            </div>
+                            <div class="defaults-field defaults-field--full">
+                              <p class="dataset-meta-label" style="margin-bottom:0.35rem;font-weight:600;">Finetune (compositional)</p>
                             </div>
                             <div class="defaults-field defaults-field--review-finetune-input">
-                              <label class="dataset-meta-label" for="settings-review-finetune-max-trials">Max trials (evaluation rounds, 4–200)</label>
-                              <input type="number" id="settings-review-finetune-max-trials" class="dataset-meta-input" min="4" max="200" value="22" aria-label="Finetune max trials" />
+                              <label class="dataset-meta-label" for="settings-review-finetune-comp-trials">Max verify rounds (8–200)</label>
+                              <input type="number" id="settings-review-finetune-comp-trials" class="dataset-meta-input" min="8" max="200" value="40" aria-label="Finetune max trials" />
                             </div>
                             <div class="defaults-field defaults-field--review-finetune-input">
-                              <label class="dataset-meta-label" for="settings-review-finetune-num-candidates">Candidate paraphrases (4–18)</label>
-                              <input type="number" id="settings-review-finetune-num-candidates" class="dataset-meta-input" min="4" max="18" value="10" aria-label="Finetune number of candidates" />
+                              <label class="dataset-meta-label" for="settings-review-finetune-comp-candidates">Candidates per segment (2–8)</label>
+                              <input type="number" id="settings-review-finetune-comp-candidates" class="dataset-meta-input" min="2" max="8" value="4" aria-label="Finetune candidates per segment" />
+                            </div>
+                            <div class="defaults-field defaults-field--review-finetune-input">
+                              <label class="dataset-meta-label" for="settings-review-finetune-comp-segments">Max segments when splitting (2–8)</label>
+                              <input type="number" id="settings-review-finetune-comp-segments" class="dataset-meta-input" min="2" max="8" value="5" aria-label="Finetune max segments" />
                             </div>
                           </div>
                       </div>
@@ -566,15 +571,16 @@ export function openSettingsModal() {
 
   const runCredSelect = overlay.querySelector('#settings-default-run-credential');
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
-  const reviewAssistantCredSelect = overlay.querySelector('#settings-default-review-assistant-credential');
   const runConcurrencyInp = overlay.querySelector('#settings-run-concurrency');
   const runMaxTokensInp = overlay.querySelector('#settings-run-max-tokens');
   const reviewConcurrencyInp = overlay.querySelector('#settings-review-concurrency');
   const reviewMaxTokensInp = overlay.querySelector('#settings-review-max-tokens');
   const reviewMaxFailedRowsInp = overlay.querySelector('#settings-review-max-failed-rows');
   const runMaxRetriesInp = overlay.querySelector('#settings-run-max-retries');
-  const reviewFinetuneMaxTrialsInp = overlay.querySelector('#settings-review-finetune-max-trials');
-  const reviewFinetuneNumCandidatesInp = overlay.querySelector('#settings-review-finetune-num-candidates');
+  const reviewFinetuneCompTrialsInp = overlay.querySelector('#settings-review-finetune-comp-trials');
+  const reviewFinetuneCompCandInp = overlay.querySelector('#settings-review-finetune-comp-candidates');
+  const reviewFinetuneCompSegInp = overlay.querySelector('#settings-review-finetune-comp-segments');
+  const reviewVerifyDebugPrintChk = overlay.querySelector('#settings-review-verify-debug-print');
 
   const tabBar = overlay.querySelector('.model-settings-view-switch');
   const tabs = tabBar ? tabBar.querySelectorAll('.review-detail-tab[data-tab]') : [];
@@ -628,29 +634,33 @@ export function openSettingsModal() {
       `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name || c.llm || c.id)}</option>`
     ).join('');
     const optNone = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`;
-    const optSame = `<option value="">${selectPlaceholderLabel('Same as Default model')}</option>`;
     runCredSelect.innerHTML = optNone + optHtml;
     reviewCredSelect.innerHTML = optNone + optHtml;
-    reviewAssistantCredSelect.innerHTML = optSame + optHtml;
   }
 
   function applySettings(settings) {
     if (!settings) return;
     runCredSelect.value = settings.default_run_credential_id || '';
     reviewCredSelect.value = settings.default_review_credential_id || '';
-    reviewAssistantCredSelect.value = settings.default_review_assistant_credential_id || '';
     runConcurrencyInp.value = String(settings.run_concurrency ?? MODEL_SETTINGS_DEFAULTS.run_concurrency);
     reviewConcurrencyInp.value = String(settings.review_concurrency ?? MODEL_SETTINGS_DEFAULTS.review_concurrency);
     runMaxTokensInp.value = String(settings.run_max_tokens ?? MODEL_SETTINGS_DEFAULTS.run_max_tokens);
     reviewMaxTokensInp.value = String(settings.review_max_tokens ?? MODEL_SETTINGS_DEFAULTS.review_max_tokens);
     reviewMaxFailedRowsInp.value = String(settings.review_max_failed_rows ?? MODEL_SETTINGS_DEFAULTS.review_max_failed_rows);
     runMaxRetriesInp.value = String(settings.run_max_retries ?? MODEL_SETTINGS_DEFAULTS.run_max_retries);
-    reviewFinetuneMaxTrialsInp.value = String(
-      settings.review_finetune_max_trials ?? MODEL_SETTINGS_DEFAULTS.review_finetune_max_trials,
+    reviewFinetuneCompTrialsInp.value = String(
+      settings.review_finetune_comp_max_trials ?? MODEL_SETTINGS_DEFAULTS.review_finetune_comp_max_trials,
     );
-    reviewFinetuneNumCandidatesInp.value = String(
-      settings.review_finetune_num_candidates ?? MODEL_SETTINGS_DEFAULTS.review_finetune_num_candidates,
+    reviewFinetuneCompCandInp.value = String(
+      settings.review_finetune_comp_candidates_per_segment ?? MODEL_SETTINGS_DEFAULTS.review_finetune_comp_candidates_per_segment,
     );
+    reviewFinetuneCompSegInp.value = String(
+      settings.review_finetune_comp_max_segments ?? MODEL_SETTINGS_DEFAULTS.review_finetune_comp_max_segments,
+    );
+    if (reviewVerifyDebugPrintChk) {
+      reviewVerifyDebugPrintChk.checked =
+        settings.review_verify_debug_print === true || settings.review_verify_debug_print === 'true';
+    }
   }
 
   async function init() {
@@ -661,13 +671,11 @@ export function openSettingsModal() {
         const ids = {
           run: (runCredSelect.value || '').trim(),
           review: (reviewCredSelect.value || '').trim(),
-          assistant: (reviewAssistantCredSelect.value || '').trim(),
         };
         const credentials = await loadCredentials();
         populateCredentialSelects(credentials);
         runCredSelect.value = ids.run;
         reviewCredSelect.value = ids.review;
-        reviewAssistantCredSelect.value = ids.assistant;
       },
     });
     wireCredentialsAddForm(addRoot, credRoot);
@@ -682,21 +690,27 @@ export function openSettingsModal() {
     const runMaxTokens = Math.min(131072, Math.max(256, parseInt(runMaxTokensInp.value, 10) || 8192));
     const reviewMaxTokens = Math.min(131072, Math.max(256, parseInt(reviewMaxTokensInp.value, 10) || 32768));
     const reviewMaxFailedRows = Math.min(200, Math.max(1, parseInt(reviewMaxFailedRowsInp.value, 10) || 30));
-    const runMaxRetries = Math.min(5, Math.max(0, parseInt(runMaxRetriesInp.value, 10) || 2));
-    const reviewFinetuneMaxTrials = Math.min(200, Math.max(4, parseInt(reviewFinetuneMaxTrialsInp.value, 10) || 22));
-    const reviewFinetuneNumCandidates = Math.min(18, Math.max(4, parseInt(reviewFinetuneNumCandidatesInp.value, 10) || 10));
+    const runMaxRetriesParsed = parseInt(runMaxRetriesInp.value, 10);
+    const runMaxRetries = Math.min(
+      5,
+      Math.max(0, Number.isNaN(runMaxRetriesParsed) ? MODEL_SETTINGS_DEFAULTS.run_max_retries : runMaxRetriesParsed),
+    );
+    const reviewFinetuneCompMaxTrials = Math.min(200, Math.max(8, parseInt(reviewFinetuneCompTrialsInp.value, 10) || 40));
+    const reviewFinetuneCompCand = Math.min(8, Math.max(2, parseInt(reviewFinetuneCompCandInp.value, 10) || 4));
+    const reviewFinetuneCompSeg = Math.min(8, Math.max(2, parseInt(reviewFinetuneCompSegInp.value, 10) || 5));
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
-      default_review_assistant_credential_id: (reviewAssistantCredSelect.value || '').trim() || '',
       run_concurrency: runConcurrency,
       review_concurrency: reviewConcurrency,
       run_max_tokens: runMaxTokens,
       review_max_tokens: reviewMaxTokens,
       review_max_failed_rows: reviewMaxFailedRows,
       run_max_retries: runMaxRetries,
-      review_finetune_max_trials: reviewFinetuneMaxTrials,
-      review_finetune_num_candidates: reviewFinetuneNumCandidates,
+      review_finetune_comp_max_trials: reviewFinetuneCompMaxTrials,
+      review_finetune_comp_candidates_per_segment: reviewFinetuneCompCand,
+      review_finetune_comp_max_segments: reviewFinetuneCompSeg,
+      review_verify_debug_print: !!(reviewVerifyDebugPrintChk && reviewVerifyDebugPrintChk.checked),
     };
   }
 

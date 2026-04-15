@@ -1,11 +1,10 @@
 /**
- * Bayesian finetune: Thompson sampling over discrete rewrite candidates (Beta–Bernoulli bandit).
- * Candidates come from POST /api/review/finetune-candidates; objective = Score pass rate on target rows.
+ * Finetune (Review suggestion): compositional (reason-guided segments + Thompson search); objective = Verify pass rate.
  * Abort via AbortController (Cancel button or window close → abortAllFinetuneJobs).
  */
 
 import { rebuildWorkingFromApplied } from './reviewWorkingSections.js';
-import { runSuggestionRowTestsMetrics } from './reviewSuggestionTest.js';
+import { expandTargetsToRunnableComparisonRows, runSuggestionRowTestsMetrics } from './reviewSuggestionTest.js';
 
 /** @type {Set<AbortController>} */
 const finetuneAbortControllers = new Set();
@@ -33,11 +32,52 @@ export function hasActiveFinetuneSessions() {
   return finetuneAbortControllers.size > 0;
 }
 
+function previewSnippet(s, max = 72) {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max)}…`;
+}
+
+function gtWorksheetRowSummary(gtContent, gtRowIndex) {
+  const headers = Array.isArray(gtContent?.headers) ? gtContent.headers : [];
+  const gRows = Array.isArray(gtContent?.rows) ? gtContent.rows : [];
+  const row = gRows[Number(gtRowIndex)];
+  if (!Array.isArray(row)) return '';
+  const parts = [];
+  for (let i = 0; i < headers.length; i++) {
+    const h = String(headers[i] ?? '').trim();
+    const v = row[i];
+    if (!h || v == null || String(v).trim() === '') continue;
+    parts.push(`${h}: ${String(v)}`);
+  }
+  return parts.join('; ');
+}
+
+/** GT-only / unpaired Score rows: tell the segment LLM the model extracted nothing and what GT expects. */
+function augmentRationaleForSyntheticGtOnly(baseRationale, expandedRows, gtContent) {
+  const bits = [];
+  for (const r of expandedRows || []) {
+    if (!r || !r.synthetic_empty_baseline) continue;
+    const gj = r.source_gt_row_index;
+    const summary =
+      typeof gj === 'number' && !Number.isNaN(gj) ? gtWorksheetRowSummary(gtContent, gj) : '';
+    const ri = typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : '?';
+    bits.push(
+      `[comparison row_index ${ri}] This line is ground-truth-only: there was no paired model output (nothing was extracted for this case). ` +
+        `Expected ground-truth${summary ? `: ${summary}` : ' is in the paired GT row.'} ` +
+        `Improve the prompt so the model actually extracts these expected values.`,
+    );
+  }
+  if (!bits.length) return String(baseRationale || '').trim();
+  const extra = bits.join('\n');
+  const base = String(baseRationale || '').trim();
+  return base ? `${base}\n\n${extra}` : extra;
+}
+
 function randomGaussian() {
   return Math.sqrt(-2 * Math.log(Math.random())) * Math.cos(2 * Math.PI * Math.random());
 }
 
-/** Marsaglia–Tsang Gamma sampler (shape > 0). */
 function gammaMarsagliaTsang(shape) {
   if (shape < 1) {
     return gammaMarsagliaTsang(1 + shape) * Math.pow(Math.random(), 1 / shape);
@@ -58,7 +98,6 @@ function gammaMarsagliaTsang(shape) {
   }
 }
 
-/** Sample Beta(a,b) via independent Gamma ratio. */
 function sampleBeta(a, b) {
   if (!(a > 0) || !(b > 0)) return 0.5;
   const x = gammaMarsagliaTsang(a);
@@ -67,85 +106,27 @@ function sampleBeta(a, b) {
   return s > 0 ? x / s : 0.5;
 }
 
-function dedupeCandidateStrings(seed, extras) {
-  const out = [];
-  const seen = new Set();
-  const push = (s) => {
-    const t = String(s ?? '').trim();
-    if (!t) return;
-    const key = t.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(t);
-  };
-  push(seed);
-  if (Array.isArray(extras)) extras.forEach(push);
-  return out;
-}
-
 function throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 }
 
-function previewSnippet(s, max = 72) {
-  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
-  if (t.length <= max) return t;
-  return `${t.slice(0, max)}…`;
-}
-
 /**
- * @param {string} apiBase
- * @param {string} credentialId
- * @param {{ oldSentence: string, newSentence: string, numVariants?: number, signal?: AbortSignal }} opts
- * @returns {Promise<string[]>}
- */
-export async function fetchFinetuneCandidates(apiBase, credentialId, opts) {
-  const base = String(apiBase || 'http://localhost:8000').replace(/\/$/, '');
-  const res = await fetch(`${base}/api/review/finetune-candidates`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: opts.signal,
-    body: JSON.stringify({
-      credential_id: credentialId,
-      old_sentence: opts.oldSentence || '',
-      new_sentence: opts.newSentence || '',
-      num_variants: Math.max(4, Math.min(18, Number(opts.numVariants) || 10)),
-    }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const rawDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data) || res.statusText;
-    if (res.status === 404) {
-      if (String(rawDetail).toLowerCase().includes('credential')) {
-        throw new Error(
-          'Credential not found. Set a Run credential on the Run node (or Settings → default Run credential), then try again.',
-        );
-      }
-      throw new Error(
-        'Finetune API not found (404). Restart the Python backend so it includes POST /api/review/finetune-candidates.',
-      );
-    }
-    throw new Error(rawDetail || 'finetune-candidates failed');
-  }
-  const arr = data.candidates;
-  return Array.isArray(arr) ? arr.map((x) => String(x || '').trim()).filter(Boolean) : [];
-}
-
-/**
+ * Compositional finetune: LLM splits improved sentence + per-segment paraphrases; factorized Thompson sampling over segment arms; same pass rate as Verify.
  * @param {object} options
- * @param {AbortController} [options.abortController] — register for abortAllFinetuneJobs; uses .signal for fetches
- * @param {(p: { trial: number, trials: number, arm: number }) => void} [options.onProgress]
- * @returns {Promise<{ bestIndex: number, bestText: string, candidates: string[], posteriorMeans: number[], bestObservedRate: number, trialLog: Array<{ round: number, arm: number, preview: string, passRate: number | null, ok: boolean, note?: string }> }>}
+ * @param {string} options.improvementRationale — typically suggestion.reason
+ * @returns {Promise<{ bestText: string, bestObservedRate: number, trialLog: object[], optimizer: string, segments?: string[], lattice?: string[][] }>}
  */
-export async function runSuggestionFinetuneBayesian(options) {
+export async function runSuggestionFinetuneCompositional(options) {
   const {
     apiBase = 'http://localhost:8000',
     llmCredentialId,
     runCredentialId,
     oldSentence,
     newSentence,
-    numCandidates = 10,
-    maxTrials = 22,
+    improvementRationale,
+    maxSegments = 5,
+    candidatesPerSegment = 4,
+    maxTrials = 40,
     allSuggestions,
     sugIdx,
     originals,
@@ -157,65 +138,164 @@ export async function runSuggestionFinetuneBayesian(options) {
     scoreMappingJson,
     runWs,
     gtContent,
-    onProgress,
     abortController,
+    onProgress,
   } = options;
 
   const ac = abortController || null;
   const signal = ac?.signal;
-  try {
-    const llmList = await fetchFinetuneCandidates(apiBase, llmCredentialId, {
-      oldSentence,
-      newSentence,
-      numVariants: numCandidates,
-      signal,
-    });
-    throwIfAborted(signal);
+  const base = String(apiBase || 'http://localhost:8000').replace(/\/$/, '');
+  const proposal = String(newSentence || '').trim();
+  if (!proposal) {
+    throw new Error('Empty improved sentence for compositional finetune.');
+  }
+  const inspectRunId = `${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
 
-    const candidates = dedupeCandidateStrings(newSentence, llmList);
-    if (candidates.length === 0) {
-      throw new Error('No finetune candidates returned.');
+  try {
+    const expanded = expandTargetsToRunnableComparisonRows(comparisonRows || [], [...(targets || [])]);
+    if (expanded.error) {
+      throw new Error(expanded.error);
+    }
+    const expandedRows = expanded.rows;
+    if (!expandedRows.length) {
+      throw new Error('No runnable comparison rows to verify.');
     }
 
-    const K = candidates.length;
-    const alpha = Array(K).fill(1);
-    const beta = Array(K).fill(1);
-    let bestObservedRate = -1;
-    /** @type {Array<{ round: number, arm: number, preview: string, passRate: number | null, ok: boolean, note?: string }>} */
+    const rationaleForLlm = augmentRationaleForSyntheticGtOnly(improvementRationale, expandedRows, gtContent);
+
+    throwIfAborted(signal);
+    const segRes = await fetch(`${base}/api/review/finetune-compositional/segments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal,
+      body: JSON.stringify({
+        credential_id: llmCredentialId,
+        old_sentence: oldSentence || '',
+        new_sentence: proposal,
+        improvement_rationale: rationaleForLlm,
+        max_segments: Math.min(8, Math.max(2, Number(maxSegments) || 5)),
+        inspect_run_id: inspectRunId,
+      }),
+    });
+    const segData = await segRes.json().catch(() => ({}));
+    if (!segRes.ok) {
+      const rawDetail = typeof segData.detail === 'string' ? segData.detail : JSON.stringify(segData.detail || segData) || segRes.statusText;
+      throw new Error(rawDetail || 'finetune-compositional/segments failed');
+    }
+    const segments = Array.isArray(segData.segments) ? segData.segments.map((x) => String(x || '')) : [];
+    if (!segments.length || segments.join('') !== proposal) {
+      throw new Error('Invalid segmentation from server.');
+    }
+
+    /** @type {string[][]} */
+    const lattice = [];
+    let offset = 0;
+    const kCand = Math.min(8, Math.max(2, Number(candidatesPerSegment) || 4));
+    for (let i = 0; i < segments.length; i++) {
+      throwIfAborted(signal);
+      const seg = segments[i];
+      const prefix = proposal.slice(0, offset);
+      const suffix = proposal.slice(offset + seg.length);
+      const cRes = await fetch(`${base}/api/review/finetune-compositional/candidates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify({
+          credential_id: llmCredentialId,
+          old_sentence: oldSentence || '',
+          new_sentence: proposal,
+          improvement_rationale: rationaleForLlm,
+          segment_text: seg,
+          prefix,
+          suffix,
+          num_candidates: kCand,
+          segment_index: i,
+          inspect_run_id: inspectRunId,
+        }),
+      });
+      const cData = await cRes.json().catch(() => ({}));
+      if (!cRes.ok) {
+        const rawDetail = typeof cData.detail === 'string' ? cData.detail : JSON.stringify(cData.detail || cData) || cRes.statusText;
+        throw new Error(rawDetail || 'finetune-compositional/candidates failed');
+      }
+      const cands = Array.isArray(cData.candidates) ? cData.candidates.map((x) => String(x || '').trim()).filter(Boolean) : [];
+      if (!cands.length) {
+        throw new Error('No candidates for a segment.');
+      }
+      lattice.push(cands);
+      offset += seg.length;
+    }
+
+    void fetch(`${base}/api/review/finetune-compositional/lattice-log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segments, lattice, inspect_run_id: inspectRunId }),
+    }).catch(() => {});
+
+    const S = lattice.length;
+    const alpha = lattice.map((row) => row.map(() => 1));
+    const beta = lattice.map((row) => row.map(() => 1));
+    let bestText = proposal;
+    let bestRate = -1;
+    /** @type {Array<{ round: number, picks: number[], preview: string, passRate: number | null, ok: boolean, note?: string }>} */
     const trialLog = [];
-    /** Total evaluation rounds from settings (Max trials); not tied to candidate count K. */
-    const trials = Math.min(200, Math.max(4, Number(maxTrials) || 22));
+    const trials = Math.min(200, Math.max(8, Number(maxTrials) || 40));
+
+    function recordCompositionalTrial(entry) {
+      trialLog.push(entry);
+      void fetch(`${base}/api/review/finetune-compositional/trial-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          round: entry.round,
+          picks: entry.picks,
+          composed_preview: entry.preview || '',
+          pass_rate: entry.passRate == null ? null : Number(entry.passRate),
+          ok: entry.ok,
+          note: entry.note ?? null,
+          inspect_run_id: inspectRunId,
+        }),
+      }).catch(() => {});
+    }
 
     for (let t = 0; t < trials; t++) {
       throwIfAborted(signal);
-
-      let pick = 0;
-      let bestDraw = -1;
-      for (let k = 0; k < K; k++) {
-        const draw = sampleBeta(alpha[k], beta[k]);
-        if (draw > bestDraw) {
-          bestDraw = draw;
-          pick = k;
+      const picks = lattice.map((row, s) => {
+        let pick = 0;
+        let bestDraw = -1;
+        for (let k = 0; k < row.length; k++) {
+          const draw = sampleBeta(alpha[s][k], beta[s][k]);
+          if (draw > bestDraw) {
+            bestDraw = draw;
+            pick = k;
+          }
         }
-      }
-      if (typeof onProgress === 'function') onProgress({ trial: t + 1, trials, arm: pick });
+        return pick;
+      });
 
-      const patched = allSuggestions.map((s, i) => ({
-        ...s,
-        applied: i === sugIdx ? true : s.applied === true,
-        ...(i === sugIdx ? { new_sentence: candidates[pick] } : {}),
+      const composed = lattice.map((row, s) => row[picks[s]]).join('');
+      if (typeof onProgress === 'function') {
+        onProgress({ trial: t + 1, trials, arm: 0 });
+      }
+
+      const patched = allSuggestions.map((sug, i) => ({
+        ...sug,
+        applied: i === sugIdx,
+        ...(i === sugIdx ? { new_sentence: composed } : {}),
       }));
       const testSections = rebuildWorkingFromApplied(originals, patched);
       if (!testSections || testSections.length !== originals.length) {
-        trialLog.push({
+        for (let s = 0; s < S; s++) {
+          beta[s][picks[s]] += 1;
+        }
+        recordCompositionalTrial({
           round: t + 1,
-          arm: pick,
-          preview: previewSnippet(candidates[pick]),
+          picks: picks.slice(),
+          preview: previewSnippet(composed, 200),
           passRate: null,
           ok: false,
           note: 'prompt rebuild failed',
         });
-        beta[pick] += 1;
         continue;
       }
 
@@ -239,47 +319,48 @@ export async function runSuggestionFinetuneBayesian(options) {
       }
 
       if (!metrics.ok) {
-        trialLog.push({
+        for (let s = 0; s < S; s++) {
+          beta[s][picks[s]] += 1;
+        }
+        recordCompositionalTrial({
           round: t + 1,
-          arm: pick,
-          preview: previewSnippet(candidates[pick]),
+          picks: picks.slice(),
+          preview: previewSnippet(composed, 200),
           passRate: typeof metrics.passRate === 'number' ? metrics.passRate : null,
           ok: false,
           note: 'evaluation failed',
         });
-        beta[pick] += 1;
         continue;
       }
+
       const r = typeof metrics.passRate === 'number' ? metrics.passRate : 0;
-      trialLog.push({
+      for (let s = 0; s < S; s++) {
+        alpha[s][picks[s]] += r;
+        beta[s][picks[s]] += 1 - r;
+      }
+      recordCompositionalTrial({
         round: t + 1,
-        arm: pick,
-        preview: previewSnippet(candidates[pick]),
+        picks: picks.slice(),
+        preview: previewSnippet(composed, 200),
         passRate: r,
         ok: true,
       });
-      alpha[pick] += r;
-      beta[pick] += 1 - r;
-      if (r > bestObservedRate) bestObservedRate = r;
-    }
-
-    const posteriorMeans = candidates.map((_, k) => alpha[k] / (alpha[k] + beta[k]));
-    let winner = 0;
-    let bestMean = posteriorMeans[0];
-    for (let k = 1; k < K; k++) {
-      if (posteriorMeans[k] > bestMean) {
-        bestMean = posteriorMeans[k];
-        winner = k;
+      if (r > bestRate) {
+        bestRate = r;
+        bestText = composed;
       }
     }
 
     return {
-      bestIndex: winner,
-      bestText: candidates[winner],
-      candidates,
-      posteriorMeans,
-      bestObservedRate: bestObservedRate < 0 ? 0 : bestObservedRate,
+      bestIndex: 0,
+      bestText,
+      candidates: [bestText],
+      posteriorMeans: [bestRate < 0 ? 0 : bestRate],
+      bestObservedRate: bestRate < 0 ? 0 : bestRate,
       trialLog,
+      optimizer: 'compositional',
+      segments,
+      lattice,
     };
   } finally {
     if (ac) unregisterFinetuneSession(ac);

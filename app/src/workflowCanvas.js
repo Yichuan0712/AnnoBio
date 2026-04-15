@@ -9,6 +9,7 @@ import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
 import { mergeResumeResults, embedInputRow, countCompletedInputRows, markEmptyOutputAsError } from './runResumeUtils.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
+import { reviewStreamSavedNeedsRowVerifyPhase } from './reviewWorkingSections.js';
 import {
   allocNextReviewSuggestionId,
   ensureReviewResultIds,
@@ -31,10 +32,11 @@ import {
   stringsMatchSemanticAlign,
   prefetchEmbeddingCosineMap,
   embeddingPairMatches,
+  isValidRunOutputForScoreRow,
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
-import { showAlert } from './alertModal.js';
+import { showAlert, showConfirm } from './alertModal.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = 'http://localhost:8000';
@@ -52,6 +54,15 @@ async function resolveRunCredentialId(runNode) {
 }
 
 const MIN_CONTENT_PADDING = 200;
+/**
+ * Review bar: LLM stream uses 0..PIPELINE_DONE (~quick); Run+Score row checks use the rest (usually most wall time).
+ * Must match reviewDetailModal REVIEW_PROGRESS_PIPELINE_DONE / CHECK_SPAN.
+ */
+const REVIEW_PROGRESS_PIPELINE_DONE = 30;
+const REVIEW_STREAM_PLAN_PCT = 4;
+const REVIEW_STREAM_DIAG_END_PCT = 24;
+const REVIEW_STREAM_SUGGESTIONS_PCT = 26;
+const REVIEW_STREAM_DATA_PCT = 28;
 /** Minimum canvas content size (width, height) so there is plenty of room to work and zoom. */
 const MIN_CANVAS_WIDTH = 4000;
 const MIN_CANVAS_HEIGHT = 2600;
@@ -392,18 +403,30 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   const gtRows = gtDeduped.rows || [];
   const resultsNoErr = (results || []).filter((r) => r && !r.error);
   const dedupedResults = dedupeRunResults(resultsNoErr);
+  const validDedupedResults = dedupedResults.filter((r) => isValidRunOutputForScoreRow(r, outputFields));
+
+  function emptyRowInputPlaceholders() {
+    const out = {};
+    for (const name of promptPlaceholderNames) out[name] = '';
+    return out;
+  }
+  const inputIndicesWithValidRun = new Set(
+    validDedupedResults.map((r) =>
+      typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index,
+    ),
+  );
 
   const resultsByIndex = new Map();
-  (dedupedResults || []).forEach((res) => { resultsByIndex.set(res.row_index, res); });
+  (validDedupedResults || []).forEach((res) => { resultsByIndex.set(res.row_index, res); });
 
-  const nonErrorResults = dedupedResults || [];
+  const nonErrorResults = validDedupedResults || [];
   const runRowIndices = [...new Set(nonErrorResults.map((r) => r.row_index))];
   reviewEmbeddingCosineMap = new Map();
   if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
     try {
       reviewEmbeddingCosineMap = await prefetchEmbeddingCosineMap(SCORE_BACKEND_BASE, {
         root: scoreRoot,
-        results: dedupedResults,
+        results: validDedupedResults,
         outputFields,
         runWs: runWsSafe,
         gtContent: gtDeduped,
@@ -542,7 +565,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
 
   const rows = [];
   let outRowIdx = 0;
-  for (const r of dedupedResults) {
+  for (const r of validDedupedResults) {
     const runR = r.row_index;
     const inpIdx = r.input_row_index ?? runR;
     const jPaired = runR >= 0 && runR < runToGt.length ? runToGt[runR] : -1;
@@ -559,7 +582,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       ?? (gtIdxForRules >= 0 ? comments[String(gtIdxForRules)] : null)
       ?? comments[`run:${runR}`]
       ?? null;
-    const row_input = rowInputAsPromptPlaceholders(inpIdx);
+    const row_input = inputIndicesWithValidRun.has(inpIdx) ? rowInputAsPromptPlaceholders(inpIdx) : emptyRowInputPlaceholders();
     const runRowIdx =
       typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : outRowIdx;
     const score_table_row = jPaired >= 0
@@ -582,66 +605,116 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     outRowIdx++;
   }
 
-  /* GT rows with no paired run (Score table shows run columns as —) never appeared in dedupedResults; add synthetic rows for Review / Phase 1. */
+  /**
+   * 0-based worksheet input index for an unpaired GT row, or null if unknown.
+   * Tiered inference so real same-input rows still group (Phase 1 `in:{iri}`), without the old
+   * “first run substring hit” that merged unrelated rows (e.g. #1 + #6).
+   */
   function findInputRowIndexForUnpairedGt(gtJ) {
     const gtCells = [];
     for (const col of gtColsUsed) {
       const v = String(getGtValue(gtDeduped, gtJ, col) || '').trim();
       if (v) gtCells.push(v);
     }
-    if (gtCells.length === 0) {
-      if (dedupedResults[0]) {
-        const r0 = dedupedResults[0];
-        return typeof r0.input_row_index === 'number' && !Number.isNaN(r0.input_row_index) ? r0.input_row_index : r0.row_index;
+    if (gtCells.length === 0) return null;
+
+    const wsRows = runWsSafe.rows || [];
+    const cellsForRow = (ii) => (wsRows[ii] || []).map((c) => String(c ?? '').trim());
+
+    const exactHitsForRow = (ii) => {
+      const cells = cellsForRow(ii);
+      return gtCells.reduce((n, gv) => n + (cells.some((c) => c === gv) ? 1 : 0), 0);
+    };
+
+    /** Unique row index with highest score, or null if tie or all zero. */
+    const uniqueArgmaxRows = (scoreFn) => {
+      let best = -1;
+      const scores = [];
+      for (let ii = 0; ii < wsRows.length; ii++) {
+        const s = scoreFn(ii);
+        scores.push(s);
+        if (s > best) best = s;
       }
-      return 0;
-    }
-    const matchesCell = (s) => {
-      const t = String(s ?? '').trim();
-      if (!t) return false;
-      for (const gv of gtCells) {
-        if (!gv) continue;
-        if (t === gv || t.includes(gv) || gv.includes(t)) return true;
+      if (best <= 0) return null;
+      const winners = [];
+      for (let ii = 0; ii < wsRows.length; ii++) {
+        if (scores[ii] === best) winners.push(ii);
       }
+      return winners.length === 1 ? winners[0] : null;
+    };
+
+    const exactWinner = uniqueArgmaxRows(exactHitsForRow);
+    if (exactWinner != null) return exactWinner;
+
+    const MIN_SUB = 4;
+    const relaxedHit = (gv, cell) => {
+      if (gv === cell) return true;
+      if (gv.length < MIN_SUB && cell.length < MIN_SUB) return false;
+      if (gv.length >= MIN_SUB && cell.includes(gv)) return true;
+      if (cell.length >= MIN_SUB && gv.includes(cell)) return true;
       return false;
     };
-    for (const r of dedupedResults) {
-      const inp = typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index;
-      for (const k of outputKeysUsed) {
-        const rv = getRunValue(r, k, runWsSafe, outputFields);
-        if (matchesCell(rv)) return inp;
+    const relaxedHitsForRow = (ii) => {
+      const cells = cellsForRow(ii);
+      return gtCells.reduce((n, gv) => n + (cells.some((c) => relaxedHit(gv, c)) ? 1 : 0), 0);
+    };
+    const relaxedWinner = uniqueArgmaxRows(relaxedHitsForRow);
+    if (relaxedWinner != null) return relaxedWinner;
+
+    const valueSetForInput = (inp) => {
+      const set = new Set();
+      const wsRow = wsRows[inp] || [];
+      for (const c of wsRow) {
+        const t = String(c ?? '').trim();
+        if (t) set.add(t);
       }
-      const wsRow = runWsSafe.rows && runWsSafe.rows[inp] ? runWsSafe.rows[inp] : [];
-      for (const cell of wsRow) {
-        if (matchesCell(cell)) return inp;
+      for (const r of validDedupedResults) {
+        const rInp = typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index;
+        if (rInp !== inp) continue;
+        for (const k of outputKeysUsed) {
+          const rv = getRunValue(r, k, runWsSafe, outputFields);
+          const t = String(rv ?? '').trim();
+          if (t) set.add(t);
+        }
       }
-    }
-    for (let ii = 0; ii < (runWsSafe.rows || []).length; ii++) {
-      const wsRow = runWsSafe.rows[ii] || [];
-      for (const cell of wsRow) {
-        if (matchesCell(cell)) return ii;
-      }
-    }
-    if (dedupedResults.length > 0) {
-      const r0 = dedupedResults[0];
-      return typeof r0.input_row_index === 'number' && !Number.isNaN(r0.input_row_index) ? r0.input_row_index : r0.row_index;
-    }
-    return 0;
+      return set;
+    };
+
+    const distinctInps = [
+      ...new Set(
+        validDedupedResults.map((r) =>
+          typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index,
+        ),
+      ),
+    ];
+    const allExactInBundle = (inp) => {
+      const set = valueSetForInput(inp);
+      return gtCells.every((gv) => set.has(gv));
+    };
+    const bundleMatches = distinctInps.filter((inp) => allExactInBundle(inp));
+    if (bundleMatches.length === 1) return bundleMatches[0];
+
+    return null;
   }
 
+  /* GT rows with no paired run: synthetic comparison rows. Prefer same `input_row_index` as runnable rows when we can infer it. */
   let synthRow = maxRunRowIndex + 1;
   for (let j = 0; j < gtCount; j++) {
     if (gtToRun[j] >= 0) continue;
     if (excludedFromScoring[String(j)]) continue;
-    const inpIdx = findInputRowIndexForUnpairedGt(j);
     const modalKey = String(j);
     const { expected, comparison_types, ground_truth_output } = expectedAndComparisonTypesForGt(j);
     const comment = comments[modalKey] ?? comments[String(j)] ?? null;
-    const row_input = rowInputAsPromptPlaceholders(inpIdx);
     const score_table_row = scoreTableRowByKey.get(`gt:${j}`) ?? null;
+    const inpResolved = findInputRowIndexForUnpairedGt(j);
+    const useInp = typeof inpResolved === 'number' && !Number.isNaN(inpResolved) ? inpResolved : null;
+    const row_input =
+      useInp != null
+        ? (inputIndicesWithValidRun.has(useInp) ? rowInputAsPromptPlaceholders(useInp) : emptyRowInputPlaceholders())
+        : null;
     rows.push({
       row_index: synthRow,
-      input_row_index: inpIdx,
+      input_row_index: useInp,
       matched: false,
       run_output: {},
       expected,
@@ -782,6 +855,8 @@ export function buildWorkflowCanvas(root) {
   const pendingRuns = new Map();
   /** Pending Review jobs: reviewNodeId -> reviewId. Poll backend and update Review node when done (like Run). */
   const pendingReviews = new Map();
+  /** Review nodes currently streaming (UI progress); used for delete-confirm "cancel job" messaging. */
+  const pendingReviewNodeIds = new Set();
   function registerPendingReview(nodeId, reviewId) {
     if (nodeId && reviewId) pendingReviews.set(nodeId, reviewId);
   }
@@ -809,6 +884,62 @@ export function buildWorkflowCanvas(root) {
     bar.style.width = pct + '%';
     bar.setAttribute('aria-valuenow', String(pct));
     if (node) node.dataset.reviewProgress = String(pct);
+  }
+  /** Score在画布上为本地即时算分：仅当选好 Ground truth、至少一条有效 rule，且上游 Run 已有结果时显示100%。 */
+  function setScoreNodeProgress(node, percent) {
+    const bar = node?.querySelector('.workflow-node__score-progress');
+    if (!bar) return;
+    const pct = Math.min(100, Math.max(0, Math.round(percent)));
+    bar.style.width = pct + '%';
+    bar.setAttribute('aria-valuenow', String(pct));
+    if (node) node.dataset.scoreProgress = String(pct);
+  }
+  function scoreNodeHasCompleteRules(scoreNode) {
+    if (!scoreNode) return false;
+    try {
+      const raw = scoreNode.dataset.scoreMapping || '[]';
+      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const tree = parseScoreMappingToTree(data);
+      const rules = flattenScoreTreeToRules(tree);
+      return rules.some((r) => (r.outputKey || '').trim() && Array.isArray(r.gtColumns) && r.gtColumns.some((c) => String(c || '').trim()));
+    } catch (_) {
+      return false;
+    }
+  }
+  function scoreNodeIsReadyForScoring(scoreNode) {
+    const gtId = (scoreNode?.dataset?.scoreGroundTruthId || '').trim();
+    return !!gtId && scoreNodeHasCompleteRules(scoreNode);
+  }
+  function syncScoreNodeProgressFromUpstreamRun(scoreNode) {
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return;
+    const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+    if (!runEdge) {
+      setScoreNodeProgress(scoreNode, 0);
+      return;
+    }
+    const runNode = getNodeById(runEdge.fromId);
+    if (!runNode) {
+      setScoreNodeProgress(scoreNode, 0);
+      return;
+    }
+    let runResults = [];
+    try {
+      runResults = JSON.parse(runNode.dataset.runResults || '[]');
+    } catch (_) {}
+    const hasResults = Array.isArray(runResults) && runResults.length > 0;
+    const ready = scoreNodeIsReadyForScoring(scoreNode);
+    setScoreNodeProgress(scoreNode, hasResults && ready ? 100 : 0);
+  }
+  function syncScoreNodesProgressForRunId(runNodeId, results) {
+    if (!runNodeId) return;
+    const hasResults = Array.isArray(results) && results.length > 0;
+    for (const c of connections) {
+      if (c.fromId !== runNodeId || c.type !== EDGE_TYPE_RUN_TO_SCORE) continue;
+      const scoreNode = getNodeById(c.toId);
+      if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) continue;
+      const ready = scoreNodeIsReadyForScoring(scoreNode);
+      setScoreNodeProgress(scoreNode, hasResults && ready ? 100 : 0);
+    }
   }
 
   /** When true, run poll is stopped (app closing); do not start new API calls. */
@@ -980,6 +1111,8 @@ export function buildWorkflowCanvas(root) {
       reviewProgress: streamSaved.reviewProgress || 0,
       run_results: streamSaved.run_results || [],
       comparison_rows: streamSaved.comparison_rows || [],
+      /** True once all Phase‑1 diagnosis_row events are done (before clustering / suggestions). Drives Issue analysis footer. */
+      diagnosisComplete: streamSaved.diagnosisComplete === true,
     };
     let diagnosisTotal = 0;
     let diagnosisDone = 0;
@@ -1002,13 +1135,18 @@ export function buildWorkflowCanvas(root) {
           data_refinement: [],
           row_diagnostics: [],
           streamComplete: false,
-          reviewProgress: 12,
+          diagnosisComplete: dt === 0,
+          reviewProgress: REVIEW_STREAM_PLAN_PCT,
         };
-        setReviewNodeProgress(getNodeById(reviewNodeId), 12);
-      } else if (ev.type === 'diagnosis_row' || ev.type === 'step2_row') {
+        setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_PLAN_PCT);
+      } else if (ev.type === 'diagnosis_row') {
         diagnosisDone = ev.done != null ? parseInt(ev.done, 10) : diagnosisDone + 1;
         const total = ev.total != null ? parseInt(ev.total, 10) : diagnosisTotal;
-        const pct = total > 0 ? 12 + Math.floor(58 * diagnosisDone / total) : 70;
+        const diagSpan = REVIEW_STREAM_DIAG_END_PCT - REVIEW_STREAM_PLAN_PCT;
+        const pct =
+          total > 0
+            ? REVIEW_STREAM_PLAN_PCT + Math.floor((diagSpan * diagnosisDone) / total)
+            : Math.min(REVIEW_STREAM_DIAG_END_PCT, REVIEW_STREAM_PLAN_PCT + diagnosisDone * 4);
         setReviewNodeProgress(getNodeById(reviewNodeId), pct);
         streamSaved.reviewProgress = pct;
         if (ev.opinion && typeof ev.opinion === 'object') {
@@ -1032,6 +1170,10 @@ export function buildWorkflowCanvas(root) {
             streamSaved.row_diagnostics = list;
           }
         }
+        const totalForPhase1 = total > 0 ? total : diagnosisTotal;
+        if (totalForPhase1 > 0 && diagnosisDone >= totalForPhase1) {
+          streamSaved.diagnosisComplete = true;
+        }
       } else if (ev.type === 'suggestions' && Array.isArray(ev.suggestions) && ev.suggestions.length) {
         const batch = ev.suggestions.map((s) =>
           s && typeof s === 'object'
@@ -1039,19 +1181,26 @@ export function buildWorkflowCanvas(root) {
             : s
         );
         streamSaved.suggestions = (streamSaved.suggestions || []).concat(batch);
-        setReviewNodeProgress(getNodeById(reviewNodeId), 90);
-        streamSaved.reviewProgress = 90;
+        setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_SUGGESTIONS_PCT);
+        streamSaved.reviewProgress = REVIEW_STREAM_SUGGESTIONS_PCT;
       } else if (ev.type === 'data_refinement' && Array.isArray(ev.data_refinement)) {
         streamSaved.data_refinement = ev.data_refinement.map((item) =>
           item && typeof item === 'object'
             ? ensureSuggestionObjectId({ ...item, source: item.source || 'pipeline' }, streamSaved)
             : item
         );
-        setReviewNodeProgress(getNodeById(reviewNodeId), 95);
-        streamSaved.reviewProgress = 95;
+        setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_DATA_PCT);
+        streamSaved.reviewProgress = REVIEW_STREAM_DATA_PCT;
       } else if (ev.type === 'done') {
-        setReviewNodeProgress(getNodeById(reviewNodeId), 100);
-        streamSaved = { ...streamSaved, streamComplete: true, reviewProgress: 100 };
+        const needsRowVerifyPhase = reviewStreamSavedNeedsRowVerifyPhase(streamSaved);
+        const finalizePct = needsRowVerifyPhase ? REVIEW_PROGRESS_PIPELINE_DONE : 100;
+        setReviewNodeProgress(getNodeById(reviewNodeId), finalizePct);
+        streamSaved = {
+          ...streamSaved,
+          streamComplete: true,
+          diagnosisComplete: true,
+          reviewProgress: finalizePct,
+        };
         normalizeSuggestionIdsToDisplayOrder(streamSaved);
       }
       ensureReviewResultIds(streamSaved);
@@ -1094,6 +1243,71 @@ export function buildWorkflowCanvas(root) {
   function getNodeById(nodeId) {
     if (!nodeId) return null;
     return nodesLayer.querySelector(`[data-node-id="${nodeId}"]`) || null;
+  }
+
+  function getOutgoingEdgesFromNode(nodeId) {
+    if (!nodeId) return [];
+    return connections.filter((c) => c.fromId === nodeId);
+  }
+
+  function isDatasetPickedByRunOrScore(datasetNodeId) {
+    if (!datasetNodeId) return false;
+    const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
+      (n) => (n.dataset.runWorkingSetId || '').trim() === datasetNodeId,
+    );
+    const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
+      (n) => (n.dataset.scoreGroundTruthId || '').trim() === datasetNodeId,
+    );
+    return usedByRun || usedByScore;
+  }
+
+  /**
+   * @param {string} nodeId
+   * @param {'prompt'|'sampler'|'dataset'|'run'|'score'|'promptReview'|''} kind
+   * @returns {{ blocked: boolean, reason?: 'downstream'|'dataset_ref' }}
+   */
+  function getWorkflowNodeDeleteBlockReason(nodeId, kind) {
+    if (getOutgoingEdgesFromNode(nodeId).length > 0) {
+      return { blocked: true, reason: 'downstream' };
+    }
+    if (kind === 'dataset' && isDatasetPickedByRunOrScore(nodeId)) {
+      return { blocked: true, reason: 'dataset_ref' };
+    }
+    return { blocked: false };
+  }
+
+  /**
+   * @param {string} nodeId
+   * @param {'prompt'|'sampler'|'dataset'|'run'|'score'|'promptReview'|''} kind
+   * @param {() => void} doDelete
+   */
+  async function handleWorkflowNodeDeleteClick(nodeId, kind, doDelete) {
+    const block = getWorkflowNodeDeleteBlockReason(nodeId, kind);
+    if (block.blocked) {
+      if (block.reason === 'downstream') {
+        showAlert(
+          'This node is connected to downstream node(s). Remove or disconnect those nodes first.',
+          { title: 'Cannot delete node' },
+        );
+      } else {
+        showAlert(
+          'This dataset is selected by one or more Run or Score nodes. Clear the selection in those nodes before deleting.',
+          { title: 'Cannot delete dataset' },
+        );
+      }
+      return;
+    }
+    const runBusy = kind === 'run' && pendingRuns.has(nodeId);
+    const reviewBusy =
+      kind === 'promptReview' && (pendingReviews.has(nodeId) || pendingReviewNodeIds.has(nodeId));
+    let msg = 'Delete this node? This cannot be undone.';
+    if (runBusy || reviewBusy) {
+      msg =
+        'Delete this node? A job is still running on it; deleting will cancel that run or review on the server.';
+    }
+    const ok = await showConfirm(msg, { title: 'Delete node', confirmText: 'Delete' });
+    if (!ok) return;
+    doDelete();
   }
 
   /**
@@ -2162,24 +2376,13 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const runEdges = connections.filter((c) => c.type === EDGE_TYPE_PROMPT_TO_RUN && c.fromId === nodeId);
-      const hasRunWithResults = runEdges.some((edge) => {
-        const runNode = getNodeById(edge.toId);
-        if (!runNode || !runNode.classList.contains('workflow-node--run')) return false;
-        try {
-          const rr = JSON.parse(runNode.dataset.runResults || '[]');
-          return Array.isArray(rr) && rr.length > 0;
-        } catch (_) { return false; }
+      void handleWorkflowNodeDeleteClick(nodeId, 'prompt', () => {
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       });
-      if (hasRunWithResults) {
-        showAlert('This prompt has been run. Remove or clear the one or more Run nodes that use it before deleting the prompt.', { title: 'Cannot delete prompt' });
-        return;
-      }
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     });
 
     let dragStartX = 0;
@@ -2394,11 +2597,13 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'sampler', () => {
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -2496,22 +2701,14 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
-        (n) => (n.dataset.runWorkingSetId || '').trim() === nodeId
-      );
-      const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
-        (n) => (n.dataset.scoreGroundTruthId || '').trim() === nodeId
-      );
-      if (usedByRun || usedByScore) {
-        showAlert('This dataset is selected by one or more Run or Score nodes. Clear the selection in those nodes before deleting.', { title: 'Cannot delete dataset' });
-        return;
-      }
-      removeConnectionsInvolvingNodeId(nodeId);
-      datasetContentByNodeId.delete(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'dataset', () => {
+        removeConnectionsInvolvingNodeId(nodeId);
+        datasetContentByNodeId.delete(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -2604,25 +2801,22 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const usedByScore = connections.some((c) => c.type === EDGE_TYPE_RUN_TO_SCORE && c.fromId === nodeId);
-      if (usedByScore) {
-        showAlert('This Run node is used by one or more Score nodes. Remove the Score nodes before deleting this Run.', { title: 'Cannot delete Run node' });
-        return;
-      }
-      const runId = pendingRuns.get(nodeId);
-      if (runId) {
-        unregisterPendingRun(nodeId);
-        fetch(`${RUN_API_BASE}/api/run/cancel/${runId}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: '{}',
-        }).catch(() => {});
-      }
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'run', () => {
+        const runId = pendingRuns.get(nodeId);
+        if (runId) {
+          unregisterPendingRun(nodeId);
+          fetch(`${RUN_API_BASE}/api/run/cancel/${runId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          }).catch(() => {});
+        }
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -2764,6 +2958,7 @@ export function buildWorkflowCanvas(root) {
         <span class="workflow-node__title">${escapeHtml(scoreTitle)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
+      <div class="workflow-node__score-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
     nodesLayer.appendChild(node);
 
@@ -2771,16 +2966,13 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const usedByReview = connections.some((c) => c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW && c.fromId === nodeId);
-      if (usedByReview) {
-        showAlert('This Score node is used by one or more Review nodes. Remove the Review nodes before deleting this Score.', { title: 'Cannot delete Score node' });
-        return;
-      }
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'score', () => {
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -2998,19 +3190,25 @@ export function buildWorkflowCanvas(root) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      const reviewId = pendingReviews.get(nodeId);
-      if (reviewId) {
-        unregisterPendingReview(nodeId);
-        fetch(`${RUN_API_BASE}/api/review/cancel/${reviewId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
-      } else {
-        fetch(`${RUN_API_BASE}/api/review/cancel/by-node/${encodeURIComponent(nodeId)}`, { method: 'POST' }).catch(() => {});
-      }
-      pendingReviewNodeIds.delete(nodeId);
-      removeConnectionsInvolvingNodeId(nodeId);
-      node.remove();
-      updateContentSize();
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void handleWorkflowNodeDeleteClick(nodeId, 'promptReview', () => {
+        const reviewId = pendingReviews.get(nodeId);
+        if (reviewId) {
+          unregisterPendingReview(nodeId);
+          fetch(`${RUN_API_BASE}/api/review/cancel/${reviewId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          }).catch(() => {});
+        } else {
+          fetch(`${RUN_API_BASE}/api/review/cancel/by-node/${encodeURIComponent(nodeId)}`, { method: 'POST' }).catch(() => {});
+        }
+        pendingReviewNodeIds.delete(nodeId);
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
     });
 
     let dragStartX = 0, dragStartY = 0, nodeStartLeft = 0, nodeStartTop = 0;
@@ -3464,7 +3662,7 @@ export function buildWorkflowCanvas(root) {
           } catch (_) {}
         }
         if (!credentialId) {
-          alert('Please select a model for Prompt reviewer in the Score detail first, or add an API credential.');
+          alert('Please select a model in the Score detail first, or add an API credential.');
           return;
         }
         await runReviewFromScore({
@@ -4226,6 +4424,16 @@ export function buildWorkflowCanvas(root) {
         type: EDGE_TYPE_RUN_TO_SCORE,
       });
       updateEdges();
+      const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
+      if (gtId) {
+        const wsNode = getNodeById(gtId);
+        if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
+          const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
+          const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+          const bar = scoreNode.querySelector('.workflow-node__score-progress');
+          if (bar) bar.style.background = color;
+        }
+      }
     }
     updateContentSize();
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -4254,7 +4462,6 @@ export function buildWorkflowCanvas(root) {
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
-  const pendingReviewNodeIds = new Set();
   document.addEventListener('workflow:review-stream-started', (e) => {
     const id = e.detail?.reviewNodeId;
     if (id) pendingReviewNodeIds.add(id);
@@ -4275,6 +4482,17 @@ export function buildWorkflowCanvas(root) {
     if (!reviewNode || !reviewNode.classList.contains('workflow-node--prompt-review')) return;
     setReviewNodeProgress(reviewNode, percent);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  });
+
+  document.addEventListener('workflow:run-results-updated', (e) => {
+    const runNodeId = e.detail?.nodeId;
+    const results = e.detail?.results;
+    if (!runNodeId) return;
+    syncScoreNodesProgressForRunId(runNodeId, results);
+  });
+
+  document.addEventListener('workflow:canvas-changed', () => {
+    nodesLayer.querySelectorAll('.workflow-node--score').forEach((sn) => syncScoreNodeProgressFromUpstreamRun(sn));
   });
 
   document.addEventListener('workflow:save-review-result', (e) => {
@@ -4319,12 +4537,20 @@ export function buildWorkflowCanvas(root) {
               (!nm || typeof nm !== 'object' || (nm.bestPassPct == null && pm.bestPassPct != null));
             if (keepPrevMeta) next.review_finetune_meta = pm;
           }
-          if (prev) {
-            const pt = prev.review_test_result;
-            if (pt === 'pass' || pt === 'fail') {
-              const nt = next.review_test_result;
-              if (nt !== 'pass' && nt !== 'fail') {
-                next.review_test_result = pt;
+          const prevNumForMerge = prev ? parseNumericSuggestionId(prev.suggestion_id) : null;
+          const sameSuggestionForTestMerge =
+            prevById != null ||
+            (prev != null && nextNum != null && prevNumForMerge != null && prevNumForMerge === nextNum);
+          const nextRowCheckRunning =
+            next.review_test_in_progress === true || next.review_test_in_progress === 1;
+          if (prev && sameSuggestionForTestMerge && !nextRowCheckRunning) {
+            for (const key of ['review_test_result', 'review_test_result_finetune_after', 'review_test_result_finetune_before']) {
+              const pt = prev[key];
+              if (pt === 'pass' || pt === 'fail') {
+                const nt = next[key];
+                if (nt !== 'pass' && nt !== 'fail') {
+                  next[key] = pt;
+                }
               }
             }
           }
@@ -4749,6 +4975,8 @@ export function buildWorkflowCanvas(root) {
         const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
         const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
         scoreNode.style.borderColor = color;
+        const progressBar = scoreNode.querySelector('.workflow-node__score-progress');
+        if (progressBar) progressBar.style.background = color;
       }
     });
     // Refresh dataset node description: sampler desc or dataset notes (always show body)
@@ -4792,6 +5020,7 @@ export function buildWorkflowCanvas(root) {
       }
       return null;
     }).filter(Boolean).filter((c) => getNodeById(c.fromId) && getNodeById(c.toId));
+    nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => syncScoreNodeProgressFromUpstreamRun(scoreNode));
     updateContentSize();
     updateEdges();
   }

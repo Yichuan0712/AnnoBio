@@ -698,10 +698,9 @@
     .overview-overlay .review-assistant-clear-btn { font-size: 11px; color: var(--text-muted); background: none; border: none; cursor: pointer; padding: 4px 0; }
     .overview-overlay .review-assistant-input-inner { display: flex; gap: 8px; border: 1px solid var(--border); border-radius: 6px; padding: 8px; background: var(--bg); }
     .overview-overlay .review-assistant-input { flex: 1; min-width: 0; font-size: 12px; border: none; resize: none; font-family: inherit; }
-    .overview-overlay .review-assistant-send-inline { width: 28px; height: 28px; flex-shrink: 0; border: none; background: var(--primary); color: white; border-radius: 4px; cursor: pointer; font-size: 14px; }
     .overview-overlay .review-detail-suggestion-card { padding: 12px; margin-bottom: 10px; background: var(--primary-bg); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
     .overview-overlay .review-detail-suggestion-card__main { font-size: 13px; color: var(--text); }
-    .overview-overlay .review-detail-suggestion-card__actions { display: flex; gap: 8px; }
+    .overview-overlay .review-detail-suggestion-card__actions { display: flex; justify-content: flex-end; gap: 8px; }
     .overview-overlay .review-detail-suggestion-header { display: block; margin-bottom: 4px; font-size: 12px; color: var(--text-muted); }
     .overview-overlay .review-detail-suggestion-reason { margin: 0; font-size: 13px; line-height: 1.45; }
     .overview-overlay .sampler-radio-group { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -1970,7 +1969,7 @@
                   <div class="review-assistant-msg review-assistant-msg--assistant">#4 reduces paraphrasing, which can cause false mismatches when the model rephrases correctly. Good to accept if you use exact match scoring.</div>
                 </div>
                 <div class="review-assistant-clear-bar"><button type="button" class="review-assistant-clear-btn" disabled>Clear chat history</button></div>
-                <div class="review-assistant-input-wrap"><div class="review-assistant-input-inner"><textarea class="review-assistant-input" placeholder="Ask anything..." rows="2" disabled></textarea><button type="button" class="review-assistant-send-inline" disabled>↑</button></div></div>
+                <div class="review-assistant-input-wrap"><div class="review-assistant-input-inner"><textarea class="review-assistant-input" placeholder="Ask anything" rows="2" disabled></textarea></div></div>
               </div>
             </div>
           </div>

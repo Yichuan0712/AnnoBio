@@ -20,6 +20,28 @@ export function comparisonRowIsMatched(row) {
   return false;
 }
 
+/**
+ * True when this run row should participate in Score / Review: no error and at least one schema output field
+ * has a non-empty value (so we do not send placeholder-only row_input for failed or empty model rows).
+ */
+export function isValidRunOutputForScoreRow(r, outputFields) {
+  if (!r || r.error) return false;
+  const out = r.output;
+  if (!out || typeof out !== 'object') return false;
+  const fields = Array.isArray(outputFields) ? outputFields : [];
+  if (fields.length === 0) return Object.keys(out).length > 0;
+  for (const f of fields) {
+    const key = String(f.key || '').trim();
+    if (!key || !Object.prototype.hasOwnProperty.call(out, key)) continue;
+    const v = out[key];
+    if (v == null) continue;
+    if (Array.isArray(v)) {
+      if (v.some((x) => x != null && String(x).trim() !== '')) return true;
+    } else if (String(v).trim() !== '') return true;
+  }
+  return false;
+}
+
 /** Comparison type (single choice). Legacy `contains` / `gt-contains-run` become String match + matchFlags.contains. */
 const MATCH_TYPES = [
   { value: 'exact', label: 'String match' },
@@ -935,10 +957,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
                   <div class="score-detail-llm-row">
-                    <label class="run-detail-label" for="score-detail-llm-select">Prompt reviewer</label>
-                    <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model for Prompt reviewer"></select>
+                    <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model"></select>
                   </div>
-                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with the selected Prompt reviewer model">Review</button>
+                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with the selected model">Review</button>
                 </div>
               </div>
             </div>
@@ -978,6 +999,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const ws = getSelectedWorkingSet();
     if (node && node.style) {
       node.style.borderColor = ws && ws.color ? ws.color : '';
+      const bar = node.querySelector('.workflow-node__score-progress');
+      if (bar) bar.style.background = ws && ws.color ? ws.color : '';
     }
   }
 
@@ -1592,6 +1615,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   async function renderResults() {
     if (!resultsBody) return;
+    const prevScrollEl = resultsBody.querySelector('.score-detail-results-table-scroll');
+    const savedScrollTop = prevScrollEl?.scrollTop ?? 0;
+    const savedScrollLeft = prevScrollEl?.scrollLeft ?? 0;
     resultsBody.innerHTML = '';
     const root = getRoot();
     const rulesFlat = getRulesFlat();
@@ -1625,7 +1651,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const errorRowCount = (rawResults || []).filter((r) => r && r.error).length;
     const resultsWithoutError = (rawResults || []).filter((r) => !r || !r.error);
     const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
-    const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields);
+    const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields).filter((r) =>
+      isValidRunOutputForScoreRow(r, outputFields),
+    );
     const gtHeaders = gtContent.headers || [];
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
@@ -1751,6 +1779,43 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const metricsText = `Precision ${fmt(precision)}% · Recall ${fmt(recall)}% · F1 ${fmt(f1)}%${errorNote}`;
 
     const summaryText = `Run result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tp} matched`;
+
+    /** Recompute PR/F1 banner only (Review checkbox toggles); avoids full table rebuild and scroll jump. */
+    function refreshScoreMetricsBanner() {
+      const excludedMapNow = getScoreRowExcludedFromScoring();
+      const isGtEx = (j) => !!excludedMapNow[String(j)];
+      const isRunOnlyEx = (runRowIdx) => !!excludedMapNow[`run:${runRowIdx}`];
+      let recallD = 0;
+      for (let j = 0; j < gtRows.length; j++) {
+        if (!isGtEx(j)) recallD++;
+      }
+      let tpN = 0;
+      for (let j = 0; j < gtRows.length; j++) {
+        if (isGtEx(j)) continue;
+        const runRowIndex = gtToRun[j];
+        if (runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent)) tpN++;
+      }
+      const nonErrRunIdx = [...new Set((results || []).filter((r) => !r.error).map((r) => r.row_index))];
+      let precD = 0;
+      for (const R of nonErrRunIdx) {
+        const j = R >= 0 && R < (runToGt || []).length ? runToGt[R] : -1;
+        if (j >= 0) {
+          if (!isGtEx(j)) precD++;
+        } else if (!isRunOnlyEx(R)) {
+          precD++;
+        }
+      }
+      const prec = precD > 0 ? (tpN / precD) * 100 : 0;
+      const rec = recallD > 0 ? (tpN / recallD) * 100 : 0;
+      const f1v = (prec + rec) > 0 ? (2 * (prec / 100) * (rec / 100) / ((prec + rec) / 100)) * 100 : 0;
+      const errNote = errorRowCount > 0 ? ` · ${errorRowCount} error row${errorRowCount === 1 ? '' : 's'} removed` : '';
+      const mTxt = `Precision ${fmt(prec)}% · Recall ${fmt(rec)}% · F1 ${fmt(f1v)}%${errNote}`;
+      const sTxt = `Run result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tpN} matched`;
+      const summaryEl = resultsBody.querySelector('.score-detail-results-summary');
+      const metricsEl = resultsBody.querySelector('.score-detail-results-metrics');
+      if (summaryEl) summaryEl.textContent = sTxt;
+      if (metricsEl) metricsEl.textContent = mTxt;
+    }
 
     const topRow = document.createElement('div');
     topRow.className = 'score-detail-results-top-row';
@@ -1882,7 +1947,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           if (cb.checked) delete ex[commentKey];
           else ex[commentKey] = true;
           setScoreRowExcludedFromScoring(ex);
-          void renderResults();
+          refreshScoreMetricsBanner();
         });
         wrap.appendChild(cb);
         tdReview.appendChild(wrap);
@@ -1922,6 +1987,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     tableScroll.className = 'score-detail-results-table-scroll';
     tableScroll.appendChild(tableWrap);
     resultsBody.appendChild(tableScroll);
+    if (savedScrollTop || savedScrollLeft) {
+      tableScroll.scrollTop = savedScrollTop;
+      tableScroll.scrollLeft = savedScrollLeft;
+    }
 
     if (resultsToolbar) {
       resultsToolbar.style.display = '';
@@ -1987,7 +2056,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
         fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
       ]);
-      llmSelect.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select Prompt reviewer model'))}</option>` + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
+      llmSelect.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>` + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
       let credentialId = (node?.dataset?.reviewCredentialId || '').trim();
       if (!credentialId && settings) {
         const defaultId = (settings.default_review_credential_id || '').trim();
@@ -2035,7 +2104,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!scoreNodeId) return;
     const credentialId = (llmSelect?.value || '').trim();
     if (!credentialId) {
-      showAlert('Please select a model for Prompt reviewer first.', { title: 'No model selected' });
+      showAlert('Please select a model first.', { title: 'No model selected' });
       return;
     }
     const payload = await Promise.resolve(getReviewPayload());
@@ -2473,7 +2542,9 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
 
   const resultsWithoutError = (rawResults || []).filter((r) => !r || !r.error);
   const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
-  const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields);
+  const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields).filter((r) =>
+    isValidRunOutputForScoreRow(r, outputFields),
+  );
   const gtRows = gtContent.rows || [];
   const gtHeaders = gtContent.headers || [];
   if (!Array.isArray(gtRows)) return null;

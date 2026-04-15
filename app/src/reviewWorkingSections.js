@@ -74,6 +74,16 @@ export function getLocatableSegment(content, oldSentence) {
 }
 
 /**
+ * `new_sentence` to use when applying a suggestion (finetuned text is always `new_sentence` when completed).
+ * @param {Record<string, unknown>} s
+ * @returns {string}
+ */
+export function effectiveNewSentenceForApply(s) {
+  if (!s || typeof s !== 'object') return '';
+  return String(s.new_sentence ?? '').trim();
+}
+
+/**
  * Rebuild working sections from originals by applying all suggestions that have applied === true.
  * @param {Array<{ name?: string, content?: string }>} originals
  * @param {Array<Record<string, unknown>>} suggestions
@@ -88,7 +98,7 @@ export function rebuildWorkingFromApplied(originals, suggestions) {
     const secIdx = Math.max(0, Math.min(s.section_index ?? 0, sections.length - 1));
     const useSentenceEdit = s.old_sentence != null && s.new_sentence != null;
     const oldSentence = (s.old_sentence || '').trim();
-    const newSentence = (s.new_sentence || '').trim();
+    const newSentence = effectiveNewSentenceForApply(s);
     const legacyNewContent = (s.new_content || '').trim();
     const content = sections[secIdx] ? (sections[secIdx].content || '') : '';
     if (useSentenceEdit) {
@@ -106,4 +116,76 @@ export function rebuildWorkingFromApplied(originals, suggestions) {
     }
   }
   return sections;
+}
+
+/** @param {Record<string, unknown>} sug */
+function suggestionFinetuneHasBeforeAfterText(sug) {
+  if (!sug || sug.review_finetune_completed !== true) return false;
+  const meta = sug.review_finetune_meta && typeof sug.review_finetune_meta === 'object' ? sug.review_finetune_meta : null;
+  const beforeRaw = meta && typeof meta.newSentenceBeforeFinetune === 'string' ? meta.newSentenceBeforeFinetune : '';
+  const before = String(beforeRaw);
+  const after = String(sug.new_sentence ?? '');
+  return before.trim() !== '' && before !== after;
+}
+
+/** Same “terminal outcome?” rule as reviewDetailModal (for auto row-check eligibility). */
+function getSuggestionTestOutcomeForAutoCheck(sug) {
+  if (!sug || typeof sug !== 'object') return null;
+  if (suggestionFinetuneHasBeforeAfterText(sug)) {
+    const rAfter = sug.review_test_result_finetune_after;
+    if (rAfter === 'pass' || rAfter === 'fail') return rAfter;
+    const legacy = sug.review_test_result;
+    if (legacy === 'pass' || legacy === 'fail') return legacy;
+    if (sug.review_test_passed === true) return 'pass';
+    return null;
+  }
+  const r = sug.review_test_result;
+  if (r === 'pass' || r === 'fail') return r;
+  if (sug.review_test_passed === true) return 'pass';
+  return null;
+}
+
+/** Stored 0-based comparison `row_index` for targeted rows (API / persistence; prompts use 1-based Score #). */
+export function suggestionTargetInputRowIndices(sug) {
+  if (!sug || typeof sug !== 'object') return [];
+  const raw = sug.target_input_row_indices ?? sug.row_indices;
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map((x) => Number(x)).filter((x) => !Number.isNaN(x) && x >= 0))].sort((a, b) => a - b);
+}
+
+/**
+ * True when Run+Score row check should run for this suggestion (locatable, has targets, no terminal outcome yet).
+ * @param {object} sug
+ * @param {{ name: string, content: string }[]} originals
+ * @param {unknown[]} promptSections
+ */
+export function suggestionNeedsAutoRowCheck(sug, originals, promptSections) {
+  if (!sug || typeof sug !== 'object') return false;
+  if (getSuggestionTestOutcomeForAutoCheck(sug)) return false;
+  const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
+  const oldSentence = (sug.old_sentence || '').trim();
+  const secIdx = Math.max(0, Math.min(Number(sug.section_index) || 0, (promptSections || []).length - 1));
+  const originalContent = originals[secIdx] && originals[secIdx].content ? originals[secIdx].content : '';
+  const segmentInOriginal = useSentenceEdit ? getLocatableSegment(originalContent, oldSentence) : null;
+  const unlocatable = useSentenceEdit && !segmentInOriginal;
+  if (unlocatable) return false;
+  if (suggestionTargetInputRowIndices(sug).length === 0) return false;
+  return true;
+}
+
+/**
+ * After streaming `done`, phase 2 (30→100%) runs only when at least one pipeline suggestion needs row verify.
+ * @param {Record<string, unknown>} saved — review result shape (`suggestions`, `promptSections`)
+ */
+export function reviewStreamSavedNeedsRowVerifyPhase(saved) {
+  if (!saved || typeof saved !== 'object') return false;
+  const list = Array.isArray(saved.suggestions) ? saved.suggestions : [];
+  const promptSections = Array.isArray(saved.promptSections) ? saved.promptSections : [];
+  const originals = promptSections.map((s) => ({ name: s?.name || '', content: String(s?.content ?? '') }));
+  for (const sug of list) {
+    if (!sug || typeof sug !== 'object') continue;
+    if (String(sug.source || '').toLowerCase() === 'assistant') continue;
+    if (suggestionNeedsAutoRowCheck(sug, originals, promptSections)) return true;
+  }
+  return false;
 }

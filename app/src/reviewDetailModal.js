@@ -14,12 +14,19 @@ import {
   hasActiveVerifySessions,
 } from './reviewSuggestionTest.js';
 import {
-  runSuggestionFinetuneBayesian,
+  runSuggestionFinetuneCompositional,
   abortAllFinetuneJobs,
   registerFinetuneSession,
+  unregisterFinetuneSession,
   hasActiveFinetuneSessions,
 } from './reviewSuggestionFinetune.js';
-import { rebuildWorkingFromApplied, getLocatableSegment } from './reviewWorkingSections.js';
+import {
+  rebuildWorkingFromApplied,
+  getLocatableSegment,
+  effectiveNewSentenceForApply,
+  suggestionTargetInputRowIndices,
+  suggestionNeedsAutoRowCheck,
+} from './reviewWorkingSections.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import {
   ensureReviewResultIds,
@@ -30,16 +37,128 @@ import {
 
 const API_BASE = 'http://localhost:8000';
 
-/** Only on full app/tab unload: cancel in-flight Verify + Finetune HTTP/poll. Closing the review modal does NOT call this — jobs keep running and persist when done. */
+/** LLM stream ends here; remaining bar is Run+Score checks (most wall time). Must match workflowCanvas. */
+const REVIEW_PROGRESS_PIPELINE_DONE = 30;
+const REVIEW_PROGRESS_CHECK_SPAN = 100 - REVIEW_PROGRESS_PIPELINE_DONE;
+
+/** Only on full app/tab unload: cancel in-flight row-check + Finetune HTTP/poll. Closing the review modal does NOT call this — jobs keep running and persist when done. */
 function abortReviewBackgroundJobsOnAppUnload() {
   abortAllFinetuneJobs();
   abortAllVerifyJobs();
 }
 
-/** Card Finetune button labels */
-const REVIEW_FINETUNE_LABEL_IDLE = 'Finetune';
-const REVIEW_FINETUNE_LABEL_TUNING = 'Tuning';
-const REVIEW_FINETUNE_LABEL_DONE = 'Finetune \u2713';
+/** After Run+Score row check succeeds (shown next to suggestion title; clearer than “Passed”). */
+const REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL = 'Verified';
+/** Row check failed (title pill); same label always. Modifier class makes it clickable when finetune can start. */
+const REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE = 'Click to Finetune';
+/** Row-check (Run+Score) in progress for this card. */
+const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying';
+/** Finetune optimization finished (title pill). */
+const REVIEW_SUGGESTION_FINETUNED_PILL_LABEL = 'Finetuned';
+/** Title tag for assistant-owned edits: dialogue proposal, not pipeline verify. */
+const REVIEW_SUGGESTION_PROPOSAL_TAG_LABEL = 'Proposal';
+const REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA = 'Edit proposed in chat; not Run+Score verified';
+
+const REVIEW_FINETUNE_LABEL_TUNING = 'Finetuning';
+
+/** Finetuned suggestions may store row-check in `review_test_result_finetune_after`; otherwise legacy `review_test_result`. */
+const REVIEW_TEST_RESULT_FINETUNE_AFTER = 'review_test_result_finetune_after';
+const REVIEW_TEST_RESULT_FINETUNE_BEFORE = 'review_test_result_finetune_before';
+
+/** True when finetune finished and meta has a distinct pre-finetune proposal (row-check targets finetuned `new_sentence` only). */
+function suggestionFinetuneHasBeforeAfterText(sug) {
+  if (!sug || sug.review_finetune_completed !== true) return false;
+  const meta = sug.review_finetune_meta && typeof sug.review_finetune_meta === 'object' ? sug.review_finetune_meta : null;
+  const beforeRaw = meta && typeof meta.newSentenceBeforeFinetune === 'string' ? meta.newSentenceBeforeFinetune : '';
+  const before = String(beforeRaw);
+  const after = String(sug.new_sentence ?? '');
+  return before.trim() !== '' && before !== after;
+}
+
+/** When true, row-check fail pill must not offer 'Click to Finetune' (tuning, or tuned with no retry). */
+function suggestionFinetuneRowCheckNudgeBlocked(sug) {
+  if (sug.review_finetune_in_progress === true) return true;
+  if (sug.review_finetune_completed === true) return !suggestionFinetuneHasBeforeAfterText(sug);
+  return false;
+}
+
+/** True when row-check fail pill should start finetune on click (idle, locatable, not blocked / already tuned). */
+function rowCheckFailPillCanStartFinetune(sug, noButton) {
+  if (noButton || getSuggestionTestOutcome(sug) !== 'fail') return false;
+  if (sug.review_finetune_in_progress === true) return false;
+  if (suggestionFinetuneRowCheckNudgeBlocked(sug)) return false;
+  if (sug.review_finetune_completed === true) return false;
+  return true;
+}
+
+const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
+
+/**
+ * At most one title pill. Pipeline: verify/finetune state. Assistant: only the Proposal tag.
+ */
+function collectSuggestionTitlePills(sug, noButton, actionsFull) {
+  if (!sug || typeof sug !== 'object') return [];
+  if (String(sug.source || '').toLowerCase() === 'assistant') {
+    return [
+      {
+        cls: 'review-suggestion-proposal-tag-pill',
+        text: REVIEW_SUGGESTION_PROPOSAL_TAG_LABEL,
+        ariaLabel: REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA,
+      },
+    ];
+  }
+  if (sug.review_finetune_in_progress === true) {
+    return [{ cls: 'review-suggestion-tuning-pill', text: REVIEW_FINETUNE_LABEL_TUNING }];
+  }
+  if (sug.review_finetune_completed === true && isReviewRowCheckInProgress(sug)) {
+    return [{ cls: 'review-suggestion-tuning-pill', text: REVIEW_FINETUNE_LABEL_TUNING }];
+  }
+  if (sug.review_finetune_completed === true) {
+    const fo = getSuggestionTestOutcome(sug);
+    let finCls = 'review-suggestion-finetuned-pill';
+    if (fo === 'pass') finCls += ' review-suggestion-finetuned-pill--pass';
+    else if (fo === 'fail') finCls += ' review-suggestion-finetuned-pill--fail';
+    return [{ cls: finCls, text: REVIEW_SUGGESTION_FINETUNED_PILL_LABEL }];
+  }
+  if (isReviewRowCheckInProgress(sug)) {
+    return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL }];
+  }
+  if (actionsFull) {
+    const outcome = getSuggestionTestOutcome(sug);
+    if (outcome === 'pass') {
+      return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL }];
+    }
+    if (outcome === 'fail') {
+      const clickFinetune = rowCheckFailPillCanStartFinetune(sug, noButton);
+      const text = REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE;
+      return [
+        {
+          cls:
+            'review-suggestion-rowcheck-fail-pill' +
+            (clickFinetune ? ' review-suggestion-rowcheck-fail-pill--click-finetune' : ''),
+          text,
+          clickFinetune,
+        },
+      ];
+    }
+  }
+  return [];
+}
+
+function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull) {
+  return collectSuggestionTitlePills(sug, noButton, actionsFull)
+    .map((spec) => {
+      if (spec.clickFinetune === true) {
+        return `<button type="button" class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}" aria-label="Finetune this suggestion" data-review-title-pill-action="finetune">${escapeHtml(spec.text)}</button>`;
+      }
+      const aria =
+        typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()
+          ? ` aria-label="${escapeHtml(spec.ariaLabel)}"`
+          : '';
+      return `<span class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}"${aria}>${escapeHtml(spec.text)}</span>`;
+    })
+    .join('');
+}
 
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
@@ -112,14 +231,6 @@ function formatRunRowIndexForDisplay(zeroBased) {
   return String(n + 1);
 }
 
-/** 0-based comparison indices for which input rows a prompt-edit suggestion targets (`target_input_row_indices` or legacy `row_indices`). */
-function suggestionTargetInputRowIndices(sug) {
-  if (!sug || typeof sug !== 'object') return [];
-  const raw = sug.target_input_row_indices ?? sug.row_indices;
-  if (!Array.isArray(raw)) return [];
-  return [...new Set(raw.map((x) => Number(x)).filter((x) => !Number.isNaN(x) && x >= 0))].sort((a, b) => a - b);
-}
-
 /** 1-based Score table position from saved comparison row when `score_table_row` is set. */
 function scoreTableRowNumberForComparisonIndex(comparisonRows, rowIndex) {
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
@@ -140,6 +251,41 @@ function formatScoreTableTargetLabels(comparisonRows, zeroBasedRowIndices) {
       return t != null ? `#${t}` : `(row_index ${idx})`;
     })
     .join(', ');
+}
+
+/**
+ * Assistant / chat may emit 1-based Score # or legacy 0-based row_index.
+ * Returns sorted unique 0-based comparison row_index (same as stored suggestions).
+ */
+function normalizeAssistantTargetsToRowIndex(rawValues, comparisonRows) {
+  const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
+  const validIdx = new Set(
+    rows.map((r) => Number(r?.row_index)).filter((n) => !Number.isNaN(n) && n >= 0),
+  );
+  const byScore = new Map();
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue;
+    const ri = Number(r.row_index);
+    if (Number.isNaN(ri) || ri < 0) continue;
+    const st = r.score_table_row != null ? Number(r.score_table_row) : NaN;
+    if (Number.isFinite(st) && st >= 1) byScore.set(st, ri);
+  }
+  const out = [];
+  const arr = Array.isArray(rawValues) ? rawValues : [];
+  for (const x of arr) {
+    const v = Number(x);
+    if (Number.isNaN(v) || v < 0) continue;
+    if (byScore.has(v)) {
+      out.push(byScore.get(v));
+      continue;
+    }
+    if (v >= 1 && validIdx.has(v - 1)) {
+      out.push(v - 1);
+      continue;
+    }
+    if (validIdx.has(v)) out.push(v);
+  }
+  return [...new Set(out)].sort((a, b) => a - b);
 }
 
 /** Turn snake_case category hints into a short phrase (not a “variable”). */
@@ -217,7 +363,7 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
     ? diagnostic.row_indices
     : null;
   const sourceLine = multiIdx
-    ? `Score table ${formatScoreTableTargetLabels(rows, multiIdx)} (same input, multiple outputs)`
+    ? `Score table ${formatScoreTableTargetLabels(rows, multiIdx)}`
     : (() => {
       const t = scoreTableRowNumberForComparisonIndex(rows, diagnostic.row_index);
       return t != null
@@ -247,18 +393,9 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
 
   function close() {
     overlay.remove();
-    document.removeEventListener('keydown', onKeyDown);
-  }
-
-  function onKeyDown(e) {
-    if (e.key === 'Escape') close();
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close();
-  });
-  document.addEventListener('keydown', onKeyDown);
   document.body.appendChild(overlay);
 }
 
@@ -266,29 +403,57 @@ const SUGGESTION_CARD_PREVIEW_TITLE_CHARS = 100;
 const SUGGESTION_CARD_PREVIEW_REASON_CHARS = 220;
 
 /**
- * Full text for a prompt-edit suggestion (what the edit responds to in review + note; diff on prompt hover / Accept).
+ * Full text for a prompt-edit suggestion (focus + rationale; diff on prompt hover / Accept).
+ * Assistant proposals: Focus line (score table + optional `chat_focus`) + `chat_focus_bullets` + Rationale. Pipeline: phase1 + score + Rationale.
  * @param {Record<string, unknown>} sug
  * @param {{ titleLine: string, comparisonRows?: Array<Record<string, unknown>> }} meta
  */
 function openPromptEditSuggestionDetailOverlay(sug, meta) {
   const heading = String(meta.titleLine || '').trim() || 'Suggestion';
-  const p1 = Array.isArray(sug.phase1_addresses)
-    ? sug.phase1_addresses.map((x) => String(x || '').trim()).filter(Boolean)
-    : [];
   const reason = String(sug.reason || '').trim();
-  const inputIdx = suggestionTargetInputRowIndices(sug);
-  const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
-  const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
-  const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
-  const respondsToHead =
-    scorePhrase !== ''
-      ? `<span class="review-diagnosis-detail-lead">Respond to:</span> ${escapeHtml(scorePhrase)}`
-      : `<span class="review-diagnosis-detail-lead">Respond to:</span>`;
-  const respondsToHtml = p1.length
-    ? `<p class="review-diagnosis-detail-prose">${respondsToHead}</p><ul class="review-suggestion-detail-list">${p1.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
-    : `<p class="review-diagnosis-detail-prose">${respondsToHead} <span class="review-diagnosis-detail-empty">(none)</span></p>`;
+  const isAssistant = String(sug.source || '').toLowerCase() === 'assistant';
 
-  const finetuneLogHtml = buildSuggestionFinetuneDetailSectionHtml(sug);
+  let detailBodyHtml;
+  if (isAssistant) {
+    const inputIdx = suggestionTargetInputRowIndices(sug);
+    const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
+    const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
+    const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
+    const chatFocus = String(sug.chat_focus || '').trim();
+    const bullets = Array.isArray(sug.chat_focus_bullets)
+      ? sug.chat_focus_bullets.map((x) => String(x || '').trim()).filter(Boolean)
+      : [];
+    const respondsToHead = scorePhrase
+      ? `<span class="review-diagnosis-detail-lead">Focus:</span> ${escapeHtml(scorePhrase)}`
+      : chatFocus
+        ? `<span class="review-diagnosis-detail-lead">Focus:</span> ${escapeHtml(chatFocus)}`
+        : `<span class="review-diagnosis-detail-lead">Focus:</span>`;
+    const focusHtml = bullets.length
+      ? `<p class="review-diagnosis-detail-prose">${respondsToHead}</p><ul class="review-suggestion-detail-list">${bullets.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+      : `<p class="review-diagnosis-detail-prose">${respondsToHead} <span class="review-diagnosis-detail-empty">(none)</span></p>`;
+    const rationalePara = `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Rationale:</span> ${
+      reason ? escapeHtml(reason) : '<span class="review-diagnosis-detail-empty">(none)</span>'
+    }</p>`;
+    detailBodyHtml = focusHtml + rationalePara;
+  } else {
+    const inputIdx = suggestionTargetInputRowIndices(sug);
+    const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
+    const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
+    const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
+    const p1 = Array.isArray(sug.phase1_addresses)
+      ? sug.phase1_addresses.map((x) => String(x || '').trim()).filter(Boolean)
+      : [];
+    const respondsToHead =
+      scorePhrase !== ''
+        ? `<span class="review-diagnosis-detail-lead">Focus:</span> ${escapeHtml(scorePhrase)}`
+        : `<span class="review-diagnosis-detail-lead">Focus:</span>`;
+    const respondsToHtml = p1.length
+      ? `<p class="review-diagnosis-detail-prose">${respondsToHead}</p><ul class="review-suggestion-detail-list">${p1.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+      : `<p class="review-diagnosis-detail-prose">${respondsToHead} <span class="review-diagnosis-detail-empty">(none)</span></p>`;
+    detailBodyHtml =
+      respondsToHtml +
+      `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Rationale:</span> ${reason ? escapeHtml(reason) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>`;
+  }
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay review-suggestion-detail-overlay';
@@ -301,47 +466,101 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body review-diagnosis-detail-body">
-        ${respondsToHtml}
-        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Note:</span> ${reason ? escapeHtml(reason) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
-        ${finetuneLogHtml}
+        ${detailBodyHtml}
       </div>
     </div>
   `;
 
   function close() {
     overlay.remove();
-    document.removeEventListener('keydown', onKeyDown);
-  }
-  function onKeyDown(e) {
-    if (e.key === 'Escape') close();
   }
   overlay.querySelector('.modal-close').addEventListener('click', close);
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close();
-  });
-  document.addEventListener('keydown', onKeyDown);
   document.body.appendChild(overlay);
+}
+
+function suggestionHasAnyTerminalTestOutcome(s) {
+  if (!s || typeof s !== 'object') return false;
+  const a = s[REVIEW_TEST_RESULT_FINETUNE_AFTER];
+  const b = s[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
+  const c = s.review_test_result;
+  if (a === 'pass' || a === 'fail' || b === 'pass' || b === 'fail' || c === 'pass' || c === 'fail') return true;
+  if (s.review_test_passed === true) return true;
+  return false;
+}
+
+function clearFinetuneRowCheckOutcome(sug) {
+  if (!sug || typeof sug !== 'object') return;
+  if (!suggestionFinetuneHasBeforeAfterText(sug)) {
+    delete sug.review_test_result;
+    delete sug.review_test_passed;
+    return;
+  }
+  delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
+  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
+  delete sug.review_test_result;
+  delete sug.review_test_passed;
+}
+
+function setFinetuneRowCheckOutcome(sug, outcome) {
+  if (!sug || typeof sug !== 'object') return;
+  if (outcome !== 'pass' && outcome !== 'fail') return;
+  if (!suggestionFinetuneHasBeforeAfterText(sug)) {
+    sug.review_test_result = outcome;
+    delete sug.review_test_passed;
+    return;
+  }
+  sug[REVIEW_TEST_RESULT_FINETUNE_AFTER] = outcome;
+  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
+  delete sug.review_test_result;
+  delete sug.review_test_passed;
+}
+
+/** @returns {'pass'|'fail'|null} */
+function getSuggestionTestOutcomeAfterSlot(sug) {
+  if (!sug || typeof sug !== 'object') return null;
+  const rAfter = sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
+  if (rAfter === 'pass' || rAfter === 'fail') return rAfter;
+  const legacy = sug.review_test_result;
+  if (legacy === 'pass' || legacy === 'fail') return legacy;
+  if (sug.review_test_passed === true) return 'pass';
+  return null;
 }
 
 /** @returns {'pass'|'fail'|null} */
 function getSuggestionTestOutcome(sug) {
   if (!sug || typeof sug !== 'object') return null;
+  if (suggestionFinetuneHasBeforeAfterText(sug)) return getSuggestionTestOutcomeAfterSlot(sug);
   const r = sug.review_test_result;
   if (r === 'pass' || r === 'fail') return r;
   if (sug.review_test_passed === true) return 'pass';
   return null;
 }
 
+/** Row-check (Run+Score) in flight on this suggestion — use everywhere UI reads this flag (reconcile/persist may not be strict boolean). */
+function isReviewRowCheckInProgress(sug) {
+  if (!sug || typeof sug !== 'object') return false;
+  const v = sug.review_test_in_progress;
+  return v === true || v === 1;
+}
+
+/** Truncated title line for suggestion cards (pass/fail shown via pill / not at all, not in the title string). */
+function formatSuggestionCardPreviewTitle(titleLine) {
+  const baseRaw = normalizeUnicodeDashesForDisplay(String(titleLine ?? ''));
+  return truncateWithEllipsis(baseRaw, SUGGESTION_CARD_PREVIEW_TITLE_CHARS);
+}
+
 function clearSuggestionTestOutcome(sug) {
   if (!sug || typeof sug !== 'object') return;
   delete sug.review_test_result;
   delete sug.review_test_passed;
+  delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
+  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
   delete sug.review_test_in_progress;
 }
 
 /**
- * Clear stale `review_test_in_progress` only when no Verify session is active (e.g. app killed).
- * If a job is still running in the background, keep the flag so reopen shows "Verifying".
+ * Clear stale `review_test_in_progress` only when no row-check session is active (e.g. app killed).
+ * If a job is still running in the background, keep the flag so reopen shows progress.
  */
 function stripAbortedReviewTests(suggestions) {
   if (!Array.isArray(suggestions)) return false;
@@ -349,12 +568,13 @@ function stripAbortedReviewTests(suggestions) {
   let changed = false;
   for (const s of suggestions) {
     if (!s || typeof s !== 'object') continue;
-    if (s.review_test_in_progress === true) {
+    if (isReviewRowCheckInProgress(s)) {
       delete s.review_test_in_progress;
-      const terminal = s.review_test_result === 'pass' || s.review_test_result === 'fail';
-      if (!terminal) {
+      if (!suggestionHasAnyTerminalTestOutcome(s)) {
         delete s.review_test_result;
         delete s.review_test_passed;
+        delete s[REVIEW_TEST_RESULT_FINETUNE_AFTER];
+        delete s[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
       }
       changed = true;
     }
@@ -364,7 +584,7 @@ function stripAbortedReviewTests(suggestions) {
 
 /**
  * Drop persisted finetune-in-progress only when no finetune session is active (crash / stale JSON).
- * While Finetune runs in the background after closing the modal, keep flags so reopen shows "Tuning".
+ * While Finetune runs in the background after closing the modal, keep flags so reopen shows "Finetuning".
  */
 function clearStaleFinetuneRunningFlags(suggestions) {
   if (!Array.isArray(suggestions)) return false;
@@ -379,83 +599,6 @@ function clearStaleFinetuneRunningFlags(suggestions) {
     }
   }
   return changed;
-}
-
-function updateSuggestionTestOutcomeVisual(card, sug) {
-  const btn = card.querySelector('.review-detail-test-btn');
-  if (!btn) return;
-  if (sug.review_test_in_progress === true) {
-    btn.disabled = true;
-    btn.classList.remove('review-detail-test-btn--passed', 'review-detail-test-btn--failed');
-    const labelEl = btn.querySelector('.review-detail-test-btn__label');
-    if (labelEl) labelEl.textContent = 'Verifying';
-    btn.removeAttribute('title');
-    return;
-  }
-  const o = getSuggestionTestOutcome(sug);
-  btn.disabled = false;
-  btn.classList.toggle('review-detail-test-btn--passed', o === 'pass');
-  btn.classList.toggle('review-detail-test-btn--failed', o === 'fail');
-  const labelEl = btn.querySelector('.review-detail-test-btn__label');
-  if (labelEl) {
-    labelEl.textContent = o === 'pass' ? `Verify \u2713` : o === 'fail' ? `Verify \u2717` : 'Verify';
-  }
-  btn.removeAttribute('title');
-}
-
-/** Keep Finetune button in sync with persisted flags (e.g. after Accept/Revert must not clobber Tuning / Finetune ��). */
-function updateSuggestionFinetuneButtonVisual(card, sug) {
-  const tuneBtn = card.querySelector('.review-detail-tune-btn');
-  if (!tuneBtn) return;
-  if (sug.review_finetune_completed === true) {
-    tuneBtn.textContent = REVIEW_FINETUNE_LABEL_DONE;
-    tuneBtn.removeAttribute('title');
-    tuneBtn.disabled = true;
-    tuneBtn.classList.add('review-detail-tune-btn--done');
-    return;
-  }
-  if (sug.review_finetune_in_progress === true) {
-    tuneBtn.textContent = REVIEW_FINETUNE_LABEL_TUNING;
-    tuneBtn.removeAttribute('title');
-    tuneBtn.disabled = true;
-    tuneBtn.classList.remove('review-detail-tune-btn--done');
-    return;
-  }
-  tuneBtn.textContent = REVIEW_FINETUNE_LABEL_IDLE;
-  tuneBtn.removeAttribute('title');
-  tuneBtn.disabled = false;
-  tuneBtn.classList.remove('review-detail-tune-btn--done');
-}
-
-function formatSuggestionFinetuneLineText(sug) {
-  if (!sug || sug.review_finetune_completed !== true) return '';
-  const meta = sug.review_finetune_meta && typeof sug.review_finetune_meta === 'object' ? sug.review_finetune_meta : null;
-  const n = meta && meta.bestPassPct != null ? Number(meta.bestPassPct) : NaN;
-  if (!Number.isNaN(n)) return `Finetune: ${n}% best pass`;
-  return 'Finetune: complete';
-}
-
-/** HTML fragment for View detail overlay when finetune has completed; label styled like Note: */
-function buildSuggestionFinetuneDetailSectionHtml(sug) {
-  const line = formatSuggestionFinetuneLineText(sug);
-  if (!line) return '';
-  const rest = line.startsWith('Finetune:') ? line.slice('Finetune:'.length).trim() : line.trim();
-  return `<p class="review-diagnosis-detail-prose review-suggestion-finetune-detail-line"><span class="review-diagnosis-detail-lead">Finetune:</span> ${
-    rest ? escapeHtml(rest) : '<span class="review-diagnosis-detail-empty">(none)</span>'
-  }</p>`;
-}
-
-function updateSuggestionCardFinetuneLine(card, sug) {
-  const line = card.querySelector('.review-detail-suggestion-finetune-line');
-  if (!line) return;
-  const txt = formatSuggestionFinetuneLineText(sug);
-  if (txt) {
-    line.textContent = txt;
-    line.hidden = false;
-  } else {
-    line.textContent = '';
-    line.hidden = true;
-  }
 }
 
 function sectionsToFullText(sections) {
@@ -678,13 +821,24 @@ function scrollNestedToReveal(el, boundary) {
 
 /** Build the shared result UI: left = sections (working copy), right = suggestions with accept/revert; full reason shown in card when selected. */
 function buildReviewResultUI(overlay, options) {
-  const { promptSections, suggestions: initialSuggestions, promptFullText, title, resultId, saved = {}, onReviewResultChange, onExportNewPrompt, streamRef, getIsReviewStreaming, getPayload } = options;
+  const {
+    promptSections,
+    suggestions: initialSuggestions,
+    promptFullText,
+    saved = {},
+    onReviewResultChange,
+    onExportNewPrompt,
+    getIsReviewStreaming,
+    getPayload,
+    getReviewResult,
+    reviewNodeId: reviewNodeIdOpt,
+  } = options;
+  const reviewNodeId = (reviewNodeIdOpt && String(reviewNodeIdOpt).trim()) || '';
   const promptWrap = overlay.querySelector('.review-detail-prompt-wrap');
-  const suggestionsEl = overlay.querySelector('#review-detail-suggestions') || overlay.querySelector('#review-result-suggestions');
-  const suggestionsFooterEl = overlay.querySelector('#review-detail-suggestions-footer') || overlay.querySelector('#review-result-suggestions-footer');
-  const diagnosisEl = overlay.querySelector('#review-detail-row-diagnostics') || overlay.querySelector('#review-result-row-diagnostics');
-  const analysisFooterEl =
-    overlay.querySelector('#review-detail-analysis-footer') || overlay.querySelector('#review-result-analysis-footer');
+  const suggestionsEl = overlay.querySelector('#review-detail-suggestions');
+  const suggestionsFooterEl = overlay.querySelector('#review-detail-suggestions-footer');
+  const diagnosisEl = overlay.querySelector('#review-detail-row-diagnostics');
+  const analysisFooterEl = overlay.querySelector('#review-detail-analysis-footer');
   if (!promptWrap || !suggestionsEl) return;
 
   if (saved && typeof saved === 'object') {
@@ -694,7 +848,6 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  const PREVIEW_LEN = 60;
   const originals = (promptSections || []).map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
   const savedSuggestions = Array.isArray(saved.suggestions) ? saved.suggestions : [];
   const savedWorking = Array.isArray(saved.workingSections) && saved.workingSections.length === originals.length
@@ -732,12 +885,8 @@ function buildReviewResultUI(overlay, options) {
     : [];
   rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
 
-  const statusEl = overlay.querySelector('.review-detail-stream-status');
-
   function isReviewStreamingNow() {
-    const byNode = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
-    const byRef = !!streamRef && saved.streamComplete !== true;
-    return byNode || byRef;
+    return typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
   }
 
   const reviewStreaming = isReviewStreamingNow();
@@ -756,6 +905,64 @@ function buildReviewResultUI(overlay, options) {
   editContainer.className = 'review-detail-edit-suggestions';
   suggestionsEl.appendChild(editContainer);
 
+  /** Click-to-pin: keep left-column diff visible without hover (Suggested changes cards only). */
+  let previewSelectedSuggestionIndex = null;
+
+  function updateSuggestionPreviewSelectionVisual() {
+    editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
+      const i = parseInt(c.dataset.suggestionIndex, 10);
+      const on = !Number.isNaN(i) && previewSelectedSuggestionIndex === i;
+      c.classList.toggle('review-detail-suggestion-card--preview-selected', on);
+    });
+  }
+
+  function applyPinnedPreviewIfAny() {
+    if (previewSelectedSuggestionIndex == null) return;
+    const c = editContainer.querySelector(
+      `.review-detail-suggestion-card[data-suggestion-index="${previewSelectedSuggestionIndex}"]`,
+    );
+    if (c && typeof c._reviewShowPreview === 'function') {
+      c._reviewShowPreview();
+    } else {
+      previewSelectedSuggestionIndex = null;
+      updateSuggestionPreviewSelectionVisual();
+    }
+  }
+
+  function reconcileAllSuggestionsFromSavedData(data) {
+    if (!data || !Array.isArray(data.suggestions)) return;
+    for (let i = 0; i < allSuggestions.length; i++) {
+      const loc = allSuggestions[i];
+      if (!loc || typeof loc !== 'object') continue;
+      const id = loc.suggestion_id;
+      if (id == null || id === '') continue;
+      const r = data.suggestions.find((x) => x && String(x.suggestion_id) === String(id));
+      if (r && typeof r === 'object') {
+        const keepInProgress =
+          hasActiveVerifySessions() &&
+          isReviewRowCheckInProgress(loc) &&
+          !isReviewRowCheckInProgress(r);
+        Object.assign(loc, r);
+        if (keepInProgress) loc.review_test_in_progress = true;
+      }
+    }
+  }
+
+  function refreshAllEditSuggestionCardsVisuals() {
+    editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((card) => {
+      const i = parseInt(card.dataset.suggestionIndex, 10);
+      if (Number.isNaN(i) || !allSuggestions[i]) return;
+      const s = allSuggestions[i];
+      updateSuggestionTestOutcomeVisual(card, s, suggestionActionsFullForCard(s), originals, promptSections);
+      const acceptBtn = card.querySelector('.review-detail-accept-btn');
+      if (acceptBtn) {
+        const applied = s.applied === true;
+        acceptBtn.textContent = applied ? 'Revert' : 'Accept';
+        acceptBtn.classList.toggle('review-detail-accept-btn--revert', applied);
+      }
+    });
+  }
+
   function persistWorking() {
     if (typeof onReviewResultChange !== 'function') return;
     const suggestionsToSave = allSuggestions.map((s) => {
@@ -764,23 +971,43 @@ function buildReviewResultUI(overlay, options) {
       delete next._finetunePersistScheduled;
       return next;
     });
+    const live = typeof getReviewResult === 'function' ? getReviewResult() : null;
+    const base = live && typeof live === 'object' ? { ...live } : { ...saved };
     const next = {
-      ...saved,
-      summary: saved.summary ?? '',
+      ...base,
+      summary: base.summary ?? saved.summary ?? '',
       suggestions: suggestionsToSave,
       design_suggestions: [],
       data_refinement: dataRefinement,
       row_diagnostics: rowDiagnostics,
-      promptSections: saved.promptSections ?? promptSections,
-      promptFullText: saved.promptFullText ?? promptFullText,
+      promptSections: base.promptSections ?? saved.promptSections ?? promptSections,
+      promptFullText: base.promptFullText ?? saved.promptFullText ?? promptFullText,
       workingSections: working.map((s) => ({ name: s.name, content: s.content })),
     };
     delete next.review_finetune_last_result;
     onReviewResultChange(next);
+    refreshAllEditSuggestionCardsVisuals();
   }
 
   if (stripAbortedReviewTests(allSuggestions) && typeof onReviewResultChange === 'function') {
     persistWorking();
+  }
+
+  function emitReviewBarProgress(percent) {
+    const pct = Math.min(100, Math.max(0, Math.round(percent)));
+    if (!reviewNodeId) return;
+    document.dispatchEvent(new CustomEvent('workflow:review-progress', {
+      detail: { reviewNodeId, percent: pct },
+    }));
+  }
+
+  function persistReviewProgressToNode(percent) {
+    const pct = Math.min(100, Math.max(0, Math.round(percent)));
+    emitReviewBarProgress(pct);
+    if (typeof onReviewResultChange !== 'function' || typeof getReviewResult !== 'function') return;
+    const live = getReviewResult();
+    if (!live || typeof live !== 'object' || live.reviewProgress === pct) return;
+    onReviewResultChange({ ...live, reviewProgress: pct });
   }
 
   /** Recompute working from originals by applying every suggestion that has .applied === true (in order). */
@@ -790,6 +1017,372 @@ function buildReviewResultUI(overlay, options) {
     for (let i = 0; i < next.length; i++) {
       working[i].name = next[i].name;
       working[i].content = next[i].content;
+    }
+  }
+
+  /** Shared Run+Score check: prompt = originals + only this suggestion applied (ignore other accepted rows). */
+  async function runRowVerifyWithPayload(sug, sugIdx, payload, signal) {
+    const targets = suggestionTargetInputRowIndices(sug);
+    if (targets.length === 0) return { emptyTargets: true };
+    const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdx }));
+    const testSections = rebuildWorkingFromApplied(originals, patched);
+    if (!testSections || testSections.length !== originals.length) {
+      return { buildError: true };
+    }
+    const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
+    const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
+    const result = await runSuggestionRowTests({
+      apiBase: API_BASE,
+      credentialId: payload.run_credential_id,
+      testSections,
+      targetComparisonRowIndices: targets,
+      comparisonRows: payload.comparison_rows || [],
+      runResults: payload.run_results || [],
+      outputFields: payload.output_fields || [],
+      outputSchema: payload.output_schema,
+      scoreMappingJson: payload.score_mapping || '[]',
+      runWs: runWs || { headers: [], rows: [] },
+      gtContent: gtContent || { headers: [], rows: [] },
+      signal,
+    });
+    return { result };
+  }
+
+  /** Run+Score check for one card (e.g. after finetune completes). Always re-resolve the card from the DOM so refresh/reconcile cannot leave a stale element reference. */
+  async function runAutoRowCheckForSuggestion(sugIdx) {
+    const sug = allSuggestions[sugIdx];
+    if (!sug || typeof sug !== 'object') return;
+    if (isReviewStreamingNow()) return;
+    if (typeof getPayload !== 'function') return;
+    if (suggestionTargetInputRowIndices(sug).length === 0) return;
+
+    function cardEl() {
+      return editContainer.querySelector(`.review-detail-suggestion-card[data-suggestion-index="${sugIdx}"]`);
+    }
+    function paintCard() {
+      const el = cardEl();
+      if (el) updateSuggestionTestOutcomeVisual(el, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+    }
+
+    const verifyAc = new AbortController();
+    registerVerifySession(verifyAc);
+
+    function exitBeforeVerifyRequest() {
+      delete sug.review_test_in_progress;
+      paintCard();
+      persistWorking();
+    }
+
+    try {
+      sug.review_test_in_progress = true;
+      persistWorking();
+      paintCard();
+
+      let payload;
+      try {
+        payload = await getPayload();
+      } catch (_) {
+        exitBeforeVerifyRequest();
+        return;
+      }
+      if (!payload || !payload.run_credential_id) {
+        exitBeforeVerifyRequest();
+        return;
+      }
+      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
+        exitBeforeVerifyRequest();
+        return;
+      }
+
+      try {
+        const out = await runRowVerifyWithPayload(sug, sugIdx, payload, verifyAc.signal);
+        if (out.emptyTargets) {
+          clearFinetuneRowCheckOutcome(sug);
+        } else if (out.buildError) {
+          setFinetuneRowCheckOutcome(sug, 'fail');
+        } else {
+          const { result } = out;
+          if (result.aborted) {
+            clearFinetuneRowCheckOutcome(sug);
+          } else if (result.ok) {
+            setFinetuneRowCheckOutcome(sug, 'pass');
+          } else {
+            setFinetuneRowCheckOutcome(sug, 'fail');
+          }
+        }
+      } catch (err) {
+        if (isReviewRowCheckInProgress(sug)) {
+          if (err && err.name === 'AbortError') {
+            clearFinetuneRowCheckOutcome(sug);
+          } else {
+            setFinetuneRowCheckOutcome(sug, 'fail');
+          }
+        }
+      }
+    } finally {
+      unregisterVerifySession(verifyAc);
+      delete sug.review_test_in_progress;
+      paintCard();
+      persistWorking();
+    }
+  }
+
+  let pipelineAutoCheckInFlight = false;
+
+  function clearAllPipelineAutoCheckInProgressFlags() {
+    for (const sug of allSuggestions) {
+      if (!sug || typeof sug !== 'object') continue;
+      delete sug.review_test_in_progress;
+    }
+  }
+
+  let editCardsRefreshScheduled = false;
+  function scheduleEditSuggestionCardsRefresh() {
+    if (editCardsRefreshScheduled) return;
+    editCardsRefreshScheduled = true;
+    queueMicrotask(() => {
+      editCardsRefreshScheduled = false;
+      renderEditSuggestionCards();
+      updateSuggestionsFooter();
+    });
+  }
+
+  async function runPipelineAutoCheckAfterStreamDone() {
+    if (pipelineAutoCheckInFlight) return;
+    if (typeof getPayload !== 'function') {
+      persistReviewProgressToNode(100);
+      return;
+    }
+    pipelineAutoCheckInFlight = true;
+    try {
+      let payload;
+      try {
+        payload = await getPayload();
+      } catch (_) {
+        clearAllPipelineAutoCheckInProgressFlags();
+        persistWorking();
+        persistReviewProgressToNode(100);
+        return;
+      }
+      if (!payload || !payload.run_credential_id) {
+        clearAllPipelineAutoCheckInProgressFlags();
+        persistWorking();
+        persistReviewProgressToNode(100);
+        return;
+      }
+      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
+        clearAllPipelineAutoCheckInProgressFlags();
+        persistWorking();
+        persistReviewProgressToNode(100);
+        return;
+      }
+      const indicesToVerify = [];
+      for (let sugIdx = 0; sugIdx < allSuggestions.length; sugIdx++) {
+        const s = allSuggestions[sugIdx];
+        if (String(s?.source || '').toLowerCase() === 'assistant') continue;
+        if (suggestionNeedsAutoRowCheck(s, originals, promptSections)) indicesToVerify.push(sugIdx);
+      }
+      const verifyTotal = indicesToVerify.length;
+      if (verifyTotal === 0) {
+        clearAllPipelineAutoCheckInProgressFlags();
+        persistWorking();
+        persistReviewProgressToNode(100);
+        return;
+      }
+      const batchAc = new AbortController();
+      registerVerifySession(batchAc);
+      try {
+        let verifyDone = 0;
+        for (const sugIdx of indicesToVerify) {
+          const sug = allSuggestions[sugIdx];
+          persistWorking();
+
+          try {
+            const out = await runRowVerifyWithPayload(sug, sugIdx, payload, batchAc.signal);
+            if (out.emptyTargets) {
+              /* no outcome */
+            } else if (out.buildError) {
+              setFinetuneRowCheckOutcome(sug, 'fail');
+            } else {
+              const { result } = out;
+              try {
+                if (result.aborted) {
+                  clearFinetuneRowCheckOutcome(sug);
+                } else if (result.ok) {
+                  setFinetuneRowCheckOutcome(sug, 'pass');
+                } else {
+                  setFinetuneRowCheckOutcome(sug, 'fail');
+                }
+              } catch (err) {
+                if (err && err.name === 'AbortError') {
+                  clearFinetuneRowCheckOutcome(sug);
+                } else {
+                  setFinetuneRowCheckOutcome(sug, 'fail');
+                }
+              }
+            }
+          } catch (err) {
+            if (isReviewRowCheckInProgress(sug)) {
+              if (err && err.name === 'AbortError') {
+                clearFinetuneRowCheckOutcome(sug);
+              } else {
+                setFinetuneRowCheckOutcome(sug, 'fail');
+              }
+            }
+          } finally {
+            delete sug.review_test_in_progress;
+            persistWorking();
+            verifyDone += 1;
+            emitReviewBarProgress(
+              REVIEW_PROGRESS_PIPELINE_DONE + Math.round((REVIEW_PROGRESS_CHECK_SPAN * verifyDone) / verifyTotal),
+            );
+            scheduleEditSuggestionCardsRefresh();
+          }
+        }
+      } finally {
+        unregisterVerifySession(batchAc);
+      }
+      persistReviewProgressToNode(100);
+    } finally {
+      pipelineAutoCheckInFlight = false;
+    }
+  }
+
+  /** Full actions per card: stream still running, or this suggestion's auto row-check not in flight (or not needed). */
+  function suggestionActionsFullForCard(sug) {
+    const isAssistant = sug && String(sug.source || '').toLowerCase() === 'assistant';
+    /* Assistant edits: full actions (View detail + Accept); title shows Proposal tag only. */
+    if (isAssistant) return true;
+    /* User may Accept/Revert the current proposal while Finetune runs (optimizer works on a copy server-side until completion). */
+    if (sug && sug.review_finetune_in_progress === true && saved.streamComplete === true) {
+      return true;
+    }
+    if (saved.streamComplete !== true) {
+      return allSuggestions.length === 0;
+    }
+    if (!suggestionNeedsAutoRowCheck(sug, originals, promptSections)) return true;
+    return !isReviewRowCheckInProgress(sug);
+  }
+
+  /** Title-line “Click to Finetune” only: one listener per pill (pipeline suggestions). */
+  function wireInteractiveTitlePillsOnCard(card) {
+    if (!card) return;
+    card.querySelectorAll('[data-review-title-pill-action="finetune"]').forEach((pill) => {
+      const onActivate = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        const sugIdx = parseInt(card.dataset.suggestionIndex, 10);
+        if (Number.isNaN(sugIdx) || !allSuggestions[sugIdx]) return;
+        const sug = allSuggestions[sugIdx];
+        void handleFinetuneActionForCard(card, sug, sugIdx);
+      };
+      pill.addEventListener('click', onActivate);
+      pill.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        onActivate(e);
+      });
+    });
+  }
+
+  function updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections) {
+    const plain = Object.prototype.hasOwnProperty.call(card.dataset, 'reviewTitlePlain')
+      ? card.dataset.reviewTitlePlain || ''
+      : '';
+    const titleWrap = card.querySelector('.review-detail-suggestion-title-wrap');
+    const strong = titleWrap
+      ? titleWrap.querySelector('.review-detail-suggestion-section-name')
+      : card.querySelector('.review-detail-suggestion-section-name');
+    if (strong && plain !== '') {
+      strong.textContent = formatSuggestionCardPreviewTitle(plain);
+    }
+    const noButton = card.classList.contains('review-detail-suggestion-card--unlocatable');
+    if (titleWrap) {
+      titleWrap.querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`).forEach((el) => el.remove());
+      const specs = collectSuggestionTitlePills(sug, noButton, actionsFull);
+      for (const spec of specs) {
+        const interactive = spec.clickFinetune === true;
+        const el = document.createElement(interactive ? 'button' : 'span');
+        if (interactive) el.type = 'button';
+        el.className = `${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`;
+        el.textContent = spec.text;
+        if (spec.clickFinetune === true) {
+          el.setAttribute('aria-label', 'Finetune this suggestion');
+          el.setAttribute('data-review-title-pill-action', 'finetune');
+        } else if (typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()) {
+          el.setAttribute('aria-label', spec.ariaLabel);
+        }
+        titleWrap.appendChild(el);
+      }
+      wireInteractiveTitlePillsOnCard(card);
+    }
+  }
+
+  function updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections) {
+    updateSuggestionTitleAndPassPill(card, sug, actionsFull !== false, originals, promptSections);
+  }
+
+  function renderEditSuggestionCards() {
+    editContainer.innerHTML = '';
+    if (!allSuggestions || allSuggestions.length === 0) {
+      previewSelectedSuggestionIndex = null;
+      clearDiffOnRight();
+      if (dataRefinement.length === 0) {
+        editContainer.innerHTML = '<p class="review-detail-placeholder">No suggestions.</p>';
+      } else {
+        editContainer.innerHTML = '<p class="review-detail-placeholder">No prompt edit suggestions.</p>';
+      }
+      return;
+    }
+    allSuggestions.forEach((sug, sugIdx) => addOneSuggestionCard(sug, sugIdx));
+    if (previewSelectedSuggestionIndex != null) {
+      const still = previewSelectedSuggestionIndex < allSuggestions.length;
+      if (!still) {
+        previewSelectedSuggestionIndex = null;
+        clearDiffOnRight();
+      }
+      updateSuggestionPreviewSelectionVisual();
+      if (still) applyPinnedPreviewIfAny();
+    } else {
+      updateSuggestionPreviewSelectionVisual();
+    }
+  }
+
+  /** After stream: show cards (View detail only while that card's check runs); row checks run one suggestion at a time. */
+  async function revealSuggestionsAfterReview() {
+    if (!allSuggestions || allSuggestions.length === 0) {
+      renderEditSuggestionCards();
+      updateSuggestionsFooter();
+      persistReviewProgressToNode(100);
+      return;
+    }
+    const willRunChecks =
+      typeof getPayload === 'function' &&
+      allSuggestions.some(
+        (s) =>
+          String(s.source || '').toLowerCase() !== 'assistant' &&
+          suggestionNeedsAutoRowCheck(s, originals, promptSections),
+      );
+    if (willRunChecks) {
+      for (const sug of allSuggestions) {
+        if (String(sug.source || '').toLowerCase() === 'assistant') continue;
+        if (suggestionNeedsAutoRowCheck(sug, originals, promptSections)) {
+          sug.review_test_in_progress = true;
+        }
+      }
+      persistWorking();
+    }
+    renderEditSuggestionCards();
+    updateSuggestionsFooter();
+    try {
+      if (typeof getPayload === 'function') {
+        await runPipelineAutoCheckAfterStreamDone();
+      } else {
+        persistReviewProgressToNode(100);
+      }
+    } finally {
+      renderEditSuggestionCards();
+      updateSuggestionsFooter();
     }
   }
 
@@ -831,15 +1424,153 @@ function buildReviewResultUI(overlay, options) {
     renderLeft(-1);
   }
 
+  async function handleFinetuneActionForCard(card, sug, sugIdx) {
+    const actionsFull = suggestionActionsFullForCard(sug);
+    if (sug.review_finetune_completed === true) return;
+    if (sug.review_finetune_in_progress === true) return;
+    if (isReviewRowCheckInProgress(sug)) return;
+    if (pipelineAutoCheckInFlight) {
+      showAlert('Wait until automatic row checks finish before using Finetune.', { title: 'Verify in progress' });
+      return;
+    }
+    if (isReviewStreamingNow()) {
+      showAlert('Wait until the review finishes before running finetune.', { title: 'Review in progress' });
+      return;
+    }
+    const targets = suggestionTargetInputRowIndices(sug);
+    if (targets.length === 0) {
+      showAlert('This suggestion has no target input rows.', { title: 'Cannot finetune' });
+      return;
+    }
+    const oldSentence = (sug.old_sentence || '').trim();
+    if (typeof getPayload !== 'function') return;
+    let finetuneAc = null;
+    try {
+      const payload = await getPayload();
+      if (!payload || !payload.run_credential_id) {
+        showAlert('Configure a Run credential on the Run node, then try again.', { title: 'Missing credential' });
+        return;
+      }
+      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
+        showAlert('The prompt needs an output schema (Run / prompt settings) to finetune.', { title: 'Missing output schema' });
+        return;
+      }
+      const improvementRationale = String(sug.reason || '').trim();
+      finetuneAc = new AbortController();
+      registerFinetuneSession(finetuneAc);
+      sug._finetuneAbort = finetuneAc;
+      sug.review_finetune_in_progress = true;
+      updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
+      persistWorking();
+      const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
+      const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
+      let reviewCredForFinetune = '';
+      let compMaxTrials = 40;
+      let compCandidates = 4;
+      let compMaxSegments = 5;
+      try {
+        const sres = await fetch(`${API_BASE}/api/settings`);
+        if (sres.ok) {
+          const s = await sres.json();
+          reviewCredForFinetune = String(s.default_review_credential_id || '').trim();
+          compMaxTrials = Math.min(200, Math.max(8, Number(s.review_finetune_comp_max_trials) || 40));
+          compCandidates = Math.min(8, Math.max(2, Number(s.review_finetune_comp_candidates_per_segment) || 4));
+          compMaxSegments = Math.min(8, Math.max(2, Number(s.review_finetune_comp_max_segments) || 5));
+        }
+      } catch (_) {
+        /* use defaults */
+      }
+      if (!reviewCredForFinetune) reviewCredForFinetune = payload.run_credential_id;
+      if (!improvementRationale) {
+        showAlert('Finetune needs this suggestion’s reason (from Review). Re-run review or pick an edit that includes a reason.', {
+          title: 'Missing reason',
+        });
+        return;
+      }
+      const proposalNew = (sug.new_sentence || '').trim();
+      const onFinetuneProgress = ({ trial, trials }) => {
+        sug.review_finetune_progress = { trial, trials };
+        if (!sug._finetunePersistScheduled) {
+          sug._finetunePersistScheduled = true;
+          requestAnimationFrame(() => {
+            delete sug._finetunePersistScheduled;
+            persistWorking();
+          });
+        }
+      };
+      const result = await runSuggestionFinetuneCompositional({
+        apiBase: API_BASE,
+        llmCredentialId: reviewCredForFinetune,
+        runCredentialId: payload.run_credential_id,
+        oldSentence,
+        newSentence: proposalNew,
+        improvementRationale,
+        maxSegments: compMaxSegments,
+        candidatesPerSegment: compCandidates,
+        maxTrials: compMaxTrials,
+        allSuggestions,
+        sugIdx,
+        originals,
+        targets,
+        comparisonRows: payload.comparison_rows || [],
+        runResults: payload.run_results || [],
+        outputFields: payload.output_fields || [],
+        outputSchema: payload.output_schema,
+        scoreMappingJson: payload.score_mapping || '[]',
+        runWs: runWs || { headers: [], rows: [] },
+        gtContent: gtContent || { headers: [], rows: [] },
+        abortController: finetuneAc,
+        onProgress: onFinetuneProgress,
+      });
+      sug.new_sentence = result.bestText;
+      sug.review_finetune_meta = {
+        bestPassPct: Math.round(Number(result.bestObservedRate) * 100),
+        candidatesCount: result.candidates.length,
+        trialsRun: Array.isArray(result.trialLog) ? result.trialLog.length : 0,
+        bestArmIndex: result.bestIndex,
+        optimizer: result.optimizer || 'compositional',
+        newSentenceBeforeFinetune: proposalNew,
+      };
+      delete saved.review_finetune_last_result;
+      sug.review_finetune_completed = true;
+      delete sug.review_finetune_use_before;
+      delete sug.review_test_result;
+      delete sug.review_test_passed;
+      delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
+      delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
+      if (sug.applied === true) syncWorkingFromApplied();
+      updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
+      renderLeft(-1);
+      persistWorking();
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        /* user cancelled or window closed */
+      } else {
+        showAlert(String(err?.message || err || 'Finetune failed'), { title: 'Finetune failed' });
+      }
+    } finally {
+      if (finetuneAc) unregisterFinetuneSession(finetuneAc);
+      delete sug.review_finetune_in_progress;
+      delete sug._finetuneAbort;
+      delete sug.review_finetune_progress;
+      updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
+      persistWorking();
+      if (sug.review_finetune_completed === true) {
+        await runAutoRowCheckForSuggestion(sugIdx);
+      }
+    }
+  }
+
   const sectionNames = (promptSections || []).map((s, i) => (s.name || '').trim() || `Section ${i}`);
 
   function updateAnalysisFooter() {
     if (!analysisFooterEl) return;
-    const isComplete = saved.streamComplete === true;
-    const inProgress = !isComplete && isReviewStreamingNow();
+    const issueAnalysisComplete =
+      saved.streamComplete === true || saved.diagnosisComplete === true;
+    const inProgress = !issueAnalysisComplete && isReviewStreamingNow();
     let statusClass = 'review-detail-status-note--incomplete';
     let statusText = REVIEW_INCOMPLETE_USER_MSG;
-    if (isComplete) {
+    if (issueAnalysisComplete) {
       statusClass = 'review-detail-status-note--complete';
       const n = rowDiagnostics.length;
       statusText =
@@ -864,7 +1595,14 @@ function buildReviewResultUI(overlay, options) {
     const inProgress = !isComplete && isReviewStreamingNow();
     let statusClass = 'review-detail-status-note--incomplete';
     let statusText = REVIEW_INCOMPLETE_USER_MSG;
-    if (isComplete) {
+    const rowChecksPending =
+      isComplete &&
+      typeof getPayload === 'function' &&
+      allSuggestions.some((s) => suggestionNeedsAutoRowCheck(s, originals, promptSections) && isReviewRowCheckInProgress(s));
+    if (rowChecksPending) {
+      statusClass = 'review-detail-status-note--generating';
+      statusText = 'Checking suggested changes…';
+    } else if (isComplete) {
       statusClass = 'review-detail-status-note--complete';
       const ne = allSuggestions.length;
       const nr = dataRefinement.length;
@@ -894,12 +1632,14 @@ function buildReviewResultUI(overlay, options) {
       const p = document.createElement('p');
       p.className = 'review-detail-placeholder';
       const streaming = isReviewStreamingNow();
+      const phase1Done =
+        saved.diagnosisComplete === true || saved.streamComplete === true;
       const stale = saved.streamComplete === false && !streaming;
-      p.textContent = streaming
-        ? 'Analyzing failed rows…'
+      p.textContent = streaming && !phase1Done
+        ? 'Analyzing row results…'
         : stale
           ? REVIEW_INCOMPLETE_USER_MSG
-          : 'No error analysis for this run.';
+          : 'No row-level analysis for this run.';
       diagnosisEl.appendChild(p);
       return;
     }
@@ -984,6 +1724,7 @@ function buildReviewResultUI(overlay, options) {
   }
 
   function addOneSuggestionCard(sug, sugIdx) {
+    const actionsFull = suggestionActionsFullForCard(sug);
     const sid = sug && sug.suggestion_id != null && sug.suggestion_id !== '' ? sug.suggestion_id : '';
     const shortLabel = formatSuggestionIdDisplay(sid);
     const secIdx = Math.max(0, Math.min(sug.section_index, (promptSections || []).length - 1));
@@ -1006,42 +1747,31 @@ function buildReviewResultUI(overlay, options) {
       sectionFallback: name,
       defaultLabel: 'Prompt edit',
     });
-    const previewTitle = truncateWithEllipsis(titleLine, SUGGESTION_CARD_PREVIEW_TITLE_CHARS);
+    const previewTitle = formatSuggestionCardPreviewTitle(titleLine);
     const previewReason = truncateWithEllipsis(fullReason, SUGGESTION_CARD_PREVIEW_REASON_CHARS);
 
     const detailsBtnHtml =
       '<button type="button" class="btn btn-secondary review-detail-diagnosis-detail-btn">View detail</button>';
-    const acceptBtnHtml = !noButton ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>' : '';
-    const testOutcome = getSuggestionTestOutcome(sug);
-    const testBtnExtra =
-      testOutcome === 'pass' ? ' review-detail-test-btn--passed' : testOutcome === 'fail' ? ' review-detail-test-btn--failed' : '';
-    const testBtnLabel =
-      testOutcome === 'pass' ? `Verify \u2713` : testOutcome === 'fail' ? `Verify \u2717` : 'Verify';
-    const testBtnHtml = !noButton
-      ? `<button type="button" class="btn btn-secondary review-detail-test-btn${testBtnExtra}"><span class="review-detail-test-btn__label">${testBtnLabel}</span><span class="review-detail-test-btn__icon-slot" aria-hidden="true"><span class="review-detail-test-btn__tick">\u2713</span><span class="review-detail-test-btn__cross">\u2717</span></span></button>`
-      : '';
-    const finetuneDone = sug.review_finetune_completed === true;
-    const finetuneBtnLabel = finetuneDone ? REVIEW_FINETUNE_LABEL_DONE : REVIEW_FINETUNE_LABEL_IDLE;
-    const refineBtnHtml = !noButton
-      ? `<button type="button" class="btn btn-secondary review-detail-tune-btn${finetuneDone ? ' review-detail-tune-btn--done' : ''}"${finetuneDone ? ' disabled' : ''}>${escapeHtml(finetuneBtnLabel)}</button>`
-      : '';
-    const actionsHtml = `${detailsBtnHtml}${testBtnHtml ? ` ${testBtnHtml}` : ''}${refineBtnHtml ? ` ${refineBtnHtml}` : ''}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
-    const finetuneLineText = formatSuggestionFinetuneLineText(sug);
-    const finetuneLineBlock =
-      finetuneLineText !== ''
-        ? `<p class="review-detail-suggestion-finetune-line">${escapeHtml(finetuneLineText)}</p>`
-        : '<p class="review-detail-suggestion-finetune-line" hidden></p>';
+    const acceptBtnHtml =
+      actionsFull && !noButton
+        ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'
+        : '';
+    const titlePillsHtml = buildSuggestionTitlePillsHtml(sug, noButton, actionsFull);
+    const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
 
     const card = document.createElement('div');
-    card.className = 'review-detail-suggestion-card' + (noButton ? ' review-detail-suggestion-card--unlocatable' : '');
+    card.className =
+      'review-detail-suggestion-card' +
+      (noButton ? ' review-detail-suggestion-card--unlocatable' : '') +
+      (!actionsFull ? ' review-detail-suggestion-card--actions-pending' : '');
     card.dataset.sectionIndex = String(secIdx);
     card.dataset.suggestionIndex = String(sugIdx);
     if (sid !== '' && sid != null) card.dataset.suggestionId = String(sid);
+    card.dataset.reviewTitlePlain = titleLine;
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span><span class="review-detail-suggestion-title-wrap"><strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong>${titlePillsHtml}</span></span>
         <p class="review-detail-suggestion-reason">${escapeHtml(previewReason || '—')}</p>
-        ${finetuneLineBlock}
       </div>
       <div class="review-detail-suggestion-card__actions">
         ${actionsHtml}
@@ -1062,7 +1792,7 @@ function buildReviewResultUI(overlay, options) {
     }
 
     function currentNewSentence() {
-      return (sug.new_sentence || '').trim();
+      return effectiveNewSentenceForApply(sug);
     }
     function getDiffContent() {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
@@ -1094,226 +1824,69 @@ function buildReviewResultUI(overlay, options) {
       }
     }
 
-    mainEl.removeAttribute('role');
-    mainEl.tabIndex = -1;
+    card._reviewShowPreview = showPreview;
 
     if (!noButton) {
-      card.addEventListener('mouseenter', () => showPreview());
-      card.addEventListener('mouseleave', () => clearDiffOnRight());
+      mainEl.setAttribute('role', 'button');
+      mainEl.tabIndex = 0;
+      mainEl.setAttribute(
+        'aria-label',
+        'Show this change in the prompt; click again to clear. Use Accept or View detail from the buttons below.',
+      );
+      mainEl.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        e.preventDefault();
+        if (previewSelectedSuggestionIndex === sugIdx) {
+          previewSelectedSuggestionIndex = null;
+          updateSuggestionPreviewSelectionVisual();
+          clearDiffOnRight();
+        } else {
+          previewSelectedSuggestionIndex = sugIdx;
+          updateSuggestionPreviewSelectionVisual();
+          showPreview();
+        }
+      });
+      mainEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        if (!mainEl.contains(e.target)) return;
+        if (e.target.closest('button')) return;
+        e.preventDefault();
+        mainEl.click();
+      });
 
+      card.addEventListener('mouseenter', () => showPreview());
+      card.addEventListener('mouseleave', () => {
+        if (previewSelectedSuggestionIndex != null) {
+          applyPinnedPreviewIfAny();
+        } else {
+          clearDiffOnRight();
+        }
+      });
+    } else {
+      mainEl.removeAttribute('role');
+      mainEl.tabIndex = -1;
+      mainEl.removeAttribute('aria-label');
+    }
+
+    if (!noButton && actionsFull) {
       acceptBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (secIdx < 0 || secIdx >= working.length) return;
         const wasApplied = sug.applied === true;
         sug.applied = !wasApplied;
-        /* Accept/Revert does not clear verify outcome; user can re-run Verify anytime. */
         syncWorkingFromApplied();
         updateAcceptButtonLabels();
-        updateSuggestionTestOutcomeVisual(card, sug);
-        updateSuggestionFinetuneButtonVisual(card, sug);
+        updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
         renderLeft(-1);
         persistWorking();
+        if (previewSelectedSuggestionIndex === sugIdx) {
+          showPreview();
+        }
       });
-
-      const testBtn = card.querySelector('.review-detail-test-btn');
-      if (testBtn && typeof getPayload === 'function') {
-        testBtn.addEventListener('click', async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (isReviewStreamingNow()) {
-            showAlert('Wait until the review finishes before running verification.', { title: 'Review in progress' });
-            return;
-          }
-          const targets = suggestionTargetInputRowIndices(sug);
-          if (targets.length === 0) {
-            showAlert('This suggestion has no target input rows to verify.', { title: 'Cannot verify' });
-            return;
-          }
-          testBtn.disabled = true;
-          testBtn.classList.remove('review-detail-test-btn--passed', 'review-detail-test-btn--failed');
-          const labelEl = testBtn.querySelector('.review-detail-test-btn__label');
-          if (labelEl) labelEl.textContent = 'Verifying';
-          testBtn.removeAttribute('title');
-          const verifyAc = new AbortController();
-          registerVerifySession(verifyAc);
-          try {
-            const payload = await getPayload();
-            if (!payload || !payload.run_credential_id) {
-              showAlert('Configure a Run credential on the Run node, then try again.', { title: 'Missing credential' });
-              return;
-            }
-            if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-              showAlert('The prompt needs an output schema (Run / prompt settings) to verify.', { title: 'Missing output schema' });
-              return;
-            }
-            const patched = allSuggestions.map((s, i) => ({
-              ...s,
-              applied: i === sugIdx ? true : s.applied === true,
-            }));
-            const testSections = rebuildWorkingFromApplied(originals, patched);
-            if (!testSections || testSections.length !== originals.length) {
-              showAlert('Could not build prompt with this suggestion applied.', { title: 'Verify failed' });
-              return;
-            }
-            const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
-            const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
-            sug.review_test_in_progress = true;
-            persistWorking();
-            const result = await runSuggestionRowTests({
-              apiBase: API_BASE,
-              credentialId: payload.run_credential_id,
-              testSections,
-              targetComparisonRowIndices: targets,
-              comparisonRows: payload.comparison_rows || [],
-              runResults: payload.run_results || [],
-              outputFields: payload.output_fields || [],
-              outputSchema: payload.output_schema,
-              scoreMappingJson: payload.score_mapping || '[]',
-              runWs: runWs || { headers: [], rows: [] },
-              gtContent: gtContent || { headers: [], rows: [] },
-              signal: verifyAc.signal,
-            });
-            if (result.aborted) {
-              delete sug.review_test_result;
-              delete sug.review_test_passed;
-            } else if (result.ok) {
-              sug.review_test_result = 'pass';
-              delete sug.review_test_passed;
-            } else {
-              sug.review_test_result = 'fail';
-              delete sug.review_test_passed;
-            }
-          } catch (err) {
-            if (err && err.name === 'AbortError') {
-              delete sug.review_test_result;
-              delete sug.review_test_passed;
-            } else {
-              sug.review_test_result = 'fail';
-              delete sug.review_test_passed;
-            }
-          } finally {
-            unregisterVerifySession(verifyAc);
-            delete sug.review_test_in_progress;
-            updateSuggestionTestOutcomeVisual(card, sug);
-            persistWorking();
-          }
-        });
-      }
-
-      const tuneBtn = card.querySelector('.review-detail-tune-btn');
-      if (tuneBtn && typeof getPayload === 'function') {
-        tuneBtn.addEventListener('click', async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (sug.review_finetune_completed === true) return;
-          if (sug.review_finetune_in_progress === true) return;
-          if (isReviewStreamingNow()) {
-            showAlert('Wait until the review finishes before running finetune.', { title: 'Review in progress' });
-            return;
-          }
-          const targets = suggestionTargetInputRowIndices(sug);
-          if (targets.length === 0) {
-            showAlert('This suggestion has no target input rows.', { title: 'Cannot finetune' });
-            return;
-          }
-          try {
-            const payload = await getPayload();
-            if (!payload || !payload.run_credential_id) {
-              showAlert('Configure a Run credential on the Run node, then try again.', { title: 'Missing credential' });
-              return;
-            }
-            if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-              showAlert('The prompt needs an output schema (Run / prompt settings) to finetune.', { title: 'Missing output schema' });
-              return;
-            }
-            const finetuneAc = new AbortController();
-            registerFinetuneSession(finetuneAc);
-            sug._finetuneAbort = finetuneAc;
-            sug.review_finetune_in_progress = true;
-            updateSuggestionFinetuneButtonVisual(card, sug);
-            persistWorking();
-            const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
-            const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
-            let ftMaxTrials = 22;
-            let ftNumCandidates = 10;
-            try {
-              const sres = await fetch(`${API_BASE}/api/settings`);
-              if (sres.ok) {
-                const s = await sres.json();
-                ftMaxTrials = Math.min(200, Math.max(4, Number(s.review_finetune_max_trials) || 22));
-                ftNumCandidates = Math.min(18, Math.max(4, Number(s.review_finetune_num_candidates) || 10));
-              }
-            } catch (_) {
-              /* use defaults */
-            }
-            const proposalNew = (sug.new_sentence || '').trim();
-            const result = await runSuggestionFinetuneBayesian({
-              apiBase: API_BASE,
-              llmCredentialId: payload.run_credential_id,
-              runCredentialId: payload.run_credential_id,
-              oldSentence: oldSentence,
-              newSentence: proposalNew,
-              numCandidates: ftNumCandidates,
-              maxTrials: ftMaxTrials,
-              allSuggestions,
-              sugIdx,
-              originals,
-              targets,
-              comparisonRows: payload.comparison_rows || [],
-              runResults: payload.run_results || [],
-              outputFields: payload.output_fields || [],
-              outputSchema: payload.output_schema,
-              scoreMappingJson: payload.score_mapping || '[]',
-              runWs: runWs || { headers: [], rows: [] },
-              gtContent: gtContent || { headers: [], rows: [] },
-              abortController: finetuneAc,
-              onProgress: ({ trial, trials }) => {
-                sug.review_finetune_progress = { trial, trials };
-                if (!sug._finetunePersistScheduled) {
-                  sug._finetunePersistScheduled = true;
-                  requestAnimationFrame(() => {
-                    delete sug._finetunePersistScheduled;
-                    persistWorking();
-                  });
-                }
-              },
-            });
-            sug.new_sentence = result.bestText;
-            sug.review_finetune_meta = {
-              bestPassPct: Math.round(Number(result.bestObservedRate) * 100),
-              candidatesCount: result.candidates.length,
-              trialsRun: Array.isArray(result.trialLog) ? result.trialLog.length : 0,
-              bestArmIndex: result.bestIndex,
-            };
-            delete saved.review_finetune_last_result;
-            sug.review_finetune_completed = true;
-            if (sug.applied === true) syncWorkingFromApplied();
-            updateSuggestionCardFinetuneLine(card, sug);
-            updateSuggestionFinetuneButtonVisual(card, sug);
-            renderLeft(-1);
-            persistWorking();
-          } catch (err) {
-            if (err && err.name === 'AbortError') {
-              /* user cancelled or window closed */
-            } else {
-              showAlert(String(err?.message || err || 'Finetune failed'), { title: 'Finetune failed' });
-            }
-          } finally {
-            delete sug.review_finetune_in_progress;
-            delete sug._finetuneAbort;
-            delete sug.review_finetune_progress;
-            updateSuggestionFinetuneButtonVisual(card, sug);
-            persistWorking();
-          }
-        });
-      }
-
-      const tbSync = card.querySelector('.review-detail-test-btn');
-      if (tbSync) updateSuggestionTestOutcomeVisual(card, sug);
-      const fbSync = card.querySelector('.review-detail-tune-btn');
-      if (fbSync) updateSuggestionFinetuneButtonVisual(card, sug);
     }
+
+    updateSuggestionTestOutcomeVisual(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
 
     editContainer.appendChild(card);
   }
@@ -1322,97 +1895,21 @@ function buildReviewResultUI(overlay, options) {
 
   dataRefinement.forEach((item) => addOneDataRefinementCard(item));
 
-  if (streamRef) {
-    if (statusEl) {
-      if (isReviewStreamingNow()) statusEl.textContent = 'Generating suggestions…';
-      else if (staleIncompletePersisted) statusEl.textContent = REVIEW_INCOMPLETE_USER_MSG;
-      else if (saved.streamComplete === true) statusEl.textContent = 'Suggestions complete.';
-      else statusEl.textContent = '';
-    }
-    streamRef.appendDataRefinement = (arr) => {
-      if (!Array.isArray(arr)) return;
-      dataRefinement = arr
-        .map((item) => (item && typeof item === 'object' ? ensureSuggestionObjectId({ ...item }, saved) : null))
-        .filter(Boolean);
-      dataRefinementContainer.innerHTML = '';
-      dataRefinement.forEach((item) => addOneDataRefinementCard(item));
-      saved.data_refinement = dataRefinement;
-      if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({ ...saved, data_refinement: dataRefinement, row_diagnostics: rowDiagnostics });
-      }
-    };
-    streamRef.appendSuggestions = (batch) => {
-      if (statusEl) statusEl.textContent = 'Generating suggestions…';
-      batch.forEach((sug) => {
-        const s = sug && typeof sug === 'object' ? ensureSuggestionObjectId({ ...sug }, saved) : null;
-        if (!s) return;
-        const sugIdx = allSuggestions.length;
-        allSuggestions.push(s);
-        addOneSuggestionCard(s, sugIdx);
-      });
-      saved.suggestions = allSuggestions.slice();
-      if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({ ...saved, suggestions: saved.suggestions, row_diagnostics: rowDiagnostics });
-      }
-    };
-    streamRef.streamDone = () => {
-      if (statusEl) statusEl.textContent = 'Suggestions complete.';
-      if (allSuggestions.length === 0 && dataRefinement.length === 0) {
-        editContainer.innerHTML = '<p class="review-detail-placeholder">No suggestions.</p>';
-      }
-      saved.suggestions = allSuggestions.slice();
-      saved.design_suggestions = [];
-      saved.data_refinement = dataRefinement;
-      saved.streamComplete = true;
-      if (typeof onReviewResultChange === 'function') {
-        onReviewResultChange({
-          ...saved,
-          suggestions: saved.suggestions,
-          design_suggestions: [],
-          data_refinement: dataRefinement,
-          row_diagnostics: rowDiagnostics,
-          streamComplete: true,
-        });
-      }
-      updateAnalysisFooter();
+  if (saved.streamComplete !== true) {
+    if (staleIncompletePersisted) {
+      editContainer.innerHTML = `<p class="review-detail-placeholder">${escapeHtml(REVIEW_INCOMPLETE_USER_MSG)}</p>`;
+    } else if (allSuggestions.length > 0) {
+      renderEditSuggestionCards();
       updateSuggestionsFooter();
-    };
-    streamRef.streamError = () => {
-      if (statusEl) statusEl.textContent = 'Failed.';
-      if (allSuggestions.length === 0 && dataRefinement.length === 0) {
-        editContainer.innerHTML = '<p class="review-detail-placeholder">Request failed.</p>';
-      }
-      const failedNote = () => {
-        const errNote = document.createElement('p');
-        errNote.className = 'review-detail-status-note review-detail-status-note--incomplete';
-        errNote.setAttribute('aria-live', 'polite');
-        errNote.textContent = 'Review failed.';
-        return errNote;
-      };
-      if (analysisFooterEl) {
-        analysisFooterEl.innerHTML = '';
-        analysisFooterEl.appendChild(failedNote());
-      }
-      if (suggestionsFooterEl) {
-        suggestionsFooterEl.innerHTML = '';
-        suggestionsFooterEl.appendChild(failedNote());
-      }
-    };
-  } else {
-    allSuggestions.forEach((sug, sugIdx) => {
-      addOneSuggestionCard(sug, sugIdx);
-    });
-    if (!allSuggestions || allSuggestions.length === 0) {
-      const noData = dataRefinement.length === 0;
-      if (noData) {
-        const showNoSuggestions = saved.streamComplete === true || !reviewStillGenerating;
-        editContainer.innerHTML = staleIncompletePersisted
-          ? `<p class="review-detail-placeholder">${escapeHtml(REVIEW_INCOMPLETE_USER_MSG)}</p>`
-          : showNoSuggestions
-            ? '<p class="review-detail-placeholder">No suggestions.</p>'
-            : '<p class="review-detail-placeholder">Generating suggestions…</p>';
-      }
+    } else {
+      editContainer.innerHTML = '<p class="review-detail-placeholder">Generating suggestions…</p>';
     }
+  } else if (allSuggestions.length > 0) {
+    void revealSuggestionsAfterReview();
+  } else {
+    renderEditSuggestionCards();
+    updateSuggestionsFooter();
+    persistReviewProgressToNode(100);
   }
 
   function setupRightTabs() {
@@ -1456,7 +1953,10 @@ function buildReviewResultUI(overlay, options) {
 
   setupRightTabs();
 
-  updateSuggestionsFooter();
+  const deferSuggestionsFooterUntilReveal = saved.streamComplete === true && allSuggestions.length > 0;
+  if (!deferSuggestionsFooterUntilReveal) {
+    updateSuggestionsFooter();
+  }
   updateAnalysisFooter();
 
   const footer = overlay.querySelector('.review-detail-prompt-footer');
@@ -1491,6 +1991,22 @@ function buildReviewResultUI(overlay, options) {
     });
     footer.appendChild(exportBtn);
   }
+
+  const overlayForReviewSync = suggestionsEl.closest('.modal-overlay');
+  if (overlayForReviewSync) {
+    overlayForReviewSync._reviewDetailReconcile = (data) => {
+      if (!data || typeof data !== 'object') return;
+      reconcileAllSuggestionsFromSavedData(data);
+      Object.keys(data).forEach((k) => {
+        if (k === 'suggestions') return;
+        saved[k] = data[k];
+      });
+      refreshAllEditSuggestionCardsVisuals();
+      updateAnalysisFooter();
+      updateSuggestionsFooter();
+    };
+  }
+
 }
 
 /** Review node modal: show saved result (sections + suggestions) or empty state. */
@@ -1563,8 +2079,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
             </div>
             <div class="review-assistant-input-wrap">
               <div class="review-assistant-input-inner">
-                <textarea class="review-assistant-input" id="review-detail-assistant-input" placeholder="Ask anything..." rows="2"></textarea>
-                <button type="button" class="review-assistant-send-inline" id="review-detail-assistant-send" aria-label="Send">↑</button>
+                <textarea class="review-assistant-input" id="review-detail-assistant-input" placeholder="Ask anything" rows="2"></textarea>
               </div>
             </div>
           </div>
@@ -1581,13 +2096,13 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
     promptSections: sectionsForDisplay || [],
     suggestions: saved?.suggestions || [],
     promptFullText: saved?.promptFullText || '',
-    title,
-    resultId: 'detail',
     saved: saved || {},
     onReviewResultChange: updateReviewResult || null,
     onExportNewPrompt: onExportNewPrompt || null,
     getIsReviewStreaming: getIsReviewStreaming || null,
     getPayload: getPayload || null,
+    getReviewResult: getReviewResult || null,
+    reviewNodeId: reviewNodeId || null,
   };
 
   const chatRefreshRef = { current: null };
@@ -1602,9 +2117,23 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 
   function onSaveReviewResult(e) {
     if (e.detail?.reviewNodeId !== reviewNodeId) return;
-    // 使用节点上的最新状态（workflow 已合并 workingSections 与 .applied），避免被流式原始数据覆盖导致 hover 时绿标不显示
-    const data = (getReviewResult && getReviewResult()) ?? e.detail?.data;
-    if (data) refreshFromSaved(data);
+    const detailData = e.detail?.data;
+    // 延后到微任务：先让 workflowCanvas 的 save-review-result 监听器把合并后的结果写入 dataset，再读节点，避免监听器顺序导致读到旧快照。
+    queueMicrotask(() => {
+      const data =
+        (typeof getReviewResult === 'function' ? getReviewResult() : null) ?? detailData;
+      if (!data || typeof data !== 'object') return;
+      // 流水线已结束时必须整页 refresh（Issue analysis / 建议列表）；reconcile 只合并已有卡片，不会重建 row_diagnostics。
+      const busySideSession =
+        hasActiveVerifySessions() || hasActiveFinetuneSessions();
+      if (busySideSession && data.streamComplete !== true) {
+        if (typeof overlay._reviewDetailReconcile === 'function') {
+          overlay._reviewDetailReconcile(data);
+        }
+        return;
+      }
+      refreshFromSaved(data);
+    });
   }
 
   if (hasResult) {
@@ -1625,6 +2154,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 
   function close() {
     if (reviewNodeId) document.removeEventListener('workflow:save-review-result', onSaveReviewResult);
+    delete overlay._reviewDetailReconcile;
     overlay.remove();
     document.body.style.overflow = '';
   }
@@ -1781,6 +2311,14 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
       const tIdx = suggestionTargetInputRowIndices(s);
       const tLbl = formatScoreTableTargetLabels(comparisonRows, tIdx);
       if (tLbl) lines.push(`   Score table ${tLbl}`);
+      const cf = String(s.chat_focus || '').trim();
+      if (src === 'assistant' && cf) lines.push(`   Focus (chat): ${cf}`);
+      if (src === 'assistant' && Array.isArray(s.chat_focus_bullets) && s.chat_focus_bullets.length) {
+        for (const b of s.chat_focus_bullets) {
+          const t = String(b || '').trim();
+          if (t) lines.push(`   · ${t}`);
+        }
+      }
       lines.push(`   Reason: ${(s.reason || '').trim()}`);
     });
     lines.push('');
@@ -1791,12 +2329,15 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('When you decide to suggest a concrete edit, include one or more blocks in this exact format:');
   lines.push('[ASSISTANT_SUGGESTION]');
   lines.push(
-    '{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "reason": "why", "name": "Short title", "target_input_row_indices": [0]}',
+    '{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "focus": "One-line summary from this chat (optional if focus_bullets carry the detail)", "focus_bullets": ["Concrete point from chat, like pipeline phase-1 bullets", "Second point"], "reason": "Why this edit helps (from this chat)", "name": "Short title", "target_input_row_indices": [1]}',
   );
   lines.push('[/ASSISTANT_SUGGESTION]');
+  lines.push(
+    'Each block MUST include **reason** and usually **focus_bullets**: a non-empty JSON **array of short English strings** — one bullet per distinct issue or instruction the user raised in **this chat** (same style as pipeline “Focus” bullets under the score row). **focus** is an optional one-line lead; **focus_bullets** are required when the user gave more than a single vague ask. Summarize **only from chat**, not from pipeline findings you cannot see. **reason** = why your new_sentence addresses those points.',
+  );
   lines.push('When adding suggestions, also write a brief comment (e.g. what you changed or why it helps). The user will see this instead of a generic message. If you omit the comment, we show "Added. Please check the Suggestions panel on the left and choose Accept or Revert."');
   lines.push(
-    'Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **0-based comparison row_index** for every input row this edit addresses (same as Run/Review). The UI labels those rows **Score table #N** using `score_table_row` when present. Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
+    'Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **1-based** row numbers — same as Issue / Score **#** (and pipeline Phase 2). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
   );
   lines.push('');
   lines.push('## Removing suggestions');
@@ -1821,17 +2362,22 @@ function parseAssistantSuggestions(text, dataRoot) {
     try {
       const obj = JSON.parse(m[1].trim());
       if (obj && typeof obj.section_index === 'number') {
-        const ri = suggestionTargetInputRowIndices({
-          target_input_row_indices: obj.target_input_row_indices,
-          row_indices: obj.row_indices,
-        });
+        const compRows = dataRoot && Array.isArray(dataRoot.comparison_rows) ? dataRoot.comparison_rows : [];
+        const rawRi = obj.target_input_row_indices ?? obj.row_indices;
+        const ri = normalizeAssistantTargetsToRowIndex(Array.isArray(rawRi) ? rawRi : [], compRows);
         if (ri.length === 0) continue;
+        const rawBullets = obj.focus_bullets ?? obj.chat_focus_bullets;
+        const chat_focus_bullets = Array.isArray(rawBullets)
+          ? rawBullets.map((x) => String(x || '').trim()).filter(Boolean)
+          : [];
         blocks.push(
           ensureSuggestionObjectId(
             {
               section_index: obj.section_index,
               old_sentence: String(obj.old_sentence || '').trim(),
               new_sentence: String(obj.new_sentence || '').trim(),
+              chat_focus: String(obj.focus ?? obj.chat_focus ?? '').trim(),
+              chat_focus_bullets,
               reason: String(obj.reason || '').trim(),
               name: String(obj.name || '').trim(),
               target_input_row_indices: ri,
@@ -1964,25 +2510,23 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
   const { getPayload, getReviewResult, onReviewResultChange, refreshFromSaved, chatRefreshRef, getIsReviewStreaming } = contextOptions;
   const messagesEl = overlay.querySelector('.review-assistant-messages');
   const inputEl = overlay.querySelector('.review-assistant-input');
-  const sendBtn = overlay.querySelector('.review-assistant-send-inline');
-  if (!messagesEl || !inputEl || !sendBtn) return;
+  if (!messagesEl || !inputEl) return;
 
   let credentialId = '';
+  let chatSendInFlight = false;
+  const assistantInputPlaceholderReady = 'Ask anything';
 
   function updateInputState() {
     const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
     if (!credentialId) {
       inputEl.disabled = true;
       inputEl.placeholder = 'Select a model in Settings first';
-      sendBtn.disabled = true;
     } else if (streaming) {
       inputEl.disabled = true;
       inputEl.placeholder = 'Wait for review to complete...';
-      sendBtn.disabled = true;
     } else {
       inputEl.disabled = false;
-      inputEl.placeholder = 'Ask anything...';
-      sendBtn.disabled = false;
+      inputEl.placeholder = assistantInputPlaceholderReady;
     }
   }
   const saved0 = typeof getReviewResult === 'function' ? getReviewResult() : null;
@@ -2000,11 +2544,9 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
         fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
       ]);
-      const assistantId = (settings?.default_review_assistant_credential_id || '').trim();
       const reviewId = (settings?.default_review_credential_id || '').trim();
-      const candidateId = assistantId || reviewId;
-      if (candidateId && (list || []).some((c) => c.id === candidateId)) {
-        credentialId = candidateId;
+      if (reviewId && (list || []).some((c) => c.id === reviewId)) {
+        credentialId = reviewId;
       }
     } catch (_) {}
   }
@@ -2064,9 +2606,10 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
   async function sendMessage() {
     const text = (inputEl.value || '').trim();
     const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
-    if (!text || !credentialId || streaming) return;
+    if (!text || !credentialId || streaming || chatSendInFlight) return;
+    chatSendInFlight = true;
+    try {
     inputEl.value = '';
-    sendBtn.disabled = true;
     appendMessage('user', text);
     chatHistory.push({ role: 'user', content: text });
     const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
@@ -2172,12 +2715,12 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
       if (isModalOpen()) appendMessage('assistant', errMsg);
       const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
       if (saved && typeof saved === 'object') persistChatResult({ ...saved, chatHistory: chatHistory.slice(), chatRequestInProgress: false });
+    }
     } finally {
-      if (isModalOpen()) sendBtn.disabled = false;
+      chatSendInFlight = false;
     }
   }
 
-  sendBtn.addEventListener('click', sendMessage);
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -2242,7 +2785,7 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
     updateInputState();
     if (!credentialId) {
       if (chatHistory.length === 0) {
-        appendMessage('assistant', 'Please select a model in Settings → Prompt Reviewer (Default model or Assistant model) to use the Assistant.');
+        appendMessage('assistant', 'Please select a default model in Settings → Review to use the Assistant.');
       }
     } else if (chatHistory.length === 0) {
       const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
@@ -2251,142 +2794,4 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
       }
     }
   });
-}
-
-/** Open modal with review result (from Score Add Review). Saves result to reviewNode (via reviewNodeId) or scoreNode. Pass streamRef to show suggestions incrementally. 右侧 Prompt sections 一打开就填好，左侧 Suggestions 流式一条条出现。 */
-export function openReviewResultModal({ summary, suggestions = [], promptSections = [], promptFullText = '', scoreNode, reviewNodeId, onExportNewPrompt, streamRef, saved: initialSaved }) {
-  const workingSections = Array.isArray(promptSections) && promptSections.length > 0
-    ? promptSections.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }))
-    : [];
-  const promptSectionsHtml = workingSections.length > 0
-    ? renderSectionsAsPromptDetail(workingSections)
-    : '';
-
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.setAttribute('aria-modal', 'true');
-  overlay.setAttribute('aria-labelledby', 'review-result-title');
-  overlay.innerHTML = `
-    <div class="modal-panel modal-panel--review-detail">
-      <div class="modal-header">
-        <h2 id="review-result-title" class="modal-title">Review result</h2>
-        <button type="button" class="modal-close" aria-label="Close">×</button>
-      </div>
-      <div class="modal-body review-detail-body">
-        <div class="review-detail-main">
-          <h3 class="review-detail-preview-title review-detail-output-title">Findings</h3>
-          <p class="review-detail-stream-status" id="review-result-stream-status" aria-live="polite"></p>
-          <div class="review-detail-output-toolbar">
-            <div class="review-detail-view-switch review-detail-right-tabs" role="tablist" aria-label="Switch findings view">
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-result-panel-analysis" id="review-result-tab-analysis" data-tab="analysis">Issue analysis</button>
-              <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-result-panel-suggestions" id="review-result-tab-suggestions" data-tab="suggestions">Suggested changes</button>
-            </div>
-          </div>
-          <div class="review-detail-preview-content">
-            <div class="review-detail-tab-panels">
-              <div class="review-detail-tab-panel review-detail-tab-panel--active" id="review-result-panel-analysis" role="tabpanel" aria-labelledby="review-result-tab-analysis" data-panel="analysis">
-                <div class="review-detail-row-diagnostics" id="review-result-row-diagnostics"></div>
-                <div class="review-detail-analysis-footer" id="review-result-analysis-footer"></div>
-              </div>
-              <div class="review-detail-tab-panel" id="review-result-panel-suggestions" role="tabpanel" aria-labelledby="review-result-tab-suggestions" data-panel="suggestions">
-                <div class="review-detail-suggestions" id="review-result-suggestions"></div>
-                <div class="review-detail-suggestions-footer" id="review-result-suggestions-footer"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="review-detail-preview-wrap">
-          <p class="prompt-step-label">Prompt sections</p>
-          <div class="prompt-detail-sections-scroll">
-            <div class="prompt-detail-sections-wrap">
-              <div class="review-detail-prompt-wrap prompt-detail-sections-view">${promptSectionsHtml}</div>
-            </div>
-          </div>
-          <div class="review-detail-prompt-footer" id="review-result-prompt-footer"></div>
-        </div>
-        <div class="review-detail-third-column">
-          <h3 class="review-detail-preview-title">Review assistant</h3>
-          <div class="review-assistant-chat-wrap">
-            <div class="review-assistant-messages" id="review-result-assistant-messages"></div>
-            <div class="review-assistant-clear-bar">
-              <button type="button" class="review-assistant-clear-btn" aria-label="Clear chat history">Clear chat history</button>
-            </div>
-            <div class="review-assistant-input-wrap">
-              <div class="review-assistant-input-inner">
-                <textarea class="review-assistant-input" id="review-result-assistant-input" placeholder="Ask anything..." rows="2"></textarea>
-                <button type="button" class="review-assistant-send-inline" id="review-result-assistant-send" aria-label="Send">↑</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const baseSaved = {
-    summary: summary || '',
-    suggestions: suggestions || [],
-    promptSections: (promptSections || []).slice(),
-    promptFullText: promptFullText || sectionsToFullText(promptSections || []),
-    workingSections: workingSections.length ? workingSections.map((s) => ({ name: s.name, content: s.content })) : [],
-  };
-  const savedRef = {
-    current: initialSaved && typeof initialSaved === 'object' ? { ...baseSaved, ...initialSaved } : baseSaved,
-  };
-  const saved = savedRef.current;
-  ensureReviewResultIds(saved);
-  clearStaleFinetuneRunningFlags(saved.suggestions);
-  const persistResult = (updated) => {
-    savedRef.current = updated;
-    if (reviewNodeId) {
-      document.dispatchEvent(new CustomEvent('workflow:save-review-result', { detail: { reviewNodeId, data: updated } }));
-    } else if (scoreNode) {
-      try {
-        scoreNode.dataset.reviewResult = JSON.stringify(updated);
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      } catch (_) {}
-    }
-  };
-  if (reviewNodeId || scoreNode) persistResult(saved);
-
-  const baseOptions = {
-    promptSections: saved.promptSections.length ? saved.promptSections : workingSections,
-    suggestions: saved.suggestions || [],
-    promptFullText: saved.promptFullText || '',
-    title: 'Review result',
-    resultId: 'result',
-    saved,
-    onReviewResultChange: (reviewNodeId || scoreNode) ? persistResult : null,
-    onExportNewPrompt: onExportNewPrompt || null,
-    streamRef: streamRef || null,
-  };
-  const chatRefreshRef = { current: null };
-  const refreshFromSaved = (data) => {
-    if (!data || typeof data !== 'object') return;
-    savedRef.current = data;
-    if (reviewNodeId || scoreNode) persistResult(data);
-    buildReviewResultUI(overlay, {
-      ...baseOptions,
-      promptSections: (data.promptSections || []).length ? data.promptSections : workingSections,
-      suggestions: data.suggestions || [],
-      saved: data,
-    });
-    if (chatRefreshRef.current) chatRefreshRef.current(data);
-  };
-
-  overlay.querySelector('.modal-close').addEventListener('click', () => {
-    overlay.remove();
-    document.body.style.overflow = '';
-  });
-  document.body.style.overflow = 'hidden';
-  document.body.appendChild(overlay);
-  initReviewAssistantChat(overlay, {
-    getPayload: () => null,
-    getReviewResult: () => savedRef.current,
-    onReviewResultChange: (reviewNodeId || scoreNode) ? persistResult : null,
-    refreshFromSaved,
-    chatRefreshRef,
-  });
-
-  buildReviewResultUI(overlay, baseOptions);
 }

@@ -155,22 +155,21 @@ export function openRunDetailModal({
               <span class="dataset-meta-label run-detail-section-label">Map input dataset columns to prompt inputs</span>
               <div class="run-detail-mapping-wrap" id="run-detail-inputs-list"></div>
             </div>
-            <div class="dataset-meta-field run-detail-model-actions-field">
-              <div class="run-detail-llm-actions-row">
-                <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
-                <div class="run-detail-llm-actions-right">
-                  <div class="run-detail-llm-row">
-                    <label class="run-detail-label" for="run-detail-llm-select">Prompt Runner</label>
-                    <select id="run-detail-llm-select" class="run-detail-llm-select dataset-meta-input" aria-label="Select model for Prompt Runner">
-                      <option value="">${escapeHtml(selectPlaceholderLabel('Select Prompt Runner model'))}</option>
-                    </select>
-                  </div>
-                  <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
+          </div>
+          <div class="prompt-form-error prompt-modal-error run-detail-form-error" id="run-detail-form-error" role="alert" aria-live="polite" hidden></div>
+          <div class="dataset-meta-field run-detail-model-actions-field">
+            <div class="run-detail-llm-actions-row">
+              <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
+              <div class="run-detail-llm-actions-right">
+                <div class="run-detail-llm-row">
+                  <select id="run-detail-llm-select" class="run-detail-llm-select dataset-meta-input" aria-label="Select model">
+                    <option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>
+                  </select>
                 </div>
+                <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
               </div>
             </div>
           </div>
-          <div class="prompt-form-error prompt-modal-error run-detail-form-error" id="run-detail-form-error" role="alert" aria-live="polite" hidden></div>
         </div>
         <div class="run-detail-preview-wrap">
           <h3 class="run-detail-preview-title">Results</h3>
@@ -248,6 +247,17 @@ export function openRunDetailModal({
       if (results != null) node.dataset.runResults = JSON.stringify(results);
       if (runCompleted !== undefined) node.dataset.runCompleted = runCompleted ? '1' : '';
     } catch (_) {}
+    if (results != null) {
+      let arr = results;
+      if (!Array.isArray(arr)) {
+        try {
+          arr = JSON.parse(node.dataset.runResults || '[]');
+        } catch (_) {
+          arr = [];
+        }
+      }
+      document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: Array.isArray(arr) ? arr : [] } }));
+    }
     if (completed != null && total != null) setNodeProgressBar(completed, total);
   }
 
@@ -676,7 +686,7 @@ export function openRunDetailModal({
   overlay.addEventListener('click', (e) => { if (!pickerEl.contains(e.target)) { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); } });
 
   (async () => {
-    llmSelectEl.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select Prompt Runner model'))}</option>`;
+    llmSelectEl.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>`;
     try {
       const [list, settings] = await Promise.all([
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
@@ -785,7 +795,18 @@ export function openRunDetailModal({
     applyRunningLock();
 
     try {
-      const res = await fetch(`${API_BASE}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ credential_id: selectedCredentialId, prompts, output_schema: outputSchema, run_node_id: nodeId || null }) });
+      const inspectRunId = `${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
+      const res = await fetch(`${API_BASE}/api/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          credential_id: selectedCredentialId,
+          prompts,
+          output_schema: outputSchema,
+          run_node_id: nodeId || null,
+          inspect_run_id: inspectRunId,
+        }),
+      });
       const data = await res.json().catch(() => ({}));
       if (res.status === 202) {
         runId = data.run_id || null;
