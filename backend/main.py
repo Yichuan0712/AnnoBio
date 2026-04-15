@@ -34,7 +34,7 @@ _HL = "\033[1;33m"   # bold yellow
 _R = "\033[0m"       # reset
 _SEP = "=" * 60      # unified separator for LLM prompt/output logs
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, create_model
 
@@ -50,6 +50,7 @@ from review_finetune_compositional_filelog import (
     inspect_write_segments,
 )
 from run_inspect_filelog import run_inspect_append_note, run_inspect_append_row, run_inspect_begin
+from review_verify_debug import print_verify_debug_report, review_verify_debug_enabled
 
 app = FastAPI()
 
@@ -101,6 +102,7 @@ DEFAULT_SETTINGS = {
     "review_finetune_comp_max_trials": 40,
     "review_finetune_comp_candidates_per_segment": 4,
     "review_finetune_comp_max_segments": 5,
+    "review_verify_debug_print": False,
 }
 
 
@@ -198,6 +200,10 @@ class SettingsPatch(BaseModel):
     )
     review_finetune_comp_max_segments: int | None = Field(
         default=None, ge=2, le=8, description="Compositional finetune: max segments when splitting"
+    )
+    review_verify_debug_print: bool | None = Field(
+        default=None,
+        description="If true, POST /api/review/verify-debug-print logs each Verify to Python stdout (also env REVIEW_VERIFY_DEBUG_PRINT)",
     )
 
 
@@ -1134,50 +1140,64 @@ def _do_run_work(
             return (row_index, items)
 
         cancelled_early = False
-        with ThreadPoolExecutor(max_workers=run_concurrency) as ex:
-            futures = {ex.submit(process_one, i, p): i for i, p in enumerate(prompts)}
-            for future in as_completed(futures):
-                row_index, items = future.result()
-                with _run_jobs_lock:
-                    if run_id in _run_cancelled:
-                        cancelled_early = True
-                    elif (time.time() - _run_last_activity.get(run_id, 0)) > RUN_ABANDON_TIMEOUT_SEC:
-                        cancelled_early = True
-                results_by_input[row_index] = items
-                if inspect_started:
-                    try:
-                        run_inspect_append_row(
-                            inspect_file_key,
-                            row_index=row_index,
-                            prompt=prompts[row_index],
-                            row_items=items,
-                        )
-                    except OSError as log_e:
-                        _safe_print(f"[Run] inspect row append failed: {log_e}")
-                if cancelled_early:
-                    for f in futures:
-                        f.cancel()
+
+        def _row_done_write_progress(row_index: int, items: list[dict]) -> None:
+            nonlocal cancelled_early
+            with _run_jobs_lock:
+                if run_id in _run_cancelled:
+                    cancelled_early = True
+                elif (time.time() - _run_last_activity.get(run_id, 0)) > RUN_ABANDON_TIMEOUT_SEC:
+                    cancelled_early = True
+            results_by_input[row_index] = items
+            if inspect_started:
+                try:
+                    run_inspect_append_row(
+                        inspect_file_key,
+                        row_index=row_index,
+                        prompt=prompts[row_index],
+                        row_items=items,
+                    )
+                except OSError as log_e:
+                    _safe_print(f"[Run] inspect row append failed: {log_e}")
+            if cancelled_early:
+                return
+            max_contiguous = 0
+            for i in range(total):
+                if i in results_by_input:
+                    max_contiguous = i + 1
+                else:
                     break
-                # 只加入从 0 开始的连续 input 前缀：1,2 完成但 3 未完成则只显示 1,2；4 完成也不显示
-                max_contiguous = 0
-                for i in range(total):
-                    if i in results_by_input:
-                        max_contiguous = i + 1
-                    else:
+            merged = []
+            for i in range(max_contiguous):
+                items_i = results_by_input.get(i) or []
+                if not items_i:
+                    merged.append({"row_index": len(merged), "input_row_index": i, "output": None, "error": None})
+                else:
+                    for r in items_i:
+                        merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
+            completed = max_contiguous
+            with _run_jobs_lock:
+                _run_jobs[run_id]["results"] = merged
+                _run_jobs[run_id]["completed"] = completed
+            _persist_run_jobs()
+
+        # Review Verify (`verify_` inspect id): no thread pool — one LLM row at a time (see reviewSuggestionTest.js).
+        if str(inspect_file_key).startswith("verify_"):
+            for i, prompt in enumerate(prompts):
+                row_index, items = process_one(i, prompt)
+                _row_done_write_progress(row_index, items)
+                if cancelled_early:
+                    break
+        else:
+            with ThreadPoolExecutor(max_workers=run_concurrency) as ex:
+                futures = {ex.submit(process_one, i, p): i for i, p in enumerate(prompts)}
+                for future in as_completed(futures):
+                    row_index, items = future.result()
+                    _row_done_write_progress(row_index, items)
+                    if cancelled_early:
+                        for f in futures:
+                            f.cancel()
                         break
-                merged = []
-                for i in range(max_contiguous):
-                    items_i = results_by_input.get(i) or []
-                    if not items_i:
-                        merged.append({"row_index": len(merged), "input_row_index": i, "output": None, "error": None})
-                    else:
-                        for r in items_i:
-                            merged.append({"row_index": len(merged), "input_row_index": i, "output": r["output"], "error": r["error"]})
-                completed = max_contiguous
-                with _run_jobs_lock:
-                    _run_jobs[run_id]["results"] = merged
-                    _run_jobs[run_id]["completed"] = completed
-                _persist_run_jobs()
 
         with _run_jobs_lock:
             if run_id in _run_cancelled:
@@ -1388,6 +1408,17 @@ def cancel_review_by_node(review_node_id: str):
             _review_cancelled.add(review_id)
             return {"ok": True, "status": "cancelling"}
         return {"ok": True, "status": job.get("status") if job else "done"}
+
+
+@app.post("/api/review/verify-debug-print")
+def review_verify_debug_print_ep(body: dict = Body(...)):
+    """When enabled (settings `review_verify_debug_print` or env `REVIEW_VERIFY_DEBUG_PRINT=1`), print Verify snapshot to server stdout."""
+    if not review_verify_debug_enabled(_load_settings()):
+        return {"ok": True, "skipped": True}
+    if not isinstance(body, dict):
+        body = {}
+    print_verify_debug_report(body, _safe_print)
+    return {"ok": True, "printed": True}
 
 
 @app.post("/api/run/cancel/{run_id}")

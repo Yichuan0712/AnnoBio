@@ -21,6 +21,7 @@ const MODEL_SETTINGS_DEFAULTS = {
   review_finetune_comp_max_trials: 40,
   review_finetune_comp_candidates_per_segment: 4,
   review_finetune_comp_max_segments: 5,
+  review_verify_debug_print: false,
 };
 
 function escapeHtml(str) {
@@ -528,6 +529,12 @@ export function openSettingsModal() {
                               <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max failed rows analyzed per Review" />
                             </div>
                             <div class="defaults-field defaults-field--full">
+                              <label class="dataset-meta-label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+                                <input type="checkbox" id="settings-review-verify-debug-print" aria-label="Print Verify snapshots to backend console" />
+                                Print Verify snapshots to backend console (Python stdout)
+                              </label>
+                            </div>
+                            <div class="defaults-field defaults-field--full">
                               <p class="dataset-meta-label" style="margin-bottom:0.35rem;font-weight:600;">Finetune (compositional)</p>
                             </div>
                             <div class="defaults-field defaults-field--review-finetune-input">
@@ -573,6 +580,7 @@ export function openSettingsModal() {
   const reviewFinetuneCompTrialsInp = overlay.querySelector('#settings-review-finetune-comp-trials');
   const reviewFinetuneCompCandInp = overlay.querySelector('#settings-review-finetune-comp-candidates');
   const reviewFinetuneCompSegInp = overlay.querySelector('#settings-review-finetune-comp-segments');
+  const reviewVerifyDebugPrintChk = overlay.querySelector('#settings-review-verify-debug-print');
 
   const tabBar = overlay.querySelector('.model-settings-view-switch');
   const tabs = tabBar ? tabBar.querySelectorAll('.review-detail-tab[data-tab]') : [];
@@ -649,6 +657,10 @@ export function openSettingsModal() {
     reviewFinetuneCompSegInp.value = String(
       settings.review_finetune_comp_max_segments ?? MODEL_SETTINGS_DEFAULTS.review_finetune_comp_max_segments,
     );
+    if (reviewVerifyDebugPrintChk) {
+      reviewVerifyDebugPrintChk.checked =
+        settings.review_verify_debug_print === true || settings.review_verify_debug_print === 'true';
+    }
   }
 
   async function init() {
@@ -698,6 +710,7 @@ export function openSettingsModal() {
       review_finetune_comp_max_trials: reviewFinetuneCompMaxTrials,
       review_finetune_comp_candidates_per_segment: reviewFinetuneCompCand,
       review_finetune_comp_max_segments: reviewFinetuneCompSeg,
+      review_verify_debug_print: !!(reviewVerifyDebugPrintChk && reviewVerifyDebugPrintChk.checked),
     };
   }
 

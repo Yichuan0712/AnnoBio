@@ -1193,7 +1193,7 @@ function buildReviewResultUI(overlay, options) {
       registerVerifySession(batchAc);
       try {
         let verifyDone = 0;
-        const tasks = indicesToVerify.map((sugIdx) => (async () => {
+        for (const sugIdx of indicesToVerify) {
           const sug = allSuggestions[sugIdx];
           persistWorking();
 
@@ -1238,8 +1238,7 @@ function buildReviewResultUI(overlay, options) {
             );
             scheduleEditSuggestionCardsRefresh();
           }
-        })());
-        await Promise.all(tasks);
+        }
       } finally {
         unregisterVerifySession(batchAc);
       }
@@ -1349,7 +1348,7 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /** After stream: show cards (View detail only while that card's check runs), concurrent checks, unlock per card when done. */
+  /** After stream: show cards (View detail only while that card's check runs); row checks run one suggestion at a time. */
   async function revealSuggestionsAfterReview() {
     if (!allSuggestions || allSuggestions.length === 0) {
       renderEditSuggestionCards();
@@ -1430,6 +1429,10 @@ function buildReviewResultUI(overlay, options) {
     if (sug.review_finetune_completed === true) return;
     if (sug.review_finetune_in_progress === true) return;
     if (isReviewRowCheckInProgress(sug)) return;
+    if (pipelineAutoCheckInFlight) {
+      showAlert('Wait until automatic row checks finish before using Finetune.', { title: 'Verify in progress' });
+      return;
+    }
     if (isReviewStreamingNow()) {
       showAlert('Wait until the review finishes before running finetune.', { title: 'Review in progress' });
       return;
@@ -1553,7 +1556,7 @@ function buildReviewResultUI(overlay, options) {
       updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
       persistWorking();
       if (sug.review_finetune_completed === true) {
-        void runAutoRowCheckForSuggestion(sugIdx);
+        await runAutoRowCheckForSuggestion(sugIdx);
       }
     }
   }

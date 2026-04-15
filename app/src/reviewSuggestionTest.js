@@ -41,6 +41,16 @@ export function hasActiveVerifySessions() {
   return verifyAbortControllers.size > 0;
 }
 
+/** When backend enables it (settings `review_verify_debug_print` or env `REVIEW_VERIFY_DEBUG_PRINT`), logs snapshot to Python stdout. */
+function postReviewVerifyDebugPrint(apiBase, payload) {
+  const base = String(apiBase || 'http://localhost:8000').replace(/\/$/, '');
+  void fetch(`${base}/api/review/verify-debug-print`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
 const DEFAULT_SCORE_MATCH_FLAGS = {
   semanticAlign: false,
   embeddingSimilarity: false,
@@ -269,6 +279,47 @@ function runnableRowsWithInputIndex(rows, inputIdx) {
 }
 
 /**
+ * Stable identity for input-closed Verify / Finetune checks (aligns with backend `_input_identity_key`).
+ * Runnable rows only; used to expand targets to every comparison row sharing the same worksheet input / placeholders.
+ */
+function comparisonRowInputIdentityKey(r) {
+  if (!r || r.gt_only) return null;
+  const iri = r.input_row_index;
+  if (typeof iri === 'number' && !Number.isNaN(iri) && iri >= 0) {
+    return `in:${iri}`;
+  }
+  const rk = stableRowInputKey(r.row_input);
+  if (rk) return `inp:${rk}`;
+  const ri = r.row_index;
+  if (typeof ri === 'number' && !Number.isNaN(ri)) return `row:${ri}`;
+  return null;
+}
+
+/** All runnable comparison rows whose identity matches any seed (same input → all output lines). */
+function expandInputClosureFromSeedRows(allRows, seedRows) {
+  const identities = new Set();
+  for (const r of seedRows) {
+    const k = comparisonRowInputIdentityKey(r);
+    if (k) identities.add(k);
+  }
+  if (identities.size === 0) return [];
+  const out = [];
+  const seen = new Set();
+  for (const r of allRows) {
+    if (!r || r.gt_only) continue;
+    const k = comparisonRowInputIdentityKey(r);
+    if (!k || !identities.has(k)) continue;
+    const ri = r.row_index;
+    if (typeof ri !== 'number' || Number.isNaN(ri)) continue;
+    if (seen.has(ri)) continue;
+    seen.add(ri);
+    out.push(r);
+  }
+  out.sort((a, b) => (a.row_index || 0) - (b.row_index || 0));
+  return out;
+}
+
+/**
  * When row_index t hits a synthetic gt_only row, resolve runnable rows: same GT pair (source_gt_row_index),
  * worksheet input_row_index on the synthetic row, same row_input, then fallbacks for unpaired GT.
  * Note: t is comparison row_index — do not use it as worksheet input_row_index (common bug).
@@ -324,8 +375,8 @@ function scoreTableNumberLabel(rows, comparisonRowIndex) {
 }
 
 /**
- * Each target t is usually a comparison row_index (Run result index). If no runnable row matches,
- * treat t as input_row_index (0-based worksheet row — same as UI Input # minus 1) and expand to all runnable comparison rows for that input.
+ * Resolve each target t to seed runnable rows (same as before), then **input-close**: include every runnable
+ * comparison row that shares the same worksheet input (`input_row_index`) or the same `row_input` key (1 input → N outputs). If no row matches t as row_index, t is treated as input_row_index (worksheet 0-based).
  */
 export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
@@ -336,17 +387,23 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
     }
   }
 
-  const expanded = [];
-  const seenRowIndex = new Set();
+  const seedRows = [];
+  const seenSeed = new Set();
+
+  function addSeed(r) {
+    if (!r || r.gt_only) return;
+    const ri = r.row_index;
+    if (typeof ri !== 'number' || Number.isNaN(ri)) return;
+    if (seenSeed.has(ri)) return;
+    seenSeed.add(ri);
+    seedRows.push(r);
+  }
 
   for (const t of orderedTargets) {
     const direct = byRowIndex.get(t);
 
     if (direct && !direct.gt_only) {
-      if (!seenRowIndex.has(direct.row_index)) {
-        expanded.push(direct);
-        seenRowIndex.add(direct.row_index);
-      }
+      addSeed(direct);
       continue;
     }
 
@@ -354,12 +411,7 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
     if (direct && direct.gt_only) {
       const resolved = runnableRowsForGtOnlyTarget(rows, direct, t);
       if (resolved.length > 0) {
-        for (const r of resolved) {
-          if (!seenRowIndex.has(r.row_index)) {
-            expanded.push(r);
-            seenRowIndex.add(r.row_index);
-          }
-        }
+        for (const r of resolved) addSeed(r);
         continue;
       }
       const st = scoreTableNumberLabel(rows, t);
@@ -374,12 +426,7 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
 
     const byInput = runnableRowsWithInputIndex(rows, t);
     if (byInput.length > 0) {
-      for (const r of byInput) {
-        if (!seenRowIndex.has(r.row_index)) {
-          expanded.push(r);
-          seenRowIndex.add(r.row_index);
-        }
-      }
+      for (const r of byInput) addSeed(r);
       continue;
     }
 
@@ -389,7 +436,8 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
     };
   }
 
-  return { rows: expanded };
+  const closureRows = expandInputClosureFromSeedRows(rows, seedRows);
+  return { rows: closureRows };
 }
 
 function sleepMs(ms, signal) {
@@ -513,10 +561,28 @@ export async function runSuggestionRowTests(opts) {
   }
   if (orderedTargets.length === 0) return { ok: false, detail: 'No target rows for verification.' };
 
+  const dbgPost = (verifyOutputs, outcomeOk, outcomeDetail) => {
+    postReviewVerifyDebugPrint(apiBase, {
+      comparison_rows: comparisonRows || [],
+      targets: orderedTargets,
+      run_results: runResults || [],
+      gt_content: gtSafe,
+      verify_outputs: verifyOutputs ?? null,
+      outcome_ok: outcomeOk,
+      outcome_detail: outcomeDetail ?? null,
+    });
+  };
+
   const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets);
-  if (expanded.error) return { ok: false, detail: expanded.error };
+  if (expanded.error) {
+    dbgPost(null, false, expanded.error);
+    return { ok: false, detail: expanded.error };
+  }
   const expandedRows = expanded.rows;
-  if (!expandedRows.length) return { ok: false, detail: 'No runnable comparison rows to verify.' };
+  if (!expandedRows.length) {
+    dbgPost(null, false, 'No runnable comparison rows to verify.');
+    return { ok: false, detail: 'No runnable comparison rows to verify.' };
+  }
 
   const prompts = expandedRows.map((row) => substitutePromptPlaceholders(templateText, row.row_input || {}));
 
@@ -539,25 +605,31 @@ export async function runSuggestionRowTests(opts) {
     const data = await res.json().catch(() => ({}));
     if (res.status !== 202) {
       const msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data) || res.statusText;
+      dbgPost(null, false, msg || 'Run request failed');
       return { ok: false, detail: msg || 'Run request failed' };
     }
     runId = data.run_id;
   } catch (e) {
     if (e?.name === 'AbortError' || signal?.aborted) {
+      dbgPost(null, false, 'aborted');
       return { ok: false, detail: 'aborted', aborted: true };
     }
+    dbgPost(null, false, String(e.message || e));
     return { ok: false, detail: String(e.message || e) };
   }
 
   const polled = await pollRunUntilDone(apiBase, runId, signal);
   if (polled.aborted) {
+    dbgPost(null, false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
   if (!polled.ok) {
+    dbgPost(null, false, polled.error || 'Run did not complete.');
     return { ok: false, detail: polled.error || 'Run did not complete.' };
   }
 
   let fresh = markEmptyOutputAsError(polled.results || []);
+  const freshDbg = () => fresh.map((row) => ({ output: row?.output, error: row?.error }));
   for (let i = 0; i < expandedRows.length; i++) {
     const r = fresh[i];
     const compRow = expandedRows[i];
@@ -566,6 +638,7 @@ export async function runSuggestionRowTests(opts) {
         ? `row_index ${compRow.row_index}` + (typeof compRow.input_row_index === 'number' ? ` (Input #${compRow.input_row_index + 1})` : '')
         : String(i);
     if (!r || r.error || !r.output) {
+      dbgPost(freshDbg(), false, `Model error on ${label}: ${r?.error || 'empty output'}`);
       return { ok: false, detail: `Model error on ${label}: ${r?.error || 'empty output'}` };
     }
   }
@@ -609,6 +682,7 @@ export async function runSuggestionRowTests(opts) {
     const compIdx = compRow.row_index;
     const gtJ = compRow.source_gt_row_index;
     if (gtJ == null || gtJ === undefined || Number.isNaN(Number(gtJ)) || Number(gtJ) < 0) {
+      dbgPost(freshDbg(), false, `No paired ground truth for row_index ${compIdx}.`);
       return { ok: false, detail: `No paired ground truth for row_index ${compIdx}.` };
     }
     const synOut = fresh[i].output && typeof fresh[i].output === 'object' ? { ...fresh[i].output } : {};
@@ -625,10 +699,12 @@ export async function runSuggestionRowTests(opts) {
         typeof compRow.input_row_index === 'number' && !Number.isNaN(compRow.input_row_index)
           ? `row_index ${compIdx}, worksheet Input #${compRow.input_row_index + 1}`
           : `row_index ${compIdx}`;
+      dbgPost(freshDbg(), false, `Score rules still fail for ${inLabel}.`);
       return { ok: false, detail: `Score rules still fail for ${inLabel}.` };
     }
   }
 
+  dbgPost(freshDbg(), true, null);
   return { ok: true };
 }
 
@@ -688,10 +764,28 @@ export async function runSuggestionRowTestsMetrics(opts) {
   }
   if (orderedTargets.length === 0) return { ok: false, detail: 'No target rows for verification.' };
 
+  const dbgPost = (verifyOutputs, outcomeOk, outcomeDetail) => {
+    postReviewVerifyDebugPrint(apiBase, {
+      comparison_rows: comparisonRows || [],
+      targets: orderedTargets,
+      run_results: runResults || [],
+      gt_content: gtSafe,
+      verify_outputs: verifyOutputs ?? null,
+      outcome_ok: outcomeOk,
+      outcome_detail: outcomeDetail ?? null,
+    });
+  };
+
   const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets);
-  if (expanded.error) return { ok: false, detail: expanded.error };
+  if (expanded.error) {
+    dbgPost(null, false, expanded.error);
+    return { ok: false, detail: expanded.error };
+  }
   const expandedRows = expanded.rows;
-  if (!expandedRows.length) return { ok: false, detail: 'No runnable comparison rows to verify.' };
+  if (!expandedRows.length) {
+    dbgPost(null, false, 'No runnable comparison rows to verify.');
+    return { ok: false, detail: 'No runnable comparison rows to verify.' };
+  }
 
   const prompts = expandedRows.map((row) => substitutePromptPlaceholders(templateText, row.row_input || {}));
 
@@ -714,30 +808,37 @@ export async function runSuggestionRowTestsMetrics(opts) {
     const data = await res.json().catch(() => ({}));
     if (res.status !== 202) {
       const msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data) || res.statusText;
+      dbgPost(null, false, msg || 'Run request failed');
       return { ok: false, detail: msg || 'Run request failed' };
     }
     runId = data.run_id;
   } catch (e) {
     if (signal?.aborted || e?.name === 'AbortError') {
+      dbgPost(null, false, 'aborted');
       return { ok: false, detail: 'aborted', aborted: true };
     }
+    dbgPost(null, false, String(e.message || e));
     return { ok: false, detail: String(e.message || e) };
   }
 
   const polled = await pollRunUntilDone(apiBase, runId, signal);
   if (polled.aborted) {
+    dbgPost(null, false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
   if (!polled.ok) {
+    dbgPost(null, false, polled.error || 'Run did not complete.');
     return { ok: false, detail: polled.error || 'Run did not complete.' };
   }
 
   if (signal?.aborted) {
     await requestRunCancel(apiBase, runId);
+    dbgPost(null, false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
 
   let fresh = markEmptyOutputAsError(polled.results || []);
+  const freshDbg = () => fresh.map((row) => ({ output: row?.output, error: row?.error }));
   for (let i = 0; i < expandedRows.length; i++) {
     const r = fresh[i];
     const compRow = expandedRows[i];
@@ -746,6 +847,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
         ? `row_index ${compRow.row_index}` + (typeof compRow.input_row_index === 'number' ? ` (Input #${compRow.input_row_index + 1})` : '')
         : String(i);
     if (!r || r.error || !r.output) {
+      dbgPost(freshDbg(), false, `Model error on ${label}: ${r?.error || 'empty output'}`);
       return { ok: false, detail: `Model error on ${label}: ${r?.error || 'empty output'}` };
     }
   }
@@ -766,6 +868,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
   let embeddingMap = new Map();
   try {
     if (signal?.aborted) {
+      dbgPost(freshDbg(), false, 'aborted');
       return { ok: false, detail: 'aborted', aborted: true };
     }
     const patchedForEmb = (runResults || []).map((r) => {
@@ -788,6 +891,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
   }
 
   if (signal?.aborted) {
+    dbgPost(freshDbg(), false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
 
@@ -798,6 +902,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
     const compIdx = compRow.row_index;
     const gtJ = compRow.source_gt_row_index;
     if (gtJ == null || gtJ === undefined || Number.isNaN(Number(gtJ)) || Number(gtJ) < 0) {
+      dbgPost(freshDbg(), false, `No paired ground truth for row_index ${compIdx}.`);
       return { ok: false, detail: `No paired ground truth for row_index ${compIdx}.` };
     }
     const synOut = fresh[i].output && typeof fresh[i].output === 'object' ? { ...fresh[i].output } : {};
@@ -812,5 +917,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
     if (pass) passed += 1;
   }
 
-  return { ok: true, passRate: n ? passed / n : 0, passed, total: n, allPass: passed === n };
+  const allPass = passed === n;
+  dbgPost(freshDbg(), allPass, `metrics passed ${passed}/${n}`);
+  return { ok: true, passRate: n ? passed / n : 0, passed, total: n, allPass };
 }
