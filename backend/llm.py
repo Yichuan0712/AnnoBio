@@ -386,7 +386,11 @@ def run_structured(
         structured_llm = llm.with_structured_output(response_model)
         messages = [HumanMessage(content=prompt)]
         result = _retry_invoke(lambda: structured_llm.invoke(messages))
-        out = result.model_dump() if hasattr(result, "model_dump") else result.dict()
+        # LangChain may return AIMessage with .parsed; model_dump() on the message triggers Pydantic warnings on `parsed`.
+        obj = getattr(result, "parsed", None) if result is not None else None
+        if obj is None:
+            obj = result
+        out = obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
         return (out, False)
     except Exception as e:
         err_msg = (getattr(e, "message", None) or str(e)).lower()

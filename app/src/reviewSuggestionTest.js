@@ -16,7 +16,7 @@ import {
   legacyMatchTypeWasContains,
 } from './scoreDetailModal.js';
 
-/** AbortControllers for in-flight Verify runs (close modal / beforeunload cancels fetch + poll). */
+/** AbortControllers for in-flight Run+Score row checks (close modal / beforeunload cancels fetch + poll). */
 const verifyAbortControllers = new Set();
 
 export function registerVerifySession(ac) {
@@ -36,9 +36,19 @@ export function abortAllVerifyJobs() {
   verifyAbortControllers.clear();
 }
 
-/** True while any Verify run has a registered AbortController (review modal may be closed). */
+/** True while any row-check run has a registered AbortController (review modal may be closed). */
 export function hasActiveVerifySessions() {
   return verifyAbortControllers.size > 0;
+}
+
+/** When backend enables it (settings `review_verify_debug_print` or env `REVIEW_VERIFY_DEBUG_PRINT`), logs snapshot to Python stdout. */
+function postReviewVerifyDebugPrint(apiBase, payload) {
+  const base = String(apiBase || 'http://localhost:8000').replace(/\/$/, '');
+  void fetch(`${base}/api/review/verify-debug-print`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
 }
 
 const DEFAULT_SCORE_MATCH_FLAGS = {
@@ -269,13 +279,56 @@ function runnableRowsWithInputIndex(rows, inputIdx) {
 }
 
 /**
- * When row_index t hits a synthetic gt_only row, resolve runnable rows: same GT pair, same worksheet index, or same row_input.
+ * Stable identity for input-closed Verify / Finetune checks (aligns with backend `_input_identity_key`).
+ * Runnable rows only; used to expand targets to every comparison row sharing the same worksheet input / placeholders.
+ */
+function comparisonRowInputIdentityKey(r) {
+  if (!r || r.gt_only) return null;
+  const iri = r.input_row_index;
+  if (typeof iri === 'number' && !Number.isNaN(iri) && iri >= 0) {
+    return `in:${iri}`;
+  }
+  const rk = stableRowInputKey(r.row_input);
+  if (rk) return `inp:${rk}`;
+  const ri = r.row_index;
+  if (typeof ri === 'number' && !Number.isNaN(ri)) return `row:${ri}`;
+  return null;
+}
+
+/** All runnable comparison rows whose identity matches any seed (same input → all output lines). */
+function expandInputClosureFromSeedRows(allRows, seedRows) {
+  const identities = new Set();
+  for (const r of seedRows) {
+    const k = comparisonRowInputIdentityKey(r);
+    if (k) identities.add(k);
+  }
+  if (identities.size === 0) return [];
+  const out = [];
+  const seen = new Set();
+  for (const r of allRows) {
+    if (!r || r.gt_only) continue;
+    const k = comparisonRowInputIdentityKey(r);
+    if (!k || !identities.has(k)) continue;
+    const ri = r.row_index;
+    if (typeof ri !== 'number' || Number.isNaN(ri)) continue;
+    if (seen.has(ri)) continue;
+    seen.add(ri);
+    out.push(r);
+  }
+  out.sort((a, b) => (a.row_index || 0) - (b.row_index || 0));
+  return out;
+}
+
+/**
+ * When row_index t hits a synthetic gt_only row, resolve runnable rows: same GT pair (source_gt_row_index),
+ * worksheet input_row_index on the synthetic row, same row_input, then fallbacks for unpaired GT.
+ * Note: t is comparison row_index — do not use it as worksheet input_row_index (common bug).
  */
 function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
   const out = [];
   const pushUnique = (arr) => {
     for (const r of arr) {
-      if (r && !out.some((x) => x.row_index === r.row_index)) out.push(r);
+      if (r && !r.gt_only && !out.some((x) => x.row_index === r.row_index)) out.push(r);
     }
   };
 
@@ -287,10 +340,8 @@ function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
     pushUnique(bySameGt);
   }
 
-  pushUnique(runnableRowsWithInputIndex(allRows, t));
-
   const synthInp = gtOnlyRow.input_row_index;
-  if (typeof synthInp === 'number' && !Number.isNaN(synthInp) && synthInp !== t) {
+  if (typeof synthInp === 'number' && !Number.isNaN(synthInp) && synthInp >= 0) {
     pushUnique(runnableRowsWithInputIndex(allRows, synthInp));
   }
 
@@ -302,15 +353,47 @@ function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
     pushUnique(byPrompt);
   }
 
+  /* Unpaired GT: no runnable shares source_gt_row_index; try score-failing runs (same sheet often has ≥1 unmatched run). */
+  if (out.length === 0) {
+    pushUnique(allRows.filter((r) => r && !r.gt_only && r.matched === false));
+  }
+
+  /* Last resort: any runnable row so Verify/Finetune can run (e.g. single-input workflow, inference lost input_row_index). */
+  if (out.length === 0) {
+    pushUnique(allRows.filter((r) => r && !r.gt_only));
+  }
+
   out.sort((a, b) => (a.row_index || 0) - (b.row_index || 0));
   return out;
 }
 
+/** Optional 1-based Score detail # for a comparison row (saved as `score_table_row`). */
+function scoreTableNumberLabel(rows, comparisonRowIndex) {
+  const r = rows.find((x) => Number(x?.row_index) === Number(comparisonRowIndex));
+  const n = r && r.score_table_row != null ? Number(r.score_table_row) : NaN;
+  return Number.isFinite(n) && n >= 1 ? n : null;
+}
+
 /**
- * Each target t is usually a comparison row_index (Run result index). If no runnable row matches,
- * treat t as input_row_index (0-based worksheet row — same as UI Input # minus 1) and expand to all runnable comparison rows for that input.
+ * When every comparison row is gt_only (no paired model line), still allow Verify/Finetune: run inference from
+ * row_input and score vs GT; baseline “had no extractable model output”.
  */
-function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
+function syntheticRunnableFromGtOnlyRow(gtOnlyRow) {
+  if (!gtOnlyRow || !gtOnlyRow.gt_only) return null;
+  const ri = gtOnlyRow.row_index;
+  if (typeof ri !== 'number' || Number.isNaN(ri)) return null;
+  return {
+    ...gtOnlyRow,
+    gt_only: false,
+    synthetic_empty_baseline: true,
+  };
+}
+
+/**
+ * Resolve each target t to seed runnable rows (same as before), then **input-close**: include every runnable
+ * comparison row that shares the same worksheet input (`input_row_index`) or the same `row_input` key (1 input → N outputs). If no row matches t as row_index, t is treated as input_row_index (worksheet 0-based).
+ */
+export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
   const byRowIndex = new Map();
   for (const r of rows) {
@@ -319,17 +402,23 @@ function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
     }
   }
 
-  const expanded = [];
-  const seenRowIndex = new Set();
+  const seedRows = [];
+  const seenSeed = new Set();
+
+  function addSeed(r) {
+    if (!r || r.gt_only) return;
+    const ri = r.row_index;
+    if (typeof ri !== 'number' || Number.isNaN(ri)) return;
+    if (seenSeed.has(ri)) return;
+    seenSeed.add(ri);
+    seedRows.push(r);
+  }
 
   for (const t of orderedTargets) {
     const direct = byRowIndex.get(t);
 
     if (direct && !direct.gt_only) {
-      if (!seenRowIndex.has(direct.row_index)) {
-        expanded.push(direct);
-        seenRowIndex.add(direct.row_index);
-      }
+      addSeed(direct);
       continue;
     }
 
@@ -337,30 +426,27 @@ function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
     if (direct && direct.gt_only) {
       const resolved = runnableRowsForGtOnlyTarget(rows, direct, t);
       if (resolved.length > 0) {
-        for (const r of resolved) {
-          if (!seenRowIndex.has(r.row_index)) {
-            expanded.push(r);
-            seenRowIndex.add(r.row_index);
-          }
-        }
+        for (const r of resolved) addSeed(r);
         continue;
       }
+      const syn = syntheticRunnableFromGtOnlyRow(direct);
+      if (syn) {
+        addSeed(syn);
+        continue;
+      }
+      const st = scoreTableNumberLabel(rows, t);
+      const stPart = st != null ? ` (Score table #${st})` : '';
       return {
         error:
-          `Cannot verify target ${t}: comparison row_index ${t} is ground-truth only (no model output). ` +
-          `No runnable row shares its ground-truth pairing, worksheet Input #${t + 1} (input_row_index ${t}), ` +
-          `or the same prompt placeholders (row_input) as that entry — often caused by one input mapping to multiple outputs with mismatched indices.`,
+          `Cannot verify target ${t}: comparison row_index ${t}${stPart} is ground-truth only (no model output). ` +
+          `Verify needs a runnable row with model output; none shares this row’s GT pairing, worksheet input_row_index, or row_input. ` +
+          `Often caused by unpaired ground-truth rows or one input → multiple outputs with mismatched indices.`,
       };
     }
 
     const byInput = runnableRowsWithInputIndex(rows, t);
     if (byInput.length > 0) {
-      for (const r of byInput) {
-        if (!seenRowIndex.has(r.row_index)) {
-          expanded.push(r);
-          seenRowIndex.add(r.row_index);
-        }
-      }
+      for (const r of byInput) addSeed(r);
       continue;
     }
 
@@ -370,7 +456,18 @@ function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
     };
   }
 
-  return { rows: expanded };
+  let closureRows = expandInputClosureFromSeedRows(rows, seedRows);
+  const seenRi = new Set(
+    closureRows.map((r) => r.row_index).filter((x) => typeof x === 'number' && !Number.isNaN(x)),
+  );
+  for (const s of seedRows) {
+    const ri = s && s.row_index;
+    if (typeof ri !== 'number' || Number.isNaN(ri) || seenRi.has(ri)) continue;
+    closureRows.push(s);
+    seenRi.add(ri);
+  }
+  closureRows.sort((a, b) => (a.row_index || 0) - (b.row_index || 0));
+  return { rows: closureRows };
 }
 
 function sleepMs(ms, signal) {
@@ -494,16 +591,35 @@ export async function runSuggestionRowTests(opts) {
   }
   if (orderedTargets.length === 0) return { ok: false, detail: 'No target rows for verification.' };
 
+  const dbgPost = (verifyOutputs, outcomeOk, outcomeDetail) => {
+    postReviewVerifyDebugPrint(apiBase, {
+      comparison_rows: comparisonRows || [],
+      targets: orderedTargets,
+      run_results: runResults || [],
+      gt_content: gtSafe,
+      verify_outputs: verifyOutputs ?? null,
+      outcome_ok: outcomeOk,
+      outcome_detail: outcomeDetail ?? null,
+    });
+  };
+
   const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets);
-  if (expanded.error) return { ok: false, detail: expanded.error };
+  if (expanded.error) {
+    dbgPost(null, false, expanded.error);
+    return { ok: false, detail: expanded.error };
+  }
   const expandedRows = expanded.rows;
-  if (!expandedRows.length) return { ok: false, detail: 'No runnable comparison rows to verify.' };
+  if (!expandedRows.length) {
+    dbgPost(null, false, 'No runnable comparison rows to verify.');
+    return { ok: false, detail: 'No runnable comparison rows to verify.' };
+  }
 
   const prompts = expandedRows.map((row) => substitutePromptPlaceholders(templateText, row.row_input || {}));
 
   const base = String(apiBase).replace(/\/$/, '');
   let runId;
   try {
+    const inspectRunId = `verify_${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
     const res = await fetch(`${base}/api/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -513,30 +629,37 @@ export async function runSuggestionRowTests(opts) {
         prompts,
         output_schema: outputSchema,
         run_node_id: null,
+        inspect_run_id: inspectRunId,
       }),
     });
     const data = await res.json().catch(() => ({}));
     if (res.status !== 202) {
       const msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data) || res.statusText;
+      dbgPost(null, false, msg || 'Run request failed');
       return { ok: false, detail: msg || 'Run request failed' };
     }
     runId = data.run_id;
   } catch (e) {
     if (e?.name === 'AbortError' || signal?.aborted) {
+      dbgPost(null, false, 'aborted');
       return { ok: false, detail: 'aborted', aborted: true };
     }
+    dbgPost(null, false, String(e.message || e));
     return { ok: false, detail: String(e.message || e) };
   }
 
   const polled = await pollRunUntilDone(apiBase, runId, signal);
   if (polled.aborted) {
+    dbgPost(null, false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
   if (!polled.ok) {
+    dbgPost(null, false, polled.error || 'Run did not complete.');
     return { ok: false, detail: polled.error || 'Run did not complete.' };
   }
 
   let fresh = markEmptyOutputAsError(polled.results || []);
+  const freshDbg = () => fresh.map((row) => ({ output: row?.output, error: row?.error }));
   for (let i = 0; i < expandedRows.length; i++) {
     const r = fresh[i];
     const compRow = expandedRows[i];
@@ -545,6 +668,7 @@ export async function runSuggestionRowTests(opts) {
         ? `row_index ${compRow.row_index}` + (typeof compRow.input_row_index === 'number' ? ` (Input #${compRow.input_row_index + 1})` : '')
         : String(i);
     if (!r || r.error || !r.output) {
+      dbgPost(freshDbg(), false, `Model error on ${label}: ${r?.error || 'empty output'}`);
       return { ok: false, detail: `Model error on ${label}: ${r?.error || 'empty output'}` };
     }
   }
@@ -588,6 +712,7 @@ export async function runSuggestionRowTests(opts) {
     const compIdx = compRow.row_index;
     const gtJ = compRow.source_gt_row_index;
     if (gtJ == null || gtJ === undefined || Number.isNaN(Number(gtJ)) || Number(gtJ) < 0) {
+      dbgPost(freshDbg(), false, `No paired ground truth for row_index ${compIdx}.`);
       return { ok: false, detail: `No paired ground truth for row_index ${compIdx}.` };
     }
     const synOut = fresh[i].output && typeof fresh[i].output === 'object' ? { ...fresh[i].output } : {};
@@ -604,15 +729,17 @@ export async function runSuggestionRowTests(opts) {
         typeof compRow.input_row_index === 'number' && !Number.isNaN(compRow.input_row_index)
           ? `row_index ${compIdx}, worksheet Input #${compRow.input_row_index + 1}`
           : `row_index ${compIdx}`;
+      dbgPost(freshDbg(), false, `Score rules still fail for ${inLabel}.`);
       return { ok: false, detail: `Score rules still fail for ${inLabel}.` };
     }
   }
 
+  dbgPost(freshDbg(), true, null);
   return { ok: true };
 }
 
 /**
- * Same pipeline as {@link runSuggestionRowTests} but returns per-row pass rate (for Bayesian finetune objective).
+ * Same pipeline as {@link runSuggestionRowTests} but returns per-row pass rate (e.g. Finetune / metrics).
  * @returns {Promise<{ ok: boolean, passRate?: number, passed?: number, total?: number, allPass?: boolean, detail?: string }>}
  */
 export async function runSuggestionRowTestsMetrics(opts) {
@@ -667,16 +794,35 @@ export async function runSuggestionRowTestsMetrics(opts) {
   }
   if (orderedTargets.length === 0) return { ok: false, detail: 'No target rows for verification.' };
 
+  const dbgPost = (verifyOutputs, outcomeOk, outcomeDetail) => {
+    postReviewVerifyDebugPrint(apiBase, {
+      comparison_rows: comparisonRows || [],
+      targets: orderedTargets,
+      run_results: runResults || [],
+      gt_content: gtSafe,
+      verify_outputs: verifyOutputs ?? null,
+      outcome_ok: outcomeOk,
+      outcome_detail: outcomeDetail ?? null,
+    });
+  };
+
   const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets);
-  if (expanded.error) return { ok: false, detail: expanded.error };
+  if (expanded.error) {
+    dbgPost(null, false, expanded.error);
+    return { ok: false, detail: expanded.error };
+  }
   const expandedRows = expanded.rows;
-  if (!expandedRows.length) return { ok: false, detail: 'No runnable comparison rows to verify.' };
+  if (!expandedRows.length) {
+    dbgPost(null, false, 'No runnable comparison rows to verify.');
+    return { ok: false, detail: 'No runnable comparison rows to verify.' };
+  }
 
   const prompts = expandedRows.map((row) => substitutePromptPlaceholders(templateText, row.row_input || {}));
 
   const base = String(apiBase).replace(/\/$/, '');
   let runId;
   try {
+    const inspectRunId = `verify_${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
     const res = await fetch(`${base}/api/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -686,35 +832,43 @@ export async function runSuggestionRowTestsMetrics(opts) {
         prompts,
         output_schema: outputSchema,
         run_node_id: null,
+        inspect_run_id: inspectRunId,
       }),
     });
     const data = await res.json().catch(() => ({}));
     if (res.status !== 202) {
       const msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data) || res.statusText;
+      dbgPost(null, false, msg || 'Run request failed');
       return { ok: false, detail: msg || 'Run request failed' };
     }
     runId = data.run_id;
   } catch (e) {
     if (signal?.aborted || e?.name === 'AbortError') {
+      dbgPost(null, false, 'aborted');
       return { ok: false, detail: 'aborted', aborted: true };
     }
+    dbgPost(null, false, String(e.message || e));
     return { ok: false, detail: String(e.message || e) };
   }
 
   const polled = await pollRunUntilDone(apiBase, runId, signal);
   if (polled.aborted) {
+    dbgPost(null, false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
   if (!polled.ok) {
+    dbgPost(null, false, polled.error || 'Run did not complete.');
     return { ok: false, detail: polled.error || 'Run did not complete.' };
   }
 
   if (signal?.aborted) {
     await requestRunCancel(apiBase, runId);
+    dbgPost(null, false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
 
   let fresh = markEmptyOutputAsError(polled.results || []);
+  const freshDbg = () => fresh.map((row) => ({ output: row?.output, error: row?.error }));
   for (let i = 0; i < expandedRows.length; i++) {
     const r = fresh[i];
     const compRow = expandedRows[i];
@@ -723,6 +877,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
         ? `row_index ${compRow.row_index}` + (typeof compRow.input_row_index === 'number' ? ` (Input #${compRow.input_row_index + 1})` : '')
         : String(i);
     if (!r || r.error || !r.output) {
+      dbgPost(freshDbg(), false, `Model error on ${label}: ${r?.error || 'empty output'}`);
       return { ok: false, detail: `Model error on ${label}: ${r?.error || 'empty output'}` };
     }
   }
@@ -743,6 +898,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
   let embeddingMap = new Map();
   try {
     if (signal?.aborted) {
+      dbgPost(freshDbg(), false, 'aborted');
       return { ok: false, detail: 'aborted', aborted: true };
     }
     const patchedForEmb = (runResults || []).map((r) => {
@@ -765,6 +921,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
   }
 
   if (signal?.aborted) {
+    dbgPost(freshDbg(), false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
 
@@ -775,6 +932,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
     const compIdx = compRow.row_index;
     const gtJ = compRow.source_gt_row_index;
     if (gtJ == null || gtJ === undefined || Number.isNaN(Number(gtJ)) || Number(gtJ) < 0) {
+      dbgPost(freshDbg(), false, `No paired ground truth for row_index ${compIdx}.`);
       return { ok: false, detail: `No paired ground truth for row_index ${compIdx}.` };
     }
     const synOut = fresh[i].output && typeof fresh[i].output === 'object' ? { ...fresh[i].output } : {};
@@ -789,5 +947,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
     if (pass) passed += 1;
   }
 
-  return { ok: true, passRate: n ? passed / n : 0, passed, total: n, allPass: passed === n };
+  const allPass = passed === n;
+  dbgPost(freshDbg(), allPass, `metrics passed ${passed}/${n}`);
+  return { ok: true, passRate: n ? passed / n : 0, passed, total: n, allPass };
 }
