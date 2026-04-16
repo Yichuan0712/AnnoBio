@@ -1,7 +1,7 @@
 """
 Review analyze pipeline, separate from FastAPI main module.
 
-Phase 1 — per **failed input**: same dataset input, **all** unmatched model outputs vs their paired expected/scoring context in one LLM call; then rough opinion.
+Phase 1 — per **failed input**: same dataset input; the prompt lists **model outputs** and **ground truth** as **two separate lists** (only lines with content on that side; same convention as the app debug preview). Then rough opinion.
 
 Phase 1.5 — **cluster** Phase‑1 issues that share the same root cause / fix strategy (one LLM call). Fallback: group by `problem_category_hint`.
 
@@ -404,6 +404,52 @@ def _cluster_opinions_for_phase2(
         return _heuristic_issue_cluster_indices(opinions)
 
 
+def _phase1_row_has_no_model_output(d: dict[str, Any]) -> bool:
+    """Match app `reviewPreviewRowHasNoModelOutput`: GT-only or empty run_output (all keys empty)."""
+    if bool(d.get("gt_only")):
+        return True
+    ro = d.get("run_output")
+    if not isinstance(ro, dict):
+        ro = {}
+    keys = list(ro.keys())
+    if not keys:
+        return True
+    for _k, v in ro.items():
+        if v is None:
+            continue
+        if isinstance(v, str) and not str(v).strip():
+            continue
+        if isinstance(v, list) and len(v) == 0:
+            continue
+        return False
+    return True
+
+
+def _phase1_row_has_no_ground_truth(d: dict[str, Any]) -> bool:
+    """Match app `reviewPreviewRowHasNoGroundTruth`: empty ground_truth_output and no expected text."""
+    gto = d.get("ground_truth_output")
+    if not isinstance(gto, dict):
+        gto = {}
+    keys = list(gto.keys())
+    if not keys:
+        gto_all_empty = True
+    else:
+        gto_all_empty = True
+        for _k, v in gto.items():
+            if v is None:
+                continue
+            if isinstance(v, str) and not str(v).strip():
+                continue
+            if isinstance(v, list) and len(v) == 0:
+                continue
+            gto_all_empty = False
+            break
+    exp = d.get("expected")
+    exp_s = "" if exp is None else " ".join(str(exp).split()).strip()
+    exp_empty = exp_s == "" or exp_s == "—"
+    return gto_all_empty and exp_empty
+
+
 def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[Any]) -> str:
     if not group_rows:
         return ""
@@ -450,48 +496,66 @@ def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[A
         return [x for x in parts if _is_model_facing_output_key(x.split(":", 1)[0].strip())]
 
     ordered_rows = sorted(group_rows, key=lambda x: int(_row_to_dict(x).get("row_index", 0)))
-    gt_entries: list[dict[str, Any]] = []
     scoring_ordered: list[str] = []
     scoring_seen: set[str] = set()
-    outputs_in_order: list[dict[str, Any] | None] = []
+    model_output_items: list[dict[str, Any]] = []
+    ground_truth_items: list[dict[str, Any]] = []
     for r in ordered_rows:
         d = _row_to_dict(r)
-        gt_only = bool(d.get("gt_only"))
-        run_output = d.get("run_output") or {}
         for part in _field_scoring_parts_for_row(d):
             key = part.split(":", 1)[0].strip()
             if key in scoring_seen:
                 continue
             scoring_seen.add(key)
             scoring_ordered.append(part)
-        if gt_only:
-            outputs_in_order.append(None)
-        else:
-            outputs_in_order.append(dict(run_output) if isinstance(run_output, dict) else {})
-        gt_obj = {k: v for k, v in _ground_truth_output_dict(d).items() if _is_model_facing_output_key(k)}
-        gt_entries.append(gt_obj)
+        score_lbl = _score_row_one_based(d)
+        matched = bool(d.get("matched", False))
+        if not _phase1_row_has_no_model_output(d):
+            run_output = d.get("run_output") or {}
+            ro_copy = dict(run_output) if isinstance(run_output, dict) else {}
+            model_output_items.append(
+                {
+                    "score_row": score_lbl,
+                    "matched": matched,
+                    "run_output": ro_copy,
+                }
+            )
+        if not _phase1_row_has_no_ground_truth(d):
+            gt_obj = {k: v for k, v in _ground_truth_output_dict(d).items() if _is_model_facing_output_key(k)}
+            ground_truth_items.append(
+                {
+                    "score_row": score_lbl,
+                    "matched": matched,
+                    "ground_truth_output": gt_obj,
+                }
+            )
 
     rules_body = "\n".join(f"- {p}" for p in scoring_ordered) if scoring_ordered else "(not specified)"
-    outputs_json = json.dumps(outputs_in_order, ensure_ascii=False, indent=2)
+    model_json = json.dumps(model_output_items, ensure_ascii=False, indent=2)
+    gt_json = json.dumps(ground_truth_items, ensure_ascii=False, indent=2)
     multi = len(group_rows) > 1
     mixed = len(failed_idxs) > 0 and len(failed_idxs) < len(group_rows)
     if multi:
         if mixed:
             scope = (
-                "This is **one dataset input** with **multiple** expectations below. **Some PASSED and some FAILED** scoring. "
-                "Use passing entries as context (what the model got right); focus the diagnosis on failures "
+                "This is **one dataset input** with **multiple** score lines below. **Some PASSED and some FAILED** scoring. "
+                "Use passing lines as context (what the model got right); focus the diagnosis on failures "
                 "and prompt changes that preserve correct behavior while fixing them."
             )
         else:
             scope = (
-                "This is **one dataset input** with **multiple** expectations (see **sections 3 and 4**). "
-                "Diagnose **holistically** across indices (same array order)."
+                "This is **one dataset input** with **multiple** score lines. **Sections 3 and 4** are **two separate lists** "
+                "(same layout as the app): section 3 only includes lines that have **model output**; section 4 only includes lines "
+                "that have **ground-truth** cells. **The two lists can have different lengths.** Tie a model line to a GT line "
+                "when they share the same **score_row** (1-based Issue / Score #)."
             )
     else:
-        scope = "This is **one** model output for this input that failed scoring."
-    gt_json = json.dumps(gt_entries, ensure_ascii=False, indent=2)
+        scope = (
+            "This is **one** score line for this input. It may appear in section 3 only, section 4 only, or both—use whichever "
+            "tables are present."
+        )
 
-    return f"""You review model output(s) for **one** dataset input (same placeholders / message as below). Possibly multiple expectations were scored; some may have **passed** and some **failed**.
+    return f"""You review model output(s) for **one** dataset input (same placeholders / message as below). Possibly multiple score lines were evaluated; some may have **passed** and some **failed**.
 
 {scope}
 
@@ -509,34 +573,36 @@ Keys are `{{placeholder}}` names from the template above; values are the strings
 {json.dumps(row_input, ensure_ascii=False, indent=2)}
 ```
 
-## 3. Model output
+## 3. Model output (one entry per score line that has model output)
 
-JSON **array**: one element per expectation, **same length and index order** as **section 4 (Ground truth)**. Each element is the model `output` object for that expectation, or `null` if no run result was paired (missing extraction).
+JSON **array** in **score-line order** among included rows only. **Omit** lines with no extractable model JSON (e.g. GT-only rows). Each object has **`score_row`** (1-based, same as Issue / Score **#** in the app), **`matched`** (whether scoring passed for that line), and **`run_output`** (the model’s output fields as in the run).
 
 ```json
-{outputs_json}
+{model_json}
 ```
 
-## 4. Ground truth
+## 4. Ground truth (one entry per score line that has expected / GT cells)
 
-JSON **array**: one object per expectation. Index `i` matches index `i` in **section 3 (Model output)**. **Keys** are the score-rule **output keys** — the same property names used when comparing model JSON to the GT sheet. Omitted here: row-index rules (`#`, `[#]`) and bracket worksheet selectors (`[…]`) that are not model-output fields.
+JSON **array** in **score-line order** among included rows only. **Omit** lines with no ground-truth content. Each object has **`score_row`** (1-based, same numbering as section 3), **`matched`**, and **`ground_truth_output`** (**keys** are score-rule **output keys** — same property names as when comparing model JSON to the GT sheet). Omitted keys: row-index rules (`#`, `[#]`) and bracket worksheet selectors (`[…]`) that are not model-output fields.
 
 ```json
 {gt_json}
 ```
 
+**Linking:** When the same **`score_row`** appears in both sections, that row has both a model output and GT expectations on that line. When it appears in only one section, the other side had nothing to show for that score line (same as the app’s debug preview).
+
 ## 5. Comparison rules (how each output key is scored against ground truth)
 
-For each listed output field, the line describes the match type / options used when comparing **section 3** values to **section 4**.
+For each listed output field, the line describes the match type / options used when comparing **model `run_output`** values to **`ground_truth_output`**.
 
 {rules_body}
 
-Note: Sections **3** and **4** use **0-based** array indices `i` only for JSON element order. The response field **row_index** (below) uses **1-based** row numbers like the app.
+The response field **row_index** (below) uses **1-based** **`score_row`** numbers like the app—not array positions in sections 3 or 4.
 
 ## Your task
 
 0. **card_title**: A **short headline** (about 4–12 words) for a UI list card—plain English, summary-style, readable at a glance. It must **not** be snake_case or look like a code identifier. It is **not** a substitute for the full explanation below.
-1. **issue_summary**: Briefly explain the mismatch(es) (one or two sentences, or a bit more if multiple outputs need tying together). If the failure is extractive, mention **missing** and/or **extra** relative to expected when relevant.
+1. **issue_summary**: Briefly explain the mismatch(es) (one or two sentences, or a bit more if multiple score lines need tying together). If the failure is extractive, mention **missing** and/or **extra** relative to expected when relevant.
 2. **rough_modification_opinion**: Rough modification advice for the **prompt** only—what to clarify, add, or constrain so coverage is exact (no missing required items, no spurious extras); do NOT paste a full new prompt.
 3. **problem_category_hint**: a very short English snake_case or hyphen tag for grouping similar failures (internal use).
 
