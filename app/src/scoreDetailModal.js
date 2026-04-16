@@ -648,63 +648,233 @@ export async function runReviewFromScore({ scoreNodeId, getReviewPayload, creden
   return runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview: addEvent.detail?.registerPendingReview }).then(() => ({ reviewNodeId }));
 }
 
-function summarizeRunOutputForPreview(obj) {
-  if (!obj || typeof obj !== 'object' || Object.keys(obj).length === 0) return '—';
-  const parts = [];
-  for (const [k, v] of Object.entries(obj)) {
-    let s = v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-    s = s.replace(/\s+/g, ' ').trim();
-    if (s.length > 56) s = `${s.slice(0, 56)}…`;
-    parts.push(`${k}: ${s}`);
-  }
-  return parts.join('; ');
+/** @param {unknown} raw */
+function reviewPreviewCellHtml(raw) {
+  if (raw == null || raw === '') return '<span class="review-selection-preview-empty">—</span>';
+  let s;
+  if (typeof raw === 'object') s = JSON.stringify(raw);
+  else s = String(raw);
+  s = s.replace(/\s+/g, ' ').trim();
+  if (!s) return '<span class="review-selection-preview-empty">—</span>';
+  const max = 480;
+  if (s.length <= max) return escapeHtml(s);
+  const short = `${s.slice(0, max)}…`;
+  return `<span class="review-selection-preview-clip" title="${escapeAttr(s)}">${escapeHtml(short)}</span>`;
 }
 
-/** Same placeholder order as Run/Review payload `row_input`; tooltip carries full text. */
-function summarizeRowInputForPreview(rowInput, promptSections) {
-  const obj = rowInput && typeof rowInput === 'object' ? rowInput : null;
-  if (!obj || Object.keys(obj).length === 0) return { cell: '—', title: '' };
+function buildReviewPreviewInputBlock(rowInput, promptSections) {
+  const obj = rowInput && typeof rowInput === 'object' ? rowInput : {};
   const ordered = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
   const seen = new Set();
-  const keys = [];
+  /** @type {{ k: string, raw: unknown }[]} */
+  const pairs = [];
   for (const k of ordered) {
     if (Object.prototype.hasOwnProperty.call(obj, k)) {
-      keys.push(k);
+      pairs.push({ k, raw: obj[k] });
       seen.add(k);
     }
   }
   for (const k of Object.keys(obj).sort()) {
-    if (!seen.has(k)) keys.push(k);
+    if (!seen.has(k)) pairs.push({ k, raw: obj[k] });
   }
-  const shortParts = [];
-  const fullParts = [];
-  for (const k of keys) {
-    let v = obj[k];
-    v = v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-    const full = v.replace(/\s+/g, ' ').trim();
-    let s = full;
-    if (s.length > 56) s = `${s.slice(0, 56)}…`;
-    shortParts.push(`${k}: ${s || '—'}`);
-    fullParts.push(`${k}: ${full || '—'}`);
+  if (pairs.length === 0) {
+    return '<p class="review-selection-preview-empty">No prompt placeholders / inputs for this worksheet row.</p>';
   }
-  return { cell: shortParts.join('; '), title: fullParts.join('; ') };
+  return `<dl class="review-selection-preview-kv">${pairs.map(({ k, raw }) => `
+    <div class="review-selection-preview-kv-pair">
+      <dt>${escapeHtml(k)}</dt>
+      <dd>${reviewPreviewCellHtml(raw)}</dd>
+    </div>`).join('')}</dl>`;
 }
 
 /**
- * Temporary modal: lists comparison rows that would be sent to Review (respects Score results “Review” checkboxes).
- * Does not add a Review node, an edge, or call the analyze API.
+ * Group key + sort order for Review preview: primary = worksheet input index; GT-only = GT row; else run row fallback.
+ * @param {any} r
+ */
+function reviewPreviewInputGroupMeta(r) {
+  if (typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index)) {
+    const i = r.input_row_index;
+    return {
+      key: `in:${i}`,
+      sortKey: i,
+      title: `Input #${i + 1}`,
+      hint: 'Worksheet row mapped into the prompt',
+    };
+  }
+  if (r.gt_only === true && typeof r.source_gt_row_index === 'number' && !Number.isNaN(r.source_gt_row_index)) {
+    const j = r.source_gt_row_index;
+    return {
+      key: `gtonly:${j}`,
+      sortKey: 1_000_000 + j,
+      title: `Ground truth #${j + 1}`,
+      hint: 'GT-only line in Score — no paired model output',
+    };
+  }
+  const ri = typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : 0;
+  return {
+    key: `run:${ri}`,
+    sortKey: 1_500_000 + ri,
+    title: `${formatResultOutputColumnLabel('#')} ${ri + 1}`,
+    hint: 'No worksheet input index on this payload — grouped by run output row',
+  };
+}
+
+/** True when there is nothing to show as model output (GT-only or empty run_output). */
+function reviewPreviewRowHasNoModelOutput(r) {
+  if (r.gt_only === true) return true;
+  const ro = r?.run_output && typeof r.run_output === 'object' ? r.run_output : {};
+  const keys = Object.keys(ro);
+  if (keys.length === 0) return true;
+  return keys.every((k) => {
+    const v = ro[k];
+    if (v == null) return true;
+    if (typeof v === 'string' && !String(v).trim()) return true;
+    if (Array.isArray(v) && v.length === 0) return true;
+    return false;
+  });
+}
+
+/** True when ground_truth_output is all empty and expected is empty or placeholder em dash. */
+function reviewPreviewRowHasNoGroundTruth(r) {
+  const gto = r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {};
+  const keys = Object.keys(gto);
+  const gtoAllEmpty =
+    keys.length === 0 ||
+    keys.every((k) => {
+      const v = gto[k];
+      if (v == null) return true;
+      if (typeof v === 'string' && !String(v).trim()) return true;
+      if (Array.isArray(v) && v.length === 0) return true;
+      return false;
+    });
+  const exp = r.expected == null ? '' : String(r.expected).replace(/\s+/g, ' ').trim();
+  const expEmpty = exp === '' || exp === '—';
+  return gtoAllEmpty && expEmpty;
+}
+
+/**
+ * Output / GT column keys for the Review preview tables (payload order when configured, else union of row keys).
+ * @param {any[]} outputFields
+ * @param {any[]} rows
+ * @returns {{ key: string, label: string }[]}
+ */
+function collectReviewPreviewOutputColumnDefs(outputFields, rows) {
+  const fields = Array.isArray(outputFields) ? outputFields : [];
+  if (fields.length > 0) {
+    return fields
+      .map((f) => {
+        const key = String(f.key || '').trim();
+        const label = formatResultOutputColumnLabel((f.display || f.key || '').trim() || key || '—');
+        return { key, label };
+      })
+      .filter((c) => c.key);
+  }
+  const keySet = new Set();
+  for (const r of rows) {
+    const ro = r?.run_output && typeof r.run_output === 'object' ? r.run_output : {};
+    for (const k of Object.keys(ro)) keySet.add(k);
+    const gto = r?.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {};
+    for (const k of Object.keys(gto)) keySet.add(k);
+  }
+  return [...keySet].sort().map((key) => ({ key, label: formatResultOutputColumnLabel(key) }));
+}
+
+/** Match / mismatch + GT-only chips for one score line (table cell). */
+function reviewPreviewResultChipsHtml(r) {
+  const matched = comparisonRowIsMatched(r);
+  const gtOnly = r.gt_only === true;
+  const chipMatch = matched
+    ? '<span class="review-selection-preview-chip review-selection-preview-chip--ok">Match</span>'
+    : '<span class="review-selection-preview-chip review-selection-preview-chip--bad">Mismatch</span>';
+  const chipGt = gtOnly ? '<span class="review-selection-preview-chip review-selection-preview-chip--info">GT only</span>' : '';
+  return `<span class="review-selection-preview-table-chips">${chipMatch}${chipGt}</span>`;
+}
+
+/** One table: every checked score line × all model output fields (same order as Score table). */
+function buildReviewPreviewModelOutputTable(rows, outputFields) {
+  if (!rows.length) return '<p class="review-selection-preview-empty">—</p>';
+  const cols = collectReviewPreviewOutputColumnDefs(outputFields, rows);
+  const runHashLabel = formatResultOutputColumnLabel('#');
+  const thFields = cols.map((c) => `<th scope="col">${escapeHtml(c.label)}</th>`).join('');
+  const thead = `<thead><tr>
+    <th scope="col">Score #</th>
+    <th scope="col" title="Run result row (1-based)">${escapeHtml(runHashLabel)}</th>
+    <th scope="col">Result</th>
+    ${thFields}
+  </tr></thead>`;
+  const tbody = `<tbody>${rows
+    .map((r) => {
+      const scoreTableRow = r.score_table_row != null && r.score_table_row !== '' ? String(r.score_table_row) : '—';
+      const runNum =
+        typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? String(r.row_index + 1) : '—';
+      const ro =
+        r.gt_only === true ? {} : r.run_output && typeof r.run_output === 'object' ? r.run_output : {};
+      const cells = cols.map((c) => `<td>${reviewPreviewCellHtml(ro[c.key])}</td>`).join('');
+      return `<tr>
+      <td>${escapeHtml(scoreTableRow)}</td>
+      <td>${escapeHtml(runNum)}</td>
+      <td>${reviewPreviewResultChipsHtml(r)}</td>
+      ${cells}
+    </tr>`;
+    })
+    .join('')}</tbody>`;
+  return `<div class="review-selection-preview-table-scroll"><table class="review-selection-preview-big-table">${thead}${tbody}</table></div>`;
+}
+
+/** One table: every checked score line × expected per field + full rule-target text. */
+function buildReviewPreviewGroundTruthTable(rows, outputFields) {
+  if (!rows.length) return '<p class="review-selection-preview-empty">—</p>';
+  const cols = collectReviewPreviewOutputColumnDefs(outputFields, rows);
+  const runHashLabel = formatResultOutputColumnLabel('#');
+  const thFields = cols
+    .map(
+      (c) =>
+        `<th scope="col">${escapeHtml(c.label)} <span class="review-selection-preview-th-hint">(expected)</span></th>`,
+    )
+    .join('');
+  const thead = `<thead><tr>
+    <th scope="col">Score #</th>
+    <th scope="col" title="Run result row (1-based)">${escapeHtml(runHashLabel)}</th>
+    <th scope="col">Result</th>
+    ${thFields}
+    <th scope="col">Rule targets <span class="review-selection-preview-th-hint">(all text)</span></th>
+  </tr></thead>`;
+  const tbody = `<tbody>${rows
+    .map((r) => {
+      const scoreTableRow = r.score_table_row != null && r.score_table_row !== '' ? String(r.score_table_row) : '—';
+      const runNum =
+        typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? String(r.row_index + 1) : '—';
+      const gto = r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {};
+      const cells = cols.map((c) => `<td>${reviewPreviewCellHtml(gto[c.key])}</td>`).join('');
+      const expRaw = r.expected == null ? '' : String(r.expected).replace(/\s+/g, ' ').trim();
+      const expDisp = expRaw === '—' ? '' : expRaw;
+      return `<tr>
+      <td>${escapeHtml(scoreTableRow)}</td>
+      <td>${escapeHtml(runNum)}</td>
+      <td>${reviewPreviewResultChipsHtml(r)}</td>
+      ${cells}
+      <td>${reviewPreviewCellHtml(expDisp)}</td>
+    </tr>`;
+    })
+    .join('')}</tbody>`;
+  return `<div class="review-selection-preview-table-scroll"><table class="review-selection-preview-big-table">${thead}${tbody}</table></div>`;
+}
+
+/**
+ * Debug modal: Review-checked lines grouped by input; per group, model output table and GT table are independent (each omits empty-on-that-side rows; score-line order within each table).
+ * Does not add a Review node or call the analyze API.
  * @param {{ getReviewPayload: () => unknown }} options
  */
 export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
   if (typeof getReviewPayload !== 'function') return;
   const payload = await Promise.resolve(getReviewPayload());
   if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) {
-    showAlert('Cannot build Review data. Ensure the Score node is connected to a Run with a prompt that has sections.', { title: 'Review preview' });
+    showAlert('Cannot build Review data. Ensure the Score node is connected to a Run with a prompt that has sections.', { title: 'Review: by input' });
     return;
   }
   const comparisonRows = Array.isArray(payload.comparison_rows) ? payload.comparison_rows : [];
   if (comparisonRows.length === 0) {
-    showAlert('No rows selected for Review. Turn on the Review checkboxes for the rows you want in the Score results table.', { title: 'Review preview' });
+    showAlert('No rows selected for Review. Turn on the Review checkboxes in the Score results table for the rows you want.', { title: 'Review: by input' });
     return;
   }
 
@@ -714,42 +884,73 @@ export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
   overlay.setAttribute('aria-labelledby', 'review-selection-preview-title');
 
   const promptSections = Array.isArray(payload.prompt_sections) ? payload.prompt_sections : [];
-  const tableRowsHtml = comparisonRows.map((r, idx) => {
-    const scoreTableRow = r.score_table_row != null && r.score_table_row !== '' ? String(r.score_table_row) : '—';
-    const runIdx = r.row_index != null && r.row_index !== '' ? String(r.row_index) : '—';
-    const inpIdx =
-      typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index)
-        ? String(r.input_row_index + 1)
-        : '—';
-    const matched = comparisonRowIsMatched(r) ? 'true' : 'false';
-    const gtOnly = r.gt_only === true ? 'yes' : 'no';
-    const outSummary = summarizeRunOutputForPreview(r.run_output);
-    const { cell: inputFieldsCell, title: inputFieldsTitle } = summarizeRowInputForPreview(r.row_input, promptSections);
-    const inputFieldsTitleAttr = inputFieldsTitle ? escapeAttr(inputFieldsTitle) : escapeAttr(inputFieldsCell);
-    const expectedShort = (() => {
-      let e = r.expected == null ? '' : String(r.expected);
-      e = e.replace(/\s+/g, ' ').trim();
-      if (e.length > 72) return `${e.slice(0, 72)}…`;
-      return e || '—';
-    })();
-    return `<tr><td>${idx + 1}</td><td>${escapeHtml(scoreTableRow)}</td><td>${escapeHtml(runIdx)}</td><td>${escapeHtml(inpIdx)}</td><td class="review-selection-preview-input-fields" title="${inputFieldsTitleAttr}">${escapeHtml(inputFieldsCell)}</td><td>${escapeHtml(matched)}</td><td>${escapeHtml(gtOnly)}</td><td title="${escapeAttr(expectedShort)}">${escapeHtml(expectedShort)}</td><td title="${escapeAttr(outSummary)}">${escapeHtml(outSummary)}</td></tr>`;
+  const outputFields = Array.isArray(payload.output_fields) ? payload.output_fields : [];
+  const lineCount = comparisonRows.length;
+
+  /** @type {Map<string, { meta: ReturnType<typeof reviewPreviewInputGroupMeta>, rows: any[], rowInput: any }>} */
+  const groups = new Map();
+  for (const r of comparisonRows) {
+    const meta = reviewPreviewInputGroupMeta(r);
+    let g = groups.get(meta.key);
+    if (!g) {
+      g = { meta, rows: [], rowInput: null };
+      groups.set(meta.key, g);
+    }
+    g.rows.push(r);
+    if (g.rowInput == null && r.row_input && typeof r.row_input === 'object') g.rowInput = r.row_input;
+  }
+
+  const sortedGroups = [...groups.values()].sort((a, b) => a.meta.sortKey - b.meta.sortKey);
+
+  const cardsHtml = sortedGroups.map((g) => {
+    const { meta, rows, rowInput } = g;
+    const inputBlock = buildReviewPreviewInputBlock(rowInput, promptSections);
+    const outputTableRows = rows.filter((r) => !reviewPreviewRowHasNoModelOutput(r));
+    const gtTableRows = rows.filter((r) => !reviewPreviewRowHasNoGroundTruth(r));
+    const nOutcomes = rows.length;
+    const allOutputsHtml = buildReviewPreviewModelOutputTable(outputTableRows, outputFields);
+    const allGtHtml = buildReviewPreviewGroundTruthTable(gtTableRows, outputFields);
+
+    return `
+    <article class="review-selection-preview-row review-selection-preview-row--by-input" aria-label="${escapeAttr(meta.title)}">
+      <header class="review-selection-preview-row-head">
+        <div class="review-selection-preview-row-meta">
+          <span class="review-selection-preview-row-title">${escapeHtml(meta.title)}</span>
+          <span class="review-selection-preview-row-sub">${escapeHtml(meta.hint)}</span>
+          <span class="review-selection-preview-meta-bits">
+            <strong>${escapeHtml(String(nOutcomes))}</strong> score line${nOutcomes === 1 ? '' : 's'} in Review for this input
+          </span>
+        </div>
+      </header>
+      <div class="review-selection-preview-input-block-wrap">
+        <h3 class="review-selection-preview-section-title">Prompt inputs <span class="review-selection-preview-section-hint">(placeholders)</span></h3>
+        <div class="review-selection-preview-section-body">${inputBlock}</div>
+      </div>
+      <div class="review-selection-preview-compare-columns">
+        <section class="review-selection-preview-aggregate review-selection-preview-aggregate--out" aria-label="All model outputs for this input">
+          <h3 class="review-selection-preview-aggregate-title">Model outputs <span class="review-selection-preview-section-hint">(only lines with output; score-line order)</span></h3>
+          <div class="review-selection-preview-aggregate-body">${allOutputsHtml}</div>
+        </section>
+        <section class="review-selection-preview-aggregate review-selection-preview-aggregate--gt" aria-label="All ground truth for this input">
+          <h3 class="review-selection-preview-aggregate-title">Ground truth <span class="review-selection-preview-section-hint">(only lines with GT; score-line order)</span></h3>
+          <div class="review-selection-preview-aggregate-body">${allGtHtml}</div>
+        </section>
+      </div>
+    </article>`;
   }).join('');
+
+  const groupCount = sortedGroups.length;
 
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--review-selection-preview" role="dialog">
       <div class="modal-header">
-        <h2 id="review-selection-preview-title" class="modal-title">Review preview</h2>
+        <h2 id="review-selection-preview-title" class="modal-title">Review: by input</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body">
-        <p class="review-selection-preview-intro">${escapeHtml(String(comparisonRows.length))} row(s) with Review enabled (not creating a Review node yet).</p>
-        <div class="review-selection-preview-table-wrap">
-          <table class="run-detail-results-table review-selection-preview-table">
-            <thead><tr>
-              <th title="#">#</th><th title="Score #">Score #</th><th title="Run output row index (row_index + 1)">${escapeHtml(formatResultOutputColumnLabel('#'))}</th><th title="Input #">Input #</th><th title="Input fields">Input fields</th><th title="Match">Match</th><th title="GT only">GT only</th><th title="Expected">Expected</th><th title="${escapeAttr(formatResultOutputColumnLabel('Model output'))}">${escapeHtml(formatResultOutputColumnLabel('Model output'))}</th>
-            </tr></thead>
-            <tbody>${tableRowsHtml}</tbody>
-          </table>
+        <p class="review-selection-preview-intro"><strong>${escapeHtml(String(lineCount))}</strong> score line(s) are included in Review (checked in the <strong>Review</strong> column). They are grouped into <strong>${escapeHtml(String(groupCount))}</strong> <strong>input</strong> group(s). Each group lists prompt placeholders once, then <strong>two separate tables</strong>: <strong>model outputs</strong> (left) and <strong>ground truth</strong> (right). Each table only lists lines that have content on that side; row counts need not match. Order within each table follows score-line order among included rows. This does not start a Review job.</p>
+        <div class="review-selection-preview-list-wrap">
+          ${cardsHtml}
         </div>
       </div>
     </div>
@@ -1384,7 +1585,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                   <div class="score-detail-llm-row">
                     <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model"></select>
                   </div>
-                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Preview which rows are included in Review (from the Review column checkboxes)">Review</button>
+                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create a Review node and run analysis with the selected model">Review</button>
+                  <button type="button" class="btn btn-secondary score-detail-review-payload-preview" id="score-detail-review-payload-preview" title="Temporary: preview Review payload by input (model output vs ground-truth tables per group). Does not start a Review job.">Debug</button>
                 </div>
               </div>
             </div>
@@ -1405,6 +1607,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const llmSelect = overlay.querySelector('#score-detail-llm-select');
   const saveToWorkspaceBtn = overlay.querySelector('#score-detail-save-to-workspace');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
+  const reviewPayloadPreviewBtn = overlay.querySelector('#score-detail-review-payload-preview');
   const resultsBody = overlay.querySelector('#score-detail-results-body');
   const resultsToolbar = overlay.querySelector('#score-detail-results-toolbar');
   const resultsFooterRowEl = overlay.querySelector('#score-detail-results-footer-row');
@@ -2517,9 +2720,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         <span class="score-detail-results-metrics" aria-label="Precision, Recall, F1">${escapeHtml(metricsText)}</span>
       </div>
       <div class="score-detail-results-search-inline">
-        <label class="score-detail-rules-column-filter" title="Hide input, model output, and ground-truth columns that are not referenced in any rule. Export still includes full columns.">
-          Only columns used in rules
-          <input type="checkbox" id="score-detail-rules-column-only" ${scoreDetailPagination.rulesColumnFilter ? 'checked' : ''} aria-label="Only show columns referenced in mapping rules" />
+        <label class="score-detail-rules-column-filter" title="Hide columns not used in any rule (input, model output, GT). Export still has all columns.">
+          Rule columns only
+          <input type="checkbox" id="score-detail-rules-column-only" ${scoreDetailPagination.rulesColumnFilter ? 'checked' : ''} aria-label="Table shows only columns referenced in rules" />
         </label>
         <label class="dataset-detail-search-label" for="score-detail-results-search">Search</label>
         <input type="text" id="score-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" value="${escapeAttr(scoreDetailPagination.searchQuery)}" />
@@ -3035,9 +3238,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   async function updateReviewButtonState() {
-    if (!addPromptReviewBtn) return;
     const payload = await Promise.resolve(getReviewPayload());
-    addPromptReviewBtn.disabled = !payload || !payload.prompt_sections || payload.prompt_sections.length === 0 || !selectedNodeId;
+    const reviewDisabled =
+      !payload || !payload.prompt_sections || payload.prompt_sections.length === 0 || !selectedNodeId;
+    if (addPromptReviewBtn) addPromptReviewBtn.disabled = reviewDisabled;
+    if (reviewPayloadPreviewBtn) reviewPayloadPreviewBtn.disabled = reviewDisabled;
     await updateSaveToWorkspaceButton();
   }
 
@@ -3092,8 +3297,24 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   addPromptReviewBtn.addEventListener('click', async () => {
     if (!node?.dataset?.nodeId) return;
-    await openReviewSelectionPreviewModal({ getReviewPayload });
+    const credentialId = (llmSelect?.value || '').trim();
+    if (!credentialId) {
+      showAlert('Select a model for Review before starting.', { title: 'Review' });
+      return;
+    }
+    await runReviewFromScore({
+      scoreNodeId: node.dataset.nodeId,
+      getReviewPayload,
+      credentialId,
+    });
   });
+
+  if (reviewPayloadPreviewBtn) {
+    reviewPayloadPreviewBtn.addEventListener('click', async () => {
+      if (!node?.dataset?.nodeId) return;
+      await openReviewSelectionPreviewModal({ getReviewPayload });
+    });
+  }
 
   /** Filter group for memory apply: keep only rules valid for runKeys/gtSet, update existingSet. Returns null if empty. */
   function filterGroupForApply(g, runKeys, gtSet, existingSet) {
