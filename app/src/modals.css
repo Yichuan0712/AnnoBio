@@ -948,7 +948,7 @@
 }
 
 .dataset-preview-table {
-  width: 100%;
+  width: max-content;
   border-collapse: collapse;
 }
 
@@ -2149,7 +2149,7 @@
 }
 
 .dataset-detail-preview-table {
-  width: 100%;
+  width: max-content;
   border-collapse: collapse;
   font-size: 12px;
 }
@@ -4997,7 +4997,6 @@ button.review-suggestion-title-pill {
 
 .run-detail-results-table {
   width: max-content;
-  min-width: 100%;
   border-collapse: collapse;
   font-size: 12px;
   background: var(--bg);
@@ -5367,7 +5366,7 @@ button.review-suggestion-title-pill {
 }
 
 .working-dataset-edit-table {
-  width: 100%;
+  width: max-content;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
