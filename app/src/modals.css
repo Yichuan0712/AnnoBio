@@ -780,6 +780,7 @@
   gap: 0;
   padding: 6px 0 20px 0;
   border-right: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .dataset-add-step {
@@ -846,6 +847,7 @@
   gap: 20px;
   padding: 20px;
   border-right: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .dataset-preview-wrap {
@@ -2260,25 +2262,17 @@
   --detail-llm-inline-gap: 12px;
 }
 
-/* Score detail modal: layout aligned with Run detail (main + preview-wrap) */
+/* Score detail modal: 默认双栏全宽（与原先 expanded 一致，无展开动画） */
 .modal-panel--score-detail {
-  width: min(400px, 92vw);
-  min-width: min(400px, 92vw);
-  max-width: 92vw;
-  max-height: 98vh;
-  min-height: min(520px, 85vh);
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  transition: width 0.35s ease-out, min-width 0.35s ease-out, max-width 0.35s ease-out;
-}
-
-.modal-panel--score-detail.score-detail-panel--expanded {
   width: 88%;
   min-width: min(960px, 85%);
   max-width: 88%;
+  max-height: 98vh;
   height: min(85vh, 98vh);
   min-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
 }
 
 .modal-panel--score-detail .modal-body.score-detail-body,
@@ -2325,7 +2319,8 @@
 }
 
 .score-detail-main {
-  flex: 1 1 0;
+  flex: 0 0 36%;
+  max-width: 380px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -2333,12 +2328,7 @@
   padding: 0 20px 20px 20px;
   border-right: 1px solid var(--border);
   overflow: hidden;
-  transition: flex 0.35s ease-out, max-width 0.35s ease-out;
-}
-
-.modal-panel--score-detail.score-detail-panel--expanded .score-detail-main {
-  flex: 0 0 36%;
-  max-width: 380px;
+  background: var(--bg);
 }
 
 .score-detail-main-label {
@@ -2754,24 +2744,16 @@
   background: var(--hover);
 }
 
-/* Score right column: Results. 无结果时收起（max-width:0），有结果时展开，带过渡动画 */
+/* Score right column: Results，始终占位 */
 .score-detail-preview-wrap {
   flex: 1 1 0;
-  min-width: 0;
-  max-width: 0;
+  min-width: 320px;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  border-left: none;
-  overflow: hidden;
-  transition: max-width 0.35s ease-out, flex 0.35s ease-out;
-}
-
-.modal-panel--score-detail.score-detail-panel--expanded .score-detail-preview-wrap {
-  max-width: 100vw;
-  min-width: 320px;
   border-left: 1px solid var(--border);
+  overflow: hidden;
 }
 
 .score-detail-preview-title {
@@ -3947,7 +3929,7 @@ button.review-suggestion-title-pill {
 }
 
 .rule-editor-option--selected {
-  background: var(--bg-bar);
+  background: var(--hover);
   border-color: var(--text-muted);
   font-weight: 600;
 }
@@ -4024,14 +4006,16 @@ button.review-suggestion-title-pill {
 
 .score-detail-results-th,
 .score-detail-results-td {
-  padding: 8px 10px;
+  padding: 6px 10px;
   text-align: left;
   border: 1px solid var(--border);
   font-size: 12px;
 }
 
-/* 表头行：与 Run/Dataset 等表头一致用 var(--hover)，用分割线区分三块 */
+/* 表头行：与 .prompt-schema-preview-table th / .prompt-detail-inputs-table th 一致 */
 .score-detail-results-table thead .score-detail-results-th {
+  padding: 6px 8px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
@@ -4075,7 +4059,7 @@ button.review-suggestion-title-pill {
 }
 
 .score-detail-results-table thead .score-detail-results-th--match {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .score-detail-results-table tbody .score-detail-results-td--match {
@@ -4099,7 +4083,7 @@ button.review-suggestion-title-pill {
   color: var(--danger, #c00);
 }
 
-/* Mark-as-shared-input-key groups: two bands bracket var(--bg)—wider step than a single tint, still not thead (--hover) */
+/* Mark-as-shared-input-key groups: two bands bracket row bg */
 .score-detail-results-table tbody tr.score-detail-results-tr--one-to-many-pal-0 .score-detail-results-td {
   background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
 }
@@ -4108,7 +4092,23 @@ button.review-suggestion-title-pill {
   background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
 }
 
+.score-detail-results-table tbody tr.score-detail-results-tr--one-to-many-pal-0 .run-detail-td {
+  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--one-to-many-pal-1 .run-detail-td {
+  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
+}
+
 .score-detail-results-table tbody tr[class*='score-detail-results-tr--one-to-many-pal-']:hover .score-detail-results-td {
+  background: var(--hover);
+}
+
+.score-detail-results-table tbody tr[class*='score-detail-results-tr--one-to-many-pal-']:hover .run-detail-td {
+  background: var(--hover);
+}
+
+.score-detail-results-table tbody tr:hover .run-detail-td {
   background: var(--hover);
 }
 
@@ -4205,7 +4205,7 @@ button.review-suggestion-title-pill {
   gap: 2px;
   font-size: 11px;
   padding: 2px 6px;
-  background: var(--bg-bar);
+  background: var(--hover);
   border: 1px solid var(--border);
   border-radius: 2px;
 }
@@ -4299,7 +4299,7 @@ button.review-suggestion-title-pill {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
-  background: var(--bg-bar);
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
 
@@ -4379,25 +4379,17 @@ button.review-suggestion-title-pill {
   margin: 12px;
 }
 
-/* Run detail modal：略窄一些；min-height 与 source 典型内容高度一致（source 左侧卡片等会撑高，故用 85vh） */
-/* Run detail：与 Add prompt 一致，一开始只显示左半部分（窄 panel），Run 开始后 panel 变宽并显示右半部分（带动画） */
+/* Run detail modal：默认双栏全宽（与原先 expanded 一致，无展开动画） */
 .modal-panel--run-detail {
-  width: min(400px, 92vw);
-  min-width: min(400px, 92vw);
-  max-width: 92vw;
-  max-height: 98vh;
-  min-height: min(520px, 85vh);
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  transition: width 0.35s ease-out, min-width 0.35s ease-out;
-}
-.modal-panel--run-detail.run-detail-panel--expanded {
   width: 88%;
   min-width: min(960px, 85%);
   max-width: 92vw;
+  max-height: 98vh;
   height: min(85vh, 98vh);
   min-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
 }
 
 .modal-panel--run-detail .modal-body.run-detail-body,
@@ -4412,7 +4404,8 @@ button.review-suggestion-title-pill {
 }
 
 .run-detail-main {
-  flex: 1 1 0;
+  flex: 0 0 36%;
+  max-width: 380px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -4420,10 +4413,7 @@ button.review-suggestion-title-pill {
   padding: 0 20px 16px 20px;
   border-right: 1px solid var(--border);
   overflow: hidden;
-}
-.modal-panel--run-detail.run-detail-panel--expanded .run-detail-main {
-  flex: 0 0 36%;
-  max-width: 380px;
+  background: var(--bg);
 }
 
 .run-detail-main-label {
@@ -4498,9 +4488,9 @@ button.review-suggestion-title-pill {
   flex-shrink: 0;
 }
 
-/* 未展开时隐藏右半部分（与 add prompt step1 的 prompt-preview-wrap 一致） */
+/* Run 右侧 Results，始终显示 */
 .run-detail-preview-wrap {
-  display: none;
+  display: flex;
   flex: 1 1 0;
   min-width: 320px;
   min-height: 0;
@@ -4508,9 +4498,6 @@ button.review-suggestion-title-pill {
   background: var(--bg);
   border-left: 1px solid var(--border);
   overflow: hidden;
-}
-.modal-panel--run-detail.run-detail-panel--expanded .run-detail-preview-wrap {
-  display: flex;
 }
 
 .run-detail-preview-title {
@@ -4670,7 +4657,7 @@ button.review-suggestion-title-pill {
   margin-top: 2px;
   max-height: 240px;
   overflow-y: auto;
-  background: var(--bg-bar);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 0;
   z-index: 10;
@@ -4713,7 +4700,7 @@ button.review-suggestion-title-pill {
   font-size: 13px;
   padding: 8px 10px;
   color: var(--text);
-  background: var(--bg-bar);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 0;
   font-family: inherit;
@@ -4944,14 +4931,14 @@ button.review-suggestion-title-pill {
 .run-detail-results-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12px;
   background: var(--bg);
   border: 1px solid var(--border);
 }
 
 .run-detail-results-table th,
 .run-detail-results-table td {
-  padding: 6px 8px;
+  padding: 6px 10px;
   text-align: left;
   border: 1px solid var(--border);
   max-width: 120px;
@@ -4962,20 +4949,36 @@ button.review-suggestion-title-pill {
 }
 
 .run-detail-results-table thead th {
+  padding: 6px 8px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--text-muted);
-  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* 输入块与「# + 输出」分界：竖线画在 # 列左侧（折叠时为 … 与 # 之间；展开时为最后 worksheet 输入列与 # 之间） */
+.run-detail-results-table .run-detail-th--input-block-sep,
+.run-detail-results-table .run-detail-td--input-block-sep {
+  border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
 }
 
 .run-detail-results-table tbody td {
   color: var(--text);
   background: var(--bg);
 }
-/* Input / 折叠列：与展开前一致，保持浅底以区分于输出列 */
-.run-detail-results-table tbody tr td.run-detail-td--dataset-row-col,
-.run-detail-results-table tbody tr td.run-detail-td--error-col {
-  background: var(--hover) !important;
-  color: var(--text);
+
+/* 按 input_row_index 分组：同一 input 的多行共用一条斑马（与 Score shared-key 条纹同一套 color-mix） */
+.run-detail-results-table tbody tr.run-detail-results-tr--zebra-0 td {
+  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
+}
+
+.run-detail-results-table tbody tr.run-detail-results-tr--zebra-1 td {
+  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
+}
+
+.run-detail-results-table tbody tr.run-detail-results-tr--zebra-0:hover td,
+.run-detail-results-table tbody tr.run-detail-results-tr--zebra-1:hover td {
+  background: var(--hover);
 }
 
 .run-detail-results-table .run-detail-th--index,
@@ -4983,6 +4986,7 @@ button.review-suggestion-title-pill {
   width: 2.5em;
   max-width: 2.5em;
   text-align: right;
+  /* 粗竖线在 # 列左侧（run-detail-*--input-block-sep），与首列输出无关 */
 }
 
 .run-detail-results-table td[title] {
@@ -4994,20 +4998,21 @@ button.review-suggestion-title-pill {
   font-size: 12px;
 }
 
-/* [Error] 与 [#] 等中括号列：标题行与标题行同色，内容行随行背景 */
+/* [#] / [Error] 列表头：与 Prompt 预览表 thead 一致 */
 .run-detail-results-table .run-detail-th--error-col,
 .run-detail-results-table .run-detail-th--dataset-row-col {
-  background: var(--hover);
-  color: var(--text);
+  padding: 6px 8px;
+  font-size: 13px;
   font-weight: 600;
-  font-size: 11px;
+  color: var(--text);
+  background: var(--hover);
 }
 .run-detail-results-table .run-detail-th--bracket-toggle {
   cursor: pointer;
   user-select: none;
 }
 .run-detail-results-table .run-detail-th--bracket-toggle:hover {
-  background: var(--hover-hover, #e8e8e8);
+  background: var(--hover);
 }
 .run-detail-results-table .run-detail-td--error-col,
 .run-detail-results-table .run-detail-td--dataset-row-col {
@@ -5650,6 +5655,7 @@ body.wd-row-resizing {
   gap: 0;
   padding: 6px 0 20px 0;
   border-right: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .prompt-step {
