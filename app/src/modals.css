@@ -2359,15 +2359,24 @@
   flex: 1;
 }
 
+/* [hidden] must win over display:flex above, or “Set rules” stays visible when no GT dataset */
+.score-detail-rules-section[hidden] {
+  display: none !important;
+}
+
 .score-detail-rules-label {
   display: block;
 }
 
-.score-detail-rules-hint {
-  margin: 0 0 10px;
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.4;
+/* Review 顶栏里 tab 用 flex:1 抢横向空间；在 Score 规则区纵向 flex 里会误抢竖向空间，导致 Tab 上下大块留白 */
+.score-detail-rules-view-switch.review-detail-view-switch {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
+.score-detail-rules-view-switch .score-detail-rules-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .score-detail-rules-scroll {
@@ -2376,6 +2385,7 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  margin-top: 10px;
 }
 
 .score-detail-rules-list {
@@ -2824,6 +2834,10 @@
   padding-left: 0;
   padding-right: 0;
   flex-shrink: 0;
+}
+
+.score-detail-results-footer-row[hidden] {
+  display: none !important;
 }
 
 .score-detail-results-footer-right {
@@ -3795,15 +3809,15 @@ button.review-suggestion-title-pill {
   flex-direction: column;
 }
 
-/* 仅表格区域纵向滚动，摘要 / 指标 / Search 始终可见 */
+/* 表格区域纵横滚动同一容器，横向条始终在可视区域底部（不必滚到整表末尾） */
 .score-detail-results-table-scroll {
   flex: 1;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
+  min-width: 0;
+  overflow: auto;
 }
 
-/* # 列与 Ground truth #、Run result # 右对齐，与 dataset 节点一致 */
+/* # 列与 Ground truth: #、Run result # 右对齐，与 dataset 节点一致 */
 .score-detail-results-table .score-detail-results-th--row-num,
 .score-detail-results-table .score-detail-results-td--row-num,
 .score-detail-results-table .score-detail-results-th--idx,
@@ -3994,12 +4008,13 @@ button.review-suggestion-title-pill {
 }
 
 .score-detail-results-table-wrap {
-  overflow-x: auto;
-  overflow-y: visible;
+  overflow: visible;
+  min-width: min-content;
 }
 
 .score-detail-results-table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 12px;
 }
@@ -4030,6 +4045,33 @@ button.review-suggestion-title-pill {
 /* 数据行：统一背景色 */
 .score-detail-results-table tbody .score-detail-results-td {
   background: var(--bg);
+}
+
+/* 按 dataset input斑马纹：同一 input_row_index 同色（与 Run 表 color-mix一致） */
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-0 .score-detail-results-td {
+  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-1 .score-detail-results-td {
+  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-0 .run-detail-td {
+  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-1 .run-detail-td {
+  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-0:hover .score-detail-results-td,
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-1:hover .score-detail-results-td {
+  background: var(--hover);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-0:hover .run-detail-td,
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-1:hover .run-detail-td {
+  background: var(--hover);
 }
 
 .score-detail-results-table tbody tr:hover .score-detail-results-td {
@@ -4081,31 +4123,6 @@ button.review-suggestion-title-pill {
 
 .score-detail-results-tr--run-only .score-detail-results-td--match {
   color: var(--danger, #c00);
-}
-
-/* Mark-as-shared-input-key groups: two bands bracket row bg */
-.score-detail-results-table tbody tr.score-detail-results-tr--one-to-many-pal-0 .score-detail-results-td {
-  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
-}
-
-.score-detail-results-table tbody tr.score-detail-results-tr--one-to-many-pal-1 .score-detail-results-td {
-  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
-}
-
-.score-detail-results-table tbody tr.score-detail-results-tr--one-to-many-pal-0 .run-detail-td {
-  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
-}
-
-.score-detail-results-table tbody tr.score-detail-results-tr--one-to-many-pal-1 .run-detail-td {
-  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
-}
-
-.score-detail-results-table tbody tr[class*='score-detail-results-tr--one-to-many-pal-']:hover .score-detail-results-td {
-  background: var(--hover);
-}
-
-.score-detail-results-table tbody tr[class*='score-detail-results-tr--one-to-many-pal-']:hover .run-detail-td {
-  background: var(--hover);
 }
 
 .score-detail-results-table tbody tr:hover .run-detail-td {
@@ -4176,13 +4193,6 @@ button.review-suggestion-title-pill {
 
 .score-detail-block--rules .score-detail-section-title {
   margin-bottom: 4px;
-}
-
-.score-detail-rules-hint {
-  margin: 0 0 10px;
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.4;
 }
 
 .score-detail-rules-wrap {
@@ -4843,7 +4853,7 @@ button.review-suggestion-title-pill {
   flex-direction: column;
   gap: 10px;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .run-detail-results .run-detail-section-title {
@@ -4872,7 +4882,9 @@ button.review-suggestion-title-pill {
 }
 
 .run-detail-results-table-wrap {
+  flex: 1 1 0;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
 }
 
@@ -4929,11 +4941,14 @@ button.review-suggestion-title-pill {
 }
 
 .run-detail-results-table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 12px;
   background: var(--bg);
   border: 1px solid var(--border);
+  /* 两档：超短=仅列表「#」；较短=Input:# / Output:#（max 120px 与内容列一致） */
+  --run-detail-col-w-tight: 2.5em;
 }
 
 .run-detail-results-table th,
@@ -4956,7 +4971,13 @@ button.review-suggestion-title-pill {
   background: var(--hover);
 }
 
-/* 输入块与「# + 输出」分界：竖线画在 # 列左侧（折叠时为 … 与 # 之间；展开时为最后 worksheet 输入列与 # 之间） */
+/* 列表「#」与输入块分界：竖线在 Input: #（或折叠 Input ...）列左侧 */
+.run-detail-results-table .run-detail-th--input-block-start,
+.run-detail-results-table .run-detail-td--input-block-start {
+  border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
+}
+
+/* 输入块与「Output: # + 模型列」分界：竖线在 Output: # 列左侧 */
 .run-detail-results-table .run-detail-th--input-block-sep,
 .run-detail-results-table .run-detail-td--input-block-sep {
   border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
@@ -4967,7 +4988,7 @@ button.review-suggestion-title-pill {
   background: var(--bg);
 }
 
-/* 按 input_row_index 分组：同一 input 的多行共用一条斑马（与 Score shared-key 条纹同一套 color-mix） */
+/* 按 input_row_index 分组：同一 input 的多行共用一条斑马（与 Score 表 input 斑马同一套 color-mix） */
 .run-detail-results-table tbody tr.run-detail-results-tr--zebra-0 td {
   background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
 }
@@ -4981,12 +5002,32 @@ button.review-suggestion-title-pill {
   background: var(--hover);
 }
 
+/* 超短：列表「#」 */
+.run-detail-results-table .run-detail-th--row-display-num,
+.run-detail-results-table .run-detail-td--row-display-num {
+  width: var(--run-detail-col-w-tight);
+  min-width: var(--run-detail-col-w-tight);
+  max-width: var(--run-detail-col-w-tight) !important;
+  box-sizing: border-box;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 较短：Input: # / Input ...（折叠）/ Output: #，顶格 120px */
+.run-detail-results-table .run-detail-th--input-block-start,
+.run-detail-results-table .run-detail-td--input-block-start,
 .run-detail-results-table .run-detail-th--index,
 .run-detail-results-table .run-detail-td--index {
-  width: 2.5em;
-  max-width: 2.5em;
+  width: auto;
+  min-width: 3.25em;
+  max-width: 120px !important;
+  box-sizing: border-box;
   text-align: right;
-  /* 粗竖线在 # 列左侧（run-detail-*--input-block-sep），与首列输出无关 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .run-detail-results-table td[title] {
