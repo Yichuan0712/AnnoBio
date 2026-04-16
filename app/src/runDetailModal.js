@@ -38,10 +38,34 @@ function escapeAttr(str) {
   return String(str ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
+/** Same order as buildResultsTable historically used: input row, then run row # */
+function sortRunResultsRows(a, b) {
+  const ai = a.input_row_index ?? 0;
+  const bi = b.input_row_index ?? 0;
+  if (ai !== bi) return ai - bi;
+  return (a.row_index ?? 0) - (b.row_index ?? 0);
+}
+
+/** Zebra band per dataset input: rows sharing input_row_index share one stripe; stripe flips when input changes in sort order */
+function buildZebraMapForInputGroups(sortedRows) {
+  const map = new Map();
+  if (!sortedRows.length) return map;
+  let stripe = 0;
+  let prevKey;
+  for (const r of sortedRows) {
+    const k = r.input_row_index ?? 0;
+    if (prevKey !== undefined && k !== prevKey) stripe = 1 - stripe;
+    prevKey = k;
+    map.set(k, stripe);
+  }
+  return map;
+}
+
 function filterResults(results, outputFields, searchQuery) {
   const q = (searchQuery || '').trim().toLowerCase();
   if (!q) return results;
   return results.filter((r) => {
+    if (String((r.input_row_index ?? 0) + 1).toLowerCase().includes(q)) return true;
     if (String((r.row_index ?? 0) + 1).toLowerCase().includes(q)) return true;
     if (r.error && String(r.error).toLowerCase().includes(q)) return true;
     const inputRow = Array.isArray(r.input_row) ? r.input_row : [];
@@ -188,7 +212,6 @@ export function openRunDetailModal({
   const inputsListEl = overlay.querySelector('#run-detail-inputs-list');
   const runBtn = overlay.querySelector('.run-detail-run-btn');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
-  const runDetailPanel = overlay.querySelector('.modal-panel--run-detail');
   const workingSets = getWorkingSets();
 
   function getNodeResults() {
@@ -342,45 +365,68 @@ export function openRunDetailModal({
       const newScrollWrap = rightCol.querySelector('.run-detail-results-table-wrap');
       if (newScrollWrap && savedScrollLeft > 0) newScrollWrap.scrollLeft = savedScrollLeft;
     }
-    if (runDetailPanel) runDetailPanel.classList.add('run-detail-panel--expanded');
   }
 
-  function buildResultsTable(results, outputFields, inputHeaders, bracketColsCollapsed, onToggleCollapse) {
+  function buildResultsTable(results, outputFields, inputHeaders, bracketColsCollapsed, onToggleCollapse, zebraMap) {
     const list = (results || []).slice();
-    list.sort((a, b) => {
-      const ai = a.input_row_index ?? 0;
-      const bi = b.input_row_index ?? 0;
-      if (ai !== bi) return ai - bi;
-      return (a.row_index ?? 0) - (b.row_index ?? 0);
-    });
     const headers = inputHeaders || [];
     const collapsed = !!bracketColsCollapsed;
     const tbl = document.createElement('table');
     tbl.className = 'run-detail-results-table';
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
-    headerRow.innerHTML = '<th class="run-detail-th run-detail-th--index">#</th>';
+    function bindInputColumnCollapseHeader(th, titleExpanded, titleCollapsed) {
+      if (typeof onToggleCollapse !== 'function') return;
+      th.classList.add('run-detail-th--bracket-toggle');
+      th.title = collapsed ? titleCollapsed : titleExpanded;
+      th.setAttribute('role', 'button');
+      th.setAttribute('tabindex', '0');
+      th.addEventListener('click', onToggleCollapse);
+      th.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggleCollapse();
+        }
+      });
+    }
+    const thBracket = document.createElement('th');
+    thBracket.className = 'run-detail-th run-detail-th--dataset-row-col';
+    thBracket.textContent = collapsed ? '...' : 'Input: #';
+    if (typeof onToggleCollapse === 'function') {
+      bindInputColumnCollapseHeader(
+        thBracket,
+        'Input: # — Dataset input row index. Click any input column header to hide input columns.',
+        'Click to expand input columns.',
+      );
+    } else {
+      thBracket.title = collapsed ? '' : 'Input: # — Dataset input row index.';
+    }
+    headerRow.appendChild(thBracket);
+    if (!collapsed) {
+      headers.forEach((h) => {
+        const th = document.createElement('th');
+        th.className = 'run-detail-th run-detail-th--dataset-row-col';
+        const label = `Input: ${String(h ?? '').trim() || ' '}`;
+        th.textContent = label;
+        if (typeof onToggleCollapse === 'function') {
+          bindInputColumnCollapseHeader(th, `${label} — Click to hide input columns.`, '');
+        } else {
+          th.title = label;
+        }
+        headerRow.appendChild(th);
+      });
+    }
+    const thIndex = document.createElement('th');
+    thIndex.className = 'run-detail-th run-detail-th--index run-detail-th--input-block-sep';
+    thIndex.textContent = '#';
+    thIndex.title = 'Row number';
+    headerRow.appendChild(thIndex);
     outputFields.forEach((f) => {
       const th = document.createElement('th');
       th.className = 'run-detail-th';
-      th.textContent = f.display || f.key || '';
-      headerRow.appendChild(th);
-    });
-    const thBracket = document.createElement('th');
-    thBracket.className = 'run-detail-th run-detail-th--dataset-row-col run-detail-th--bracket-toggle';
-    thBracket.textContent = collapsed ? '...' : 'Input: #';
-    thBracket.title = collapsed ? 'Click to expand.' : 'Click to collapse.';
-    thBracket.setAttribute('role', 'button');
-    thBracket.setAttribute('tabindex', '0');
-    if (typeof onToggleCollapse === 'function') {
-      thBracket.addEventListener('click', onToggleCollapse);
-      thBracket.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleCollapse(); } });
-    }
-    headerRow.appendChild(thBracket);
-    if (!collapsed) headers.forEach((h) => {
-      const th = document.createElement('th');
-      th.className = 'run-detail-th run-detail-th--dataset-row-col';
-      th.textContent = `Input: ${String(h ?? '').trim() || ' '}`;
+      const label = (f.display || f.key || '').trim() || '—';
+      th.textContent = label;
+      th.title = label;
       headerRow.appendChild(th);
     });
     thead.appendChild(headerRow);
@@ -388,7 +434,25 @@ export function openRunDetailModal({
     const tbody = document.createElement('tbody');
     list.forEach((r) => {
       const tr = document.createElement('tr');
-      tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--index', textContent: String((r.row_index ?? 0) + 1) }));
+      const zi = zebraMap?.get(r.input_row_index ?? 0);
+      if (zi === 0 || zi === 1) tr.classList.add(`run-detail-results-tr--zebra-${zi}`);
+      if (collapsed) {
+        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: '...' }));
+        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--index run-detail-td--input-block-sep', textContent: String((r.row_index ?? 0) + 1) }));
+      } else {
+        const inpIdx = r.input_row_index ?? 0;
+        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: String(inpIdx + 1) }));
+        const inputRow = Array.isArray(r.input_row) ? r.input_row : [];
+        headers.forEach((_, i) => {
+          const td = document.createElement('td');
+          td.className = 'run-detail-td run-detail-td--dataset-row-col';
+          const v = inputRow[i];
+          td.textContent = v == null ? '—' : truncate(String(v));
+          if (v != null) td.title = String(v);
+          tr.appendChild(td);
+        });
+        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--index run-detail-td--input-block-sep', textContent: String((r.row_index ?? 0) + 1) }));
+      }
       if (r.error) {
         outputFields.forEach(() => {
           const td = document.createElement('td');
@@ -405,21 +469,6 @@ export function openRunDetailModal({
           if (val == null) td.textContent = '—';
           else if (Array.isArray(val)) { td.textContent = truncate(val.join(', ')); td.title = val.join(', '); }
           else { td.textContent = truncate(String(val)); td.title = String(val); }
-          tr.appendChild(td);
-        });
-      }
-      if (collapsed) {
-        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: '...' }));
-      } else {
-        const inpIdx = r.input_row_index ?? 0;
-        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: String(inpIdx + 1) }));
-        const inputRow = Array.isArray(r.input_row) ? r.input_row : [];
-        headers.forEach((_, i) => {
-          const td = document.createElement('td');
-          td.className = 'run-detail-td run-detail-td--dataset-row-col';
-          const v = inputRow[i];
-          td.textContent = v == null ? '—' : truncate(String(v));
-          if (v != null) td.title = String(v);
           tr.appendChild(td);
         });
       }
@@ -471,10 +520,12 @@ export function openRunDetailModal({
 
     function refreshTable() {
       const filtered = filterResults(resultsState.results, resultsState.outputFields, resultsState.searchQuery);
-      const totalPages = Math.max(1, Math.ceil(filtered.length / resultsState.rowsPerPage));
+      const sortedFiltered = filtered.slice().sort(sortRunResultsRows);
+      const zebraMap = buildZebraMapForInputGroups(sortedFiltered);
+      const totalPages = Math.max(1, Math.ceil(sortedFiltered.length / resultsState.rowsPerPage));
       resultsState.currentPage = Math.min(Math.max(1, resultsState.currentPage), totalPages);
       const start = (resultsState.currentPage - 1) * resultsState.rowsPerPage;
-      const pageResults = filtered.slice(start, start + resultsState.rowsPerPage);
+      const pageResults = sortedFiltered.slice(start, start + resultsState.rowsPerPage);
       const onToggle = () => {
         resultsState.bracketColsCollapsed = !resultsState.bracketColsCollapsed;
         if (node) node.dataset.runBracketColsCollapsed = resultsState.bracketColsCollapsed ? '1' : '0';
@@ -482,9 +533,9 @@ export function openRunDetailModal({
       };
       const savedScrollLeft = tableWrap.scrollLeft;
       tableWrap.innerHTML = '';
-      tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields, resultsState.inputHeaders || [], resultsState.bracketColsCollapsed, onToggle));
+      tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields, resultsState.inputHeaders || [], resultsState.bracketColsCollapsed, onToggle, zebraMap));
       if (savedScrollLeft > 0) tableWrap.scrollLeft = savedScrollLeft;
-      const totalFiltered = filtered.length;
+      const totalFiltered = sortedFiltered.length;
       const totalRows = resultsState.results.length;
       paginationInfo.textContent = totalFiltered === 0 ? (totalRows === 0 ? '0 rows' : `0 rows (filtered from ${totalRows})`) : `Showing ${start + 1}–${Math.min(start + resultsState.rowsPerPage, totalFiltered)} of ${totalRows} rows`;
       pageInp.value = String(resultsState.currentPage);
@@ -498,7 +549,11 @@ export function openRunDetailModal({
     rowsPerPageSelect?.addEventListener('change', () => { resultsState.rowsPerPage = Number(rowsPerPageSelect.value) || 25; resultsState.currentPage = 1; refreshTable(); });
     pageInp?.addEventListener('change', () => { resultsState.currentPage = Math.max(1, parseInt(pageInp.value, 10) || 1); refreshTable(); });
     prevBtn?.addEventListener('click', () => { resultsState.currentPage = Math.max(1, resultsState.currentPage - 1); refreshTable(); });
-    nextBtn?.addEventListener('click', () => { resultsState.currentPage = Math.min(Math.ceil(filterResults(resultsState.results, resultsState.outputFields, resultsState.searchQuery).length / resultsState.rowsPerPage), resultsState.currentPage + 1); refreshTable(); });
+    nextBtn?.addEventListener('click', () => {
+      const n = filterResults(resultsState.results, resultsState.outputFields, resultsState.searchQuery).slice().sort(sortRunResultsRows).length;
+      resultsState.currentPage = Math.min(Math.ceil(n / resultsState.rowsPerPage), resultsState.currentPage + 1);
+      refreshTable();
+    });
     wrap._updateResultsTable = refreshTable;
     refreshTable();
 
@@ -520,9 +575,9 @@ export function openRunDetailModal({
         const outputPart = r.error ? (resultsState.outputFields || []).map(() => String(r.error)) : (resultsState.outputFields || []).map((f) => { const v = r.output?.[f.key]; return v == null ? '—' : Array.isArray(v) ? v.join(', ') : String(v); });
         const inputRow = Array.isArray(r.input_row) ? r.input_row : [];
         const inputPart = ih.map((_, i) => (inputRow[i] == null ? '—' : String(inputRow[i])));
-        return [...outputPart, ...inputPart];
+        return [...inputPart, ...outputPart];
       });
-      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: [...outputHeaders, ...inputHeaderLabels], rows } }));
+      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: [...inputHeaderLabels, ...outputHeaders], rows } }));
       closeModal();
     });
     const scoreBtn = document.createElement('button');
@@ -652,7 +707,6 @@ export function openRunDetailModal({
     rightCol.appendChild(buildResultsCard(resultsState.results, outputFields, status));
     const newScrollWrap = rightCol.querySelector('.run-detail-results-table-wrap');
     if (newScrollWrap && savedScrollLeft > 0) newScrollWrap.scrollLeft = savedScrollLeft;
-    if (runDetailPanel) runDetailPanel.classList.add('run-detail-panel--expanded');
     if (isComplete) refreshButton();
     else refreshButton();
   }
@@ -823,7 +877,6 @@ export function openRunDetailModal({
           delete node.dataset.runResumeTotalRows;
         }
         rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(data.detail || res.statusText || 'Request failed')}</p>`;
-        if (runDetailPanel) runDetailPanel.classList.add('run-detail-panel--expanded');
         refreshButton();
         return;
       }
@@ -853,7 +906,6 @@ export function openRunDetailModal({
         delete node.dataset.runResumeTotalRows;
       }
       rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(String(e.message || e))}</p>`;
-      if (runDetailPanel) runDetailPanel.classList.add('run-detail-panel--expanded');
     }
     refreshButton();
   });
@@ -883,8 +935,5 @@ export function openRunDetailModal({
     card.className = 'run-detail-results-card';
     card.innerHTML = `<div class="run-detail-results"><p class="run-detail-placeholder">${runId ? 'Running…' : 'Run to see results.'}</p></div>`;
     rightCol.appendChild(card);
-  }
-  if (runDetailPanel && (resultsState.results.length > 0 || runId)) {
-    runDetailPanel.classList.add('run-detail-panel--expanded');
   }
 }

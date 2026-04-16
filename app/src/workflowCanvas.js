@@ -34,6 +34,7 @@ import {
   prefetchEmbeddingCosineMap,
   embeddingPairMatches,
   isValidRunOutputForScoreRow,
+  buildScoreResultDescriptorsInRunOrder,
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
@@ -467,45 +468,19 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     return false;
   }
 
-  /** Same descriptor order as scoreDetailModal.renderResults (unfiltered); 1-based # column when the table is not filtered. */
-  const scoreDetailDescriptors = [];
-  for (let j = 0; j < gtCount; j++) {
-    if (gtToRun[j] >= 0) scoreDetailDescriptors.push({ type: 'gt', j });
-  }
-  for (let j = 0; j < gtCount; j++) {
-    if (gtToRun[j] < 0) scoreDetailDescriptors.push({ type: 'gt', j });
-  }
-  for (const i of runRowIndices) {
-    const paired = i < runToGt.length && runToGt[i] >= 0;
-    if (paired) continue;
-    let matchesAnyGt = false;
-    for (let jj = 0; jj < gtCount; jj++) {
-      if (evaluateNodeLocal(scoreRoot, i, jj)) {
-        matchesAnyGt = true;
-        break;
+  /** Same descriptor order as scoreDetailModal.renderResults (unfiltered): run row_index order, then unmatched GT. */
+  const scoreDetailDescriptors = buildScoreResultDescriptorsInRunOrder({
+    runRowIndices,
+    runToGt,
+    gtToRun,
+    gtRowsLength: gtCount,
+    evaluateRunMatchesAnyGt: (i) => {
+      for (let jj = 0; jj < gtCount; jj++) {
+        if (evaluateNodeLocal(scoreRoot, i, jj)) return true;
       }
-    }
-    if (!matchesAnyGt) scoreDetailDescriptors.push({ type: 'runOnly', i });
-  }
-  const rowGroupRule = rulesFlat.find((r) => r && r.rowGroupKey === true) || null;
-  function gtOneToManyGroupKeyReview(j) {
-    if (!rowGroupRule) return '';
-    const cols = (rowGroupRule.gtColumns || []).filter(Boolean);
-    if (cols.length === 0) return `\0${j}`;
-    return cols.map((c) => String(getGtValue(gtDeduped, j, c) ?? '')).join('\u0001');
-  }
-  if (rowGroupRule) {
-    const gtDesc = scoreDetailDescriptors.filter((d) => d.type === 'gt');
-    const runOnlyDesc = scoreDetailDescriptors.filter((d) => d.type === 'runOnly');
-    gtDesc.sort((a, b) => {
-      const ka = gtOneToManyGroupKeyReview(a.j);
-      const kb = gtOneToManyGroupKeyReview(b.j);
-      if (ka !== kb) return ka < kb ? -1 : 1;
-      return a.j - b.j;
-    });
-    scoreDetailDescriptors.length = 0;
-    scoreDetailDescriptors.push(...gtDesc, ...runOnlyDesc);
-  }
+      return false;
+    },
+  });
   const scoreTableRowByKey = new Map();
   scoreDetailDescriptors.forEach((d, idx) => {
     const n = idx + 1;
@@ -2064,6 +2039,13 @@ export function buildWorkflowCanvas(root) {
           getRunWorkingSetContent,
           getGroundTruthContent,
           getScoreMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).map((n) => n.dataset.scoreMapping || '[]'),
+          getRunInputColsCollapsed: runNode ? () => runNode.dataset.runBracketColsCollapsed === '1' : undefined,
+          setRunInputColsCollapsed: runNode
+            ? (collapsed) => {
+                runNode.dataset.runBracketColsCollapsed = collapsed ? '1' : '0';
+                document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+              }
+            : undefined,
         });
       }
     } else if (edgeType === EDGE_TYPE_PROMPT_TO_RUN) {
@@ -3146,6 +3128,13 @@ export function buildWorkflowCanvas(root) {
         getGroundTruthContent,
         getReviewPayload,
         getScoreMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).map((n) => n.dataset.scoreMapping || '[]'),
+        getRunInputColsCollapsed: runNode ? () => runNode.dataset.runBracketColsCollapsed === '1' : undefined,
+        setRunInputColsCollapsed: runNode
+          ? (collapsed) => {
+              runNode.dataset.runBracketColsCollapsed = collapsed ? '1' : '0';
+              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+            }
+          : undefined,
       });
     });
 
