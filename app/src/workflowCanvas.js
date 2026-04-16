@@ -7,7 +7,7 @@
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
 import { mergeResumeResults, embedInputRow, countCompletedInputRows, markEmptyOutputAsError } from './runResumeUtils.js';
-import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
+import { normalizeUnicodeDashesForDisplay, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
 import { reviewStreamSavedNeedsRowVerifyPhase } from './reviewWorkingSections.js';
 import {
@@ -18,11 +18,18 @@ import {
   parseNumericSuggestionId,
   syncReviewSuggestionSeqNext,
 } from './reviewSuggestionIds.js';
-import { computeGreedyRunToGtPairing } from './scoreRunGtPairing.js';
+import { computeGreedyRunToGtPairing, flattenScoreRules } from './scoreRunGtPairing.js';
+import {
+  parseScoreMappingBundle,
+  serializeScoreMappingBundle,
+  emptyScoreRuleGroup,
+  scoreBundleRootsForEmbeddingWalk,
+} from './scoreMappingBundle.js';
 import {
   openScoreDetailModal,
   openReviewSelectionPreviewModal,
   getScoreExportData,
+  SCORE_GT_ROW_INDEX_COLUMN,
   canonicalizeMatchFlags,
   getMatchFlags,
   legacyMatchTypeWasContains,
@@ -35,6 +42,8 @@ import {
   embeddingPairMatches,
   isValidRunOutputForScoreRow,
   buildScoreResultDescriptorsInRunOrder,
+  attachInputMatchedUnpairedGtDescriptors,
+  buildScoreTableGtColumns,
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
@@ -207,7 +216,6 @@ function normalizeScoreChild(c) {
       matchType: migrateLegacyMatchType(rawMt),
       matchFlags: canonicalizeMatchFlags(f),
     };
-    if (c && c.rowGroupKey === true) leaf.rowGroupKey = true;
     return leaf;
   }
   return normalizeScoreGroupChild(c);
@@ -273,11 +281,22 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     return '';
   };
   const getGtValue = (gtContent, rowIndex, columnName) => {
+    if (String(columnName).trim() === SCORE_GT_ROW_INDEX_COLUMN) {
+      if (typeof rowIndex !== 'number' || rowIndex < 0) return '';
+      return toCompareStr(rowIndex);
+    }
     const headers = gtContent.headers || [];
     const rows = gtContent.rows || [];
     const colIdx = headers.findIndex((h) => String(h).trim() === String(columnName).trim());
     if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
     return '';
+  };
+  const getGtValueForDisplay = (gtContent, rowIndex, columnName) => {
+    if (String(columnName).trim() === SCORE_GT_ROW_INDEX_COLUMN) {
+      if (typeof rowIndex !== 'number' || rowIndex < 0) return '';
+      return String(rowIndex + 1);
+    }
+    return getGtValue(gtContent, rowIndex, columnName);
   };
   let reviewEmbeddingCosineMap = new Map();
   const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
@@ -310,11 +329,13 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       return runVal === gtVal;
     });
   };
-  let scoreRoot = { type: 'group', op: 'AND', children: [] };
+  let inputRoot = emptyScoreRuleGroup();
+  let outputRoot = emptyScoreRuleGroup();
   try {
-    const raw = scoreNode.dataset.scoreMapping || '[]';
-    const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    scoreRoot = parseScoreMappingToTree(data);
+    const raw = scoreNode.dataset.scoreMapping || '{}';
+    const b = parseScoreMappingBundle(typeof raw === 'string' ? raw : JSON.stringify(raw));
+    inputRoot = b.inputRoot;
+    outputRoot = b.outputRoot;
   } catch (_) {}
   let results = [];
   let outputFields = [];
@@ -359,47 +380,13 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     excludedFromScoring = JSON.parse(scoreNode.dataset.scoreRowExcludedFromScoring || '{}');
   } catch (_) {}
 
-  const rulesFlat = flattenScoreTreeToRules(scoreRoot);
-  const gtColsUsed = [];
-  const outputKeysUsed = [];
-  for (const rule of rulesFlat) {
-    for (const c of (rule.gtColumns || [])) {
-      if (c && !gtColsUsed.includes(c)) gtColsUsed.push(c);
-    }
-    const k = (rule.outputKey || '').trim();
-    if (k && !outputKeysUsed.includes(k)) outputKeysUsed.push(k);
-  }
-  const dedupeGt = (gtC) => {
-    if (!gtColsUsed.length) return gtC;
-    const rows = gtC.rows || [];
-    const seen = new Set();
-    const dedupRows = [];
-    for (let i = 0; i < rows.length; i++) {
-      const key = JSON.stringify(gtColsUsed.map((col) => getGtValue(gtC, i, col)));
-      if (seen.has(key)) continue;
-      seen.add(key);
-      dedupRows.push(rows[i]);
-    }
-    return { ...gtC, rows: dedupRows };
-  };
-  const dedupeRunResults = (resList) => {
-    if (!outputKeysUsed.length) return resList || [];
-    const seen = new Set();
-    const out = [];
-    for (const res of resList || []) {
-      const key = JSON.stringify([res.row_index, ...outputKeysUsed.map((k) => getRunValue(res, k, runWsSafe, outputFields))]);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(res);
-    }
-    return out;
-  };
+  const rulesFlat = [...flattenScoreRules(inputRoot), ...flattenScoreRules(outputRoot)];
+  const gtColsUsed = buildScoreTableGtColumns(rulesFlat, gtSafe);
 
-  const gtDeduped = dedupeGt(gtSafe);
-  const gtRows = gtDeduped.rows || [];
+  const gtRows = gtSafe.rows || [];
   const resultsForScore = (results || []).filter((r) => r);
-  const dedupedResults = dedupeRunResults(resultsForScore);
-  const validDedupedResults = dedupedResults.filter((r) => isValidRunOutputForScoreRow(r, outputFields));
+  const validDedupedResults = resultsForScore.filter((r) => isValidRunOutputForScoreRow(r, outputFields));
+  const outputKeysForBundleInference = (outputFields || []).map((f) => String(f.key || '').trim()).filter(Boolean);
 
   function emptyRowInputPlaceholders() {
     const out = {};
@@ -421,11 +408,11 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
     try {
       reviewEmbeddingCosineMap = await prefetchEmbeddingCosineMap(SCORE_BACKEND_BASE, {
-        root: scoreRoot,
+        root: scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot),
         results: validDedupedResults,
         outputFields,
         runWs: runWsSafe,
-        gtContent: gtDeduped,
+        gtContent: gtSafe,
         getRunValue: (rr, ok, _rowIdx, ws, of) => getRunValue(rr, ok, ws, of),
         getGtValue,
       });
@@ -435,13 +422,19 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   }
   const gtCount = gtRows.length;
   const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
+  const getRunValueForPairingBand = (rr, ok, rowIdx, ws, of) => {
+    if (ok === '#' || ok === '[#]') return toCompareStr(rowIdx);
+    return getRunValue(rr, ok, ws, of);
+  };
   const { runToGt } = computeGreedyRunToGtPairing({
-    scoreRoot,
+    inputRoot,
+    outputRoot,
     results: validDedupedResults,
     runWs: runWsSafe,
-    gtContent: gtDeduped,
+    gtContent: gtSafe,
     outputFields,
     ruleMatchesRow,
+    getRunValue: getRunValueForPairingBand,
   });
 
   const gtToRun = new Array(gtCount).fill(-1);
@@ -453,7 +446,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   function evaluateNodeLocal(node, runRowIndex, gtRowIndex) {
     if (!node) return false;
     if (node.type === 'rule') {
-      return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWsSafe, outputFields, gtDeduped);
+      return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWsSafe, outputFields, gtSafe);
     }
     if (node.type === 'group' && Array.isArray(node.children)) {
       if (node.children.length === 0) return false;
@@ -469,18 +462,31 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   }
 
   /** Same descriptor order as scoreDetailModal.renderResults (unfiltered): run row_index order, then unmatched GT. */
-  const scoreDetailDescriptors = buildScoreResultDescriptorsInRunOrder({
-    runRowIndices,
-    runToGt,
-    gtToRun,
-    gtRowsLength: gtCount,
-    evaluateRunMatchesAnyGt: (i) => {
-      for (let jj = 0; jj < gtCount; jj++) {
-        if (evaluateNodeLocal(scoreRoot, i, jj)) return true;
-      }
-      return false;
+  function treeMatchesPairLocal(rootTree, runRowIndex, gtRowIndex) {
+    const leaves = flattenScoreRules(rootTree || emptyScoreRuleGroup());
+    if (leaves.length === 0) return true;
+    return evaluateNodeLocal(rootTree, runRowIndex, gtRowIndex);
+  }
+  const scoreDetailDescriptors = attachInputMatchedUnpairedGtDescriptors(
+    buildScoreResultDescriptorsInRunOrder({
+      runRowIndices,
+      runToGt,
+      gtToRun,
+      gtRowsLength: gtCount,
+      evaluateRunMatchesAnyGt: (i) => {
+        for (let jj = 0; jj < gtCount; jj++) {
+          if (treeMatchesPairLocal(inputRoot, i, jj) && treeMatchesPairLocal(outputRoot, i, jj)) return true;
+        }
+        return false;
+      },
+    }),
+    {
+      runRowIndices,
+      runToGt,
+      gtToRun,
+      inputMatchesPairForRow: (i, jj) => treeMatchesPairLocal(inputRoot, i, jj),
     },
-  });
+  );
   const scoreTableRowByKey = new Map();
   scoreDetailDescriptors.forEach((d, idx) => {
     const n = idx + 1;
@@ -507,7 +513,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     for (const rule of rulesFlat) {
       const outKey = String(rule.outputKey || '').trim();
       if (!isModelFacingOutputKey(outKey)) continue;
-      const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtDeduped, gtIdxForRules, col));
+      const gtVals = (rule.gtColumns || []).map((col) => getGtValueForDisplay(gtSafe, gtIdxForRules, col));
       groundTruthOutput[outKey] = gtVals.length === 1
         ? (gtVals[0] == null ? '' : String(gtVals[0]))
         : gtVals.map((x) => (x == null ? '' : String(x))).join(' | ');
@@ -543,6 +549,14 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     };
   }
 
+  function isPairMatchLocal(iRun, jGt) {
+    if (iRun < 0 || jGt < 0) return false;
+    if (!treeMatchesPairLocal(inputRoot, iRun, jGt)) return false;
+    const outLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
+    if (outLeaves.length === 0) return true;
+    return evaluateNodeLocal(outputRoot, iRun, jGt);
+  }
+
   const rows = [];
   let outRowIdx = 0;
   for (const r of validDedupedResults) {
@@ -555,7 +569,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     const runOutput = r?.output && typeof r.output === 'object' ? r.output : {};
     const gtIdxForRules = jPaired >= 0 ? jPaired : -1;
     const { expected, comparison_types, ground_truth_output } = expectedAndComparisonTypesForGt(gtIdxForRules);
-    const isFullMatch = gtIdxForRules >= 0 && evaluateNodeLocal(scoreRoot, runR, gtIdxForRules);
+    const isFullMatch = gtIdxForRules >= 0 && isPairMatchLocal(runR, gtIdxForRules);
     const row_input = inputIndicesWithValidRun.has(inpIdx) ? rowInputAsPromptPlaceholders(inpIdx) : emptyRowInputPlaceholders();
     const runRowIdx =
       typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : outRowIdx;
@@ -586,7 +600,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   function findInputRowIndexForUnpairedGt(gtJ) {
     const gtCells = [];
     for (const col of gtColsUsed) {
-      const v = String(getGtValue(gtDeduped, gtJ, col) || '').trim();
+      const v = String(getGtValue(gtSafe, gtJ, col) || '').trim();
       if (v) gtCells.push(v);
     }
     if (gtCells.length === 0) return null;
@@ -644,7 +658,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       for (const r of validDedupedResults) {
         const rInp = typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index;
         if (rInp !== inp) continue;
-        for (const k of outputKeysUsed) {
+        for (const k of outputKeysForBundleInference) {
           const rv = getRunValue(r, k, runWsSafe, outputFields);
           const t = String(rv ?? '').trim();
           if (t) set.add(t);
@@ -868,10 +882,9 @@ export function buildWorkflowCanvas(root) {
   function scoreNodeHasCompleteRules(scoreNode) {
     if (!scoreNode) return false;
     try {
-      const raw = scoreNode.dataset.scoreMapping || '[]';
-      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      const tree = parseScoreMappingToTree(data);
-      const rules = flattenScoreTreeToRules(tree);
+      const raw = scoreNode.dataset.scoreMapping || '{}';
+      const { inputRoot: ir, outputRoot: or } = parseScoreMappingBundle(typeof raw === 'string' ? raw : JSON.stringify(raw));
+      const rules = [...flattenScoreRules(ir), ...flattenScoreRules(or)];
       return rules.some((r) => (r.outputKey || '').trim() && Array.isArray(r.gtColumns) && r.gtColumns.some((c) => String(c || '').trim()));
     } catch (_) {
       return false;
@@ -1987,7 +2000,7 @@ export function buildWorkflowCanvas(root) {
             } catch (_) {}
           }
           const outputFields = deriveOutputFields(results, schemaFields);
-          outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+          outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
           const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
@@ -2039,7 +2052,7 @@ export function buildWorkflowCanvas(root) {
           getRunWorkingSetContent,
           getGroundTruthContent,
           getScoreMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).map((n) => n.dataset.scoreMapping || '[]'),
-          getRunInputColsCollapsed: runNode ? () => runNode.dataset.runBracketColsCollapsed === '1' : undefined,
+          getRunInputColsCollapsed: runNode ? () => runNode.dataset.runBracketColsCollapsed !== '0' : undefined,
           setRunInputColsCollapsed: runNode
             ? (collapsed) => {
                 runNode.dataset.runBracketColsCollapsed = collapsed ? '1' : '0';
@@ -3029,7 +3042,7 @@ export function buildWorkflowCanvas(root) {
           } catch (_) {}
         }
         const outputFields = deriveOutputFields(results, schemaFields);
-        outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+        outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
         const wsId = (runNode.dataset.runWorkingSetId || '').trim();
         const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
         const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
@@ -3128,7 +3141,7 @@ export function buildWorkflowCanvas(root) {
         getGroundTruthContent,
         getReviewPayload,
         getScoreMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).map((n) => n.dataset.scoreMapping || '[]'),
-        getRunInputColsCollapsed: runNode ? () => runNode.dataset.runBracketColsCollapsed === '1' : undefined,
+        getRunInputColsCollapsed: runNode ? () => runNode.dataset.runBracketColsCollapsed !== '0' : undefined,
         setRunInputColsCollapsed: runNode
           ? (collapsed) => {
               runNode.dataset.runBracketColsCollapsed = collapsed ? '1' : '0';
@@ -3504,17 +3517,24 @@ export function buildWorkflowCanvas(root) {
         const runCompleted = node.dataset.runCompleted === '1';
         const statusLine = runCompleted ? 'Run completed.' : 'Run incomplete.';
         const description = `Exported from ${promptName} ${runName}.\n${statusLine}`;
-        const headers = outputFields.map((f) => ((f && (f.display || f.key)) ? String(f.display || f.key).trim() || 'output' : 'output'));
-        const rows = results.map((r) =>
-          r.error
+        const headers = [
+          'Input: #',
+          formatResultOutputColumnLabel('#'),
+          ...outputFields.map((f) => formatResultOutputColumnLabel((f && (f.display || f.key)) ? String(f.display || f.key).trim() || 'output' : 'output')),
+        ];
+        const rows = results.map((r) => {
+          const inputNum = String((typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index ?? 0) + 1);
+          const outputNum = String((r.row_index ?? 0) + 1);
+          const outputPart = r.error
             ? outputFields.map(() => String(r.error))
             : (outputFields || []).map((f) => {
                 const val = r.output && f && r.output[f.key];
                 if (val === null || val === undefined) return '—';
                 if (Array.isArray(val)) return val.join(', ');
                 return String(val);
-              })
-        );
+              });
+          return [inputNum, outputNum, ...outputPart];
+        });
         document.dispatchEvent(
           new CustomEvent('workflow:add-dataset-node', {
             detail: { name: datasetName, notes: description, headers, rows },
@@ -3554,7 +3574,7 @@ export function buildWorkflowCanvas(root) {
             const arr = JSON.parse(raw);
             outputFields = Array.isArray(arr) ? arr : [];
           } catch (_) {}
-          outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+          outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
           const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
@@ -3775,7 +3795,7 @@ export function buildWorkflowCanvas(root) {
             const arr = JSON.parse(raw);
             outputFields = Array.isArray(arr) ? arr : [];
           } catch (_) {}
-          outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+          outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
           const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
@@ -4698,11 +4718,11 @@ export function buildWorkflowCanvas(root) {
         const scoreGroundTruthId = (node.dataset.scoreGroundTruthId || '').trim() || undefined;
         let scoreMapping;
         try {
-          const raw = node.dataset.scoreMapping || '[]';
-          const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-          const tree = parseScoreMappingToTree(data);
-          const hasRules = (tree.type === 'group' && tree.children && tree.children.length > 0) || flattenScoreTreeToRules(tree).length > 0;
-          scoreMapping = hasRules ? tree : undefined;
+          const raw = node.dataset.scoreMapping || '{}';
+          const { inputRoot: irS, outputRoot: orS } = parseScoreMappingBundle(typeof raw === 'string' ? raw : JSON.stringify(raw));
+          const rules = [...flattenScoreRules(irS), ...flattenScoreRules(orS)];
+          const hasRules = rules.some((r) => (r.outputKey || '').trim() && Array.isArray(r.gtColumns) && r.gtColumns.some((c) => String(c || '').trim()));
+          scoreMapping = hasRules ? JSON.parse(serializeScoreMappingBundle(irS, orS)) : undefined;
         } catch (_) {}
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const reviewCredentialId = (node.dataset.reviewCredentialId || '').trim() || undefined;
@@ -4857,9 +4877,11 @@ export function buildWorkflowCanvas(root) {
         if (n.scoreGroundTruthId) scoreNode.dataset.scoreGroundTruthId = n.scoreGroundTruthId;
         if (n.scoreMapping != null) {
           try {
-            const tree = parseScoreMappingToTree(n.scoreMapping);
-            const hasRules = (tree.type === 'group' && tree.children && tree.children.length > 0) || flattenScoreTreeToRules(tree).length > 0;
-            if (hasRules) scoreNode.dataset.scoreMapping = JSON.stringify(tree);
+            const raw = typeof n.scoreMapping === 'string' ? n.scoreMapping : JSON.stringify(n.scoreMapping);
+            const { inputRoot: irL, outputRoot: orL } = parseScoreMappingBundle(raw);
+            const rules = [...flattenScoreRules(irL), ...flattenScoreRules(orL)];
+            const hasRules = rules.some((r) => (r.outputKey || '').trim() && Array.isArray(r.gtColumns) && r.gtColumns.some((c) => String(c || '').trim()));
+            if (hasRules) scoreNode.dataset.scoreMapping = serializeScoreMappingBundle(irL, orL);
           } catch (_) {}
         }
         if (n.scoreRowExcludedFromScoring && typeof n.scoreRowExcludedFromScoring === 'object') {

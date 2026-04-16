@@ -6,7 +6,7 @@
  */
 
 import { getNextRowIndex, mergeResumeResults, embedInputRow, processApiResults, markEmptyOutputAsError } from './runResumeUtils.js';
-import { selectPlaceholderLabel } from './displayTextNormalize.js';
+import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 
 const API_BASE = 'http://localhost:8000';
 const MAX_CELL_CHARS = 40;
@@ -367,7 +367,7 @@ export function openRunDetailModal({
     }
   }
 
-  function buildResultsTable(results, outputFields, inputHeaders, bracketColsCollapsed, onToggleCollapse, zebraMap) {
+  function buildResultsTable(results, outputFields, inputHeaders, bracketColsCollapsed, onToggleCollapse, zebraMap, firstRowDisplayIndex = 0) {
     const list = (results || []).slice();
     const headers = inputHeaders || [];
     const collapsed = !!bracketColsCollapsed;
@@ -375,6 +375,11 @@ export function openRunDetailModal({
     tbl.className = 'run-detail-results-table';
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
+    const thRowNum = document.createElement('th');
+    thRowNum.className = 'run-detail-th run-detail-th--row-display-num';
+    thRowNum.textContent = '#';
+    thRowNum.title = 'Row number in the current list (after sort/filter)';
+    headerRow.appendChild(thRowNum);
     function bindInputColumnCollapseHeader(th, titleExpanded, titleCollapsed) {
       if (typeof onToggleCollapse !== 'function') return;
       th.classList.add('run-detail-th--bracket-toggle');
@@ -390,8 +395,8 @@ export function openRunDetailModal({
       });
     }
     const thBracket = document.createElement('th');
-    thBracket.className = 'run-detail-th run-detail-th--dataset-row-col';
-    thBracket.textContent = collapsed ? '...' : 'Input: #';
+    thBracket.className = 'run-detail-th run-detail-th--dataset-row-col run-detail-th--input-block-start';
+    thBracket.textContent = collapsed ? 'Input ...' : 'Input: #';
     if (typeof onToggleCollapse === 'function') {
       bindInputColumnCollapseHeader(
         thBracket,
@@ -399,7 +404,7 @@ export function openRunDetailModal({
         'Click to expand input columns.',
       );
     } else {
-      thBracket.title = collapsed ? '' : 'Input: # — Dataset input row index.';
+      thBracket.title = collapsed ? 'Input columns hidden. Click a header with toggle to expand.' : 'Input: # — Dataset input row index.';
     }
     headerRow.appendChild(thBracket);
     if (!collapsed) {
@@ -418,13 +423,14 @@ export function openRunDetailModal({
     }
     const thIndex = document.createElement('th');
     thIndex.className = 'run-detail-th run-detail-th--index run-detail-th--input-block-sep';
-    thIndex.textContent = '#';
-    thIndex.title = 'Row number';
+    const outputRowLabel = formatResultOutputColumnLabel('#');
+    thIndex.textContent = outputRowLabel;
+    thIndex.title = 'Run output row index (row_index + 1)';
     headerRow.appendChild(thIndex);
     outputFields.forEach((f) => {
       const th = document.createElement('th');
       th.className = 'run-detail-th';
-      const label = (f.display || f.key || '').trim() || '—';
+      const label = formatResultOutputColumnLabel((f.display || f.key || '').trim() || '—');
       th.textContent = label;
       th.title = label;
       headerRow.appendChild(th);
@@ -432,16 +438,20 @@ export function openRunDetailModal({
     thead.appendChild(headerRow);
     tbl.appendChild(thead);
     const tbody = document.createElement('tbody');
-    list.forEach((r) => {
+    list.forEach((r, rowIdx) => {
       const tr = document.createElement('tr');
       const zi = zebraMap?.get(r.input_row_index ?? 0);
       if (zi === 0 || zi === 1) tr.classList.add(`run-detail-results-tr--zebra-${zi}`);
+      tr.appendChild(Object.assign(document.createElement('td'), {
+        className: 'run-detail-td run-detail-td--row-display-num',
+        textContent: String(firstRowDisplayIndex + rowIdx + 1),
+      }));
       if (collapsed) {
-        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: '...' }));
+        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col run-detail-td--input-block-start', textContent: 'Input ...' }));
         tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--index run-detail-td--input-block-sep', textContent: String((r.row_index ?? 0) + 1) }));
       } else {
         const inpIdx = r.input_row_index ?? 0;
-        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col', textContent: String(inpIdx + 1) }));
+        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col run-detail-td--input-block-start', textContent: String(inpIdx + 1) }));
         const inputRow = Array.isArray(r.input_row) ? r.input_row : [];
         headers.forEach((_, i) => {
           const td = document.createElement('td');
@@ -533,7 +543,7 @@ export function openRunDetailModal({
       };
       const savedScrollLeft = tableWrap.scrollLeft;
       tableWrap.innerHTML = '';
-      tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields, resultsState.inputHeaders || [], resultsState.bracketColsCollapsed, onToggle, zebraMap));
+      tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields, resultsState.inputHeaders || [], resultsState.bracketColsCollapsed, onToggle, zebraMap, start));
       if (savedScrollLeft > 0) tableWrap.scrollLeft = savedScrollLeft;
       const totalFiltered = sortedFiltered.length;
       const totalRows = resultsState.results.length;
@@ -569,15 +579,18 @@ export function openRunDetailModal({
       const baseName = `${promptName} ${runName}`.trim();
       const datasetName = getUniqueDatasetExportName(baseName);
       const ih = resultsState.inputHeaders || [];
-      const outputHeaders = (resultsState.outputFields || []).map((f) => (f.display || f.key || '').trim() || 'output');
+      const outputHeaders = (resultsState.outputFields || []).map((f) => formatResultOutputColumnLabel((f.display || f.key || '').trim() || 'output'));
       const inputHeaderLabels = ih.map((h) => 'Input: ' + (String(h ?? '').trim() || ' '));
+      const exportHeaders = ['Input: #', ...inputHeaderLabels, formatResultOutputColumnLabel('#'), ...outputHeaders];
       const rows = (resultsState.results || []).map((r) => {
         const outputPart = r.error ? (resultsState.outputFields || []).map(() => String(r.error)) : (resultsState.outputFields || []).map((f) => { const v = r.output?.[f.key]; return v == null ? '—' : Array.isArray(v) ? v.join(', ') : String(v); });
         const inputRow = Array.isArray(r.input_row) ? r.input_row : [];
         const inputPart = ih.map((_, i) => (inputRow[i] == null ? '—' : String(inputRow[i])));
-        return [...inputPart, ...outputPart];
+        const inputNum = String((r.input_row_index ?? 0) + 1);
+        const outputNum = String((r.row_index ?? 0) + 1);
+        return [inputNum, ...inputPart, outputNum, ...outputPart];
       });
-      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: [...inputHeaderLabels, ...outputHeaders], rows } }));
+      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: exportHeaders, rows } }));
       closeModal();
     });
     const scoreBtn = document.createElement('button');
