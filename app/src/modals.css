@@ -3815,6 +3815,9 @@ button.review-suggestion-title-pill {
   min-height: 0;
   min-width: 0;
   overflow: auto;
+  /* 竖向滚动条出现时不挤占横向布局，减轻滑到最右端时 sticky 列微抖 */
+  scrollbar-gutter: stable;
+  overflow-anchor: none;
 }
 
 /* # 列与 Ground truth: #、Run result # 右对齐，与 dataset 节点一致 */
@@ -3996,8 +3999,26 @@ button.review-suggestion-title-pill {
 .score-detail-results-search-inline {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   flex-shrink: 0;
+}
+
+.score-detail-rules-column-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.score-detail-rules-column-filter input {
+  margin: 0;
+  cursor: pointer;
 }
 
 .score-detail-results-search-inline .dataset-detail-search-label {
@@ -4007,16 +4028,19 @@ button.review-suggestion-title-pill {
   white-space: nowrap;
 }
 
+/* 与表同宽，避免外层块被拉满 100% 后列宽「吃」剩余空间，导致滚到横向尽头时 sticky 在粘住/自然位之间跳1px */
 .score-detail-results-table-wrap {
   overflow: visible;
+  width: max-content;
   min-width: min-content;
 }
 
 .score-detail-results-table {
   width: max-content;
-  min-width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  /* Match列 sticky 的 right = Review 列总占位（与宽度一致，避免两列叠字） */
+  --score-sticky-review-w: 72px;
 }
 
 .score-detail-results-th,
@@ -4093,9 +4117,14 @@ button.review-suggestion-title-pill {
 
 .score-detail-results-th--match,
 .score-detail-results-td--match {
+  box-sizing: border-box;
   border-left: 4px solid var(--text-muted);
-  width: 3em;
-  min-width: 3em;
+  /* 14px 的 true/false 需大于3em，否则与 Review 粘滞列互相压字 */
+  width: 5rem;
+  min-width: 5rem;
+  max-width: 5rem;
+  padding-left: 6px;
+  padding-right: 6px;
   text-align: center;
   vertical-align: middle;
 }
@@ -4131,11 +4160,37 @@ button.review-suggestion-title-pill {
 
 .score-detail-results-th--review,
 .score-detail-results-td--review {
-  width: 52px;
-  min-width: 52px;
-  max-width: 64px;
+  box-sizing: border-box;
+  width: var(--score-sticky-review-w, 72px);
+  min-width: var(--score-sticky-review-w, 72px);
+  max-width: var(--score-sticky-review-w, 72px);
+  padding-left: 6px;
+  padding-right: 6px;
   text-align: center;
   vertical-align: middle;
+}
+
+/* Match / Review：横向滚动时固定在表格可视区右侧（与 .score-detail-results-table-scroll 配合） */
+.score-detail-results-table thead .score-detail-results-th--match,
+.score-detail-results-table tbody .score-detail-results-td--match {
+  position: sticky;
+  right: var(--score-sticky-review-w, 72px);
+  z-index: 2;
+}
+
+.score-detail-results-table thead .score-detail-results-th--review,
+.score-detail-results-table tbody .score-detail-results-td--review {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+}
+
+.score-detail-results-table thead .score-detail-results-th--match {
+  z-index: 4;
+}
+
+.score-detail-results-table thead .score-detail-results-th--review {
+  z-index: 5;
 }
 
 .score-detail-results-review-label {
@@ -5015,9 +5070,11 @@ button.review-suggestion-title-pill {
   text-overflow: ellipsis;
 }
 
-/* 较短：Input: # / Input ...（折叠）/ Output: #，顶格 120px */
+/* 较短：Input: # / Input ...（折叠）/ Output: # / Output ...（折叠），与索引列同为右对齐，顶格 120px */
 .run-detail-results-table .run-detail-th--input-block-start,
 .run-detail-results-table .run-detail-td--input-block-start,
+.run-detail-results-table .run-detail-th--input-block-sep,
+.run-detail-results-table .run-detail-td--input-block-sep,
 .run-detail-results-table .run-detail-th--index,
 .run-detail-results-table .run-detail-td--index {
   width: auto;
@@ -5028,6 +5085,37 @@ button.review-suggestion-title-pill {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Score：Ground truth 折叠占位列与上列折叠样式一致（右对齐） */
+.score-detail-results-table .score-detail-results-th--gt-collapse-bracket,
+.score-detail-results-table .score-detail-results-td--gt-collapse-bracket {
+  text-align: right;
+  width: auto;
+  min-width: 3.25em;
+  max-width: 120px;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 折叠占位列（Input ... / Output ... / Ground truth ...）：斜体 + 次要色，与展开的数据列区分 */
+.run-detail-results-table .run-detail-bracket-collapsed,
+.score-detail-results-table .run-detail-bracket-collapsed {
+  font-style: italic;
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.92em;
+}
+
+/* 表头默认 13px / 600 优先级更高，单独压低折叠列样式 */
+.run-detail-results-table thead th.run-detail-bracket-collapsed,
+.score-detail-results-table thead .score-detail-results-th.run-detail-bracket-collapsed {
+  color: var(--text-muted);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 12px;
 }
 
 .run-detail-results-table td[title] {
@@ -5061,6 +5149,63 @@ button.review-suggestion-title-pill {
 }
 .run-detail-results-table .run-detail-td--error-col.run-detail-td--error {
   color: var(--danger, #c00);
+}
+
+/*
+ * Score 结果表同时带 .score-detail-results-table与 .run-detail-results-table。
+ * 仅靠前面的 score 规则会被后面的 run-detail 的 border-collapse: collapse 覆盖，
+ * 导致 sticky 的 Match/Review 与相邻格「抢」折叠边框——表现为无边线 + 横向滚到尽头时微抖。
+ * 此处用更高优先级 + separate，在 Score 表上单独恢复稳定格线与 sticky。
+ */
+.score-detail-results-table.run-detail-results-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: unset;
+  width: max-content;
+}
+
+.score-detail-results-table.run-detail-results-table th,
+.score-detail-results-table.run-detail-results-table td {
+  border-style: solid;
+  border-color: var(--border);
+  border-width: 0 1px 1px 0;
+}
+
+.score-detail-results-table.run-detail-results-table thead tr:first-child th {
+  border-top-width: 0;
+}
+
+.score-detail-results-table.run-detail-results-table tbody tr:last-child td {
+  border-bottom-width: 0;
+}
+
+.score-detail-results-table.run-detail-results-table thead tr th:last-child,
+.score-detail-results-table.run-detail-results-table tbody tr td:last-child {
+  border-right-width: 0;
+}
+
+/* 与原有 Score 块分界一致（需压过上面单元格规则的 border-left:0） */
+.score-detail-results-table.run-detail-results-table .score-detail-results-th--block-sep,
+.score-detail-results-table.run-detail-results-table .score-detail-results-td--block-sep {
+  border-left-width: 2px !important;
+  border-left-style: solid !important;
+  border-left-color: var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
+}
+
+/* Match / Review：Review 的 z-index 更高，会盖住 Match 的右边框，分隔线画在 Review 的 border-left */
+.score-detail-results-table.run-detail-results-table .score-detail-results-th--match,
+.score-detail-results-table.run-detail-results-table .score-detail-results-td--match {
+  border-left: 4px solid var(--text-muted);
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  border-top: none;
+}
+
+.score-detail-results-table.run-detail-results-table .score-detail-results-th--review,
+.score-detail-results-table.run-detail-results-table .score-detail-results-td--review {
+  border-left: 1px solid var(--border);
+  border-top: none;
+  border-right: none;
 }
 
 .run-detail-error {

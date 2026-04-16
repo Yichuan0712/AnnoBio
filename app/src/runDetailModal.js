@@ -61,10 +61,12 @@ function buildZebraMapForInputGroups(sortedRows) {
   return map;
 }
 
-function filterResults(results, outputFields, searchQuery) {
+function filterResults(results, outputFields, searchQuery, inputColsCollapsed = false, outputColsCollapsed = false) {
   const q = (searchQuery || '').trim().toLowerCase();
   if (!q) return results;
   return results.filter((r) => {
+    if (inputColsCollapsed && 'input ...'.includes(q)) return true;
+    if (outputColsCollapsed && 'output ...'.includes(q)) return true;
     if (String((r.input_row_index ?? 0) + 1).toLowerCase().includes(q)) return true;
     if (String((r.row_index ?? 0) + 1).toLowerCase().includes(q)) return true;
     if (r.error && String(r.error).toLowerCase().includes(q)) return true;
@@ -140,6 +142,7 @@ export function openRunDetailModal({
     rowsPerPage: 25,
     currentPage: 1,
     bracketColsCollapsed: node?.dataset?.runBracketColsCollapsed !== '0',
+    outputBracketCollapsed: node?.dataset?.runOutputBracketCollapsed === '1',
   };
   let inputToColumn = {};
   try {
@@ -367,10 +370,11 @@ export function openRunDetailModal({
     }
   }
 
-  function buildResultsTable(results, outputFields, inputHeaders, bracketColsCollapsed, onToggleCollapse, zebraMap, firstRowDisplayIndex = 0) {
+  function buildResultsTable(results, outputFields, inputHeaders, inputCollapsed, outputCollapsed, onToggleInputCollapse, onToggleOutputCollapse, zebraMap, firstRowDisplayIndex = 0) {
     const list = (results || []).slice();
     const headers = inputHeaders || [];
-    const collapsed = !!bracketColsCollapsed;
+    const inCollapsed = !!inputCollapsed;
+    const outCollapsed = !!outputCollapsed;
     const tbl = document.createElement('table');
     tbl.className = 'run-detail-results-table';
     const thead = document.createElement('thead');
@@ -381,39 +385,53 @@ export function openRunDetailModal({
     thRowNum.title = 'Row number in the current list (after sort/filter)';
     headerRow.appendChild(thRowNum);
     function bindInputColumnCollapseHeader(th, titleExpanded, titleCollapsed) {
-      if (typeof onToggleCollapse !== 'function') return;
+      if (typeof onToggleInputCollapse !== 'function') return;
       th.classList.add('run-detail-th--bracket-toggle');
-      th.title = collapsed ? titleCollapsed : titleExpanded;
+      th.title = inCollapsed ? titleCollapsed : titleExpanded;
       th.setAttribute('role', 'button');
       th.setAttribute('tabindex', '0');
-      th.addEventListener('click', onToggleCollapse);
+      th.addEventListener('click', onToggleInputCollapse);
       th.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onToggleCollapse();
+          onToggleInputCollapse();
+        }
+      });
+    }
+    function bindOutputColumnCollapseHeader(th, titleExpanded, titleCollapsed) {
+      if (typeof onToggleOutputCollapse !== 'function') return;
+      th.classList.add('run-detail-th--bracket-toggle');
+      th.title = outCollapsed ? titleCollapsed : titleExpanded;
+      th.setAttribute('role', 'button');
+      th.setAttribute('tabindex', '0');
+      th.addEventListener('click', onToggleOutputCollapse);
+      th.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggleOutputCollapse();
         }
       });
     }
     const thBracket = document.createElement('th');
-    thBracket.className = 'run-detail-th run-detail-th--dataset-row-col run-detail-th--input-block-start';
-    thBracket.textContent = collapsed ? 'Input ...' : 'Input: #';
-    if (typeof onToggleCollapse === 'function') {
+    thBracket.className = `run-detail-th run-detail-th--dataset-row-col run-detail-th--input-block-start${inCollapsed ? ' run-detail-bracket-collapsed' : ''}`;
+    thBracket.textContent = inCollapsed ? 'Input ...' : 'Input: #';
+    if (typeof onToggleInputCollapse === 'function') {
       bindInputColumnCollapseHeader(
         thBracket,
         'Input: # — Dataset input row index. Click any input column header to hide input columns.',
         'Click to expand input columns.',
       );
     } else {
-      thBracket.title = collapsed ? 'Input columns hidden. Click a header with toggle to expand.' : 'Input: # — Dataset input row index.';
+      thBracket.title = inCollapsed ? 'Input columns hidden. Click a header with toggle to expand.' : 'Input: # — Dataset input row index.';
     }
     headerRow.appendChild(thBracket);
-    if (!collapsed) {
+    if (!inCollapsed) {
       headers.forEach((h) => {
         const th = document.createElement('th');
         th.className = 'run-detail-th run-detail-th--dataset-row-col';
         const label = `Input: ${String(h ?? '').trim() || ' '}`;
         th.textContent = label;
-        if (typeof onToggleCollapse === 'function') {
+        if (typeof onToggleInputCollapse === 'function') {
           bindInputColumnCollapseHeader(th, `${label} — Click to hide input columns.`, '');
         } else {
           th.title = label;
@@ -421,20 +439,45 @@ export function openRunDetailModal({
         headerRow.appendChild(th);
       });
     }
-    const thIndex = document.createElement('th');
-    thIndex.className = 'run-detail-th run-detail-th--index run-detail-th--input-block-sep';
-    const outputRowLabel = formatResultOutputColumnLabel('#');
-    thIndex.textContent = outputRowLabel;
-    thIndex.title = 'Run output row index (row_index + 1)';
-    headerRow.appendChild(thIndex);
-    outputFields.forEach((f) => {
-      const th = document.createElement('th');
-      th.className = 'run-detail-th';
-      const label = formatResultOutputColumnLabel((f.display || f.key || '').trim() || '—');
-      th.textContent = label;
-      th.title = label;
-      headerRow.appendChild(th);
-    });
+    if (outCollapsed) {
+      const thOutBracket = document.createElement('th');
+      thOutBracket.className = 'run-detail-th run-detail-th--dataset-row-col run-detail-th--input-block-sep run-detail-bracket-collapsed';
+      thOutBracket.textContent = 'Output ...';
+      if (typeof onToggleOutputCollapse === 'function') {
+        bindOutputColumnCollapseHeader(
+          thOutBracket,
+          'Output columns are hidden.',
+          'Click to expand model output columns.',
+        );
+      } else {
+        thOutBracket.title = 'Model output columns hidden. Click a header with toggle to expand.';
+      }
+      headerRow.appendChild(thOutBracket);
+    } else {
+      const thIndex = document.createElement('th');
+      thIndex.className = 'run-detail-th run-detail-th--index run-detail-th--input-block-sep';
+      const outputRowLabel = formatResultOutputColumnLabel('#');
+      thIndex.textContent = outputRowLabel;
+      if (typeof onToggleOutputCollapse === 'function') {
+        bindOutputColumnCollapseHeader(
+          thIndex,
+          'Output: # — Run output row index. Click any output column header to hide output columns.',
+          'Click to expand output columns.',
+        );
+      } else {
+        thIndex.title = 'Run output row index (row_index + 1)';
+      }
+      headerRow.appendChild(thIndex);
+      outputFields.forEach((f) => {
+        const th = document.createElement('th');
+        th.className = 'run-detail-th';
+        const label = formatResultOutputColumnLabel((f.display || f.key || '').trim() || '—');
+        th.textContent = label;
+        th.title = label;
+        bindOutputColumnCollapseHeader(th, `${label} — Click to hide output columns.`, '');
+        headerRow.appendChild(th);
+      });
+    }
     thead.appendChild(headerRow);
     tbl.appendChild(thead);
     const tbody = document.createElement('tbody');
@@ -446,9 +489,8 @@ export function openRunDetailModal({
         className: 'run-detail-td run-detail-td--row-display-num',
         textContent: String(firstRowDisplayIndex + rowIdx + 1),
       }));
-      if (collapsed) {
-        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col run-detail-td--input-block-start', textContent: 'Input ...' }));
-        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--index run-detail-td--input-block-sep', textContent: String((r.row_index ?? 0) + 1) }));
+      if (inCollapsed) {
+        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col run-detail-td--input-block-start run-detail-bracket-collapsed', textContent: 'Input ...' }));
       } else {
         const inpIdx = r.input_row_index ?? 0;
         tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col run-detail-td--input-block-start', textContent: String(inpIdx + 1) }));
@@ -461,26 +503,30 @@ export function openRunDetailModal({
           if (v != null) td.title = String(v);
           tr.appendChild(td);
         });
-        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--index run-detail-td--input-block-sep', textContent: String((r.row_index ?? 0) + 1) }));
       }
-      if (r.error) {
-        outputFields.forEach(() => {
-          const td = document.createElement('td');
-          td.className = 'run-detail-td run-detail-td--error';
-          td.textContent = truncate(r.error);
-          td.title = r.error ?? '';
-          tr.appendChild(td);
-        });
+      if (outCollapsed) {
+        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--dataset-row-col run-detail-td--input-block-sep run-detail-bracket-collapsed', textContent: 'Output ...' }));
       } else {
-        outputFields.forEach((f) => {
-          const td = document.createElement('td');
-          td.className = 'run-detail-td';
-          const val = r.output?.[f.key];
-          if (val == null) td.textContent = '—';
-          else if (Array.isArray(val)) { td.textContent = truncate(val.join(', ')); td.title = val.join(', '); }
-          else { td.textContent = truncate(String(val)); td.title = String(val); }
-          tr.appendChild(td);
-        });
+        tr.appendChild(Object.assign(document.createElement('td'), { className: 'run-detail-td run-detail-td--index run-detail-td--input-block-sep', textContent: String((r.row_index ?? 0) + 1) }));
+        if (r.error) {
+          outputFields.forEach(() => {
+            const td = document.createElement('td');
+            td.className = 'run-detail-td run-detail-td--error';
+            td.textContent = truncate(r.error);
+            td.title = r.error ?? '';
+            tr.appendChild(td);
+          });
+        } else {
+          outputFields.forEach((f) => {
+            const td = document.createElement('td');
+            td.className = 'run-detail-td';
+            const val = r.output?.[f.key];
+            if (val == null) td.textContent = '—';
+            else if (Array.isArray(val)) { td.textContent = truncate(val.join(', ')); td.title = val.join(', '); }
+            else { td.textContent = truncate(String(val)); td.title = String(val); }
+            tr.appendChild(td);
+          });
+        }
       }
       tbody.appendChild(tr);
     });
@@ -529,21 +575,37 @@ export function openRunDetailModal({
     const nextBtn = toolbar.querySelector('.run-detail-next-page');
 
     function refreshTable() {
-      const filtered = filterResults(resultsState.results, resultsState.outputFields, resultsState.searchQuery);
+      const filtered = filterResults(resultsState.results, resultsState.outputFields, resultsState.searchQuery, resultsState.bracketColsCollapsed, resultsState.outputBracketCollapsed);
       const sortedFiltered = filtered.slice().sort(sortRunResultsRows);
       const zebraMap = buildZebraMapForInputGroups(sortedFiltered);
       const totalPages = Math.max(1, Math.ceil(sortedFiltered.length / resultsState.rowsPerPage));
       resultsState.currentPage = Math.min(Math.max(1, resultsState.currentPage), totalPages);
       const start = (resultsState.currentPage - 1) * resultsState.rowsPerPage;
       const pageResults = sortedFiltered.slice(start, start + resultsState.rowsPerPage);
-      const onToggle = () => {
+      const onToggleInput = () => {
         resultsState.bracketColsCollapsed = !resultsState.bracketColsCollapsed;
         if (node) node.dataset.runBracketColsCollapsed = resultsState.bracketColsCollapsed ? '1' : '0';
         refreshTable();
       };
+      const onToggleOutput = () => {
+        resultsState.outputBracketCollapsed = !resultsState.outputBracketCollapsed;
+        if (node) node.dataset.runOutputBracketCollapsed = resultsState.outputBracketCollapsed ? '1' : '0';
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        refreshTable();
+      };
       const savedScrollLeft = tableWrap.scrollLeft;
       tableWrap.innerHTML = '';
-      tableWrap.appendChild(buildResultsTable(pageResults, resultsState.outputFields, resultsState.inputHeaders || [], resultsState.bracketColsCollapsed, onToggle, zebraMap, start));
+      tableWrap.appendChild(buildResultsTable(
+        pageResults,
+        resultsState.outputFields,
+        resultsState.inputHeaders || [],
+        resultsState.bracketColsCollapsed,
+        resultsState.outputBracketCollapsed,
+        onToggleInput,
+        onToggleOutput,
+        zebraMap,
+        start,
+      ));
       if (savedScrollLeft > 0) tableWrap.scrollLeft = savedScrollLeft;
       const totalFiltered = sortedFiltered.length;
       const totalRows = resultsState.results.length;
@@ -560,7 +622,7 @@ export function openRunDetailModal({
     pageInp?.addEventListener('change', () => { resultsState.currentPage = Math.max(1, parseInt(pageInp.value, 10) || 1); refreshTable(); });
     prevBtn?.addEventListener('click', () => { resultsState.currentPage = Math.max(1, resultsState.currentPage - 1); refreshTable(); });
     nextBtn?.addEventListener('click', () => {
-      const n = filterResults(resultsState.results, resultsState.outputFields, resultsState.searchQuery).slice().sort(sortRunResultsRows).length;
+      const n = filterResults(resultsState.results, resultsState.outputFields, resultsState.searchQuery, resultsState.bracketColsCollapsed, resultsState.outputBracketCollapsed).slice().sort(sortRunResultsRows).length;
       resultsState.currentPage = Math.min(Math.ceil(n / resultsState.rowsPerPage), resultsState.currentPage + 1);
       refreshTable();
     });

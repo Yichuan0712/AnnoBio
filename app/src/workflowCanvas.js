@@ -2059,6 +2059,16 @@ export function buildWorkflowCanvas(root) {
                 document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
               }
             : undefined,
+          getScoreOutputColsCollapsed: () => scoreNode.dataset.scoreOutputBracketCollapsed === '1',
+          setScoreOutputColsCollapsed: (collapsed) => {
+            scoreNode.dataset.scoreOutputBracketCollapsed = collapsed ? '1' : '0';
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          },
+          getScoreGtColsCollapsed: () => scoreNode.dataset.scoreGtBracketCollapsed === '1',
+          setScoreGtColsCollapsed: (collapsed) => {
+            scoreNode.dataset.scoreGtBracketCollapsed = collapsed ? '1' : '0';
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          },
         });
       }
     } else if (edgeType === EDGE_TYPE_PROMPT_TO_RUN) {
@@ -3148,6 +3158,16 @@ export function buildWorkflowCanvas(root) {
               document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
             }
           : undefined,
+        getScoreOutputColsCollapsed: () => node.dataset.scoreOutputBracketCollapsed === '1',
+        setScoreOutputColsCollapsed: (collapsed) => {
+          node.dataset.scoreOutputBracketCollapsed = collapsed ? '1' : '0';
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        },
+        getScoreGtColsCollapsed: () => node.dataset.scoreGtBracketCollapsed === '1',
+        setScoreGtColsCollapsed: (collapsed) => {
+          node.dataset.scoreGtBracketCollapsed = collapsed ? '1' : '0';
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        },
       });
     });
 
@@ -4711,6 +4731,7 @@ export function buildWorkflowCanvas(root) {
           } catch (_) {}
         }
         if (pct > 0) out.runProgress = pct;
+        if (node.dataset.runOutputBracketCollapsed === '1') out.runOutputBracketCollapsed = true;
         return out;
       }
       if (node.classList.contains('workflow-node--score')) {
@@ -4731,7 +4752,7 @@ export function buildWorkflowCanvas(root) {
         try {
           scoreRowExcludedFromScoringObj = scoreRowExcludedFromScoring ? JSON.parse(scoreRowExcludedFromScoring) : undefined;
         } catch (_) {}
-        return {
+        const out = {
           type: 'score',
           nodeId,
           left,
@@ -4743,6 +4764,10 @@ export function buildWorkflowCanvas(root) {
           reviewResult: reviewResult || undefined,
           reviewCredentialId,
         };
+        if (node.dataset.scoreOutputBracketCollapsed === '1') out.scoreOutputBracketCollapsed = true;
+        if (node.dataset.scoreGtBracketCollapsed === '1') out.scoreGtBracketCollapsed = true;
+        if (node.dataset.scoreTableRulesColumnFilter === '1') out.scoreTableRulesColumnFilter = true;
+        return out;
       }
       if (node.classList.contains('workflow-node--prompt-review')) {
         const promptReviewName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Review';
@@ -4866,6 +4891,7 @@ export function buildWorkflowCanvas(root) {
             }
           } catch (_) {}
         }
+        if (n.runOutputBracketCollapsed === true) runNode.dataset.runOutputBracketCollapsed = '1';
         createdNodes.push(runNode);
       } else if (n.type === 'assessment' || n.type === 'score') {
         const scoreNode = createScoreNode({
@@ -4895,6 +4921,9 @@ export function buildWorkflowCanvas(root) {
         if (n.reviewCredentialId && typeof n.reviewCredentialId === 'string') {
           scoreNode.dataset.reviewCredentialId = n.reviewCredentialId;
         }
+        if (n.scoreOutputBracketCollapsed === true) scoreNode.dataset.scoreOutputBracketCollapsed = '1';
+        if (n.scoreGtBracketCollapsed === true) scoreNode.dataset.scoreGtBracketCollapsed = '1';
+        if (n.scoreTableRulesColumnFilter === true) scoreNode.dataset.scoreTableRulesColumnFilter = '1';
         createdNodes.push(scoreNode);
       } else if (n.type === 'promptReview') {
         const promptReviewNode = createPromptReviewNode({
