@@ -215,7 +215,7 @@ export function buildScoreTableGtColumns(rulesFlat, rawGtContent) {
 }
 
 /**
- * GT columns referenced by rules only (sheet order + rule-only columns), for the “Rules only” column filter.
+ * GT columns referenced by rules only (sheet order + rule-only columns), for the “only columns used in rules” table filter.
  */
 export function buildScoreTableGtColumnsRulesOnly(rulesFlat, rawGtContent) {
   const fromRules = [];
@@ -2517,9 +2517,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         <span class="score-detail-results-metrics" aria-label="Precision, Recall, F1">${escapeHtml(metricsText)}</span>
       </div>
       <div class="score-detail-results-search-inline">
-        <label class="score-detail-rules-column-filter" title="Show only input, model output, and ground-truth columns that appear in mapping rules">
-          Rules only
-          <input type="checkbox" id="score-detail-rules-column-only" ${scoreDetailPagination.rulesColumnFilter ? 'checked' : ''} />
+        <label class="score-detail-rules-column-filter" title="Hide input, model output, and ground-truth columns that are not referenced in any rule. Export still includes full columns.">
+          Only columns used in rules
+          <input type="checkbox" id="score-detail-rules-column-only" ${scoreDetailPagination.rulesColumnFilter ? 'checked' : ''} aria-label="Only show columns referenced in mapping rules" />
         </label>
         <label class="dataset-detail-search-label" for="score-detail-results-search">Search</label>
         <input type="text" id="score-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" value="${escapeAttr(scoreDetailPagination.searchQuery)}" />
