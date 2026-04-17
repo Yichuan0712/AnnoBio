@@ -35,7 +35,7 @@ _SEP = "=" * 60      # unified separator for LLM prompt/output logs
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, create_model
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
 from llm import chat as llm_chat, run_structured as llm_run_structured
 from review_finetune_compositional import (
@@ -49,7 +49,6 @@ from review_finetune_compositional_filelog import (
     inspect_write_segments,
 )
 from run_inspect_filelog import run_inspect_append_note, run_inspect_append_row, run_inspect_begin
-from review_verify_debug import print_verify_debug_report, review_verify_debug_enabled
 
 app = FastAPI()
 
@@ -99,7 +98,6 @@ DEFAULT_SETTINGS = {
     "review_finetune_comp_max_trials": 40,
     "review_finetune_comp_candidates_per_segment": 4,
     "review_finetune_comp_max_segments": 5,
-    "review_verify_debug_print": False,
 }
 
 
@@ -188,17 +186,13 @@ class SettingsPatch(BaseModel):
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
     review_max_failed_rows: int | None = Field(default=None, ge=1, le=200)
     review_finetune_comp_max_trials: int | None = Field(
-        default=None, ge=8, le=200, description="Compositional finetune: max verify rounds"
+        default=None, ge=8, le=200, description="Compositional finetune: max trial rounds"
     )
     review_finetune_comp_candidates_per_segment: int | None = Field(
         default=None, ge=2, le=8, description="Compositional finetune: LLM paraphrases per segment"
     )
     review_finetune_comp_max_segments: int | None = Field(
         default=None, ge=2, le=8, description="Compositional finetune: max segments when splitting"
-    )
-    review_verify_debug_print: bool | None = Field(
-        default=None,
-        description="If true, POST /api/review/verify-debug-print logs each Verify to Python stdout (also env REVIEW_VERIFY_DEBUG_PRINT)",
     )
 
 
@@ -280,6 +274,8 @@ class ReviewRequest(BaseModel):
 
 
 class ReviewSuggestion(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str = Field(..., description="Short name summarizing this change (e.g. 'Clarify output format')")
     phase1_addresses: list[str] = Field(
         default_factory=list,
@@ -288,9 +284,10 @@ class ReviewSuggestion(BaseModel):
     old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only)")
     new_sentence: str = Field(..., description="Replacement for that one sentence")
     reason: str = Field(..., description="Why this change is suggested")
-    target_input_row_indices: list[int] = Field(
+    target_score_row_indices: list[int] = Field(
         ...,
         min_length=1,
+        validation_alias=AliasChoices("target_score_row_indices", "target_input_row_indices"),
         description="0-based comparison row_index in stored/API payloads; automated review prompts use 1-based Score #",
     )
 
@@ -1405,17 +1402,6 @@ def cancel_review_by_node(review_node_id: str):
             _review_cancelled.add(review_id)
             return {"ok": True, "status": "cancelling"}
         return {"ok": True, "status": job.get("status") if job else "done"}
-
-
-@app.post("/api/review/verify-debug-print")
-def review_verify_debug_print_ep(body: dict = Body(...)):
-    """When enabled (settings `review_verify_debug_print` or env `REVIEW_VERIFY_DEBUG_PRINT=1`), print Verify snapshot to server stdout."""
-    if not review_verify_debug_enabled(_load_settings()):
-        return {"ok": True, "skipped": True}
-    if not isinstance(body, dict):
-        body = {}
-    print_verify_debug_report(body, _safe_print)
-    return {"ok": True, "printed": True}
 
 
 @app.post("/api/run/cancel/{run_id}")

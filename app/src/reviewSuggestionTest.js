@@ -1,13 +1,13 @@
 /**
- * Run a mini–batch Run + Score evaluation for one Review prompt-edit suggestion (test if target rows pass).
- *
- * After the mini-run, verification applies **only Output → Ground truth** rules to the **new** model outputs
- * vs the same paired GT row (`source_gt_row_index`). Input→GT rules are intentionally not used here.
+ * Review suggestion mini-run + Score pairing: build prompt from **accepted** working sections (`testSections`).
+ * Resolve targets → comparison rows → **one mini-run per distinct worksheet input**; re-score with the same greedy
+ * **Input→GT + Output→GT** pairing as Score (`computeGreedyRunToGtPairing`).
+ * Used by Finetune metrics (`runSuggestionRowTestsMetrics`).
  */
 
 import { markEmptyOutputAsError } from './runResumeUtils.js';
-import { parseScoreMappingBundle, emptyScoreRuleGroup } from './scoreMappingBundle.js';
-import { flattenScoreRules } from './scoreRunGtPairing.js';
+import { parseScoreMappingBundle, emptyScoreRuleGroup, scoreBundleRootsForEmbeddingWalk } from './scoreMappingBundle.js';
+import { flattenScoreRules, computeGreedyRunToGtPairing } from './scoreRunGtPairing.js';
 import {
   prefetchEmbeddingCosineMap,
   embeddingPairMatches,
@@ -19,42 +19,8 @@ import {
   migrateLegacyMatchType,
   canonicalizeMatchFlags,
   legacyMatchTypeWasContains,
+  isValidRunOutputForScoreRow,
 } from './scoreDetailModal.js';
-
-/** AbortControllers for in-flight Run+Score row checks (close modal / beforeunload cancels fetch + poll). */
-const verifyAbortControllers = new Set();
-
-export function registerVerifySession(ac) {
-  if (ac && typeof ac.abort === 'function') verifyAbortControllers.add(ac);
-}
-
-export function unregisterVerifySession(ac) {
-  verifyAbortControllers.delete(ac);
-}
-
-export function abortAllVerifyJobs() {
-  for (const c of verifyAbortControllers) {
-    try {
-      c.abort();
-    } catch (_) {}
-  }
-  verifyAbortControllers.clear();
-}
-
-/** True while any row-check run has a registered AbortController (review modal may be closed). */
-export function hasActiveVerifySessions() {
-  return verifyAbortControllers.size > 0;
-}
-
-/** When backend enables it (settings `review_verify_debug_print` or env `REVIEW_VERIFY_DEBUG_PRINT`), logs snapshot to Python stdout. */
-function postReviewVerifyDebugPrint(apiBase, payload) {
-  const base = String(apiBase || 'http://localhost:8000').replace(/\/$/, '');
-  void fetch(`${base}/api/review/verify-debug-print`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
-}
 
 const DEFAULT_SCORE_MATCH_FLAGS = {
   semanticAlign: false,
@@ -234,7 +200,8 @@ function ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, ou
   });
 }
 
-function evaluateScoreTree(node, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap) {
+/** Full AND/OR rule tree (same convention as Score / workflowCanvas `isPairMatchLocal`). */
+function evaluateScoreRuleTree(node, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap) {
   if (!node) return false;
   if (node.type === 'rule') {
     return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap);
@@ -242,9 +209,27 @@ function evaluateScoreTree(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
   if (node.type === 'group' && Array.isArray(node.children)) {
     if (node.children.length === 0) return false;
     const ops = node.ops || Array(Math.max(0, node.children.length - 1)).fill('AND');
-    let r = evaluateScoreTree(node.children[0], runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap);
+    let r = evaluateScoreRuleTree(
+      node.children[0],
+      runRowIndex,
+      gtRowIndex,
+      resultsByIndex,
+      runWs,
+      outputFields,
+      gtContent,
+      embeddingMap,
+    );
     for (let i = 1; i < node.children.length; i++) {
-      const next = evaluateScoreTree(node.children[i], runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap);
+      const next = evaluateScoreRuleTree(
+        node.children[i],
+        runRowIndex,
+        gtRowIndex,
+        resultsByIndex,
+        runWs,
+        outputFields,
+        gtContent,
+        embeddingMap,
+      );
       r = ops[i - 1] === 'OR' ? r || next : r && next;
     }
     return r;
@@ -252,28 +237,134 @@ function evaluateScoreTree(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
   return false;
 }
 
-/**
- * Parse stored score mapping and return the **output** rule tree only (v2 bundle or legacy root).
- */
-function parseVerifyOutputRuleRoot(scoreMappingJson) {
-  const raw =
-    typeof scoreMappingJson === 'string'
-      ? JSON.parse(scoreMappingJson || '{}')
-      : scoreMappingJson && typeof scoreMappingJson === 'object'
-        ? scoreMappingJson
-        : {};
-  const { outputRoot } = parseScoreMappingBundle(raw);
-  return outputRoot && typeof outputRoot === 'object' ? outputRoot : emptyScoreRuleGroup();
+function treeMatchesPairFull(rootTree, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap) {
+  const leaves = flattenScoreRules(rootTree || emptyScoreRuleGroup());
+  if (leaves.length === 0) return true;
+  return evaluateScoreRuleTree(rootTree, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap);
+}
+
+/** True iff this run/GT pair satisfies both input and output rule trees (Score row `matched`). */
+function verifyPairIsFullScoreMatch(
+  inputRoot,
+  outputRoot,
+  runI,
+  gtJ,
+  resultsByIndex,
+  runWs,
+  outputFields,
+  gtContent,
+  embeddingMap,
+) {
+  if (runI < 0 || gtJ < 0) return false;
+  if (!treeMatchesPairFull(inputRoot, runI, gtJ, resultsByIndex, runWs, outputFields, gtContent, embeddingMap)) return false;
+  const outLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
+  if (outLeaves.length === 0) return true;
+  return treeMatchesPairFull(outputRoot, runI, gtJ, resultsByIndex, runWs, outputFields, gtContent, embeddingMap);
+}
+
+function parseScoreMappingRaw(scoreMappingJson) {
+  if (typeof scoreMappingJson === 'string') {
+    try {
+      return JSON.parse(scoreMappingJson || '{}');
+    } catch (_) {
+      return {};
+    }
+  }
+  return scoreMappingJson && typeof scoreMappingJson === 'object' ? scoreMappingJson : {};
+}
+
+/** v2 bundle: both rule trees, same as Score / Review comparison rows. */
+function parseVerifyScoreBundle(scoreMappingJson) {
+  const raw = parseScoreMappingRaw(scoreMappingJson);
+  const { inputRoot, outputRoot } = parseScoreMappingBundle(raw);
+  return {
+    inputRoot: inputRoot && typeof inputRoot === 'object' ? inputRoot : emptyScoreRuleGroup(),
+    outputRoot: outputRoot && typeof outputRoot === 'object' ? outputRoot : emptyScoreRuleGroup(),
+  };
+}
+
+/** Group `/api/run` merged results by prompt slot (0..numSlots-1), stable by global `row_index`. */
+function partitionFreshByPromptSlot(fresh, numSlots) {
+  const bySlot = Array.from({ length: Math.max(0, numSlots) }, () => []);
+  for (const row of fresh || []) {
+    if (!row) continue;
+    const j = row.input_row_index;
+    if (typeof j !== 'number' || Number.isNaN(j) || j < 0 || j >= numSlots) continue;
+    bySlot[j].push(row);
+  }
+  for (const arr of bySlot) {
+    arr.sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0));
+  }
+  return bySlot;
 }
 
 /**
- * True if mini-run output passes **Output→GT** rules for this run row vs paired GT row.
- * No output rules ⇒ pass (same vacuous convention as Score’s output tree).
+ * All saved run result rows for the same worksheet input as `runRows[slotJ]` (order = `row_index`).
+ * Fallback when `input_row_index` is missing: rows tied to this slot via expanded comparison rows only.
  */
-function verifyPassOutputRulesVsGt(outputRuleRoot, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap) {
-  const leaves = flattenScoreRules(outputRuleRoot);
-  if (leaves.length === 0) return true;
-  return evaluateScoreTree(outputRuleRoot, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap);
+function bandRunResultsForSlot(runResults, runRows, slotJ, expandedRows, expandedRowToRunIdx) {
+  const rep = runRows[slotJ];
+  const wsRep =
+    rep && typeof rep.input_row_index === 'number' && !Number.isNaN(rep.input_row_index) && rep.input_row_index >= 0
+      ? rep.input_row_index
+      : null;
+  let band = [];
+  if (wsRep != null) {
+    band = (runResults || []).filter(
+      (r) =>
+        r &&
+        typeof r.input_row_index === 'number' &&
+        !Number.isNaN(r.input_row_index) &&
+        r.input_row_index === wsRep,
+    );
+  } else {
+    const want = new Set();
+    expandedRows.forEach((er, i) => {
+      if (expandedRowToRunIdx[i] === slotJ && typeof er.row_index === 'number' && !Number.isNaN(er.row_index)) {
+        want.add(er.row_index);
+      }
+    });
+    band = (runResults || []).filter((r) => r && want.has(r.row_index));
+  }
+  band.sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0));
+  return band;
+}
+
+/**
+ * Map mini-run lines onto saved `row_index` values; clone full `runResults` with patched `output`.
+ */
+function buildPatchedRunResultsForVerify(
+  runResults,
+  runRows,
+  expandedRows,
+  expandedRowToRunIdx,
+  freshBySlot,
+) {
+  const patchOut = new Map();
+  const nSlots = runRows.length;
+  for (let j = 0; j < nSlots; j++) {
+    const chunk = freshBySlot[j] || [];
+    const band = bandRunResultsForSlot(runResults, runRows, j, expandedRows, expandedRowToRunIdx);
+    if (chunk.length !== band.length) {
+      const rep = runRows[j];
+      const inLab =
+        rep && typeof rep.input_row_index === 'number' && !Number.isNaN(rep.input_row_index)
+          ? `worksheet Input #${rep.input_row_index + 1}`
+          : `verify slot ${j + 1}`;
+      return {
+        error: `${inLab}: mini-run returned ${chunk.length} output line(s) but the saved run has ${band.length} line(s) for this input — cannot align rows.`,
+      };
+    }
+    for (let k = 0; k < band.length; k++) {
+      const out = chunk[k]?.output;
+      patchOut.set(band[k].row_index, out && typeof out === 'object' ? { ...out } : {});
+    }
+  }
+  const patched = (runResults || []).map((r) => {
+    if (!r || !patchOut.has(r.row_index)) return r;
+    return { ...r, output: patchOut.get(r.row_index), error: undefined };
+  });
+  return { patched };
 }
 
 export function substitutePromptPlaceholders(templateText, rowInput) {
@@ -286,6 +377,17 @@ export function substitutePromptPlaceholders(templateText, rowInput) {
     text = text.replace(new RegExp(`\\{${escapeRegex(name)}\\}`, 'g'), val);
   }
   return text;
+}
+
+function sectionsToVerifyTemplate(testSections) {
+  if (!Array.isArray(testSections)) return '';
+  return testSections
+    .map((s) => {
+      const name = (s.name || '').trim() || '(unnamed)';
+      const content = (s.content || '').trim() || '';
+      return `## ${name}\n\n${content}`;
+    })
+    .join('\n\n');
 }
 
 /** Stable key for matching comparison rows that share the same prompt placeholders (1 input → N outputs). */
@@ -322,6 +424,26 @@ function comparisonRowInputIdentityKey(r) {
   const ri = r.row_index;
   if (typeof ri === 'number' && !Number.isNaN(ri)) return `row:${ri}`;
   return null;
+}
+
+/**
+ * One `/api/run` prompt per distinct worksheet input; `expandedRowToRunIdx[i]` indexes into `fresh` for `expandedRows[i]`.
+ */
+function planVerifyMiniRuns(expandedRows) {
+  const keyToRunIdx = new Map();
+  const runRows = [];
+  const expandedRowToRunIdx = [];
+  for (const row of expandedRows) {
+    const k = comparisonRowInputIdentityKey(row) || `row:${row.row_index}`;
+    let idx = keyToRunIdx.get(k);
+    if (idx === undefined) {
+      idx = runRows.length;
+      keyToRunIdx.set(k, idx);
+      runRows.push(row);
+    }
+    expandedRowToRunIdx.push(idx);
+  }
+  return { runRows, expandedRowToRunIdx };
 }
 
 /** All runnable comparison rows whose identity matches any seed (same input → all output lines). */
@@ -470,8 +592,8 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
       const stPart = st != null ? ` (Score table #${st})` : '';
       return {
         error:
-          `Cannot verify target ${t}: comparison row_index ${t}${stPart} is ground-truth only (no model output). ` +
-          `Verify needs a runnable row with model output; none shares this row’s ground truth pairing, worksheet input_row_index, or row_input. ` +
+          `Cannot resolve target ${t}: comparison row_index ${t}${stPart} is ground-truth only (no model output). ` +
+          `Need a runnable row with model output; none shares this row’s ground truth pairing, worksheet input_row_index, or row_input. ` +
           `Often caused by unpaired ground-truth rows or one input → multiple outputs with mismatched indices.`,
       };
     }
@@ -484,7 +606,7 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
 
     return {
       error:
-        `Cannot verify target ${t}: no runnable row with row_index ${t} or input_row_index ${t}.`,
+        `Cannot resolve target ${t}: no runnable row with row_index ${t} or input_row_index ${t}.`,
     };
   }
 
@@ -573,170 +695,59 @@ async function pollRunUntilDone(apiBase, runId, signal) {
 }
 
 /**
- * @param {object} opts
- * @returns {Promise<{ ok: boolean, detail?: string }>}
+ * After `/api/run` poll: validate multi-line results per slot, patch into saved `runResults`, re-pair like Score.
+ * @returns {Promise<{ ok: true, runToGt: number[], patchedRunResults: unknown[], freshPerExpanded: unknown[], freshBySlot: unknown[][] } | { ok: false, detail: string, aborted?: boolean }>}
  */
-export async function runSuggestionRowTests(opts) {
-  const {
-    apiBase = 'http://localhost:8000',
-    credentialId,
-    testSections,
-    targetComparisonRowIndices,
-    comparisonRows,
-    runResults,
-    outputFields,
-    outputSchema,
-    scoreMappingJson,
-    runWs,
-    gtContent,
-    signal,
-    // false (default): only explicit targets; true: same-input closure (Finetune metrics).
-    expandInputClosure = false,
-  } = opts;
-
-  if (!credentialId || !outputSchema || !Array.isArray(outputSchema.fields) || outputSchema.fields.length === 0) {
-    return { ok: false, detail: 'Missing credential or output schema.' };
-  }
-
-  let verifyOutputRuleRoot;
-  try {
-    verifyOutputRuleRoot = parseVerifyOutputRuleRoot(scoreMappingJson);
-  } catch (_) {
-    return { ok: false, detail: 'Invalid score mapping.' };
-  }
-
-  const runWsSafe = runWs && typeof runWs === 'object' ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
-  const gtSafe = gtContent && typeof gtContent === 'object' ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
-
-  const templateText = Array.isArray(testSections)
-    ? testSections
-        .map((s) => {
-          const name = (s.name || '').trim() || '(unnamed)';
-          const content = (s.content || '').trim() || '';
-          return `## ${name}\n\n${content}`;
-        })
-        .join('\n\n')
-    : '';
-
-  const seenT = new Set();
-  const orderedTargets = [];
-  for (const x of targetComparisonRowIndices || []) {
-    const n = Number(x);
-    if (Number.isNaN(n) || n < 0) continue;
-    if (seenT.has(n)) continue;
-    seenT.add(n);
-    orderedTargets.push(n);
-  }
-  if (orderedTargets.length === 0) return { ok: false, detail: 'No target rows for verification.' };
-
-  const dbgPost = (verifyOutputs, outcomeOk, outcomeDetail) => {
-    postReviewVerifyDebugPrint(apiBase, {
-      comparison_rows: comparisonRows || [],
-      targets: orderedTargets,
-      run_results: runResults || [],
-      gt_content: gtSafe,
-      verify_outputs: verifyOutputs ?? null,
-      outcome_ok: outcomeOk,
-      outcome_detail: outcomeDetail ?? null,
-    });
-  };
-
-  const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets, {
-    expandInputClosure,
-  });
-  if (expanded.error) {
-    dbgPost(null, false, expanded.error);
-    return { ok: false, detail: expanded.error };
-  }
-  const expandedRows = expanded.rows;
-  if (!expandedRows.length) {
-    dbgPost(null, false, 'No runnable comparison rows to verify.');
-    return { ok: false, detail: 'No runnable comparison rows to verify.' };
-  }
-
-  const prompts = expandedRows.map((row) => substitutePromptPlaceholders(templateText, row.row_input || {}));
-
-  const base = String(apiBase).replace(/\/$/, '');
-  let runId;
-  try {
-    const inspectRunId = `verify_${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
-    const res = await fetch(`${base}/api/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal,
-      body: JSON.stringify({
-        credential_id: credentialId,
-        prompts,
-        output_schema: outputSchema,
-        run_node_id: null,
-        inspect_run_id: inspectRunId,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.status !== 202) {
-      const msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data) || res.statusText;
-      dbgPost(null, false, msg || 'Run request failed');
-      return { ok: false, detail: msg || 'Run request failed' };
-    }
-    runId = data.run_id;
-  } catch (e) {
-    if (e?.name === 'AbortError' || signal?.aborted) {
-      dbgPost(null, false, 'aborted');
-      return { ok: false, detail: 'aborted', aborted: true };
-    }
-    dbgPost(null, false, String(e.message || e));
-    return { ok: false, detail: String(e.message || e) };
-  }
-
-  const polled = await pollRunUntilDone(apiBase, runId, signal);
-  if (polled.aborted) {
-    dbgPost(null, false, 'aborted');
-    return { ok: false, detail: 'aborted', aborted: true };
-  }
-  if (!polled.ok) {
-    dbgPost(null, false, polled.error || 'Run did not complete.');
-    return { ok: false, detail: polled.error || 'Run did not complete.' };
-  }
-
-  let fresh = markEmptyOutputAsError(polled.results || []);
-  const freshDbg = () => fresh.map((row) => ({ output: row?.output, error: row?.error }));
-  for (let i = 0; i < expandedRows.length; i++) {
-    const r = fresh[i];
-    const compRow = expandedRows[i];
+async function verifyMiniRunWithGreedyPairing({
+  fresh,
+  runRows,
+  expandedRows,
+  expandedRowToRunIdx,
+  runResults,
+  runWsSafe,
+  gtSafe,
+  outputFields,
+  inputRoot,
+  outputRoot,
+  apiBase,
+  signal,
+}) {
+  const numSlots = runRows.length;
+  const freshBySlot = partitionFreshByPromptSlot(fresh, numSlots);
+  for (let j = 0; j < numSlots; j++) {
+    const chunk = freshBySlot[j] || [];
+    const compRow = runRows[j];
     const label =
       compRow && typeof compRow.row_index === 'number'
         ? `row_index ${compRow.row_index}` + (typeof compRow.input_row_index === 'number' ? ` (Input #${compRow.input_row_index + 1})` : '')
-        : String(i);
-    if (!r || r.error || !r.output) {
-      dbgPost(freshDbg(), false, `Model error on ${label}: ${r?.error || 'empty output'}`);
-      return { ok: false, detail: `Model error on ${label}: ${r?.error || 'empty output'}` };
+        : String(j);
+    if (chunk.length === 0) {
+      return { ok: false, detail: `Model returned no output lines for ${label}.` };
+    }
+    for (let k = 0; k < chunk.length; k++) {
+      const r = chunk[k];
+      if (!r || r.error || !r.output) {
+        return {
+          ok: false,
+          detail: `Model error on ${label} (line ${k + 1}/${chunk.length}): ${r?.error || 'empty output'}`,
+        };
+      }
     }
   }
 
-  const resultsByIndex = new Map();
-  (runResults || []).forEach((r) => {
-    if (r && typeof r.row_index === 'number') resultsByIndex.set(r.row_index, r);
-  });
-
-  const rowIndexToFreshOut = new Map();
-  expandedRows.forEach((compRow, i) => {
-    const out = fresh[i]?.output;
-    if (out && typeof out === 'object' && compRow && typeof compRow.row_index === 'number') {
-      rowIndexToFreshOut.set(compRow.row_index, out);
-    }
-  });
+  const patchRes = buildPatchedRunResultsForVerify(runResults, runRows, expandedRows, expandedRowToRunIdx, freshBySlot);
+  if (patchRes.error) {
+    return { ok: false, detail: patchRes.error };
+  }
+  const patchedRunResults = patchRes.patched;
 
   let embeddingMap = new Map();
   try {
-    const patchedForEmb = (runResults || []).map((r) => {
-      if (!r) return r;
-      const out = rowIndexToFreshOut.get(r.row_index);
-      if (out == null) return r;
-      return { ...r, output: typeof out === 'object' ? { ...out } : {}, error: undefined };
-    });
+    if (signal?.aborted) return { ok: false, detail: 'aborted', aborted: true };
+    const validForEmb = patchedRunResults.filter((r) => isValidRunOutputForScoreRow(r, outputFields || []));
     embeddingMap = await prefetchEmbeddingCosineMap(apiBase, {
-      root: verifyOutputRuleRoot,
-      results: patchedForEmb,
+      root: scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot),
+      results: validForEmb.length ? validForEmb : patchedRunResults,
       outputFields: outputFields || [],
       runWs: runWsSafe,
       gtContent: gtSafe,
@@ -747,48 +758,55 @@ export async function runSuggestionRowTests(opts) {
     embeddingMap = new Map();
   }
 
-  for (let i = 0; i < expandedRows.length; i++) {
-    const compRow = expandedRows[i];
-    const compIdx = compRow.row_index;
-    const gtJ = compRow.source_gt_row_index;
-    if (gtJ == null || gtJ === undefined || Number.isNaN(Number(gtJ)) || Number(gtJ) < 0) {
-      dbgPost(freshDbg(), false, `No paired ground truth for row_index ${compIdx}.`);
-      return { ok: false, detail: `No paired ground truth for row_index ${compIdx}.` };
-    }
-    const synOut = fresh[i].output && typeof fresh[i].output === 'object' ? { ...fresh[i].output } : {};
-    const baseRes = resultsByIndex.get(compIdx) || { row_index: compIdx, output: {} };
-    resultsByIndex.set(compIdx, {
-      ...baseRes,
-      row_index: compIdx,
-      output: synOut,
-      error: undefined,
-    });
-    const pass = verifyPassOutputRulesVsGt(
-      verifyOutputRuleRoot,
-      compIdx,
-      gtJ,
-      resultsByIndex,
-      runWsSafe,
-      outputFields || [],
-      gtSafe,
-      embeddingMap,
-    );
-    if (!pass) {
-      const inLabel =
-        typeof compRow.input_row_index === 'number' && !Number.isNaN(compRow.input_row_index)
-          ? `row_index ${compIdx}, worksheet Input #${compRow.input_row_index + 1}`
-          : `row_index ${compIdx}`;
-      dbgPost(freshDbg(), false, `Output→GT rules still fail for ${inLabel} (mini-run output).`);
-      return { ok: false, detail: `Output→GT rules still fail for ${inLabel} (mini-run output).` };
-    }
-  }
+  if (signal?.aborted) return { ok: false, detail: 'aborted', aborted: true };
 
-  dbgPost(freshDbg(), true, null);
-  return { ok: true };
+  const validDedupedResults = patchedRunResults.filter((r) => isValidRunOutputForScoreRow(r, outputFields || []));
+
+  const resultsByIndexForVerify = new Map();
+  patchedRunResults.forEach((res) => {
+    if (res && typeof res.row_index === 'number') resultsByIndexForVerify.set(res.row_index, res);
+  });
+
+  const ruleMatchesRowForPairing = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, ofs, gtContent) =>
+    ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, ofs, gtContent, embeddingMap);
+
+  const getRunValueForPairingBand = (rr, ok, rowIdx, ws, of) => {
+    if (ok === '#' || ok === '[#]') return toCompareStr(rowIdx);
+    return getRunValue(rr, ok, ws, of);
+  };
+
+  const { runToGt } = computeGreedyRunToGtPairing({
+    inputRoot,
+    outputRoot,
+    results: validDedupedResults,
+    runWs: runWsSafe,
+    gtContent: gtSafe,
+    outputFields: outputFields || [],
+    ruleMatchesRow: ruleMatchesRowForPairing,
+    getRunValue: getRunValueForPairingBand,
+  });
+
+  const freshPerExpanded = expandedRows.map((er, i) => {
+    const j = expandedRowToRunIdx[i];
+    const slot = freshBySlot[j] || [];
+    const band = bandRunResultsForSlot(runResults, runRows, j, expandedRows, expandedRowToRunIdx);
+    const pos = band.findIndex((b) => b && b.row_index === er.row_index);
+    return pos >= 0 && slot[pos] ? slot[pos] : null;
+  });
+
+  return {
+    ok: true,
+    runToGt,
+    patchedRunResults,
+    freshPerExpanded,
+    freshBySlot,
+    embeddingMap,
+    resultsByIndexForVerify,
+  };
 }
 
 /**
- * Same pipeline as {@link runSuggestionRowTests} but returns per-row pass rate (e.g. Finetune / metrics).
+ * Mini-run + greedy pairing: per-row pass rate for Finetune / metrics.
  * @returns {Promise<{ ok: boolean, passRate?: number, passed?: number, total?: number, allPass?: boolean, detail?: string }>}
  */
 export async function runSuggestionRowTestsMetrics(opts) {
@@ -811,9 +829,12 @@ export async function runSuggestionRowTestsMetrics(opts) {
     return { ok: false, detail: 'Missing credential or output schema.' };
   }
 
-  let verifyOutputRuleRoot;
+  let inputRoot;
+  let outputRoot;
   try {
-    verifyOutputRuleRoot = parseVerifyOutputRuleRoot(scoreMappingJson);
+    const bundle = parseVerifyScoreBundle(scoreMappingJson);
+    inputRoot = bundle.inputRoot;
+    outputRoot = bundle.outputRoot;
   } catch (_) {
     return { ok: false, detail: 'Invalid score mapping.' };
   }
@@ -821,15 +842,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
   const runWsSafe = runWs && typeof runWs === 'object' ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
   const gtSafe = gtContent && typeof gtContent === 'object' ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
 
-  const templateText = Array.isArray(testSections)
-    ? testSections
-        .map((s) => {
-          const name = (s.name || '').trim() || '(unnamed)';
-          const content = (s.content || '').trim() || '';
-          return `## ${name}\n\n${content}`;
-        })
-        .join('\n\n')
-    : '';
+  const templateText = sectionsToVerifyTemplate(testSections);
 
   const seenT = new Set();
   const orderedTargets = [];
@@ -840,39 +853,26 @@ export async function runSuggestionRowTestsMetrics(opts) {
     seenT.add(n);
     orderedTargets.push(n);
   }
-  if (orderedTargets.length === 0) return { ok: false, detail: 'No target rows for verification.' };
-
-  const dbgPost = (verifyOutputs, outcomeOk, outcomeDetail) => {
-    postReviewVerifyDebugPrint(apiBase, {
-      comparison_rows: comparisonRows || [],
-      targets: orderedTargets,
-      run_results: runResults || [],
-      gt_content: gtSafe,
-      verify_outputs: verifyOutputs ?? null,
-      outcome_ok: outcomeOk,
-      outcome_detail: outcomeDetail ?? null,
-    });
-  };
+  if (orderedTargets.length === 0) return { ok: false, detail: 'No target comparison rows for metrics.' };
 
   const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets, {
     expandInputClosure: true,
   });
   if (expanded.error) {
-    dbgPost(null, false, expanded.error);
     return { ok: false, detail: expanded.error };
   }
   const expandedRows = expanded.rows;
   if (!expandedRows.length) {
-    dbgPost(null, false, 'No runnable comparison rows to verify.');
-    return { ok: false, detail: 'No runnable comparison rows to verify.' };
+    return { ok: false, detail: 'No runnable comparison rows for metrics.' };
   }
 
-  const prompts = expandedRows.map((row) => substitutePromptPlaceholders(templateText, row.row_input || {}));
+  const { runRows, expandedRowToRunIdx } = planVerifyMiniRuns(expandedRows);
+  const prompts = runRows.map((row) => substitutePromptPlaceholders(templateText, row.row_input || {}));
 
   const base = String(apiBase).replace(/\/$/, '');
   let runId;
   try {
-    const inspectRunId = `verify_${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
+    const inspectRunId = `metrics_${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
     const res = await fetch(`${base}/api/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -888,125 +888,78 @@ export async function runSuggestionRowTestsMetrics(opts) {
     const data = await res.json().catch(() => ({}));
     if (res.status !== 202) {
       const msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data) || res.statusText;
-      dbgPost(null, false, msg || 'Run request failed');
       return { ok: false, detail: msg || 'Run request failed' };
     }
     runId = data.run_id;
   } catch (e) {
     if (signal?.aborted || e?.name === 'AbortError') {
-      dbgPost(null, false, 'aborted');
       return { ok: false, detail: 'aborted', aborted: true };
     }
-    dbgPost(null, false, String(e.message || e));
     return { ok: false, detail: String(e.message || e) };
   }
 
   const polled = await pollRunUntilDone(apiBase, runId, signal);
   if (polled.aborted) {
-    dbgPost(null, false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
   if (!polled.ok) {
-    dbgPost(null, false, polled.error || 'Run did not complete.');
     return { ok: false, detail: polled.error || 'Run did not complete.' };
   }
 
   if (signal?.aborted) {
     await requestRunCancel(apiBase, runId);
-    dbgPost(null, false, 'aborted');
     return { ok: false, detail: 'aborted', aborted: true };
   }
 
-  let fresh = markEmptyOutputAsError(polled.results || []);
-  const freshDbg = () => fresh.map((row) => ({ output: row?.output, error: row?.error }));
-  for (let i = 0; i < expandedRows.length; i++) {
-    const r = fresh[i];
-    const compRow = expandedRows[i];
-    const label =
-      compRow && typeof compRow.row_index === 'number'
-        ? `row_index ${compRow.row_index}` + (typeof compRow.input_row_index === 'number' ? ` (Input #${compRow.input_row_index + 1})` : '')
-        : String(i);
-    if (!r || r.error || !r.output) {
-      dbgPost(freshDbg(), false, `Model error on ${label}: ${r?.error || 'empty output'}`);
-      return { ok: false, detail: `Model error on ${label}: ${r?.error || 'empty output'}` };
-    }
-  }
+  const fresh = markEmptyOutputAsError(polled.results || []);
 
-  const resultsByIndex = new Map();
-  (runResults || []).forEach((r) => {
-    if (r && typeof r.row_index === 'number') resultsByIndex.set(r.row_index, r);
+  const paired = await verifyMiniRunWithGreedyPairing({
+    fresh,
+    runRows,
+    expandedRows,
+    expandedRowToRunIdx,
+    runResults,
+    runWsSafe,
+    gtSafe,
+    outputFields,
+    inputRoot,
+    outputRoot,
+    apiBase,
+    signal,
   });
 
-  const rowIndexToFreshOut = new Map();
-  expandedRows.forEach((compRow, i) => {
-    const out = fresh[i]?.output;
-    if (out && typeof out === 'object' && compRow && typeof compRow.row_index === 'number') {
-      rowIndexToFreshOut.set(compRow.row_index, out);
-    }
-  });
-
-  let embeddingMap = new Map();
-  try {
-    if (signal?.aborted) {
-      dbgPost(freshDbg(), false, 'aborted');
+  if (!paired.ok) {
+    if (paired.aborted) {
       return { ok: false, detail: 'aborted', aborted: true };
     }
-    const patchedForEmb = (runResults || []).map((r) => {
-      if (!r) return r;
-      const out = rowIndexToFreshOut.get(r.row_index);
-      if (out == null) return r;
-      return { ...r, output: typeof out === 'object' ? { ...out } : {}, error: undefined };
-    });
-    embeddingMap = await prefetchEmbeddingCosineMap(apiBase, {
-      root: verifyOutputRuleRoot,
-      results: patchedForEmb,
-      outputFields: outputFields || [],
-      runWs: runWsSafe,
-      gtContent: gtSafe,
-      getRunValue: (runResult, outputKey, _runRowIndex, ws, of) => getRunValue(runResult, outputKey, ws, of),
-      getGtValue,
-    });
-  } catch (_) {
-    embeddingMap = new Map();
+    return { ok: false, detail: paired.detail || 'Mini-run metrics pairing failed.' };
   }
 
-  if (signal?.aborted) {
-    dbgPost(freshDbg(), false, 'aborted');
-    return { ok: false, detail: 'aborted', aborted: true };
-  }
-
+  const { runToGt, embeddingMap, resultsByIndexForVerify } = paired;
   let passed = 0;
   const n = expandedRows.length;
   for (let i = 0; i < expandedRows.length; i++) {
     const compRow = expandedRows[i];
     const compIdx = compRow.row_index;
-    const gtJ = compRow.source_gt_row_index;
-    if (gtJ == null || gtJ === undefined || Number.isNaN(Number(gtJ)) || Number(gtJ) < 0) {
-      dbgPost(freshDbg(), false, `No paired ground truth for row_index ${compIdx}.`);
-      return { ok: false, detail: `No paired ground truth for row_index ${compIdx}.` };
+    const j = typeof compIdx === 'number' ? runToGt[compIdx] : -1;
+    if (j == null || j < 0) continue;
+    if (
+      verifyPairIsFullScoreMatch(
+        inputRoot,
+        outputRoot,
+        compIdx,
+        j,
+        resultsByIndexForVerify,
+        runWsSafe,
+        outputFields || [],
+        gtSafe,
+        embeddingMap,
+      )
+    ) {
+      passed += 1;
     }
-    const synOut = fresh[i].output && typeof fresh[i].output === 'object' ? { ...fresh[i].output } : {};
-    const baseRes = resultsByIndex.get(compIdx) || { row_index: compIdx, output: {} };
-    resultsByIndex.set(compIdx, {
-      ...baseRes,
-      row_index: compIdx,
-      output: synOut,
-      error: undefined,
-    });
-    const pass = verifyPassOutputRulesVsGt(
-      verifyOutputRuleRoot,
-      compIdx,
-      gtJ,
-      resultsByIndex,
-      runWsSafe,
-      outputFields || [],
-      gtSafe,
-      embeddingMap,
-    );
-    if (pass) passed += 1;
   }
 
   const allPass = passed === n;
-  dbgPost(freshDbg(), allPass, `metrics passed ${passed}/${n}`);
   return { ok: true, passRate: n ? passed / n : 0, passed, total: n, allPass };
 }

@@ -1,5 +1,5 @@
 /**
- * Finetune (Review suggestion): compositional (reason-guided segments + Thompson search); objective = Verify pass rate.
+ * Finetune (Review suggestion): compositional (reason-guided segments + Thompson search); objective = mini-run pass rate vs Score.
  * Abort via AbortController (Cancel button or window close → abortAllFinetuneJobs).
  */
 
@@ -111,7 +111,7 @@ function throwIfAborted(signal) {
 }
 
 /**
- * Compositional finetune: LLM splits improved sentence + per-segment paraphrases; factorized Thompson sampling over segment arms; same pass rate as Verify.
+ * Compositional finetune: LLM splits improved sentence + per-segment paraphrases; factorized Thompson sampling over segment arms; pass rate from mini-run + Score pairing.
  * @param {object} options
  * @param {string} options.improvementRationale — typically suggestion.reason
  * @returns {Promise<{ bestText: string, bestObservedRate: number, trialLog: object[], optimizer: string, segments?: string[], lattice?: string[][] }>}
@@ -158,7 +158,7 @@ export async function runSuggestionFinetuneCompositional(options) {
     }
     const expandedRows = expanded.rows;
     if (!expandedRows.length) {
-      throw new Error('No runnable comparison rows to verify.');
+      throw new Error('No runnable comparison rows for finetune metrics.');
     }
 
     const rationaleForLlm = augmentRationaleForSyntheticGtOnly(improvementRationale, expandedRows, gtContent);
