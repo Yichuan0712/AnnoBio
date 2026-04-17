@@ -5,7 +5,7 @@
  * pairing and rules as Score (`computeGreedyRunToGtPairing`).
  *
  * **Does not read or merge `run_results` from the original Run** — only comparison rows, GT, run worksheet, and schema
- * from the project. Used by Finetune metrics / Verify.
+ * from the project. Used by Finetune metrics and Run+Score row-check.
  */
 
 import { markEmptyOutputAsError } from './runResumeUtils.js';
@@ -247,7 +247,7 @@ function treeMatchesPairFull(rootTree, runRowIndex, gtRowIndex, resultsByIndex, 
 }
 
 /** True iff this run/GT pair satisfies both input and output rule trees (Score row `matched`). */
-function verifyPairIsFullScoreMatch(
+function pairIsFullScoreMatch(
   inputRoot,
   outputRoot,
   runI,
@@ -277,7 +277,7 @@ function parseScoreMappingRaw(scoreMappingJson) {
 }
 
 /** v2 bundle: both rule trees, same as Score / Review comparison rows. */
-function parseVerifyScoreBundle(scoreMappingJson) {
+function parseMiniRunScoreBundle(scoreMappingJson) {
   const raw = parseScoreMappingRaw(scoreMappingJson);
   const { inputRoot, outputRoot } = parseScoreMappingBundle(raw);
   return {
@@ -324,9 +324,9 @@ function partitionFreshByPromptSlot(fresh, runRows) {
 }
 
 /**
- * Sorted unique comparison `row_index` values for verify slot `slotJ` (1 prompt → N Score lines).
+ * Sorted unique comparison `row_index` values for prompt slot `slotJ` (1 prompt → N Score lines).
  */
-function comparisonRowIndicesForVerifySlot(expandedRows, expandedRowToRunIdx, slotJ) {
+function comparisonRowIndicesForPromptSlot(expandedRows, expandedRowToRunIdx, slotJ) {
   const set = new Set();
   for (let i = 0; i < expandedRows.length; i++) {
     if (expandedRowToRunIdx[i] !== slotJ) continue;
@@ -338,27 +338,27 @@ function comparisonRowIndicesForVerifySlot(expandedRows, expandedRowToRunIdx, sl
 }
 
 /**
- * Build the run-result list used for verify / Finetune metrics: **only** this mini-run’s outputs.
+ * Build the run-result list used for row-check / Finetune metrics: **only** this mini-run’s outputs.
  * For each worksheet input: map API lines to expanded comparison `row_index` in order (first line → first target, …).
  * If the model returns **more** lines than expanded targets, **every extra line is kept** with its API `row_index`
- * or a generated unique index so greedy GT pairing and Debug see all outputs. Fewer API lines than targets → empty output for missing targets.
+ * or a generated unique index so greedy GT pairing sees all outputs. Fewer API lines than targets → empty output for missing targets.
  */
-function buildFreshRunResultsForVerify(runRows, expandedRows, expandedRowToRunIdx, freshBySlot) {
+function buildFreshRunResultsForMiniRun(runRows, expandedRows, expandedRowToRunIdx, freshBySlot) {
   const miniRunResults = [];
   const globalUsedRowIdx = new Set();
   let maxRowIdx = -1;
   const nSlots = runRows.length;
   for (let j = 0; j < nSlots; j++) {
     const chunk = freshBySlot[j] || [];
-    const targets = comparisonRowIndicesForVerifySlot(expandedRows, expandedRowToRunIdx, j);
+    const targets = comparisonRowIndicesForPromptSlot(expandedRows, expandedRowToRunIdx, j);
     const rep = runRows[j];
     const inLab =
       rep && typeof rep.input_row_index === 'number' && !Number.isNaN(rep.input_row_index)
         ? `worksheet Input #${rep.input_row_index + 1}`
-        : `verify slot ${j + 1}`;
+        : `prompt slot ${j + 1}`;
 
     if (targets.length === 0) {
-      return { error: `${inLab}: no expanded comparison rows for this input (internal verify planning error).` };
+      return { error: `${inLab}: no expanded comparison rows for this input (internal mini-run planning error).` };
     }
 
     /* Worksheet input row (same as Score comparison row), not the API prompt-slot index. */
@@ -418,7 +418,7 @@ export function substitutePromptPlaceholders(templateText, rowInput) {
   return text;
 }
 
-function sectionsToVerifyTemplate(testSections) {
+function sectionsToPromptTemplate(testSections) {
   if (!Array.isArray(testSections)) return '';
   return testSections
     .map((s) => {
@@ -449,7 +449,7 @@ function runnableRowsWithInputIndex(rows, inputIdx) {
 }
 
 /**
- * Stable identity for input-closed Verify / Finetune checks (aligns with backend `_input_identity_key`).
+ * Stable identity for input-closed row-check / Finetune (aligns with backend `_input_identity_key`).
  * Runnable rows only; used to expand targets to every comparison row sharing the same worksheet input / placeholders.
  */
 function comparisonRowInputIdentityKey(r) {
@@ -468,7 +468,7 @@ function comparisonRowInputIdentityKey(r) {
 /**
  * One `/api/run` prompt per distinct worksheet input; `expandedRowToRunIdx[i]` indexes into `fresh` for `expandedRows[i]`.
  */
-function planVerifyMiniRuns(expandedRows) {
+function planMiniRunPromptSlots(expandedRows) {
   const keyToRunIdx = new Map();
   const runRows = [];
   const expandedRowToRunIdx = [];
@@ -548,7 +548,7 @@ function runnableRowsForGtOnlyTarget(allRows, gtOnlyRow, t) {
     pushUnique(allRows.filter((r) => r && !r.gt_only && r.matched === false));
   }
 
-  /* Last resort: any runnable row so Verify/Finetune can run (e.g. single-input workflow, inference lost input_row_index). */
+  /* Last resort: any runnable row so row-check / Finetune can run (e.g. single-input workflow, inference lost input_row_index). */
   if (out.length === 0) {
     pushUnique(allRows.filter((r) => r && !r.gt_only));
   }
@@ -564,14 +564,6 @@ function scoreTableNumberLabel(rows, comparisonRowIndex) {
   return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
-/** 0-based GT row on the saved comparison row (`source_gt_row_index`, set when Score rows are built). */
-function comparisonRowReferenceGtIndex(compRow) {
-  if (!compRow || typeof compRow !== 'object') return -1;
-  const j = compRow.source_gt_row_index;
-  if (typeof j === 'number' && !Number.isNaN(j) && j >= 0) return Math.floor(j);
-  return -1;
-}
-
 /** Greedy pairing result: run `row_index` → GT index (array is sized by Score pairing, not by expanded row count). */
 function lookupPairedGtIndex(runToGt, runI) {
   if (!Array.isArray(runToGt) || typeof runI !== 'number' || runI < 0 || runI >= runToGt.length) return -1;
@@ -580,26 +572,7 @@ function lookupPairedGtIndex(runToGt, runI) {
 }
 
 /**
- * GT表行（0-based，已排序）：**仅**由卡片目标 Score 行上的 `source_gt_row_index` 汇总，与 Review 调试表头
- * 「Ground truth表 #（卡片引用）」**同一集合**，一行不能少、不能靠配对子集替代。
- */
-function gtRowIndicesFromCardTargets(comparisonRows, targetComparisonRowIndices) {
-  const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
-  const seenT = new Set();
-  const idx0 = new Set();
-  for (const x of targetComparisonRowIndices || []) {
-    const n = Number(x);
-    if (Number.isNaN(n) || n < 0 || seenT.has(n)) continue;
-    seenT.add(n);
-    const row = rows.find((r) => Number(r?.row_index) === n) || null;
-    const j = comparisonRowReferenceGtIndex(row);
-    if (j >= 0) idx0.add(j);
-  }
-  return [...idx0].sort((a, b) => a - b);
-}
-
-/**
- * When every comparison row is gt_only (no paired model line), still allow Verify/Finetune: run inference from
+ * When every comparison row is gt_only (no paired model line), still allow row-check / Finetune: run inference from
  * row_input and score vs GT; baseline “had no extractable model output”.
  */
 function syntheticRunnableFromGtOnlyRow(gtOnlyRow) {
@@ -617,7 +590,7 @@ function syntheticRunnableFromGtOnlyRow(gtOnlyRow) {
  * Resolve each target t to seed runnable rows (same as before), then optionally **input-close**: include every runnable
  * comparison row that shares the same worksheet input (`input_row_index`) or the same `row_input` key (1 input → N outputs). If no row matches t as row_index, t is treated as input_row_index (worksheet 0-based).
  *
- * @param {{ expandInputClosure?: boolean }} [options] If `expandInputClosure === false`, only **seed** rows are returned (e.g. Review “Verify this card” must not re-run every line for the same input). Default `true` (Finetune metrics / legacy).
+ * @param {{ expandInputClosure?: boolean }} [options] If `expandInputClosure === false`, only **seed** rows are returned (narrow target set). Default `true` (Finetune metrics / row-check).
  */
 export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets, options = {}) {
   const expandInputClosure = options.expandInputClosure !== false;
@@ -771,7 +744,7 @@ async function pollRunUntilDone(apiBase, runId, signal) {
  * After `/api/run` poll: build run rows **only** from mini-run outputs, then greedy pairing vs GT and rule checks (same as Score).
  * @returns {Promise<{ ok: true, runToGt: number[], miniRunResults: unknown[], freshPerExpanded: unknown[], freshBySlot: unknown[][] } | { ok: false, detail: string, aborted?: boolean }>}
  */
-async function verifyMiniRunWithGreedyPairing({
+async function miniRunWithGreedyPairing({
   fresh,
   runRows,
   expandedRows,
@@ -787,7 +760,7 @@ async function verifyMiniRunWithGreedyPairing({
   const freshBySlot = partitionFreshByPromptSlot(fresh, runRows);
   for (let j = 0; j < runRows.length; j++) {
     const chunk = freshBySlot[j] || [];
-    const targets = comparisonRowIndicesForVerifySlot(expandedRows, expandedRowToRunIdx, j);
+    const targets = comparisonRowIndicesForPromptSlot(expandedRows, expandedRowToRunIdx, j);
     const compRow = runRows[j];
     const label =
       compRow && typeof compRow.row_index === 'number'
@@ -807,7 +780,7 @@ async function verifyMiniRunWithGreedyPairing({
     }
   }
 
-  const built = buildFreshRunResultsForVerify(runRows, expandedRows, expandedRowToRunIdx, freshBySlot);
+  const built = buildFreshRunResultsForMiniRun(runRows, expandedRows, expandedRowToRunIdx, freshBySlot);
   if (built.error) {
     return { ok: false, detail: built.error };
   }
@@ -834,9 +807,9 @@ async function verifyMiniRunWithGreedyPairing({
 
   const validDedupedResults = miniRunResults.filter((r) => isValidRunOutputForScoreRow(r, outputFields || []));
 
-  const resultsByIndexForVerify = new Map();
+  const resultsByRowIndex = new Map();
   miniRunResults.forEach((res) => {
-    if (res && typeof res.row_index === 'number') resultsByIndexForVerify.set(res.row_index, res);
+    if (res && typeof res.row_index === 'number') resultsByRowIndex.set(res.row_index, res);
   });
 
   const ruleMatchesRowForPairing = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, ofs, gtContent) =>
@@ -861,7 +834,7 @@ async function verifyMiniRunWithGreedyPairing({
   const freshPerExpanded = expandedRows.map((er, i) => {
     const j = expandedRowToRunIdx[i];
     const slot = freshBySlot[j] || [];
-    const targets = comparisonRowIndicesForVerifySlot(expandedRows, expandedRowToRunIdx, j);
+    const targets = comparisonRowIndicesForPromptSlot(expandedRows, expandedRowToRunIdx, j);
     const ri = er && typeof er.row_index === 'number' && !Number.isNaN(er.row_index) ? er.row_index : null;
     const pos = ri != null ? targets.indexOf(ri) : -1;
     if (pos < 0 || pos >= slot.length) return null;
@@ -875,61 +848,15 @@ async function verifyMiniRunWithGreedyPairing({
     freshPerExpanded,
     freshBySlot,
     embeddingMap,
-    resultsByIndexForVerify,
+    resultsByRowIndex,
   };
-}
-
-const VERIFY_MATCH_TYPE_LABELS = { exact: 'String match', numeric: 'Numeric equality' };
-
-function isModelFacingOutputKeyForVerify(key) {
-  const k = String(key || '').trim();
-  if (!k || k === '#' || k === '[#]') return false;
-  if (k.startsWith('[') && k.endsWith(']') && k.length >= 2) return false;
-  return true;
-}
-
-function formatScoreRuleSummaryLine(rule) {
-  if (!rule || rule.type !== 'rule') return '';
-  const outKey = String(rule.outputKey || '').trim();
-  const cols = (rule.gtColumns || []).map((c) => String(c).trim()).filter(Boolean);
-  const gtPart = cols.length ? cols.join(' | ') : '—';
-  const mt = migrateLegacyMatchType(rule.matchType);
-  let label = VERIFY_MATCH_TYPE_LABELS[mt] || rule.matchType || 'String match';
-  if (mt === 'exact') {
-    const fl = getMatchFlags(rule);
-    if (fl.embeddingSimilarity) {
-      label += ' · Semantic';
-    } else if (fl.semanticAlign) {
-      label += ' · Fuzzy text';
-    } else {
-      const normParts = [];
-      if (fl.contains) normParts.push('Contains');
-      if (fl.ignoreCase) normParts.push('Ignore case');
-      if (fl.ignoreSymbols) normParts.push('Ignore symbols');
-      if (fl.ignoreWhitespace) normParts.push('Ignore whitespace');
-      if (normParts.length) label += ` (${normParts.join(', ')})`;
-    }
-  } else if (mt === 'numeric') {
-    const fl = getMatchFlags(rule);
-    if (fl.numericMode === 'abs') label += ` (abs ε≤${fl.numericAbsEpsilon})`;
-    else if (fl.numericMode === 'rel') label += ` (rel≤${fl.numericRelEpsilon})`;
-    else if (fl.numericMode === 'decimals') label += ` (${fl.numericDecimalPlaces} dp)`;
-  }
-  return `${outKey} ← GT 列「${gtPart}」：${label}`;
-}
-
-function collectOutputRuleSummaryLines(outputRoot) {
-  const leaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
-  return leaves
-    .filter((r) => r && r.type === 'rule' && isModelFacingOutputKeyForVerify(r.outputKey))
-    .map((r) => formatScoreRuleSummaryLine(r));
 }
 
 /**
  * Shared: expand targets, POST /api/run, poll, greedy pairing vs GT.
  * @param {{ expandInputClosure?: boolean, inspectIdPrefix?: string }} opts
  */
-async function suggestionVerifyMiniRunPipeline(opts) {
+async function suggestionRowCheckMiniRunPipeline(opts) {
   const {
     apiBase = 'http://localhost:8000',
     credentialId,
@@ -943,7 +870,7 @@ async function suggestionVerifyMiniRunPipeline(opts) {
     gtContent,
     signal,
     expandInputClosure = true,
-    inspectIdPrefix = 'verify',
+    inspectIdPrefix = 'minirun',
   } = opts;
 
   if (!credentialId || !outputSchema || !Array.isArray(outputSchema.fields) || outputSchema.fields.length === 0) {
@@ -953,7 +880,7 @@ async function suggestionVerifyMiniRunPipeline(opts) {
   let inputRoot;
   let outputRoot;
   try {
-    const bundle = parseVerifyScoreBundle(scoreMappingJson);
+    const bundle = parseMiniRunScoreBundle(scoreMappingJson);
     inputRoot = bundle.inputRoot;
     outputRoot = bundle.outputRoot;
   } catch (_) {
@@ -963,7 +890,7 @@ async function suggestionVerifyMiniRunPipeline(opts) {
   const runWsSafe = runWs && typeof runWs === 'object' ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
   const gtSafe = gtContent && typeof gtContent === 'object' ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
 
-  const templateText = sectionsToVerifyTemplate(testSections);
+  const templateText = sectionsToPromptTemplate(testSections);
 
   const seenT = new Set();
   const orderedTargets = [];
@@ -987,7 +914,7 @@ async function suggestionVerifyMiniRunPipeline(opts) {
     return { ok: false, detail: 'No runnable comparison rows for metrics.' };
   }
 
-  const { runRows, expandedRowToRunIdx } = planVerifyMiniRuns(expandedRows);
+  const { runRows, expandedRowToRunIdx } = planMiniRunPromptSlots(expandedRows);
   const prompts = runRows.map((row) => substitutePromptPlaceholders(templateText, row.row_input || {}));
 
   const base = String(apiBase).replace(/\/$/, '');
@@ -1034,7 +961,7 @@ async function suggestionVerifyMiniRunPipeline(opts) {
 
   const fresh = markEmptyOutputAsError(polled.results || []);
 
-  const paired = await verifyMiniRunWithGreedyPairing({
+  const paired = await miniRunWithGreedyPairing({
     fresh,
     runRows,
     expandedRows,
@@ -1091,7 +1018,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
     signal,
   } = opts;
 
-  const pipe = await suggestionVerifyMiniRunPipeline({
+  const pipe = await suggestionRowCheckMiniRunPipeline({
     apiBase,
     credentialId,
     testSections,
@@ -1112,7 +1039,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
   }
 
   const { runWsSafe, gtSafe, inputRoot, outputRoot, outputFields: ofs, paired } = pipe;
-  const { runToGt, embeddingMap, resultsByIndexForVerify, miniRunResults } = paired;
+  const { runToGt, embeddingMap, resultsByRowIndex, miniRunResults } = paired;
 
   const rowIndices = [
     ...new Set(
@@ -1128,12 +1055,12 @@ export async function runSuggestionRowTestsMetrics(opts) {
     const j = lookupPairedGtIndex(runToGt, compIdx);
     if (j < 0) continue;
     if (
-      verifyPairIsFullScoreMatch(
+      pairIsFullScoreMatch(
         inputRoot,
         outputRoot,
         compIdx,
         j,
-        resultsByIndexForVerify,
+        resultsByRowIndex,
         runWsSafe,
         ofs,
         gtSafe,
@@ -1146,216 +1073,4 @@ export async function runSuggestionRowTestsMetrics(opts) {
 
   const allPass = n > 0 && passed === n;
   return { ok: true, passRate: n ? passed / n : 0, passed, total: n, allPass };
-}
-
-/**
- * Full verify for Review Debug UI: same mini-run as metrics, returns Output→GT rules, GT rows, and per-line model output + rule checks.
- * Prompt = `testSections` (caller builds: original + **only** current card applied).
- * @param {{ expandInputClosure?: boolean }} [opts]
- */
-export async function runSuggestionVerifyDebug(opts) {
-  const {
-    apiBase = 'http://localhost:8000',
-    credentialId,
-    testSections,
-    targetComparisonRowIndices,
-    comparisonRows,
-    outputFields,
-    outputSchema,
-    scoreMappingJson,
-    runWs,
-    gtContent,
-    signal,
-    expandInputClosure = true,
-  } = opts;
-
-  const pipe = await suggestionVerifyMiniRunPipeline({
-    apiBase,
-    credentialId,
-    testSections,
-    targetComparisonRowIndices,
-    comparisonRows,
-    outputFields,
-    outputSchema,
-    scoreMappingJson,
-    runWs,
-    gtContent,
-    signal,
-    expandInputClosure,
-    inspectIdPrefix: 'verify_debug',
-  });
-
-  if (!pipe.ok) {
-    return { ok: false, detail: pipe.detail, aborted: pipe.aborted };
-  }
-
-  const {
-    expandedRows,
-    runWsSafe,
-    gtSafe,
-    inputRoot,
-    outputRoot,
-    comparisonRows: compRowsAll,
-    orderedTargets,
-    prompts,
-    outputFields: ofs,
-    paired,
-  } = pipe;
-
-  const { runToGt, embeddingMap, resultsByIndexForVerify, freshPerExpanded, miniRunResults } = paired;
-
-  const outputRuleSummaries = collectOutputRuleSummaryLines(outputRoot);
-
-  const gtOrder = gtRowIndicesFromCardTargets(compRowsAll, orderedTargets);
-  const gtHeaders = gtSafe.headers || [];
-  const gtTableRows = gtOrder.map((j) => (gtSafe.rows && gtSafe.rows[j] ? gtSafe.rows[j] : []));
-
-  const expandedResults = [];
-  for (let i = 0; i < expandedRows.length; i++) {
-    const compRow = expandedRows[i];
-    const runI = compRow.row_index;
-    const fr = freshPerExpanded[i];
-    const res = typeof runI === 'number' ? resultsByIndexForVerify.get(runI) : null;
-    const pairedGtJ = lookupPairedGtIndex(runToGt, typeof runI === 'number' ? runI : -1);
-    const refGtJ = comparisonRowReferenceGtIndex(compRow);
-    const evalGtJ = pairedGtJ >= 0 ? pairedGtJ : refGtJ;
-
-    const st = scoreTableNumberLabel(compRowsAll, runI);
-    const scoreLabel = st != null ? `#${st}` : `(row_index ${runI})`;
-    const inputLabel =
-      typeof compRow.input_row_index === 'number' && !Number.isNaN(compRow.input_row_index) && compRow.input_row_index >= 0
-        ? `#${compRow.input_row_index + 1}`
-        : '—';
-    let gtLabel = '—';
-    if (pairedGtJ >= 0) gtLabel = `#${pairedGtJ + 1}（配对）`;
-    else if (refGtJ >= 0) gtLabel = `#${refGtJ + 1}（Score 行引用）`;
-
-    const outLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup()).filter(
-      (r) => r && r.type === 'rule' && isModelFacingOutputKeyForVerify(r.outputKey),
-    );
-    const outputRules = outLeaves.map((rule) => ({
-      outputKey: String(rule.outputKey || ''),
-      summary: formatScoreRuleSummaryLine(rule),
-      runValue: res ? getRunValue(res, rule.outputKey, runWsSafe, ofs) : '',
-      gtValues: evalGtJ >= 0 ? (rule.gtColumns || []).map((col) => getGtValue(gtSafe, evalGtJ, col)) : [],
-      pass:
-        evalGtJ >= 0 &&
-        ruleMatchesRow(rule, runI, evalGtJ, resultsByIndexForVerify, runWsSafe, ofs, gtSafe, embeddingMap),
-    }));
-
-    const inputTreePass =
-      evalGtJ >= 0 &&
-      treeMatchesPairFull(inputRoot, runI, evalGtJ, resultsByIndexForVerify, runWsSafe, ofs, gtSafe, embeddingMap);
-    const outputTreePass =
-      outLeaves.length === 0 ||
-      (evalGtJ >= 0 &&
-        treeMatchesPairFull(outputRoot, runI, evalGtJ, resultsByIndexForVerify, runWsSafe, ofs, gtSafe, embeddingMap));
-    const fullMatch =
-      pairedGtJ >= 0 &&
-      verifyPairIsFullScoreMatch(
-        inputRoot,
-        outputRoot,
-        runI,
-        pairedGtJ,
-        resultsByIndexForVerify,
-        runWsSafe,
-        ofs,
-        gtSafe,
-        embeddingMap,
-      );
-
-    expandedResults.push({
-      scoreLabel,
-      inputLabel,
-      gtLabel,
-      runRowIndex: runI,
-      gtRowIndex: evalGtJ,
-      freshOutput: fr && fr.output && typeof fr.output === 'object' ? fr.output : null,
-      modelError: fr && fr.error ? String(fr.error) : null,
-      inputTreePass,
-      outputTreePass,
-      fullMatch,
-      outputRules,
-    });
-  }
-
-  const fromExpandedRunIdx = new Set(
-    expandedRows
-      .map((er) => (er && typeof er.row_index === 'number' && !Number.isNaN(er.row_index) ? er.row_index : null))
-      .filter((x) => x != null),
-  );
-
-  for (const pr of miniRunResults || []) {
-    if (!pr || typeof pr.row_index !== 'number' || Number.isNaN(pr.row_index)) continue;
-    if (fromExpandedRunIdx.has(pr.row_index)) continue;
-
-    const runI = pr.row_index;
-    const res = resultsByIndexForVerify.get(runI);
-    const pairedGtJ = lookupPairedGtIndex(runToGt, runI);
-    const evalGtJ = pairedGtJ >= 0 ? pairedGtJ : -1;
-
-    const scoreLabel = `(row_index ${runI}) · 额外 mini-run 行`;
-    const inputLabel =
-      typeof pr.input_row_index === 'number' && !Number.isNaN(pr.input_row_index) && pr.input_row_index >= 0
-        ? `#${pr.input_row_index + 1}`
-        : '—';
-    let gtLabel = '—';
-    if (pairedGtJ >= 0) gtLabel = `#${pairedGtJ + 1}（配对）`;
-
-    const outLeavesExtra = flattenScoreRules(outputRoot || emptyScoreRuleGroup()).filter(
-      (r) => r && r.type === 'rule' && isModelFacingOutputKeyForVerify(r.outputKey),
-    );
-    const outputRules = outLeavesExtra.map((rule) => ({
-      outputKey: String(rule.outputKey || ''),
-      summary: formatScoreRuleSummaryLine(rule),
-      runValue: res ? getRunValue(res, rule.outputKey, runWsSafe, ofs) : '',
-      gtValues: evalGtJ >= 0 ? (rule.gtColumns || []).map((col) => getGtValue(gtSafe, evalGtJ, col)) : [],
-      pass:
-        evalGtJ >= 0 &&
-        ruleMatchesRow(rule, runI, evalGtJ, resultsByIndexForVerify, runWsSafe, ofs, gtSafe, embeddingMap),
-    }));
-
-    const inputTreePass =
-      evalGtJ >= 0 &&
-      treeMatchesPairFull(inputRoot, runI, evalGtJ, resultsByIndexForVerify, runWsSafe, ofs, gtSafe, embeddingMap);
-    const outputTreePass =
-      outLeavesExtra.length === 0 ||
-      (evalGtJ >= 0 &&
-        treeMatchesPairFull(outputRoot, runI, evalGtJ, resultsByIndexForVerify, runWsSafe, ofs, gtSafe, embeddingMap));
-    const fullMatch =
-      pairedGtJ >= 0 &&
-      verifyPairIsFullScoreMatch(
-        inputRoot,
-        outputRoot,
-        runI,
-        pairedGtJ,
-        resultsByIndexForVerify,
-        runWsSafe,
-        ofs,
-        gtSafe,
-        embeddingMap,
-      );
-
-    expandedResults.push({
-      scoreLabel,
-      inputLabel,
-      gtLabel,
-      runRowIndex: runI,
-      gtRowIndex: evalGtJ,
-      freshOutput: pr && pr.output && typeof pr.output === 'object' ? pr.output : null,
-      modelError: null,
-      inputTreePass,
-      outputTreePass,
-      fullMatch,
-      outputRules,
-    });
-  }
-
-  return {
-    ok: true,
-    outputRuleSummaries,
-    gtTable: { headers: gtHeaders, rowIndicesOneBased: gtOrder.map((j) => j + 1), rows: gtTableRows },
-    expandedResults,
-    promptsSent: prompts.slice(),
-  };
 }

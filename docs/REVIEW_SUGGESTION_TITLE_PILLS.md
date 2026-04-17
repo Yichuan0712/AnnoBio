@@ -11,7 +11,7 @@
 | 显示文案 | CSS 类（另加 `.review-suggestion-title-pill`） | 文字色（CSS 变量 → 默认回退） | 背景 |
 |--------|-----------------------------------------------|--------------------------------|------|
 | **Proposal** | `.review-suggestion-proposal-tag-pill` | `--review-proposal-tag-text` → `#1d4ed8` | `color-mix` 约 20% 提案蓝 + 透明 |
-| **Verified** | `.review-suggestion-verified-pill` | `--diff-added-text` → `#15803d` | `--diff-added-bg` → `rgba(22, 163, 74, 0.22)` |
+| **Row check passed** | `.review-suggestion-rowcheck-pass-pill` | `--diff-added-text` → `#15803d` | `--diff-added-bg` → `rgba(22, 163, 74, 0.22)` |
 | **Verifying** | `.review-suggestion-verifying-pill` | `--text-muted` → `#64748b` | `color-mix` 约 14% muted + 透明 |
 | **Finetuning** | `.review-suggestion-tuning-pill` | 同 Verifying | 同 Verifying |
 | **Finetuned**（未定 pass/fail） | `.review-suggestion-finetuned-pill` | 同 Verifying | 同 Verifying |
