@@ -525,6 +525,40 @@ function scoreTableNumberLabel(rows, comparisonRowIndex) {
   return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
+/** 0-based GT row on the saved comparison row (`source_gt_row_index`, set when Score rows are built). */
+function comparisonRowReferenceGtIndex(compRow) {
+  if (!compRow || typeof compRow !== 'object') return -1;
+  const j = compRow.source_gt_row_index;
+  if (typeof j === 'number' && !Number.isNaN(j) && j >= 0) return Math.floor(j);
+  return -1;
+}
+
+/** Greedy pairing result: run `row_index` → GT index (array is sized by Score pairing, not by expanded row count). */
+function lookupPairedGtIndex(runToGt, runI) {
+  if (!Array.isArray(runToGt) || typeof runI !== 'number' || runI < 0 || runI >= runToGt.length) return -1;
+  const j = runToGt[runI];
+  return typeof j === 'number' && j >= 0 ? j : -1;
+}
+
+/**
+ * GT表行（0-based，已排序）：**仅**由卡片目标 Score 行上的 `source_gt_row_index` 汇总，与 Review 调试表头
+ * 「Ground truth表 #（卡片引用）」**同一集合**，一行不能少、不能靠配对子集替代。
+ */
+function gtRowIndicesFromCardTargets(comparisonRows, targetComparisonRowIndices) {
+  const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
+  const seenT = new Set();
+  const idx0 = new Set();
+  for (const x of targetComparisonRowIndices || []) {
+    const n = Number(x);
+    if (Number.isNaN(n) || n < 0 || seenT.has(n)) continue;
+    seenT.add(n);
+    const row = rows.find((r) => Number(r?.row_index) === n) || null;
+    const j = comparisonRowReferenceGtIndex(row);
+    if (j >= 0) idx0.add(j);
+  }
+  return [...idx0].sort((a, b) => a - b);
+}
+
 /**
  * When every comparison row is gt_only (no paired model line), still allow Verify/Finetune: run inference from
  * row_input and score vs GT; baseline “had no extractable model output”.
@@ -805,11 +839,57 @@ async function verifyMiniRunWithGreedyPairing({
   };
 }
 
+const VERIFY_MATCH_TYPE_LABELS = { exact: 'String match', numeric: 'Numeric equality' };
+
+function isModelFacingOutputKeyForVerify(key) {
+  const k = String(key || '').trim();
+  if (!k || k === '#' || k === '[#]') return false;
+  if (k.startsWith('[') && k.endsWith(']') && k.length >= 2) return false;
+  return true;
+}
+
+function formatScoreRuleSummaryLine(rule) {
+  if (!rule || rule.type !== 'rule') return '';
+  const outKey = String(rule.outputKey || '').trim();
+  const cols = (rule.gtColumns || []).map((c) => String(c).trim()).filter(Boolean);
+  const gtPart = cols.length ? cols.join(' | ') : '—';
+  const mt = migrateLegacyMatchType(rule.matchType);
+  let label = VERIFY_MATCH_TYPE_LABELS[mt] || rule.matchType || 'String match';
+  if (mt === 'exact') {
+    const fl = getMatchFlags(rule);
+    if (fl.embeddingSimilarity) {
+      label += ' · Semantic';
+    } else if (fl.semanticAlign) {
+      label += ' · Fuzzy text';
+    } else {
+      const normParts = [];
+      if (fl.contains) normParts.push('Contains');
+      if (fl.ignoreCase) normParts.push('Ignore case');
+      if (fl.ignoreSymbols) normParts.push('Ignore symbols');
+      if (fl.ignoreWhitespace) normParts.push('Ignore whitespace');
+      if (normParts.length) label += ` (${normParts.join(', ')})`;
+    }
+  } else if (mt === 'numeric') {
+    const fl = getMatchFlags(rule);
+    if (fl.numericMode === 'abs') label += ` (abs ε≤${fl.numericAbsEpsilon})`;
+    else if (fl.numericMode === 'rel') label += ` (rel≤${fl.numericRelEpsilon})`;
+    else if (fl.numericMode === 'decimals') label += ` (${fl.numericDecimalPlaces} dp)`;
+  }
+  return `${outKey} ← GT 列「${gtPart}」：${label}`;
+}
+
+function collectOutputRuleSummaryLines(outputRoot) {
+  const leaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
+  return leaves
+    .filter((r) => r && r.type === 'rule' && isModelFacingOutputKeyForVerify(r.outputKey))
+    .map((r) => formatScoreRuleSummaryLine(r));
+}
+
 /**
- * Mini-run + greedy pairing: per-row pass rate for Finetune / metrics.
- * @returns {Promise<{ ok: boolean, passRate?: number, passed?: number, total?: number, allPass?: boolean, detail?: string }>}
+ * Shared: expand targets, POST /api/run, poll, greedy pairing vs GT.
+ * @param {{ expandInputClosure?: boolean, inspectIdPrefix?: string }} opts
  */
-export async function runSuggestionRowTestsMetrics(opts) {
+async function suggestionVerifyMiniRunPipeline(opts) {
   const {
     apiBase = 'http://localhost:8000',
     credentialId,
@@ -823,6 +903,8 @@ export async function runSuggestionRowTestsMetrics(opts) {
     runWs,
     gtContent,
     signal,
+    expandInputClosure = true,
+    inspectIdPrefix = 'verify',
   } = opts;
 
   if (!credentialId || !outputSchema || !Array.isArray(outputSchema.fields) || outputSchema.fields.length === 0) {
@@ -856,7 +938,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
   if (orderedTargets.length === 0) return { ok: false, detail: 'No target comparison rows for metrics.' };
 
   const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets, {
-    expandInputClosure: true,
+    expandInputClosure,
   });
   if (expanded.error) {
     return { ok: false, detail: expanded.error };
@@ -872,7 +954,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
   const base = String(apiBase).replace(/\/$/, '');
   let runId;
   try {
-    const inspectRunId = `metrics_${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
+    const inspectRunId = `${inspectIdPrefix}_${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
     const res = await fetch(`${base}/api/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -935,14 +1017,74 @@ export async function runSuggestionRowTestsMetrics(opts) {
     return { ok: false, detail: paired.detail || 'Mini-run metrics pairing failed.' };
   }
 
+  return {
+    ok: true,
+    expandedRows,
+    runRows,
+    expandedRowToRunIdx,
+    runWsSafe,
+    gtSafe,
+    inputRoot,
+    outputRoot,
+    comparisonRows: Array.isArray(comparisonRows) ? comparisonRows : [],
+    orderedTargets,
+    prompts,
+    outputFields: outputFields || [],
+    paired,
+  };
+}
+
+/**
+ * Mini-run + greedy pairing: per-row pass rate for Finetune / metrics.
+ * @returns {Promise<{ ok: boolean, passRate?: number, passed?: number, total?: number, allPass?: boolean, detail?: string }>}
+ */
+export async function runSuggestionRowTestsMetrics(opts) {
+  const {
+    apiBase = 'http://localhost:8000',
+    credentialId,
+    testSections,
+    targetComparisonRowIndices,
+    comparisonRows,
+    runResults,
+    outputFields,
+    outputSchema,
+    scoreMappingJson,
+    runWs,
+    gtContent,
+    signal,
+  } = opts;
+
+  const pipe = await suggestionVerifyMiniRunPipeline({
+    apiBase,
+    credentialId,
+    testSections,
+    targetComparisonRowIndices,
+    comparisonRows,
+    runResults,
+    outputFields,
+    outputSchema,
+    scoreMappingJson,
+    runWs,
+    gtContent,
+    signal,
+    expandInputClosure: true,
+    inspectIdPrefix: 'metrics',
+  });
+
+  if (!pipe.ok) {
+    return { ok: false, detail: pipe.detail, aborted: pipe.aborted };
+  }
+
+  const { expandedRows, runWsSafe, gtSafe, inputRoot, outputRoot, outputFields: ofs, paired } = pipe;
   const { runToGt, embeddingMap, resultsByIndexForVerify } = paired;
+
   let passed = 0;
   const n = expandedRows.length;
   for (let i = 0; i < expandedRows.length; i++) {
     const compRow = expandedRows[i];
     const compIdx = compRow.row_index;
-    const j = typeof compIdx === 'number' ? runToGt[compIdx] : -1;
-    if (j == null || j < 0) continue;
+    const j = lookupPairedGtIndex(runToGt, typeof compIdx === 'number' ? compIdx : -1);
+    if (j < 0) continue;
     if (
       verifyPairIsFullScoreMatch(
         inputRoot,
@@ -951,7 +1093,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
         j,
         resultsByIndexForVerify,
         runWsSafe,
-        outputFields || [],
+        ofs,
         gtSafe,
         embeddingMap,
       )
@@ -962,4 +1104,146 @@ export async function runSuggestionRowTestsMetrics(opts) {
 
   const allPass = passed === n;
   return { ok: true, passRate: n ? passed / n : 0, passed, total: n, allPass };
+}
+
+/**
+ * Full verify for Review Debug UI: same mini-run as metrics, returns Output→GT rules, GT rows, and per-line model output + rule checks.
+ * Prompt = `testSections` (caller builds: original + **only** current card applied).
+ * @param {{ expandInputClosure?: boolean }} [opts]
+ */
+export async function runSuggestionVerifyDebug(opts) {
+  const {
+    apiBase = 'http://localhost:8000',
+    credentialId,
+    testSections,
+    targetComparisonRowIndices,
+    comparisonRows,
+    runResults,
+    outputFields,
+    outputSchema,
+    scoreMappingJson,
+    runWs,
+    gtContent,
+    signal,
+    expandInputClosure = true,
+  } = opts;
+
+  const pipe = await suggestionVerifyMiniRunPipeline({
+    apiBase,
+    credentialId,
+    testSections,
+    targetComparisonRowIndices,
+    comparisonRows,
+    runResults,
+    outputFields,
+    outputSchema,
+    scoreMappingJson,
+    runWs,
+    gtContent,
+    signal,
+    expandInputClosure,
+    inspectIdPrefix: 'verify_debug',
+  });
+
+  if (!pipe.ok) {
+    return { ok: false, detail: pipe.detail, aborted: pipe.aborted };
+  }
+
+  const {
+    expandedRows,
+    runWsSafe,
+    gtSafe,
+    inputRoot,
+    outputRoot,
+    comparisonRows: compRowsAll,
+    orderedTargets,
+    prompts,
+    outputFields: ofs,
+    paired,
+  } = pipe;
+
+  const { runToGt, embeddingMap, resultsByIndexForVerify, freshPerExpanded } = paired;
+
+  const outputRuleSummaries = collectOutputRuleSummaryLines(outputRoot);
+
+  const gtOrder = gtRowIndicesFromCardTargets(compRowsAll, orderedTargets);
+  const gtHeaders = gtSafe.headers || [];
+  const gtTableRows = gtOrder.map((j) => (gtSafe.rows && gtSafe.rows[j] ? gtSafe.rows[j] : []));
+
+  const expandedResults = [];
+  for (let i = 0; i < expandedRows.length; i++) {
+    const compRow = expandedRows[i];
+    const runI = compRow.row_index;
+    const fr = freshPerExpanded[i];
+    const res = typeof runI === 'number' ? resultsByIndexForVerify.get(runI) : null;
+    const pairedGtJ = lookupPairedGtIndex(runToGt, typeof runI === 'number' ? runI : -1);
+    const refGtJ = comparisonRowReferenceGtIndex(compRow);
+    const evalGtJ = pairedGtJ >= 0 ? pairedGtJ : refGtJ;
+
+    const st = scoreTableNumberLabel(compRowsAll, runI);
+    const scoreLabel = st != null ? `#${st}` : `(row_index ${runI})`;
+    const inputLabel =
+      typeof compRow.input_row_index === 'number' && !Number.isNaN(compRow.input_row_index) && compRow.input_row_index >= 0
+        ? `#${compRow.input_row_index + 1}`
+        : '—';
+    let gtLabel = '—';
+    if (pairedGtJ >= 0) gtLabel = `#${pairedGtJ + 1}（配对）`;
+    else if (refGtJ >= 0) gtLabel = `#${refGtJ + 1}（Score 行引用）`;
+
+    const outLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup()).filter(
+      (r) => r && r.type === 'rule' && isModelFacingOutputKeyForVerify(r.outputKey),
+    );
+    const outputRules = outLeaves.map((rule) => ({
+      outputKey: String(rule.outputKey || ''),
+      summary: formatScoreRuleSummaryLine(rule),
+      runValue: res ? getRunValue(res, rule.outputKey, runWsSafe, ofs) : '',
+      gtValues: evalGtJ >= 0 ? (rule.gtColumns || []).map((col) => getGtValue(gtSafe, evalGtJ, col)) : [],
+      pass:
+        evalGtJ >= 0 &&
+        ruleMatchesRow(rule, runI, evalGtJ, resultsByIndexForVerify, runWsSafe, ofs, gtSafe, embeddingMap),
+    }));
+
+    const inputTreePass =
+      evalGtJ >= 0 &&
+      treeMatchesPairFull(inputRoot, runI, evalGtJ, resultsByIndexForVerify, runWsSafe, ofs, gtSafe, embeddingMap);
+    const outputTreePass =
+      outLeaves.length === 0 ||
+      (evalGtJ >= 0 &&
+        treeMatchesPairFull(outputRoot, runI, evalGtJ, resultsByIndexForVerify, runWsSafe, ofs, gtSafe, embeddingMap));
+    const fullMatch =
+      pairedGtJ >= 0 &&
+      verifyPairIsFullScoreMatch(
+        inputRoot,
+        outputRoot,
+        runI,
+        pairedGtJ,
+        resultsByIndexForVerify,
+        runWsSafe,
+        ofs,
+        gtSafe,
+        embeddingMap,
+      );
+
+    expandedResults.push({
+      scoreLabel,
+      inputLabel,
+      gtLabel,
+      runRowIndex: runI,
+      gtRowIndex: evalGtJ,
+      freshOutput: fr && fr.output && typeof fr.output === 'object' ? fr.output : null,
+      modelError: fr && fr.error ? String(fr.error) : null,
+      inputTreePass,
+      outputTreePass,
+      fullMatch,
+      outputRules,
+    });
+  }
+
+  return {
+    ok: true,
+    outputRuleSummaries,
+    gtTable: { headers: gtHeaders, rowIndicesOneBased: gtOrder.map((j) => j + 1), rows: gtTableRows },
+    expandedResults,
+    promptsSent: prompts.slice(),
+  };
 }

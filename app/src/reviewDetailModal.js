@@ -6,7 +6,7 @@
 
 import { showConfirm, showAlert } from './alertModal.js';
 import { comparisonRowIsMatched } from './scoreDetailModal.js';
-import { runSuggestionRowTestsMetrics } from './reviewSuggestionTest.js';
+import { runSuggestionRowTestsMetrics, runSuggestionVerifyDebug } from './reviewSuggestionTest.js';
 import {
   runSuggestionFinetuneCompositional,
   abortAllFinetuneJobs,
@@ -547,17 +547,10 @@ function pseudoSuggestionFromDataRefinementRowIndices(item) {
   return { target_score_row_indices: ri };
 }
 
-/**
- * Second-layer modal: per-target Score #, worksheet Input #, and GT sheet # for Verify chip.
- * @param {Record<string, unknown>} sug
- * @param {Array<Record<string, unknown>>} comparisonRows
- * @param {string} heading - card title line
- */
-function openSuggestionVerifyTargetsOverlay(sug, comparisonRows, heading) {
+/** Static mapping rows for verify debug header (targets from suggestion). */
+function buildVerifyTargetMappingHtml(sug, comparisonRows) {
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
   const targets = suggestionTargetScoreRowIndices(sug);
-  const mainHeading = ensureCardTitleSentenceLead(String(heading || '').trim() || 'Suggestion');
-
   const lines = [];
   const inputNums = new Set();
   const gtNums = new Set();
@@ -616,25 +609,128 @@ function openSuggestionVerifyTargetsOverlay(sug, comparisonRows, heading) {
           .join('')
       : `<tr><td colspan="3" class="review-verify-targets-empty">未记录目标 Score 行（无 target_score_row_indices / row_indices）</td></tr>`;
 
+  return {
+    scoreSummary,
+    inputSummary,
+    gtSummary,
+    tableBody,
+  };
+}
+
+function renderVerifyDebugResultHtml(res) {
+  const rulesUl =
+    res.outputRuleSummaries && res.outputRuleSummaries.length > 0
+      ? `<ul class="review-verify-debug-rule-list">${res.outputRuleSummaries.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+      : '<p class="review-diagnosis-detail-empty">（无 Output→GT 模型字段规则）</p>';
+
+  const gt = res.gtTable || { headers: [], rows: [], rowIndicesOneBased: [] };
+  const gh = Array.isArray(gt.headers) ? gt.headers : [];
+  const gri = Array.isArray(gt.rowIndicesOneBased) ? gt.rowIndicesOneBased : [];
+  const gr = Array.isArray(gt.rows) ? gt.rows : [];
+  const gtHeadHtml = `<tr><th scope="col">GT #</th>${gh.map((h) => `<th scope="col">${escapeHtml(String(h))}</th>`).join('')}</tr>`;
+  const gtBodyHtml =
+    gr.length > 0
+      ? gr
+          .map((cells, idx) => {
+            const num = gri[idx] != null ? String(gri[idx]) : String(idx + 1);
+            const tds = (Array.isArray(cells) ? cells : []).map((c) => `<td>${escapeHtml(c == null ? '' : String(c))}</td>`);
+            return `<tr><th scope="row">${escapeHtml(num)}</th>${tds.join('')}</tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="${Math.max(2, gh.length + 1)}" class="review-verify-targets-empty">无配对 GT 行</td></tr>`;
+
+  const rowBlocks = (res.expandedResults || []).map((row) => {
+    const rulesInner = (row.outputRules || [])
+      .map(
+        (r) =>
+          `<tr><td>${escapeHtml(r.outputKey)}</td><td>${escapeHtml(r.summary)}</td><td>${escapeHtml(
+            String(r.runValue ?? ''),
+          )}</td><td>${escapeHtml((r.gtValues || []).join(' | '))}</td><td>${r.pass ? '是' : '否'}</td></tr>`,
+      )
+      .join('');
+    const outJson = row.freshOutput ? JSON.stringify(row.freshOutput, null, 2) : '';
+    const errLine = row.modelError ? `<p class="review-verify-debug-model-error">${escapeHtml(row.modelError)}</p>` : '';
+    return `
+      <div class="review-verify-debug-row-block">
+        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Score / Input / GT：</span> ${escapeHtml(
+          row.scoreLabel,
+        )} &nbsp;·&nbsp; ${escapeHtml(row.inputLabel)} &nbsp;·&nbsp; ${escapeHtml(row.gtLabel)}</p>
+        <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Input 规则树：</span> ${row.inputTreePass ? '通过' : '未通过'} &nbsp; <span class="review-diagnosis-detail-lead">Output 规则树：</span> ${row.outputTreePass ? '通过' : '未通过'} &nbsp; <span class="review-diagnosis-detail-lead">整行 Score 匹配：</span> ${row.fullMatch ? '通过' : '未通过'}</p>
+        ${errLine}
+        <p class="review-diagnosis-detail-lead">本次验证模型输出（JSON）</p>
+        <pre class="review-verify-debug-json">${escapeHtml(outJson || '—')}</pre>
+        <div class="review-verify-targets-table-wrap">
+          <table class="review-verify-targets-table">
+            <thead><tr><th>字段</th><th>比较规则</th><th>模型值</th><th>GT</th><th>匹配</th></tr></thead>
+            <tbody>${rulesInner || `<tr><td colspan="5" class="review-verify-targets-empty">—</td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  });
+
+  const promptsSection =
+    res.promptsSent && res.promptsSent.length > 0
+      ? `<details class="review-verify-debug-prompts"><summary>发送的完整 prompt（按 worksheet 输入分组，${res.promptsSent.length} 条）</summary>${res.promptsSent
+          .map(
+            (p, i) =>
+              `<p class="review-diagnosis-detail-lead">Prompt ${i + 1}</p><pre class="review-verify-debug-json">${escapeHtml(
+                String(p || ''),
+              )}</pre>`,
+          )
+          .join('')}</details>`
+      : '';
+
+  return `
+    <section class="review-verify-debug-section">
+      <h3 class="review-verify-debug-h3">Output → Ground truth比较规则</h3>
+      ${rulesUl}
+    </section>
+    <section class="review-verify-debug-section">
+      <h3 class="review-verify-debug-h3">Ground truth 表（与上方「Ground truth表 #（卡片引用）」完全一致）</h3>
+      <div class="review-verify-targets-table-wrap">
+        <table class="review-verify-targets-table">
+          <thead>${gtHeadHtml}</thead>
+          <tbody>${gtBodyHtml}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="review-verify-debug-section">
+      <h3 class="review-verify-debug-h3">验证生成的输出与逐项比较</h3>
+      ${rowBlocks.join('') || '<p class="review-diagnosis-detail-empty">无行结果</p>'}
+    </section>
+    ${promptsSection}
+  `;
+}
+
+/**
+ * Verify debug: header mapping + async mini-run (original prompt + **only** this card) + GT / rules / outputs.
+ * @param {{ heading: string, sug: Record<string, unknown>, comparisonRows: unknown[], getPayload: () => Promise<unknown>, buildTestSections: () => Array<{name: string, content: string}> }} opts
+ */
+function openSuggestionVerifyDebugOverlay(opts) {
+  const { heading, sug, comparisonRows, getPayload, buildTestSections } = opts;
+  const mainHeading = ensureCardTitleSentenceLead(String(heading || '').trim() || 'Suggestion');
+  const mapHtml = buildVerifyTargetMappingHtml(sug, comparisonRows);
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay review-diagnosis-detail-overlay review-verify-targets-overlay';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'review-verify-targets-title');
   overlay.innerHTML = `
-    <div class="modal-panel modal-panel--review-diagnosis-detail">
+    <div class="modal-panel modal-panel--review-diagnosis-detail modal-panel--review-verify-debug">
       <div class="modal-header">
         <h2 id="review-verify-targets-title" class="modal-title">${escapeHtml(mainHeading)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
-      <div class="modal-body review-diagnosis-detail-body">
+      <div class="modal-body review-diagnosis-detail-body review-verify-debug-body">
         <p class="review-diagnosis-detail-prose review-verify-targets-summary">
-          <span class="review-diagnosis-detail-lead">Score 表目标：</span> ${escapeHtml(scoreSummary)}
+          <span class="review-diagnosis-detail-lead">Score 表目标：</span> ${escapeHtml(mapHtml.scoreSummary)}
         </p>
         <p class="review-diagnosis-detail-prose review-verify-targets-summary">
-          <span class="review-diagnosis-detail-lead">工作表 Input #：</span> ${escapeHtml(inputSummary)}
+          <span class="review-diagnosis-detail-lead">工作表 Input #：</span> ${escapeHtml(mapHtml.inputSummary)}
         </p>
         <p class="review-diagnosis-detail-prose review-verify-targets-summary">
-          <span class="review-diagnosis-detail-lead">Ground truth表 #：</span> ${escapeHtml(gtSummary)}
+          <span class="review-diagnosis-detail-lead">Ground truth表 #（卡片引用）：</span> ${escapeHtml(mapHtml.gtSummary)}
         </p>
         <div class="review-verify-targets-table-wrap">
           <table class="review-verify-targets-table">
@@ -645,18 +741,81 @@ function openSuggestionVerifyTargetsOverlay(sug, comparisonRows, heading) {
                 <th scope="col">GT #</th>
               </tr>
             </thead>
-            <tbody>${tableBody}</tbody>
+            <tbody>${mapHtml.tableBody}</tbody>
           </table>
         </div>
+        <p class="review-diagnosis-detail-prose review-verify-debug-note">验证使用<strong>原始 prompt</strong>并<strong>仅应用当前卡片</strong>的修改；对每个相关 worksheet 输入调用模型，再按 Score 中 <strong>Output→GT</strong> 规则与 Ground truth 比较（与 Finetune 小跑一致）。</p>
+        <div id="review-verify-debug-status" class="review-verify-debug-status">正在运行验证…</div>
+        <div id="review-verify-debug-dynamic" class="review-verify-debug-dynamic" hidden></div>
       </div>
     </div>
   `;
 
+  const abortController = new AbortController();
   function close() {
+    abortController.abort();
     overlay.remove();
   }
   overlay.querySelector('.modal-close').addEventListener('click', close);
+
   document.body.appendChild(overlay);
+
+  void (async () => {
+    const statusEl = overlay.querySelector('#review-verify-debug-status');
+    const dynamicEl = overlay.querySelector('#review-verify-debug-dynamic');
+    try {
+      if (typeof getPayload !== 'function') {
+        if (statusEl) statusEl.textContent = '无法获取运行上下文。';
+        return;
+      }
+      const payload = await getPayload();
+      if (!payload || !payload.run_credential_id) {
+        if (statusEl) statusEl.textContent = '缺少运行凭证，无法调用模型。';
+        return;
+      }
+      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
+        if (statusEl) statusEl.textContent = '缺少 output schema，无法验证。';
+        return;
+      }
+      const testSections = typeof buildTestSections === 'function' ? buildTestSections() : null;
+      if (!testSections || !Array.isArray(testSections) || testSections.length === 0) {
+        if (statusEl) statusEl.textContent = '无法构建验证用 prompt 段落。';
+        return;
+      }
+
+      const res = await runSuggestionVerifyDebug({
+        apiBase: API_BASE,
+        credentialId: payload.run_credential_id,
+        testSections,
+        targetComparisonRowIndices: suggestionTargetScoreRowIndices(sug),
+        comparisonRows: payload.comparison_rows || [],
+        runResults: payload.run_results || [],
+        outputFields: payload.output_fields || [],
+        outputSchema: payload.output_schema,
+        scoreMappingJson: payload.score_mapping || '[]',
+        runWs: typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : { headers: [], rows: [] },
+        gtContent: typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : { headers: [], rows: [] },
+        signal: abortController.signal,
+        expandInputClosure: true,
+      });
+
+      if (abortController.signal.aborted) return;
+
+      if (!res.ok) {
+        if (statusEl) statusEl.textContent = res.detail || '验证失败';
+        return;
+      }
+
+      if (statusEl) statusEl.remove();
+      if (dynamicEl) {
+        dynamicEl.hidden = false;
+        dynamicEl.innerHTML = renderVerifyDebugResultHtml(res);
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      if (statusEl) statusEl.textContent = String(e?.message || e || '验证出错');
+    }
+  })();
 }
 
 function suggestionHasAnyTerminalTestOutcome(s) {
@@ -671,7 +830,6 @@ function suggestionHasAnyTerminalTestOutcome(s) {
 
 function clearFinetuneRowCheckOutcome(sug) {
   if (!sug || typeof sug !== 'object') return;
-  delete sug.review_verify_debug;
   if (!suggestionFinetuneHasBeforeAfterText(sug)) {
     delete sug.review_test_result;
     delete sug.review_test_passed;
@@ -733,7 +891,6 @@ function formatSuggestionCardPreviewTitle(titleLine) {
 
 function clearSuggestionTestOutcome(sug) {
   if (!sug || typeof sug !== 'object') return;
-  delete sug.review_verify_debug;
   delete sug.review_test_result;
   delete sug.review_test_passed;
   delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
@@ -1227,7 +1384,6 @@ function buildReviewResultUI(overlay, options) {
 
     try {
       sug.review_test_in_progress = true;
-      delete sug.review_verify_debug;
       persistWorking();
       paintCard();
 
@@ -1797,7 +1953,13 @@ function buildReviewResultUI(overlay, options) {
           return;
         }
         const pseudo = pseudoSuggestionFromDataRefinementRowIndices(item);
-        openSuggestionVerifyTargetsOverlay(pseudo, saved.comparison_rows || [], titleLine);
+        openSuggestionVerifyDebugOverlay({
+          heading: titleLine,
+          sug: pseudo,
+          comparisonRows: saved.comparison_rows || [],
+          getPayload,
+          buildTestSections: () => originals.map((s) => ({ name: s.name || '', content: (s.content || '').slice() })),
+        });
       });
     }
   }
@@ -1907,7 +2069,16 @@ function buildReviewResultUI(overlay, options) {
           showAlert('请先点击标题旁的「Click to Verify」以解锁调试信息。', { title: 'Verify' });
           return;
         }
-        openSuggestionVerifyTargetsOverlay(sug, saved.comparison_rows || [], titleLine);
+        openSuggestionVerifyDebugOverlay({
+          heading: titleLine,
+          sug,
+          comparisonRows: Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [],
+          getPayload,
+          buildTestSections: () => {
+            const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdx }));
+            return rebuildWorkingFromApplied(originals, patched);
+          },
+        });
       });
     }
     function currentNewSentence() {
