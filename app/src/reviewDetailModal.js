@@ -23,22 +23,44 @@ import {
 
 const API_BASE = 'http://localhost:8000';
 
+/** Module-level verify state so verification survives review modal close/reopen.
+ *  Keys are `reviewNodeId:sugIdx`. */
+const _verifyStates = new Map();   // → 'idle' | 'verifying'
+const _verifyResults = new Map();  // → result object | null
+const _verifyPromises = new Map(); // → in-flight Promise | undefined
+
 /** Review node progress reaches 100% when the stream ends (workflowCanvas). */
 
 /** Placeholder pill only; verify/finetune flows removed pending redesign. */
 const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
+const REVIEW_SUGGESTION_VERIFIED_LABEL = 'Verified';
+const REVIEW_SUGGESTION_FINETUNE_LABEL = 'Click to Finetune';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
+/** Returns true when all verify rows matched their GT rows and there were no errors. */
+function isVerifyFullPass(result) {
+  if (!result || result.status !== 'complete') return false;
+  const rows = result.verifyRows;
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  return rows.every((r) => r.matched === true && !r.error);
+}
+
 /**
  * Returns pill specs for the suggestion title line.
- * @param {string} [verifyState] - 'idle' (default) or 'verifying'
+ * @param {string} [verifyState] - 'idle' | 'verifying' | 'verified' | 'finetune'
  */
 function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState) {
   if (streamComplete !== true) return [];
   if (verifyState === 'verifying') {
     return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL, ariaLabel: 'Verifying…' }];
+  }
+  if (verifyState === 'verified') {
+    return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_VERIFIED_LABEL, ariaLabel: 'All outputs matched ground truth' }];
+  }
+  if (verifyState === 'finetune') {
+    return [{ cls: 'review-suggestion-finetune-pill', text: REVIEW_SUGGESTION_FINETUNE_LABEL, ariaLabel: 'Some outputs did not match — click to finetune' }];
   }
   return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
@@ -82,6 +104,92 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = normalizeUnicodeDashesForDisplay(String(str ?? ''));
   return div.innerHTML;
+}
+
+function escapeRegex(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeForCompare(v) {
+  if (v == null) return '';
+  return String(v).trim().toLowerCase();
+}
+
+/** Compare one output row dict against one GT row dict (model-facing keys only).
+ *  Key lookup is case-insensitive to handle score-rule outputKey vs actual LLM output field name mismatches. */
+function compareRowToGt(output, gt) {
+  if (!output || !gt) return false;
+  const keys = Object.keys(gt);
+  if (keys.length === 0) return true;
+  // Build case-insensitive lookup for output keys
+  const outLower = new Map(Object.entries(output).map(([k, v]) => [k.toLowerCase().trim(), v]));
+  return keys.every((k) => {
+    const outVal = outLower.get(k.toLowerCase().trim());
+    return normalizeForCompare(outVal) === normalizeForCompare(gt[k]);
+  });
+}
+
+/**
+ * Build the inner HTML for the "Verify results" section of the debug overlay.
+ * verifyResult: null | { status: 'running' }
+ *             | { status: 'complete', verifyRows: [{inputNum, output, error}] }
+ *             | { status: 'error', message: string }
+ */
+function buildVerifySectionHtml(verifyResult) {
+  if (!verifyResult) return '';
+
+  if (verifyResult.status === 'running') {
+    return `<p class="review-verify-status-running">\u23f3 Running\u2026</p>`;
+  }
+
+  if (verifyResult.status === 'error') {
+    return `<p class="review-verify-status-error">\u26a0 ${escapeHtml(verifyResult.message || 'Unknown error')}</p>`;
+  }
+
+  if (verifyResult.status === 'complete') {
+    const rows = verifyResult.verifyRows || [];
+    if (rows.length === 0) return `<p class="review-verify-status-empty">No results.</p>`;
+
+    // Collect GT field names (only GT keys that exist), and output field names
+    const gtFieldNames = [...new Set(rows.flatMap((r) => (r.gt ? Object.keys(r.gt) : [])))];
+    const outFieldNames = [...new Set(rows.flatMap((r) => (r.output ? Object.keys(r.output) : [])))];
+    // Show output fields; for each GT field show its expected value in a separate "GT: field" column
+    const hasMatch = rows.some((r) => r.matched !== null && r.matched !== undefined);
+    const headerCells = [
+      ...outFieldNames.map((f) => `<th>${escapeHtml(f)}</th>`),
+      ...gtFieldNames.map((f) => `<th class="review-verify-cell-gt-header">GT: ${escapeHtml(f)}</th>`),
+      ...(hasMatch ? ['<th>Match</th>'] : []),
+    ].join('');
+    const bodyRows = rows.map((row) => {
+      if (row.error) {
+        const span = outFieldNames.length + gtFieldNames.length + (hasMatch ? 1 : 0) || 1;
+        return `<tr class="review-verify-row-error">
+          <td colspan="${span}" class="review-verify-error-cell">${escapeHtml(row.error)}</td>
+        </tr>`;
+      }
+      const outCells = outFieldNames.map(
+        (f) => `<td class="review-verify-cell-output">${escapeHtml(String(row.output?.[f] ?? ''))}</td>`,
+      );
+      const gtCells = gtFieldNames.map(
+        (f) => `<td class="review-verify-cell-gt">${escapeHtml(String(row.gt?.[f] ?? '—'))}</td>`,
+      );
+      const matchCell = hasMatch
+        ? (row.matched === null
+          ? '<td>—</td>'
+          : row.matched
+            ? '<td><span class="review-debug-pass-badge">\u2714</span></td>'
+            : '<td><span class="review-debug-fail-badge">\u2718</span></td>')
+        : '';
+      return `<tr>${outCells.join('')}${gtCells.join('')}${matchCell}</tr>`;
+    }).join('');
+
+    return `<table class="review-suggestion-debug-table review-verify-results-table">
+      <thead><tr>${headerCells}</tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>`;
+  }
+
+  return '';
 }
 
 const DIAG_LIST_PREVIEW_CHARS = 200;
@@ -448,9 +556,20 @@ function debugKvHtml(obj) {
  * Debug overlay: shows per-suggestion run info.
  * @param {object} sug
  * @param {{ inputNums: string, gtNums: string, scoreNums: string, targetRows: any[] } | null} [debugData]
+ * @param {{ status: 'running'|'complete'|'error', ... } | null} [verifyResult]
  */
-function openSuggestionDebugOverlay(sug, debugData) {
+function openSuggestionDebugOverlay(sug, debugData, verifyResult = null) {
   const sid = sug && sug.suggestion_id != null ? String(sug.suggestion_id) : '(no id)';
+
+  // If the overlay for this suggestion is already open and we only need to update the verify section, do it in-place.
+  const existing = document.querySelector('.review-suggestion-debug-overlay');
+  if (existing && existing.dataset.suggestionId === String(sid) && verifyResult !== null) {
+    const verifySection = existing.querySelector('.review-suggest-verify-section');
+    if (verifySection) {
+      verifySection.innerHTML = buildVerifySectionHtml(verifyResult);
+      return;
+    }
+  }
 
   let bodyHtml;
   if (debugData) {
@@ -501,18 +620,22 @@ function openSuggestionDebugOverlay(sug, debugData) {
           .join('')
       : '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">No ground truth data.</p>';
 
+    const verifyHtml = `<h2 class="review-suggestion-debug-group-title">Verify results</h2>
+      <div class="review-suggest-verify-section">${buildVerifySectionHtml(verifyResult)}</div>`;
+
     bodyHtml = summaryHtml +
       `<h2 class="review-suggestion-debug-group-title">Input</h2>${inputBlocksHtml}` +
-      `<h2 class="review-suggestion-debug-group-title">Ground truth</h2>${gtBlocksHtml}`;
+      `<h2 class="review-suggestion-debug-group-title">Ground truth</h2>${gtBlocksHtml}` +
+      verifyHtml;
   } else {
     bodyHtml = '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">(Run information will appear here.)</p>';
   }
 
-  const existing = document.querySelector('.review-suggestion-debug-overlay');
   if (existing) existing.remove();
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay review-suggestion-detail-overlay review-suggestion-debug-overlay';
+  overlay.dataset.suggestionId = String(sid);
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'review-suggestion-debug-title');
   overlay.innerHTML = `
@@ -828,8 +951,21 @@ function buildReviewResultUI(overlay, options) {
   /** Click-to-pin: keep left-column diff visible without hover (Suggested changes cards only). */
   let previewSelectedSuggestionIndex = null;
 
-  /** Per-card debug verify state: 'idle' (default) | 'verifying'. Key = sugIdx. */
-  const cardVerifyStates = new Map();
+  /** Compound key for module-level verify maps. */
+  function verifyKey(sugIdx) { return `${reviewNodeId}:${sugIdx}`; }
+  /** Per-card debug verify state: 'idle' (default) | 'verifying'. Key = sugIdx.
+   *  Backed by module-level _verifyStates so state survives modal close/reopen. */
+  const cardVerifyStates = {
+    get: (si) => _verifyStates.get(verifyKey(si)) || 'idle',
+    set: (si, v) => _verifyStates.set(verifyKey(si), v),
+    delete: (si) => _verifyStates.delete(verifyKey(si)),
+  };
+  /** Per-card last verify result (null = never run). Key = sugIdx. */
+  const cardVerifyResults = {
+    get: (si) => _verifyResults.get(verifyKey(si)) ?? null,
+    set: (si, v) => _verifyResults.set(verifyKey(si), v),
+    delete: (si) => _verifyResults.delete(verifyKey(si)),
+  };
 
   function updateSuggestionPreviewSelectionVisual() {
     editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
@@ -1284,7 +1420,7 @@ function buildReviewResultUI(overlay, options) {
       originals,
       promptSections,
       saved.streamComplete === true,
-      'idle',
+      cardVerifyStates.get(sugIdx),
     );
     const debugActionsHtml =
       '<button type="button" class="btn review-detail-debug-reset-btn" title="Debug: reset card to Click-to-verify state">↺ Reset</button>' +
@@ -1329,6 +1465,7 @@ function buildReviewResultUI(overlay, options) {
         e.preventDefault();
         e.stopPropagation();
         cardVerifyStates.delete(sugIdx);
+        cardVerifyResults.delete(sugIdx);
         updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
         bindVerifyPillClick();
       });
@@ -1337,7 +1474,7 @@ function buildReviewResultUI(overlay, options) {
       debugInfoBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        openSuggestionDebugOverlay(sug, buildSugDebugData(sug));
+        openSuggestionDebugOverlay(sug, buildSugDebugData(sug), cardVerifyResults.get(sugIdx) ?? null);
       });
     }
 
@@ -1364,6 +1501,173 @@ function buildReviewResultUI(overlay, options) {
       return { inputNums: toNums(inputSet), gtNums: toNums(gtSet), scoreNums: scoreLabel, targetRows };
     }
 
+    /**
+     * Store a verify result and, if the debug overlay for this suggestion is already open,
+     * update its verify section in-place. Never re-opens a closed overlay.
+     */
+    function storeVerifyResult(verifyResult) {
+      cardVerifyResults.set(sugIdx, verifyResult);
+      const sid = sug && sug.suggestion_id != null ? String(sug.suggestion_id) : '(no id)';
+      const overlay = document.querySelector('.review-suggestion-debug-overlay');
+      if (overlay && overlay.dataset.suggestionId === sid) {
+        const verifySection = overlay.querySelector('.review-suggest-verify-section');
+        if (verifySection) verifySection.innerHTML = buildVerifySectionHtml(verifyResult);
+      }
+    }
+
+    /** Run the modified prompt against the suggestion's target inputs and store results. */
+    async function runVerification() {
+      try {
+        storeVerifyResult({ status: 'running' });
+      } catch (_) { /* non-fatal */ }
+
+      try {
+        // 1. Get credential + output schema from canvas payload
+        const payload = typeof getPayload === 'function' ? await getPayload() : null;
+        const credentialId = payload?.run_credential_id;
+        const outputSchema = payload?.output_schema;
+        if (!credentialId) throw new Error('No run credential configured on the Run node.');
+        if (!outputSchema) throw new Error('No output schema configured on the Prompt node.');
+
+        // 2. Build modified prompt: apply only this suggestion to originals
+        const modifiedSections = rebuildWorkingFromApplied(originals, [{ ...sug, applied: true }]) || originals;
+        const templateText = modifiedSections.map((s) => (s.content || '').trim()).filter(Boolean).join('\n\n');
+
+        // 3. Collect target comparison rows
+        const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
+        const rowIndices = suggestionTargetScoreRowIndices(sug);
+        const targetRows = rowIndices
+          .map((ri) => compRows.find((r) => Number(r?.row_index) === ri))
+          .filter(Boolean);
+
+        // 4. Build ordered unique input list, collecting associated GTs per input
+        const inputMap = new Map(); // input_row_index → { row, gtRows: [{gtNum, gt}] }
+        for (const row of targetRows) {
+          const inputIdx = row.input_row_index;
+          if (inputIdx == null) continue;
+          if (!inputMap.has(inputIdx)) inputMap.set(inputIdx, { row, gtRows: [] });
+          if (row.ground_truth_output && row.source_gt_row_index != null) {
+            const gtNum = row.source_gt_row_index + 1;
+            const entry = inputMap.get(inputIdx);
+            if (!entry.gtRows.find((g) => g.gtNum === gtNum)) {
+              const filtered = Object.fromEntries(
+                Object.entries(row.ground_truth_output).filter(([k]) => isModelFacingKey(k)),
+              );
+              entry.gtRows.push({ gtNum, gt: filtered });
+            }
+          }
+        }
+        const inputEntries = [...inputMap.entries()].sort(([a], [b]) => a - b);
+        if (inputEntries.length === 0) throw new Error('No inputs found for this suggestion.');
+
+        // 5. Fill template with row_input values (single-brace placeholder substitution)
+        const prompts = inputEntries.map(([, { row }]) => {
+          let text = templateText;
+          for (const [key, val] of Object.entries(row.row_input || {})) {
+            text = text.replace(new RegExp(`\\{${escapeRegex(key)}\\}`, 'g'), String(val ?? ''));
+          }
+          return text;
+        });
+
+        // 6. Submit run job
+        const runRes = await fetch(`${API_BASE}/api/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credential_id: credentialId, prompts, output_schema: outputSchema }),
+        });
+        if (!runRes.ok) {
+          const errText = await runRes.text().catch(() => String(runRes.status));
+          throw new Error(`Run API error ${runRes.status}: ${errText}`);
+        }
+        const { run_id: runId } = await runRes.json();
+
+        // 7. Poll until complete, updating stored state each tick
+        let finalData = null;
+        while (true) {
+          await new Promise((r) => setTimeout(r, 1200));
+          const pollRes = await fetch(`${API_BASE}/api/run/result/${runId}`);
+          const pollData = await pollRes.json();
+          if (pollData.progress) storeVerifyResult({ status: 'running', progress: pollData.progress });
+          if (pollData.status === 'done' || pollData.status === 'cancelled') {
+            finalData = pollData;
+            break;
+          }
+        }
+
+        // 8. Collect all result rows with one-to-one positional GT comparison
+        if (finalData?.error) throw new Error(String(finalData.error));
+        const rawResults = finalData?.results || [];
+
+        // Group outputs by their prompts-array index (input_row_index in rawResults)
+        const outputsByPromptIdx = new Map();
+        for (const r of rawResults) {
+          const idx = r?.input_row_index ?? 0;
+          if (!outputsByPromptIdx.has(idx)) outputsByPromptIdx.set(idx, []);
+          outputsByPromptIdx.get(idx).push(r);
+        }
+
+        // Match each output row to the best-matching GT row (order-independent, greedy one-to-one)
+        const verifyRows = [];
+        for (const [promptArrayIdx, [, { gtRows }]] of inputEntries.entries()) {
+          const outputs = outputsByPromptIdx.get(promptArrayIdx) || [];
+          const usedGtIdx = new Set();
+
+          // First pass: greedily assign each output row to the first matching GT row
+          const assignments = outputs.map((out) => {
+            if (!out?.output) return { out, gtEntry: null, matched: null };
+            for (let gi = 0; gi < gtRows.length; gi++) {
+              if (usedGtIdx.has(gi)) continue;
+              if (compareRowToGt(out.output, gtRows[gi].gt)) {
+                usedGtIdx.add(gi);
+                return { out, gtEntry: gtRows[gi], matched: true };
+              }
+            }
+            return { out, gtEntry: null, matched: false };
+          });
+
+          // Collect unmatched GT rows (for attaching to failed output rows for display)
+          const unmatchedGts = gtRows.filter((_, gi) => !usedGtIdx.has(gi));
+          let unmatchedGtCursor = 0;
+          for (const asgn of assignments) {
+            if (asgn.matched === false && !asgn.gtEntry && unmatchedGtCursor < unmatchedGts.length) {
+              asgn.gtEntry = unmatchedGts[unmatchedGtCursor++];
+            }
+          }
+
+          for (const { out, gtEntry, matched } of assignments) {
+            verifyRows.push({
+              output: out?.output ?? null,
+              error: out?.error ?? null,
+              gt: gtEntry ? gtEntry.gt : null,
+              gtNum: gtEntry ? gtEntry.gtNum : null,
+              matched,
+            });
+          }
+
+          // Any GT rows with no corresponding output at all
+          for (let gi = unmatchedGtCursor; gi < unmatchedGts.length; gi++) {
+            verifyRows.push({ output: null, error: null, gt: unmatchedGts[gi].gt, gtNum: unmatchedGts[gi].gtNum, matched: false });
+          }
+        }
+
+        // 9. Store final results
+        try { storeVerifyResult({ status: 'complete', verifyRows }); } catch (_) { /* non-fatal */ }
+      } catch (err) {
+        try { storeVerifyResult({ status: 'error', message: String(err?.message || err) }); } catch (_) { /* non-fatal */ }
+      } finally {
+        // Determine final pill state from stored result
+        const finalResult = cardVerifyResults.get(sugIdx);
+        const postState = isVerifyFullPass(finalResult) ? 'verified' : (finalResult?.status === 'complete' ? 'finetune' : 'idle');
+        cardVerifyStates.set(sugIdx, postState);
+        _verifyPromises.delete(verifyKey(sugIdx));
+        // Only update the DOM if this card is still mounted; if the modal was
+        // closed and reopened, the new card's .finally() hook handles the update.
+        if (card.isConnected) {
+          updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+        }
+      }
+    }
+
     /** Attach click handler to the "Click to verify" pill (re-called after reset or pill rebuild). */
     function bindVerifyPillClick() {
       const titleWrap = card.querySelector('.review-detail-suggestion-title-wrap');
@@ -1372,13 +1676,30 @@ function buildReviewResultUI(overlay, options) {
         pill.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
+          // Guard: if a run is already in flight for this suggestion, ignore the click
+          if (_verifyPromises.has(verifyKey(sugIdx))) return;
           cardVerifyStates.set(sugIdx, 'verifying');
           updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+          const vp = runVerification();
+          _verifyPromises.set(verifyKey(sugIdx), vp);
         });
       });
     }
     card._bindVerifyPillClick = bindVerifyPillClick;
     bindVerifyPillClick();
+
+    // If a verification was in-flight when the modal was closed, hook the existing
+    // promise so this (newly mounted) card's pill resets when the run finishes.
+    if (cardVerifyStates.get(sugIdx) === 'verifying') {
+      const inflight = _verifyPromises.get(verifyKey(sugIdx));
+      if (inflight) {
+        inflight.finally(() => {
+          if (card.isConnected) {
+            updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+          }
+        });
+      }
+    }
 
     function currentNewSentence() {
       return effectiveNewSentenceForApply(sug);

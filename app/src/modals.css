@@ -3796,7 +3796,9 @@
 
 /* Base pill shared by Click-to-verify and Verifying states */
 .review-suggestion-verify-pill,
-.review-suggestion-verifying-pill {
+.review-suggestion-verifying-pill,
+.review-suggestion-verified-pill,
+.review-suggestion-finetune-pill {
   display: inline-flex;
   align-items: center;
   vertical-align: baseline;
@@ -3839,6 +3841,122 @@
 @keyframes review-verifying-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
+}
+
+/* Verified state – solid green */
+.review-suggestion-verified-pill,
+.review-suggestion-finetune-pill {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+  margin-left: 6px;
+  white-space: nowrap;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  border: none;
+  box-shadow: none;
+  user-select: none;
+}
+
+.review-suggestion-verified-pill {
+  color: #166534;
+  background: color-mix(in srgb, #22c55e 22%, transparent);
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Click to Finetune – same amber as Click to Verify */
+.review-suggestion-finetune-pill {
+  color: #b45309;
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── Verify results section in debug overlay ── */
+.review-verify-status-running {
+  color: var(--text-muted, #64748b);
+  font-style: italic;
+  padding: 4px 0 8px;
+  font-size: 12px;
+}
+
+.review-verify-status-error {
+  color: var(--red, #ef4444);
+  padding: 4px 0 8px;
+  font-size: 12px;
+}
+
+.review-verify-status-empty {
+  color: var(--text-muted, #64748b);
+  padding: 4px 0 8px;
+  font-size: 12px;
+}
+
+.review-verify-summary {
+  padding: 2px 0 8px;
+  font-size: 12px;
+}
+
+.review-verify-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  table-layout: auto;
+}
+
+.review-verify-results-table th,
+.review-verify-results-table td {
+  padding: 3px 7px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border, rgba(0,0,0,0.08));
+  white-space: nowrap;
+}
+
+.review-verify-results-table thead th {
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #64748b);
+  background: var(--surface-alt, rgba(0,0,0,0.03));
+}
+
+.review-verify-cell-output {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono, 'Menlo', monospace);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.review-verify-cell-gt-header {
+  color: #888;
+  font-style: italic;
+}
+
+.review-verify-cell-gt {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono, 'Menlo', monospace);
+  font-size: 10px;
+  white-space: nowrap;
+  color: #888;
+  background: rgba(0,0,0,0.04);
+}
+
+.review-verify-row-error td {
+  color: var(--red, #ef4444);
+}
+
+.review-verify-error-cell {
+  font-size: 11px;
 }
 
 .review-detail-suggestion-card__actions {
