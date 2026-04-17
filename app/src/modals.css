@@ -152,6 +152,10 @@
   max-width: min(420px, 92vw);
 }
 
+.modal-panel--alert.modal-panel--alert-wide {
+  max-width: min(760px, 94vw);
+}
+
 .modal-body--alert {
   min-height: 0;
 }
@@ -3926,7 +3930,7 @@ button.review-suggestion-title-pill {
   background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
 }
 
-/* Row-check did not pass; label is always “Click to Finetune”; --click-finetune enables pointer/hover. */
+/* Row-check did not pass (non-interactive copy stays warning-colored). */
 .review-suggestion-rowcheck-fail-pill {
   display: inline-flex;
   align-items: center;
@@ -3948,15 +3952,18 @@ button.review-suggestion-title-pill {
   user-select: none;
 }
 
+/* “Click to Finetune” / “Click to Verify”: same muted gray as verifying/tuning pills. */
 .review-suggestion-rowcheck-fail-pill--click-finetune,
 .review-suggestion-rowcheck-fail-pill--click-verify {
   cursor: pointer;
   pointer-events: auto;
+  color: var(--text-muted, #64748b);
+  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
 }
 
 .review-suggestion-rowcheck-fail-pill--click-finetune:hover,
 .review-suggestion-rowcheck-fail-pill--click-verify:hover {
-  filter: brightness(1.06);
+  background: color-mix(in srgb, var(--text-muted, #64748b) 22%, transparent);
 }
 
 .review-detail-suggestion-card__actions {

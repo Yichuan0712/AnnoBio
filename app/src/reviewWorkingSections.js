@@ -1,5 +1,5 @@
 /**
- * Locate prompt spans and rebuild section text when suggestions are applied (Review / Finetune / Verify).
+ * Locate prompt spans and rebuild section text when suggestions are applied (Review / Finetune).
  */
 
 /**
@@ -183,13 +183,16 @@ function getSuggestionTestOutcomeForAutoCheck(sug) {
   return null;
 }
 
-/** Stored 0-based comparison `row_index` for targeted rows (API / persistence; prompts use 1-based Score #). */
-export function suggestionTargetInputRowIndices(sug) {
+/** Stored 0-based comparison `row_index` for targeted Score rows (API / persistence; prompts use 1-based Score #). */
+export function suggestionTargetScoreRowIndices(sug) {
   if (!sug || typeof sug !== 'object') return [];
-  const raw = sug.target_input_row_indices ?? sug.row_indices;
+  const raw = sug.target_score_row_indices ?? sug.target_input_row_indices ?? sug.row_indices;
   if (!Array.isArray(raw)) return [];
   return [...new Set(raw.map((x) => Number(x)).filter((x) => !Number.isNaN(x) && x >= 0))].sort((a, b) => a - b);
 }
+
+/** @deprecated Use `suggestionTargetScoreRowIndices` (legacy name). */
+export const suggestionTargetInputRowIndices = suggestionTargetScoreRowIndices;
 
 /**
  * True when Run+Score row check should run for this suggestion (locatable, has targets, no terminal outcome yet).
@@ -215,7 +218,7 @@ export function suggestionNeedsAutoRowCheck(sug, originals, promptSections) {
     : null;
   const unlocatable = useSentenceEdit && !segmentInOriginal;
   if (unlocatable) return false;
-  if (suggestionTargetInputRowIndices(sug).length === 0) return false;
+  if (suggestionTargetScoreRowIndices(sug).length === 0) return false;
   return true;
 }
 

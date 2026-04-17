@@ -6,13 +6,7 @@
 
 import { showConfirm, showAlert } from './alertModal.js';
 import { comparisonRowIsMatched } from './scoreDetailModal.js';
-import {
-  runSuggestionRowTests,
-  abortAllVerifyJobs,
-  registerVerifySession,
-  unregisterVerifySession,
-  hasActiveVerifySessions,
-} from './reviewSuggestionTest.js';
+import { runSuggestionRowTestsMetrics } from './reviewSuggestionTest.js';
 import {
   runSuggestionFinetuneCompositional,
   abortAllFinetuneJobs,
@@ -25,7 +19,7 @@ import {
   getLocatableSegment,
   findSectionIndexForOldSentence,
   effectiveNewSentenceForApply,
-  suggestionTargetInputRowIndices,
+  suggestionTargetScoreRowIndices,
   suggestionNeedsAutoRowCheck,
 } from './reviewWorkingSections.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
@@ -38,29 +32,54 @@ import {
 
 const API_BASE = 'http://localhost:8000';
 
-/** Review node progress reaches 100% when the stream ends (workflowCanvas). Row verify is user-triggered in this modal. */
+/** AbortControllers for post-finetune row-check (mini-run metrics). */
+const rowCheckAbortControllers = new Set();
+
+function registerRowCheckSession(ac) {
+  if (ac && typeof ac.abort === 'function') rowCheckAbortControllers.add(ac);
+}
+
+function unregisterRowCheckSession(ac) {
+  rowCheckAbortControllers.delete(ac);
+}
+
+function hasActiveRowCheckSessions() {
+  return rowCheckAbortControllers.size > 0;
+}
+
+function abortAllRowCheckJobs() {
+  for (const c of rowCheckAbortControllers) {
+    try {
+      c.abort();
+    } catch (_) {}
+  }
+  rowCheckAbortControllers.clear();
+}
+
+/** Review node progress reaches 100% when the stream ends (workflowCanvas). */
 
 /** Only on full app/tab unload: cancel in-flight row-check + Finetune HTTP/poll. Closing the review modal does NOT call this — jobs keep running and persist when done. */
 function abortReviewBackgroundJobsOnAppUnload() {
   abortAllFinetuneJobs();
-  abortAllVerifyJobs();
+  abortAllRowCheckJobs();
 }
 
-/** After Run+Score row check succeeds (shown next to suggestion title; clearer than “Passed”). */
-const REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL = 'Verified';
+/** After Run+Score row check succeeds (shown next to suggestion title). */
+const REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL = 'Row check passed';
 /** Row check failed (title pill); same label always. Modifier class makes it clickable when finetune can start. */
 const REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE = 'Click to Finetune';
 /** Row-check (Run+Score) in progress for this card. */
-const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying';
-/** Title-line tag: run pending Run+Score checks (same look as “Click to Finetune”). */
-const REVIEW_SUGGESTION_VERIFY_INVITE_PILL = 'Click to Verify';
+const REVIEW_SUGGESTION_ROWCHECKING_LABEL = 'Checking…';
 /** Finetune optimization finished (title pill). */
 const REVIEW_SUGGESTION_FINETUNED_PILL_LABEL = 'Finetuned';
-/** Title tag for assistant-owned edits: dialogue proposal, not pipeline verify. */
+/** Title tag for assistant-owned edits: dialogue proposal, not pipeline row-check. */
 const REVIEW_SUGGESTION_PROPOSAL_TAG_LABEL = 'Proposal';
-const REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA = 'Edit proposed in chat; not Run+Score verified';
+const REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA = 'Edit proposed in chat; not Run+Score checked';
 
 const REVIEW_FINETUNE_LABEL_TUNING = 'Finetuning';
+
+/** Placeholder control next to each suggestion title; verify behavior wired later. */
+const REVIEW_SUGGESTION_VERIFY_CHIP_LABEL = 'Click to Verify';
 
 /** Finetuned suggestions may store row-check in `review_test_result_finetune_after`; otherwise legacy `review_test_result`. */
 const REVIEW_TEST_RESULT_FINETUNE_AFTER = 'review_test_result_finetune_after';
@@ -94,8 +113,13 @@ function rowCheckFailPillCanStartFinetune(sug, noButton) {
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
+function buildSuggestionVerifyChipHtml() {
+  const lbl = REVIEW_SUGGESTION_VERIFY_CHIP_LABEL;
+  return `<button type="button" class="review-suggestion-rowcheck-fail-pill review-suggestion-rowcheck-fail-pill--click-verify ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}" data-review-verify-chip="1" aria-label="${escapeHtml(lbl)}">${escapeHtml(lbl)}</button>`;
+}
+
 /**
- * At most one title pill. Pipeline: verify/finetune state. Assistant: only the Proposal tag.
+ * At most one title pill. Pipeline: row-check / finetune state. Assistant: only the Proposal tag.
  */
 function collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections) {
   if (!sug || typeof sug !== 'object') return [];
@@ -122,7 +146,7 @@ function collectSuggestionTitlePills(sug, noButton, actionsFull, originals, prom
     return [{ cls: finCls, text: REVIEW_SUGGESTION_FINETUNED_PILL_LABEL }];
   }
   if (isReviewRowCheckInProgress(sug)) {
-    return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL }];
+    return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_ROWCHECKING_LABEL }];
   }
   if (actionsFull) {
     const outcome = getSuggestionTestOutcome(sug);
@@ -142,15 +166,6 @@ function collectSuggestionTitlePills(sug, noButton, actionsFull, originals, prom
         },
       ];
     }
-    if (suggestionNeedsAutoRowCheck(sug, originals, promptSections)) {
-      return [
-        {
-          cls: 'review-suggestion-rowcheck-fail-pill review-suggestion-rowcheck-fail-pill--click-verify',
-          text: REVIEW_SUGGESTION_VERIFY_INVITE_PILL,
-          clickVerify: true,
-        },
-      ];
-    }
   }
   return [];
 }
@@ -160,9 +175,6 @@ function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, pr
     .map((spec) => {
       if (spec.clickFinetune === true) {
         return `<button type="button" class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}" aria-label="Finetune this suggestion" data-review-title-pill-action="finetune">${escapeHtml(spec.text)}</button>`;
-      }
-      if (spec.clickVerify === true) {
-        return `<button type="button" class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}" aria-label="Run row checks for this suggested prompt edit against the Run and Score worksheet" data-review-title-pill-action="verify-suggestion">${escapeHtml(spec.text)}</button>`;
       }
       const aria =
         typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()
@@ -266,6 +278,37 @@ function formatScoreTableTargetLabels(comparisonRows, zeroBasedRowIndices) {
     .join(', ');
 }
 
+/** 1-based worksheet input # from persisted diagnosis (`input_index` only). */
+function diagnosisInputOneBased(diagnostic) {
+  if (!diagnostic || typeof diagnostic !== 'object') return NaN;
+  const i = Number(diagnostic.input_index);
+  return !Number.isNaN(i) && i >= 1 ? i : NaN;
+}
+
+/** 0-based comparison row indices from `row_indices` (Score table). */
+function diagnosticComparisonRowIndices(diagnostic) {
+  const raw = Array.isArray(diagnostic?.row_indices) ? diagnostic.row_indices : [];
+  return raw.map((x) => parseInt(x, 10)).filter((x) => !Number.isNaN(x));
+}
+
+/** Normalize saved Issue analysis row; invalid entries are dropped. */
+function normalizeRowDiagnosticFromSaved(d) {
+  if (!d || typeof d !== 'object') return null;
+  const input_index = Number(d.input_index);
+  if (Number.isNaN(input_index) || input_index < 1) return null;
+  const row_indices = Array.isArray(d.row_indices)
+    ? d.row_indices.map((x) => Number(x)).filter((x) => !Number.isNaN(x))
+    : [];
+  return {
+    input_index,
+    row_indices,
+    card_title: String(d.card_title || ''),
+    issue_summary: String(d.issue_summary || ''),
+    rough_modification_opinion: String(d.rough_modification_opinion || ''),
+    problem_category_hint: String(d.problem_category_hint || ''),
+  };
+}
+
 /**
  * Assistant / chat may emit 1-based Score # or legacy 0-based row_index.
  * Returns sorted unique 0-based comparison row_index (same as stored suggestions).
@@ -362,7 +405,7 @@ function suggestionCardTitleLine({ explicitName, reason, sectionFallback, defaul
 
 /**
  * Second-layer modal: analysis text only + which Score comparison row this refers to.
- * @param {{ row_index: number, row_indices?: number[], card_title?: string, issue_summary: string, rough_modification_opinion: string, problem_category_hint?: string }} diagnostic
+ * @param {{ input_index: number, row_indices?: number[], card_title?: string, issue_summary: string, rough_modification_opinion: string, problem_category_hint?: string }} diagnostic
  * @param {Array<Record<string, unknown>>} comparisonRows - saved comparison rows (for score_table_row lookup)
  * @param {number} displayNumber - 1-based order in the Issue analysis list (same as # on the card)
  */
@@ -372,16 +415,20 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
   const rough = (diagnostic.rough_modification_opinion || '').trim();
   const cardTitle = (diagnostic.card_title || '').trim();
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
-  const multiIdx = Array.isArray(diagnostic.row_indices) && diagnostic.row_indices.length > 1
-    ? diagnostic.row_indices
-    : null;
+  const compIdxs = diagnosticComparisonRowIndices(diagnostic);
+  const multiIdx = compIdxs.length > 1 ? compIdxs : null;
   const sourceLine = multiIdx
     ? `Score table ${formatScoreTableTargetLabels(rows, multiIdx)}`
     : (() => {
-      const t = scoreTableRowNumberForComparisonIndex(rows, diagnostic.row_index);
+      const anchor = compIdxs[0];
+      if (anchor === undefined) {
+        const inp = diagnosisInputOneBased(diagnostic);
+        return !Number.isNaN(inp) && inp >= 1 ? `Worksheet input #${inp}` : 'Score comparison (unknown row)';
+      }
+      const t = scoreTableRowNumberForComparisonIndex(rows, anchor);
       return t != null
         ? `Score table #${t}`
-        : `Score comparison (row_index ${diagnostic.row_index})`;
+        : `Score comparison (row_index ${anchor})`;
     })();
 
   const mainHeading = ensureCardTitleSentenceLead(cardTitle || `Analysis #${num}`);
@@ -428,7 +475,7 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
 
   let detailBodyHtml;
   if (isAssistant) {
-    const inputIdx = suggestionTargetInputRowIndices(sug);
+    const inputIdx = suggestionTargetScoreRowIndices(sug);
     const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
     const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
     const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
@@ -449,7 +496,7 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
     }</p>`;
     detailBodyHtml = focusHtml + rationalePara;
   } else {
-    const inputIdx = suggestionTargetInputRowIndices(sug);
+    const inputIdx = suggestionTargetScoreRowIndices(sug);
     const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
     const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
     const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
@@ -503,6 +550,7 @@ function suggestionHasAnyTerminalTestOutcome(s) {
 
 function clearFinetuneRowCheckOutcome(sug) {
   if (!sug || typeof sug !== 'object') return;
+  delete sug.review_verify_debug;
   if (!suggestionFinetuneHasBeforeAfterText(sug)) {
     delete sug.review_test_result;
     delete sug.review_test_passed;
@@ -564,6 +612,7 @@ function formatSuggestionCardPreviewTitle(titleLine) {
 
 function clearSuggestionTestOutcome(sug) {
   if (!sug || typeof sug !== 'object') return;
+  delete sug.review_verify_debug;
   delete sug.review_test_result;
   delete sug.review_test_passed;
   delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
@@ -577,7 +626,7 @@ function clearSuggestionTestOutcome(sug) {
  */
 function stripAbortedReviewTests(suggestions) {
   if (!Array.isArray(suggestions)) return false;
-  if (hasActiveVerifySessions()) return false;
+  if (hasActiveRowCheckSessions()) return false;
   let changed = false;
   for (const s of suggestions) {
     if (!s || typeof s !== 'object') continue;
@@ -879,24 +928,9 @@ function buildReviewResultUI(overlay, options) {
   let dataRefinement = Array.isArray(saved.data_refinement) ? saved.data_refinement.slice() : [];
   /** Phase 1 per-row LLM notes (persisted on review node) */
   let rowDiagnostics = Array.isArray(saved.row_diagnostics)
-    ? saved.row_diagnostics
-      .map((d) => {
-        const rid = Number(d && d.row_index);
-        const ri = Array.isArray(d && d.row_indices)
-          ? d.row_indices.map((x) => Number(x)).filter((x) => !Number.isNaN(x))
-          : [];
-        return {
-          row_index: rid,
-          row_indices: ri.length ? ri : (!Number.isNaN(rid) ? [rid] : []),
-          card_title: String((d && d.card_title) || ''),
-          issue_summary: String((d && d.issue_summary) || ''),
-          rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
-          problem_category_hint: String((d && d.problem_category_hint) || ''),
-        };
-      })
-      .filter((d) => !Number.isNaN(d.row_index))
+    ? saved.row_diagnostics.map((d) => normalizeRowDiagnosticFromSaved(d)).filter(Boolean)
     : [];
-  rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
+  rowDiagnostics.sort((a, b) => a.input_index - b.input_index);
 
   function isReviewStreamingNow() {
     return typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
@@ -952,7 +986,7 @@ function buildReviewResultUI(overlay, options) {
       const r = data.suggestions.find((x) => x && String(x.suggestion_id) === String(id));
       if (r && typeof r === 'object') {
         const keepInProgress =
-          hasActiveVerifySessions() &&
+          hasActiveRowCheckSessions() &&
           isReviewRowCheckInProgress(loc) &&
           !isReviewRowCheckInProgress(r);
         Object.assign(loc, r);
@@ -1033,47 +1067,14 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /**
-   * Shared Run+Score check: prompt = originals + only this suggestion applied (ignore other accepted rows).
-   * @param {{ singleComparisonTargetOnly?: boolean }} [opts] If true, only the first (smallest) comparison `row_index` in the suggestion is checked — for manual “Click to Verify” so one click ≠ one mini-run per listed target.
-   */
-  async function runRowVerifyWithPayload(sug, sugIdx, payload, signal, opts = {}) {
-    let targets = suggestionTargetInputRowIndices(sug);
-    if (targets.length === 0) return { emptyTargets: true };
-    if (opts.singleComparisonTargetOnly === true && targets.length > 1) {
-      targets = [targets[0]];
-    }
-    const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdx }));
-    const testSections = rebuildWorkingFromApplied(originals, patched);
-    if (!testSections || testSections.length !== originals.length) {
-      return { buildError: true };
-    }
-    const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
-    const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
-    const result = await runSuggestionRowTests({
-      apiBase: API_BASE,
-      credentialId: payload.run_credential_id,
-      testSections,
-      targetComparisonRowIndices: targets,
-      comparisonRows: payload.comparison_rows || [],
-      runResults: payload.run_results || [],
-      outputFields: payload.output_fields || [],
-      outputSchema: payload.output_schema,
-      scoreMappingJson: payload.score_mapping || '[]',
-      runWs: runWs || { headers: [], rows: [] },
-      gtContent: gtContent || { headers: [], rows: [] },
-      signal,
-    });
-    return { result };
-  }
-
-  /** Run+Score check for one card (e.g. after finetune completes). Always re-resolve the card from the DOM so refresh/reconcile cannot leave a stale element reference. */
+  /** Run+Score mini-run metrics for one card (e.g. after finetune completes). */
   async function runAutoRowCheckForSuggestion(sugIdx) {
     const sug = allSuggestions[sugIdx];
     if (!sug || typeof sug !== 'object') return;
     if (isReviewStreamingNow()) return;
     if (typeof getPayload !== 'function') return;
-    if (suggestionTargetInputRowIndices(sug).length === 0) return;
+    const targets = suggestionTargetScoreRowIndices(sug);
+    if (targets.length === 0) return;
 
     function cardEl() {
       return editContainer.querySelector(`.review-detail-suggestion-card[data-suggestion-index="${sugIdx}"]`);
@@ -1083,10 +1084,10 @@ function buildReviewResultUI(overlay, options) {
       if (el) updateSuggestionTestOutcomeVisual(el, sug, suggestionActionsFullForCard(sug), originals, promptSections);
     }
 
-    const verifyAc = new AbortController();
-    registerVerifySession(verifyAc);
+    const rowAc = new AbortController();
+    registerRowCheckSession(rowAc);
 
-    function exitBeforeVerifyRequest() {
+    function exitBeforeRowCheckRequest() {
       delete sug.review_test_in_progress;
       paintCard();
       persistWorking();
@@ -1094,6 +1095,7 @@ function buildReviewResultUI(overlay, options) {
 
     try {
       sug.review_test_in_progress = true;
+      delete sug.review_verify_debug;
       persistWorking();
       paintCard();
 
@@ -1101,33 +1103,50 @@ function buildReviewResultUI(overlay, options) {
       try {
         payload = await getPayload();
       } catch (_) {
-        exitBeforeVerifyRequest();
+        exitBeforeRowCheckRequest();
         return;
       }
       if (!payload || !payload.run_credential_id) {
-        exitBeforeVerifyRequest();
+        exitBeforeRowCheckRequest();
         return;
       }
       if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-        exitBeforeVerifyRequest();
+        exitBeforeRowCheckRequest();
         return;
       }
 
+      const patched = allSuggestions.map((s, i) => ({ ...s, applied: s.applied === true || i === sugIdx }));
+      const testSections = rebuildWorkingFromApplied(originals, patched);
+      if (!testSections || testSections.length !== originals.length) {
+        setFinetuneRowCheckOutcome(sug, 'fail');
+        return;
+      }
+      const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
+      const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
+
       try {
-        const out = await runRowVerifyWithPayload(sug, sugIdx, payload, verifyAc.signal);
-        if (out.emptyTargets) {
+        const result = await runSuggestionRowTestsMetrics({
+          apiBase: API_BASE,
+          credentialId: payload.run_credential_id,
+          testSections,
+          targetComparisonRowIndices: targets,
+          comparisonRows: payload.comparison_rows || [],
+          runResults: payload.run_results || [],
+          outputFields: payload.output_fields || [],
+          outputSchema: payload.output_schema,
+          scoreMappingJson: payload.score_mapping || '[]',
+          runWs: runWs || { headers: [], rows: [] },
+          gtContent: gtContent || { headers: [], rows: [] },
+          signal: rowAc.signal,
+        });
+        if (result.aborted) {
           clearFinetuneRowCheckOutcome(sug);
-        } else if (out.buildError) {
+        } else if (result.ok && result.allPass) {
+          setFinetuneRowCheckOutcome(sug, 'pass');
+        } else if (result.ok) {
           setFinetuneRowCheckOutcome(sug, 'fail');
         } else {
-          const { result } = out;
-          if (result.aborted) {
-            clearFinetuneRowCheckOutcome(sug);
-          } else if (result.ok) {
-            setFinetuneRowCheckOutcome(sug, 'pass');
-          } else {
-            setFinetuneRowCheckOutcome(sug, 'fail');
-          }
+          setFinetuneRowCheckOutcome(sug, 'fail');
         }
       } catch (err) {
         if (isReviewRowCheckInProgress(sug)) {
@@ -1139,15 +1158,15 @@ function buildReviewResultUI(overlay, options) {
         }
       }
     } finally {
-      unregisterVerifySession(verifyAc);
+      unregisterRowCheckSession(rowAc);
       delete sug.review_test_in_progress;
       paintCard();
       persistWorking();
     }
   }
 
-  /** True if any pipeline card is running a user-triggered row verify (parallel jobs allowed). */
-  function anyRowVerifyInProgress() {
+  /** True if any pipeline card is running a row-check mini-run (e.g. after finetune). */
+  function anyRowCheckInProgress() {
     return allSuggestions.some((s) => s && s.review_test_in_progress === true);
   }
 
@@ -1160,88 +1179,6 @@ function buildReviewResultUI(overlay, options) {
       renderEditSuggestionCards();
       updateSuggestionsFooter();
     });
-  }
-
-  /**
-   * Run Run+Score check for the card the user clicked (“Click to Verify”).
-   * Multiple cards verify concurrently; the same card ignores repeat clicks while in flight.
-   */
-  async function runRowVerifyForSuggestionIndex(sugIdx) {
-    const sug = allSuggestions[sugIdx];
-    if (!sug || typeof sug !== 'object') return;
-    if (String(sug.source || '').toLowerCase() === 'assistant') return;
-    if (!suggestionNeedsAutoRowCheck(sug, originals, promptSections)) return;
-    if (sug.review_test_in_progress === true) return;
-
-    if (typeof getPayload !== 'function') {
-      showAlert('Could not load Run / Score data. Open the Run node and try again.', { title: 'Cannot verify' });
-      return;
-    }
-
-    const verifyAc = new AbortController();
-    registerVerifySession(verifyAc);
-    try {
-      sug.review_test_in_progress = true;
-      persistWorking();
-      scheduleEditSuggestionCardsRefresh();
-
-      let payload;
-      try {
-        payload = await getPayload();
-      } catch (_) {
-        return;
-      }
-      if (!payload || !payload.run_credential_id) {
-        showAlert('Configure a Run credential on the Run node, then try again.', { title: 'Missing credential' });
-        return;
-      }
-      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-        showAlert('The prompt needs an output schema (Run / prompt settings) to verify.', { title: 'Missing output schema' });
-        return;
-      }
-
-      try {
-        const out = await runRowVerifyWithPayload(sug, sugIdx, payload, verifyAc.signal, {
-          singleComparisonTargetOnly: true,
-        });
-        if (out.emptyTargets) {
-          /* no outcome */
-        } else if (out.buildError) {
-          setFinetuneRowCheckOutcome(sug, 'fail');
-        } else {
-          const { result } = out;
-          try {
-            if (result.aborted) {
-              clearFinetuneRowCheckOutcome(sug);
-            } else if (result.ok) {
-              setFinetuneRowCheckOutcome(sug, 'pass');
-            } else {
-              setFinetuneRowCheckOutcome(sug, 'fail');
-            }
-          } catch (err) {
-            if (err && err.name === 'AbortError') {
-              clearFinetuneRowCheckOutcome(sug);
-            } else {
-              setFinetuneRowCheckOutcome(sug, 'fail');
-            }
-          }
-        }
-      } catch (err) {
-        if (isReviewRowCheckInProgress(sug)) {
-          if (err && err.name === 'AbortError') {
-            clearFinetuneRowCheckOutcome(sug);
-          } else {
-            setFinetuneRowCheckOutcome(sug, 'fail');
-          }
-        }
-      }
-    } finally {
-      unregisterVerifySession(verifyAc);
-      delete sug.review_test_in_progress;
-      persistWorking();
-      scheduleEditSuggestionCardsRefresh();
-      updateSuggestionsFooter();
-    }
   }
 
   /**
@@ -1258,7 +1195,7 @@ function buildReviewResultUI(overlay, options) {
     return true;
   }
 
-  /** Title-line “Click to Finetune” / “Click to Verify”: one listener per pill (pipeline suggestions). */
+  /** Title-line “Click to Finetune”: one listener per pill (pipeline suggestions). */
   function wireInteractiveTitlePillsOnCard(card) {
     if (!card) return;
     card.querySelectorAll('[data-review-title-pill-action="finetune"]').forEach((pill) => {
@@ -1270,21 +1207,6 @@ function buildReviewResultUI(overlay, options) {
         if (Number.isNaN(sugIdx) || !allSuggestions[sugIdx]) return;
         const sug = allSuggestions[sugIdx];
         void handleFinetuneActionForCard(card, sug, sugIdx);
-      };
-      pill.addEventListener('click', onActivate);
-      pill.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        onActivate(e);
-      });
-    });
-    card.querySelectorAll('[data-review-title-pill-action="verify-suggestion"]').forEach((pill) => {
-      const onActivate = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        const sugIdx = parseInt(card.dataset.suggestionIndex, 10);
-        if (Number.isNaN(sugIdx) || !allSuggestions[sugIdx]) return;
-        void runRowVerifyForSuggestionIndex(sugIdx);
       };
       pill.addEventListener('click', onActivate);
       pill.addEventListener('keydown', (e) => {
@@ -1307,10 +1229,12 @@ function buildReviewResultUI(overlay, options) {
     }
     const noButton = card.classList.contains('review-detail-suggestion-card--unlocatable');
     if (titleWrap) {
-      titleWrap.querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`).forEach((el) => el.remove());
+      titleWrap
+        .querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}:not([data-review-verify-chip])`)
+        .forEach((el) => el.remove());
       const specs = collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections);
       for (const spec of specs) {
-        const interactive = spec.clickFinetune === true || spec.clickVerify === true;
+        const interactive = spec.clickFinetune === true;
         const el = document.createElement(interactive ? 'button' : 'span');
         if (interactive) el.type = 'button';
         el.className = `${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`;
@@ -1318,12 +1242,6 @@ function buildReviewResultUI(overlay, options) {
         if (spec.clickFinetune === true) {
           el.setAttribute('aria-label', 'Finetune this suggestion');
           el.setAttribute('data-review-title-pill-action', 'finetune');
-        } else if (spec.clickVerify === true) {
-          el.setAttribute(
-            'aria-label',
-            'Run row checks for suggested prompt edits against the Run and Score worksheet',
-          );
-          el.setAttribute('data-review-title-pill-action', 'verify-suggestion');
         } else if (typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()) {
           el.setAttribute('aria-label', spec.ariaLabel);
         }
@@ -1363,7 +1281,7 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /** After stream: show cards; row verify runs only after the user clicks a title-line “Click to Verify” pill. */
+  /** After stream: show cards (post-finetune row check runs automatically when applicable). */
   async function revealSuggestionsAfterReview() {
     if (!allSuggestions || allSuggestions.length === 0) {
       renderEditSuggestionCards();
@@ -1419,15 +1337,15 @@ function buildReviewResultUI(overlay, options) {
     if (sug.review_finetune_completed === true) return;
     if (sug.review_finetune_in_progress === true) return;
     if (isReviewRowCheckInProgress(sug)) return;
-    if (anyRowVerifyInProgress()) {
-      showAlert('Wait until row verify finishes before using Finetune.', { title: 'Verify in progress' });
+    if (anyRowCheckInProgress()) {
+      showAlert('Wait until the row check finishes before using Finetune.', { title: 'Row check in progress' });
       return;
     }
     if (isReviewStreamingNow()) {
       showAlert('Wait until the review finishes before running finetune.', { title: 'Review in progress' });
       return;
     }
-    const targets = suggestionTargetInputRowIndices(sug);
+    const targets = suggestionTargetScoreRowIndices(sug);
     if (targets.length === 0) {
       showAlert('This suggestion has no target input rows.', { title: 'Cannot finetune' });
       return;
@@ -1592,7 +1510,7 @@ function buildReviewResultUI(overlay, options) {
       );
     if (rowChecksPending) {
       statusClass = 'review-detail-status-note--generating';
-      statusText = 'Verifying suggested changes…';
+      statusText = 'Checking suggested changes…';
     } else if (isComplete) {
       statusClass = 'review-detail-status-note--complete';
       const ne = allSuggestions.length;
@@ -1638,11 +1556,6 @@ function buildReviewResultUI(overlay, options) {
       return;
     }
     const comparisonRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
-    function findComparisonRow(idx) {
-      const n = Number(idx);
-      return comparisonRows.find((r) => Number(r?.row_index) === n) || null;
-    }
-
     rowDiagnostics.forEach((d, displayIdx) => {
       const displayNum = displayIdx + 1;
       const issue = (d.issue_summary || '').trim();
@@ -1650,7 +1563,6 @@ function buildReviewResultUI(overlay, options) {
       const primaryBlurb = issue || rough;
       const preview = truncateWithEllipsis(primaryBlurb, DIAG_LIST_PREVIEW_CHARS);
       const titleLine = diagnosisCardTitleLine(d);
-      const compRow = findComparisonRow(d.row_index);
       const badgeLabel = escapeHtml(String(displayNum));
 
       const card = document.createElement('div');
@@ -1697,7 +1609,7 @@ function buildReviewResultUI(overlay, options) {
     card.className = 'review-detail-suggestion-card review-detail-data-refinement-card';
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong>${buildSuggestionVerifyChipHtml()}</span>
         <p class="review-detail-suggestion-reason"><span class="review-detail-data-refinement-rows">${escapeHtml(rowsText)}</span>: ${escapeHtml((item.reason || '').trim())}</p>
       </div>
     `;
@@ -1770,7 +1682,7 @@ function buildReviewResultUI(overlay, options) {
     card.dataset.reviewTitlePlain = titleLine;
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span><span class="review-detail-suggestion-title-wrap"><strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong>${titlePillsHtml}</span></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span><span class="review-detail-suggestion-title-wrap"><strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong>${buildSuggestionVerifyChipHtml()}${titlePillsHtml}</span></span>
         <p class="review-detail-suggestion-reason">${escapeHtml(previewReason || '—')}</p>
       </div>
       <div class="review-detail-suggestion-card__actions">
@@ -1790,7 +1702,6 @@ function buildReviewResultUI(overlay, options) {
         });
       });
     }
-
     function currentNewSentence() {
       return effectiveNewSentenceForApply(sug);
     }
@@ -1920,7 +1831,7 @@ function buildReviewResultUI(overlay, options) {
     if (!tabs.length || !panels.length) return;
 
     function activate(name) {
-      const n = name === 'analysis' || name === 'suggestions' ? name : 'suggestions';
+      const n = name === 'analysis' || name === 'suggestions' ? name : 'analysis';
       tabs.forEach((btn) => {
         const on = btn.dataset.tab === n;
         btn.classList.toggle('review-detail-tab--active', on);
@@ -1935,12 +1846,7 @@ function buildReviewResultUI(overlay, options) {
     const stored = overlay.dataset.reviewRightTab;
     let initial = stored === 'analysis' || stored === 'suggestions' ? stored : null;
     if (!initial) {
-      const phase1Only =
-        saved.streamComplete === false &&
-        rowDiagnostics.length > 0 &&
-        allSuggestions.length === 0 &&
-        dataRefinement.length === 0;
-      initial = phase1Only ? 'analysis' : 'suggestions';
+      initial = 'analysis';
     }
     activate(initial);
 
@@ -2125,7 +2031,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
       if (!data || typeof data !== 'object') return;
       // 流水线已结束时必须整页 refresh（Issue analysis / 建议列表）；reconcile 只合并已有卡片，不会重建 row_diagnostics。
       const busySideSession =
-        hasActiveVerifySessions() || hasActiveFinetuneSessions();
+        hasActiveRowCheckSessions() || hasActiveFinetuneSessions();
       if (busySideSession && data.streamComplete !== true) {
         if (typeof overlay._reviewDetailReconcile === 'function') {
           overlay._reviewDetailReconcile(data);
@@ -2176,24 +2082,9 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
   const payload = await Promise.resolve(typeof getPayload === 'function' ? getPayload() : null);
   const rowDiagnostics = Array.isArray(saved?.row_diagnostics)
-    ? saved.row_diagnostics
-        .map((d) => {
-          const rid = Number(d && d.row_index);
-          const ri = Array.isArray(d && d.row_indices)
-            ? d.row_indices.map((x) => Number(x)).filter((x) => !Number.isNaN(x))
-            : [];
-          return {
-            row_index: rid,
-            row_indices: ri.length ? ri : (!Number.isNaN(rid) ? [rid] : []),
-            card_title: String((d && d.card_title) || ''),
-            issue_summary: String((d && d.issue_summary) || ''),
-            rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
-            problem_category_hint: String((d && d.problem_category_hint) || ''),
-          };
-        })
-        .filter((d) => !Number.isNaN(d.row_index))
+    ? saved.row_diagnostics.map((d) => normalizeRowDiagnosticFromSaved(d)).filter(Boolean)
     : [];
-  rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
+  rowDiagnostics.sort((a, b) => a.input_index - b.input_index);
   const lines = [
     'You are a prompt improvement assistant. Your ONLY job is to help improve the current prompt below. Do not discuss general prompt engineering, other prompts, or unrelated topics. Everything you say and do must directly serve improving this prompt.',
     '',
@@ -2223,12 +2114,17 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     lines.push('');
     rowDiagnostics.forEach((d, i) => {
       const n = i + 1;
-      const multi = Array.isArray(d.row_indices) && d.row_indices.length > 1;
-      const rowLabel = multi
-        ? d.row_indices.map((x) => formatRunRowIndexForDisplay(x)).join(', ')
-        : formatRunRowIndexForDisplay(d.row_index);
-      const rowSuffix = multi ? `rows ${rowLabel} (same input)` : `row ${rowLabel}`;
-      lines.push(`### Issue analysis #${n} · Score comparison run result ${rowSuffix}`);
+      const compIdxs = diagnosticComparisonRowIndices(d);
+      const multi = compIdxs.length > 1;
+      if (multi) {
+        const rowLabel = compIdxs.map((x) => formatRunRowIndexForDisplay(x)).join(', ');
+        lines.push(`### Issue analysis #${n} · Input #${d.input_index} · Score rows ${rowLabel}`);
+      } else if (compIdxs.length === 1) {
+        const rowLabel = formatRunRowIndexForDisplay(compIdxs[0]);
+        lines.push(`### Issue analysis #${n} · Input #${d.input_index} · Score row ${rowLabel}`);
+      } else {
+        lines.push(`### Issue analysis #${n} · worksheet input #${d.input_index}`);
+      }
       const ct = (d.card_title || '').trim();
       if (ct) lines.push(`Headline: ${ct}`);
       lines.push(`Issue: ${(d.issue_summary || '').trim() || '(none)'}`);
@@ -2308,7 +2204,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
         ? s.phase1_addresses.map((x) => String(x || '').trim()).filter(Boolean)
         : [];
       if (p1s.length) lines.push(`   Responds to: ${p1s.join(' · ')}`);
-      const tIdx = suggestionTargetInputRowIndices(s);
+      const tIdx = suggestionTargetScoreRowIndices(s);
       const tLbl = formatScoreTableTargetLabels(comparisonRows, tIdx);
       if (tLbl) lines.push(`   Score table ${tLbl}`);
       const cf = String(s.chat_focus || '').trim();
@@ -2329,7 +2225,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('When you decide to suggest a concrete edit, include one or more blocks in this exact format:');
   lines.push('[ASSISTANT_SUGGESTION]');
   lines.push(
-    '{"old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "focus": "One-line summary from this chat (optional if focus_bullets carry the detail)", "focus_bullets": ["Concrete point from chat, like pipeline phase-1 bullets", "Second point"], "reason": "Why this edit helps (from this chat)", "name": "Short title", "target_input_row_indices": [1]}',
+    '{"old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "focus": "One-line summary from this chat (optional if focus_bullets carry the detail)", "focus_bullets": ["Concrete point from chat, like pipeline phase-1 bullets", "Second point"], "reason": "Why this edit helps (from this chat)", "name": "Short title", "target_score_row_indices": [1]}',
   );
   lines.push('[/ASSISTANT_SUGGESTION]');
   lines.push(
@@ -2337,7 +2233,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   );
   lines.push('When adding suggestions, also write a brief comment (e.g. what you changed or why it helps). The user will see this instead of a generic message. If you omit the comment, we show "Added. Please check the Suggestions panel on the left and choose Accept or Revert."');
   lines.push(
-    'Rules: old_sentence must match the current prompt content exactly and be **locatable in exactly one section** (if the same substring appears in multiple sections, the suggestion is rejected). new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **1-based** row numbers — same as Issue / Score **#** (and pipeline Phase 2). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
+    'Rules: old_sentence must match the current prompt content exactly and be **locatable in exactly one section** (if the same substring appears in multiple sections, the suggestion is rejected). new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_score_row_indices** is required: non-empty JSON array of **1-based** row numbers — same as Issue / Score **#** (and pipeline Phase 2). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
   );
   lines.push('');
   lines.push('## Removing suggestions');
@@ -2363,7 +2259,7 @@ function parseAssistantSuggestions(text, dataRoot) {
       const obj = JSON.parse(m[1].trim());
       if (obj && String(obj.old_sentence || '').trim()) {
         const compRows = dataRoot && Array.isArray(dataRoot.comparison_rows) ? dataRoot.comparison_rows : [];
-        const rawRi = obj.target_input_row_indices ?? obj.row_indices;
+        const rawRi = obj.target_score_row_indices ?? obj.target_input_row_indices ?? obj.row_indices;
         const ri = normalizeAssistantTargetsToRowIndex(Array.isArray(rawRi) ? rawRi : [], compRows);
         if (ri.length === 0) continue;
         const rawBullets = obj.focus_bullets ?? obj.chat_focus_bullets;
@@ -2379,7 +2275,7 @@ function parseAssistantSuggestions(text, dataRoot) {
               chat_focus_bullets,
               reason: String(obj.reason || '').trim(),
               name: String(obj.name || '').trim(),
-              target_input_row_indices: ri,
+              target_score_row_indices: ri,
               row_indices: ri,
               source: 'assistant',
             },

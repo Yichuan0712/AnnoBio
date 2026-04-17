@@ -1128,23 +1128,23 @@ export function buildWorkflowCanvas(root) {
         setReviewNodeProgress(getNodeById(reviewNodeId), pct);
         streamSaved.reviewProgress = pct;
         if (ev.opinion && typeof ev.opinion === 'object') {
-          const rid = ev.row_index != null ? parseInt(ev.row_index, 10) : NaN;
-          if (!Number.isNaN(rid)) {
+          const iid = ev.input_index != null ? parseInt(ev.input_index, 10) : NaN;
+          if (!Number.isNaN(iid)) {
             const list = Array.isArray(streamSaved.row_diagnostics) ? streamSaved.row_diagnostics.slice() : [];
             const rowIndicesRaw = Array.isArray(ev.row_indices) ? ev.row_indices : [];
             const row_indices = rowIndicesRaw.map((x) => parseInt(x, 10)).filter((x) => !Number.isNaN(x));
             const entry = {
-              row_index: rid,
-              row_indices: row_indices.length ? row_indices : [rid],
+              input_index: iid,
+              row_indices,
               card_title: String(ev.opinion.card_title || ''),
               issue_summary: String(ev.opinion.issue_summary || ''),
               rough_modification_opinion: String(ev.opinion.rough_modification_opinion || ''),
               problem_category_hint: String(ev.opinion.problem_category_hint || ''),
             };
-            const idx = list.findIndex((x) => x && Number(x.row_index) === rid);
+            const idx = list.findIndex((x) => x && Number(x.input_index) === iid);
             if (idx >= 0) list[idx] = entry;
             else list.push(entry);
-            list.sort((a, b) => (Number(a.row_index) || 0) - (Number(b.row_index) || 0));
+            list.sort((a, b) => Number(a.input_index) - Number(b.input_index));
             streamSaved.row_diagnostics = list;
           }
         }
