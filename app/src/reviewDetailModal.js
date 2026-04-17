@@ -23,6 +23,7 @@ import {
 import {
   rebuildWorkingFromApplied,
   getLocatableSegment,
+  findSectionIndexForOldSentence,
   effectiveNewSentenceForApply,
   suggestionTargetInputRowIndices,
   suggestionNeedsAutoRowCheck,
@@ -1720,15 +1721,22 @@ function buildReviewResultUI(overlay, options) {
     const actionsFull = suggestionActionsFullForCard(sug);
     const sid = sug && sug.suggestion_id != null && sug.suggestion_id !== '' ? sug.suggestion_id : '';
     const shortLabel = formatSuggestionIdDisplay(sid);
-    const secIdx = Math.max(0, Math.min(sug.section_index, (promptSections || []).length - 1));
-    const name = sectionNames[secIdx] || `Section ${secIdx}`;
     const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
-    const oldSentence = (sug.old_sentence || '').trim();
+    const rawOldSentence = sug.old_sentence != null ? String(sug.old_sentence) : '';
+    const oldSentence = rawOldSentence.trim();
+    let secIdx = 0;
+    if (useSentenceEdit && oldSentence) {
+      const found = findSectionIndexForOldSentence(originals, rawOldSentence);
+      if (found >= 0) secIdx = found;
+    }
+    const name = sectionNames[secIdx] || `Section ${secIdx}`;
     const newSentence = (sug.new_sentence || '').trim();
     const legacyNewContent = (sug.new_content || '').trim();
     const currentContent = working[secIdx] ? (working[secIdx].content || '') : '';
     const originalContent = (originals[secIdx] && originals[secIdx].content) ? originals[secIdx].content : '';
-    const segmentInOriginal = useSentenceEdit ? getLocatableSegment(originalContent, oldSentence) : null;
+    const segmentInOriginal = useSentenceEdit
+      ? getLocatableSegment(originalContent, rawOldSentence) || getLocatableSegment(originalContent, oldSentence)
+      : null;
     const unlocatable = useSentenceEdit && !segmentInOriginal;
     const noButton = unlocatable;
     /* Only show Revert when user has explicitly applied (sug.applied === true from persist). Fresh suggestions must show Accept. */
@@ -1745,10 +1753,9 @@ function buildReviewResultUI(overlay, options) {
 
     const detailsBtnHtml =
       '<button type="button" class="btn btn-secondary review-detail-diagnosis-detail-btn">View detail</button>';
-    const acceptBtnHtml =
-      actionsFull && !noButton
-        ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'
-        : '';
+    const acceptBtnHtml = !noButton
+      ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'
+      : '';
     const titlePillsHtml = buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections);
     const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
 
@@ -1791,13 +1798,13 @@ function buildReviewResultUI(overlay, options) {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
       if (!useSentenceEdit) return legacyNewContent;
       const ns = currentNewSentence();
-      const seg = getLocatableSegment(c, oldSentence);
+      const seg = getLocatableSegment(c, rawOldSentence) || getLocatableSegment(c, oldSentence);
       return seg ? c.replace(seg, ns, 1) : c.replace(oldSentence, ns, 1);
     }
     function getRemoveSpanForDiff() {
       if (!useSentenceEdit || currentNewSentence() !== '') return undefined;
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
-      return getLocatableSegment(c, oldSentence) || oldSentence;
+      return getLocatableSegment(c, rawOldSentence) || getLocatableSegment(c, oldSentence) || oldSentence;
     }
     /** Reverted section content (current with new_sentence -> old_sentence, or original for legacy). */
     function getRevertedContent() {
@@ -1805,7 +1812,7 @@ function buildReviewResultUI(overlay, options) {
       if (!useSentenceEdit) return originalContent || '';
       const ns = currentNewSentence();
       const seg = getLocatableSegment(c, ns);
-      return seg ? c.replace(seg, oldSentence, 1) : c.replace(ns, oldSentence, 1);
+      return seg ? c.replace(seg, rawOldSentence, 1) : c.replace(ns, oldSentence, 1);
     }
     function showPreview() {
       if (sug.applied) {
@@ -2292,7 +2299,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     suggestions.forEach((s) => {
       const sid = (s && s.suggestion_id) ? String(s.suggestion_id) : '';
       const shortLabel = formatSuggestionIdDisplay(sid);
-      const title = (s.name || '').trim() || (s.reason || '').trim().slice(0, 80) || `[Section ${s.section_index ?? 0}] "${(s.old_sentence || '').slice(0, 40)}..." → "${(s.new_sentence || '').slice(0, 40)}..."`;
+      const title = (s.name || '').trim() || (s.reason || '').trim().slice(0, 80) || `"${(s.old_sentence || '').slice(0, 40)}..." → "${(s.new_sentence || '').slice(0, 40)}..."`;
       const applied = s.applied === true ? ' [applied]' : '';
       const src = String(s?.source || '').trim().toLowerCase();
       const tag = src === 'assistant' ? '[assistant — removable]' : '[pipeline — not editable via chat]';
@@ -2322,7 +2329,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('When you decide to suggest a concrete edit, include one or more blocks in this exact format:');
   lines.push('[ASSISTANT_SUGGESTION]');
   lines.push(
-    '{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "focus": "One-line summary from this chat (optional if focus_bullets carry the detail)", "focus_bullets": ["Concrete point from chat, like pipeline phase-1 bullets", "Second point"], "reason": "Why this edit helps (from this chat)", "name": "Short title", "target_input_row_indices": [1]}',
+    '{"old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "focus": "One-line summary from this chat (optional if focus_bullets carry the detail)", "focus_bullets": ["Concrete point from chat, like pipeline phase-1 bullets", "Second point"], "reason": "Why this edit helps (from this chat)", "name": "Short title", "target_input_row_indices": [1]}',
   );
   lines.push('[/ASSISTANT_SUGGESTION]');
   lines.push(
@@ -2330,7 +2337,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   );
   lines.push('When adding suggestions, also write a brief comment (e.g. what you changed or why it helps). The user will see this instead of a generic message. If you omit the comment, we show "Added. Please check the Suggestions panel on the left and choose Accept or Revert."');
   lines.push(
-    'Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **1-based** row numbers — same as Issue / Score **#** (and pipeline Phase 2). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
+    'Rules: old_sentence must match the current prompt content exactly and be **locatable in exactly one section** (if the same substring appears in multiple sections, the suggestion is rejected). new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **1-based** row numbers — same as Issue / Score **#** (and pipeline Phase 2). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
   );
   lines.push('');
   lines.push('## Removing suggestions');
@@ -2354,7 +2361,7 @@ function parseAssistantSuggestions(text, dataRoot) {
   while ((m = re.exec(text)) !== null) {
     try {
       const obj = JSON.parse(m[1].trim());
-      if (obj && typeof obj.section_index === 'number') {
+      if (obj && String(obj.old_sentence || '').trim()) {
         const compRows = dataRoot && Array.isArray(dataRoot.comparison_rows) ? dataRoot.comparison_rows : [];
         const rawRi = obj.target_input_row_indices ?? obj.row_indices;
         const ri = normalizeAssistantTargetsToRowIndex(Array.isArray(rawRi) ? rawRi : [], compRows);
@@ -2366,7 +2373,6 @@ function parseAssistantSuggestions(text, dataRoot) {
         blocks.push(
           ensureSuggestionObjectId(
             {
-              section_index: obj.section_index,
               old_sentence: String(obj.old_sentence || '').trim(),
               new_sentence: String(obj.new_sentence || '').trim(),
               chat_focus: String(obj.focus ?? obj.chat_focus ?? '').trim(),
@@ -2689,7 +2695,11 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
       if (reviewSaved && typeof reviewSaved === 'object') {
         if (parsedSuggestions.length > 0) {
           const sections = reviewSaved.workingSections || reviewSaved.promptSections || [];
-          const validSuggestions = parsedSuggestions.filter((s) => s.section_index >= 0 && s.section_index < sections.length);
+          const validSuggestions = parsedSuggestions.filter((s) => {
+            const raw = String(s.old_sentence ?? '');
+            if (!raw.trim()) return false;
+            return findSectionIndexForOldSentence(sections, raw) >= 0;
+          });
           suggestions = suggestions.concat(validSuggestions);
         }
         persistChatResult({

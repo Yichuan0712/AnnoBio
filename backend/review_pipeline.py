@@ -5,18 +5,20 @@ Phase 1 — per **failed input**: same dataset input; the prompt gives **model o
 
 Phase 1.5 — **cluster** Phase‑1 issues that share the same root cause / fix strategy (one LLM call). Fallback: group by `problem_category_hint`.
 
-Phase 2 — **one LLM call per issue cluster** (sequential); PART C of the Phase 2 meta-prompt lists cluster findings; localized `prompt_edits` must cover them. Identical spans are still **deduped** once before emit.
+Phase 2 — **one LLM call per issue cluster** (sequential); cluster diagnosis plus a **single** copy of the stored prompt (same layout as Phase 1); localized `prompt_edits` must cover findings. Identical spans are still **deduped** once before emit.
 
-Extraction-style tasks: **under-coverage** (required items missing) and **over-coverage** (extra items not in ground truth) are both failures—the prompts below tell the model to diagnose and fix with that rubric.
+Extraction-style tasks: **under-coverage** and **over-coverage** are both failures; Phase 1 instructs the model accordingly.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Callable
 
 from pydantic import BaseModel, Field
+from rapidfuzz import fuzz, utils
 
 from llm import run_structured as llm_run_structured
 from safe_stdio import safe_print
@@ -51,7 +53,7 @@ def _sec_name_content(sec: Any) -> tuple[str, str]:
     return (str(getattr(sec, "name", "") or "").strip() or "(unnamed)", str(getattr(sec, "content", "") or ""))
 
 
-def format_prompt_for_review(prompt_sections: list[Any]) -> str:
+def _format_prompt_for_review(prompt_sections: list[Any]) -> str:
     parts: list[str] = []
     for i, sec in enumerate(prompt_sections or []):
         name, content = _sec_name_content(sec)
@@ -79,19 +81,6 @@ def _score_row_one_based(d: dict[str, Any]) -> int:
         return int(d.get("row_index", -1)) + 1
     except (TypeError, ValueError):
         return 0
-
-
-def _rows_by_comparison_index(group_rows: list[Any]) -> dict[int, dict[str, Any]]:
-    out: dict[int, dict[str, Any]] = {}
-    for r in group_rows:
-        d = _row_to_dict(r)
-        try:
-            k = int(d.get("row_index", -3))
-        except (TypeError, ValueError):
-            continue
-        if k >= 0:
-            out[k] = d
-    return out
 
 
 def _phase1_anchor_comparison_index(group_rows: list[Any]) -> int:
@@ -244,57 +233,151 @@ def _loose_match_key_and_starts(text: str) -> tuple[str, list[int]]:
     return "".join(key_chars), starts
 
 
-def resolve_old_sentence_span(section_body: str, old_sentence: str) -> str | None:
+_MD_NUMBERED_ITEM_START = re.compile(r"\s*\d+\.\s")
+
+
+def _expand_span_to_logical_end(content: str, start: int, end: int, max_expand: int = 12000) -> int:
+    """
+    Extend ``end`` forward so truncated fuzzy matches cover the rest of a list item / paragraph.
+
+    Stops at blank line (``\\n\\n``) or a new top-level numbered line (``\\n`` + optional ws + ``digits.``).
+    """
+    n = len(content)
+    if end >= n:
+        return end
+    limit = min(n, end + max(400, max_expand))
+    pos = end
+    while pos < limit:
+        if pos + 1 < n and content[pos : pos + 2] == "\n\n":
+            return pos
+        if content[pos] == "\n" and _MD_NUMBERED_ITEM_START.match(content, pos + 1):
+            return pos
+        pos += 1
+    return limit
+
+
+def _slice_with_truncation_extension(content: str, d0: int, d1: int, old: str, score: float) -> str:
+    """Return ``content[d0:d1]``, optionally extending ``d1`` when ``old`` looks truncated or ends mid-token."""
+    ost = old.strip()
+    if d0 < 0 or d1 > len(content) or d0 >= d1 or not ost:
+        return content[d0:d1] if d0 >= 0 and d1 <= len(content) and d0 < d1 else ""
+    extend = False
+    if d1 < len(content):
+        span_len = d1 - d0
+        if score >= 85.0 and span_len < len(ost) - 1:
+            extend = True
+        elif content[d1].isalnum() and ost[-1].isalnum():
+            extend = True
+        elif len(ost) >= 28 and ost[-1] not in ".!?:\n\r" and content[d1] not in "\n\r":
+            extend = True
+    if extend:
+        d1 = _expand_span_to_logical_end(content, d0, d1)
+    return content[d0:d1]
+
+
+def _resolve_old_sentence_span_exactish(content: str, old_sentence: str) -> str | None:
+    """Cheap path before ``rapidfuzz``: substring, typographic quotes, 1:1 normalized index, newline-normalized slice."""
+    o = old_sentence or ""
+    if not o.strip():
+        return None
+
+    def _span(needle: str) -> str | None:
+        i = content.find(needle)
+        return content[i : i + len(needle)] if i >= 0 else None
+
+    hit = _span(o)
+    if hit is not None:
+        return hit
+    oq = _normalize_typographic_quotes(o)
+    hit = _span(oq)
+    if hit is not None:
+        return hit
+    cq = _normalize_typographic_quotes(content)
+    if len(cq) == len(content) and oq in cq:
+        i = cq.find(oq)
+        if i >= 0:
+            return content[i : i + len(oq)]
+    span = _span_from_nc_match(content, oq.replace("\r\n", "\n").replace("\r", "\n"))
+    return span
+
+
+def _resolve_old_sentence_span_fuzzy(content: str, old_sentence: str) -> str | None:
+    """``rapidfuzz.partial_ratio_alignment`` + same truncation extension as exact hits."""
+    o = (old_sentence or "").strip()
+    if not o or not content:
+        return None
+    align = fuzz.partial_ratio_alignment(o, content, processor=utils.default_process, score_cutoff=76.0)
+    if align is None:
+        return None
+    d0, d1 = int(align.dest_start), int(align.dest_end)
+    if d0 < 0 or d1 > len(content) or d0 >= d1:
+        return None
+    return _slice_with_truncation_extension(content, d0, d1, o, float(align.score))
+
+
+def _resolve_old_sentence_span_unique_prefix_loose(content: str, old_sentence: str) -> str | None:
+    """When fuzzy fails: longest ``old`` loose-key prefix that occurs **once** in ``content`` loose key."""
+    key_c, starts_c = _loose_match_key_and_starts(content)
+    key_o, _ = _loose_match_key_and_starts(old_sentence)
+    if not key_o or not key_c:
+        return None
+    min_l = min(20, len(key_o))
+    for L in range(len(key_o), min_l - 1, -1):
+        pref = key_o[:L]
+        pos = key_c.find(pref)
+        if pos < 0:
+            continue
+        if key_c.find(pref, pos + 1) >= 0:
+            continue
+        p1 = pos + L
+        if pos >= len(starts_c) or p1 > len(starts_c) or p1 <= pos:
+            continue
+        c0 = starts_c[pos]
+        c1 = starts_c[p1 - 1] + 1
+        exp = _expand_span_to_logical_end(content, c0, c1)
+        return content[c0:exp]
+    return None
+
+
+def _resolve_old_sentence_span(section_body: str, old_sentence: str) -> str | None:
     """
     Map Phase 2 ``old_sentence`` to the verbatim substring of ``section_body`` for Accept/Revert.
 
-    Order: exact substring → curly-quote ASCII match → index match when quote-normalization is 1:1
-    length-preserving → newline-normalized slice → loose key (ignore ``**``, etc.) with **unique** hit.
+    Order: cheap exactish → ``rapidfuzz`` → unique-prefix loose (markdown-tolerant).
     """
     content = section_body or ""
     o = old_sentence or ""
     if not o.strip():
         return None
 
-    def _first_span(needle: str) -> str | None:
-        i = content.find(needle)
-        return content[i : i + len(needle)] if i >= 0 else None
-
-    hit = _first_span(o)
+    hit = _resolve_old_sentence_span_exactish(content, o)
     if hit is not None:
-        return hit
-
-    oq = _normalize_typographic_quotes(o)
-    hit = _first_span(oq)
-    if hit is not None:
-        return hit
-
-    cq = _normalize_typographic_quotes(content)
-    if len(cq) == len(content) and oq in cq:
-        i = cq.find(oq)
+        i = content.find(hit)
         if i >= 0:
-            return content[i : i + len(oq)]
+            return _slice_with_truncation_extension(content, i, i + len(hit), o, 100.0)
+        return hit
 
-    on = oq.replace("\r\n", "\n").replace("\r", "\n")
-    span = _span_from_nc_match(content, on)
-    if span is not None:
-        return span
+    hit = _resolve_old_sentence_span_fuzzy(content, o)
+    if hit is not None:
+        return hit
 
-    key_c, starts = _loose_match_key_and_starts(content)
-    key_o, _ = _loose_match_key_and_starts(o)
-    if not key_o:
+    return _resolve_old_sentence_span_unique_prefix_loose(content, o)
+
+
+def _resolve_old_sentence_unique_across_sections(sections: list[Any], raw_old: str) -> str | None:
+    """Return the resolved verbatim span when ``raw_old`` matches **exactly one** section body; else ``None``."""
+    n = len(sections or [])
+    if n == 0 or not (raw_old or "").strip():
         return None
-    pos = key_c.find(key_o)
-    if pos < 0:
-        return None
-    if key_c.find(key_o, pos + 1) != -1:
-        return None
-    p1 = pos + len(key_o)
-    if pos >= len(starts) or p1 > len(starts) or p1 <= pos:
-        return None
-    c0 = starts[pos]
-    c1 = starts[p1 - 1] + 1
-    return content[c0:c1]
+    hits: list[str] = []
+    for i in range(n):
+        _, cbody = _sec_name_content(sections[i])
+        sp = _resolve_old_sentence_span(cbody, raw_old)
+        if sp is not None:
+            hits.append(sp)
+    if len(hits) == 1:
+        return hits[0]
+    return None
 
 
 def _targets_zero_based_from_llm(values: list[Any], comparison_rows: list[Any]) -> list[int]:
@@ -409,17 +492,12 @@ class PromptEditLlm(BaseModel):
         min_length=1,
         max_length=3,
         description=(
-            "1–3 strings naming PART C findings this edit fixes; if many bullets are the same failure class, merge into fewer strings"
+            "1–3 strings naming cluster-diagnosis items this edit fixes; merge when many bullets share one failure class"
         ),
-    )
-    section_index: int = Field(
-        0,
-        ge=0,
-        description="N from `--- Section index N: ---` in PART A (same 0-based slot the app uses for that section body)",
     )
     old_sentence: str = Field(
         ...,
-        description="Contiguous substring from the PART A body under that section header (server resolves minor ** / quote / newline differences)",
+        description="Contiguous substring copied from the stored prompt (unique across sections when possible)",
     )
     new_sentence: str = Field(
         default="",
@@ -431,24 +509,13 @@ class PromptEditLlm(BaseModel):
     )
 
 
-class PromptEditSuggestion(BaseModel):
-    """Full prompt edit with targets (after server attaches `target_input_row_indices`)."""
+class PromptEditSuggestion(PromptEditLlm):
+    """Same as Phase 2 LLM edit plus comparison-row targets (filled server-side; not in LLM schema)."""
 
-    name: str = Field(..., description="Short title for this edit")
-    phase1_addresses: list[str] = Field(
-        ...,
-        min_length=1,
-        max_length=3,
-        description="PART C finding labels this edit addresses",
-    )
-    section_index: int = Field(0, ge=0, description="Section index in PART A")
-    old_sentence: str = Field(..., description="Verbatim span from PART A")
-    new_sentence: str = Field(default="", description="Replacement text")
-    reason: str = Field(..., description="Why this edit fixes the issue(s)")
     target_input_row_indices: list[int] = Field(
         ...,
         min_length=1,
-        description="1-based Score # values; filled server-side from the issue cluster.",
+        description="Server-filled 1-based Score # labels for this cluster; sanitize maps to 0-based row_index.",
     )
 
 
@@ -458,8 +525,8 @@ class Phase2ModificationsLlm(BaseModel):
     prompt_edits: list[PromptEditLlm] = Field(
         default_factory=list,
         description=(
-            "Every edit MUST address PART C (cluster diagnosis); together they MUST cover those failures. "
-            "Each old_sentence must be a substring of the matching PART A section body only."
+            "Every edit MUST address the cluster diagnosis; together they MUST cover those failures. "
+            "Each old_sentence must be resolvable in the stored prompt (prefer spans unique across the full prompt)."
         ),
     )
 
@@ -556,14 +623,12 @@ Return JSON **`clusters`** only: each item has `member_indices` (ints from the c
 def _cluster_opinions_for_phase2(
     *,
     opinions: list[tuple[PerRowOpinion, list[int]]],
-    comparison_rows: list[Any],
     provider: str,
     model: str,
     api_key: str,
     max_tokens: int,
     is_cancelled: Callable[[], bool],
 ) -> list[list[int]]:
-    _ = comparison_rows
     n = len(opinions)
     result_source = ""
     final: list[list[int]]
@@ -790,13 +855,13 @@ def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[A
 
 ## Model output
 
-What the task model returned. **Only rows with non-empty model output appear**; rows with nothing to show are omitted.
+What the task model returned.
 
 {model_body}
 
 ## Expected output
 
-Ground truth used for scoring. **Only rows with expected fields appear**; rows with nothing to show are omitted.
+Ground truth used for scoring.
 
 {expected_body}
 
@@ -809,14 +874,6 @@ Ground truth used for scoring. **Only rows with expected fields appear**; rows w
 
 Return only those four fields.
 """
-
-
-def _sections_block_for_phase2(sections: list[Any]) -> str:
-    parts: list[str] = []
-    for i, sec in enumerate(sections or []):
-        name, content = _sec_name_content(sec)
-        parts.append(f"--- Section index {i}: {name} ---\n{content}")
-    return "\n\n".join(parts) if parts else "(no sections)"
 
 
 def _phase2_single_issue_block(*, op: PerRowOpinion) -> str:
@@ -851,59 +908,43 @@ def _build_phase2_modifications_prompt(
     *,
     prompt_text: str,
     opinions_text: str,
-    sections: list[Any],
     cluster_context: str = "",
 ) -> str:
     """One Phase 2 LLM call for one **cluster** of Phase 1 issues (single input group or merged related findings)."""
-    sections_block = _sections_block_for_phase2(sections)
     scope_line = (
         f"**Cluster:** {cluster_context.strip()}\n\n" if (cluster_context or "").strip() else ""
     )
     coverage_rule = (
-        "- Each edit addresses PART C via `phase1_addresses` and `reason`; no generic polish.\n"
-        "- One edit per distinct fix unless one sentence fixes several PART C items.\n"
-        "- Cover every distinct PART C failure; if one is unfixable by substring edit, state that in `reason` on the closest edit."
+        "- Each edit ties to cluster diagnosis via `phase1_addresses` and `reason`; no generic polish.\n"
+        "- One edit per distinct fix unless one sentence fixes several diagnosis items.\n"
+        "- Cover every distinct failure called out below; if one is unfixable by substring edit, state that in `reason` on the closest edit."
     )
-    return f"""Produce minimal **localized** edits to the stored prompt so behavior matches **PART C**. Output only `prompt_edits`.
+    return f"""Produce minimal **localized** edits to the stored prompt so behavior matches the cluster diagnosis. Output only `prompt_edits`.
 
-PART A, B, and C are **sequential sections** for reading only—never treat them as columns or side-by-side panels to reconcile visually.
+The **stored prompt** block and the **cluster diagnosis** block are separate—read in order; do not treat them as columns or side-by-side panels.
 
 {scope_line}Rules:
-- `old_sentence` must be copied verbatim from **PART A** only; patches apply to stored section bodies.
-- `section_index` is the integer **N** in `--- Section index N: ---` inside **PART A** below. Headings in *this* message are not section indices.
-- If PART C has any finding, return **at least one** edit. Empty `prompt_edits` only when PART A has no bodies.
-- Do not paste diagnosis text from PART C into `old_sentence`.
+- `old_sentence` must be copied verbatim from **one** place in the stored prompt below. Prefer a span that appears **only once** in the full prompt so the server can resolve it unambiguously.
+- If the diagnosis lists any finding, return **at least one** edit. Empty `prompt_edits` only when the stored prompt has no section bodies.
+- Do not paste diagnosis markdown into `old_sentence`.
 
 {coverage_rule}
 
----
-
-### PART A — Section bodies (only source for `old_sentence`)
-
-{sections_block}
-
----
-
-### PART B — Full template (context; **PART A** wins if wording differs)
+## Stored prompt (same layout as Phase 1 review; sole source for `old_sentence`)
 
 {prompt_text}
 
----
-
-### PART C — Cluster diagnosis (never use as `old_sentence`)
+## Cluster diagnosis (never use as `old_sentence`)
 
 {opinions_text}
 
----
-
-### Each `prompt_edits` item
+## `prompt_edits` fields
 
 - **name**: Short UI label.
-- **phase1_addresses**: 1–3 strings; prefer PART C **label** values.
-- **section_index**: **N** from PART A header line.
-- **old_sentence**: Contiguous substring of that section body in PART A.
+- **phase1_addresses**: 1–3 strings; prefer diagnosis **label** lines.
+- **old_sentence**: Contiguous substring from the stored prompt (see rules above).
 - **new_sentence**: Replacement, or `""` to delete.
-- **reason**: How this fixes the cited PART C items.
+- **reason**: How this fixes the cited diagnosis items.
 
 Invalid spans are dropped server-side.
 
@@ -912,7 +953,7 @@ Return **`prompt_edits`** only.
 
 
 def _phase2_old_sentence_smells_diagnosis_leak(raw: str) -> bool:
-    """True if the model pasted PART C / diagnosis markdown into old_sentence (never valid)."""
+    """True if the model pasted cluster-diagnosis markdown into old_sentence (never valid)."""
     t = (raw or "").strip()
     if not t:
         return False
@@ -929,58 +970,28 @@ def _phase2_old_sentence_smells_diagnosis_leak(raw: str) -> bool:
     return False
 
 
-def _dedupe_prompt_edit_objects(edits: list[PromptEditSuggestion]) -> list[PromptEditSuggestion]:
-    """Drop duplicate (section_index, old_sentence, new_sentence) after Phase 2 merges."""
-    seen: set[tuple[int, str, str]] = set()
-    out: list[PromptEditSuggestion] = []
-    for e in edits:
-        old = (e.old_sentence or "").strip()
-        new = e.new_sentence if e.new_sentence is not None else ""
-        if not isinstance(new, str):
-            new = str(new)
-        key = (int(e.section_index), old, new)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(e)
-    return out
-
-
 def _sanitize_prompt_edits(
     sections: list[Any],
     edits: list[PromptEditSuggestion],
     comparison_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Drop edits whose old_sentence is not an exact substring of the section (UI needs a real span)."""
+    """Keep edits whose ``old_sentence`` resolves in **exactly one** section body (verbatim span for UI apply)."""
     out: list[dict[str, Any]] = []
     n = len(sections or [])
     if n == 0:
         return out
     cr = list(comparison_rows or [])
     for e in edits:
-        idx = int(e.section_index)
-        idx = max(0, min(idx, n - 1))
-        _, content = _sec_name_content(sections[idx])
         raw_old = e.old_sentence or ""
         if not raw_old.strip():
             continue
         if _phase2_old_sentence_smells_diagnosis_leak(raw_old):
             safe_print(
-                f"[Review] Phase 2 edit skipped (old_sentence is diagnosis text, not PART A): {raw_old[:120]!r}",
+                f"[Review] Phase 2 edit skipped (old_sentence is diagnosis text, not stored prompt): {raw_old[:120]!r}",
                 flush=True,
             )
             continue
-        old = resolve_old_sentence_span(content, raw_old)
-        if old is None and n > 0:
-            hits: list[tuple[int, str]] = []
-            for si in range(n):
-                _, cbody = _sec_name_content(sections[si])
-                sp = resolve_old_sentence_span(cbody, raw_old)
-                if sp is not None:
-                    hits.append((si, sp))
-            if len(hits) == 1:
-                idx, old = hits[0]
-                _, content = _sec_name_content(sections[idx])
+        old = _resolve_old_sentence_unique_across_sections(sections, raw_old)
         if old is None:
             continue
         new = e.new_sentence if e.new_sentence is not None else ""
@@ -1007,7 +1018,6 @@ def _sanitize_prompt_edits(
             {
                 "name": (e.name or "Prompt edit").strip()[:200],
                 "phase1_addresses": p1,
-                "section_index": idx,
                 "old_sentence": old,
                 "new_sentence": new,
                 "reason": (e.reason or "").strip(),
@@ -1058,18 +1068,17 @@ def _phase2_edits_when_llm_abstains(
     if tail:
         guidance = (guidance + " Context from diagnosis: " + tail[:450]).strip()
 
-    sec_idx: int | None = None
     old_span: str | None = None
-    for i, sec in enumerate(sections or []):
+    for sec in sections or []:
         _, body = _sec_name_content(sec)
         for cand in _PHASE2_FALLBACK_ANCHOR_CANDIDATES:
-            resolved = resolve_old_sentence_span(body, cand)
+            resolved = _resolve_old_sentence_span(body, cand)
             if resolved:
-                sec_idx, old_span = i, resolved
+                old_span = resolved
                 break
         if old_span:
             break
-    if sec_idx is None or not old_span:
+    if not old_span:
         safe_print(
             "[Review] Phase 2 fallback skipped (no Normalize Names anchor in stored sections).",
             flush=True,
@@ -1081,11 +1090,10 @@ def _phase2_edits_when_llm_abstains(
         PromptEditLlm(
             name="Clarify normalization and multi-pair coverage",
             phase1_addresses=p1,
-            section_index=int(sec_idx),
             old_sentence=old_span,
             new_sentence=new_sent,
             reason=(
-                "Phase 2 returned no edits; this server fallback extends the Normalize Names line in PART A so the run "
+                "Phase 2 returned no edits; this server fallback extends the Normalize Names line in the stored prompt so the run "
                 "still yields an applyable patch aligned with the cluster diagnosis."
             ),
         )
@@ -1159,7 +1167,7 @@ def run_review_pipeline(
     Caller handles credential errors and job status.
     """
     sections = list(getattr(body, "prompt_sections", None) or [])
-    prompt_text = format_prompt_for_review(sections)
+    prompt_text = _format_prompt_for_review(sections)
     comparison_rows = list(getattr(body, "comparison_rows", None) or [])
 
     all_matched_flag = getattr(body, "all_rows_matched", None)
@@ -1239,7 +1247,6 @@ def run_review_pipeline(
 
     cluster_members = _cluster_opinions_for_phase2(
         opinions=opinions,
-        comparison_rows=comparison_rows,
         provider=provider,
         model=model,
         api_key=api_key,
@@ -1275,7 +1282,6 @@ def run_review_pipeline(
         mod_prompt = _build_phase2_modifications_prompt(
             prompt_text=prompt_text,
             opinions_text=opinions_text,
-            sections=sections,
             cluster_context=label,
         )
         logger.info(
@@ -1323,17 +1329,10 @@ def run_review_pipeline(
             )
             raw_llm_edits = _phase2_edits_when_llm_abstains(sections, cluster_pairs)
         full_edits: list[PromptEditSuggestion] = []
+        tgt = list(target_labels)
         for el in raw_llm_edits:
             full_edits.append(
-                PromptEditSuggestion(
-                    name=el.name,
-                    phase1_addresses=list(el.phase1_addresses),
-                    section_index=int(el.section_index),
-                    old_sentence=el.old_sentence,
-                    new_sentence=el.new_sentence,
-                    reason=el.reason,
-                    target_input_row_indices=list(target_labels),
-                )
+                PromptEditSuggestion(**el.model_dump(), target_input_row_indices=tgt),
             )
         _print_review_result_banner(
             f"PHASE 2 (cluster {cluster_idx + 1}/{n_clusters})",
@@ -1359,14 +1358,14 @@ def run_review_pipeline(
     if is_cancelled():
         return
 
-    seen_edit: set[tuple[int, str, str]] = set()
+    seen_edit: set[tuple[str, str]] = set()
     deduped_triples: list[tuple[int, str, PromptEditSuggestion]] = []
     for cidx, label, e in collected:
         old = (e.old_sentence or "").strip()
         new = e.new_sentence if e.new_sentence is not None else ""
         if not isinstance(new, str):
             new = str(new)
-        key = (int(e.section_index), old, new)
+        key = (old, new)
         if key in seen_edit:
             continue
         seen_edit.add(key)
@@ -1385,18 +1384,15 @@ def run_review_pipeline(
                 break
 
     if not edit_dicts and deduped_triples:
-        nsec = len(sections or [])
         cr = list(comparison_rows or [])
-        for i, (cidx, label, e) in enumerate(deduped_triples[:5]):
-            sidx = max(0, min(int(e.section_index), nsec - 1)) if nsec else 0
-            _, cbody = _sec_name_content(sections[sidx]) if nsec else ("", "")
+        for cidx, label, e in deduped_triples[:5]:
             raw_old = e.old_sentence or ""
-            resolved = resolve_old_sentence_span(cbody, raw_old) if cbody else None
+            resolved = _resolve_old_sentence_unique_across_sections(sections, raw_old)
             raw_t = getattr(e, "target_input_row_indices", None)
             mapped = _targets_zero_based_from_llm(raw_t if isinstance(raw_t, list) else [], cr)
             safe_print(
                 f"[Review] Phase 2 suggestion dropped (sanitize): cluster={cidx} label={label!r} "
-                f"section_index={sidx} old_resolved={resolved is not None} "
+                f"old_resolved={resolved is not None} "
                 f"targets_raw={raw_t!r} targets_mapped={mapped!r} old_preview={raw_old[:120]!r}",
                 flush=True,
             )

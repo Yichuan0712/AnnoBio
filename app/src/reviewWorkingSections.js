@@ -8,8 +8,10 @@
  */
 export function findSegmentInContent(content, oldSentence) {
   if (content == null || content === '' || oldSentence == null) return null;
-  const trimmed = String(oldSentence).trim();
+  const raw = String(oldSentence);
+  const trimmed = raw.trim();
   if (trimmed === '') return null;
+  if (content.includes(raw)) return raw;
   if (content.includes(trimmed)) return trimmed;
   const pattern = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
   try {
@@ -74,6 +76,36 @@ export function getLocatableSegment(content, oldSentence) {
 }
 
 /**
+ * 0-based section index where `oldSentence` is uniquely locatable, or -1 if none / ambiguous.
+ * @param {Array<{ content?: string }>} sections
+ * @param {string} oldSentence
+ * @returns {number}
+ */
+export function findSectionIndexForOldSentence(sections, oldSentence) {
+  if (!Array.isArray(sections) || oldSentence == null) return -1;
+  const raw = String(oldSentence);
+  const trimmed = raw.trim();
+  if (!trimmed) return -1;
+  /** Strict: includes + whitespace-flex regex only (no fuzzy sentence match — avoids false multi-section hits). */
+  const segmentHit = (content) => !!findSegmentInContent(content, raw);
+  const hits = [];
+  for (let i = 0; i < sections.length; i++) {
+    const content = sections[i] && sections[i].content != null ? String(sections[i].content) : '';
+    if (segmentHit(content)) hits.push(i);
+  }
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) {
+    const literalHits = [];
+    for (let i = 0; i < sections.length; i++) {
+      const content = sections[i] && sections[i].content != null ? String(sections[i].content) : '';
+      if (content.includes(raw) || content.includes(trimmed)) literalHits.push(i);
+    }
+    if (literalHits.length === 1) return literalHits[0];
+  }
+  return -1;
+}
+
+/**
  * `new_sentence` to use when applying a suggestion (finetuned text is always `new_sentence` when completed).
  * @param {Record<string, unknown>} s
  * @returns {string}
@@ -95,14 +127,20 @@ export function rebuildWorkingFromApplied(originals, suggestions) {
   for (let i = 0; i < suggestions.length; i++) {
     const s = suggestions[i];
     if (s.applied !== true) continue;
-    const secIdx = Math.max(0, Math.min(s.section_index ?? 0, sections.length - 1));
     const useSentenceEdit = s.old_sentence != null && s.new_sentence != null;
-    const oldSentence = (s.old_sentence || '').trim();
+    const rawOld = s.old_sentence != null ? String(s.old_sentence) : '';
+    const oldSentence = rawOld.trim();
     const newSentence = effectiveNewSentenceForApply(s);
     const legacyNewContent = (s.new_content || '').trim();
+    let secIdx = 0;
+    if (useSentenceEdit) {
+      if (!oldSentence) continue;
+      secIdx = findSectionIndexForOldSentence(sections, rawOld);
+      if (secIdx < 0) continue;
+    }
     const content = sections[secIdx] ? (sections[secIdx].content || '') : '';
     if (useSentenceEdit) {
-      const seg = getLocatableSegment(content, oldSentence);
+      const seg = getLocatableSegment(content, rawOld) || getLocatableSegment(content, oldSentence);
       const toReplace = seg || oldSentence;
       if (content.includes(toReplace)) {
         sections[secIdx].content = content.replace(toReplace, newSentence);
@@ -163,10 +201,18 @@ export function suggestionNeedsAutoRowCheck(sug, originals, promptSections) {
   if (!sug || typeof sug !== 'object') return false;
   if (getSuggestionTestOutcomeForAutoCheck(sug)) return false;
   const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
-  const oldSentence = (sug.old_sentence || '').trim();
-  const secIdx = Math.max(0, Math.min(Number(sug.section_index) || 0, (promptSections || []).length - 1));
+  const rawOld = sug.old_sentence != null ? String(sug.old_sentence) : '';
+  const oldSentence = rawOld.trim();
+  let secIdx = 0;
+  if (useSentenceEdit) {
+    if (!oldSentence) return false;
+    secIdx = findSectionIndexForOldSentence(originals, rawOld);
+    if (secIdx < 0) return false;
+  }
   const originalContent = originals[secIdx] && originals[secIdx].content ? originals[secIdx].content : '';
-  const segmentInOriginal = useSentenceEdit ? getLocatableSegment(originalContent, oldSentence) : null;
+  const segmentInOriginal = useSentenceEdit
+    ? getLocatableSegment(originalContent, rawOld) || getLocatableSegment(originalContent, oldSentence)
+    : null;
   const unlocatable = useSentenceEdit && !segmentInOriginal;
   if (unlocatable) return false;
   if (suggestionTargetInputRowIndices(sug).length === 0) return false;
