@@ -26,18 +26,25 @@ const API_BASE = 'http://localhost:8000';
 /** Review node progress reaches 100% when the stream ends (workflowCanvas). */
 
 /** Placeholder pill only; verify/finetune flows removed pending redesign. */
-const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to verify';
+const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
+const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
-/** Single decorative pill after the review stream completes. */
-function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete) {
+/**
+ * Returns pill specs for the suggestion title line.
+ * @param {string} [verifyState] - 'idle' (default) or 'verifying'
+ */
+function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState) {
   if (streamComplete !== true) return [];
-  return [{ cls: 'review-suggestion-verify-pill', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL }];
+  if (verifyState === 'verifying') {
+    return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL, ariaLabel: 'Verifying…' }];
+  }
+  return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
 
-function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections, streamComplete) {
-  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections, streamComplete)
+function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState) {
+  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState)
     .map((spec) => {
       const aria =
         typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()
@@ -410,6 +417,119 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
   document.body.appendChild(overlay);
 }
 
+/** Render a key-value object as a definition list for the debug overlay. */
+/** Mirror of Python _is_model_facing_output_key: skip internal keys like #, [#], [rule_targets]. */
+function isModelFacingKey(k) {
+  const key = String(k || '').trim();
+  if (!key || key === '#' || key === '[#]') return false;
+  if (key.length >= 2 && key.startsWith('[') && key.endsWith(']')) return false;
+  return true;
+}
+
+function debugKvHtml(obj) {
+  if (!obj || typeof obj !== 'object') return '<span class="review-diagnosis-detail-empty">—</span>';
+  const pairs = Object.entries(obj).filter(([k]) => isModelFacingKey(k));
+  if (pairs.length === 0) return '<span class="review-diagnosis-detail-empty">—</span>';
+  const MAX = 480;
+  const cellHtml = (raw) => {
+    if (raw == null || raw === '') return '<span class="review-diagnosis-detail-empty">—</span>';
+    let s = typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+    s = s.replace(/\s+/g, ' ').trim();
+    if (!s) return '<span class="review-diagnosis-detail-empty">—</span>';
+    if (s.length > MAX) return `<span title="${escapeHtml(s)}">${escapeHtml(s.slice(0, MAX))}\u2026</span>`;
+    return escapeHtml(s);
+  };
+  return `<dl class="review-suggestion-debug-kv">${pairs.map(([k, v]) =>
+    `<div class="review-suggestion-debug-kv-pair"><dt>${escapeHtml(k)}</dt><dd>${cellHtml(v)}</dd></div>`
+  ).join('')}</dl>`;
+}
+
+/**
+ * Debug overlay: shows per-suggestion run info.
+ * @param {object} sug
+ * @param {{ inputNums: string, gtNums: string, scoreNums: string, targetRows: any[] } | null} [debugData]
+ */
+function openSuggestionDebugOverlay(sug, debugData) {
+  const sid = sug && sug.suggestion_id != null ? String(sug.suggestion_id) : '(no id)';
+
+  let bodyHtml;
+  if (debugData) {
+    // Summary row
+    const summaryHtml = `
+      <table class="review-suggestion-debug-table">
+        <tbody>
+          <tr><th scope="row">Input</th><td>${escapeHtml(debugData.inputNums)}</td></tr>
+          <tr><th scope="row">Ground truth</th><td>${escapeHtml(debugData.gtNums)}</td></tr>
+          <tr><th scope="row">Score table</th><td>${escapeHtml(debugData.scoreNums)}</td></tr>
+        </tbody>
+      </table>`;
+
+    // Input sub-tables: one block per unique input_row_index; first non-empty row_input
+    const seenInput = new Map();
+    for (const r of (debugData.targetRows || [])) {
+      const key = r.input_row_index != null ? r.input_row_index : null;
+      if (key !== null && !seenInput.has(key) && r.row_input && typeof r.row_input === 'object' && Object.keys(r.row_input).length > 0) {
+        seenInput.set(key, r.row_input);
+      }
+    }
+    const inputBlocksHtml = seenInput.size > 0
+      ? [...seenInput.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([idx, rowInput]) =>
+            `<section class="review-suggestion-debug-section">
+              <h3 class="review-suggestion-debug-section-title">Input #${escapeHtml(String(idx + 1))}</h3>
+              ${debugKvHtml(rowInput)}
+            </section>`)
+          .join('')
+      : '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">No input data.</p>';
+
+    // Ground truth sub-tables: deduplicated by source_gt_row_index; same key filter as pipeline
+    const seenGt = new Map();
+    for (const r of (debugData.targetRows || [])) {
+      const gtNum = r.source_gt_row_index != null ? r.source_gt_row_index + 1 : null;
+      if (gtNum !== null && !seenGt.has(gtNum) && r.ground_truth_output && typeof r.ground_truth_output === 'object') {
+        const filtered = Object.fromEntries(Object.entries(r.ground_truth_output).filter(([k]) => isModelFacingKey(k)));
+        if (Object.keys(filtered).length > 0) seenGt.set(gtNum, filtered);
+      }
+    }
+    const gtBlocksHtml = seenGt.size > 0
+      ? [...seenGt.entries()].sort(([a], [b]) => a - b).map(([gtNum, gto]) =>
+          `<section class="review-suggestion-debug-section">
+            <h3 class="review-suggestion-debug-section-title">Ground truth #${escapeHtml(String(gtNum))}</h3>
+            ${debugKvHtml(gto)}
+          </section>`)
+          .join('')
+      : '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">No ground truth data.</p>';
+
+    bodyHtml = summaryHtml +
+      `<h2 class="review-suggestion-debug-group-title">Input</h2>${inputBlocksHtml}` +
+      `<h2 class="review-suggestion-debug-group-title">Ground truth</h2>${gtBlocksHtml}`;
+  } else {
+    bodyHtml = '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">(Run information will appear here.)</p>';
+  }
+
+  const existing = document.querySelector('.review-suggestion-debug-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay review-suggestion-detail-overlay review-suggestion-debug-overlay';
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'review-suggestion-debug-title');
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--review-diagnosis-detail">
+      <div class="modal-header">
+        <h2 id="review-suggestion-debug-title" class="modal-title">Debug info – #${escapeHtml(sid)}</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body review-diagnosis-detail-body review-suggestion-debug-body">
+        ${bodyHtml}
+      </div>
+    </div>
+  `;
+  overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+  document.body.appendChild(overlay);
+}
+
 /** Truncated title line for suggestion cards. */
 function formatSuggestionCardPreviewTitle(titleLine) {
   const baseRaw = normalizeUnicodeDashesForDisplay(String(titleLine ?? ''));
@@ -708,6 +828,9 @@ function buildReviewResultUI(overlay, options) {
   /** Click-to-pin: keep left-column diff visible without hover (Suggested changes cards only). */
   let previewSelectedSuggestionIndex = null;
 
+  /** Per-card debug verify state: 'idle' (default) | 'verifying'. Key = sugIdx. */
+  const cardVerifyStates = new Map();
+
   function updateSuggestionPreviewSelectionVisual() {
     editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
       const i = parseInt(c.dataset.suggestionIndex, 10);
@@ -854,6 +977,8 @@ function buildReviewResultUI(overlay, options) {
       titleWrap.querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`).forEach((el) => {
         el.remove();
       });
+      const sugIdx = parseInt(card.dataset.suggestionIndex, 10);
+      const verifyState = !Number.isNaN(sugIdx) ? (cardVerifyStates.get(sugIdx) || 'idle') : 'idle';
       const specs = collectSuggestionTitlePills(
         sug,
         noButton,
@@ -861,6 +986,7 @@ function buildReviewResultUI(overlay, options) {
         originals,
         promptSections,
         saved.streamComplete === true,
+        verifyState,
       );
       for (const spec of specs) {
         const el = document.createElement('span');
@@ -870,6 +996,9 @@ function buildReviewResultUI(overlay, options) {
           el.setAttribute('aria-label', spec.ariaLabel);
         }
         titleWrap.appendChild(el);
+      }
+      if (typeof card._bindVerifyPillClick === 'function') {
+        card._bindVerifyPillClick();
       }
     }
   }
@@ -1155,8 +1284,12 @@ function buildReviewResultUI(overlay, options) {
       originals,
       promptSections,
       saved.streamComplete === true,
+      'idle',
     );
-    const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
+    const debugActionsHtml =
+      '<button type="button" class="btn review-detail-debug-reset-btn" title="Debug: reset card to Click-to-verify state">↺ Reset</button>' +
+      '<button type="button" class="btn review-detail-debug-info-btn" title="Debug: open run info panel">⚙ Debug</button>';
+    const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''} <span class="review-detail-debug-btn-group">${debugActionsHtml}</span>`;
 
     const card = document.createElement('div');
     card.className =
@@ -1179,6 +1312,8 @@ function buildReviewResultUI(overlay, options) {
     const mainEl = card.querySelector('.review-detail-suggestion-card__main');
     const acceptBtn = card.querySelector('.review-detail-accept-btn');
     const detailBtn = card.querySelector('.review-detail-diagnosis-detail-btn');
+    const resetBtn = card.querySelector('.review-detail-debug-reset-btn');
+    const debugInfoBtn = card.querySelector('.review-detail-debug-info-btn');
     if (detailBtn) {
       detailBtn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -1189,6 +1324,62 @@ function buildReviewResultUI(overlay, options) {
         });
       });
     }
+    if (resetBtn) {
+      resetBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cardVerifyStates.delete(sugIdx);
+        updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+        bindVerifyPillClick();
+      });
+    }
+    if (debugInfoBtn) {
+      debugInfoBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openSuggestionDebugOverlay(sug, buildSugDebugData(sug));
+      });
+    }
+
+    /** Compute debug data (summary numbers + raw targetRows) for this suggestion. */
+    function buildSugDebugData(s) {
+      const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
+      const rowIndices = suggestionTargetScoreRowIndices(s);
+      const targetRows = rowIndices
+        .map((ri) => compRows.find((r) => Number(r?.row_index) === ri))
+        .filter(Boolean);
+
+      const toNums = (arr) => arr.length ? arr.map((n) => `#${n}`).join(', ') : '—';
+
+      const inputSet = [...new Set(
+        targetRows.map((r) => r.input_row_index != null ? r.input_row_index + 1 : null).filter((n) => n != null),
+      )].sort((a, b) => a - b);
+
+      const gtSet = [...new Set(
+        targetRows.map((r) => r.source_gt_row_index != null ? r.source_gt_row_index + 1 : null).filter((n) => n != null),
+      )].sort((a, b) => a - b);
+
+      const scoreLabel = formatScoreTableTargetLabels(compRows, rowIndices) || '—';
+
+      return { inputNums: toNums(inputSet), gtNums: toNums(gtSet), scoreNums: scoreLabel, targetRows };
+    }
+
+    /** Attach click handler to the "Click to verify" pill (re-called after reset or pill rebuild). */
+    function bindVerifyPillClick() {
+      const titleWrap = card.querySelector('.review-detail-suggestion-title-wrap');
+      if (!titleWrap) return;
+      titleWrap.querySelectorAll(`.review-suggestion-verify-pill--clickable`).forEach((pill) => {
+        pill.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          cardVerifyStates.set(sugIdx, 'verifying');
+          updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+        });
+      });
+    }
+    card._bindVerifyPillClick = bindVerifyPillClick;
+    bindVerifyPillClick();
+
     function currentNewSentence() {
       return effectiveNewSentenceForApply(sug);
     }
