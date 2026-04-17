@@ -78,8 +78,10 @@ const REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA = 'Edit proposed in chat; not Run+Scor
 
 const REVIEW_FINETUNE_LABEL_TUNING = 'Finetuning';
 
-/** Placeholder control next to each suggestion title; verify behavior wired later. */
+/** Opens a breakdown of Score / Input / GT row numbers for this suggestion. */
 const REVIEW_SUGGESTION_VERIFY_CHIP_LABEL = 'Click to Verify';
+/** Set true after user clicks the verify chip; enables the per-card Debug button. Persists on the suggestion object. */
+const REVIEW_VERIFY_DEBUG_UNLOCKED_KEY = 'review_verify_debug_unlocked';
 
 /** Finetuned suggestions may store row-check in `review_test_result_finetune_after`; otherwise legacy `review_test_result`. */
 const REVIEW_TEST_RESULT_FINETUNE_AFTER = 'review_test_result_finetune_after';
@@ -527,6 +529,125 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
       </div>
       <div class="modal-body review-diagnosis-detail-body">
         ${detailBodyHtml}
+      </div>
+    </div>
+  `;
+
+  function close() {
+    overlay.remove();
+  }
+  overlay.querySelector('.modal-close').addEventListener('click', close);
+  document.body.appendChild(overlay);
+}
+
+/** @param {Record<string, unknown>} item - data refinement row */
+function pseudoSuggestionFromDataRefinementRowIndices(item) {
+  const raw = item && Array.isArray(item.row_indices) ? item.row_indices : [];
+  const ri = [...new Set(raw.map((x) => Number(x)).filter((x) => !Number.isNaN(x) && x >= 0))].sort((a, b) => a - b);
+  return { target_score_row_indices: ri };
+}
+
+/**
+ * Second-layer modal: per-target Score #, worksheet Input #, and GT sheet # for Verify chip.
+ * @param {Record<string, unknown>} sug
+ * @param {Array<Record<string, unknown>>} comparisonRows
+ * @param {string} heading - card title line
+ */
+function openSuggestionVerifyTargetsOverlay(sug, comparisonRows, heading) {
+  const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
+  const targets = suggestionTargetScoreRowIndices(sug);
+  const mainHeading = ensureCardTitleSentenceLead(String(heading || '').trim() || 'Suggestion');
+
+  const lines = [];
+  const inputNums = new Set();
+  const gtNums = new Set();
+
+  for (const ri of targets) {
+    const row = rows.find((r) => Number(r?.row_index) === Number(ri)) || null;
+    const st =
+      row && row.score_table_row != null
+        ? Number(row.score_table_row)
+        : scoreTableRowNumberForComparisonIndex(rows, ri);
+    const scoreLabel =
+      Number.isFinite(st) && st >= 1 ? `#${st}` : `(row_index ${ri})`;
+
+    let inputLabel = '—';
+    if (
+      row &&
+      typeof row.input_row_index === 'number' &&
+      !Number.isNaN(row.input_row_index) &&
+      row.input_row_index >= 0
+    ) {
+      const n = row.input_row_index + 1;
+      inputLabel = `#${n}`;
+      inputNums.add(n);
+    }
+
+    let gtLabel = '—';
+    if (
+      row &&
+      typeof row.source_gt_row_index === 'number' &&
+      !Number.isNaN(row.source_gt_row_index) &&
+      row.source_gt_row_index >= 0
+    ) {
+      const n = row.source_gt_row_index + 1;
+      gtLabel = `#${n}`;
+      gtNums.add(n);
+    }
+
+    lines.push({ scoreLabel, inputLabel, gtLabel });
+  }
+
+  const inputSummary = [...inputNums].sort((a, b) => a - b).map((n) => `#${n}`).join('、') || '—';
+  const gtSummary = [...gtNums].sort((a, b) => a - b).map((n) => `#${n}`).join('、') || '—';
+  const scoreSummary =
+    formatScoreTableTargetLabels(rows, targets) ||
+    (targets.length ? targets.map((i) => `(row_index ${i})`).join('、') : '—');
+
+  const tableBody =
+    lines.length > 0
+      ? lines
+          .map(
+            (L) =>
+              `<tr><td>${escapeHtml(L.scoreLabel)}</td><td>${escapeHtml(L.inputLabel)}</td><td>${escapeHtml(
+                L.gtLabel,
+              )}</td></tr>`,
+          )
+          .join('')
+      : `<tr><td colspan="3" class="review-verify-targets-empty">未记录目标 Score 行（无 target_score_row_indices / row_indices）</td></tr>`;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay review-diagnosis-detail-overlay review-verify-targets-overlay';
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'review-verify-targets-title');
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--review-diagnosis-detail">
+      <div class="modal-header">
+        <h2 id="review-verify-targets-title" class="modal-title">${escapeHtml(mainHeading)}</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body review-diagnosis-detail-body">
+        <p class="review-diagnosis-detail-prose review-verify-targets-summary">
+          <span class="review-diagnosis-detail-lead">Score 表目标：</span> ${escapeHtml(scoreSummary)}
+        </p>
+        <p class="review-diagnosis-detail-prose review-verify-targets-summary">
+          <span class="review-diagnosis-detail-lead">工作表 Input #：</span> ${escapeHtml(inputSummary)}
+        </p>
+        <p class="review-diagnosis-detail-prose review-verify-targets-summary">
+          <span class="review-diagnosis-detail-lead">Ground truth表 #：</span> ${escapeHtml(gtSummary)}
+        </p>
+        <div class="review-verify-targets-table-wrap">
+          <table class="review-verify-targets-table">
+            <thead>
+              <tr>
+                <th scope="col">Score #</th>
+                <th scope="col">Input #</th>
+                <th scope="col">GT #</th>
+              </tr>
+            </thead>
+            <tbody>${tableBody}</tbody>
+          </table>
+        </div>
       </div>
     </div>
   `;
@@ -995,6 +1116,16 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
+  function syncVerifyDebugButtonUi(btn, unlocked) {
+    if (!btn) return;
+    const on = unlocked === true;
+    btn.disabled = !on;
+    btn.setAttribute(
+      'aria-label',
+      on ? '查看 Verify 调试信息（Score / Input / GT）' : '请先点击标题旁的 Click to Verify',
+    );
+  }
+
   function refreshAllEditSuggestionCardsVisuals() {
     editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((card) => {
       const i = parseInt(card.dataset.suggestionIndex, 10);
@@ -1007,6 +1138,7 @@ function buildReviewResultUI(overlay, options) {
         acceptBtn.textContent = applied ? 'Revert' : 'Accept';
         acceptBtn.classList.toggle('review-detail-accept-btn--revert', applied);
       }
+      syncVerifyDebugButtonUi(card.querySelector('.review-detail-verify-debug-btn'), s[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY]);
     });
   }
 
@@ -1210,6 +1342,25 @@ function buildReviewResultUI(overlay, options) {
       };
       pill.addEventListener('click', onActivate);
       pill.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        onActivate(e);
+      });
+    });
+    card.querySelectorAll('[data-review-verify-chip]:not([data-review-verify-listener])').forEach((chip) => {
+      chip.setAttribute('data-review-verify-listener', '1');
+      const onActivate = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        const sugIdx = parseInt(card.dataset.suggestionIndex, 10);
+        if (Number.isNaN(sugIdx) || !allSuggestions[sugIdx]) return;
+        const sug = allSuggestions[sugIdx];
+        sug[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] = true;
+        persistWorking();
+        syncVerifyDebugButtonUi(card.querySelector('.review-detail-verify-debug-btn'), true);
+      };
+      chip.addEventListener('click', onActivate);
+      chip.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
         onActivate(e);
       });
@@ -1605,6 +1756,7 @@ function buildReviewResultUI(overlay, options) {
       sectionFallback: '',
       defaultLabel: 'Possible ground truth issue',
     });
+    const drDebugUnlocked = item[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] === true;
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card review-detail-data-refinement-card';
     card.innerHTML = `
@@ -1612,8 +1764,42 @@ function buildReviewResultUI(overlay, options) {
         <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong>${buildSuggestionVerifyChipHtml()}</span>
         <p class="review-detail-suggestion-reason"><span class="review-detail-data-refinement-rows">${escapeHtml(rowsText)}</span>: ${escapeHtml((item.reason || '').trim())}</p>
       </div>
+      <div class="review-detail-suggestion-card__actions">
+        <button type="button" class="btn btn-secondary review-detail-verify-debug-btn"${drDebugUnlocked ? '' : ' disabled'} aria-label="${
+          drDebugUnlocked ? '查看 Verify 调试信息（Score / Input / GT）' : '请先点击标题旁的 Click to Verify'
+        }">Debug</button>
+      </div>
     `;
     dataRefinementContainer.appendChild(card);
+    const verifyChip = card.querySelector('[data-review-verify-chip]');
+    if (verifyChip) {
+      const onVerify = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        item[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] = true;
+        persistWorking();
+        syncVerifyDebugButtonUi(card.querySelector('.review-detail-verify-debug-btn'), true);
+      };
+      verifyChip.addEventListener('click', onVerify);
+      verifyChip.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        onVerify(e);
+      });
+    }
+    const drDebugBtn = card.querySelector('.review-detail-verify-debug-btn');
+    if (drDebugBtn) {
+      drDebugBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (item[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] !== true) {
+          showAlert('请先点击标题旁的「Click to Verify」以解锁调试信息。', { title: 'Verify' });
+          return;
+        }
+        const pseudo = pseudoSuggestionFromDataRefinementRowIndices(item);
+        openSuggestionVerifyTargetsOverlay(pseudo, saved.comparison_rows || [], titleLine);
+      });
+    }
   }
 
   function updateAcceptButtonLabels() {
@@ -1665,11 +1851,21 @@ function buildReviewResultUI(overlay, options) {
 
     const detailsBtnHtml =
       '<button type="button" class="btn btn-secondary review-detail-diagnosis-detail-btn">View detail</button>';
+    const verifyDebugUnlocked = sug[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] === true;
+    const debugBtnHtml = actionsFull
+      ? `<button type="button" class="btn btn-secondary review-detail-verify-debug-btn"${
+          verifyDebugUnlocked ? '' : ' disabled'
+        } aria-label="${
+          verifyDebugUnlocked
+            ? '查看 Verify 调试信息（Score / Input / GT）'
+            : '请先点击标题旁的 Click to Verify'
+        }">Debug</button>`
+      : '';
     const acceptBtnHtml = !noButton
       ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'
       : '';
     const titlePillsHtml = buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections);
-    const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
+    const actionsHtml = `${detailsBtnHtml}${debugBtnHtml ? ` ${debugBtnHtml}` : ''}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
 
     const card = document.createElement('div');
     card.className =
@@ -1692,6 +1888,7 @@ function buildReviewResultUI(overlay, options) {
     const mainEl = card.querySelector('.review-detail-suggestion-card__main');
     const acceptBtn = card.querySelector('.review-detail-accept-btn');
     const detailBtn = card.querySelector('.review-detail-diagnosis-detail-btn');
+    const verifyDebugBtn = card.querySelector('.review-detail-verify-debug-btn');
     if (detailBtn) {
       detailBtn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -1700,6 +1897,17 @@ function buildReviewResultUI(overlay, options) {
           titleLine,
           comparisonRows: Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [],
         });
+      });
+    }
+    if (verifyDebugBtn && actionsFull) {
+      verifyDebugBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (sug[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] !== true) {
+          showAlert('请先点击标题旁的「Click to Verify」以解锁调试信息。', { title: 'Verify' });
+          return;
+        }
+        openSuggestionVerifyTargetsOverlay(sug, saved.comparison_rows || [], titleLine);
       });
     }
     function currentNewSentence() {

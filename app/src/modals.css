@@ -3411,6 +3411,45 @@
   font-style: italic;
 }
 
+.review-verify-targets-summary {
+  margin: 0;
+}
+
+.review-verify-targets-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  border-radius: 6px;
+}
+
+.review-verify-targets-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.review-verify-targets-table th,
+.review-verify-targets-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+
+.review-verify-targets-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-bar, rgba(0, 0, 0, 0.04));
+}
+
+.review-verify-targets-table tr:last-child td {
+  border-bottom: none;
+}
+
+.review-verify-targets-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+}
+
 .review-detail-diagnosis-tag {
   display: inline-block;
   margin-right: 6px;
