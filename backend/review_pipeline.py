@@ -3,7 +3,7 @@ Review analyze pipeline, separate from FastAPI main module.
 
 Phase 1 — per **failed input**: same dataset input; the prompt gives **model output** and **expected output** in **separate sections** (never paired or column-aligned; only non-empty rows appear per section). Then rough opinion.
 
-Phase 1.5 — **cluster** Phase‑1 issues that share the same root cause / fix strategy (one LLM call). Fallback: group by `problem_category_hint`.
+Phase 1.5 — **cluster** Phase‑1 issues that share the same root cause / fix strategy (one LLM call **only when** there are **more than 5** Phase‑1 issues; otherwise each issue is its own cluster and the clustering LLM is skipped). Fallback when using the LLM: group by `problem_category_hint`.
 
 Phase 2 — **one LLM call per issue cluster** (sequential); **exactly one** localized `prompt_edit` per cluster must fix **all** findings in that cluster together (no duplicate edits for the same cluster). Identical spans across clusters are still **deduped** once before emit.
 
@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 # Server-side cap on validated edits (response size / UI); not stated in LLM prompts.
 _MAX_VALIDATED_PROMPT_EDITS = 64
+
+# Phase 1.5: skip clustering LLM when Phase‑1 issue count ≤ this (singleton cluster per issue).
+_PHASE15_SKIP_CLUSTERING_LLM_AT_MOST = 5
 
 
 def _review_json_for_print(obj: Any) -> str:
@@ -662,13 +665,25 @@ def _cluster_opinions_for_phase2(
     final: list[list[int]]
     llm_parsed: Phase15Clustering | None = None
 
-    if n <= 1:
-        final = [[0]] if n == 1 else []
-        result_source = "no_llm_single_or_empty_issue_list"
+    if n == 0:
+        final = []
+        result_source = "no_llm_empty_issue_list"
         safe_print(
             "\n"
             + "=" * 80
-            + "\nREVIEW PHASE 1.5 PROMPT — skipped (0 or 1 Phase-1 issue; no clustering LLM call)\n"
+            + "\nREVIEW PHASE 1.5 — skipped (0 Phase-1 issues)\n"
+            + "=" * 80
+            + "\n",
+            flush=True,
+        )
+    elif n <= _PHASE15_SKIP_CLUSTERING_LLM_AT_MOST:
+        final = [[i] for i in range(n)]
+        result_source = f"no_llm_n_le_{_PHASE15_SKIP_CLUSTERING_LLM_AT_MOST}_singleton_clusters"
+        safe_print(
+            "\n"
+            + "=" * 80
+            + f"\nREVIEW PHASE 1.5 PROMPT — skipped ({n} Phase-1 issue(s) ≤ {_PHASE15_SKIP_CLUSTERING_LLM_AT_MOST}; "
+            "one cluster per issue, no clustering LLM)\n"
             + "=" * 80
             + "\n",
             flush=True,
@@ -805,9 +820,13 @@ def _phase1_format_nonempty_lines_json(items: list[tuple[int, dict[str, Any]]], 
     return "\n\n".join(parts)
 
 
-def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[Any]) -> str:
+def _phase1_group_context_parts(group_rows: list[Any]) -> tuple[str, str]:
+    """
+    Shared Phase 1 row context: (scope paragraph, markdown from Placeholder substitutions through Expected output).
+    Used by Phase 1 prompts and Phase 2 cluster blocks so the edit LLM sees the same input/model/GT as Phase 1.
+    """
     if not group_rows:
-        return ""
+        return ("", "")
     first = _row_to_dict(group_rows[0])
     row_input = first.get("row_input") or {}
 
@@ -865,17 +884,7 @@ def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[A
     else:
         scope = "One scoring row for this input; follow the layout rules below."
 
-    return f"""Diagnose scoring failures for **one** dataset input.
-
-**Layout:** Do not treat **Model output** and **Expected output** as left/right columns, matched pairs, or row-aligned tables. Read each section on its own. **`Line n` is only the n-th entry listed in that section**; it does not pair with anything in the other section.
-
-{scope}
-
-## Prompt template (placeholders not yet substituted)
-
-{prompt_text}
-
-## Placeholder substitutions (values inserted into the template for this run)
+    subs_out = f"""## Placeholder substitutions (values inserted into the template for this run)
 
 ```json
 {json.dumps(row_input, ensure_ascii=False, indent=2)}
@@ -891,7 +900,25 @@ What the task model returned.
 
 Ground truth used for scoring.
 
-{expected_body}
+{expected_body}"""
+    return (scope, subs_out)
+
+
+def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[Any]) -> str:
+    if not group_rows:
+        return ""
+    scope, subs_out = _phase1_group_context_parts(group_rows)
+    return f"""Diagnose scoring failures for **one** dataset input.
+
+**Layout:** Do not treat **Model output** and **Expected output** as left/right columns, matched pairs, or row-aligned tables. Read each section on its own. **`Line n` is only the n-th entry listed in that section**; it does not pair with anything in the other section.
+
+{scope}
+
+## Prompt template (placeholders not yet substituted)
+
+{prompt_text}
+
+{subs_out}
 
 ## Output (JSON only)
 
@@ -900,17 +927,47 @@ Ground truth used for scoring.
 - **rough_modification_opinion**: Concrete prompt-level changes only; do not paste a full rewritten prompt.
 - **problem_category_hint**: Short grouping tag in English snake_case or hyphen form.
 
+When **Model output** is missing or empty, infer how the **prompt template** should be clearer or stricter so extraction is **more complete and reliable**—not generic “always emit output” unless the template truly lacks required fields or shape. When **Expected output** is missing or empty, still reason about tightening or clarifying the **prompt** so behavior is **more precise** where scoring is possible. When both sides have content, treat **extra** model items vs GT as over-generation (tighten constraints) and **missing** items as **under-spec**—including **partial** under-coverage (**fewer** extractive items, rows, or relations than expected, not only a wholly empty model section): say what is missing vs expected and how the prompt should be expanded, clarified, or exemplified. Never mention internal code, class, or schema names (e.g. Python types) in any field.
+
 Return only those four fields.
 """
 
 
-def _phase2_single_issue_block(*, op: PerRowOpinion) -> str:
+def _comparison_rows_by_indices(comparison_rows: list[Any], ridxs: list[int]) -> list[Any]:
+    """Restore Phase 1 input-group rows from 0-based comparison ``row_index`` list."""
+    want: set[int] = set()
+    for x in ridxs or []:
+        try:
+            want.add(int(x))
+        except (TypeError, ValueError):
+            continue
+    if not want:
+        return []
+    out = [r for r in comparison_rows if int(_row_to_dict(r).get("row_index", -2)) in want]
+    out.sort(key=lambda x: int(_row_to_dict(x).get("row_index", 0)))
+    return out
+
+
+def _phase2_single_issue_block(*, op: PerRowOpinion, group_rows: list[Any]) -> str:
     rough = op.rough_modification_opinion.strip()
     if len(rough) > 1200:
         rough = rough[:1197] + "..."
     head = (op.card_title or "").strip() or op.issue_summary
+    scope, subs_out = _phase1_group_context_parts(group_rows)
+    if not subs_out.strip():
+        data_section = "*No comparison row payloads matched this case (missing `row_index` data).*"
+    else:
+        data_section = (
+            "**Run context (same subsections as Phase 1 for this worksheet input; the full prompt template is in `Stored prompt` above):**\n\n"
+            "**Layout:** Do not treat **Model output** and **Expected output** as left/right columns, matched pairs, or row-aligned tables. "
+            "Read each section on its own. **`Line n` is only the n-th entry listed in that section**; it does not pair with anything in the other section.\n\n"
+            f"{scope}\n\n"
+            f"{subs_out}"
+        )
     return (
-        f"#### Finding\n"
+        f"### Case — worksheet Input #{op.input_index}\n\n"
+        f"{data_section}\n\n"
+        f"#### Review diagnosis for this case\n"
         f"- **category:** `{op.problem_category_hint or 'uncategorized'}`\n"
         f"- **label:** {head}\n"
         f"- **detail:** {op.issue_summary}\n"
@@ -957,6 +1014,8 @@ The **stored prompt** block and the **cluster diagnosis** block are separate—r
 - `old_sentence` must be copied verbatim from **one** place in the stored prompt below. Prefer a span that appears **only once** in the full prompt so the server can resolve it unambiguously.
 - If the diagnosis lists any finding, return **exactly one** edit in `prompt_edits` (see coverage rules). Empty `prompt_edits` only when the stored prompt has no section bodies.
 - Do not paste diagnosis markdown into `old_sentence`.
+- Edits must improve **task prompt** extraction: **fuller** where the model under-delivers vs expected (including **partial** gaps—fewer items than expected—not only wholly empty model output), **stricter** where it over-generates vs expected. Prefer diagnosis-driven wording in the stored prompt over blanket “emit output every row” unless the template truly omits required output spec.
+- **`name` and `reason`**: end-user plain English only; **never** Python/Pydantic/class names, `Phase1LlmOutput`, or other internal identifiers.
 
 {coverage_rule}
 
@@ -965,6 +1024,8 @@ The **stored prompt** block and the **cluster diagnosis** block are separate—r
 {prompt_text}
 
 ## Cluster diagnosis (never use as `old_sentence`)
+
+Each **Case** block repeats **placeholder substitutions**, **model output**, and **expected output** for that worksheet input, then the **Review diagnosis** lines. The prompt template itself appears only in **Stored prompt** above.
 
 {opinions_text}
 
@@ -1226,7 +1287,9 @@ def run_review_pipeline(
             "summary": (
                 f"Phase 1: analyzing {n} input group(s) with failures ({row_count} failed comparison row(s)); "
                 "each prompt includes every comparison row for that input (matched + unmatched). "
-                "Phase 1.5: cluster related issues (one LLM call; fallback: group by category hint). "
+                f"Phase 1.5: if more than {_PHASE15_SKIP_CLUSTERING_LLM_AT_MOST} Phase-1 issues, cluster related issues "
+                "(one LLM call; fallback: group by category hint); "
+                f"if ≤{_PHASE15_SKIP_CLUSTERING_LLM_AT_MOST} issues, one cluster per issue (no clustering LLM). "
                 "Phase 2: one prompt-edit per cluster (sequential; one merged edit fixes all cases in the cluster); "
                 "duplicate spans across clusters are deduped once."
             ),
@@ -1308,8 +1371,11 @@ def run_review_pipeline(
             )
             return cluster_idx, cluster_labels[cluster_idx], []
         cluster_pairs = [opinions[i] for i in member_indices]
-        blocks = [_phase2_single_issue_block(op=op) for op, _ in cluster_pairs]
-        opinions_text = "\n\n".join(blocks)
+        blocks = [
+            _phase2_single_issue_block(op=op, group_rows=_comparison_rows_by_indices(comparison_rows, ridxs))
+            for op, ridxs in cluster_pairs
+        ]
+        opinions_text = "\n\n---\n\n".join(blocks)
         label = cluster_labels[cluster_idx]
         mod_prompt = _build_phase2_modifications_prompt(
             prompt_text=prompt_text,

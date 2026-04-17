@@ -35,6 +35,41 @@ const API_BASE = 'http://localhost:8000';
 /** AbortControllers for post-finetune row-check (mini-run metrics). */
 const rowCheckAbortControllers = new Set();
 
+/** User Verify (Review title chip): suggestion_id → AbortController — survives modal close; cleared on completion or beforeunload. */
+const userVerifyAbortBySuggestionId = new Map();
+
+function registerUserVerifySession(suggestionId, ac) {
+  const k = suggestionId != null && String(suggestionId) !== '' ? String(suggestionId) : '';
+  if (!k || !ac || typeof ac.abort !== 'function') return;
+  userVerifyAbortBySuggestionId.set(k, ac);
+}
+
+function unregisterUserVerifySession(suggestionId) {
+  const k = suggestionId != null && String(suggestionId) !== '' ? String(suggestionId) : '';
+  if (!k) return;
+  userVerifyAbortBySuggestionId.delete(k);
+}
+
+function hasActiveUserVerifySessions() {
+  return userVerifyAbortBySuggestionId.size > 0;
+}
+
+function isUserVerifySessionActiveForSuggestion(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  const id = obj.suggestion_id;
+  if (id == null || String(id) === '') return false;
+  return userVerifyAbortBySuggestionId.has(String(id));
+}
+
+function abortAllUserVerifyJobs() {
+  for (const ac of userVerifyAbortBySuggestionId.values()) {
+    try {
+      ac.abort();
+    } catch (_) {}
+  }
+  userVerifyAbortBySuggestionId.clear();
+}
+
 function registerRowCheckSession(ac) {
   if (ac && typeof ac.abort === 'function') rowCheckAbortControllers.add(ac);
 }
@@ -58,10 +93,11 @@ function abortAllRowCheckJobs() {
 
 /** Review node progress reaches 100% when the stream ends (workflowCanvas). */
 
-/** Only on full app/tab unload: cancel in-flight row-check + Finetune HTTP/poll. Closing the review modal does NOT call this — jobs keep running and persist when done. */
+/** Only on full app/tab unload: cancel in-flight row-check + Finetune + user Verify. Closing the review modal does NOT call this — jobs keep running and persist when done. */
 function abortReviewBackgroundJobsOnAppUnload() {
   abortAllFinetuneJobs();
   abortAllRowCheckJobs();
+  abortAllUserVerifyJobs();
 }
 
 /** After Run+Score row check succeeds (shown next to suggestion title). */
@@ -78,10 +114,14 @@ const REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA = 'Edit proposed in chat; not Run+Scor
 
 const REVIEW_FINETUNE_LABEL_TUNING = 'Finetuning';
 
-/** Opens a breakdown of Score / Input / GT row numbers for this suggestion. */
 const REVIEW_SUGGESTION_VERIFY_CHIP_LABEL = 'Click to Verify';
-/** Set true after user clicks the verify chip; enables the per-card Debug button. Persists on the suggestion object. */
-const REVIEW_VERIFY_DEBUG_UNLOCKED_KEY = 'review_verify_debug_unlocked';
+/** User-triggered verify (title chip), in progress — same copy tone as row-check「Checking…」. */
+const REVIEW_SUGGESTION_USER_VERIFYING_LABEL = 'Verifying…';
+/** User verify finished and all expanded Score rows matched. */
+const REVIEW_SUGGESTION_USER_VERIFIED_LABEL = 'Verified';
+/** Persisted JSON-safe payload from last completed user Verify (`{ v, ok, payload? } | { v, ok:false, error }`). */
+const REVIEW_VERIFY_DEBUG_STORE_KEY = 'review_verify_debug_store';
+const REVIEW_VERIFY_DEBUG_STORE_VERSION = 1;
 
 /** Finetuned suggestions may store row-check in `review_test_result_finetune_after`; otherwise legacy `review_test_result`. */
 const REVIEW_TEST_RESULT_FINETUNE_AFTER = 'review_test_result_finetune_after';
@@ -115,9 +155,62 @@ function rowCheckFailPillCanStartFinetune(sug, noButton) {
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
-function buildSuggestionVerifyChipHtml() {
-  const lbl = REVIEW_SUGGESTION_VERIFY_CHIP_LABEL;
-  return `<button type="button" class="review-suggestion-rowcheck-fail-pill review-suggestion-rowcheck-fail-pill--click-verify ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}" data-review-verify-chip="1" aria-label="${escapeHtml(lbl)}">${escapeHtml(lbl)}</button>`;
+function verifyChipSlotHtml() {
+  return '<span class="review-detail-verify-chip-slot"></span>';
+}
+
+function hasVerifyDebugPayload(obj) {
+  if (!obj || typeof obj !== 'object' || obj.review_verify_in_progress === true) return false;
+  const st = obj[REVIEW_VERIFY_DEBUG_STORE_KEY];
+  if (!st || typeof st !== 'object') return false;
+  return st.ok === true || st.ok === false;
+}
+
+/** Pipeline cards only: after user Verify fails, Finetune entry matches row-check fail pill rules. */
+function verifyFailCanStartFinetunePipeline(sug, noButton) {
+  if (!sug || sug.review_verify_pass !== false) return false;
+  if (String(sug.source || '').toLowerCase() === 'assistant') return false;
+  if (noButton || sug.review_finetune_in_progress === true) return false;
+  if (suggestionFinetuneRowCheckNudgeBlocked(sug)) return false;
+  if (sug.review_finetune_completed === true) return false;
+  return true;
+}
+
+/** After user starts Finetune (or it completed), hide Click to Verify — Finetune path replaces user Verify for this card. */
+function suggestionUserVerifySuppressedAfterFinetune(sug) {
+  if (!sug || typeof sug !== 'object') return false;
+  if (sug.review_finetune_invoked === true) return true;
+  if (sug.review_finetune_in_progress === true) return true;
+  if (sug.review_finetune_completed === true) return true;
+  return false;
+}
+
+function clearUserVerifyState(sug) {
+  if (!sug || typeof sug !== 'object') return;
+  delete sug.review_verify_pass;
+  delete sug.review_verify_in_progress;
+  delete sug[REVIEW_VERIFY_DEBUG_STORE_KEY];
+  delete sug.review_verify_debug_unlocked;
+}
+
+function cloneVerifyDebugForPersist(res) {
+  try {
+    return JSON.parse(
+      JSON.stringify({
+        outputRuleSummaries: res.outputRuleSummaries,
+        gtTable: res.gtTable,
+        expandedResults: res.expandedResults,
+        promptsSent: res.promptsSent,
+      }),
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+function userVerifyAllExpandedPass(res) {
+  if (!res || !res.ok || !Array.isArray(res.expandedResults) || res.expandedResults.length === 0) return false;
+  return res.expandedResults.every((r) => r && r.fullMatch === true);
 }
 
 /**
@@ -269,14 +362,29 @@ function scoreTableRowNumberForComparisonIndex(comparisonRows, rowIndex) {
 
 /**
  * Labels like "#1, #2" for target comparison `row_index` values (uses `score_table_row` when present).
+ * Sorted by Score table # (`score_table_row`) so display reads e.g. "#5, #6, #7, #8" not "#5, #7, #6, #8".
  */
 function formatScoreTableTargetLabels(comparisonRows, zeroBasedRowIndices) {
   if (!Array.isArray(zeroBasedRowIndices) || zeroBasedRowIndices.length === 0) return '';
-  return zeroBasedRowIndices
-    .map((idx) => {
-      const t = scoreTableRowNumberForComparisonIndex(comparisonRows, idx);
-      return t != null ? `#${t}` : `(row_index ${idx})`;
-    })
+  const seen = new Set();
+  const pairs = [];
+  for (const raw of zeroBasedRowIndices) {
+    const idx = Number(raw);
+    if (Number.isNaN(idx) || idx < 0 || seen.has(idx)) continue;
+    seen.add(idx);
+    const scoreNum = scoreTableRowNumberForComparisonIndex(comparisonRows, idx);
+    pairs.push({ idx, scoreNum });
+  }
+  pairs.sort((a, b) => {
+    const aOk = a.scoreNum != null;
+    const bOk = b.scoreNum != null;
+    if (aOk && bOk) return a.scoreNum - b.scoreNum;
+    if (aOk && !bOk) return -1;
+    if (!aOk && bOk) return 1;
+    return a.idx - b.idx;
+  });
+  return pairs
+    .map(({ idx, scoreNum }) => (scoreNum != null ? `#${scoreNum}` : `(row_index ${idx})`))
     .join(', ');
 }
 
@@ -704,13 +812,27 @@ function renderVerifyDebugResultHtml(res) {
 }
 
 /**
- * Verify debug: header mapping + async mini-run (original prompt + **only** this card) + GT / rules / outputs.
- * @param {{ heading: string, sug: Record<string, unknown>, comparisonRows: unknown[], getPayload: () => Promise<unknown>, buildTestSections: () => Array<{name: string, content: string}> }} opts
+ * Debug overlay: **only** shows the last completed user Verify snapshot (`review_verify_debug_store`). Does not run the model.
+ * @param {{ heading: string, sugForMapping: Record<string, unknown>, comparisonRows: unknown[], debugStore: Record<string, unknown> | null | undefined }} opts
  */
 function openSuggestionVerifyDebugOverlay(opts) {
-  const { heading, sug, comparisonRows, getPayload, buildTestSections } = opts;
+  const { heading, sugForMapping, comparisonRows, debugStore } = opts;
+  if (!debugStore || typeof debugStore !== 'object') {
+    showAlert('尚无验证结果。请先点击「Click to Verify」并等待验证结束后再打开 Debug。', { title: 'Debug' });
+    return;
+  }
   const mainHeading = ensureCardTitleSentenceLead(String(heading || '').trim() || 'Suggestion');
-  const mapHtml = buildVerifyTargetMappingHtml(sug, comparisonRows);
+  const mapHtml = buildVerifyTargetMappingHtml(sugForMapping, comparisonRows);
+
+  let bodyExtra = '';
+  if (debugStore.ok === false) {
+    const err = typeof debugStore.error === 'string' ? debugStore.error : '验证失败';
+    bodyExtra = `<p class="review-verify-debug-model-error">${escapeHtml(err)}</p>`;
+  } else if (debugStore.payload && typeof debugStore.payload === 'object') {
+    bodyExtra = renderVerifyDebugResultHtml(debugStore.payload);
+  } else {
+    bodyExtra = '<p class="review-diagnosis-detail-empty">无保存的验证详情。</p>';
+  }
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay review-diagnosis-detail-overlay review-verify-targets-overlay';
@@ -744,78 +866,18 @@ function openSuggestionVerifyDebugOverlay(opts) {
             <tbody>${mapHtml.tableBody}</tbody>
           </table>
         </div>
-        <p class="review-diagnosis-detail-prose review-verify-debug-note">验证使用<strong>原始 prompt</strong>并<strong>仅应用当前卡片</strong>的修改；对每个相关 worksheet 输入调用模型，再按 Score 中 <strong>Output→GT</strong> 规则与 Ground truth 比较（与 Finetune 小跑一致）。</p>
-        <div id="review-verify-debug-status" class="review-verify-debug-status">正在运行验证…</div>
-        <div id="review-verify-debug-dynamic" class="review-verify-debug-dynamic" hidden></div>
+        <p class="review-diagnosis-detail-prose review-verify-debug-note">以下为<strong>已完成验证</strong>时写入的快照（原始 prompt + 仅当前卡片修改；Output→GT 规则与 Score 一致）。打开本页不会再次调用模型。</p>
+        <div class="review-verify-debug-dynamic">${bodyExtra}</div>
       </div>
     </div>
   `;
 
-  const abortController = new AbortController();
   function close() {
-    abortController.abort();
     overlay.remove();
   }
   overlay.querySelector('.modal-close').addEventListener('click', close);
 
   document.body.appendChild(overlay);
-
-  void (async () => {
-    const statusEl = overlay.querySelector('#review-verify-debug-status');
-    const dynamicEl = overlay.querySelector('#review-verify-debug-dynamic');
-    try {
-      if (typeof getPayload !== 'function') {
-        if (statusEl) statusEl.textContent = '无法获取运行上下文。';
-        return;
-      }
-      const payload = await getPayload();
-      if (!payload || !payload.run_credential_id) {
-        if (statusEl) statusEl.textContent = '缺少运行凭证，无法调用模型。';
-        return;
-      }
-      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-        if (statusEl) statusEl.textContent = '缺少 output schema，无法验证。';
-        return;
-      }
-      const testSections = typeof buildTestSections === 'function' ? buildTestSections() : null;
-      if (!testSections || !Array.isArray(testSections) || testSections.length === 0) {
-        if (statusEl) statusEl.textContent = '无法构建验证用 prompt 段落。';
-        return;
-      }
-
-      const res = await runSuggestionVerifyDebug({
-        apiBase: API_BASE,
-        credentialId: payload.run_credential_id,
-        testSections,
-        targetComparisonRowIndices: suggestionTargetScoreRowIndices(sug),
-        comparisonRows: payload.comparison_rows || [],
-        runResults: payload.run_results || [],
-        outputFields: payload.output_fields || [],
-        outputSchema: payload.output_schema,
-        scoreMappingJson: payload.score_mapping || '[]',
-        runWs: typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : { headers: [], rows: [] },
-        gtContent: typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : { headers: [], rows: [] },
-        signal: abortController.signal,
-        expandInputClosure: true,
-      });
-
-      if (abortController.signal.aborted) return;
-
-      if (!res.ok) {
-        if (statusEl) statusEl.textContent = res.detail || '验证失败';
-        return;
-      }
-
-      if (statusEl) statusEl.remove();
-      if (dynamicEl) {
-        dynamicEl.hidden = false;
-        dynamicEl.innerHTML = renderVerifyDebugResultHtml(res);
-      }
-    } catch (e) {
-      if (e && e.name === 'AbortError') return;
-      if (statusEl) statusEl.textContent = String(e?.message || e || '验证出错');
-    }
-  })();
 }
 
 function suggestionHasAnyTerminalTestOutcome(s) {
@@ -935,6 +997,32 @@ function clearStaleFinetuneRunningFlags(suggestions) {
     if (s.review_finetune_in_progress === true || s.review_finetune_progress != null) {
       delete s.review_finetune_in_progress;
       delete s.review_finetune_progress;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Drop persisted `review_verify_in_progress` when no Verify session is active (app killed / stale JSON).
+ * While Verify runs in the background after closing the modal, sessions stay registered — reopen shows Verifying….
+ */
+function stripStaleUserVerifyFlags(suggestions, dataRefinementArr) {
+  if (hasActiveUserVerifySessions()) return false;
+  let changed = false;
+  for (const s of suggestions || []) {
+    if (!s || typeof s !== 'object') continue;
+    if (s.review_verify_in_progress === true) {
+      delete s.review_verify_in_progress;
+      delete s._userVerifyAbort;
+      changed = true;
+    }
+  }
+  for (const it of dataRefinementArr || []) {
+    if (!it || typeof it !== 'object') continue;
+    if (it.review_verify_in_progress === true) {
+      delete it.review_verify_in_progress;
+      delete it._userVerifyAbort;
       changed = true;
     }
   }
@@ -1261,7 +1349,8 @@ function buildReviewResultUI(overlay, options) {
       if (!loc || typeof loc !== 'object') continue;
       const id = loc.suggestion_id;
       if (id == null || id === '') continue;
-      const r = data.suggestions.find((x) => x && String(x.suggestion_id) === String(id));
+      const idStr = String(id);
+      const r = data.suggestions.find((x) => x && String(x.suggestion_id) === idStr);
       if (r && typeof r === 'object') {
         const keepInProgress =
           hasActiveRowCheckSessions() &&
@@ -1269,18 +1358,246 @@ function buildReviewResultUI(overlay, options) {
           !isReviewRowCheckInProgress(r);
         Object.assign(loc, r);
         if (keepInProgress) loc.review_test_in_progress = true;
+        if (userVerifyAbortBySuggestionId.has(idStr)) loc.review_verify_in_progress = true;
       }
     }
   }
 
-  function syncVerifyDebugButtonUi(btn, unlocked) {
+  async function runUserVerifyOnState(stateObj, ctx) {
+    if (!stateObj || typeof stateObj !== 'object') return;
+    if (isUserVerifySessionActiveForSuggestion(stateObj)) return;
+    if (stateObj.review_verify_in_progress === true) return;
+    const verifySidRaw = stateObj.suggestion_id;
+    const verifySid = verifySidRaw != null && String(verifySidRaw) !== '' ? String(verifySidRaw) : '';
+    if (!verifySid) {
+      showAlert('无法验证：建议缺少内部 ID。请关闭并重开 Review 后再试。', { title: '无法验证' });
+      return;
+    }
+    if (isReviewStreamingNow()) {
+      showAlert('请等待 Review 生成结束后再验证。', { title: 'Review 进行中' });
+      return;
+    }
+    if (anyRowCheckInProgress()) {
+      showAlert('请等待行检查（Checking…）结束后再验证。', { title: '行检查进行中' });
+      return;
+    }
+    if (hasActiveFinetuneSessions()) {
+      showAlert('请等待 Finetune 结束后再验证。', { title: 'Finetune 进行中' });
+      return;
+    }
+    const { card, kind, sugForTargets, buildTestSections, sugIdx } = ctx;
+    if (kind === 'pipeline') {
+      const sug = allSuggestions[sugIdx];
+      if (sug && isReviewRowCheckInProgress(sug)) {
+        showAlert('请等待本卡片行检查结束后再验证。', { title: '行检查进行中' });
+        return;
+      }
+      if (sug && sug.review_finetune_in_progress === true) {
+        showAlert('请等待 Finetune 结束后再验证。', { title: 'Finetune 进行中' });
+        return;
+      }
+      if (sug && suggestionUserVerifySuppressedAfterFinetune(sug)) {
+        showAlert('此建议已走 Finetune 流程，不再提供 Verify。', { title: '无法验证' });
+        return;
+      }
+    }
+    const targets = suggestionTargetScoreRowIndices(sugForTargets);
+    if (targets.length === 0) {
+      showAlert('此建议没有 Score 目标行，无法验证。', { title: '无法验证' });
+      return;
+    }
+    if (typeof getPayload !== 'function') return;
+    let payload;
+    try {
+      payload = await getPayload();
+    } catch (_) {
+      return;
+    }
+    if (!payload || !payload.run_credential_id) {
+      showAlert('缺少运行凭证，无法调用模型。', { title: '无法验证' });
+      return;
+    }
+    if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
+      showAlert('缺少 output schema，无法验证。', { title: '无法验证' });
+      return;
+    }
+    const testSections = buildTestSections();
+    if (!testSections || !Array.isArray(testSections) || testSections.length === 0) {
+      showAlert('无法构建验证用 prompt 段落。', { title: '无法验证' });
+      return;
+    }
+
+    const ac = new AbortController();
+    registerUserVerifySession(verifySid, ac);
+    stateObj._userVerifyAbort = ac;
+    stateObj.review_verify_in_progress = true;
+    persistWorking();
+
+    function paintAfterStateChange() {
+      if (kind === 'pipeline' && card && !Number.isNaN(sugIdx) && allSuggestions[sugIdx]) {
+        const s = allSuggestions[sugIdx];
+        updateSuggestionTestOutcomeVisual(card, s, suggestionActionsFullForCard(s), originals, promptSections);
+      } else if (kind === 'dataRefinement' && card) {
+        fillUserVerifyChipSlot(card, stateObj, { kind: 'dataRefinement' });
+        syncVerifyDebugButtonUi(card.querySelector('.review-detail-verify-debug-btn'), stateObj);
+      }
+    }
+
+    paintAfterStateChange();
+
+    try {
+      const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : { headers: [], rows: [] };
+      const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : { headers: [], rows: [] };
+      const res = await runSuggestionVerifyDebug({
+        apiBase: API_BASE,
+        credentialId: payload.run_credential_id,
+        testSections,
+        targetComparisonRowIndices: targets,
+        comparisonRows: payload.comparison_rows || [],
+        outputFields: payload.output_fields || [],
+        outputSchema: payload.output_schema,
+        scoreMappingJson: payload.score_mapping || '[]',
+        runWs,
+        gtContent,
+        signal: ac.signal,
+        expandInputClosure: true,
+      });
+
+      if (ac.signal.aborted) return;
+
+      if (!res.ok) {
+        if (res.aborted) return;
+        stateObj[REVIEW_VERIFY_DEBUG_STORE_KEY] = {
+          v: REVIEW_VERIFY_DEBUG_STORE_VERSION,
+          ok: false,
+          error: typeof res.detail === 'string' ? res.detail : '验证失败',
+        };
+        stateObj.review_verify_pass = false;
+        return;
+      }
+
+      const persistedPayload = cloneVerifyDebugForPersist(res);
+      stateObj[REVIEW_VERIFY_DEBUG_STORE_KEY] = {
+        v: REVIEW_VERIFY_DEBUG_STORE_VERSION,
+        ok: true,
+        payload: persistedPayload && typeof persistedPayload === 'object' ? persistedPayload : null,
+      };
+      stateObj.review_verify_pass = userVerifyAllExpandedPass(res);
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      stateObj[REVIEW_VERIFY_DEBUG_STORE_KEY] = {
+        v: REVIEW_VERIFY_DEBUG_STORE_VERSION,
+        ok: false,
+        error: String(e?.message || e || '验证出错'),
+      };
+      stateObj.review_verify_pass = false;
+    } finally {
+      delete stateObj._userVerifyAbort;
+      delete stateObj.review_verify_in_progress;
+      unregisterUserVerifySession(verifySid);
+      persistWorking();
+      paintAfterStateChange();
+    }
+  }
+
+  function fillUserVerifyChipSlot(card, stateObj, spec) {
+    const slot = card && card.querySelector('.review-detail-verify-chip-slot');
+    if (!slot) return;
+    const kind = spec && spec.kind === 'dataRefinement' ? 'dataRefinement' : 'pipeline';
+    let actionsFull = true;
+    let noButton = false;
+    let sug = null;
+    let sugIdx = NaN;
+    if (kind === 'pipeline') {
+      sugIdx = parseInt(card.dataset.suggestionIndex, 10);
+      sug = Number.isNaN(sugIdx) ? null : allSuggestions[sugIdx];
+      if (!sug) {
+        slot.replaceChildren();
+        return;
+      }
+      actionsFull = suggestionActionsFullForCard(sug);
+      noButton = card.classList.contains('review-detail-suggestion-card--unlocatable');
+      if (String(sug.source || '').toLowerCase() === 'assistant' || !actionsFull) {
+        slot.replaceChildren();
+        return;
+      }
+    }
+
+    slot.replaceChildren();
+
+    const mkSpan = (cls, text) => {
+      const el = document.createElement('span');
+      el.className = cls;
+      el.textContent = text;
+      return el;
+    };
+
+    if (stateObj.review_verify_in_progress === true) {
+      slot.appendChild(
+        mkSpan(`review-suggestion-verifying-pill ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`, REVIEW_SUGGESTION_USER_VERIFYING_LABEL),
+      );
+      return;
+    }
+
+    if (stateObj.review_verify_pass === true) {
+      slot.appendChild(
+        mkSpan(`review-suggestion-verified-pill ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`, REVIEW_SUGGESTION_USER_VERIFIED_LABEL),
+      );
+      return;
+    }
+
+    if (stateObj.review_verify_pass === false) {
+      if (kind === 'pipeline' && verifyFailCanStartFinetunePipeline(sug, noButton)) {
+        const el = document.createElement('button');
+        el.type = 'button';
+        el.className = `review-suggestion-rowcheck-fail-pill review-suggestion-rowcheck-fail-pill--click-finetune ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`;
+        el.textContent = REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE;
+        el.setAttribute('data-review-title-pill-action', 'finetune');
+        el.setAttribute('aria-label', 'Finetune this suggestion');
+        slot.appendChild(el);
+      } else {
+        slot.appendChild(
+          mkSpan(`review-suggestion-rowcheck-fail-pill ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`, '验证未通过'),
+        );
+      }
+      wireInteractiveTitlePillsOnCard(card);
+      return;
+    }
+
+    if (kind === 'pipeline' && suggestionUserVerifySuppressedAfterFinetune(sug)) {
+      return;
+    }
+
+    const startEl = document.createElement('button');
+    startEl.type = 'button';
+    startEl.className = `review-suggestion-rowcheck-fail-pill review-suggestion-rowcheck-fail-pill--click-verify ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`;
+    startEl.textContent = REVIEW_SUGGESTION_VERIFY_CHIP_LABEL;
+    startEl.setAttribute('data-review-user-verify-start', '1');
+    startEl.setAttribute('aria-label', '对此建议运行 Verify');
+    slot.appendChild(startEl);
+
+    wireInteractiveTitlePillsOnCard(card);
+  }
+
+  function syncVerifyDebugButtonUi(btn, holder) {
     if (!btn) return;
-    const on = unlocked === true;
+    const on = hasVerifyDebugPayload(holder);
     btn.disabled = !on;
     btn.setAttribute(
       'aria-label',
-      on ? '查看 Verify 调试信息（Score / Input / GT）' : '请先点击标题旁的 Click to Verify',
+      on ? '查看 Verify 调试信息（Score / Input / GT）' : '请先完成一次验证后再查看 Debug',
     );
+  }
+
+  function refreshDataRefinementVerifyVisuals() {
+    if (!dataRefinementContainer) return;
+    dataRefinementContainer.querySelectorAll('.review-detail-data-refinement-card').forEach((card) => {
+      const i = parseInt(card.dataset.dataRefinementIndex, 10);
+      if (Number.isNaN(i) || !dataRefinement[i]) return;
+      const item = dataRefinement[i];
+      syncVerifyDebugButtonUi(card.querySelector('.review-detail-verify-debug-btn'), item);
+      fillUserVerifyChipSlot(card, item, { kind: 'dataRefinement' });
+    });
   }
 
   function refreshAllEditSuggestionCardsVisuals() {
@@ -1295,8 +1612,9 @@ function buildReviewResultUI(overlay, options) {
         acceptBtn.textContent = applied ? 'Revert' : 'Accept';
         acceptBtn.classList.toggle('review-detail-accept-btn--revert', applied);
       }
-      syncVerifyDebugButtonUi(card.querySelector('.review-detail-verify-debug-btn'), s[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY]);
+      syncVerifyDebugButtonUi(card.querySelector('.review-detail-verify-debug-btn'), s);
     });
+    refreshDataRefinementVerifyVisuals();
   }
 
   function persistWorking() {
@@ -1305,6 +1623,25 @@ function buildReviewResultUI(overlay, options) {
       const next = { ...s, applied: s.applied === true };
       delete next._finetuneAbort;
       delete next._finetunePersistScheduled;
+      delete next.review_verify_in_progress;
+      delete next.review_verify_debug_unlocked;
+      delete next._userVerifyAbort;
+      const sid = s?.suggestion_id;
+      if (sid != null && String(sid) !== '' && userVerifyAbortBySuggestionId.has(String(sid))) {
+        next.review_verify_in_progress = true;
+      }
+      return next;
+    });
+    const dataRefinementToSave = dataRefinement.map((it) => {
+      if (!it || typeof it !== 'object') return it;
+      const next = { ...it };
+      delete next.review_verify_in_progress;
+      delete next.review_verify_debug_unlocked;
+      delete next._userVerifyAbort;
+      const sid = it?.suggestion_id;
+      if (sid != null && String(sid) !== '' && userVerifyAbortBySuggestionId.has(String(sid))) {
+        next.review_verify_in_progress = true;
+      }
       return next;
     });
     const live = typeof getReviewResult === 'function' ? getReviewResult() : null;
@@ -1314,7 +1651,7 @@ function buildReviewResultUI(overlay, options) {
       summary: base.summary ?? saved.summary ?? '',
       suggestions: suggestionsToSave,
       design_suggestions: [],
-      data_refinement: dataRefinement,
+      data_refinement: dataRefinementToSave,
       row_diagnostics: rowDiagnostics,
       promptSections: base.promptSections ?? saved.promptSections ?? promptSections,
       promptFullText: base.promptFullText ?? saved.promptFullText ?? promptFullText,
@@ -1326,6 +1663,9 @@ function buildReviewResultUI(overlay, options) {
   }
 
   if (stripAbortedReviewTests(allSuggestions) && typeof onReviewResultChange === 'function') {
+    persistWorking();
+  }
+  if (stripStaleUserVerifyFlags(allSuggestions, dataRefinement) && typeof onReviewResultChange === 'function') {
     persistWorking();
   }
 
@@ -1419,7 +1759,6 @@ function buildReviewResultUI(overlay, options) {
           testSections,
           targetComparisonRowIndices: targets,
           comparisonRows: payload.comparison_rows || [],
-          runResults: payload.run_results || [],
           outputFields: payload.output_fields || [],
           outputSchema: payload.output_schema,
           scoreMappingJson: payload.score_mapping || '[]',
@@ -1502,21 +1841,38 @@ function buildReviewResultUI(overlay, options) {
         onActivate(e);
       });
     });
-    card.querySelectorAll('[data-review-verify-chip]:not([data-review-verify-listener])').forEach((chip) => {
-      chip.setAttribute('data-review-verify-listener', '1');
+    card.querySelectorAll('[data-review-user-verify-start]:not([data-review-user-verify-wired])').forEach((btn) => {
+      btn.setAttribute('data-review-user-verify-wired', '1');
       const onActivate = (e) => {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
-        const sugIdx = parseInt(card.dataset.suggestionIndex, 10);
-        if (Number.isNaN(sugIdx) || !allSuggestions[sugIdx]) return;
-        const sug = allSuggestions[sugIdx];
-        sug[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] = true;
-        persistWorking();
-        syncVerifyDebugButtonUi(card.querySelector('.review-detail-verify-debug-btn'), true);
+        const sugIdxInner = parseInt(card.dataset.suggestionIndex, 10);
+        const drIdx = parseInt(card.dataset.dataRefinementIndex, 10);
+        if (!Number.isNaN(sugIdxInner) && allSuggestions[sugIdxInner]) {
+          const sugInner = allSuggestions[sugIdxInner];
+          void runUserVerifyOnState(sugInner, {
+            kind: 'pipeline',
+            card,
+            sugIdx: sugIdxInner,
+            sugForTargets: sugInner,
+            buildTestSections: () => {
+              const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdxInner }));
+              return rebuildWorkingFromApplied(originals, patched);
+            },
+          });
+        } else if (!Number.isNaN(drIdx) && dataRefinement[drIdx]) {
+          const itemInner = dataRefinement[drIdx];
+          void runUserVerifyOnState(itemInner, {
+            kind: 'dataRefinement',
+            card,
+            sugForTargets: pseudoSuggestionFromDataRefinementRowIndices(itemInner),
+            buildTestSections: () => originals.map((s) => ({ name: s.name || '', content: (s.content || '').slice() })),
+          });
+        }
       };
-      chip.addEventListener('click', onActivate);
-      chip.addEventListener('keydown', (e) => {
+      btn.addEventListener('click', onActivate);
+      btn.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
         onActivate(e);
       });
@@ -1536,9 +1892,10 @@ function buildReviewResultUI(overlay, options) {
     }
     const noButton = card.classList.contains('review-detail-suggestion-card--unlocatable');
     if (titleWrap) {
-      titleWrap
-        .querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}:not([data-review-verify-chip])`)
-        .forEach((el) => el.remove());
+      titleWrap.querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`).forEach((el) => {
+        if (el.closest('.review-detail-verify-chip-slot')) return;
+        el.remove();
+      });
       const specs = collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections);
       for (const spec of specs) {
         const interactive = spec.clickFinetune === true;
@@ -1555,6 +1912,10 @@ function buildReviewResultUI(overlay, options) {
         titleWrap.appendChild(el);
       }
       wireInteractiveTitlePillsOnCard(card);
+    }
+    const idxForChip = parseInt(card.dataset.suggestionIndex, 10);
+    if (!Number.isNaN(idxForChip) && allSuggestions[idxForChip]) {
+      fillUserVerifyChipSlot(card, allSuggestions[idxForChip], { kind: 'pipeline' });
     }
   }
 
@@ -1658,6 +2019,14 @@ function buildReviewResultUI(overlay, options) {
       return;
     }
     const oldSentence = (sug.old_sentence || '').trim();
+    const improvementRationale = String(sug.reason || '').trim();
+    if (!improvementRationale) {
+      showAlert('Finetune needs this suggestion’s reason (from Review). Re-run review or pick an edit that includes a reason.', {
+        title: 'Missing reason',
+      });
+      return;
+    }
+    const proposalNew = (sug.new_sentence || '').trim();
     if (typeof getPayload !== 'function') return;
     let finetuneAc = null;
     try {
@@ -1670,10 +2039,11 @@ function buildReviewResultUI(overlay, options) {
         showAlert('The prompt needs an output schema (Run / prompt settings) to finetune.', { title: 'Missing output schema' });
         return;
       }
-      const improvementRationale = String(sug.reason || '').trim();
       finetuneAc = new AbortController();
       registerFinetuneSession(finetuneAc);
       sug._finetuneAbort = finetuneAc;
+      clearUserVerifyState(sug);
+      sug.review_finetune_invoked = true;
       sug.review_finetune_in_progress = true;
       updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
       persistWorking();
@@ -1696,13 +2066,6 @@ function buildReviewResultUI(overlay, options) {
         /* use defaults */
       }
       if (!reviewCredForFinetune) reviewCredForFinetune = payload.run_credential_id;
-      if (!improvementRationale) {
-        showAlert('Finetune needs this suggestion’s reason (from Review). Re-run review or pick an edit that includes a reason.', {
-          title: 'Missing reason',
-        });
-        return;
-      }
-      const proposalNew = (sug.new_sentence || '').trim();
       const onFinetuneProgress = ({ trial, trials }) => {
         sug.review_finetune_progress = { trial, trials };
         if (!sug._finetunePersistScheduled) {
@@ -1728,7 +2091,6 @@ function buildReviewResultUI(overlay, options) {
         originals,
         targets,
         comparisonRows: payload.comparison_rows || [],
-        runResults: payload.run_results || [],
         outputFields: payload.output_fields || [],
         outputSchema: payload.output_schema,
         scoreMappingJson: payload.score_mapping || '[]',
@@ -1898,7 +2260,7 @@ function buildReviewResultUI(overlay, options) {
     });
   }
 
-  function addOneDataRefinementCard(item) {
+  function addOneDataRefinementCard(item, itemIdx) {
     const sid = item && item.suggestion_id != null && item.suggestion_id !== '' ? item.suggestion_id : '';
     const shortLabel = formatSuggestionIdDisplay(sid);
     const rowIndices = Array.isArray(item.row_indices) ? item.row_indices : [];
@@ -1912,56 +2274,41 @@ function buildReviewResultUI(overlay, options) {
       sectionFallback: '',
       defaultLabel: 'Possible ground truth issue',
     });
-    const drDebugUnlocked = item[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] === true;
+    const drDebugOn = hasVerifyDebugPayload(item);
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card review-detail-data-refinement-card';
+    card.dataset.dataRefinementIndex = String(itemIdx);
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong>${buildSuggestionVerifyChipHtml()}</span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong>${verifyChipSlotHtml()}</span>
         <p class="review-detail-suggestion-reason"><span class="review-detail-data-refinement-rows">${escapeHtml(rowsText)}</span>: ${escapeHtml((item.reason || '').trim())}</p>
       </div>
       <div class="review-detail-suggestion-card__actions">
-        <button type="button" class="btn btn-secondary review-detail-verify-debug-btn"${drDebugUnlocked ? '' : ' disabled'} aria-label="${
-          drDebugUnlocked ? '查看 Verify 调试信息（Score / Input / GT）' : '请先点击标题旁的 Click to Verify'
+        <button type="button" class="btn btn-secondary review-detail-verify-debug-btn"${drDebugOn ? '' : ' disabled'} aria-label="${
+          drDebugOn ? '查看 Verify 调试信息（Score / Input / GT）' : '请先完成一次验证后再查看 Debug'
         }">Debug</button>
       </div>
     `;
     dataRefinementContainer.appendChild(card);
-    const verifyChip = card.querySelector('[data-review-verify-chip]');
-    if (verifyChip) {
-      const onVerify = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        item[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] = true;
-        persistWorking();
-        syncVerifyDebugButtonUi(card.querySelector('.review-detail-verify-debug-btn'), true);
-      };
-      verifyChip.addEventListener('click', onVerify);
-      verifyChip.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        onVerify(e);
-      });
-    }
     const drDebugBtn = card.querySelector('.review-detail-verify-debug-btn');
     if (drDebugBtn) {
       drDebugBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (item[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] !== true) {
-          showAlert('请先点击标题旁的「Click to Verify」以解锁调试信息。', { title: 'Verify' });
+        if (!hasVerifyDebugPayload(item)) {
+          showAlert('尚无验证结果。请先点击「Click to Verify」并等待验证结束后再打开 Debug。', { title: 'Debug' });
           return;
         }
         const pseudo = pseudoSuggestionFromDataRefinementRowIndices(item);
         openSuggestionVerifyDebugOverlay({
           heading: titleLine,
-          sug: pseudo,
+          sugForMapping: pseudo,
           comparisonRows: saved.comparison_rows || [],
-          getPayload,
-          buildTestSections: () => originals.map((s) => ({ name: s.name || '', content: (s.content || '').slice() })),
+          debugStore: item[REVIEW_VERIFY_DEBUG_STORE_KEY],
         });
       });
     }
+    fillUserVerifyChipSlot(card, item, { kind: 'dataRefinement' });
   }
 
   function updateAcceptButtonLabels() {
@@ -2013,14 +2360,12 @@ function buildReviewResultUI(overlay, options) {
 
     const detailsBtnHtml =
       '<button type="button" class="btn btn-secondary review-detail-diagnosis-detail-btn">View detail</button>';
-    const verifyDebugUnlocked = sug[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] === true;
+    const verifyDebugOn = hasVerifyDebugPayload(sug);
     const debugBtnHtml = actionsFull
       ? `<button type="button" class="btn btn-secondary review-detail-verify-debug-btn"${
-          verifyDebugUnlocked ? '' : ' disabled'
+          verifyDebugOn ? '' : ' disabled'
         } aria-label="${
-          verifyDebugUnlocked
-            ? '查看 Verify 调试信息（Score / Input / GT）'
-            : '请先点击标题旁的 Click to Verify'
+          verifyDebugOn ? '查看 Verify 调试信息（Score / Input / GT）' : '请先完成一次验证后再查看 Debug'
         }">Debug</button>`
       : '';
     const acceptBtnHtml = !noButton
@@ -2040,7 +2385,7 @@ function buildReviewResultUI(overlay, options) {
     card.dataset.reviewTitlePlain = titleLine;
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span><span class="review-detail-suggestion-title-wrap"><strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong>${buildSuggestionVerifyChipHtml()}${titlePillsHtml}</span></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span><span class="review-detail-suggestion-title-wrap"><strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong>${verifyChipSlotHtml()}${titlePillsHtml}</span></span>
         <p class="review-detail-suggestion-reason">${escapeHtml(previewReason || '—')}</p>
       </div>
       <div class="review-detail-suggestion-card__actions">
@@ -2065,19 +2410,15 @@ function buildReviewResultUI(overlay, options) {
       verifyDebugBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (sug[REVIEW_VERIFY_DEBUG_UNLOCKED_KEY] !== true) {
-          showAlert('请先点击标题旁的「Click to Verify」以解锁调试信息。', { title: 'Verify' });
+        if (!hasVerifyDebugPayload(sug)) {
+          showAlert('尚无验证结果。请先点击「Click to Verify」并等待验证结束后再打开 Debug。', { title: 'Debug' });
           return;
         }
         openSuggestionVerifyDebugOverlay({
           heading: titleLine,
-          sug,
+          sugForMapping: sug,
           comparisonRows: Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [],
-          getPayload,
-          buildTestSections: () => {
-            const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdx }));
-            return rebuildWorkingFromApplied(originals, patched);
-          },
+          debugStore: sug[REVIEW_VERIFY_DEBUG_STORE_KEY],
         });
       });
     }
@@ -2183,7 +2524,7 @@ function buildReviewResultUI(overlay, options) {
 
   renderRowDiagnostics();
 
-  dataRefinement.forEach((item) => addOneDataRefinementCard(item));
+  dataRefinement.forEach((item, drIdx) => addOneDataRefinementCard(item, drIdx));
 
   if (saved.streamComplete !== true) {
     if (staleIncompletePersisted) {
@@ -2296,11 +2637,15 @@ function buildReviewResultUI(overlay, options) {
 
 /** Review node modal: show saved result (sections + suggestions) or empty state. */
 export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, getIsReviewStreaming }) {
-  const saved = getReviewResult ? getReviewResult() : null;
-  if (saved && typeof saved === 'object' && clearStaleFinetuneRunningFlags(saved.suggestions) && typeof updateReviewResult === 'function') {
-    try {
-      updateReviewResult({ ...saved });
-    } catch (_) {}
+   const saved = getReviewResult ? getReviewResult() : null;
+  if (saved && typeof saved === 'object') {
+    let fixStale = clearStaleFinetuneRunningFlags(saved.suggestions);
+    fixStale = stripStaleUserVerifyFlags(saved.suggestions, saved.data_refinement) || fixStale;
+    if (fixStale && typeof updateReviewResult === 'function') {
+      try {
+        updateReviewResult({ ...saved });
+      } catch (_) {}
+    }
   }
   const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
   const title = `Review: ${reviewName}`;
@@ -2410,7 +2755,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
       if (!data || typeof data !== 'object') return;
       // 流水线已结束时必须整页 refresh（Issue analysis / 建议列表）；reconcile 只合并已有卡片，不会重建 row_diagnostics。
       const busySideSession =
-        hasActiveRowCheckSessions() || hasActiveFinetuneSessions();
+        hasActiveRowCheckSessions() || hasActiveFinetuneSessions() || hasActiveUserVerifySessions();
       if (busySideSession && data.streamComplete !== true) {
         if (typeof overlay._reviewDetailReconcile === 'function') {
           overlay._reviewDetailReconcile(data);
@@ -2514,6 +2859,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     });
   }
   const comparisonRows = saved?.comparison_rows || payload?.comparison_rows || [];
+  /* Snapshot from the Score/Run node (assistant chat context only). Review Verify / row-check mini-run does not use this. */
   const runResults = saved?.run_results || payload?.run_results || [];
   if (comparisonRows.length > 0 || runResults.length > 0) {
     lines.push('## Run Results');

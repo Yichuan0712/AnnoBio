@@ -1116,6 +1116,9 @@ export function buildWorkflowCanvas(root) {
           diagnosisComplete: dt === 0,
           reviewProgress: REVIEW_STREAM_PLAN_PCT,
         };
+        /* Poll replays all events from `plan` each tick; clearing lists without resetting the id cursor made
+         * `allocNextReviewSuggestionId` continue from disk — # on cards crept up every poll. */
+        streamSaved.review_suggestion_seq_next = 1;
         setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_PLAN_PCT);
       } else if (ev.type === 'diagnosis_row') {
         diagnosisDone = ev.done != null ? parseInt(ev.done, 10) : diagnosisDone + 1;
