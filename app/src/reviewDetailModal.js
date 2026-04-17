@@ -967,6 +967,19 @@ function buildReviewResultUI(overlay, options) {
     delete: (si) => _verifyResults.delete(verifyKey(si)),
   };
 
+  // Restore persisted verify states from saved review result (survives app restart)
+  const _savedVerifyStates = (saved && typeof saved.verify_states === 'object' && saved.verify_states) ? saved.verify_states : {};
+  const _savedVerifyResults = (saved && typeof saved.verify_results === 'object' && saved.verify_results) ? saved.verify_results : {};
+  const savedSuggestionsForVerify = Array.isArray(saved.suggestions) ? saved.suggestions : [];
+  savedSuggestionsForVerify.forEach((sug, si) => {
+    const sid = sug && sug.suggestion_id != null ? String(sug.suggestion_id) : '';
+    if (!sid) return;
+    const st = _savedVerifyStates[sid];
+    if (st && st !== 'idle') _verifyStates.set(verifyKey(si), st);
+    const res = _savedVerifyResults[sid];
+    if (res) _verifyResults.set(verifyKey(si), res);
+  });
+
   function updateSuggestionPreviewSelectionVisual() {
     editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
       const i = parseInt(c.dataset.suggestionIndex, 10);
@@ -1057,6 +1070,26 @@ function buildReviewResultUI(overlay, options) {
     };
     onReviewResultChange(next);
     refreshAllEditSuggestionCardsVisuals();
+  }
+
+  /** Persist the verify state and result for one suggestion so they survive app restart. */
+  function persistVerifyState(sugIdx, state, result) {
+    if (typeof onReviewResultChange !== 'function') return;
+    const sug = allSuggestions[sugIdx];
+    if (!sug) return;
+    const sid = sug.suggestion_id != null ? String(sug.suggestion_id) : '';
+    if (!sid) return;
+    const live = typeof getReviewResult === 'function' ? getReviewResult() : null;
+    const base = live && typeof live === 'object' ? { ...live } : { ...saved };
+    const verifyStates = typeof base.verify_states === 'object' && base.verify_states ? { ...base.verify_states } : {};
+    const verifyResults = typeof base.verify_results === 'object' && base.verify_results ? { ...base.verify_results } : {};
+    verifyStates[sid] = state;
+    if (state === 'idle') {
+      delete verifyResults[sid];
+    } else if (result) {
+      verifyResults[sid] = result;
+    }
+    onReviewResultChange({ ...base, verify_states: verifyStates, verify_results: verifyResults });
   }
 
   function emitReviewBarProgress(percent) {
@@ -1466,6 +1499,7 @@ function buildReviewResultUI(overlay, options) {
         e.stopPropagation();
         cardVerifyStates.delete(sugIdx);
         cardVerifyResults.delete(sugIdx);
+        try { persistVerifyState(sugIdx, 'idle', null); } catch (_) {}
         updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
         bindVerifyPillClick();
       });
@@ -1660,6 +1694,8 @@ function buildReviewResultUI(overlay, options) {
         const postState = isVerifyFullPass(finalResult) ? 'verified' : (finalResult?.status === 'complete' ? 'finetune' : 'idle');
         cardVerifyStates.set(sugIdx, postState);
         _verifyPromises.delete(verifyKey(sugIdx));
+        // Persist state + result so they survive app restart
+        try { persistVerifyState(sugIdx, postState, postState !== 'idle' ? finalResult : null); } catch (_) {}
         // Only update the DOM if this card is still mounted; if the modal was
         // closed and reopened, the new card's .finally() hook handles the update.
         if (card.isConnected) {
