@@ -1,11 +1,11 @@
 """
 Review analyze pipeline, separate from FastAPI main module.
 
-Phase 1 — per **failed input**: same dataset input; the prompt lists **model outputs** and **ground truth** as **two separate lists** (only lines with content on that side; same convention as the app debug preview). Then rough opinion.
+Phase 1 — per **failed input**: same dataset input; the prompt gives **model output** and **expected output** in **separate sections** (never paired or column-aligned; only non-empty rows appear per section). Then rough opinion.
 
 Phase 1.5 — **cluster** Phase‑1 issues that share the same root cause / fix strategy (one LLM call). Fallback: group by `problem_category_hint`.
 
-Phase 2 — **one LLM call per issue cluster** (sequential), each prompt’s section 3 lists every finding in that cluster; localized `prompt_edits` must cover them. Identical spans are still **deduped** once before emit.
+Phase 2 — **one LLM call per issue cluster** (sequential); PART C of the Phase 2 meta-prompt lists cluster findings; localized `prompt_edits` must cover them. Identical spans are still **deduped** once before emit.
 
 Extraction-style tasks: **under-coverage** (required items missing) and **over-coverage** (extra items not in ground truth) are both failures—the prompts below tell the model to diagnose and fix with that rubric.
 """
@@ -25,6 +25,24 @@ logger = logging.getLogger(__name__)
 
 # Server-side cap on validated edits (response size / UI); not stated in LLM prompts.
 _MAX_VALIDATED_PROMPT_EDITS = 64
+
+
+def _review_json_for_print(obj: Any) -> str:
+    try:
+        if isinstance(obj, BaseModel):
+            data = obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
+        else:
+            data = obj
+        return json.dumps(data, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        return repr(obj)
+
+
+def _print_review_result_banner(phase: str, body: str) -> None:
+    safe_print(
+        "\n" + "=" * 80 + f"\nREVIEW {phase} RESULT\n" + "=" * 80 + "\n" + body + "\n" + "=" * 80 + "\n",
+        flush=True,
+    )
 
 
 def _sec_name_content(sec: Any) -> tuple[str, str]:
@@ -76,6 +94,48 @@ def _rows_by_comparison_index(group_rows: list[Any]) -> dict[int, dict[str, Any]
     return out
 
 
+def _phase1_anchor_comparison_index(group_rows: list[Any]) -> int:
+    """Smallest failed comparison `row_index` in the group, else smallest any — never from the LLM."""
+    failed: list[int] = []
+    all_idx: list[int] = []
+    for r in group_rows:
+        d = _row_to_dict(r)
+        try:
+            ri = int(d.get("row_index", -1))
+        except (TypeError, ValueError):
+            continue
+        if ri < 0:
+            continue
+        all_idx.append(ri)
+        if not d.get("matched", False):
+            failed.append(ri)
+    if failed:
+        return int(min(failed))
+    if all_idx:
+        return int(min(all_idx))
+    return 0
+
+
+def _cluster_fallback_target_score_labels(
+    comparison_rows: list[Any],
+    cluster_pairs: list[tuple[PerRowOpinion, list[int]]],
+) -> list[int]:
+    """1-based Score # labels for all comparison rows in this cluster (server-side; not shown to LLM)."""
+    s: set[int] = set()
+    for _op, ridxs in cluster_pairs:
+        for ri in ridxs or []:
+            try:
+                ii = int(ri)
+            except (TypeError, ValueError):
+                continue
+            if ii < 0:
+                continue
+            lbl = _label_one_based_from_comparison_rows(comparison_rows, ii)
+            if lbl >= 1:
+                s.add(lbl)
+    return sorted(s) if s else [1]
+
+
 def _label_one_based_from_comparison_rows(comparison_rows: list[Any], row_index: int) -> int:
     for r in comparison_rows or []:
         d = _row_to_dict(r)
@@ -99,6 +159,142 @@ def _valid_comparison_indices(comparison_rows: list[Any]) -> set[int]:
         except (TypeError, ValueError):
             continue
     return {i for i in out if i >= 0}
+
+
+def _normalize_typographic_quotes(s: str) -> str:
+    return (
+        (s or "")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+    )
+
+
+def _build_nc_and_ranges(content: str) -> tuple[str, list[tuple[int, int]]]:
+    nc_parts: list[str] = []
+    ranges: list[tuple[int, int]] = []
+    j = 0
+    while j < len(content):
+        if content.startswith("\r\n", j):
+            nc_parts.append("\n")
+            ranges.append((j, j + 2))
+            j += 2
+        elif content[j] == "\r":
+            nc_parts.append("\n")
+            ranges.append((j, j + 1))
+            j += 1
+        else:
+            nc_parts.append(content[j])
+            ranges.append((j, j + 1))
+            j += 1
+    return "".join(nc_parts), ranges
+
+
+def _span_from_nc_match(content: str, old_normalized: str) -> str | None:
+    if not old_normalized:
+        return None
+    nc, ranges = _build_nc_and_ranges(content)
+    pos = nc.find(old_normalized)
+    if pos < 0:
+        return None
+    end_pos = pos + len(old_normalized) - 1
+    if end_pos >= len(ranges):
+        return None
+    start = ranges[pos][0]
+    end = ranges[end_pos][1]
+    return content[start:end]
+
+
+def _loose_match_key_and_starts(text: str) -> tuple[str, list[int]]:
+    """
+    Build a comparison key from `text` and map each key index to the start index in `text`.
+
+    Strips Markdown ``**``, normalizes newlines (``\\r\\n`` / ``\\r`` → ``\\n``), curly quotes → ASCII,
+    unicode dashes → ``-``. Same rules apply to section body and to Phase 2 ``old_sentence``.
+    """
+    src = text or ""
+    key_chars: list[str] = []
+    starts: list[int] = []
+    i = 0
+    while i < len(src):
+        if src.startswith("**", i):
+            i += 2
+            continue
+        if src.startswith("\r\n", i):
+            key_chars.append("\n")
+            starts.append(i)
+            i += 2
+            continue
+        if src[i] == "\r":
+            key_chars.append("\n")
+            starts.append(i)
+            i += 1
+            continue
+        ch = src[i]
+        if ch in ("\u201c", "\u201d"):
+            ch = '"'
+        elif ch in ("\u2018", "\u2019"):
+            ch = "'"
+        elif ch in ("\u2013", "\u2014", "\u2212"):
+            ch = "-"
+        key_chars.append(ch)
+        starts.append(i)
+        i += 1
+    return "".join(key_chars), starts
+
+
+def resolve_old_sentence_span(section_body: str, old_sentence: str) -> str | None:
+    """
+    Map Phase 2 ``old_sentence`` to the verbatim substring of ``section_body`` for Accept/Revert.
+
+    Order: exact substring → curly-quote ASCII match → index match when quote-normalization is 1:1
+    length-preserving → newline-normalized slice → loose key (ignore ``**``, etc.) with **unique** hit.
+    """
+    content = section_body or ""
+    o = old_sentence or ""
+    if not o.strip():
+        return None
+
+    def _first_span(needle: str) -> str | None:
+        i = content.find(needle)
+        return content[i : i + len(needle)] if i >= 0 else None
+
+    hit = _first_span(o)
+    if hit is not None:
+        return hit
+
+    oq = _normalize_typographic_quotes(o)
+    hit = _first_span(oq)
+    if hit is not None:
+        return hit
+
+    cq = _normalize_typographic_quotes(content)
+    if len(cq) == len(content) and oq in cq:
+        i = cq.find(oq)
+        if i >= 0:
+            return content[i : i + len(oq)]
+
+    on = oq.replace("\r\n", "\n").replace("\r", "\n")
+    span = _span_from_nc_match(content, on)
+    if span is not None:
+        return span
+
+    key_c, starts = _loose_match_key_and_starts(content)
+    key_o, _ = _loose_match_key_and_starts(o)
+    if not key_o:
+        return None
+    pos = key_c.find(key_o)
+    if pos < 0:
+        return None
+    if key_c.find(key_o, pos + 1) != -1:
+        return None
+    p1 = pos + len(key_o)
+    if pos >= len(starts) or p1 > len(starts) or p1 <= pos:
+        return None
+    c0 = starts[pos]
+    c1 = starts[p1 - 1] + 1
+    return content[c0:c1]
 
 
 def _targets_zero_based_from_llm(values: list[Any], comparison_rows: list[Any]) -> list[int]:
@@ -170,53 +366,60 @@ def _group_comparison_rows_by_input(rows: list[Any]) -> list[list[Any]]:
     return groups
 
 
-class PerRowOpinion(BaseModel):
-    """Structured output for phase 1 (one failed input group; row_index = min comparison row_index in that group)."""
+class Phase1LlmOutput(BaseModel):
+    """Phase 1 structured output from the LLM only (no row identifiers — server picks anchor row)."""
 
-    row_index: int = Field(
-        ...,
-        description=(
-            "**1-based** row number for this group’s anchor failure — same labels as in the prompt "
-            "(Score # when `score_table_row` exists, else comparison row_index + 1). "
-            "Use the **smallest failed** row number listed there."
-        ),
-    )
     card_title: str = Field(
         default="",
-        description=(
-            "Very short UI headline (about 4–12 words): a plain-English summary of the failure for a list card. "
-            "Like a concise news headline—not snake_case, not a variable name, not the same long text as issue_summary."
-        ),
+        description="Short plain-English UI headline for the failure; not snake_case or a code identifier.",
     )
-    issue_summary: str = Field(..., description="One or two sentences: what went wrong vs expected")
+    issue_summary: str = Field(
+        ...,
+        description="One or two sentences: what went wrong, relative to the expected output when relevant",
+    )
     rough_modification_opinion: str = Field(
         ...,
         description="Rough, prompt-level advice (criteria, wording, format)—not a full rewritten prompt",
     )
     problem_category_hint: str = Field(
         default="",
-        description=(
-            "Short tag for grouping, e.g. format_mismatch, missing_field, omission, over_extraction, ambiguity, threshold"
-        ),
+        description="Short English snake_case or hyphen tag for grouping similar failures.",
     )
 
 
-class PromptEditSuggestion(BaseModel):
-    """One localized prompt change; old_sentence must exist verbatim in the section (UI highlights red/green)."""
+class PerRowOpinion(BaseModel):
+    """Phase 1 opinion after server fills `row_index` (0-based comparison row_index for this project)."""
 
-    name: str = Field(..., description="Short title for this edit")
+    row_index: int = Field(..., description="Anchor comparison row; set server-side, not by the LLM.")
+    card_title: str = Field(default="", description="UI headline from Phase 1 LLM")
+    issue_summary: str = Field(..., description="Diagnosis from Phase 1 LLM")
+    rough_modification_opinion: str = Field(..., description="Rough fix idea from Phase 1 LLM")
+    problem_category_hint: str = Field(default="", description="Grouping tag from Phase 1 LLM")
+
+
+class PromptEditLlm(BaseModel):
+    """Phase 2 LLM output for one edit (no target row ids — server fills from cluster)."""
+
+    name: str = Field(
+        default="Prompt edit",
+        description="Short title for this edit (shown in UI); always set a distinct label when possible",
+    )
     phase1_addresses: list[str] = Field(
         ...,
         min_length=1,
         max_length=3,
         description=(
-            "1–3 strings naming Phase 1 findings this edit fixes; if many bullets are the same failure class, merge into fewer strings"
+            "1–3 strings naming PART C findings this edit fixes; if many bullets are the same failure class, merge into fewer strings"
         ),
     )
-    section_index: int = Field(0, ge=0, description="0-based index of the section to edit")
+    section_index: int = Field(
+        0,
+        ge=0,
+        description="N from `--- Section index N: ---` in PART A (same 0-based slot the app uses for that section body)",
+    )
     old_sentence: str = Field(
         ...,
-        description="Exact contiguous substring copied character-for-character from that section's body",
+        description="Contiguous substring from the PART A body under that section header (server resolves minor ** / quote / newline differences)",
     )
     new_sentence: str = Field(
         default="",
@@ -226,39 +429,51 @@ class PromptEditSuggestion(BaseModel):
         ...,
         description="How this old→new change implements the fix for the phase1_addresses items (1–2 sentences)",
     )
+
+
+class PromptEditSuggestion(BaseModel):
+    """Full prompt edit with targets (after server attaches `target_input_row_indices`)."""
+
+    name: str = Field(..., description="Short title for this edit")
+    phase1_addresses: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=3,
+        description="PART C finding labels this edit addresses",
+    )
+    section_index: int = Field(0, ge=0, description="Section index in PART A")
+    old_sentence: str = Field(..., description="Verbatim span from PART A")
+    new_sentence: str = Field(default="", description="Replacement text")
+    reason: str = Field(..., description="Why this edit fixes the issue(s)")
     target_input_row_indices: list[int] = Field(
         ...,
         min_length=1,
-        description=(
-            "Required. **1-based** row numbers exactly as in Phase 2 section 3 "
-            "(e.g. `#3` → include integer `3`). Same convention as Issue / Score #. "
-            "Not worksheet input_row_index."
-        ),
+        description="1-based Score # values; filled server-side from the issue cluster.",
     )
 
 
-class Phase2Modifications(BaseModel):
-    """Structured output for the modifications-only LLM call (localized prompt_edits)."""
+class Phase2ModificationsLlm(BaseModel):
+    """Structured output from the Phase 2 LLM (targets added server-side)."""
 
-    prompt_edits: list[PromptEditSuggestion] = Field(
+    prompt_edits: list[PromptEditLlm] = Field(
         default_factory=list,
         description=(
-            "Every edit MUST resolve at least one issue named in Phase 1 (section 3); together they MUST cover "
-            "those failures—no unrelated or generic-only improvements; each old_sentence verbatim in section body"
+            "Every edit MUST address PART C (cluster diagnosis); together they MUST cover those failures. "
+            "Each old_sentence must be a substring of the matching PART A section body only."
         ),
     )
 
 
 class Phase15IssueCluster(BaseModel):
-    """One cluster of Phase‑1 issue indices before Phase 2."""
+    """One cluster of Phase‑1 case ids before Phase 2."""
 
     member_indices: list[int] = Field(
         ...,
-        description="0-based indices into the numbered issue list; every index in exactly one cluster across all clusters",
+        description="Case ids (0..n-1) from the Phase 1.5 list; each id in exactly one cluster across all clusters",
     )
     group_label: str = Field(
         default="",
-        description="Very short English label (e.g. missing required field, format mismatch)",
+        description="Very short optional English label for the cluster.",
     )
 
 
@@ -307,7 +522,7 @@ def _normalize_cluster_member_indices(n: int, clusters: list[Phase15IssueCluster
     return out
 
 
-def _build_phase15_clustering_prompt(*, opinions: list[tuple[PerRowOpinion, list[int]]], comparison_rows: list[Any]) -> str:
+def _build_phase15_clustering_prompt(*, opinions: list[tuple[PerRowOpinion, list[int]]]) -> str:
     lines: list[str] = []
     for i, (op, ridxs) in enumerate(opinions):
         head = (op.card_title or "").strip() or op.issue_summary
@@ -315,33 +530,26 @@ def _build_phase15_clustering_prompt(*, opinions: list[tuple[PerRowOpinion, list
         if len(summ) > 220:
             summ = summ[:217] + "..."
         cat = (op.problem_category_hint or "uncategorized").strip()
-        if len(ridxs) > 1:
-            rows_lbl = ", ".join(
-                f"#{_label_one_based_from_comparison_rows(comparison_rows, j)}" for j in sorted(ridxs)
-            )
-        else:
-            rows_lbl = f"#{_label_one_based_from_comparison_rows(comparison_rows, op.row_index)}"
         lines.append(
-            f"- **Index {i}** | Score row(s) {rows_lbl} | [{cat}] **{head}**\n"
+            f"- **Case {i}** | [{cat}] **{head}**\n"
             f"  Summary: {summ}"
         )
     issues_block = "\n".join(lines) if lines else "(no issues)"
-    return f"""## Task: group Phase‑1 review issues before prompt-edit generation
+    return f"""Cluster Phase‑1 diagnoses for the next step: one prompt-edit pass per cluster.
 
-Each **index** below is one completed Phase‑1 diagnosis (different failed dataset input or failure context). Soon we will run **one** prompt-edit pass **per cluster** of issues.
+Case IDs are **0 … {len(opinions) - 1}** only (not worksheet or score row ids). Cases are a **linear list**; do not pair or align cases unless the text itself links them.
 
-### Rules
+Rules:
+- Same cluster only if **one** instruction change can fix **both** with the same root cause.
+- Do not merge unrelated failure types.
+- Each case id appears in **exactly one** cluster.
+- Prefer fewer clusters; use a singleton when unsure.
 
-1. Put two indices in the **same cluster** only if **one coherent change to the instruction prompt** (same root cause / same fix strategy) would reasonably address **both** findings together.
-2. **Do not** merge unrelated failures (e.g. missing field vs format mismatch vs threshold), even if they share a category tag.
-3. **Every** index from **0** to **{len(opinions) - 1}** must appear in **exactly one** cluster.
-4. Prefer **fewer, meaningful** clusters when justified; use **singleton** clusters when in doubt.
-
-### Phase‑1 issues (numbered)
+Cases:
 
 {issues_block}
 
-Respond with JSON: **`clusters`** only — each cluster has `member_indices` (list of ints) and optional `group_label`.
+Return JSON **`clusters`** only: each item has `member_indices` (ints from the case id list) and optional `group_label`.
 """
 
 
@@ -355,53 +563,92 @@ def _cluster_opinions_for_phase2(
     max_tokens: int,
     is_cancelled: Callable[[], bool],
 ) -> list[list[int]]:
+    _ = comparison_rows
     n = len(opinions)
+    result_source = ""
+    final: list[list[int]]
+    llm_parsed: Phase15Clustering | None = None
+
     if n <= 1:
-        return [[0]] if n == 1 else []
-    if is_cancelled():
-        return [[i] for i in range(n)]
-    prompt = _build_phase15_clustering_prompt(opinions=opinions, comparison_rows=comparison_rows)
-    safe_print(
-        "\n"
-        + "=" * 80
-        + "\nREVIEW PHASE 1.5 (issue clustering)"
-        + f" ({n} issues, {len(prompt)} chars)\n"
-        + "=" * 80
-        + "\n"
-        + prompt
-        + "\n"
-        + "=" * 80
-        + "\n",
-        flush=True,
-    )
-    try:
-        out, _ = llm_run_structured(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            prompt=prompt,
-            response_model=Phase15Clustering,
-            max_tokens=max_tokens,
+        final = [[0]] if n == 1 else []
+        result_source = "no_llm_single_or_empty_issue_list"
+        safe_print(
+            "\n"
+            + "=" * 80
+            + "\nREVIEW PHASE 1.5 PROMPT — skipped (0 or 1 Phase-1 issue; no clustering LLM call)\n"
+            + "=" * 80
+            + "\n",
+            flush=True,
         )
-        if isinstance(out, dict):
-            parsed = Phase15Clustering(**out)
-        elif isinstance(out, Phase15Clustering):
-            parsed = out
-        else:
-            parsed = Phase15Clustering(
-                **(out.model_dump() if hasattr(out, "model_dump") else out.dict())
+    elif is_cancelled():
+        final = [[i] for i in range(n)]
+        result_source = "no_llm_cancelled"
+        safe_print(
+            "\n"
+            + "=" * 80
+            + "\nREVIEW PHASE 1.5 PROMPT — skipped (cancelled before LLM)\n"
+            + "=" * 80
+            + "\n",
+            flush=True,
+        )
+    else:
+        prompt = _build_phase15_clustering_prompt(opinions=opinions)
+        safe_print(
+            "\n"
+            + "=" * 80
+            + "\nREVIEW PHASE 1.5 PROMPT (issue clustering)"
+            + f" ({n} issues, {len(prompt)} chars)\n"
+            + "=" * 80
+            + "\n"
+            + prompt
+            + "\n"
+            + "=" * 80
+            + "\n",
+            flush=True,
+        )
+        try:
+            out, _ = llm_run_structured(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                prompt=prompt,
+                response_model=Phase15Clustering,
+                max_tokens=max_tokens,
             )
-        normalized = _normalize_cluster_member_indices(n, list(parsed.clusters or []))
-        if len(normalized) == 0:
-            return _heuristic_issue_cluster_indices(opinions)
-        covered = sum(len(c) for c in normalized)
-        if covered != n:
-            logger.warning("Phase 1.5 clustering covered %s/%s indices; using heuristic", covered, n)
-            return _heuristic_issue_cluster_indices(opinions)
-        return normalized
-    except Exception as e:
-        logger.warning("Phase 1.5 clustering failed (%s); using heuristic buckets", e)
-        return _heuristic_issue_cluster_indices(opinions)
+            if isinstance(out, dict):
+                parsed = Phase15Clustering(**out)
+            elif isinstance(out, Phase15Clustering):
+                parsed = out
+            else:
+                parsed = Phase15Clustering(
+                    **(out.model_dump() if hasattr(out, "model_dump") else out.dict())
+                )
+            llm_parsed = parsed
+            normalized = _normalize_cluster_member_indices(n, list(parsed.clusters or []))
+            if len(normalized) == 0:
+                final = _heuristic_issue_cluster_indices(opinions)
+                result_source = "heuristic_empty_normalized_clusters"
+            else:
+                covered = sum(len(c) for c in normalized)
+                if covered != n:
+                    logger.warning("Phase 1.5 clustering covered %s/%s indices; using heuristic", covered, n)
+                    final = _heuristic_issue_cluster_indices(opinions)
+                    result_source = "heuristic_partial_index_coverage"
+                else:
+                    final = normalized
+                    result_source = "llm"
+        except Exception as e:
+            logger.warning("Phase 1.5 clustering failed (%s); using heuristic buckets", e)
+            final = _heuristic_issue_cluster_indices(opinions)
+            result_source = "heuristic_after_exception"
+
+    report: dict[str, Any] = {"how": result_source, "clusters_member_indices": final}
+    if llm_parsed is not None:
+        report["llm_structured_output"] = (
+            llm_parsed.model_dump() if hasattr(llm_parsed, "model_dump") else llm_parsed.dict()
+        )
+    _print_review_result_banner("PHASE 1.5", _review_json_for_print(report))
+    return final
 
 
 def _phase1_row_has_no_model_output(d: dict[str, Any]) -> bool:
@@ -450,31 +697,26 @@ def _phase1_row_has_no_ground_truth(d: dict[str, Any]) -> bool:
     return gto_all_empty and exp_empty
 
 
+def _phase1_format_nonempty_lines_json(items: list[tuple[int, dict[str, Any]]], *, empty_note: str) -> str:
+    """Phase 1: only list rows that have content; single item → bare JSON; multiple → Line n labels + JSON each."""
+    if not items:
+        return empty_note
+    if len(items) == 1:
+        _i, d = items[0]
+        return f"```json\n{json.dumps(d, ensure_ascii=False, indent=2)}\n```"
+    parts: list[str] = []
+    for idx, d in items:
+        parts.append(
+            f"**Line {idx}**\n\n```json\n{json.dumps(d, ensure_ascii=False, indent=2)}\n```"
+        )
+    return "\n\n".join(parts)
+
+
 def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[Any]) -> str:
     if not group_rows:
         return ""
     first = _row_to_dict(group_rows[0])
     row_input = first.get("row_input") or {}
-    idxs = sorted({int(_row_to_dict(r).get("row_index", -1)) for r in group_rows})
-    failed_idxs = sorted(
-        {
-            int(_row_to_dict(r).get("row_index", -1))
-            for r in group_rows
-            if not _row_to_dict(r).get("matched", False)
-        }
-    )
-    by_idx = _rows_by_comparison_index(group_rows)
-    fail_list_1 = (
-        ", ".join(str(_score_row_one_based(by_idx[i])) for i in sorted(failed_idxs) if i in by_idx)
-        if failed_idxs
-        else "(none)"
-    )
-    all_list_1 = ", ".join(str(_score_row_one_based(by_idx[i])) for i in sorted(idxs) if i in by_idx)
-    min_fail_1 = (
-        _score_row_one_based(by_idx[min(failed_idxs)])
-        if failed_idxs and min(failed_idxs) in by_idx
-        else (_score_row_one_based(by_idx[min(idxs)]) if idxs and min(idxs) in by_idx else 1)
-    )
 
     def _ground_truth_output_dict(d: dict[str, Any]) -> dict[str, Any]:
         gto = d.get("ground_truth_output")
@@ -490,125 +732,82 @@ def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[A
             return False
         return True
 
-    def _field_scoring_parts_for_row(d: dict[str, Any]) -> list[str]:
-        comparison_types = d.get("comparison_types")
-        parts = [str(x) for x in (comparison_types or []) if isinstance(x, str)]
-        return [x for x in parts if _is_model_facing_output_key(x.split(":", 1)[0].strip())]
-
     ordered_rows = sorted(group_rows, key=lambda x: int(_row_to_dict(x).get("row_index", 0)))
-    scoring_ordered: list[str] = []
-    scoring_seen: set[str] = set()
-    model_output_items: list[dict[str, Any]] = []
-    ground_truth_items: list[dict[str, Any]] = []
-    for r in ordered_rows:
+    mo_items: list[tuple[int, dict[str, Any]]] = []
+    gt_items: list[tuple[int, dict[str, Any]]] = []
+    for i, r in enumerate(ordered_rows, start=1):
         d = _row_to_dict(r)
-        for part in _field_scoring_parts_for_row(d):
-            key = part.split(":", 1)[0].strip()
-            if key in scoring_seen:
-                continue
-            scoring_seen.add(key)
-            scoring_ordered.append(part)
-        score_lbl = _score_row_one_based(d)
-        matched = bool(d.get("matched", False))
         if not _phase1_row_has_no_model_output(d):
             run_output = d.get("run_output") or {}
-            ro_copy = dict(run_output) if isinstance(run_output, dict) else {}
-            model_output_items.append(
-                {
-                    "score_row": score_lbl,
-                    "matched": matched,
-                    "run_output": ro_copy,
-                }
-            )
+            mo = dict(run_output) if isinstance(run_output, dict) else {}
+            mo_items.append((i, mo))
         if not _phase1_row_has_no_ground_truth(d):
             gt_obj = {k: v for k, v in _ground_truth_output_dict(d).items() if _is_model_facing_output_key(k)}
-            ground_truth_items.append(
-                {
-                    "score_row": score_lbl,
-                    "matched": matched,
-                    "ground_truth_output": gt_obj,
-                }
-            )
+            if gt_obj:
+                gt_items.append((i, gt_obj))
 
-    rules_body = "\n".join(f"- {p}" for p in scoring_ordered) if scoring_ordered else "(not specified)"
-    model_json = json.dumps(model_output_items, ensure_ascii=False, indent=2)
-    gt_json = json.dumps(ground_truth_items, ensure_ascii=False, indent=2)
-    multi = len(group_rows) > 1
-    mixed = len(failed_idxs) > 0 and len(failed_idxs) < len(group_rows)
+    model_body = _phase1_format_nonempty_lines_json(
+        mo_items,
+        empty_note="*None — no model output on any row for this input.*",
+    )
+    expected_body = _phase1_format_nonempty_lines_json(
+        gt_items,
+        empty_note="*None — no expected output on any row for this input.*",
+    )
+    n_lines = len(ordered_rows)
+    n_failed = sum(1 for r in group_rows if not _row_to_dict(r).get("matched", False))
+    multi = n_lines > 1
+    mixed = n_failed > 0 and n_failed < n_lines
     if multi:
         if mixed:
             scope = (
-                "This is **one dataset input** with **multiple** score lines below. **Some PASSED and some FAILED** scoring. "
-                "Use passing lines as context (what the model got right); focus the diagnosis on failures "
-                "and prompt changes that preserve correct behavior while fixing them."
+                "One dataset input; several scoring rows. Some rows satisfied the rubric, some did not. "
+                "Infer what already works from the full picture; focus the diagnosis on incorrect or missing behavior."
             )
         else:
             scope = (
-                "This is **one dataset input** with **multiple** score lines. **Sections 3 and 4** are **two separate lists** "
-                "(same layout as the app): section 3 only includes lines that have **model output**; section 4 only includes lines "
-                "that have **ground-truth** cells. **The two lists can have different lengths.** Tie a model line to a GT line "
-                "when they share the same **score_row** (1-based Issue / Score #)."
+                "One dataset input; several scoring rows. **Model output** and **Expected output** are two independent sections. "
+                "Each section lists only rows that have content for that section; completely empty rows are omitted."
             )
     else:
-        scope = (
-            "This is **one** score line for this input. It may appear in section 3 only, section 4 only, or both—use whichever "
-            "tables are present."
-        )
+        scope = "One scoring row for this input; follow the layout rules below."
 
-    return f"""You review model output(s) for **one** dataset input (same placeholders / message as below). Possibly multiple score lines were evaluated; some may have **passed** and some **failed**.
+    return f"""Diagnose scoring failures for **one** dataset input.
+
+**Layout:** Do not treat **Model output** and **Expected output** as left/right columns, matched pairs, or row-aligned tables. Read each section on its own. **`Line n` is only the n-th entry listed in that section**; it does not pair with anything in the other section.
 
 {scope}
 
-## 1. Prompt template
-
-Full instruction text the model was given (all sections, as in the app):
+## Prompt template (placeholders not yet substituted)
 
 {prompt_text}
 
-## 2. Input (substituted placeholders)
-
-Keys are `{{placeholder}}` names from the template above; values are the strings substituted into the prompt for this run.
+## Placeholder substitutions (values inserted into the template for this run)
 
 ```json
 {json.dumps(row_input, ensure_ascii=False, indent=2)}
 ```
 
-## 3. Model output (one entry per score line that has model output)
+## Model output
 
-JSON **array** in **score-line order** among included rows only. **Omit** lines with no extractable model JSON (e.g. GT-only rows). Each object has **`score_row`** (1-based, same as Issue / Score **#** in the app), **`matched`** (whether scoring passed for that line), and **`run_output`** (the model’s output fields as in the run).
+What the task model returned. **Only rows with non-empty model output appear**; rows with nothing to show are omitted.
 
-```json
-{model_json}
-```
+{model_body}
 
-## 4. Ground truth (one entry per score line that has expected / GT cells)
+## Expected output
 
-JSON **array** in **score-line order** among included rows only. **Omit** lines with no ground-truth content. Each object has **`score_row`** (1-based, same numbering as section 3), **`matched`**, and **`ground_truth_output`** (**keys** are score-rule **output keys** — same property names as when comparing model JSON to the GT sheet). Omitted keys: row-index rules (`#`, `[#]`) and bracket worksheet selectors (`[…]`) that are not model-output fields.
+Ground truth used for scoring. **Only rows with expected fields appear**; rows with nothing to show are omitted.
 
-```json
-{gt_json}
-```
+{expected_body}
 
-**Linking:** When the same **`score_row`** appears in both sections, that row has both a model output and GT expectations on that line. When it appears in only one section, the other side had nothing to show for that score line (same as the app’s debug preview).
+## Output (JSON only)
 
-## 5. Comparison rules (how each output key is scored against ground truth)
+- **card_title**: Short plain-English headline; not snake_case or code-like.
+- **issue_summary**: Describe the failure; reference the expected output when relevant; note missing or extra extractive items when relevant.
+- **rough_modification_opinion**: Concrete prompt-level changes only; do not paste a full rewritten prompt.
+- **problem_category_hint**: Short grouping tag in English snake_case or hyphen form.
 
-For each listed output field, the line describes the match type / options used when comparing **model `run_output`** values to **`ground_truth_output`**.
-
-{rules_body}
-
-The response field **row_index** (below) uses **1-based** **`score_row`** numbers like the app—not array positions in sections 3 or 4.
-
-## Your task
-
-0. **card_title**: A **short headline** (about 4–12 words) for a UI list card—plain English, summary-style, readable at a glance. It must **not** be snake_case or look like a code identifier. It is **not** a substitute for the full explanation below.
-1. **issue_summary**: Briefly explain the mismatch(es) (one or two sentences, or a bit more if multiple score lines need tying together). If the failure is extractive, mention **missing** and/or **extra** relative to expected when relevant.
-2. **rough_modification_opinion**: Rough modification advice for the **prompt** only—what to clarify, add, or constrain so coverage is exact (no missing required items, no spurious extras); do NOT paste a full new prompt.
-3. **problem_category_hint**: a very short English snake_case or hyphen tag for grouping similar failures (internal use).
-
-Row numbers in this task are **1-based** (same as the app’s Issue / Score **#** column when `score_table_row` is set; otherwise comparison row_index + 1).
-
-Respond with JSON matching the schema (**row_index** must be **{min_fail_1}** — smallest **failed** row number below; failed row number(s): {fail_list_1}; all rows in this group: {all_list_1}).
+Return only those four fields.
 """
 
 
@@ -620,20 +819,17 @@ def _sections_block_for_phase2(sections: list[Any]) -> str:
     return "\n\n".join(parts) if parts else "(no sections)"
 
 
-def _phase2_single_issue_block(*, comparison_rows: list[Any], op: PerRowOpinion, ridxs: list[int]) -> str:
+def _phase2_single_issue_block(*, op: PerRowOpinion) -> str:
     rough = op.rough_modification_opinion.strip()
     if len(rough) > 1200:
         rough = rough[:1197] + "..."
     head = (op.card_title or "").strip() or op.issue_summary
-    if len(ridxs) > 1:
-        rows_lbl = ", ".join(
-            f"#{_label_one_based_from_comparison_rows(comparison_rows, i)}" for i in sorted(ridxs)
-        )
-    else:
-        rows_lbl = f"#{_label_one_based_from_comparison_rows(comparison_rows, op.row_index)}"
     return (
-        f"- Score row(s) {rows_lbl} (1-based, same as Issue / Score #): [{op.problem_category_hint or 'uncategorized'}] {head}\n"
-        f"  Detail: {op.issue_summary}\n  Rough fix: {rough}"
+        f"#### Finding\n"
+        f"- **category:** `{op.problem_category_hint or 'uncategorized'}`\n"
+        f"- **label:** {head}\n"
+        f"- **detail:** {op.issue_summary}\n"
+        f"- **rough_fix_idea:** {rough}"
     )
 
 
@@ -663,60 +859,74 @@ def _build_phase2_modifications_prompt(
     scope_line = (
         f"**Cluster:** {cluster_context.strip()}\n\n" if (cluster_context or "").strip() else ""
     )
-    section3_rule = (
-        "- **Section 3** lists **every** Phase‑1 finding in **this cluster** (already grouped as sharing the same fix strategy). "
-        "Do **not** redesign the prompt, add unrelated polish, or address failures not listed there.\n"
-        "- **One problem → one edit (default):** Usually **one** `prompt_edit` per **distinct** failure or fix strategy **in section 3**. "
-        "When **one** localized change fixes **several** bullets in section 3, you may use **one** edit and name all of them in `phase1_addresses` / `target_input_row_indices`.\n"
-        "- **Coverage:** Your edits **must** address **all** distinct failures in **section 3**, unless the prompt has no place to apply a fix (then fewer edits and state the gap in `reason`—still no generic-only edits)."
+    coverage_rule = (
+        "- Each edit addresses PART C via `phase1_addresses` and `reason`; no generic polish.\n"
+        "- One edit per distinct fix unless one sentence fixes several PART C items.\n"
+        "- Cover every distinct PART C failure; if one is unfixable by substring edit, state that in `reason` on the closest edit."
     )
-    return f"""## Phase 2 goal (read first)
+    return f"""Produce minimal **localized** edits to the stored prompt so behavior matches **PART C**. Output only `prompt_edits`.
 
-**Fix what Phase 1 found for this cluster, with as little change to the prompt as possible.**
+PART A, B, and C are **sequential sections** for reading only—never treat them as columns or side-by-side panels to reconcile visually.
 
-{scope_line}**Hard rule:** Every `prompt_edit` you output **must** directly fix something **Phase 1 already identified** in **section 3** (issue_summary, rough_modification_opinion, category hint, or the row lines). **Do not** output an edit whose only justification is generic “better prompt” or “clarity”—if you cannot point to **which part of section 3** it answers, **omit** that edit.
+{scope_line}Rules:
+- `old_sentence` must be copied verbatim from **PART A** only; patches apply to stored section bodies.
+- `section_index` is the integer **N** in `--- Section index N: ---` inside **PART A** below. Headings in *this* message are not section indices.
+- If PART C has any finding, return **at least one** edit. Empty `prompt_edits` only when PART A has no bodies.
+- Do not paste diagnosis text from PART C into `old_sentence`.
 
-{section3_rule}
-- Each `prompt_edit` is a **minimal** change: prefer one sentence / bullet / clause.
-- **Smallest effective diff wins**; do **not** split one fix into many micro-edits.
-- **Extraction / coverage:** tighten only as much as Phase 1 implies.
+{coverage_rule}
 
-Output format: **only** `prompt_edits`. No clusters, no meta summaries, no full rewritten prompt.
+---
 
-## 1. Prompt template
-
-Full instruction text the model was given (same as Phase 1; use together with **section 2** for locating spans to edit):
-
-{prompt_text}
-
-## 2. Prompt sections (by index)
-
-Verbatim section bodies only. **`old_sentence` must be copied from here** — not from headers like `--- Section index 0: … ---`, and not from **section 1** if the wording differs.
+### PART A — Section bodies (only source for `old_sentence`)
 
 {sections_block}
 
-## 3. Phase 1 findings (**this cluster** — every bullet must be addressed by your edits)
+---
+
+### PART B — Full template (context; **PART A** wins if wording differs)
+
+{prompt_text}
+
+---
+
+### PART C — Cluster diagnosis (never use as `old_sentence`)
 
 {opinions_text}
 
-## Your task — **prompt_edits** (in-app diff + Accept/Revert)
+---
 
-Each edit in `prompt_edits` **must** include:
+### Each `prompt_edits` item
 
-- **`phase1_addresses`**: **1 to 3 strings** (hard cap **3**). Each string should name a **Phase 1 finding** from **section 3** (short phrase or quote). **Do not** use vague entries like “improve clarity” unless Phase 1 said so.
-- **`target_input_row_indices`**: **Non-empty** list of **1-based integers** — copy the **exact numbers** from section 3 after **“Score row(s)”** (e.g. `#4, #5` → `[4, 5]`). Same numbering as Issue / Score **#**. Not worksheet `input_row_index`.
-- **`reason`**: 1–2 sentences on **how** the `old_sentence`→`new_sentence` change implements those fixes (implementation detail, not a repeat of the whole section 3).
+- **name**: Short UI label.
+- **phase1_addresses**: 1–3 strings; prefer PART C **label** values.
+- **section_index**: **N** from PART A header line.
+- **old_sentence**: Contiguous substring of that section body in PART A.
+- **new_sentence**: Replacement, or `""` to delete.
+- **reason**: How this fixes the cited PART C items.
 
-Other rules:
+Invalid spans are dropped server-side.
 
-1. **Count:** **Minimum** edits that still **fully** cover Phase 1’s problems in section 3 for this cluster. No padding.
-2. **old_sentence:** **Character-for-character** from **section 2** (one contiguous substring).
-3. **new_sentence:** Replaces `old_sentence`; **""** = deletion.
-4. **section_index:** Section in **section 2** where `old_sentence` appears.
-5. If `old_sentence` is **not** an exact substring of that body, **omit** that edit.
-
-Respond with JSON: **`prompt_edits` only** (no other keys).
+Return **`prompt_edits`** only.
 """
+
+
+def _phase2_old_sentence_smells_diagnosis_leak(raw: str) -> bool:
+    """True if the model pasted PART C / diagnosis markdown into old_sentence (never valid)."""
+    t = (raw or "").strip()
+    if not t:
+        return False
+    head = t[:200]
+    tl = head.lower()
+    if "score row(s)" in tl:
+        return True
+    if t.startswith("#### Finding"):
+        return True
+    if t.startswith("- **category:**") or t.startswith("- **detail:**") or t.startswith("- **label:**"):
+        return True
+    if "**rough_fix_idea:**" in head:
+        return True
+    return False
 
 
 def _dedupe_prompt_edit_objects(edits: list[PromptEditSuggestion]) -> list[PromptEditSuggestion]:
@@ -751,10 +961,27 @@ def _sanitize_prompt_edits(
         idx = int(e.section_index)
         idx = max(0, min(idx, n - 1))
         _, content = _sec_name_content(sections[idx])
-        old = e.old_sentence or ""
-        if not old.strip():
+        raw_old = e.old_sentence or ""
+        if not raw_old.strip():
             continue
-        if old not in content:
+        if _phase2_old_sentence_smells_diagnosis_leak(raw_old):
+            safe_print(
+                f"[Review] Phase 2 edit skipped (old_sentence is diagnosis text, not PART A): {raw_old[:120]!r}",
+                flush=True,
+            )
+            continue
+        old = resolve_old_sentence_span(content, raw_old)
+        if old is None and n > 0:
+            hits: list[tuple[int, str]] = []
+            for si in range(n):
+                _, cbody = _sec_name_content(sections[si])
+                sp = resolve_old_sentence_span(cbody, raw_old)
+                if sp is not None:
+                    hits.append((si, sp))
+            if len(hits) == 1:
+                idx, old = hits[0]
+                _, content = _sec_name_content(sections[idx])
+        if old is None:
             continue
         new = e.new_sentence if e.new_sentence is not None else ""
         if not isinstance(new, str):
@@ -793,6 +1020,78 @@ def _sanitize_prompt_edits(
     return out
 
 
+_PHASE2_FALLBACK_ANCHOR_CANDIDATES: tuple[str, ...] = (
+    "Providing these identifiers from the source ensures other scientists can accurately look up the entry in UniProt.",
+    "Whenever possible, use standardized identifiers:",
+)
+
+
+def _phase2_edits_when_llm_abstains(
+    sections: list[Any],
+    cluster_pairs: list[tuple[PerRowOpinion, list[int]]],
+) -> list[PromptEditLlm]:
+    """
+    If Phase2 returns an empty ``prompt_edits`` list, emit one anchored edit so the UI still receives suggestions.
+    Anchors on the WORKFLOW **Normalize Names** paragraph when that wording exists in stored sections.
+    """
+    if not cluster_pairs:
+        return []
+    p1: list[str] = []
+    for op, _ in cluster_pairs:
+        lab = ((op.card_title or "").strip() or (op.issue_summary or "").strip())[:200]
+        if lab and lab not in p1:
+            p1.append(lab)
+        if len(p1) >= 3:
+            break
+    if not p1:
+        p1 = ["Cluster findings"]
+    bits: list[str] = []
+    for op, _ in cluster_pairs:
+        r = (op.rough_modification_opinion or "").strip()
+        if r and r not in bits:
+            bits.append(r[:500])
+    tail = " ".join(bits)[:900].strip()
+    guidance = (
+        "Also require mapping holoenzyme, complex, or informal protein names to **gene symbols** required by scoring, "
+        "and emit **every distinct** phosphatase–substrate pair the passage supports, including multiple isoforms on one substrate when the text implies them."
+    )
+    if tail:
+        guidance = (guidance + " Context from diagnosis: " + tail[:450]).strip()
+
+    sec_idx: int | None = None
+    old_span: str | None = None
+    for i, sec in enumerate(sections or []):
+        _, body = _sec_name_content(sec)
+        for cand in _PHASE2_FALLBACK_ANCHOR_CANDIDATES:
+            resolved = resolve_old_sentence_span(body, cand)
+            if resolved:
+                sec_idx, old_span = i, resolved
+                break
+        if old_span:
+            break
+    if sec_idx is None or not old_span:
+        safe_print(
+            "[Review] Phase 2 fallback skipped (no Normalize Names anchor in stored sections).",
+            flush=True,
+        )
+        return []
+
+    new_sent = (old_span.rstrip() + " " + guidance).strip()
+    return [
+        PromptEditLlm(
+            name="Clarify normalization and multi-pair coverage",
+            phase1_addresses=p1,
+            section_index=int(sec_idx),
+            old_sentence=old_span,
+            new_sentence=new_sent,
+            reason=(
+                "Phase 2 returned no edits; this server fallback extends the Normalize Names line in PART A so the run "
+                "still yields an applyable patch aligned with the cluster diagnosis."
+            ),
+        )
+    ]
+
+
 def _analyze_input_group(
     *,
     group_rows: list[Any],
@@ -814,7 +1113,7 @@ def _analyze_input_group(
     safe_print(
         "\n"
         + "=" * 80
-        + "\nREVIEW PHASE 1 PROMPT"
+        + "\nREVIEW PHASE 1 PROMPT (per input group)"
         + f" (all row_index: {idxs_all}, failed: {failed_idxs}, {len(prompt)} chars)\n"
         + "=" * 80
         + "\n"
@@ -829,27 +1128,18 @@ def _analyze_input_group(
         model=model,
         api_key=api_key,
         prompt=prompt,
-        response_model=PerRowOpinion,
+        response_model=Phase1LlmOutput,
         max_tokens=max_tokens,
     )
     if isinstance(out, dict):
-        op = PerRowOpinion(**out)
-    elif isinstance(out, PerRowOpinion):
-        op = out
+        diag = Phase1LlmOutput(**out)
+    elif isinstance(out, Phase1LlmOutput):
+        diag = out
     else:
-        op = PerRowOpinion(**(out.model_dump() if hasattr(out, "model_dump") else out.dict()))
-    raw_ri = int(op.row_index)
-    by_idx = _rows_by_comparison_index(group_rows)
-    failed_set = set(failed_idxs)
-    if raw_ri in failed_set:
-        norm = raw_ri
-    elif raw_ri >= 1 and (raw_ri - 1) in failed_set:
-        norm = raw_ri - 1
-    else:
-        label_to_idx = {_score_row_one_based(by_idx[i]): i for i in failed_set if i in by_idx}
-        fallback = int(min(failed_idxs)) if failed_idxs else int(min(idxs_all))
-        norm = label_to_idx.get(raw_ri, fallback)
-    op.row_index = int(norm)
+        diag = Phase1LlmOutput(**(out.model_dump() if hasattr(out, "model_dump") else out.dict()))
+    anchor = _phase1_anchor_comparison_index(group_rows)
+    op = PerRowOpinion(row_index=int(anchor), **diag.model_dump())
+    _print_review_result_banner("PHASE 1", _review_json_for_print(op))
     return op, idxs_all
 
 
@@ -965,12 +1255,21 @@ def run_review_pipeline(
     def run_one_phase2(pair: tuple[int, list[int]]) -> tuple[int, str, list[PromptEditSuggestion]]:
         cluster_idx, member_indices = pair
         if is_cancelled():
+            safe_print(
+                "\n"
+                + "=" * 80
+                + f"\nREVIEW PHASE 2 PROMPT — skipped (cancelled) cluster {cluster_idx + 1}/{n_clusters}\n"
+                + "=" * 80
+                + "\n",
+                flush=True,
+            )
+            _print_review_result_banner(
+                f"PHASE 2 (cluster {cluster_idx + 1}/{n_clusters}) — skipped",
+                _review_json_for_print({"cancelled": True, "prompt_edits": []}),
+            )
             return cluster_idx, cluster_labels[cluster_idx], []
         cluster_pairs = [opinions[i] for i in member_indices]
-        blocks = [
-            _phase2_single_issue_block(comparison_rows=comparison_rows, op=op, ridxs=ridxs)
-            for op, ridxs in cluster_pairs
-        ]
+        blocks = [_phase2_single_issue_block(op=op) for op, _ in cluster_pairs]
         opinions_text = "\n\n".join(blocks)
         label = cluster_labels[cluster_idx]
         mod_prompt = _build_phase2_modifications_prompt(
@@ -1004,16 +1303,49 @@ def run_review_pipeline(
             model=model,
             api_key=api_key,
             prompt=mod_prompt,
-            response_model=Phase2Modifications,
+            response_model=Phase2ModificationsLlm,
             max_tokens=max_tokens,
         )
         if isinstance(out_mod, dict):
-            mod = Phase2Modifications(**out_mod)
-        elif isinstance(out_mod, Phase2Modifications):
-            mod = out_mod
+            mod_raw = Phase2ModificationsLlm(**out_mod)
+        elif isinstance(out_mod, Phase2ModificationsLlm):
+            mod_raw = out_mod
         else:
-            mod = Phase2Modifications(**(out_mod.model_dump() if hasattr(out_mod, "model_dump") else out_mod.dict()))
-        return cluster_idx, label, list(mod.prompt_edits or [])
+            mod_raw = Phase2ModificationsLlm(
+                **(out_mod.model_dump() if hasattr(out_mod, "model_dump") else out_mod.dict())
+            )
+        target_labels = _cluster_fallback_target_score_labels(comparison_rows, cluster_pairs)
+        raw_llm_edits = list(mod_raw.prompt_edits or [])
+        if not raw_llm_edits:
+            safe_print(
+                "[Review] Phase 2 LLM returned empty prompt_edits; applying anchored fallback if possible.",
+                flush=True,
+            )
+            raw_llm_edits = _phase2_edits_when_llm_abstains(sections, cluster_pairs)
+        full_edits: list[PromptEditSuggestion] = []
+        for el in raw_llm_edits:
+            full_edits.append(
+                PromptEditSuggestion(
+                    name=el.name,
+                    phase1_addresses=list(el.phase1_addresses),
+                    section_index=int(el.section_index),
+                    old_sentence=el.old_sentence,
+                    new_sentence=el.new_sentence,
+                    reason=el.reason,
+                    target_input_row_indices=list(target_labels),
+                )
+            )
+        _print_review_result_banner(
+            f"PHASE 2 (cluster {cluster_idx + 1}/{n_clusters})",
+            _review_json_for_print(
+                {
+                    "llm_output": mod_raw.model_dump() if hasattr(mod_raw, "model_dump") else mod_raw.dict(),
+                    "target_input_row_indices_filled_server_side": target_labels,
+                    "prompt_edits": [e.model_dump() if hasattr(e, "model_dump") else e.dict() for e in full_edits],
+                }
+            ),
+        )
+        return cluster_idx, label, full_edits
 
     indexed_pairs = list(enumerate(cluster_members))
     collected: list[tuple[int, str, PromptEditSuggestion]] = []
@@ -1051,6 +1383,23 @@ def run_review_pipeline(
             edit_dicts.append(d)
             if len(edit_dicts) >= _MAX_VALIDATED_PROMPT_EDITS:
                 break
+
+    if not edit_dicts and deduped_triples:
+        nsec = len(sections or [])
+        cr = list(comparison_rows or [])
+        for i, (cidx, label, e) in enumerate(deduped_triples[:5]):
+            sidx = max(0, min(int(e.section_index), nsec - 1)) if nsec else 0
+            _, cbody = _sec_name_content(sections[sidx]) if nsec else ("", "")
+            raw_old = e.old_sentence or ""
+            resolved = resolve_old_sentence_span(cbody, raw_old) if cbody else None
+            raw_t = getattr(e, "target_input_row_indices", None)
+            mapped = _targets_zero_based_from_llm(raw_t if isinstance(raw_t, list) else [], cr)
+            safe_print(
+                f"[Review] Phase 2 suggestion dropped (sanitize): cluster={cidx} label={label!r} "
+                f"section_index={sidx} old_resolved={resolved is not None} "
+                f"targets_raw={raw_t!r} targets_mapped={mapped!r} old_preview={raw_old[:120]!r}",
+                flush=True,
+            )
 
     if edit_dicts:
         append_event({"type": "suggestions", "suggestions": edit_dicts})

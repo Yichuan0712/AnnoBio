@@ -3634,6 +3634,21 @@
   justify-content: flex-end;
 }
 
+.review-detail-suggestions-footer-stack {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  width: 100%;
+}
+
+.review-detail-suggestions-footer-stack .review-detail-status-note {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .review-detail-suggestions-footer:empty,
 .review-detail-analysis-footer:empty {
   display: none;
@@ -3933,12 +3948,14 @@ button.review-suggestion-title-pill {
   user-select: none;
 }
 
-.review-suggestion-rowcheck-fail-pill--click-finetune {
+.review-suggestion-rowcheck-fail-pill--click-finetune,
+.review-suggestion-rowcheck-fail-pill--click-verify {
   cursor: pointer;
   pointer-events: auto;
 }
 
-.review-suggestion-rowcheck-fail-pill--click-finetune:hover {
+.review-suggestion-rowcheck-fail-pill--click-finetune:hover,
+.review-suggestion-rowcheck-fail-pill--click-verify:hover {
   filter: brightness(1.06);
 }
 

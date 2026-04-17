@@ -37,9 +37,7 @@ import {
 
 const API_BASE = 'http://localhost:8000';
 
-/** LLM stream ends here; remaining bar is Run+Score checks (most wall time). Must match workflowCanvas. */
-const REVIEW_PROGRESS_PIPELINE_DONE = 30;
-const REVIEW_PROGRESS_CHECK_SPAN = 100 - REVIEW_PROGRESS_PIPELINE_DONE;
+/** Review node progress reaches 100% when the stream ends (workflowCanvas). Row verify is user-triggered in this modal. */
 
 /** Only on full app/tab unload: cancel in-flight row-check + Finetune HTTP/poll. Closing the review modal does NOT call this — jobs keep running and persist when done. */
 function abortReviewBackgroundJobsOnAppUnload() {
@@ -53,6 +51,8 @@ const REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL = 'Verified';
 const REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE = 'Click to Finetune';
 /** Row-check (Run+Score) in progress for this card. */
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying';
+/** Title-line tag: run pending Run+Score checks (same look as “Click to Finetune”). */
+const REVIEW_SUGGESTION_VERIFY_INVITE_PILL = 'Click to Verify';
 /** Finetune optimization finished (title pill). */
 const REVIEW_SUGGESTION_FINETUNED_PILL_LABEL = 'Finetuned';
 /** Title tag for assistant-owned edits: dialogue proposal, not pipeline verify. */
@@ -96,7 +96,7 @@ const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 /**
  * At most one title pill. Pipeline: verify/finetune state. Assistant: only the Proposal tag.
  */
-function collectSuggestionTitlePills(sug, noButton, actionsFull) {
+function collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections) {
   if (!sug || typeof sug !== 'object') return [];
   if (String(sug.source || '').toLowerCase() === 'assistant') {
     return [
@@ -141,15 +141,27 @@ function collectSuggestionTitlePills(sug, noButton, actionsFull) {
         },
       ];
     }
+    if (suggestionNeedsAutoRowCheck(sug, originals, promptSections)) {
+      return [
+        {
+          cls: 'review-suggestion-rowcheck-fail-pill review-suggestion-rowcheck-fail-pill--click-verify',
+          text: REVIEW_SUGGESTION_VERIFY_INVITE_PILL,
+          clickVerify: true,
+        },
+      ];
+    }
   }
   return [];
 }
 
-function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull) {
-  return collectSuggestionTitlePills(sug, noButton, actionsFull)
+function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections) {
+  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections)
     .map((spec) => {
       if (spec.clickFinetune === true) {
         return `<button type="button" class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}" aria-label="Finetune this suggestion" data-review-title-pill-action="finetune">${escapeHtml(spec.text)}</button>`;
+      }
+      if (spec.clickVerify === true) {
+        return `<button type="button" class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}" aria-label="Run row checks for this suggested prompt edit against the Run and Score worksheet" data-review-title-pill-action="verify-suggestion">${escapeHtml(spec.text)}</button>`;
       }
       const aria =
         typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()
@@ -1020,10 +1032,16 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /** Shared Run+Score check: prompt = originals + only this suggestion applied (ignore other accepted rows). */
-  async function runRowVerifyWithPayload(sug, sugIdx, payload, signal) {
-    const targets = suggestionTargetInputRowIndices(sug);
+  /**
+   * Shared Run+Score check: prompt = originals + only this suggestion applied (ignore other accepted rows).
+   * @param {{ singleComparisonTargetOnly?: boolean }} [opts] If true, only the first (smallest) comparison `row_index` in the suggestion is checked — for manual “Click to Verify” so one click ≠ one mini-run per listed target.
+   */
+  async function runRowVerifyWithPayload(sug, sugIdx, payload, signal, opts = {}) {
+    let targets = suggestionTargetInputRowIndices(sug);
     if (targets.length === 0) return { emptyTargets: true };
+    if (opts.singleComparisonTargetOnly === true && targets.length > 1) {
+      targets = [targets[0]];
+    }
     const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdx }));
     const testSections = rebuildWorkingFromApplied(originals, patched);
     if (!testSections || testSections.length !== originals.length) {
@@ -1127,13 +1145,9 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  let pipelineAutoCheckInFlight = false;
-
-  function clearAllPipelineAutoCheckInProgressFlags() {
-    for (const sug of allSuggestions) {
-      if (!sug || typeof sug !== 'object') continue;
-      delete sug.review_test_in_progress;
-    }
+  /** True if any pipeline card is running a user-triggered row verify (parallel jobs allowed). */
+  function anyRowVerifyInProgress() {
+    return allSuggestions.some((s) => s && s.review_test_in_progress === true);
   }
 
   let editCardsRefreshScheduled = false;
@@ -1147,124 +1161,103 @@ function buildReviewResultUI(overlay, options) {
     });
   }
 
-  async function runPipelineAutoCheckAfterStreamDone() {
-    if (pipelineAutoCheckInFlight) return;
+  /**
+   * Run Run+Score check for the card the user clicked (“Click to Verify”).
+   * Multiple cards verify concurrently; the same card ignores repeat clicks while in flight.
+   */
+  async function runRowVerifyForSuggestionIndex(sugIdx) {
+    const sug = allSuggestions[sugIdx];
+    if (!sug || typeof sug !== 'object') return;
+    if (String(sug.source || '').toLowerCase() === 'assistant') return;
+    if (!suggestionNeedsAutoRowCheck(sug, originals, promptSections)) return;
+    if (sug.review_test_in_progress === true) return;
+
     if (typeof getPayload !== 'function') {
-      persistReviewProgressToNode(100);
+      showAlert('Could not load Run / Score data. Open the Run node and try again.', { title: 'Cannot verify' });
       return;
     }
-    pipelineAutoCheckInFlight = true;
+
+    const verifyAc = new AbortController();
+    registerVerifySession(verifyAc);
     try {
+      sug.review_test_in_progress = true;
+      persistWorking();
+      scheduleEditSuggestionCardsRefresh();
+
       let payload;
       try {
         payload = await getPayload();
       } catch (_) {
-        clearAllPipelineAutoCheckInProgressFlags();
-        persistWorking();
-        persistReviewProgressToNode(100);
         return;
       }
       if (!payload || !payload.run_credential_id) {
-        clearAllPipelineAutoCheckInProgressFlags();
-        persistWorking();
-        persistReviewProgressToNode(100);
+        showAlert('Configure a Run credential on the Run node, then try again.', { title: 'Missing credential' });
         return;
       }
       if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-        clearAllPipelineAutoCheckInProgressFlags();
-        persistWorking();
-        persistReviewProgressToNode(100);
+        showAlert('The prompt needs an output schema (Run / prompt settings) to verify.', { title: 'Missing output schema' });
         return;
       }
-      const indicesToVerify = [];
-      for (let sugIdx = 0; sugIdx < allSuggestions.length; sugIdx++) {
-        const s = allSuggestions[sugIdx];
-        if (String(s?.source || '').toLowerCase() === 'assistant') continue;
-        if (suggestionNeedsAutoRowCheck(s, originals, promptSections)) indicesToVerify.push(sugIdx);
-      }
-      const verifyTotal = indicesToVerify.length;
-      if (verifyTotal === 0) {
-        clearAllPipelineAutoCheckInProgressFlags();
-        persistWorking();
-        persistReviewProgressToNode(100);
-        return;
-      }
-      const batchAc = new AbortController();
-      registerVerifySession(batchAc);
-      try {
-        let verifyDone = 0;
-        for (const sugIdx of indicesToVerify) {
-          const sug = allSuggestions[sugIdx];
-          persistWorking();
 
+      try {
+        const out = await runRowVerifyWithPayload(sug, sugIdx, payload, verifyAc.signal, {
+          singleComparisonTargetOnly: true,
+        });
+        if (out.emptyTargets) {
+          /* no outcome */
+        } else if (out.buildError) {
+          setFinetuneRowCheckOutcome(sug, 'fail');
+        } else {
+          const { result } = out;
           try {
-            const out = await runRowVerifyWithPayload(sug, sugIdx, payload, batchAc.signal);
-            if (out.emptyTargets) {
-              /* no outcome */
-            } else if (out.buildError) {
-              setFinetuneRowCheckOutcome(sug, 'fail');
+            if (result.aborted) {
+              clearFinetuneRowCheckOutcome(sug);
+            } else if (result.ok) {
+              setFinetuneRowCheckOutcome(sug, 'pass');
             } else {
-              const { result } = out;
-              try {
-                if (result.aborted) {
-                  clearFinetuneRowCheckOutcome(sug);
-                } else if (result.ok) {
-                  setFinetuneRowCheckOutcome(sug, 'pass');
-                } else {
-                  setFinetuneRowCheckOutcome(sug, 'fail');
-                }
-              } catch (err) {
-                if (err && err.name === 'AbortError') {
-                  clearFinetuneRowCheckOutcome(sug);
-                } else {
-                  setFinetuneRowCheckOutcome(sug, 'fail');
-                }
-              }
+              setFinetuneRowCheckOutcome(sug, 'fail');
             }
           } catch (err) {
-            if (isReviewRowCheckInProgress(sug)) {
-              if (err && err.name === 'AbortError') {
-                clearFinetuneRowCheckOutcome(sug);
-              } else {
-                setFinetuneRowCheckOutcome(sug, 'fail');
-              }
+            if (err && err.name === 'AbortError') {
+              clearFinetuneRowCheckOutcome(sug);
+            } else {
+              setFinetuneRowCheckOutcome(sug, 'fail');
             }
-          } finally {
-            delete sug.review_test_in_progress;
-            persistWorking();
-            verifyDone += 1;
-            emitReviewBarProgress(
-              REVIEW_PROGRESS_PIPELINE_DONE + Math.round((REVIEW_PROGRESS_CHECK_SPAN * verifyDone) / verifyTotal),
-            );
-            scheduleEditSuggestionCardsRefresh();
           }
         }
-      } finally {
-        unregisterVerifySession(batchAc);
+      } catch (err) {
+        if (isReviewRowCheckInProgress(sug)) {
+          if (err && err.name === 'AbortError') {
+            clearFinetuneRowCheckOutcome(sug);
+          } else {
+            setFinetuneRowCheckOutcome(sug, 'fail');
+          }
+        }
       }
-      persistReviewProgressToNode(100);
     } finally {
-      pipelineAutoCheckInFlight = false;
+      unregisterVerifySession(verifyAc);
+      delete sug.review_test_in_progress;
+      persistWorking();
+      scheduleEditSuggestionCardsRefresh();
+      updateSuggestionsFooter();
     }
   }
 
-  /** Full actions per card: stream still running, or this suggestion's auto row-check not in flight (or not needed). */
+  /**
+   * Full actions (View detail + Accept): off only while the review stream is still generating
+   * and there is at least one suggestion (pipeline cards stay “pending” until the stream ends).
+   * After stream complete, keep Accept visible during Run+Score row-check / Finetune — same as before for Finetune.
+   */
   function suggestionActionsFullForCard(sug) {
     const isAssistant = sug && String(sug.source || '').toLowerCase() === 'assistant';
-    /* Assistant edits: full actions (View detail + Accept); title shows Proposal tag only. */
     if (isAssistant) return true;
-    /* User may Accept/Revert the current proposal while Finetune runs (optimizer works on a copy server-side until completion). */
-    if (sug && sug.review_finetune_in_progress === true && saved.streamComplete === true) {
-      return true;
-    }
     if (saved.streamComplete !== true) {
       return allSuggestions.length === 0;
     }
-    if (!suggestionNeedsAutoRowCheck(sug, originals, promptSections)) return true;
-    return !isReviewRowCheckInProgress(sug);
+    return true;
   }
 
-  /** Title-line “Click to Finetune” only: one listener per pill (pipeline suggestions). */
+  /** Title-line “Click to Finetune” / “Click to Verify”: one listener per pill (pipeline suggestions). */
   function wireInteractiveTitlePillsOnCard(card) {
     if (!card) return;
     card.querySelectorAll('[data-review-title-pill-action="finetune"]').forEach((pill) => {
@@ -1276,6 +1269,21 @@ function buildReviewResultUI(overlay, options) {
         if (Number.isNaN(sugIdx) || !allSuggestions[sugIdx]) return;
         const sug = allSuggestions[sugIdx];
         void handleFinetuneActionForCard(card, sug, sugIdx);
+      };
+      pill.addEventListener('click', onActivate);
+      pill.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        onActivate(e);
+      });
+    });
+    card.querySelectorAll('[data-review-title-pill-action="verify-suggestion"]').forEach((pill) => {
+      const onActivate = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        const sugIdx = parseInt(card.dataset.suggestionIndex, 10);
+        if (Number.isNaN(sugIdx) || !allSuggestions[sugIdx]) return;
+        void runRowVerifyForSuggestionIndex(sugIdx);
       };
       pill.addEventListener('click', onActivate);
       pill.addEventListener('keydown', (e) => {
@@ -1299,9 +1307,9 @@ function buildReviewResultUI(overlay, options) {
     const noButton = card.classList.contains('review-detail-suggestion-card--unlocatable');
     if (titleWrap) {
       titleWrap.querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`).forEach((el) => el.remove());
-      const specs = collectSuggestionTitlePills(sug, noButton, actionsFull);
+      const specs = collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections);
       for (const spec of specs) {
-        const interactive = spec.clickFinetune === true;
+        const interactive = spec.clickFinetune === true || spec.clickVerify === true;
         const el = document.createElement(interactive ? 'button' : 'span');
         if (interactive) el.type = 'button';
         el.className = `${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`;
@@ -1309,6 +1317,12 @@ function buildReviewResultUI(overlay, options) {
         if (spec.clickFinetune === true) {
           el.setAttribute('aria-label', 'Finetune this suggestion');
           el.setAttribute('data-review-title-pill-action', 'finetune');
+        } else if (spec.clickVerify === true) {
+          el.setAttribute(
+            'aria-label',
+            'Run row checks for suggested prompt edits against the Run and Score worksheet',
+          );
+          el.setAttribute('data-review-title-pill-action', 'verify-suggestion');
         } else if (typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()) {
           el.setAttribute('aria-label', spec.ariaLabel);
         }
@@ -1348,7 +1362,7 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /** After stream: show cards (View detail only while that card's check runs); row checks run one suggestion at a time. */
+  /** After stream: show cards; row verify runs only after the user clicks a title-line “Click to Verify” pill. */
   async function revealSuggestionsAfterReview() {
     if (!allSuggestions || allSuggestions.length === 0) {
       renderEditSuggestionCards();
@@ -1356,34 +1370,9 @@ function buildReviewResultUI(overlay, options) {
       persistReviewProgressToNode(100);
       return;
     }
-    const willRunChecks =
-      typeof getPayload === 'function' &&
-      allSuggestions.some(
-        (s) =>
-          String(s.source || '').toLowerCase() !== 'assistant' &&
-          suggestionNeedsAutoRowCheck(s, originals, promptSections),
-      );
-    if (willRunChecks) {
-      for (const sug of allSuggestions) {
-        if (String(sug.source || '').toLowerCase() === 'assistant') continue;
-        if (suggestionNeedsAutoRowCheck(sug, originals, promptSections)) {
-          sug.review_test_in_progress = true;
-        }
-      }
-      persistWorking();
-    }
     renderEditSuggestionCards();
     updateSuggestionsFooter();
-    try {
-      if (typeof getPayload === 'function') {
-        await runPipelineAutoCheckAfterStreamDone();
-      } else {
-        persistReviewProgressToNode(100);
-      }
-    } finally {
-      renderEditSuggestionCards();
-      updateSuggestionsFooter();
-    }
+    persistReviewProgressToNode(100);
   }
 
   function scrollRightToSection(sectionIndex) {
@@ -1429,8 +1418,8 @@ function buildReviewResultUI(overlay, options) {
     if (sug.review_finetune_completed === true) return;
     if (sug.review_finetune_in_progress === true) return;
     if (isReviewRowCheckInProgress(sug)) return;
-    if (pipelineAutoCheckInFlight) {
-      showAlert('Wait until automatic row checks finish before using Finetune.', { title: 'Verify in progress' });
+    if (anyRowVerifyInProgress()) {
+      showAlert('Wait until row verify finishes before using Finetune.', { title: 'Verify in progress' });
       return;
     }
     if (isReviewStreamingNow()) {
@@ -1597,11 +1586,12 @@ function buildReviewResultUI(overlay, options) {
     let statusText = REVIEW_INCOMPLETE_USER_MSG;
     const rowChecksPending =
       isComplete &&
-      typeof getPayload === 'function' &&
-      allSuggestions.some((s) => suggestionNeedsAutoRowCheck(s, originals, promptSections) && isReviewRowCheckInProgress(s));
+      allSuggestions.some(
+        (s) => suggestionNeedsAutoRowCheck(s, originals, promptSections) && isReviewRowCheckInProgress(s),
+      );
     if (rowChecksPending) {
       statusClass = 'review-detail-status-note--generating';
-      statusText = 'Checking suggested changes…';
+      statusText = 'Verifying suggested changes…';
     } else if (isComplete) {
       statusClass = 'review-detail-status-note--complete';
       const ne = allSuggestions.length;
@@ -1618,11 +1608,14 @@ function buildReviewResultUI(overlay, options) {
       statusText = 'Suggested changes in progress…';
     }
     suggestionsFooterEl.innerHTML = '';
+    const stack = document.createElement('div');
+    stack.className = 'review-detail-suggestions-footer-stack';
     const statusNote = document.createElement('p');
     statusNote.className = `review-detail-status-note ${statusClass}`;
     statusNote.setAttribute('aria-live', 'polite');
     statusNote.textContent = statusText;
-    suggestionsFooterEl.appendChild(statusNote);
+    stack.appendChild(statusNote);
+    suggestionsFooterEl.appendChild(stack);
   }
 
   function renderRowDiagnostics() {
@@ -1756,7 +1749,7 @@ function buildReviewResultUI(overlay, options) {
       actionsFull && !noButton
         ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'
         : '';
-    const titlePillsHtml = buildSuggestionTitlePillsHtml(sug, noButton, actionsFull);
+    const titlePillsHtml = buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections);
     const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
 
     const card = document.createElement('div');
