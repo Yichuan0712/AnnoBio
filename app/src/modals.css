@@ -3411,127 +3411,6 @@
   font-style: italic;
 }
 
-.review-verify-targets-summary {
-  margin: 0;
-}
-
-.review-verify-targets-table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
-  border-radius: 6px;
-}
-
-.review-verify-targets-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.review-verify-targets-table th,
-.review-verify-targets-table td {
-  padding: 8px 10px;
-  text-align: left;
-  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-}
-
-.review-verify-targets-table th {
-  font-weight: 600;
-  color: var(--text-muted);
-  background: var(--bg-bar, rgba(0, 0, 0, 0.04));
-}
-
-.review-verify-targets-table tr:last-child td {
-  border-bottom: none;
-}
-
-.review-verify-targets-empty {
-  color: var(--text-muted);
-  font-style: italic;
-  text-align: center;
-}
-
-.modal-panel--review-verify-debug {
-  max-width: min(920px, 96vw);
-}
-
-.review-verify-debug-body {
-  max-height: min(78vh, 900px);
-}
-
-.review-verify-debug-status {
-  margin-top: 12px;
-  padding: 12px;
-  border-radius: 6px;
-  background: var(--bg-bar, rgba(0, 0, 0, 0.05));
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
-.review-verify-debug-note {
-  margin-top: 12px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.review-verify-debug-section {
-  margin-top: 20px;
-}
-
-.review-verify-debug-h3 {
-  margin: 0 0 10px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.review-verify-debug-rule-list {
-  margin: 0;
-  padding-left: 1.2em;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.review-verify-debug-json {
-  margin: 6px 0 12px;
-  padding: 10px;
-  max-height: 220px;
-  overflow: auto;
-  font-size: 11px;
-  line-height: 1.45;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  background: var(--bg-bar, rgba(0, 0, 0, 0.06));
-  border-radius: 6px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.review-verify-debug-row-block {
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-}
-
-.review-verify-debug-row-block:last-child {
-  border-bottom: none;
-}
-
-.review-verify-debug-model-error {
-  margin: 6px 0;
-  color: var(--danger, #b91c1c);
-  font-size: 12px;
-}
-
-.review-verify-debug-prompts {
-  margin-top: 16px;
-  font-size: 12px;
-}
-
-.review-verify-debug-prompts summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
 .review-detail-diagnosis-tag {
   display: inline-block;
   margin-right: 6px;
@@ -3953,8 +3832,8 @@ button.review-suggestion-title-pill {
   user-select: none;
 }
 
-/*状态标签：与 .review-detail-diagnosis-tag 同类弱样式，避免像 .btn（无边框、不可点） */
-.review-suggestion-verified-pill {
+/* Row-check passed（与 .review-detail-diagnosis-tag 同类弱样式，避免像 .btn） */
+.review-suggestion-rowcheck-pass-pill {
   display: inline-flex;
   align-items: center;
   vertical-align: baseline;
@@ -3976,7 +3855,7 @@ button.review-suggestion-title-pill {
 }
 
 /* Run+Score row-check in progress. */
-.review-suggestion-verifying-pill {
+.review-suggestion-rowchecking-pill {
   display: inline-flex;
   align-items: center;
   vertical-align: baseline;
@@ -3997,7 +3876,7 @@ button.review-suggestion-title-pill {
   user-select: none;
 }
 
-/* Finetune optimization in progress (title); same muted gray as Verifying. */
+/* Finetune optimization in progress (title); same muted gray as row-check pill. */
 .review-suggestion-tuning-pill {
   display: inline-flex;
   align-items: center;
@@ -4073,17 +3952,15 @@ button.review-suggestion-title-pill {
   user-select: none;
 }
 
-/* “Click to Finetune” / “Click to Verify”: same muted gray as verifying/tuning pills. */
-.review-suggestion-rowcheck-fail-pill--click-finetune,
-.review-suggestion-rowcheck-fail-pill--click-verify {
+/* “Click to Finetune”: same muted gray as row-check / tuning pills. */
+.review-suggestion-rowcheck-fail-pill--click-finetune {
   cursor: pointer;
   pointer-events: auto;
   color: var(--text-muted, #64748b);
   background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
 }
 
-.review-suggestion-rowcheck-fail-pill--click-finetune:hover,
-.review-suggestion-rowcheck-fail-pill--click-verify:hover {
+.review-suggestion-rowcheck-fail-pill--click-finetune:hover {
   background: color-mix(in srgb, var(--text-muted, #64748b) 22%, transparent);
 }
 
