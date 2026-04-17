@@ -861,7 +861,7 @@ function buildReviewPreviewGroundTruthTable(rows, outputFields) {
 }
 
 /**
- * Debug modal: Review-checked lines grouped by input; per group, model output table and GT table are independent (each omits empty-on-that-side rows; score-line order within each table).
+ * Debug modal: Review-checked rows shown as Input # key-value blocks and Ground truth # key-value blocks.
  * Does not add a Review node or call the analyze API.
  * @param {{ getReviewPayload: () => unknown }} options
  */
@@ -869,89 +869,125 @@ export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
   if (typeof getReviewPayload !== 'function') return;
   const payload = await Promise.resolve(getReviewPayload());
   if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) {
-    showAlert('Cannot build Review data. Ensure the Score node is connected to a Run with a prompt that has sections.', { title: 'Review: by input' });
+    showAlert('Cannot build Review data. Ensure the Score node is connected to a Run with a prompt that has sections.', { title: 'Debug: Review rows' });
     return;
   }
   const comparisonRows = Array.isArray(payload.comparison_rows) ? payload.comparison_rows : [];
   if (comparisonRows.length === 0) {
-    showAlert('No rows selected for Review. Turn on the Review checkboxes in the Score results table for the rows you want.', { title: 'Review: by input' });
+    showAlert('No rows selected for Review. Turn on the Review checkboxes in the Score results table for the rows you want.', { title: 'Debug: Review rows' });
     return;
   }
+
+  /** Render a key-value object as a definition list. */
+  function kvHtml(obj) {
+    if (!obj || typeof obj !== 'object') return '<span class="review-diagnosis-detail-empty">—</span>';
+    const pairs = Object.entries(obj);
+    if (pairs.length === 0) return '<span class="review-diagnosis-detail-empty">—</span>';
+    const MAX = 480;
+    const cell = (raw) => {
+      if (raw == null || raw === '') return '<span class="review-diagnosis-detail-empty">—</span>';
+      let s = typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+      s = s.replace(/\s+/g, ' ').trim();
+      if (!s) return '<span class="review-diagnosis-detail-empty">—</span>';
+      if (s.length > MAX) return `<span title="${escapeAttr(s)}">${escapeHtml(s.slice(0, MAX))}\u2026</span>`;
+      return escapeHtml(s);
+    };
+    return `<dl class="review-suggestion-debug-kv">${pairs.map(([k, v]) =>
+      `<div class="review-suggestion-debug-kv-pair"><dt>${escapeHtml(k)}</dt><dd>${cell(v)}</dd></div>`
+    ).join('')}</dl>`;
+  }
+
+  // Collect unique inputs (by input_row_index) and GT rows (by source_gt_row_index + 1)
+  const inputMap = new Map();      // input_row_index → { rowInput, total, failed, gtNums: Set<gt_row_1based> }
+  const gtMap = new Map();         // source_gt_row_index + 1 → ground_truth_output
+  for (const r of comparisonRows) {
+    const inpKey = r.input_row_index != null ? r.input_row_index : null;
+    const gtKey = r.source_gt_row_index != null ? r.source_gt_row_index + 1 : null;
+    if (inpKey !== null) {
+      if (!inputMap.has(inpKey)) inputMap.set(inpKey, { rowInput: null, total: 0, failed: 0, gtNums: new Set() });
+      const entry = inputMap.get(inpKey);
+      entry.total += 1;
+      if (!comparisonRowIsMatched(r)) entry.failed += 1;
+      if (entry.rowInput == null && r.row_input && typeof r.row_input === 'object') entry.rowInput = r.row_input;
+      if (gtKey !== null) entry.gtNums.add(gtKey);
+    }
+    if (gtKey !== null && !gtMap.has(gtKey)) {
+      const raw = r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : null;
+      if (raw) {
+        const gto = Object.fromEntries(
+          Object.entries(raw).filter(([k]) => {
+            const key = String(k || '').trim();
+            if (!key || key === '#' || key === '[#]') return false;
+            if (key.length >= 2 && key.startsWith('[') && key.endsWith(']')) return false;
+            return true;
+          }),
+        );
+        if (Object.keys(gto).length > 0) gtMap.set(gtKey, gto);
+      }
+    }
+  }
+
+  const inputBlocksHtml = inputMap.size > 0
+    ? [...inputMap.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([idx, { rowInput, total, failed, gtNums }]) => {
+          const failBadge = failed > 0
+            ? ` <span class="review-debug-fail-badge">${escapeHtml(String(failed))}/${escapeHtml(String(total))} failed</span>`
+            : ` <span class="review-debug-pass-badge">passed</span>`;
+          const gtLabel = gtNums.size > 0
+            ? [...gtNums].sort((a, b) => a - b).map((n) => `Ground truth #${n}`).join(', ')
+            : null;
+          const gtLine = gtLabel
+            ? `<p class="review-suggestion-debug-gt-link">${escapeHtml(gtLabel)}</p>`
+            : '';
+          return `<section class="review-suggestion-debug-section">
+            <h3 class="review-suggestion-debug-section-title">Input #${escapeHtml(String(idx + 1))}${failBadge}</h3>
+            ${gtLine}
+            ${kvHtml(rowInput)}
+          </section>`;
+        })
+        .join('')
+    : '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">No input data.</p>';
+
+  const gtBlocksHtml = gtMap.size > 0
+    ? [...gtMap.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([scoreNum, gto]) =>
+          `<section class="review-suggestion-debug-section">
+            <h3 class="review-suggestion-debug-section-title">Ground truth #${escapeHtml(String(scoreNum))}</h3>
+            ${kvHtml(gto)}
+          </section>`)
+        .join('')
+    : '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">No ground truth data.</p>';
+
+  const totalFailed = comparisonRows.filter((r) => !comparisonRowIsMatched(r)).length;
+  const inputsFailed = [...inputMap.values()].filter((e) => e.failed > 0).length;
+
+  const summaryHtml = `
+    <table class="review-suggestion-debug-table">
+      <tbody>
+        <tr><th scope="row">Score lines</th><td>${escapeHtml(String(comparisonRows.length))}${totalFailed > 0 ? ` <span class="review-debug-fail-badge">${escapeHtml(String(totalFailed))} failed</span>` : ''}</td></tr>
+        <tr><th scope="row">Inputs</th><td>${escapeHtml(String(inputMap.size))}${inputsFailed > 0 ? ` <span class="review-debug-fail-badge">${escapeHtml(String(inputsFailed))} with failures</span>` : ''}</td></tr>
+        <tr><th scope="row">Ground truth rows</th><td>${escapeHtml(String(gtMap.size))}</td></tr>
+      </tbody>
+    </table>`;
+
+  const bodyHtml = summaryHtml +
+    `<h2 class="review-suggestion-debug-group-title">Input</h2>${inputBlocksHtml}` +
+    `<h2 class="review-suggestion-debug-group-title">Ground truth</h2>${gtBlocksHtml}`;
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'review-selection-preview-title');
-
-  const promptSections = Array.isArray(payload.prompt_sections) ? payload.prompt_sections : [];
-  const outputFields = Array.isArray(payload.output_fields) ? payload.output_fields : [];
-  const lineCount = comparisonRows.length;
-
-  /** @type {Map<string, { meta: ReturnType<typeof reviewPreviewInputGroupMeta>, rows: any[], rowInput: any }>} */
-  const groups = new Map();
-  for (const r of comparisonRows) {
-    const meta = reviewPreviewInputGroupMeta(r);
-    let g = groups.get(meta.key);
-    if (!g) {
-      g = { meta, rows: [], rowInput: null };
-      groups.set(meta.key, g);
-    }
-    g.rows.push(r);
-    if (g.rowInput == null && r.row_input && typeof r.row_input === 'object') g.rowInput = r.row_input;
-  }
-
-  const sortedGroups = [...groups.values()].sort((a, b) => a.meta.sortKey - b.meta.sortKey);
-
-  const cardsHtml = sortedGroups.map((g) => {
-    const { meta, rows, rowInput } = g;
-    const inputBlock = buildReviewPreviewInputBlock(rowInput, promptSections);
-    const outputTableRows = rows.filter((r) => !reviewPreviewRowHasNoModelOutput(r));
-    const gtTableRows = rows.filter((r) => !reviewPreviewRowHasNoGroundTruth(r));
-    const nOutcomes = rows.length;
-    const allOutputsHtml = buildReviewPreviewModelOutputTable(outputTableRows, outputFields);
-    const allGtHtml = buildReviewPreviewGroundTruthTable(gtTableRows, outputFields);
-
-    return `
-    <article class="review-selection-preview-row review-selection-preview-row--by-input" aria-label="${escapeAttr(meta.title)}">
-      <header class="review-selection-preview-row-head">
-        <div class="review-selection-preview-row-meta">
-          <span class="review-selection-preview-row-title">${escapeHtml(meta.title)}</span>
-          <span class="review-selection-preview-row-sub">${escapeHtml(meta.hint)}</span>
-          <span class="review-selection-preview-meta-bits">
-            <strong>${escapeHtml(String(nOutcomes))}</strong> score line${nOutcomes === 1 ? '' : 's'} in Review for this input
-          </span>
-        </div>
-      </header>
-      <div class="review-selection-preview-input-block-wrap">
-        <h3 class="review-selection-preview-section-title">Prompt inputs <span class="review-selection-preview-section-hint">(placeholders)</span></h3>
-        <div class="review-selection-preview-section-body">${inputBlock}</div>
-      </div>
-      <div class="review-selection-preview-compare-columns">
-        <section class="review-selection-preview-aggregate review-selection-preview-aggregate--out" aria-label="All model outputs for this input">
-          <h3 class="review-selection-preview-aggregate-title">Model outputs <span class="review-selection-preview-section-hint">(only lines with output; score-line order)</span></h3>
-          <div class="review-selection-preview-aggregate-body">${allOutputsHtml}</div>
-        </section>
-        <section class="review-selection-preview-aggregate review-selection-preview-aggregate--gt" aria-label="All ground truth for this input">
-          <h3 class="review-selection-preview-aggregate-title">Ground truth <span class="review-selection-preview-section-hint">(only lines with GT; score-line order)</span></h3>
-          <div class="review-selection-preview-aggregate-body">${allGtHtml}</div>
-        </section>
-      </div>
-    </article>`;
-  }).join('');
-
-  const groupCount = sortedGroups.length;
-
   overlay.innerHTML = `
-    <div class="modal-panel modal-panel--review-selection-preview" role="dialog">
+    <div class="modal-panel modal-panel--review-diagnosis-detail" role="dialog">
       <div class="modal-header">
-        <h2 id="review-selection-preview-title" class="modal-title">Review: by input</h2>
+        <h2 id="review-selection-preview-title" class="modal-title">Debug: Review rows</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
-      <div class="modal-body">
-        <p class="review-selection-preview-intro"><strong>${escapeHtml(String(lineCount))}</strong> score line(s) are included in Review (checked in the <strong>Review</strong> column). They are grouped into <strong>${escapeHtml(String(groupCount))}</strong> <strong>input</strong> group(s). Each group lists prompt placeholders once, then <strong>two separate tables</strong>: <strong>model outputs</strong> (left) and <strong>ground truth</strong> (right). Each table only lists lines that have content on that side; row counts need not match. Order within each table follows score-line order among included rows. This does not start a Review job.</p>
-        <div class="review-selection-preview-list-wrap">
-          ${cardsHtml}
-        </div>
+      <div class="modal-body review-diagnosis-detail-body review-suggestion-debug-body">
+        ${bodyHtml}
       </div>
     </div>
   `;

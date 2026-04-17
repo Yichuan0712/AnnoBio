@@ -780,6 +780,16 @@ def _phase1_row_has_no_model_output(d: dict[str, Any]) -> bool:
     return True
 
 
+def _is_model_facing_output_key(key: str) -> bool:
+    """True when a ground_truth_output key should be shown to the LLM (skips internal metadata keys like [#], [rule_targets])."""
+    k = str(key or "").strip()
+    if not k or k in ("#", "[#]"):
+        return False
+    if len(k) >= 2 and k.startswith("[") and k.endswith("]"):
+        return False
+    return True
+
+
 def _phase1_row_has_no_ground_truth(d: dict[str, Any]) -> bool:
     """Match app `reviewPreviewRowHasNoGroundTruth`: empty ground_truth_output and no expected text."""
     gto = d.get("ground_truth_output")
@@ -820,6 +830,22 @@ def _phase1_format_nonempty_lines_json(items: list[tuple[int, dict[str, Any]]], 
     return "\n\n".join(parts)
 
 
+def _phase1_format_gt_lines_json(
+    items: list[tuple[int | None, dict[str, Any]]], *, empty_note: str
+) -> str:
+    """Phase 1: format GT rows labeled by 1-based ground-truth row number ('Ground truth #N'); single item → bare JSON."""
+    if not items:
+        return empty_note
+    if len(items) == 1:
+        _gt_num, d = items[0]
+        return f"```json\n{json.dumps(d, ensure_ascii=False, indent=2)}\n```"
+    parts: list[str] = []
+    for gt_num, d in items:
+        label = f"Ground truth #{gt_num}" if gt_num is not None else "Ground truth"
+        parts.append(f"**{label}**\n\n```json\n{json.dumps(d, ensure_ascii=False, indent=2)}\n```")
+    return "\n\n".join(parts)
+
+
 def _phase1_group_context_parts(group_rows: list[Any]) -> tuple[str, str]:
     """
     Shared Phase 1 row context: (scope paragraph, markdown from Placeholder substitutions through Expected output).
@@ -827,8 +853,6 @@ def _phase1_group_context_parts(group_rows: list[Any]) -> tuple[str, str]:
     """
     if not group_rows:
         return ("", "")
-    first = _row_to_dict(group_rows[0])
-    row_input = first.get("row_input") or {}
 
     def _ground_truth_output_dict(d: dict[str, Any]) -> dict[str, Any]:
         gto = d.get("ground_truth_output")
@@ -836,17 +860,13 @@ def _phase1_group_context_parts(group_rows: list[Any]) -> tuple[str, str]:
             return dict(gto)
         return {}
 
-    def _is_model_facing_output_key(key: str) -> bool:
-        k = str(key or "").strip()
-        if not k or k in ("#", "[#]"):
-            return False
-        if len(k) >= 2 and k.startswith("[") and k.endswith("]"):
-            return False
-        return True
-
     ordered_rows = sorted(group_rows, key=lambda x: int(_row_to_dict(x).get("row_index", 0)))
+
+    first = _row_to_dict(ordered_rows[0])
+    row_input: dict[str, Any] = first.get("row_input") or {}
     mo_items: list[tuple[int, dict[str, Any]]] = []
-    gt_items: list[tuple[int, dict[str, Any]]] = []
+    gt_items: list[tuple[int | None, dict[str, Any]]] = []
+    seen_gt_indices: set[int | None] = set()
     for i, r in enumerate(ordered_rows, start=1):
         d = _row_to_dict(r)
         if not _phase1_row_has_no_model_output(d):
@@ -854,15 +874,19 @@ def _phase1_group_context_parts(group_rows: list[Any]) -> tuple[str, str]:
             mo = dict(run_output) if isinstance(run_output, dict) else {}
             mo_items.append((i, mo))
         if not _phase1_row_has_no_ground_truth(d):
-            gt_obj = {k: v for k, v in _ground_truth_output_dict(d).items() if _is_model_facing_output_key(k)}
-            if gt_obj:
-                gt_items.append((i, gt_obj))
+            sgi = d.get("source_gt_row_index")
+            gt_num = int(sgi) + 1 if sgi is not None else None
+            if gt_num not in seen_gt_indices:
+                seen_gt_indices.add(gt_num)
+                gt_obj = {k: v for k, v in _ground_truth_output_dict(d).items() if _is_model_facing_output_key(k)}
+                if gt_obj:
+                    gt_items.append((gt_num, gt_obj))
 
     model_body = _phase1_format_nonempty_lines_json(
         mo_items,
         empty_note="*None — no model output on any row for this input.*",
     )
-    expected_body = _phase1_format_nonempty_lines_json(
+    expected_body = _phase1_format_gt_lines_json(
         gt_items,
         empty_note="*None — no expected output on any row for this input.*",
     )
@@ -884,7 +908,8 @@ def _phase1_group_context_parts(group_rows: list[Any]) -> tuple[str, str]:
     else:
         scope = "One scoring row for this input; follow the layout rules below."
 
-    subs_out = f"""## Placeholder substitutions (values inserted into the template for this run)
+    input_num = _phase1_input_one_based_from_group(group_rows)
+    subs_out = f"""## Input #{input_num} — Placeholder substitutions (values inserted into the template for this run)
 
 ```json
 {json.dumps(row_input, ensure_ascii=False, indent=2)}
@@ -910,7 +935,7 @@ def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[A
     scope, subs_out = _phase1_group_context_parts(group_rows)
     return f"""Diagnose scoring failures for **one** dataset input.
 
-**Layout:** Do not treat **Model output** and **Expected output** as left/right columns, matched pairs, or row-aligned tables. Read each section on its own. **`Line n` is only the n-th entry listed in that section**; it does not pair with anything in the other section.
+**Layout:** Do not treat **Model output** and **Expected output** as left/right columns or matched pairs. Read each section on its own. **Model output `Line n`** is the n-th model result listed; **`Ground truth #N`** identifies the expected output by its ground-truth row number. They are independent and do not pair by position.
 
 {scope}
 
@@ -959,8 +984,8 @@ def _phase2_single_issue_block(*, op: PerRowOpinion, group_rows: list[Any]) -> s
     else:
         data_section = (
             "**Run context (same subsections as Phase 1 for this worksheet input; the full prompt template is in `Stored prompt` above):**\n\n"
-            "**Layout:** Do not treat **Model output** and **Expected output** as left/right columns, matched pairs, or row-aligned tables. "
-            "Read each section on its own. **`Line n` is only the n-th entry listed in that section**; it does not pair with anything in the other section.\n\n"
+            "**Layout:** Do not treat **Model output** and **Expected output** as left/right columns or matched pairs. "
+            "Read each section on its own. **Model output `Line n`** is the n-th model result listed; **`Ground truth #N`** identifies the expected output by its ground-truth row number. They are independent and do not pair by position.\n\n"
             f"{scope}\n\n"
             f"{subs_out}"
         )
