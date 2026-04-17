@@ -1239,6 +1239,15 @@ def run_prompts(body: RunRequest):
     inspect_raw = (body.inspect_run_id or "").strip()
     inspect_file_key = inspect_raw if inspect_raw else run_id
     with _run_jobs_lock:
+        # At most one active worker per canvas Run node: supersede any still-running job for this node.
+        # (Rows within a single job are already processed sequentially in _do_run_work.)
+        nid = body.run_node_id
+        if nid:
+            prev_id = _run_jobs_by_node.get(nid)
+            if prev_id:
+                prev_job = _run_jobs.get(prev_id)
+                if prev_job and prev_job.get("status") == "running":
+                    _run_cancelled.add(prev_id)
         _run_jobs[run_id] = {"status": "running", "run_node_id": body.run_node_id}
         if body.run_node_id:
             _run_jobs_by_node[body.run_node_id] = run_id
@@ -1313,6 +1322,13 @@ def review_analyze(body: ReviewRequest):
     review_id = str(uuid.uuid4())
     review_node_id = body.review_session_id or ""
     with _review_jobs_lock:
+        # At most one active worker per Review node (same idea as POST /api/run + run_node_id).
+        if review_node_id:
+            prev_id = _review_jobs_by_node.get(review_node_id)
+            if prev_id:
+                prev_job = _review_jobs.get(prev_id)
+                if prev_job and prev_job.get("status") == "running":
+                    _review_cancelled.add(prev_id)
         _review_jobs[review_id] = {"status": "running", "events": [], "review_node_id": review_node_id}
         if review_node_id:
             _review_jobs_by_node[review_node_id] = review_id

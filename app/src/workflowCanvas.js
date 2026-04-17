@@ -9,7 +9,6 @@ import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
 import { mergeResumeResults, embedInputRow, countCompletedInputRows, markEmptyOutputAsError } from './runResumeUtils.js';
 import { normalizeUnicodeDashesForDisplay, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
-import { reviewStreamSavedNeedsRowVerifyPhase } from './reviewWorkingSections.js';
 import {
   allocNextReviewSuggestionId,
   ensureReviewResultIds,
@@ -27,7 +26,7 @@ import {
 } from './scoreMappingBundle.js';
 import {
   openScoreDetailModal,
-  openReviewSelectionPreviewModal,
+  runReviewFromScore,
   getScoreExportData,
   SCORE_GT_ROW_INDEX_COLUMN,
   canonicalizeMatchFlags,
@@ -65,11 +64,6 @@ async function resolveRunCredentialId(runNode) {
 }
 
 const MIN_CONTENT_PADDING = 200;
-/**
- * Review bar: LLM stream uses 0..PIPELINE_DONE (~quick); Run+Score row checks use the rest (usually most wall time).
- * Must match reviewDetailModal REVIEW_PROGRESS_PIPELINE_DONE / CHECK_SPAN.
- */
-const REVIEW_PROGRESS_PIPELINE_DONE = 30;
 const REVIEW_STREAM_PLAN_PCT = 4;
 const REVIEW_STREAM_DIAG_END_PCT = 24;
 const REVIEW_STREAM_SUGGESTIONS_PCT = 26;
@@ -1176,8 +1170,7 @@ export function buildWorkflowCanvas(root) {
         setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_DATA_PCT);
         streamSaved.reviewProgress = REVIEW_STREAM_DATA_PCT;
       } else if (ev.type === 'done') {
-        const needsRowVerifyPhase = reviewStreamSavedNeedsRowVerifyPhase(streamSaved);
-        const finalizePct = needsRowVerifyPhase ? REVIEW_PROGRESS_PIPELINE_DONE : 100;
+        const finalizePct = 100;
         setReviewNodeProgress(getNodeById(reviewNodeId), finalizePct);
         streamSaved = {
           ...streamSaved,
@@ -3669,7 +3662,19 @@ export function buildWorkflowCanvas(root) {
             comparison_rows,
           };
         }
-        await openReviewSelectionPreviewModal({ getReviewPayload });
+        const credentialId = (scoreNode.dataset.reviewCredentialId || '').trim();
+        if (!credentialId) {
+          showAlert('Select a Review model on the Score node (open Score detail → Results footer) or in project settings.', { title: 'Review' });
+          return;
+        }
+        const started = await runReviewFromScore({
+          scoreNodeId: scoreNode.dataset.nodeId,
+          getReviewPayload,
+          credentialId,
+        });
+        if (!started) {
+          showAlert('Could not start Review. Open Score detail and ensure the prompt has sections, Run has results, and ground truth is selected.', { title: 'Review' });
+        }
       },
       'add-sampler': () => {
         if (node.dataset.nodeType !== 'dataset') return;

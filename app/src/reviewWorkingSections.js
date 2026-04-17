@@ -173,19 +173,3 @@ export function suggestionNeedsAutoRowCheck(sug, originals, promptSections) {
   return true;
 }
 
-/**
- * After streaming `done`, phase 2 (30→100%) runs only when at least one pipeline suggestion needs row verify.
- * @param {Record<string, unknown>} saved — review result shape (`suggestions`, `promptSections`)
- */
-export function reviewStreamSavedNeedsRowVerifyPhase(saved) {
-  if (!saved || typeof saved !== 'object') return false;
-  const list = Array.isArray(saved.suggestions) ? saved.suggestions : [];
-  const promptSections = Array.isArray(saved.promptSections) ? saved.promptSections : [];
-  const originals = promptSections.map((s) => ({ name: s?.name || '', content: String(s?.content ?? '') }));
-  for (const sug of list) {
-    if (!sug || typeof sug !== 'object') continue;
-    if (String(sug.source || '').toLowerCase() === 'assistant') continue;
-    if (suggestionNeedsAutoRowCheck(sug, originals, promptSections)) return true;
-  }
-  return false;
-}

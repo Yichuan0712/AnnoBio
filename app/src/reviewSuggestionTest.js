@@ -1,8 +1,13 @@
 /**
  * Run a mini–batch Run + Score evaluation for one Review prompt-edit suggestion (test if target rows pass).
+ *
+ * After the mini-run, verification applies **only Output → Ground truth** rules to the **new** model outputs
+ * vs the same paired GT row (`source_gt_row_index`). Input→GT rules are intentionally not used here.
  */
 
 import { markEmptyOutputAsError } from './runResumeUtils.js';
+import { parseScoreMappingBundle, emptyScoreRuleGroup } from './scoreMappingBundle.js';
+import { flattenScoreRules } from './scoreRunGtPairing.js';
 import {
   prefetchEmbeddingCosineMap,
   embeddingPairMatches,
@@ -247,6 +252,30 @@ function evaluateScoreTree(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
   return false;
 }
 
+/**
+ * Parse stored score mapping and return the **output** rule tree only (v2 bundle or legacy root).
+ */
+function parseVerifyOutputRuleRoot(scoreMappingJson) {
+  const raw =
+    typeof scoreMappingJson === 'string'
+      ? JSON.parse(scoreMappingJson || '{}')
+      : scoreMappingJson && typeof scoreMappingJson === 'object'
+        ? scoreMappingJson
+        : {};
+  const { outputRoot } = parseScoreMappingBundle(raw);
+  return outputRoot && typeof outputRoot === 'object' ? outputRoot : emptyScoreRuleGroup();
+}
+
+/**
+ * True if mini-run output passes **Output→GT** rules for this run row vs paired GT row.
+ * No output rules ⇒ pass (same vacuous convention as Score’s output tree).
+ */
+function verifyPassOutputRulesVsGt(outputRuleRoot, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap) {
+  const leaves = flattenScoreRules(outputRuleRoot);
+  if (leaves.length === 0) return true;
+  return evaluateScoreTree(outputRuleRoot, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, embeddingMap);
+}
+
 export function substitutePromptPlaceholders(templateText, rowInput) {
   let text = String(templateText || '');
   const inp = rowInput && typeof rowInput === 'object' ? rowInput : {};
@@ -390,10 +419,13 @@ function syntheticRunnableFromGtOnlyRow(gtOnlyRow) {
 }
 
 /**
- * Resolve each target t to seed runnable rows (same as before), then **input-close**: include every runnable
+ * Resolve each target t to seed runnable rows (same as before), then optionally **input-close**: include every runnable
  * comparison row that shares the same worksheet input (`input_row_index`) or the same `row_input` key (1 input → N outputs). If no row matches t as row_index, t is treated as input_row_index (worksheet 0-based).
+ *
+ * @param {{ expandInputClosure?: boolean }} [options] If `expandInputClosure === false`, only **seed** rows are returned (e.g. Review “Verify this card” must not re-run every line for the same input). Default `true` (Finetune metrics / legacy).
  */
-export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets) {
+export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets, options = {}) {
+  const expandInputClosure = options.expandInputClosure !== false;
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
   const byRowIndex = new Map();
   for (const r of rows) {
@@ -456,15 +488,20 @@ export function expandTargetsToRunnableComparisonRows(comparisonRows, orderedTar
     };
   }
 
-  let closureRows = expandInputClosureFromSeedRows(rows, seedRows);
-  const seenRi = new Set(
-    closureRows.map((r) => r.row_index).filter((x) => typeof x === 'number' && !Number.isNaN(x)),
-  );
-  for (const s of seedRows) {
-    const ri = s && s.row_index;
-    if (typeof ri !== 'number' || Number.isNaN(ri) || seenRi.has(ri)) continue;
-    closureRows.push(s);
-    seenRi.add(ri);
+  let closureRows;
+  if (expandInputClosure) {
+    closureRows = expandInputClosureFromSeedRows(rows, seedRows);
+    const seenRi = new Set(
+      closureRows.map((r) => r.row_index).filter((x) => typeof x === 'number' && !Number.isNaN(x)),
+    );
+    for (const s of seedRows) {
+      const ri = s && s.row_index;
+      if (typeof ri !== 'number' || Number.isNaN(ri) || seenRi.has(ri)) continue;
+      closureRows.push(s);
+      seenRi.add(ri);
+    }
+  } else {
+    closureRows = seedRows.slice();
   }
   closureRows.sort((a, b) => (a.row_index || 0) - (b.row_index || 0));
   return { rows: closureRows };
@@ -553,16 +590,17 @@ export async function runSuggestionRowTests(opts) {
     runWs,
     gtContent,
     signal,
+    // false (default): only explicit targets; true: same-input closure (Finetune metrics).
+    expandInputClosure = false,
   } = opts;
 
   if (!credentialId || !outputSchema || !Array.isArray(outputSchema.fields) || outputSchema.fields.length === 0) {
     return { ok: false, detail: 'Missing credential or output schema.' };
   }
 
-  let scoreRoot;
+  let verifyOutputRuleRoot;
   try {
-    const raw = typeof scoreMappingJson === 'string' ? JSON.parse(scoreMappingJson || '[]') : scoreMappingJson;
-    scoreRoot = parseScoreMappingToTree(raw);
+    verifyOutputRuleRoot = parseVerifyOutputRuleRoot(scoreMappingJson);
   } catch (_) {
     return { ok: false, detail: 'Invalid score mapping.' };
   }
@@ -603,7 +641,9 @@ export async function runSuggestionRowTests(opts) {
     });
   };
 
-  const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets);
+  const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets, {
+    expandInputClosure,
+  });
   if (expanded.error) {
     dbgPost(null, false, expanded.error);
     return { ok: false, detail: expanded.error };
@@ -695,7 +735,7 @@ export async function runSuggestionRowTests(opts) {
       return { ...r, output: typeof out === 'object' ? { ...out } : {}, error: undefined };
     });
     embeddingMap = await prefetchEmbeddingCosineMap(apiBase, {
-      root: scoreRoot,
+      root: verifyOutputRuleRoot,
       results: patchedForEmb,
       outputFields: outputFields || [],
       runWs: runWsSafe,
@@ -723,14 +763,23 @@ export async function runSuggestionRowTests(opts) {
       output: synOut,
       error: undefined,
     });
-    const pass = evaluateScoreTree(scoreRoot, compIdx, gtJ, resultsByIndex, runWsSafe, outputFields || [], gtSafe, embeddingMap);
+    const pass = verifyPassOutputRulesVsGt(
+      verifyOutputRuleRoot,
+      compIdx,
+      gtJ,
+      resultsByIndex,
+      runWsSafe,
+      outputFields || [],
+      gtSafe,
+      embeddingMap,
+    );
     if (!pass) {
       const inLabel =
         typeof compRow.input_row_index === 'number' && !Number.isNaN(compRow.input_row_index)
           ? `row_index ${compIdx}, worksheet Input #${compRow.input_row_index + 1}`
           : `row_index ${compIdx}`;
-      dbgPost(freshDbg(), false, `Score rules still fail for ${inLabel}.`);
-      return { ok: false, detail: `Score rules still fail for ${inLabel}.` };
+      dbgPost(freshDbg(), false, `Output→GT rules still fail for ${inLabel} (mini-run output).`);
+      return { ok: false, detail: `Output→GT rules still fail for ${inLabel} (mini-run output).` };
     }
   }
 
@@ -762,10 +811,9 @@ export async function runSuggestionRowTestsMetrics(opts) {
     return { ok: false, detail: 'Missing credential or output schema.' };
   }
 
-  let scoreRoot;
+  let verifyOutputRuleRoot;
   try {
-    const raw = typeof scoreMappingJson === 'string' ? JSON.parse(scoreMappingJson || '[]') : scoreMappingJson;
-    scoreRoot = parseScoreMappingToTree(raw);
+    verifyOutputRuleRoot = parseVerifyOutputRuleRoot(scoreMappingJson);
   } catch (_) {
     return { ok: false, detail: 'Invalid score mapping.' };
   }
@@ -806,7 +854,9 @@ export async function runSuggestionRowTestsMetrics(opts) {
     });
   };
 
-  const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets);
+  const expanded = expandTargetsToRunnableComparisonRows(comparisonRows, orderedTargets, {
+    expandInputClosure: true,
+  });
   if (expanded.error) {
     dbgPost(null, false, expanded.error);
     return { ok: false, detail: expanded.error };
@@ -908,7 +958,7 @@ export async function runSuggestionRowTestsMetrics(opts) {
       return { ...r, output: typeof out === 'object' ? { ...out } : {}, error: undefined };
     });
     embeddingMap = await prefetchEmbeddingCosineMap(apiBase, {
-      root: scoreRoot,
+      root: verifyOutputRuleRoot,
       results: patchedForEmb,
       outputFields: outputFields || [],
       runWs: runWsSafe,
@@ -943,7 +993,16 @@ export async function runSuggestionRowTestsMetrics(opts) {
       output: synOut,
       error: undefined,
     });
-    const pass = evaluateScoreTree(scoreRoot, compIdx, gtJ, resultsByIndex, runWsSafe, outputFields || [], gtSafe, embeddingMap);
+    const pass = verifyPassOutputRulesVsGt(
+      verifyOutputRuleRoot,
+      compIdx,
+      gtJ,
+      resultsByIndex,
+      runWsSafe,
+      outputFields || [],
+      gtSafe,
+      embeddingMap,
+    );
     if (pass) passed += 1;
   }
 
