@@ -684,12 +684,6 @@
   overflow: hidden;
 }
 
-/* Review → Finetune number fields: 两列须用相同 padding-bottom，否则 .defaults-row的 align-items:end 会让两个输入框上下错开 */
-.modal-panel--defaults .defaults-field--review-finetune-input,
-.modal-panel--model-settings-combined .defaults-row .defaults-field--review-finetune-input {
-  padding-bottom: 0.5rem;
-}
-
 .modal-panel--defaults .model-settings-defaults-card .credentials-select,
 .modal-panel--defaults .model-settings-defaults-card .dataset-meta-input {
   height: 40px;
@@ -3787,7 +3781,7 @@
   border-radius: 4px;
 }
 
-/* Inline flow: full title can wrap; row-check pass pill stays after text (same line when space, or after last line). */
+/* Inline flow: full title can wrap; title-line pills follow the title. */
 .review-detail-suggestion-section-name {
   display: inline;
   font-weight: 600;
@@ -3800,18 +3794,8 @@
   vertical-align: baseline;
 }
 
-/* Title-line finetune uses native <button>; strip UA chrome. Do not use margin: 0 — it overrides pill margin-left vs title. */
-button.review-suggestion-title-pill {
-  appearance: none;
-  -webkit-appearance: none;
-  margin-top: 0;
-  margin-right: 0;
-  margin-bottom: 0;
-  font-family: inherit;
-}
-
-/* Dialogue proposal (`source=assistant`); non-interactive, distinct from pipeline status pills. */
-.review-suggestion-proposal-tag-pill {
+/* Decorative label after review completes (no click action). */
+.review-suggestion-verify-pill {
   display: inline-flex;
   align-items: center;
   vertical-align: baseline;
@@ -3822,51 +3806,7 @@ button.review-suggestion-title-pill {
   font-weight: 500;
   line-height: 1.4;
   letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--review-proposal-tag-text, #1d4ed8);
-  background: color-mix(in srgb, var(--review-proposal-tag-text, #3b82f6) 20%, transparent);
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* Row-check passed（与 .review-detail-diagnosis-tag 同类弱样式，避免像 .btn） */
-.review-suggestion-rowcheck-pass-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--diff-added-text, #15803d);
-  background: var(--diff-added-bg, rgba(22, 163, 74, 0.22));
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* Run+Score row-check in progress. */
-.review-suggestion-rowchecking-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
+  border-radius: 999px;
   border: none;
   color: var(--text-muted, #64748b);
   background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
@@ -3874,94 +3814,6 @@ button.review-suggestion-title-pill {
   cursor: default;
   pointer-events: none;
   user-select: none;
-}
-
-/* Finetune optimization in progress (title); same muted gray as row-check pill. */
-.review-suggestion-tuning-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--text-muted, #64748b);
-  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* Finetune completed (title). Default: muted when row-check outcome not yet set. */
-.review-suggestion-finetuned-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--text-muted, #64748b);
-  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-.review-suggestion-finetuned-pill--pass {
-  color: var(--diff-added-text, #15803d);
-  background: var(--diff-added-bg, rgba(22, 163, 74, 0.22));
-}
-
-.review-suggestion-finetuned-pill--fail {
-  color: var(--warning, #b45309);
-  background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
-}
-
-/* Row-check did not pass (non-interactive copy stays warning-colored). */
-.review-suggestion-rowcheck-fail-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--warning, #b45309);
-  background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* “Click to Finetune”: same muted gray as row-check / tuning pills. */
-.review-suggestion-rowcheck-fail-pill--click-finetune {
-  cursor: pointer;
-  pointer-events: auto;
-  color: var(--text-muted, #64748b);
-  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
-}
-
-.review-suggestion-rowcheck-fail-pill--click-finetune:hover {
-  background: color-mix(in srgb, var(--text-muted, #64748b) 22%, transparent);
 }
 
 .review-detail-suggestion-card__actions {

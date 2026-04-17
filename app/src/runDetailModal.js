@@ -924,7 +924,6 @@ export function openRunDetailModal({
     applyRunningLock();
 
     try {
-      const inspectRunId = `${Date.now()}_${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 14)}`;
       const res = await fetch(`${API_BASE}/api/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -933,7 +932,6 @@ export function openRunDetailModal({
           prompts,
           output_schema: outputSchema,
           run_node_id: nodeId || null,
-          inspect_run_id: inspectRunId,
         }),
       });
       const data = await res.json().catch(() => ({}));

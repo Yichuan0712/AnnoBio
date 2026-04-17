@@ -1,5 +1,5 @@
 /**
- * Locate prompt spans and rebuild section text when suggestions are applied (Review / Finetune).
+ * Locate prompt spans and rebuild section text when suggestions are applied (Review).
  */
 
 /**
@@ -106,7 +106,7 @@ export function findSectionIndexForOldSentence(sections, oldSentence) {
 }
 
 /**
- * `new_sentence` to use when applying a suggestion (finetuned text is always `new_sentence` when completed).
+ * `new_sentence` to use when applying a suggestion.
  * @param {Record<string, unknown>} s
  * @returns {string}
  */
@@ -156,33 +156,6 @@ export function rebuildWorkingFromApplied(originals, suggestions) {
   return sections;
 }
 
-/** @param {Record<string, unknown>} sug */
-function suggestionFinetuneHasBeforeAfterText(sug) {
-  if (!sug || sug.review_finetune_completed !== true) return false;
-  const meta = sug.review_finetune_meta && typeof sug.review_finetune_meta === 'object' ? sug.review_finetune_meta : null;
-  const beforeRaw = meta && typeof meta.newSentenceBeforeFinetune === 'string' ? meta.newSentenceBeforeFinetune : '';
-  const before = String(beforeRaw);
-  const after = String(sug.new_sentence ?? '');
-  return before.trim() !== '' && before !== after;
-}
-
-/** Same “terminal outcome?” rule as reviewDetailModal (for auto row-check eligibility). */
-function getSuggestionTestOutcomeForAutoCheck(sug) {
-  if (!sug || typeof sug !== 'object') return null;
-  if (suggestionFinetuneHasBeforeAfterText(sug)) {
-    const rAfter = sug.review_test_result_finetune_after;
-    if (rAfter === 'pass' || rAfter === 'fail') return rAfter;
-    const legacy = sug.review_test_result;
-    if (legacy === 'pass' || legacy === 'fail') return legacy;
-    if (sug.review_test_passed === true) return 'pass';
-    return null;
-  }
-  const r = sug.review_test_result;
-  if (r === 'pass' || r === 'fail') return r;
-  if (sug.review_test_passed === true) return 'pass';
-  return null;
-}
-
 /** Stored 0-based comparison `row_index` for targeted Score rows (API / persistence; prompts use 1-based Score #). */
 export function suggestionTargetScoreRowIndices(sug) {
   if (!sug || typeof sug !== 'object') return [];
@@ -193,32 +166,3 @@ export function suggestionTargetScoreRowIndices(sug) {
 
 /** @deprecated Use `suggestionTargetScoreRowIndices` (legacy name). */
 export const suggestionTargetInputRowIndices = suggestionTargetScoreRowIndices;
-
-/**
- * True when Run+Score row check should run for this suggestion (locatable, has targets, no terminal outcome yet).
- * @param {object} sug
- * @param {{ name: string, content: string }[]} originals
- * @param {unknown[]} promptSections
- */
-export function suggestionNeedsAutoRowCheck(sug, originals, promptSections) {
-  if (!sug || typeof sug !== 'object') return false;
-  if (getSuggestionTestOutcomeForAutoCheck(sug)) return false;
-  const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
-  const rawOld = sug.old_sentence != null ? String(sug.old_sentence) : '';
-  const oldSentence = rawOld.trim();
-  let secIdx = 0;
-  if (useSentenceEdit) {
-    if (!oldSentence) return false;
-    secIdx = findSectionIndexForOldSentence(originals, rawOld);
-    if (secIdx < 0) return false;
-  }
-  const originalContent = originals[secIdx] && originals[secIdx].content ? originals[secIdx].content : '';
-  const segmentInOriginal = useSentenceEdit
-    ? getLocatableSegment(originalContent, rawOld) || getLocatableSegment(originalContent, oldSentence)
-    : null;
-  const unlocatable = useSentenceEdit && !segmentInOriginal;
-  if (unlocatable) return false;
-  if (suggestionTargetScoreRowIndices(sug).length === 0) return false;
-  return true;
-}
-
