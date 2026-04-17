@@ -1251,7 +1251,7 @@ def run_review_pipeline(
     api_key: str,
     body: Any,
     max_tokens: int,
-    max_failed_rows: int,
+    max_failed_inputs: int,
     is_cancelled: Callable[[], bool],
     append_event: Callable[[dict], None],
 ) -> None:
@@ -1275,17 +1275,24 @@ def run_review_pipeline(
         append_event({"type": "done"})
         return
 
-    to_analyze = unmatched[: max(1, min(200, int(max_failed_rows)))]
-    failed_input_keys = {_input_identity_key(_row_to_dict(r)) for r in to_analyze}
+    max_in = max(1, min(200, int(max_failed_inputs)))
     all_groups = _group_comparison_rows_by_input(comparison_rows)
-    groups = [g for g in all_groups if _input_identity_key(_row_to_dict(g[0])) in failed_input_keys]
+    failed_groups = [
+        g
+        for g in all_groups
+        if any(not _row_to_dict(r).get("matched", False) for r in g)
+    ]
+    groups = failed_groups[:max_in]
     n = len(groups)
-    row_count = len(to_analyze)
+    unmatched_rows_in_scope = sum(
+        1 for g in groups for r in g if not _row_to_dict(r).get("matched", False)
+    )
     append_event(
         {
             "type": "plan",
             "summary": (
-                f"Phase 1: analyzing {n} input group(s) with failures ({row_count} failed comparison row(s)); "
+                f"Phase 1: analyzing {n} input group(s) with failures (cap {max_in} failed input(s) by settings; "
+                f"{unmatched_rows_in_scope} unmatched comparison row(s) in scope); "
                 "each prompt includes every comparison row for that input (matched + unmatched). "
                 f"Phase 1.5: if more than {_PHASE15_SKIP_CLUSTERING_LLM_AT_MOST} Phase-1 issues, cluster related issues "
                 "(one LLM call; fallback: group by category hint); "

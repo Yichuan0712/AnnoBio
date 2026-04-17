@@ -4,23 +4,14 @@
  * Result is saved on the Score node and persisted with the project.
  */
 
-import { showConfirm, showAlert } from './alertModal.js';
+import { showConfirm } from './alertModal.js';
 import { comparisonRowIsMatched } from './scoreDetailModal.js';
-import { runSuggestionRowTestsMetrics } from './reviewSuggestionTest.js';
-import {
-  runSuggestionFinetuneCompositional,
-  abortAllFinetuneJobs,
-  registerFinetuneSession,
-  unregisterFinetuneSession,
-  hasActiveFinetuneSessions,
-} from './reviewSuggestionFinetune.js';
 import {
   rebuildWorkingFromApplied,
   getLocatableSegment,
   findSectionIndexForOldSentence,
   effectiveNewSentenceForApply,
   suggestionTargetScoreRowIndices,
-  suggestionNeedsAutoRowCheck,
 } from './reviewWorkingSections.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import {
@@ -32,142 +23,22 @@ import {
 
 const API_BASE = 'http://localhost:8000';
 
-/** AbortControllers for post-finetune row-check (mini-run metrics). */
-const rowCheckAbortControllers = new Set();
-
-function registerRowCheckSession(ac) {
-  if (ac && typeof ac.abort === 'function') rowCheckAbortControllers.add(ac);
-}
-
-function unregisterRowCheckSession(ac) {
-  rowCheckAbortControllers.delete(ac);
-}
-
-function hasActiveRowCheckSessions() {
-  return rowCheckAbortControllers.size > 0;
-}
-
-function abortAllRowCheckJobs() {
-  for (const c of rowCheckAbortControllers) {
-    try {
-      c.abort();
-    } catch (_) {}
-  }
-  rowCheckAbortControllers.clear();
-}
-
 /** Review node progress reaches 100% when the stream ends (workflowCanvas). */
 
-/** Only on full app/tab unload: cancel in-flight row-check + Finetune. Closing the review modal does NOT call this — jobs keep running and persist when done. */
-function abortReviewBackgroundJobsOnAppUnload() {
-  abortAllFinetuneJobs();
-  abortAllRowCheckJobs();
-}
-
-/** After Run+Score row check succeeds (shown next to suggestion title). */
-const REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL = 'Row check passed';
-/** Row check failed (title pill); same label always. Modifier class makes it clickable when finetune can start. */
-const REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE = 'Click to Finetune';
-/** Row-check (Run+Score) in progress for this card. */
-const REVIEW_SUGGESTION_ROWCHECKING_LABEL = 'Checking…';
-/** Finetune optimization finished (title pill). */
-const REVIEW_SUGGESTION_FINETUNED_PILL_LABEL = 'Finetuned';
-/** Title tag for assistant-owned edits: dialogue proposal, not pipeline row-check. */
-const REVIEW_SUGGESTION_PROPOSAL_TAG_LABEL = 'Proposal';
-const REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA = 'Edit proposed in chat; not Run+Score checked';
-
-const REVIEW_FINETUNE_LABEL_TUNING = 'Finetuning';
-
-/** Finetuned suggestions may store row-check in `review_test_result_finetune_after`; otherwise legacy `review_test_result`. */
-const REVIEW_TEST_RESULT_FINETUNE_AFTER = 'review_test_result_finetune_after';
-const REVIEW_TEST_RESULT_FINETUNE_BEFORE = 'review_test_result_finetune_before';
-
-/** True when finetune finished and meta has a distinct pre-finetune proposal (row-check targets finetuned `new_sentence` only). */
-function suggestionFinetuneHasBeforeAfterText(sug) {
-  if (!sug || sug.review_finetune_completed !== true) return false;
-  const meta = sug.review_finetune_meta && typeof sug.review_finetune_meta === 'object' ? sug.review_finetune_meta : null;
-  const beforeRaw = meta && typeof meta.newSentenceBeforeFinetune === 'string' ? meta.newSentenceBeforeFinetune : '';
-  const before = String(beforeRaw);
-  const after = String(sug.new_sentence ?? '');
-  return before.trim() !== '' && before !== after;
-}
-
-/** When true, row-check fail pill must not offer 'Click to Finetune' (tuning, or tuned with no retry). */
-function suggestionFinetuneRowCheckNudgeBlocked(sug) {
-  if (sug.review_finetune_in_progress === true) return true;
-  if (sug.review_finetune_completed === true) return !suggestionFinetuneHasBeforeAfterText(sug);
-  return false;
-}
-
-/** True when row-check fail pill should start finetune on click (idle, locatable, not blocked / already tuned). */
-function rowCheckFailPillCanStartFinetune(sug, noButton) {
-  if (noButton || getSuggestionTestOutcome(sug) !== 'fail') return false;
-  if (sug.review_finetune_in_progress === true) return false;
-  if (suggestionFinetuneRowCheckNudgeBlocked(sug)) return false;
-  if (sug.review_finetune_completed === true) return false;
-  return true;
-}
+/** Placeholder pill only; verify/finetune flows removed pending redesign. */
+const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to verify';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
-/**
- * At most one title pill. Pipeline: row-check / finetune state. Assistant: only the Proposal tag.
- */
-function collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections) {
-  if (!sug || typeof sug !== 'object') return [];
-  if (String(sug.source || '').toLowerCase() === 'assistant') {
-    return [
-      {
-        cls: 'review-suggestion-proposal-tag-pill',
-        text: REVIEW_SUGGESTION_PROPOSAL_TAG_LABEL,
-        ariaLabel: REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA,
-      },
-    ];
-  }
-  if (sug.review_finetune_in_progress === true) {
-    return [{ cls: 'review-suggestion-tuning-pill', text: REVIEW_FINETUNE_LABEL_TUNING }];
-  }
-  if (sug.review_finetune_completed === true && isReviewRowCheckInProgress(sug)) {
-    return [{ cls: 'review-suggestion-tuning-pill', text: REVIEW_FINETUNE_LABEL_TUNING }];
-  }
-  if (sug.review_finetune_completed === true) {
-    const fo = getSuggestionTestOutcome(sug);
-    let finCls = 'review-suggestion-finetuned-pill';
-    if (fo === 'pass') finCls += ' review-suggestion-finetuned-pill--pass';
-    else if (fo === 'fail') finCls += ' review-suggestion-finetuned-pill--fail';
-    return [{ cls: finCls, text: REVIEW_SUGGESTION_FINETUNED_PILL_LABEL }];
-  }
-  if (isReviewRowCheckInProgress(sug)) {
-    return [{ cls: 'review-suggestion-rowchecking-pill', text: REVIEW_SUGGESTION_ROWCHECKING_LABEL }];
-  }
-  if (actionsFull) {
-    const outcome = getSuggestionTestOutcome(sug);
-    if (outcome === 'pass') {
-      return [{ cls: 'review-suggestion-rowcheck-pass-pill', text: REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL }];
-    }
-    if (outcome === 'fail') {
-      const clickFinetune = rowCheckFailPillCanStartFinetune(sug, noButton);
-      const text = REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE;
-      return [
-        {
-          cls:
-            'review-suggestion-rowcheck-fail-pill' +
-            (clickFinetune ? ' review-suggestion-rowcheck-fail-pill--click-finetune' : ''),
-          text,
-          clickFinetune,
-        },
-      ];
-    }
-  }
-  return [];
+/** Single decorative pill after the review stream completes. */
+function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete) {
+  if (streamComplete !== true) return [];
+  return [{ cls: 'review-suggestion-verify-pill', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL }];
 }
 
-function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections) {
-  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections)
+function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections, streamComplete) {
+  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections, streamComplete)
     .map((spec) => {
-      if (spec.clickFinetune === true) {
-        return `<button type="button" class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}" aria-label="Finetune this suggestion" data-review-title-pill-action="finetune">${escapeHtml(spec.text)}</button>`;
-      }
       const aria =
         typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()
           ? ` aria-label="${escapeHtml(spec.ariaLabel)}"`
@@ -175,12 +46,6 @@ function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, pr
       return `<span class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}"${aria}>${escapeHtml(spec.text)}</span>`;
     })
     .join('');
-}
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', () => {
-    abortReviewBackgroundJobsOnAppUnload();
-  });
 }
 
 /** Shown when persisted review has streamComplete:false but no live job (e.g. app closed mid-review). Mirrors Run: “Last run did not complete.” */
@@ -545,127 +410,10 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
   document.body.appendChild(overlay);
 }
 
-function suggestionHasAnyTerminalTestOutcome(s) {
-  if (!s || typeof s !== 'object') return false;
-  const a = s[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-  const b = s[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  const c = s.review_test_result;
-  if (a === 'pass' || a === 'fail' || b === 'pass' || b === 'fail' || c === 'pass' || c === 'fail') return true;
-  if (s.review_test_passed === true) return true;
-  return false;
-}
-
-function clearFinetuneRowCheckOutcome(sug) {
-  if (!sug || typeof sug !== 'object') return;
-  if (!suggestionFinetuneHasBeforeAfterText(sug)) {
-    delete sug.review_test_result;
-    delete sug.review_test_passed;
-    return;
-  }
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  delete sug.review_test_result;
-  delete sug.review_test_passed;
-}
-
-function setFinetuneRowCheckOutcome(sug, outcome) {
-  if (!sug || typeof sug !== 'object') return;
-  if (outcome !== 'pass' && outcome !== 'fail') return;
-  if (!suggestionFinetuneHasBeforeAfterText(sug)) {
-    sug.review_test_result = outcome;
-    delete sug.review_test_passed;
-    return;
-  }
-  sug[REVIEW_TEST_RESULT_FINETUNE_AFTER] = outcome;
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  delete sug.review_test_result;
-  delete sug.review_test_passed;
-}
-
-/** @returns {'pass'|'fail'|null} */
-function getSuggestionTestOutcomeAfterSlot(sug) {
-  if (!sug || typeof sug !== 'object') return null;
-  const rAfter = sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-  if (rAfter === 'pass' || rAfter === 'fail') return rAfter;
-  const legacy = sug.review_test_result;
-  if (legacy === 'pass' || legacy === 'fail') return legacy;
-  if (sug.review_test_passed === true) return 'pass';
-  return null;
-}
-
-/** @returns {'pass'|'fail'|null} */
-function getSuggestionTestOutcome(sug) {
-  if (!sug || typeof sug !== 'object') return null;
-  if (suggestionFinetuneHasBeforeAfterText(sug)) return getSuggestionTestOutcomeAfterSlot(sug);
-  const r = sug.review_test_result;
-  if (r === 'pass' || r === 'fail') return r;
-  if (sug.review_test_passed === true) return 'pass';
-  return null;
-}
-
-/** Row-check (Run+Score) in flight on this suggestion — use everywhere UI reads this flag (reconcile/persist may not be strict boolean). */
-function isReviewRowCheckInProgress(sug) {
-  if (!sug || typeof sug !== 'object') return false;
-  const v = sug.review_test_in_progress;
-  return v === true || v === 1;
-}
-
-/** Truncated title line for suggestion cards (pass/fail shown via pill / not at all, not in the title string). */
+/** Truncated title line for suggestion cards. */
 function formatSuggestionCardPreviewTitle(titleLine) {
   const baseRaw = normalizeUnicodeDashesForDisplay(String(titleLine ?? ''));
   return truncateWithEllipsis(baseRaw, SUGGESTION_CARD_PREVIEW_TITLE_CHARS);
-}
-
-function clearSuggestionTestOutcome(sug) {
-  if (!sug || typeof sug !== 'object') return;
-  delete sug.review_test_result;
-  delete sug.review_test_passed;
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  delete sug.review_test_in_progress;
-}
-
-/**
- * Clear stale `review_test_in_progress` only when no row-check session is active (e.g. app killed).
- * If a job is still running in the background, keep the flag so reopen shows progress.
- */
-function stripAbortedReviewTests(suggestions) {
-  if (!Array.isArray(suggestions)) return false;
-  if (hasActiveRowCheckSessions()) return false;
-  let changed = false;
-  for (const s of suggestions) {
-    if (!s || typeof s !== 'object') continue;
-    if (isReviewRowCheckInProgress(s)) {
-      delete s.review_test_in_progress;
-      if (!suggestionHasAnyTerminalTestOutcome(s)) {
-        delete s.review_test_result;
-        delete s.review_test_passed;
-        delete s[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-        delete s[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-      }
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-/**
- * Drop persisted finetune-in-progress only when no finetune session is active (crash / stale JSON).
- * While Finetune runs in the background after closing the modal, keep flags so reopen shows "Finetuning".
- */
-function clearStaleFinetuneRunningFlags(suggestions) {
-  if (!Array.isArray(suggestions)) return false;
-  if (hasActiveFinetuneSessions()) return false;
-  let changed = false;
-  for (const s of suggestions) {
-    if (!s || typeof s !== 'object') continue;
-    if (s.review_finetune_in_progress === true || s.review_finetune_progress != null) {
-      delete s.review_finetune_in_progress;
-      delete s.review_finetune_progress;
-      changed = true;
-    }
-  }
-  return changed;
 }
 
 function sectionsToFullText(sections) {
@@ -991,12 +739,7 @@ function buildReviewResultUI(overlay, options) {
       const idStr = String(id);
       const r = data.suggestions.find((x) => x && String(x.suggestion_id) === idStr);
       if (r && typeof r === 'object') {
-        const keepInProgress =
-          hasActiveRowCheckSessions() &&
-          isReviewRowCheckInProgress(loc) &&
-          !isReviewRowCheckInProgress(r);
         Object.assign(loc, r);
-        if (keepInProgress) loc.review_test_in_progress = true;
       }
     }
   }
@@ -1035,12 +778,7 @@ function buildReviewResultUI(overlay, options) {
 
   function persistWorking() {
     if (typeof onReviewResultChange !== 'function') return;
-    const suggestionsToSave = allSuggestions.map((s) => {
-      const next = { ...s, applied: s.applied === true };
-      delete next._finetuneAbort;
-      delete next._finetunePersistScheduled;
-      return next;
-    });
+    const suggestionsToSave = allSuggestions.map((s) => ({ ...s, applied: s.applied === true }));
     const dataRefinementToSave = dataRefinement.map((it) => {
       if (!it || typeof it !== 'object') return it;
       return { ...it };
@@ -1058,13 +796,8 @@ function buildReviewResultUI(overlay, options) {
       promptFullText: base.promptFullText ?? saved.promptFullText ?? promptFullText,
       workingSections: working.map((s) => ({ name: s.name, content: s.content })),
     };
-    delete next.review_finetune_last_result;
     onReviewResultChange(next);
     refreshAllEditSuggestionCardsVisuals();
-  }
-
-  if (stripAbortedReviewTests(allSuggestions) && typeof onReviewResultChange === 'function') {
-    persistWorking();
   }
 
   function emitReviewBarProgress(percent) {
@@ -1094,142 +827,15 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /** Run+Score mini-run metrics for one card (e.g. after finetune completes). */
-  async function runAutoRowCheckForSuggestion(sugIdx) {
-    const sug = allSuggestions[sugIdx];
-    if (!sug || typeof sug !== 'object') return;
-    if (isReviewStreamingNow()) return;
-    if (typeof getPayload !== 'function') return;
-    const targets = suggestionTargetScoreRowIndices(sug);
-    if (targets.length === 0) return;
-
-    const rowAc = new AbortController();
-    registerRowCheckSession(rowAc);
-
-    function exitBeforeRowCheckRequest() {
-      delete sug.review_test_in_progress;
-      persistWorking();
-    }
-
-    try {
-      sug.review_test_in_progress = true;
-      persistWorking();
-
-      let payload;
-      try {
-        payload = await getPayload();
-      } catch (_) {
-        exitBeforeRowCheckRequest();
-        return;
-      }
-      if (!payload || !payload.run_credential_id) {
-        exitBeforeRowCheckRequest();
-        return;
-      }
-      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-        exitBeforeRowCheckRequest();
-        return;
-      }
-
-      const patched = allSuggestions.map((s, i) => ({ ...s, applied: s.applied === true || i === sugIdx }));
-      const testSections = rebuildWorkingFromApplied(originals, patched);
-      if (!testSections || testSections.length !== originals.length) {
-        setFinetuneRowCheckOutcome(sug, 'fail');
-        return;
-      }
-      const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
-      const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
-
-      try {
-        const result = await runSuggestionRowTestsMetrics({
-          apiBase: API_BASE,
-          credentialId: payload.run_credential_id,
-          testSections,
-          targetComparisonRowIndices: targets,
-          comparisonRows: payload.comparison_rows || [],
-          outputFields: payload.output_fields || [],
-          outputSchema: payload.output_schema,
-          scoreMappingJson: payload.score_mapping || '[]',
-          runWs: runWs || { headers: [], rows: [] },
-          gtContent: gtContent || { headers: [], rows: [] },
-          signal: rowAc.signal,
-        });
-        if (result.aborted) {
-          clearFinetuneRowCheckOutcome(sug);
-        } else if (result.ok && result.allPass) {
-          setFinetuneRowCheckOutcome(sug, 'pass');
-        } else if (result.ok) {
-          setFinetuneRowCheckOutcome(sug, 'fail');
-        } else {
-          setFinetuneRowCheckOutcome(sug, 'fail');
-        }
-      } catch (err) {
-        if (isReviewRowCheckInProgress(sug)) {
-          if (err && err.name === 'AbortError') {
-            clearFinetuneRowCheckOutcome(sug);
-          } else {
-            setFinetuneRowCheckOutcome(sug, 'fail');
-          }
-        }
-      }
-    } finally {
-      unregisterRowCheckSession(rowAc);
-      delete sug.review_test_in_progress;
-      persistWorking();
-    }
-  }
-
-  /** True if any pipeline card is running a row-check mini-run (e.g. after finetune). */
-  function anyRowCheckInProgress() {
-    return allSuggestions.some((s) => s && s.review_test_in_progress === true);
-  }
-
-  let editCardsRefreshScheduled = false;
-  function scheduleEditSuggestionCardsRefresh() {
-    if (editCardsRefreshScheduled) return;
-    editCardsRefreshScheduled = true;
-    queueMicrotask(() => {
-      editCardsRefreshScheduled = false;
-      renderEditSuggestionCards();
-      updateSuggestionsFooter();
-    });
-  }
-
   /**
    * Card actions “ready”: View detail always; Accept/Revert only when true.
-   * Off while the review stream is still generating (if any suggestion exists), and off during
-   * Finetune or Run+Score row-check so Accept does not appear until that work finishes.
+   * Off while the review stream is still generating (if any suggestion exists).
    */
-  function suggestionActionsFullForCard(sug) {
+  function suggestionActionsFullForCard(_sug) {
     if (saved.streamComplete !== true) {
       return allSuggestions.length === 0;
     }
-    if (sug && typeof sug === 'object') {
-      if (sug.review_finetune_in_progress === true) return false;
-      if (isReviewRowCheckInProgress(sug)) return false;
-    }
     return true;
-  }
-
-  /** Title-line “Click to Finetune”: one listener per pill (pipeline suggestions). */
-  function wireInteractiveTitlePillsOnCard(card) {
-    if (!card) return;
-    card.querySelectorAll('[data-review-title-pill-action="finetune"]').forEach((pill) => {
-      const onActivate = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        const sugIdx = parseInt(card.dataset.suggestionIndex, 10);
-        if (Number.isNaN(sugIdx) || !allSuggestions[sugIdx]) return;
-        const sug = allSuggestions[sugIdx];
-        void handleFinetuneActionForCard(card, sug, sugIdx);
-      };
-      pill.addEventListener('click', onActivate);
-      pill.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        onActivate(e);
-      });
-    });
   }
 
   function updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections) {
@@ -1248,22 +854,23 @@ function buildReviewResultUI(overlay, options) {
       titleWrap.querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`).forEach((el) => {
         el.remove();
       });
-      const specs = collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections);
+      const specs = collectSuggestionTitlePills(
+        sug,
+        noButton,
+        actionsFull,
+        originals,
+        promptSections,
+        saved.streamComplete === true,
+      );
       for (const spec of specs) {
-        const interactive = spec.clickFinetune === true;
-        const el = document.createElement(interactive ? 'button' : 'span');
-        if (interactive) el.type = 'button';
+        const el = document.createElement('span');
         el.className = `${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`;
         el.textContent = spec.text;
-        if (spec.clickFinetune === true) {
-          el.setAttribute('aria-label', 'Finetune this suggestion');
-          el.setAttribute('data-review-title-pill-action', 'finetune');
-        } else if (typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()) {
+        if (typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()) {
           el.setAttribute('aria-label', spec.ariaLabel);
         }
         titleWrap.appendChild(el);
       }
-      wireInteractiveTitlePillsOnCard(card);
     }
   }
 
@@ -1297,7 +904,7 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /** After stream: show cards (post-finetune row check runs automatically when applicable). */
+  /** After stream: show suggestion cards and complete review progress. */
   async function revealSuggestionsAfterReview() {
     if (!allSuggestions || allSuggestions.length === 0) {
       renderEditSuggestionCards();
@@ -1348,139 +955,6 @@ function buildReviewResultUI(overlay, options) {
     renderLeft(-1);
   }
 
-  async function handleFinetuneActionForCard(_card, sug, sugIdx) {
-    if (sug.review_finetune_completed === true) return;
-    if (sug.review_finetune_in_progress === true) return;
-    if (isReviewRowCheckInProgress(sug)) return;
-    if (anyRowCheckInProgress()) {
-      showAlert('Wait until the row check finishes before using Finetune.', { title: 'Row check in progress' });
-      return;
-    }
-    if (isReviewStreamingNow()) {
-      showAlert('Wait until the review finishes before running finetune.', { title: 'Review in progress' });
-      return;
-    }
-    const targets = suggestionTargetScoreRowIndices(sug);
-    if (targets.length === 0) {
-      showAlert('This suggestion has no target input rows.', { title: 'Cannot finetune' });
-      return;
-    }
-    const oldSentence = (sug.old_sentence || '').trim();
-    const improvementRationale = String(sug.reason || '').trim();
-    if (!improvementRationale) {
-      showAlert('Finetune needs this suggestion’s reason (from Review). Re-run review or pick an edit that includes a reason.', {
-        title: 'Missing reason',
-      });
-      return;
-    }
-    const proposalNew = (sug.new_sentence || '').trim();
-    if (typeof getPayload !== 'function') return;
-    let finetuneAc = null;
-    try {
-      const payload = await getPayload();
-      if (!payload || !payload.run_credential_id) {
-        showAlert('Configure a Run credential on the Run node, then try again.', { title: 'Missing credential' });
-        return;
-      }
-      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-        showAlert('The prompt needs an output schema (Run / prompt settings) to finetune.', { title: 'Missing output schema' });
-        return;
-      }
-      finetuneAc = new AbortController();
-      registerFinetuneSession(finetuneAc);
-      sug._finetuneAbort = finetuneAc;
-      sug.review_finetune_invoked = true;
-      sug.review_finetune_in_progress = true;
-      persistWorking();
-      const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
-      const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
-      let reviewCredForFinetune = '';
-      let compMaxTrials = 40;
-      let compCandidates = 4;
-      let compMaxSegments = 5;
-      try {
-        const sres = await fetch(`${API_BASE}/api/settings`);
-        if (sres.ok) {
-          const s = await sres.json();
-          reviewCredForFinetune = String(s.default_review_credential_id || '').trim();
-          compMaxTrials = Math.min(200, Math.max(8, Number(s.review_finetune_comp_max_trials) || 40));
-          compCandidates = Math.min(8, Math.max(2, Number(s.review_finetune_comp_candidates_per_segment) || 4));
-          compMaxSegments = Math.min(8, Math.max(2, Number(s.review_finetune_comp_max_segments) || 5));
-        }
-      } catch (_) {
-        /* use defaults */
-      }
-      if (!reviewCredForFinetune) reviewCredForFinetune = payload.run_credential_id;
-      const onFinetuneProgress = ({ trial, trials }) => {
-        sug.review_finetune_progress = { trial, trials };
-        if (!sug._finetunePersistScheduled) {
-          sug._finetunePersistScheduled = true;
-          requestAnimationFrame(() => {
-            delete sug._finetunePersistScheduled;
-            persistWorking();
-          });
-        }
-      };
-      const result = await runSuggestionFinetuneCompositional({
-        apiBase: API_BASE,
-        llmCredentialId: reviewCredForFinetune,
-        runCredentialId: payload.run_credential_id,
-        oldSentence,
-        newSentence: proposalNew,
-        improvementRationale,
-        maxSegments: compMaxSegments,
-        candidatesPerSegment: compCandidates,
-        maxTrials: compMaxTrials,
-        allSuggestions,
-        sugIdx,
-        originals,
-        targets,
-        comparisonRows: payload.comparison_rows || [],
-        outputFields: payload.output_fields || [],
-        outputSchema: payload.output_schema,
-        scoreMappingJson: payload.score_mapping || '[]',
-        runWs: runWs || { headers: [], rows: [] },
-        gtContent: gtContent || { headers: [], rows: [] },
-        abortController: finetuneAc,
-        onProgress: onFinetuneProgress,
-      });
-      sug.new_sentence = result.bestText;
-      sug.review_finetune_meta = {
-        bestPassPct: Math.round(Number(result.bestObservedRate) * 100),
-        candidatesCount: result.candidates.length,
-        trialsRun: Array.isArray(result.trialLog) ? result.trialLog.length : 0,
-        bestArmIndex: result.bestIndex,
-        optimizer: result.optimizer || 'compositional',
-        newSentenceBeforeFinetune: proposalNew,
-      };
-      delete saved.review_finetune_last_result;
-      sug.review_finetune_completed = true;
-      delete sug.review_finetune_use_before;
-      delete sug.review_test_result;
-      delete sug.review_test_passed;
-      delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-      delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-      if (sug.applied === true) syncWorkingFromApplied();
-      renderLeft(-1);
-      persistWorking();
-    } catch (err) {
-      if (err && err.name === 'AbortError') {
-        /* user cancelled or window closed */
-      } else {
-        showAlert(String(err?.message || err || 'Finetune failed'), { title: 'Finetune failed' });
-      }
-    } finally {
-      if (finetuneAc) unregisterFinetuneSession(finetuneAc);
-      delete sug.review_finetune_in_progress;
-      delete sug._finetuneAbort;
-      delete sug.review_finetune_progress;
-      persistWorking();
-      if (sug.review_finetune_completed === true) {
-        await runAutoRowCheckForSuggestion(sugIdx);
-      }
-    }
-  }
-
   const sectionNames = (promptSections || []).map((s, i) => (s.name || '').trim() || `Section ${i}`);
 
   function updateAnalysisFooter() {
@@ -1515,15 +989,7 @@ function buildReviewResultUI(overlay, options) {
     const inProgress = !isComplete && isReviewStreamingNow();
     let statusClass = 'review-detail-status-note--incomplete';
     let statusText = REVIEW_INCOMPLETE_USER_MSG;
-    const rowChecksPending =
-      isComplete &&
-      allSuggestions.some(
-        (s) => suggestionNeedsAutoRowCheck(s, originals, promptSections) && isReviewRowCheckInProgress(s),
-      );
-    if (rowChecksPending) {
-      statusClass = 'review-detail-status-note--generating';
-      statusText = 'Checking suggested changes…';
-    } else if (isComplete) {
+    if (isComplete) {
       statusClass = 'review-detail-status-note--complete';
       const ne = allSuggestions.length;
       const nr = dataRefinement.length;
@@ -1682,7 +1148,14 @@ function buildReviewResultUI(overlay, options) {
     const acceptBtnHtml = showAcceptOrRevert
       ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'
       : '';
-    const titlePillsHtml = buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections);
+    const titlePillsHtml = buildSuggestionTitlePillsHtml(
+      sug,
+      noButton,
+      actionsFull,
+      originals,
+      promptSections,
+      saved.streamComplete === true,
+    );
     const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
 
     const card = document.createElement('div');
@@ -1934,14 +1407,6 @@ function buildReviewResultUI(overlay, options) {
 /** Review node modal: show saved result (sections + suggestions) or empty state. */
 export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, getIsReviewStreaming }) {
    const saved = getReviewResult ? getReviewResult() : null;
-  if (saved && typeof saved === 'object') {
-    const fixStale = clearStaleFinetuneRunningFlags(saved.suggestions);
-    if (fixStale && typeof updateReviewResult === 'function') {
-      try {
-        updateReviewResult({ ...saved });
-      } catch (_) {}
-    }
-  }
   const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
   const title = `Review: ${reviewName}`;
   const sectionsForDisplay = saved && (
@@ -2049,14 +1514,6 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
         (typeof getReviewResult === 'function' ? getReviewResult() : null) ?? detailData;
       if (!data || typeof data !== 'object') return;
       // 流水线已结束时必须整页 refresh（Issue analysis / 建议列表）；reconcile 只合并已有卡片，不会重建 row_diagnostics。
-      const busySideSession =
-        hasActiveRowCheckSessions() || hasActiveFinetuneSessions();
-      if (busySideSession && data.streamComplete !== true) {
-        if (typeof overlay._reviewDetailReconcile === 'function') {
-          overlay._reviewDetailReconcile(data);
-        }
-        return;
-      }
       refreshFromSaved(data);
     });
   }

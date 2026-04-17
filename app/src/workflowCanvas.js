@@ -4534,33 +4534,6 @@ export function buildWorkflowCanvas(root) {
               : null;
           const prev = prevById || existSug[i];
           if (prev && prev.applied === true) next.applied = true;
-          if (prev && prev.review_finetune_completed === true) {
-            next.review_finetune_completed = true;
-            const pm = prev.review_finetune_meta;
-            const nm = next.review_finetune_meta;
-            const keepPrevMeta =
-              pm &&
-              typeof pm === 'object' &&
-              (!nm || typeof nm !== 'object' || (nm.bestPassPct == null && pm.bestPassPct != null));
-            if (keepPrevMeta) next.review_finetune_meta = pm;
-          }
-          const prevNumForMerge = prev ? parseNumericSuggestionId(prev.suggestion_id) : null;
-          const sameSuggestionForTestMerge =
-            prevById != null ||
-            (prev != null && nextNum != null && prevNumForMerge != null && prevNumForMerge === nextNum);
-          const nextRowCheckRunning =
-            next.review_test_in_progress === true || next.review_test_in_progress === 1;
-          if (prev && sameSuggestionForTestMerge && !nextRowCheckRunning) {
-            for (const key of ['review_test_result', 'review_test_result_finetune_after', 'review_test_result_finetune_before']) {
-              const pt = prev[key];
-              if (pt === 'pass' || pt === 'fail') {
-                const nt = next[key];
-                if (nt !== 'pass' && nt !== 'fail') {
-                  next[key] = pt;
-                }
-              }
-            }
-          }
           if (nextNum == null) {
             const prevNum = prev ? parseNumericSuggestionId(prev.suggestion_id) : null;
             next.suggestion_id = prevNum != null ? prevNum : allocNextReviewSuggestionId(merged);
