@@ -21,6 +21,13 @@ export function selectPlaceholderLabel(innerLabel) {
   return `${SELECT_PLACEHOLDER_EMDASH} ${t} ${SELECT_PLACEHOLDER_EMDASH}`;
 }
 
+/** UI / export header for model output schema fields (Run & Score results tables, mapping pickers). */
+export function formatResultOutputColumnLabel(fieldDisplayOrKey) {
+  const s = String(fieldDisplayOrKey ?? '').trim();
+  const base = s || '—';
+  return `Output: ${base}`;
+}
+
 export function normalizeUnicodeDashesForDisplay(str) {
   if (str == null) return '';
   return String(str)

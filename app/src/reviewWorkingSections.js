@@ -1,5 +1,5 @@
 /**
- * Locate prompt spans and rebuild section text when suggestions are applied (Review / Finetune / Verify).
+ * Locate prompt spans and rebuild section text when suggestions are applied (Review).
  */
 
 /**
@@ -8,8 +8,10 @@
  */
 export function findSegmentInContent(content, oldSentence) {
   if (content == null || content === '' || oldSentence == null) return null;
-  const trimmed = String(oldSentence).trim();
+  const raw = String(oldSentence);
+  const trimmed = raw.trim();
   if (trimmed === '') return null;
+  if (content.includes(raw)) return raw;
   if (content.includes(trimmed)) return trimmed;
   const pattern = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
   try {
@@ -74,7 +76,37 @@ export function getLocatableSegment(content, oldSentence) {
 }
 
 /**
- * `new_sentence` to use when applying a suggestion (finetuned text is always `new_sentence` when completed).
+ * 0-based section index where `oldSentence` is uniquely locatable, or -1 if none / ambiguous.
+ * @param {Array<{ content?: string }>} sections
+ * @param {string} oldSentence
+ * @returns {number}
+ */
+export function findSectionIndexForOldSentence(sections, oldSentence) {
+  if (!Array.isArray(sections) || oldSentence == null) return -1;
+  const raw = String(oldSentence);
+  const trimmed = raw.trim();
+  if (!trimmed) return -1;
+  /** Strict: includes + whitespace-flex regex only (no fuzzy sentence match — avoids false multi-section hits). */
+  const segmentHit = (content) => !!findSegmentInContent(content, raw);
+  const hits = [];
+  for (let i = 0; i < sections.length; i++) {
+    const content = sections[i] && sections[i].content != null ? String(sections[i].content) : '';
+    if (segmentHit(content)) hits.push(i);
+  }
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) {
+    const literalHits = [];
+    for (let i = 0; i < sections.length; i++) {
+      const content = sections[i] && sections[i].content != null ? String(sections[i].content) : '';
+      if (content.includes(raw) || content.includes(trimmed)) literalHits.push(i);
+    }
+    if (literalHits.length === 1) return literalHits[0];
+  }
+  return -1;
+}
+
+/**
+ * `new_sentence` to use when applying a suggestion.
  * @param {Record<string, unknown>} s
  * @returns {string}
  */
@@ -95,14 +127,20 @@ export function rebuildWorkingFromApplied(originals, suggestions) {
   for (let i = 0; i < suggestions.length; i++) {
     const s = suggestions[i];
     if (s.applied !== true) continue;
-    const secIdx = Math.max(0, Math.min(s.section_index ?? 0, sections.length - 1));
     const useSentenceEdit = s.old_sentence != null && s.new_sentence != null;
-    const oldSentence = (s.old_sentence || '').trim();
+    const rawOld = s.old_sentence != null ? String(s.old_sentence) : '';
+    const oldSentence = rawOld.trim();
     const newSentence = effectiveNewSentenceForApply(s);
     const legacyNewContent = (s.new_content || '').trim();
+    let secIdx = 0;
+    if (useSentenceEdit) {
+      if (!oldSentence) continue;
+      secIdx = findSectionIndexForOldSentence(sections, rawOld);
+      if (secIdx < 0) continue;
+    }
     const content = sections[secIdx] ? (sections[secIdx].content || '') : '';
     if (useSentenceEdit) {
-      const seg = getLocatableSegment(content, oldSentence);
+      const seg = getLocatableSegment(content, rawOld) || getLocatableSegment(content, oldSentence);
       const toReplace = seg || oldSentence;
       if (content.includes(toReplace)) {
         sections[secIdx].content = content.replace(toReplace, newSentence);
@@ -118,74 +156,13 @@ export function rebuildWorkingFromApplied(originals, suggestions) {
   return sections;
 }
 
-/** @param {Record<string, unknown>} sug */
-function suggestionFinetuneHasBeforeAfterText(sug) {
-  if (!sug || sug.review_finetune_completed !== true) return false;
-  const meta = sug.review_finetune_meta && typeof sug.review_finetune_meta === 'object' ? sug.review_finetune_meta : null;
-  const beforeRaw = meta && typeof meta.newSentenceBeforeFinetune === 'string' ? meta.newSentenceBeforeFinetune : '';
-  const before = String(beforeRaw);
-  const after = String(sug.new_sentence ?? '');
-  return before.trim() !== '' && before !== after;
-}
-
-/** Same “terminal outcome?” rule as reviewDetailModal (for auto row-check eligibility). */
-function getSuggestionTestOutcomeForAutoCheck(sug) {
-  if (!sug || typeof sug !== 'object') return null;
-  if (suggestionFinetuneHasBeforeAfterText(sug)) {
-    const rAfter = sug.review_test_result_finetune_after;
-    if (rAfter === 'pass' || rAfter === 'fail') return rAfter;
-    const legacy = sug.review_test_result;
-    if (legacy === 'pass' || legacy === 'fail') return legacy;
-    if (sug.review_test_passed === true) return 'pass';
-    return null;
-  }
-  const r = sug.review_test_result;
-  if (r === 'pass' || r === 'fail') return r;
-  if (sug.review_test_passed === true) return 'pass';
-  return null;
-}
-
-/** Stored 0-based comparison `row_index` for targeted rows (API / persistence; prompts use 1-based Score #). */
-export function suggestionTargetInputRowIndices(sug) {
+/** Stored 0-based comparison `row_index` for targeted Score rows (API / persistence; prompts use 1-based Score #). */
+export function suggestionTargetScoreRowIndices(sug) {
   if (!sug || typeof sug !== 'object') return [];
-  const raw = sug.target_input_row_indices ?? sug.row_indices;
+  const raw = sug.target_score_row_indices ?? sug.target_input_row_indices ?? sug.row_indices;
   if (!Array.isArray(raw)) return [];
   return [...new Set(raw.map((x) => Number(x)).filter((x) => !Number.isNaN(x) && x >= 0))].sort((a, b) => a - b);
 }
 
-/**
- * True when Run+Score row check should run for this suggestion (locatable, has targets, no terminal outcome yet).
- * @param {object} sug
- * @param {{ name: string, content: string }[]} originals
- * @param {unknown[]} promptSections
- */
-export function suggestionNeedsAutoRowCheck(sug, originals, promptSections) {
-  if (!sug || typeof sug !== 'object') return false;
-  if (getSuggestionTestOutcomeForAutoCheck(sug)) return false;
-  const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
-  const oldSentence = (sug.old_sentence || '').trim();
-  const secIdx = Math.max(0, Math.min(Number(sug.section_index) || 0, (promptSections || []).length - 1));
-  const originalContent = originals[secIdx] && originals[secIdx].content ? originals[secIdx].content : '';
-  const segmentInOriginal = useSentenceEdit ? getLocatableSegment(originalContent, oldSentence) : null;
-  const unlocatable = useSentenceEdit && !segmentInOriginal;
-  if (unlocatable) return false;
-  if (suggestionTargetInputRowIndices(sug).length === 0) return false;
-  return true;
-}
-
-/**
- * After streaming `done`, phase 2 (30→100%) runs only when at least one pipeline suggestion needs row verify.
- * @param {Record<string, unknown>} saved — review result shape (`suggestions`, `promptSections`)
- */
-export function reviewStreamSavedNeedsRowVerifyPhase(saved) {
-  if (!saved || typeof saved !== 'object') return false;
-  const list = Array.isArray(saved.suggestions) ? saved.suggestions : [];
-  const promptSections = Array.isArray(saved.promptSections) ? saved.promptSections : [];
-  const originals = promptSections.map((s) => ({ name: s?.name || '', content: String(s?.content ?? '') }));
-  for (const sug of list) {
-    if (!sug || typeof sug !== 'object') continue;
-    if (String(sug.source || '').toLowerCase() === 'assistant') continue;
-    if (suggestionNeedsAutoRowCheck(sug, originals, promptSections)) return true;
-  }
-  return false;
-}
+/** @deprecated Use `suggestionTargetScoreRowIndices` (legacy name). */
+export const suggestionTargetInputRowIndices = suggestionTargetScoreRowIndices;

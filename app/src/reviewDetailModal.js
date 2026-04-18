@@ -4,28 +4,20 @@
  * Result is saved on the Score node and persisted with the project.
  */
 
-import { showConfirm, showAlert } from './alertModal.js';
-import { comparisonRowIsMatched } from './scoreDetailModal.js';
-import {
-  runSuggestionRowTests,
-  abortAllVerifyJobs,
-  registerVerifySession,
-  unregisterVerifySession,
-  hasActiveVerifySessions,
-} from './reviewSuggestionTest.js';
+import { showConfirm } from './alertModal.js';
 import {
   runSuggestionFinetuneCompositional,
-  abortAllFinetuneJobs,
   registerFinetuneSession,
   unregisterFinetuneSession,
   hasActiveFinetuneSessions,
 } from './reviewSuggestionFinetune.js';
+import { comparisonRowIsMatched } from './scoreDetailModal.js';
 import {
   rebuildWorkingFromApplied,
   getLocatableSegment,
+  findSectionIndexForOldSentence,
   effectiveNewSentenceForApply,
-  suggestionTargetInputRowIndices,
-  suggestionNeedsAutoRowCheck,
+  suggestionTargetScoreRowIndices,
 } from './reviewWorkingSections.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import {
@@ -37,120 +29,65 @@ import {
 
 const API_BASE = 'http://localhost:8000';
 
-/** LLM stream ends here; remaining bar is Run+Score checks (most wall time). Must match workflowCanvas. */
-const REVIEW_PROGRESS_PIPELINE_DONE = 30;
-const REVIEW_PROGRESS_CHECK_SPAN = 100 - REVIEW_PROGRESS_PIPELINE_DONE;
+/** Module-level verify state so verification survives review modal close/reopen.
+ *  Keys are `reviewNodeId:sugIdx`. */
+const _verifyStates = new Map();   // → 'idle' | 'verifying'
+const _verifyResults = new Map();  // → result object | null
+const _verifyPromises = new Map(); // → in-flight Promise | undefined
 
-/** Only on full app/tab unload: cancel in-flight row-check + Finetune HTTP/poll. Closing the review modal does NOT call this — jobs keep running and persist when done. */
-function abortReviewBackgroundJobsOnAppUnload() {
-  abortAllFinetuneJobs();
-  abortAllVerifyJobs();
-}
+/** Review node progress reaches 100% when the stream ends (workflowCanvas). */
 
-/** After Run+Score row check succeeds (shown next to suggestion title; clearer than “Passed”). */
-const REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL = 'Verified';
-/** Row check failed (title pill); same label always. Modifier class makes it clickable when finetune can start. */
-const REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE = 'Click to Finetune';
-/** Row-check (Run+Score) in progress for this card. */
-const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying';
-/** Finetune optimization finished (title pill). */
-const REVIEW_SUGGESTION_FINETUNED_PILL_LABEL = 'Finetuned';
-/** Title tag for assistant-owned edits: dialogue proposal, not pipeline verify. */
-const REVIEW_SUGGESTION_PROPOSAL_TAG_LABEL = 'Proposal';
-const REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA = 'Edit proposed in chat; not Run+Score verified';
-
-const REVIEW_FINETUNE_LABEL_TUNING = 'Finetuning';
-
-/** Finetuned suggestions may store row-check in `review_test_result_finetune_after`; otherwise legacy `review_test_result`. */
-const REVIEW_TEST_RESULT_FINETUNE_AFTER = 'review_test_result_finetune_after';
-const REVIEW_TEST_RESULT_FINETUNE_BEFORE = 'review_test_result_finetune_before';
-
-/** True when finetune finished and meta has a distinct pre-finetune proposal (row-check targets finetuned `new_sentence` only). */
-function suggestionFinetuneHasBeforeAfterText(sug) {
-  if (!sug || sug.review_finetune_completed !== true) return false;
-  const meta = sug.review_finetune_meta && typeof sug.review_finetune_meta === 'object' ? sug.review_finetune_meta : null;
-  const beforeRaw = meta && typeof meta.newSentenceBeforeFinetune === 'string' ? meta.newSentenceBeforeFinetune : '';
-  const before = String(beforeRaw);
-  const after = String(sug.new_sentence ?? '');
-  return before.trim() !== '' && before !== after;
-}
-
-/** When true, row-check fail pill must not offer 'Click to Finetune' (tuning, or tuned with no retry). */
-function suggestionFinetuneRowCheckNudgeBlocked(sug) {
-  if (sug.review_finetune_in_progress === true) return true;
-  if (sug.review_finetune_completed === true) return !suggestionFinetuneHasBeforeAfterText(sug);
-  return false;
-}
-
-/** True when row-check fail pill should start finetune on click (idle, locatable, not blocked / already tuned). */
-function rowCheckFailPillCanStartFinetune(sug, noButton) {
-  if (noButton || getSuggestionTestOutcome(sug) !== 'fail') return false;
-  if (sug.review_finetune_in_progress === true) return false;
-  if (suggestionFinetuneRowCheckNudgeBlocked(sug)) return false;
-  if (sug.review_finetune_completed === true) return false;
-  return true;
-}
+/** Placeholder pill only; verify/finetune flows removed pending redesign. */
+const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
+const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
+const REVIEW_SUGGESTION_VERIFIED_LABEL = 'Verified';
+const REVIEW_SUGGESTION_FINETUNE_LABEL = 'Click to Finetune';
+const REVIEW_SUGGESTION_FINETUNING_LABEL = 'Finetuning\u2026';
+const REVIEW_SUGGESTION_FINETUNED_LABEL = 'Finetuned';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
-/**
- * At most one title pill. Pipeline: verify/finetune state. Assistant: only the Proposal tag.
- */
-function collectSuggestionTitlePills(sug, noButton, actionsFull) {
-  if (!sug || typeof sug !== 'object') return [];
-  if (String(sug.source || '').toLowerCase() === 'assistant') {
-    return [
-      {
-        cls: 'review-suggestion-proposal-tag-pill',
-        text: REVIEW_SUGGESTION_PROPOSAL_TAG_LABEL,
-        ariaLabel: REVIEW_SUGGESTION_PROPOSAL_TAG_ARIA,
-      },
-    ];
-  }
-  if (sug.review_finetune_in_progress === true) {
-    return [{ cls: 'review-suggestion-tuning-pill', text: REVIEW_FINETUNE_LABEL_TUNING }];
-  }
-  if (sug.review_finetune_completed === true && isReviewRowCheckInProgress(sug)) {
-    return [{ cls: 'review-suggestion-tuning-pill', text: REVIEW_FINETUNE_LABEL_TUNING }];
-  }
-  if (sug.review_finetune_completed === true) {
-    const fo = getSuggestionTestOutcome(sug);
-    let finCls = 'review-suggestion-finetuned-pill';
-    if (fo === 'pass') finCls += ' review-suggestion-finetuned-pill--pass';
-    else if (fo === 'fail') finCls += ' review-suggestion-finetuned-pill--fail';
-    return [{ cls: finCls, text: REVIEW_SUGGESTION_FINETUNED_PILL_LABEL }];
-  }
-  if (isReviewRowCheckInProgress(sug)) {
-    return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL }];
-  }
-  if (actionsFull) {
-    const outcome = getSuggestionTestOutcome(sug);
-    if (outcome === 'pass') {
-      return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_ROWCHECK_PASS_LABEL }];
-    }
-    if (outcome === 'fail') {
-      const clickFinetune = rowCheckFailPillCanStartFinetune(sug, noButton);
-      const text = REVIEW_SUGGESTION_ROWCHECK_FAIL_TRY_FINETUNE;
-      return [
-        {
-          cls:
-            'review-suggestion-rowcheck-fail-pill' +
-            (clickFinetune ? ' review-suggestion-rowcheck-fail-pill--click-finetune' : ''),
-          text,
-          clickFinetune,
-        },
-      ];
-    }
-  }
-  return [];
+/** Returns true when all verify rows matched their GT rows and there were no errors. */
+function isVerifyFullPass(result) {
+  if (!result || result.status !== 'complete') return false;
+  const rows = result.verifyRows;
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  return rows.every((r) => r.matched === true && !r.error);
 }
 
-function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull) {
-  return collectSuggestionTitlePills(sug, noButton, actionsFull)
+/**
+ * Returns pill specs for the suggestion title line.
+ * @param {string} [verifyState] - 'idle' | 'verifying' | 'verified' | 'finetune'
+ */
+function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState) {
+  if (streamComplete !== true) return [];
+  if (String(_sug?.source || '').toLowerCase() === 'assistant') {
+    return [{ cls: 'review-suggestion-proposal-pill', text: 'Proposal', ariaLabel: 'Added via Review Assistant' }];
+  }
+  if (verifyState === 'verifying') {
+    return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL, ariaLabel: 'Verifying…' }];
+  }
+  if (verifyState === 'verified') {
+    return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_VERIFIED_LABEL, ariaLabel: 'All outputs matched ground truth' }];
+  }
+  if (verifyState === 'finetune') {
+    return [{ cls: 'review-suggestion-finetune-pill review-suggestion-finetune-pill--clickable', text: REVIEW_SUGGESTION_FINETUNE_LABEL, ariaLabel: 'Some outputs did not match — click to finetune' }];
+  }
+  if (verifyState === 'finetuning') {
+    return [{ cls: 'review-suggestion-finetuning-pill', text: REVIEW_SUGGESTION_FINETUNING_LABEL, ariaLabel: 'Finetuning in progress…' }];
+  }
+  if (verifyState === 'finetuned') {
+    return [{ cls: 'review-suggestion-finetuned-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Finetune complete — some outputs still differ from ground truth' }];
+  }
+  if (verifyState === 'finetuned-pass') {
+    return [{ cls: 'review-suggestion-finetuned-pass-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Finetune complete — all outputs matched ground truth' }];
+  }
+  return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
+}
+
+function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState) {
+  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState)
     .map((spec) => {
-      if (spec.clickFinetune === true) {
-        return `<button type="button" class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}" aria-label="Finetune this suggestion" data-review-title-pill-action="finetune">${escapeHtml(spec.text)}</button>`;
-      }
       const aria =
         typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()
           ? ` aria-label="${escapeHtml(spec.ariaLabel)}"`
@@ -158,12 +95,6 @@ function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull) {
       return `<span class="${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}"${aria}>${escapeHtml(spec.text)}</span>`;
     })
     .join('');
-}
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', () => {
-    abortReviewBackgroundJobsOnAppUnload();
-  });
 }
 
 /** Shown when persisted review has streamComplete:false but no live job (e.g. app closed mid-review). Mirrors Run: “Last run did not complete.” */
@@ -193,6 +124,92 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = normalizeUnicodeDashesForDisplay(String(str ?? ''));
   return div.innerHTML;
+}
+
+function escapeRegex(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeForCompare(v) {
+  if (v == null) return '';
+  return String(v).trim().toLowerCase();
+}
+
+/** Compare one output row dict against one GT row dict (model-facing keys only).
+ *  Key lookup is case-insensitive to handle score-rule outputKey vs actual LLM output field name mismatches. */
+function compareRowToGt(output, gt) {
+  if (!output || !gt) return false;
+  const keys = Object.keys(gt);
+  if (keys.length === 0) return true;
+  // Build case-insensitive lookup for output keys
+  const outLower = new Map(Object.entries(output).map(([k, v]) => [k.toLowerCase().trim(), v]));
+  return keys.every((k) => {
+    const outVal = outLower.get(k.toLowerCase().trim());
+    return normalizeForCompare(outVal) === normalizeForCompare(gt[k]);
+  });
+}
+
+/**
+ * Build the inner HTML for the "Verify results" section of the debug overlay.
+ * verifyResult: null | { status: 'running' }
+ *             | { status: 'complete', verifyRows: [{inputNum, output, error}] }
+ *             | { status: 'error', message: string }
+ */
+function buildVerifySectionHtml(verifyResult) {
+  if (!verifyResult) return '';
+
+  if (verifyResult.status === 'running') {
+    return `<p class="review-verify-status-running">\u23f3 Running\u2026</p>`;
+  }
+
+  if (verifyResult.status === 'error') {
+    return `<p class="review-verify-status-error">\u26a0 ${escapeHtml(verifyResult.message || 'Unknown error')}</p>`;
+  }
+
+  if (verifyResult.status === 'complete') {
+    const rows = verifyResult.verifyRows || [];
+    if (rows.length === 0) return `<p class="review-verify-status-empty">No results.</p>`;
+
+    // Collect GT field names (only GT keys that exist), and output field names
+    const gtFieldNames = [...new Set(rows.flatMap((r) => (r.gt ? Object.keys(r.gt) : [])))];
+    const outFieldNames = [...new Set(rows.flatMap((r) => (r.output ? Object.keys(r.output) : [])))];
+    // Show output fields; for each GT field show its expected value in a separate "GT: field" column
+    const hasMatch = rows.some((r) => r.matched !== null && r.matched !== undefined);
+    const headerCells = [
+      ...outFieldNames.map((f) => `<th>${escapeHtml(f)}</th>`),
+      ...gtFieldNames.map((f) => `<th class="review-verify-cell-gt-header">GT: ${escapeHtml(f)}</th>`),
+      ...(hasMatch ? ['<th>Match</th>'] : []),
+    ].join('');
+    const bodyRows = rows.map((row) => {
+      if (row.error) {
+        const span = outFieldNames.length + gtFieldNames.length + (hasMatch ? 1 : 0) || 1;
+        return `<tr class="review-verify-row-error">
+          <td colspan="${span}" class="review-verify-error-cell">${escapeHtml(row.error)}</td>
+        </tr>`;
+      }
+      const outCells = outFieldNames.map(
+        (f) => `<td class="review-verify-cell-output">${escapeHtml(String(row.output?.[f] ?? ''))}</td>`,
+      );
+      const gtCells = gtFieldNames.map(
+        (f) => `<td class="review-verify-cell-gt">${escapeHtml(String(row.gt?.[f] ?? '—'))}</td>`,
+      );
+      const matchCell = hasMatch
+        ? (row.matched === null
+          ? '<td>—</td>'
+          : row.matched
+            ? '<td><span class="review-debug-pass-badge">\u2714</span></td>'
+            : '<td><span class="review-debug-fail-badge">\u2718</span></td>')
+        : '';
+      return `<tr>${outCells.join('')}${gtCells.join('')}${matchCell}</tr>`;
+    }).join('');
+
+    return `<table class="review-suggestion-debug-table review-verify-results-table">
+      <thead><tr>${headerCells}</tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>`;
+  }
+
+  return '';
 }
 
 const DIAG_LIST_PREVIEW_CHARS = 200;
@@ -242,15 +259,61 @@ function scoreTableRowNumberForComparisonIndex(comparisonRows, rowIndex) {
 
 /**
  * Labels like "#1, #2" for target comparison `row_index` values (uses `score_table_row` when present).
+ * Sorted by Score table # (`score_table_row`) so display reads e.g. "#5, #6, #7, #8" not "#5, #7, #6, #8".
  */
 function formatScoreTableTargetLabels(comparisonRows, zeroBasedRowIndices) {
   if (!Array.isArray(zeroBasedRowIndices) || zeroBasedRowIndices.length === 0) return '';
-  return zeroBasedRowIndices
-    .map((idx) => {
-      const t = scoreTableRowNumberForComparisonIndex(comparisonRows, idx);
-      return t != null ? `#${t}` : `(row_index ${idx})`;
-    })
+  const seen = new Set();
+  const pairs = [];
+  for (const raw of zeroBasedRowIndices) {
+    const idx = Number(raw);
+    if (Number.isNaN(idx) || idx < 0 || seen.has(idx)) continue;
+    seen.add(idx);
+    const scoreNum = scoreTableRowNumberForComparisonIndex(comparisonRows, idx);
+    pairs.push({ idx, scoreNum });
+  }
+  pairs.sort((a, b) => {
+    const aOk = a.scoreNum != null;
+    const bOk = b.scoreNum != null;
+    if (aOk && bOk) return a.scoreNum - b.scoreNum;
+    if (aOk && !bOk) return -1;
+    if (!aOk && bOk) return 1;
+    return a.idx - b.idx;
+  });
+  return pairs
+    .map(({ idx, scoreNum }) => (scoreNum != null ? `#${scoreNum}` : `(row_index ${idx})`))
     .join(', ');
+}
+
+/** 1-based worksheet input # from persisted diagnosis (`input_index` only). */
+function diagnosisInputOneBased(diagnostic) {
+  if (!diagnostic || typeof diagnostic !== 'object') return NaN;
+  const i = Number(diagnostic.input_index);
+  return !Number.isNaN(i) && i >= 1 ? i : NaN;
+}
+
+/** 0-based comparison row indices from `row_indices` (Score table). */
+function diagnosticComparisonRowIndices(diagnostic) {
+  const raw = Array.isArray(diagnostic?.row_indices) ? diagnostic.row_indices : [];
+  return raw.map((x) => parseInt(x, 10)).filter((x) => !Number.isNaN(x));
+}
+
+/** Normalize saved Issue analysis row; invalid entries are dropped. */
+function normalizeRowDiagnosticFromSaved(d) {
+  if (!d || typeof d !== 'object') return null;
+  const input_index = Number(d.input_index);
+  if (Number.isNaN(input_index) || input_index < 1) return null;
+  const row_indices = Array.isArray(d.row_indices)
+    ? d.row_indices.map((x) => Number(x)).filter((x) => !Number.isNaN(x))
+    : [];
+  return {
+    input_index,
+    row_indices,
+    card_title: String(d.card_title || ''),
+    issue_summary: String(d.issue_summary || ''),
+    rough_modification_opinion: String(d.rough_modification_opinion || ''),
+    problem_category_hint: String(d.problem_category_hint || ''),
+  };
 }
 
 /**
@@ -349,7 +412,7 @@ function suggestionCardTitleLine({ explicitName, reason, sectionFallback, defaul
 
 /**
  * Second-layer modal: analysis text only + which Score comparison row this refers to.
- * @param {{ row_index: number, row_indices?: number[], card_title?: string, issue_summary: string, rough_modification_opinion: string, problem_category_hint?: string }} diagnostic
+ * @param {{ input_index: number, row_indices?: number[], card_title?: string, issue_summary: string, rough_modification_opinion: string, problem_category_hint?: string }} diagnostic
  * @param {Array<Record<string, unknown>>} comparisonRows - saved comparison rows (for score_table_row lookup)
  * @param {number} displayNumber - 1-based order in the Issue analysis list (same as # on the card)
  */
@@ -359,16 +422,20 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
   const rough = (diagnostic.rough_modification_opinion || '').trim();
   const cardTitle = (diagnostic.card_title || '').trim();
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
-  const multiIdx = Array.isArray(diagnostic.row_indices) && diagnostic.row_indices.length > 1
-    ? diagnostic.row_indices
-    : null;
+  const compIdxs = diagnosticComparisonRowIndices(diagnostic);
+  const multiIdx = compIdxs.length > 1 ? compIdxs : null;
   const sourceLine = multiIdx
     ? `Score table ${formatScoreTableTargetLabels(rows, multiIdx)}`
     : (() => {
-      const t = scoreTableRowNumberForComparisonIndex(rows, diagnostic.row_index);
+      const anchor = compIdxs[0];
+      if (anchor === undefined) {
+        const inp = diagnosisInputOneBased(diagnostic);
+        return !Number.isNaN(inp) && inp >= 1 ? `Worksheet input #${inp}` : 'Score comparison (unknown row)';
+      }
+      const t = scoreTableRowNumberForComparisonIndex(rows, anchor);
       return t != null
         ? `Score table #${t}`
-        : `Score comparison (row_index ${diagnostic.row_index})`;
+        : `Score comparison (row_index ${anchor})`;
     })();
 
   const mainHeading = ensureCardTitleSentenceLead(cardTitle || `Analysis #${num}`);
@@ -415,28 +482,13 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
 
   let detailBodyHtml;
   if (isAssistant) {
-    const inputIdx = suggestionTargetInputRowIndices(sug);
-    const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
-    const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
-    const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
-    const chatFocus = String(sug.chat_focus || '').trim();
-    const bullets = Array.isArray(sug.chat_focus_bullets)
-      ? sug.chat_focus_bullets.map((x) => String(x || '').trim()).filter(Boolean)
-      : [];
-    const respondsToHead = scorePhrase
-      ? `<span class="review-diagnosis-detail-lead">Focus:</span> ${escapeHtml(scorePhrase)}`
-      : chatFocus
-        ? `<span class="review-diagnosis-detail-lead">Focus:</span> ${escapeHtml(chatFocus)}`
-        : `<span class="review-diagnosis-detail-lead">Focus:</span>`;
-    const focusHtml = bullets.length
-      ? `<p class="review-diagnosis-detail-prose">${respondsToHead}</p><ul class="review-suggestion-detail-list">${bullets.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
-      : `<p class="review-diagnosis-detail-prose">${respondsToHead} <span class="review-diagnosis-detail-empty">(none)</span></p>`;
+    const sourcePara = `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Source:</span> Added via Review Assistant</p>`;
     const rationalePara = `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Rationale:</span> ${
       reason ? escapeHtml(reason) : '<span class="review-diagnosis-detail-empty">(none)</span>'
     }</p>`;
-    detailBodyHtml = focusHtml + rationalePara;
+    detailBodyHtml = sourcePara + rationalePara;
   } else {
-    const inputIdx = suggestionTargetInputRowIndices(sug);
+    const inputIdx = suggestionTargetScoreRowIndices(sug);
     const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
     const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
     const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
@@ -478,127 +530,143 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
   document.body.appendChild(overlay);
 }
 
-function suggestionHasAnyTerminalTestOutcome(s) {
-  if (!s || typeof s !== 'object') return false;
-  const a = s[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-  const b = s[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  const c = s.review_test_result;
-  if (a === 'pass' || a === 'fail' || b === 'pass' || b === 'fail' || c === 'pass' || c === 'fail') return true;
-  if (s.review_test_passed === true) return true;
-  return false;
+/** Render a key-value object as a definition list for the debug overlay. */
+/** Mirror of Python _is_model_facing_output_key: skip internal keys like #, [#], [rule_targets]. */
+function isModelFacingKey(k) {
+  const key = String(k || '').trim();
+  if (!key || key === '#' || key === '[#]') return false;
+  if (key.length >= 2 && key.startsWith('[') && key.endsWith(']')) return false;
+  return true;
 }
 
-function clearFinetuneRowCheckOutcome(sug) {
-  if (!sug || typeof sug !== 'object') return;
-  if (!suggestionFinetuneHasBeforeAfterText(sug)) {
-    delete sug.review_test_result;
-    delete sug.review_test_passed;
-    return;
+function debugKvHtml(obj) {
+  if (!obj || typeof obj !== 'object') return '<span class="review-diagnosis-detail-empty">—</span>';
+  const pairs = Object.entries(obj).filter(([k]) => isModelFacingKey(k));
+  if (pairs.length === 0) return '<span class="review-diagnosis-detail-empty">—</span>';
+  const MAX = 480;
+  const cellHtml = (raw) => {
+    if (raw == null || raw === '') return '<span class="review-diagnosis-detail-empty">—</span>';
+    let s = typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+    s = s.replace(/\s+/g, ' ').trim();
+    if (!s) return '<span class="review-diagnosis-detail-empty">—</span>';
+    if (s.length > MAX) return `<span title="${escapeHtml(s)}">${escapeHtml(s.slice(0, MAX))}\u2026</span>`;
+    return escapeHtml(s);
+  };
+  return `<dl class="review-suggestion-debug-kv">${pairs.map(([k, v]) =>
+    `<div class="review-suggestion-debug-kv-pair"><dt>${escapeHtml(k)}</dt><dd>${cellHtml(v)}</dd></div>`
+  ).join('')}</dl>`;
+}
+
+/**
+ * Debug overlay: shows per-suggestion run info.
+ * @param {object} sug
+ * @param {{ inputNums: string, gtNums: string, scoreNums: string, targetRows: any[] } | null} [debugData]
+ * @param {{ status: 'running'|'complete'|'error', ... } | null} [verifyResult]
+ */
+function openSuggestionDebugOverlay(sug, debugData, verifyResult = null) {
+  const sid = sug && sug.suggestion_id != null ? String(sug.suggestion_id) : '(no id)';
+
+  // If the overlay for this suggestion is already open and we only need to update the verify section, do it in-place.
+  const existing = document.querySelector('.review-suggestion-debug-overlay');
+  if (existing && existing.dataset.suggestionId === String(sid) && verifyResult !== null) {
+    const verifySection = existing.querySelector('.review-suggest-verify-section');
+    if (verifySection) {
+      verifySection.innerHTML = buildVerifySectionHtml(verifyResult);
+      return;
+    }
   }
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  delete sug.review_test_result;
-  delete sug.review_test_passed;
-}
 
-function setFinetuneRowCheckOutcome(sug, outcome) {
-  if (!sug || typeof sug !== 'object') return;
-  if (outcome !== 'pass' && outcome !== 'fail') return;
-  if (!suggestionFinetuneHasBeforeAfterText(sug)) {
-    sug.review_test_result = outcome;
-    delete sug.review_test_passed;
-    return;
+  let bodyHtml;
+  if (debugData) {
+    // Summary row
+    const finetuneInputCell = debugData.finetuneInputNums
+      ? escapeHtml(debugData.finetuneInputNums) + (debugData.finetuneExtraInputNums ? ` <span style="opacity:0.6">(extra: ${escapeHtml(debugData.finetuneExtraInputNums)})</span>` : '')
+      : null;
+    const summaryHtml = `
+      <table class="review-suggestion-debug-table">
+        <tbody>
+          <tr><th scope="row">Input</th><td>${escapeHtml(debugData.inputNums)}</td></tr>
+          <tr><th scope="row">Ground truth</th><td>${escapeHtml(debugData.gtNums)}</td></tr>
+          <tr><th scope="row">Score table</th><td>${escapeHtml(debugData.scoreNums)}</td></tr>
+          ${finetuneInputCell ? `<tr><th scope="row">Finetune inputs</th><td>${finetuneInputCell}</td></tr>` : ''}
+          ${debugData.finetuneGtNums ? `<tr><th scope="row">Finetune GT</th><td>${escapeHtml(debugData.finetuneGtNums)}</td></tr>` : ''}
+        </tbody>
+      </table>`;
+
+    // Input sub-tables: one block per unique input_row_index; first non-empty row_input
+    const seenInput = new Map();
+    for (const r of (debugData.targetRows || [])) {
+      const key = r.input_row_index != null ? r.input_row_index : null;
+      if (key !== null && !seenInput.has(key) && r.row_input && typeof r.row_input === 'object' && Object.keys(r.row_input).length > 0) {
+        seenInput.set(key, r.row_input);
+      }
+    }
+    const inputBlocksHtml = seenInput.size > 0
+      ? [...seenInput.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([idx, rowInput]) =>
+            `<section class="review-suggestion-debug-section">
+              <h3 class="review-suggestion-debug-section-title">Input #${escapeHtml(String(idx + 1))}</h3>
+              ${debugKvHtml(rowInput)}
+            </section>`)
+          .join('')
+      : '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">No input data.</p>';
+
+    // Ground truth sub-tables: deduplicated by source_gt_row_index; same key filter as pipeline
+    const seenGt = new Map();
+    for (const r of (debugData.targetRows || [])) {
+      const gtNum = r.source_gt_row_index != null ? r.source_gt_row_index + 1 : null;
+      if (gtNum !== null && !seenGt.has(gtNum) && r.ground_truth_output && typeof r.ground_truth_output === 'object') {
+        const filtered = Object.fromEntries(Object.entries(r.ground_truth_output).filter(([k]) => isModelFacingKey(k)));
+        if (Object.keys(filtered).length > 0) seenGt.set(gtNum, filtered);
+      }
+    }
+    const gtBlocksHtml = seenGt.size > 0
+      ? [...seenGt.entries()].sort(([a], [b]) => a - b).map(([gtNum, gto]) =>
+          `<section class="review-suggestion-debug-section">
+            <h3 class="review-suggestion-debug-section-title">Ground truth #${escapeHtml(String(gtNum))}</h3>
+            ${debugKvHtml(gto)}
+          </section>`)
+          .join('')
+      : '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">No ground truth data.</p>';
+
+    const verifyHtml = `<h2 class="review-suggestion-debug-group-title">Verify results</h2>
+      <div class="review-suggest-verify-section">${buildVerifySectionHtml(verifyResult)}</div>`;
+
+    bodyHtml = summaryHtml +
+      `<h2 class="review-suggestion-debug-group-title">Input</h2>${inputBlocksHtml}` +
+      `<h2 class="review-suggestion-debug-group-title">Ground truth</h2>${gtBlocksHtml}` +
+      verifyHtml;
+  } else {
+    bodyHtml = '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">(Run information will appear here.)</p>';
   }
-  sug[REVIEW_TEST_RESULT_FINETUNE_AFTER] = outcome;
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  delete sug.review_test_result;
-  delete sug.review_test_passed;
+
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay review-suggestion-detail-overlay review-suggestion-debug-overlay';
+  overlay.dataset.suggestionId = String(sid);
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'review-suggestion-debug-title');
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--review-diagnosis-detail">
+      <div class="modal-header">
+        <h2 id="review-suggestion-debug-title" class="modal-title">Debug info – #${escapeHtml(sid)}</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body review-diagnosis-detail-body review-suggestion-debug-body">
+        ${bodyHtml}
+      </div>
+    </div>
+  `;
+  overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+  document.body.appendChild(overlay);
 }
 
-/** @returns {'pass'|'fail'|null} */
-function getSuggestionTestOutcomeAfterSlot(sug) {
-  if (!sug || typeof sug !== 'object') return null;
-  const rAfter = sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-  if (rAfter === 'pass' || rAfter === 'fail') return rAfter;
-  const legacy = sug.review_test_result;
-  if (legacy === 'pass' || legacy === 'fail') return legacy;
-  if (sug.review_test_passed === true) return 'pass';
-  return null;
-}
-
-/** @returns {'pass'|'fail'|null} */
-function getSuggestionTestOutcome(sug) {
-  if (!sug || typeof sug !== 'object') return null;
-  if (suggestionFinetuneHasBeforeAfterText(sug)) return getSuggestionTestOutcomeAfterSlot(sug);
-  const r = sug.review_test_result;
-  if (r === 'pass' || r === 'fail') return r;
-  if (sug.review_test_passed === true) return 'pass';
-  return null;
-}
-
-/** Row-check (Run+Score) in flight on this suggestion — use everywhere UI reads this flag (reconcile/persist may not be strict boolean). */
-function isReviewRowCheckInProgress(sug) {
-  if (!sug || typeof sug !== 'object') return false;
-  const v = sug.review_test_in_progress;
-  return v === true || v === 1;
-}
-
-/** Truncated title line for suggestion cards (pass/fail shown via pill / not at all, not in the title string). */
+/** Truncated title line for suggestion cards. */
 function formatSuggestionCardPreviewTitle(titleLine) {
   const baseRaw = normalizeUnicodeDashesForDisplay(String(titleLine ?? ''));
   return truncateWithEllipsis(baseRaw, SUGGESTION_CARD_PREVIEW_TITLE_CHARS);
-}
-
-function clearSuggestionTestOutcome(sug) {
-  if (!sug || typeof sug !== 'object') return;
-  delete sug.review_test_result;
-  delete sug.review_test_passed;
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-  delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-  delete sug.review_test_in_progress;
-}
-
-/**
- * Clear stale `review_test_in_progress` only when no row-check session is active (e.g. app killed).
- * If a job is still running in the background, keep the flag so reopen shows progress.
- */
-function stripAbortedReviewTests(suggestions) {
-  if (!Array.isArray(suggestions)) return false;
-  if (hasActiveVerifySessions()) return false;
-  let changed = false;
-  for (const s of suggestions) {
-    if (!s || typeof s !== 'object') continue;
-    if (isReviewRowCheckInProgress(s)) {
-      delete s.review_test_in_progress;
-      if (!suggestionHasAnyTerminalTestOutcome(s)) {
-        delete s.review_test_result;
-        delete s.review_test_passed;
-        delete s[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-        delete s[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-      }
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-/**
- * Drop persisted finetune-in-progress only when no finetune session is active (crash / stale JSON).
- * While Finetune runs in the background after closing the modal, keep flags so reopen shows "Finetuning".
- */
-function clearStaleFinetuneRunningFlags(suggestions) {
-  if (!Array.isArray(suggestions)) return false;
-  if (hasActiveFinetuneSessions()) return false;
-  let changed = false;
-  for (const s of suggestions) {
-    if (!s || typeof s !== 'object') continue;
-    if (s.review_finetune_in_progress === true || s.review_finetune_progress != null) {
-      delete s.review_finetune_in_progress;
-      delete s.review_finetune_progress;
-      changed = true;
-    }
-  }
-  return changed;
 }
 
 function sectionsToFullText(sections) {
@@ -866,24 +934,9 @@ function buildReviewResultUI(overlay, options) {
   let dataRefinement = Array.isArray(saved.data_refinement) ? saved.data_refinement.slice() : [];
   /** Phase 1 per-row LLM notes (persisted on review node) */
   let rowDiagnostics = Array.isArray(saved.row_diagnostics)
-    ? saved.row_diagnostics
-      .map((d) => {
-        const rid = Number(d && d.row_index);
-        const ri = Array.isArray(d && d.row_indices)
-          ? d.row_indices.map((x) => Number(x)).filter((x) => !Number.isNaN(x))
-          : [];
-        return {
-          row_index: rid,
-          row_indices: ri.length ? ri : (!Number.isNaN(rid) ? [rid] : []),
-          card_title: String((d && d.card_title) || ''),
-          issue_summary: String((d && d.issue_summary) || ''),
-          rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
-          problem_category_hint: String((d && d.problem_category_hint) || ''),
-        };
-      })
-      .filter((d) => !Number.isNaN(d.row_index))
+    ? saved.row_diagnostics.map((d) => normalizeRowDiagnosticFromSaved(d)).filter(Boolean)
     : [];
-  rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
+  rowDiagnostics.sort((a, b) => a.input_index - b.input_index);
 
   function isReviewStreamingNow() {
     return typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
@@ -907,6 +960,40 @@ function buildReviewResultUI(overlay, options) {
 
   /** Click-to-pin: keep left-column diff visible without hover (Suggested changes cards only). */
   let previewSelectedSuggestionIndex = null;
+
+  /** Compound key for module-level verify maps. */
+  function verifyKey(sugIdx) { return `${reviewNodeId}:${sugIdx}`; }
+  /** Per-card debug verify state: 'idle' (default) | 'verifying'. Key = sugIdx.
+   *  Backed by module-level _verifyStates so state survives modal close/reopen. */
+  const cardVerifyStates = {
+    get: (si) => _verifyStates.get(verifyKey(si)) || 'idle',
+    set: (si, v) => _verifyStates.set(verifyKey(si), v),
+    delete: (si) => _verifyStates.delete(verifyKey(si)),
+  };
+  /** Per-card last verify result (null = never run). Key = sugIdx. */
+  const cardVerifyResults = {
+    get: (si) => _verifyResults.get(verifyKey(si)) ?? null,
+    set: (si, v) => _verifyResults.set(verifyKey(si), v),
+    delete: (si) => _verifyResults.delete(verifyKey(si)),
+  };
+
+  // Restore persisted verify states from saved review result (survives app restart)
+  const _savedVerifyStates = (saved && typeof saved.verify_states === 'object' && saved.verify_states) ? saved.verify_states : {};
+  const _savedVerifyResults = (saved && typeof saved.verify_results === 'object' && saved.verify_results) ? saved.verify_results : {};
+  const savedSuggestionsForVerify = Array.isArray(saved.suggestions) ? saved.suggestions : [];
+  savedSuggestionsForVerify.forEach((sug, si) => {
+    const sid = sug && sug.suggestion_id != null ? String(sug.suggestion_id) : '';
+    if (!sid) return;
+    // Don't overwrite an in-flight state that's already tracked in memory.
+    const currentSt = _verifyStates.get(verifyKey(si));
+    const isInFlight = currentSt === 'verifying' || currentSt === 'finetuning';
+    if (!isInFlight) {
+      const st = _savedVerifyStates[sid];
+      if (st && st !== 'idle') _verifyStates.set(verifyKey(si), st);
+      const res = _savedVerifyResults[sid];
+      if (res) _verifyResults.set(verifyKey(si), res);
+    }
+  });
 
   function updateSuggestionPreviewSelectionVisual() {
     editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((c) => {
@@ -936,19 +1023,32 @@ function buildReviewResultUI(overlay, options) {
       if (!loc || typeof loc !== 'object') continue;
       const id = loc.suggestion_id;
       if (id == null || id === '') continue;
-      const r = data.suggestions.find((x) => x && String(x.suggestion_id) === String(id));
+      const idStr = String(id);
+      const r = data.suggestions.find((x) => x && String(x.suggestion_id) === idStr);
       if (r && typeof r === 'object') {
-        const keepInProgress =
-          hasActiveVerifySessions() &&
-          isReviewRowCheckInProgress(loc) &&
-          !isReviewRowCheckInProgress(r);
         Object.assign(loc, r);
-        if (keepInProgress) loc.review_test_in_progress = true;
       }
     }
   }
 
   function refreshAllEditSuggestionCardsVisuals() {
+    let needFullRerender = false;
+    editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((card) => {
+      const i = parseInt(card.dataset.suggestionIndex, 10);
+      if (Number.isNaN(i) || !allSuggestions[i]) return;
+      const s = allSuggestions[i];
+      const actionsFull = suggestionActionsFullForCard(s);
+      const isApplied = s.applied === true;
+      const noButton = card.classList.contains('review-detail-suggestion-card--unlocatable');
+      const shouldShowAccept = !noButton && (isApplied || actionsFull);
+      const hasAccept = !!card.querySelector('.review-detail-accept-btn');
+      if (shouldShowAccept !== hasAccept) needFullRerender = true;
+    });
+    if (needFullRerender) {
+      renderEditSuggestionCards();
+      updateSuggestionsFooter();
+      return;
+    }
     editContainer.querySelectorAll('.review-detail-suggestion-card').forEach((card) => {
       const i = parseInt(card.dataset.suggestionIndex, 10);
       if (Number.isNaN(i) || !allSuggestions[i]) return;
@@ -965,11 +1065,10 @@ function buildReviewResultUI(overlay, options) {
 
   function persistWorking() {
     if (typeof onReviewResultChange !== 'function') return;
-    const suggestionsToSave = allSuggestions.map((s) => {
-      const next = { ...s, applied: s.applied === true };
-      delete next._finetuneAbort;
-      delete next._finetunePersistScheduled;
-      return next;
+    const suggestionsToSave = allSuggestions.map((s) => ({ ...s, applied: s.applied === true }));
+    const dataRefinementToSave = dataRefinement.map((it) => {
+      if (!it || typeof it !== 'object') return it;
+      return { ...it };
     });
     const live = typeof getReviewResult === 'function' ? getReviewResult() : null;
     const base = live && typeof live === 'object' ? { ...live } : { ...saved };
@@ -978,19 +1077,34 @@ function buildReviewResultUI(overlay, options) {
       summary: base.summary ?? saved.summary ?? '',
       suggestions: suggestionsToSave,
       design_suggestions: [],
-      data_refinement: dataRefinement,
+      data_refinement: dataRefinementToSave,
       row_diagnostics: rowDiagnostics,
       promptSections: base.promptSections ?? saved.promptSections ?? promptSections,
       promptFullText: base.promptFullText ?? saved.promptFullText ?? promptFullText,
       workingSections: working.map((s) => ({ name: s.name, content: s.content })),
     };
-    delete next.review_finetune_last_result;
     onReviewResultChange(next);
     refreshAllEditSuggestionCardsVisuals();
   }
 
-  if (stripAbortedReviewTests(allSuggestions) && typeof onReviewResultChange === 'function') {
-    persistWorking();
+  /** Persist the verify state and result for one suggestion so they survive app restart. */
+  function persistVerifyState(sugIdx, state, result) {
+    if (typeof onReviewResultChange !== 'function') return;
+    const sug = allSuggestions[sugIdx];
+    if (!sug) return;
+    const sid = sug.suggestion_id != null ? String(sug.suggestion_id) : '';
+    if (!sid) return;
+    const live = typeof getReviewResult === 'function' ? getReviewResult() : null;
+    const base = live && typeof live === 'object' ? { ...live } : { ...saved };
+    const verifyStates = typeof base.verify_states === 'object' && base.verify_states ? { ...base.verify_states } : {};
+    const verifyResults = typeof base.verify_results === 'object' && base.verify_results ? { ...base.verify_results } : {};
+    verifyStates[sid] = state;
+    if (state === 'idle') {
+      delete verifyResults[sid];
+    } else if (result) {
+      verifyResults[sid] = result;
+    }
+    onReviewResultChange({ ...base, verify_states: verifyStates, verify_results: verifyResults });
   }
 
   function emitReviewBarProgress(percent) {
@@ -1020,269 +1134,15 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /** Shared Run+Score check: prompt = originals + only this suggestion applied (ignore other accepted rows). */
-  async function runRowVerifyWithPayload(sug, sugIdx, payload, signal) {
-    const targets = suggestionTargetInputRowIndices(sug);
-    if (targets.length === 0) return { emptyTargets: true };
-    const patched = allSuggestions.map((s, i) => ({ ...s, applied: i === sugIdx }));
-    const testSections = rebuildWorkingFromApplied(originals, patched);
-    if (!testSections || testSections.length !== originals.length) {
-      return { buildError: true };
-    }
-    const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
-    const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
-    const result = await runSuggestionRowTests({
-      apiBase: API_BASE,
-      credentialId: payload.run_credential_id,
-      testSections,
-      targetComparisonRowIndices: targets,
-      comparisonRows: payload.comparison_rows || [],
-      runResults: payload.run_results || [],
-      outputFields: payload.output_fields || [],
-      outputSchema: payload.output_schema,
-      scoreMappingJson: payload.score_mapping || '[]',
-      runWs: runWs || { headers: [], rows: [] },
-      gtContent: gtContent || { headers: [], rows: [] },
-      signal,
-    });
-    return { result };
-  }
-
-  /** Run+Score check for one card (e.g. after finetune completes). Always re-resolve the card from the DOM so refresh/reconcile cannot leave a stale element reference. */
-  async function runAutoRowCheckForSuggestion(sugIdx) {
-    const sug = allSuggestions[sugIdx];
-    if (!sug || typeof sug !== 'object') return;
-    if (isReviewStreamingNow()) return;
-    if (typeof getPayload !== 'function') return;
-    if (suggestionTargetInputRowIndices(sug).length === 0) return;
-
-    function cardEl() {
-      return editContainer.querySelector(`.review-detail-suggestion-card[data-suggestion-index="${sugIdx}"]`);
-    }
-    function paintCard() {
-      const el = cardEl();
-      if (el) updateSuggestionTestOutcomeVisual(el, sug, suggestionActionsFullForCard(sug), originals, promptSections);
-    }
-
-    const verifyAc = new AbortController();
-    registerVerifySession(verifyAc);
-
-    function exitBeforeVerifyRequest() {
-      delete sug.review_test_in_progress;
-      paintCard();
-      persistWorking();
-    }
-
-    try {
-      sug.review_test_in_progress = true;
-      persistWorking();
-      paintCard();
-
-      let payload;
-      try {
-        payload = await getPayload();
-      } catch (_) {
-        exitBeforeVerifyRequest();
-        return;
-      }
-      if (!payload || !payload.run_credential_id) {
-        exitBeforeVerifyRequest();
-        return;
-      }
-      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-        exitBeforeVerifyRequest();
-        return;
-      }
-
-      try {
-        const out = await runRowVerifyWithPayload(sug, sugIdx, payload, verifyAc.signal);
-        if (out.emptyTargets) {
-          clearFinetuneRowCheckOutcome(sug);
-        } else if (out.buildError) {
-          setFinetuneRowCheckOutcome(sug, 'fail');
-        } else {
-          const { result } = out;
-          if (result.aborted) {
-            clearFinetuneRowCheckOutcome(sug);
-          } else if (result.ok) {
-            setFinetuneRowCheckOutcome(sug, 'pass');
-          } else {
-            setFinetuneRowCheckOutcome(sug, 'fail');
-          }
-        }
-      } catch (err) {
-        if (isReviewRowCheckInProgress(sug)) {
-          if (err && err.name === 'AbortError') {
-            clearFinetuneRowCheckOutcome(sug);
-          } else {
-            setFinetuneRowCheckOutcome(sug, 'fail');
-          }
-        }
-      }
-    } finally {
-      unregisterVerifySession(verifyAc);
-      delete sug.review_test_in_progress;
-      paintCard();
-      persistWorking();
-    }
-  }
-
-  let pipelineAutoCheckInFlight = false;
-
-  function clearAllPipelineAutoCheckInProgressFlags() {
-    for (const sug of allSuggestions) {
-      if (!sug || typeof sug !== 'object') continue;
-      delete sug.review_test_in_progress;
-    }
-  }
-
-  let editCardsRefreshScheduled = false;
-  function scheduleEditSuggestionCardsRefresh() {
-    if (editCardsRefreshScheduled) return;
-    editCardsRefreshScheduled = true;
-    queueMicrotask(() => {
-      editCardsRefreshScheduled = false;
-      renderEditSuggestionCards();
-      updateSuggestionsFooter();
-    });
-  }
-
-  async function runPipelineAutoCheckAfterStreamDone() {
-    if (pipelineAutoCheckInFlight) return;
-    if (typeof getPayload !== 'function') {
-      persistReviewProgressToNode(100);
-      return;
-    }
-    pipelineAutoCheckInFlight = true;
-    try {
-      let payload;
-      try {
-        payload = await getPayload();
-      } catch (_) {
-        clearAllPipelineAutoCheckInProgressFlags();
-        persistWorking();
-        persistReviewProgressToNode(100);
-        return;
-      }
-      if (!payload || !payload.run_credential_id) {
-        clearAllPipelineAutoCheckInProgressFlags();
-        persistWorking();
-        persistReviewProgressToNode(100);
-        return;
-      }
-      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-        clearAllPipelineAutoCheckInProgressFlags();
-        persistWorking();
-        persistReviewProgressToNode(100);
-        return;
-      }
-      const indicesToVerify = [];
-      for (let sugIdx = 0; sugIdx < allSuggestions.length; sugIdx++) {
-        const s = allSuggestions[sugIdx];
-        if (String(s?.source || '').toLowerCase() === 'assistant') continue;
-        if (suggestionNeedsAutoRowCheck(s, originals, promptSections)) indicesToVerify.push(sugIdx);
-      }
-      const verifyTotal = indicesToVerify.length;
-      if (verifyTotal === 0) {
-        clearAllPipelineAutoCheckInProgressFlags();
-        persistWorking();
-        persistReviewProgressToNode(100);
-        return;
-      }
-      const batchAc = new AbortController();
-      registerVerifySession(batchAc);
-      try {
-        let verifyDone = 0;
-        for (const sugIdx of indicesToVerify) {
-          const sug = allSuggestions[sugIdx];
-          persistWorking();
-
-          try {
-            const out = await runRowVerifyWithPayload(sug, sugIdx, payload, batchAc.signal);
-            if (out.emptyTargets) {
-              /* no outcome */
-            } else if (out.buildError) {
-              setFinetuneRowCheckOutcome(sug, 'fail');
-            } else {
-              const { result } = out;
-              try {
-                if (result.aborted) {
-                  clearFinetuneRowCheckOutcome(sug);
-                } else if (result.ok) {
-                  setFinetuneRowCheckOutcome(sug, 'pass');
-                } else {
-                  setFinetuneRowCheckOutcome(sug, 'fail');
-                }
-              } catch (err) {
-                if (err && err.name === 'AbortError') {
-                  clearFinetuneRowCheckOutcome(sug);
-                } else {
-                  setFinetuneRowCheckOutcome(sug, 'fail');
-                }
-              }
-            }
-          } catch (err) {
-            if (isReviewRowCheckInProgress(sug)) {
-              if (err && err.name === 'AbortError') {
-                clearFinetuneRowCheckOutcome(sug);
-              } else {
-                setFinetuneRowCheckOutcome(sug, 'fail');
-              }
-            }
-          } finally {
-            delete sug.review_test_in_progress;
-            persistWorking();
-            verifyDone += 1;
-            emitReviewBarProgress(
-              REVIEW_PROGRESS_PIPELINE_DONE + Math.round((REVIEW_PROGRESS_CHECK_SPAN * verifyDone) / verifyTotal),
-            );
-            scheduleEditSuggestionCardsRefresh();
-          }
-        }
-      } finally {
-        unregisterVerifySession(batchAc);
-      }
-      persistReviewProgressToNode(100);
-    } finally {
-      pipelineAutoCheckInFlight = false;
-    }
-  }
-
-  /** Full actions per card: stream still running, or this suggestion's auto row-check not in flight (or not needed). */
-  function suggestionActionsFullForCard(sug) {
-    const isAssistant = sug && String(sug.source || '').toLowerCase() === 'assistant';
-    /* Assistant edits: full actions (View detail + Accept); title shows Proposal tag only. */
-    if (isAssistant) return true;
-    /* User may Accept/Revert the current proposal while Finetune runs (optimizer works on a copy server-side until completion). */
-    if (sug && sug.review_finetune_in_progress === true && saved.streamComplete === true) {
-      return true;
-    }
+  /**
+   * Card actions “ready”: View detail always; Accept/Revert only when true.
+   * Off while the review stream is still generating (if any suggestion exists).
+   */
+  function suggestionActionsFullForCard(_sug) {
     if (saved.streamComplete !== true) {
       return allSuggestions.length === 0;
     }
-    if (!suggestionNeedsAutoRowCheck(sug, originals, promptSections)) return true;
-    return !isReviewRowCheckInProgress(sug);
-  }
-
-  /** Title-line “Click to Finetune” only: one listener per pill (pipeline suggestions). */
-  function wireInteractiveTitlePillsOnCard(card) {
-    if (!card) return;
-    card.querySelectorAll('[data-review-title-pill-action="finetune"]').forEach((pill) => {
-      const onActivate = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        const sugIdx = parseInt(card.dataset.suggestionIndex, 10);
-        if (Number.isNaN(sugIdx) || !allSuggestions[sugIdx]) return;
-        const sug = allSuggestions[sugIdx];
-        void handleFinetuneActionForCard(card, sug, sugIdx);
-      };
-      pill.addEventListener('click', onActivate);
-      pill.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        onActivate(e);
-      });
-    });
+    return true;
   }
 
   function updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections) {
@@ -1298,23 +1158,32 @@ function buildReviewResultUI(overlay, options) {
     }
     const noButton = card.classList.contains('review-detail-suggestion-card--unlocatable');
     if (titleWrap) {
-      titleWrap.querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`).forEach((el) => el.remove());
-      const specs = collectSuggestionTitlePills(sug, noButton, actionsFull);
+      titleWrap.querySelectorAll(`.${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`).forEach((el) => {
+        el.remove();
+      });
+      const sugIdx = parseInt(card.dataset.suggestionIndex, 10);
+      const verifyState = !Number.isNaN(sugIdx) ? (cardVerifyStates.get(sugIdx) || 'idle') : 'idle';
+      const specs = collectSuggestionTitlePills(
+        sug,
+        noButton,
+        actionsFull,
+        originals,
+        promptSections,
+        saved.streamComplete === true,
+        verifyState,
+      );
       for (const spec of specs) {
-        const interactive = spec.clickFinetune === true;
-        const el = document.createElement(interactive ? 'button' : 'span');
-        if (interactive) el.type = 'button';
+        const el = document.createElement('span');
         el.className = `${spec.cls} ${REVIEW_SUGGESTION_TITLE_PILL_CLASS}`;
         el.textContent = spec.text;
-        if (spec.clickFinetune === true) {
-          el.setAttribute('aria-label', 'Finetune this suggestion');
-          el.setAttribute('data-review-title-pill-action', 'finetune');
-        } else if (typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()) {
+        if (typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()) {
           el.setAttribute('aria-label', spec.ariaLabel);
         }
         titleWrap.appendChild(el);
       }
-      wireInteractiveTitlePillsOnCard(card);
+      if (typeof card._bindVerifyPillClick === 'function') {
+        card._bindVerifyPillClick();
+      }
     }
   }
 
@@ -1348,7 +1217,7 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  /** After stream: show cards (View detail only while that card's check runs); row checks run one suggestion at a time. */
+  /** After stream: show suggestion cards and complete review progress. */
   async function revealSuggestionsAfterReview() {
     if (!allSuggestions || allSuggestions.length === 0) {
       renderEditSuggestionCards();
@@ -1356,34 +1225,9 @@ function buildReviewResultUI(overlay, options) {
       persistReviewProgressToNode(100);
       return;
     }
-    const willRunChecks =
-      typeof getPayload === 'function' &&
-      allSuggestions.some(
-        (s) =>
-          String(s.source || '').toLowerCase() !== 'assistant' &&
-          suggestionNeedsAutoRowCheck(s, originals, promptSections),
-      );
-    if (willRunChecks) {
-      for (const sug of allSuggestions) {
-        if (String(sug.source || '').toLowerCase() === 'assistant') continue;
-        if (suggestionNeedsAutoRowCheck(sug, originals, promptSections)) {
-          sug.review_test_in_progress = true;
-        }
-      }
-      persistWorking();
-    }
     renderEditSuggestionCards();
     updateSuggestionsFooter();
-    try {
-      if (typeof getPayload === 'function') {
-        await runPipelineAutoCheckAfterStreamDone();
-      } else {
-        persistReviewProgressToNode(100);
-      }
-    } finally {
-      renderEditSuggestionCards();
-      updateSuggestionsFooter();
-    }
+    persistReviewProgressToNode(100);
   }
 
   function scrollRightToSection(sectionIndex) {
@@ -1424,143 +1268,6 @@ function buildReviewResultUI(overlay, options) {
     renderLeft(-1);
   }
 
-  async function handleFinetuneActionForCard(card, sug, sugIdx) {
-    const actionsFull = suggestionActionsFullForCard(sug);
-    if (sug.review_finetune_completed === true) return;
-    if (sug.review_finetune_in_progress === true) return;
-    if (isReviewRowCheckInProgress(sug)) return;
-    if (pipelineAutoCheckInFlight) {
-      showAlert('Wait until automatic row checks finish before using Finetune.', { title: 'Verify in progress' });
-      return;
-    }
-    if (isReviewStreamingNow()) {
-      showAlert('Wait until the review finishes before running finetune.', { title: 'Review in progress' });
-      return;
-    }
-    const targets = suggestionTargetInputRowIndices(sug);
-    if (targets.length === 0) {
-      showAlert('This suggestion has no target input rows.', { title: 'Cannot finetune' });
-      return;
-    }
-    const oldSentence = (sug.old_sentence || '').trim();
-    if (typeof getPayload !== 'function') return;
-    let finetuneAc = null;
-    try {
-      const payload = await getPayload();
-      if (!payload || !payload.run_credential_id) {
-        showAlert('Configure a Run credential on the Run node, then try again.', { title: 'Missing credential' });
-        return;
-      }
-      if (!payload.output_schema || !Array.isArray(payload.output_schema.fields) || payload.output_schema.fields.length === 0) {
-        showAlert('The prompt needs an output schema (Run / prompt settings) to finetune.', { title: 'Missing output schema' });
-        return;
-      }
-      const improvementRationale = String(sug.reason || '').trim();
-      finetuneAc = new AbortController();
-      registerFinetuneSession(finetuneAc);
-      sug._finetuneAbort = finetuneAc;
-      sug.review_finetune_in_progress = true;
-      updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
-      persistWorking();
-      const runWs = typeof payload.getRunWorkingSetContent === 'function' ? payload.getRunWorkingSetContent() : null;
-      const gtContent = typeof payload.getGroundTruthContent === 'function' ? payload.getGroundTruthContent() : null;
-      let reviewCredForFinetune = '';
-      let compMaxTrials = 40;
-      let compCandidates = 4;
-      let compMaxSegments = 5;
-      try {
-        const sres = await fetch(`${API_BASE}/api/settings`);
-        if (sres.ok) {
-          const s = await sres.json();
-          reviewCredForFinetune = String(s.default_review_credential_id || '').trim();
-          compMaxTrials = Math.min(200, Math.max(8, Number(s.review_finetune_comp_max_trials) || 40));
-          compCandidates = Math.min(8, Math.max(2, Number(s.review_finetune_comp_candidates_per_segment) || 4));
-          compMaxSegments = Math.min(8, Math.max(2, Number(s.review_finetune_comp_max_segments) || 5));
-        }
-      } catch (_) {
-        /* use defaults */
-      }
-      if (!reviewCredForFinetune) reviewCredForFinetune = payload.run_credential_id;
-      if (!improvementRationale) {
-        showAlert('Finetune needs this suggestion’s reason (from Review). Re-run review or pick an edit that includes a reason.', {
-          title: 'Missing reason',
-        });
-        return;
-      }
-      const proposalNew = (sug.new_sentence || '').trim();
-      const onFinetuneProgress = ({ trial, trials }) => {
-        sug.review_finetune_progress = { trial, trials };
-        if (!sug._finetunePersistScheduled) {
-          sug._finetunePersistScheduled = true;
-          requestAnimationFrame(() => {
-            delete sug._finetunePersistScheduled;
-            persistWorking();
-          });
-        }
-      };
-      const result = await runSuggestionFinetuneCompositional({
-        apiBase: API_BASE,
-        llmCredentialId: reviewCredForFinetune,
-        runCredentialId: payload.run_credential_id,
-        oldSentence,
-        newSentence: proposalNew,
-        improvementRationale,
-        maxSegments: compMaxSegments,
-        candidatesPerSegment: compCandidates,
-        maxTrials: compMaxTrials,
-        allSuggestions,
-        sugIdx,
-        originals,
-        targets,
-        comparisonRows: payload.comparison_rows || [],
-        runResults: payload.run_results || [],
-        outputFields: payload.output_fields || [],
-        outputSchema: payload.output_schema,
-        scoreMappingJson: payload.score_mapping || '[]',
-        runWs: runWs || { headers: [], rows: [] },
-        gtContent: gtContent || { headers: [], rows: [] },
-        abortController: finetuneAc,
-        onProgress: onFinetuneProgress,
-      });
-      sug.new_sentence = result.bestText;
-      sug.review_finetune_meta = {
-        bestPassPct: Math.round(Number(result.bestObservedRate) * 100),
-        candidatesCount: result.candidates.length,
-        trialsRun: Array.isArray(result.trialLog) ? result.trialLog.length : 0,
-        bestArmIndex: result.bestIndex,
-        optimizer: result.optimizer || 'compositional',
-        newSentenceBeforeFinetune: proposalNew,
-      };
-      delete saved.review_finetune_last_result;
-      sug.review_finetune_completed = true;
-      delete sug.review_finetune_use_before;
-      delete sug.review_test_result;
-      delete sug.review_test_passed;
-      delete sug[REVIEW_TEST_RESULT_FINETUNE_AFTER];
-      delete sug[REVIEW_TEST_RESULT_FINETUNE_BEFORE];
-      if (sug.applied === true) syncWorkingFromApplied();
-      updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
-      renderLeft(-1);
-      persistWorking();
-    } catch (err) {
-      if (err && err.name === 'AbortError') {
-        /* user cancelled or window closed */
-      } else {
-        showAlert(String(err?.message || err || 'Finetune failed'), { title: 'Finetune failed' });
-      }
-    } finally {
-      if (finetuneAc) unregisterFinetuneSession(finetuneAc);
-      delete sug.review_finetune_in_progress;
-      delete sug._finetuneAbort;
-      delete sug.review_finetune_progress;
-      updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
-      persistWorking();
-      if (sug.review_finetune_completed === true) {
-        await runAutoRowCheckForSuggestion(sugIdx);
-      }
-    }
-  }
-
   const sectionNames = (promptSections || []).map((s, i) => (s.name || '').trim() || `Section ${i}`);
 
   function updateAnalysisFooter() {
@@ -1595,14 +1302,7 @@ function buildReviewResultUI(overlay, options) {
     const inProgress = !isComplete && isReviewStreamingNow();
     let statusClass = 'review-detail-status-note--incomplete';
     let statusText = REVIEW_INCOMPLETE_USER_MSG;
-    const rowChecksPending =
-      isComplete &&
-      typeof getPayload === 'function' &&
-      allSuggestions.some((s) => suggestionNeedsAutoRowCheck(s, originals, promptSections) && isReviewRowCheckInProgress(s));
-    if (rowChecksPending) {
-      statusClass = 'review-detail-status-note--generating';
-      statusText = 'Checking suggested changes…';
-    } else if (isComplete) {
+    if (isComplete) {
       statusClass = 'review-detail-status-note--complete';
       const ne = allSuggestions.length;
       const nr = dataRefinement.length;
@@ -1618,11 +1318,14 @@ function buildReviewResultUI(overlay, options) {
       statusText = 'Suggested changes in progress…';
     }
     suggestionsFooterEl.innerHTML = '';
+    const stack = document.createElement('div');
+    stack.className = 'review-detail-suggestions-footer-stack';
     const statusNote = document.createElement('p');
     statusNote.className = `review-detail-status-note ${statusClass}`;
     statusNote.setAttribute('aria-live', 'polite');
     statusNote.textContent = statusText;
-    suggestionsFooterEl.appendChild(statusNote);
+    stack.appendChild(statusNote);
+    suggestionsFooterEl.appendChild(stack);
   }
 
   function renderRowDiagnostics() {
@@ -1644,11 +1347,6 @@ function buildReviewResultUI(overlay, options) {
       return;
     }
     const comparisonRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
-    function findComparisonRow(idx) {
-      const n = Number(idx);
-      return comparisonRows.find((r) => Number(r?.row_index) === n) || null;
-    }
-
     rowDiagnostics.forEach((d, displayIdx) => {
       const displayNum = displayIdx + 1;
       const issue = (d.issue_summary || '').trim();
@@ -1656,7 +1354,6 @@ function buildReviewResultUI(overlay, options) {
       const primaryBlurb = issue || rough;
       const preview = truncateWithEllipsis(primaryBlurb, DIAG_LIST_PREVIEW_CHARS);
       const titleLine = diagnosisCardTitleLine(d);
-      const compRow = findComparisonRow(d.row_index);
       const badgeLabel = escapeHtml(String(displayNum));
 
       const card = document.createElement('div');
@@ -1685,7 +1382,7 @@ function buildReviewResultUI(overlay, options) {
     });
   }
 
-  function addOneDataRefinementCard(item) {
+  function addOneDataRefinementCard(item, itemIdx) {
     const sid = item && item.suggestion_id != null && item.suggestion_id !== '' ? item.suggestion_id : '';
     const shortLabel = formatSuggestionIdDisplay(sid);
     const rowIndices = Array.isArray(item.row_indices) ? item.row_indices : [];
@@ -1701,6 +1398,7 @@ function buildReviewResultUI(overlay, options) {
     });
     const card = document.createElement('div');
     card.className = 'review-detail-suggestion-card review-detail-data-refinement-card';
+    card.dataset.dataRefinementIndex = String(itemIdx);
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
         <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span> <strong class="review-detail-suggestion-section-name">${escapeHtml(titleLine)}</strong></span>
@@ -1727,15 +1425,22 @@ function buildReviewResultUI(overlay, options) {
     const actionsFull = suggestionActionsFullForCard(sug);
     const sid = sug && sug.suggestion_id != null && sug.suggestion_id !== '' ? sug.suggestion_id : '';
     const shortLabel = formatSuggestionIdDisplay(sid);
-    const secIdx = Math.max(0, Math.min(sug.section_index, (promptSections || []).length - 1));
-    const name = sectionNames[secIdx] || `Section ${secIdx}`;
     const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
-    const oldSentence = (sug.old_sentence || '').trim();
+    const rawOldSentence = sug.old_sentence != null ? String(sug.old_sentence) : '';
+    const oldSentence = rawOldSentence.trim();
+    let secIdx = 0;
+    if (useSentenceEdit && oldSentence) {
+      const found = findSectionIndexForOldSentence(originals, rawOldSentence);
+      if (found >= 0) secIdx = found;
+    }
+    const name = sectionNames[secIdx] || `Section ${secIdx}`;
     const newSentence = (sug.new_sentence || '').trim();
     const legacyNewContent = (sug.new_content || '').trim();
     const currentContent = working[secIdx] ? (working[secIdx].content || '') : '';
     const originalContent = (originals[secIdx] && originals[secIdx].content) ? originals[secIdx].content : '';
-    const segmentInOriginal = useSentenceEdit ? getLocatableSegment(originalContent, oldSentence) : null;
+    const segmentInOriginal = useSentenceEdit
+      ? getLocatableSegment(originalContent, rawOldSentence) || getLocatableSegment(originalContent, oldSentence)
+      : null;
     const unlocatable = useSentenceEdit && !segmentInOriginal;
     const noButton = unlocatable;
     /* Only show Revert when user has explicitly applied (sug.applied === true from persist). Fresh suggestions must show Accept. */
@@ -1752,12 +1457,23 @@ function buildReviewResultUI(overlay, options) {
 
     const detailsBtnHtml =
       '<button type="button" class="btn btn-secondary review-detail-diagnosis-detail-btn">View detail</button>';
-    const acceptBtnHtml =
-      actionsFull && !noButton
-        ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'
-        : '';
-    const titlePillsHtml = buildSuggestionTitlePillsHtml(sug, noButton, actionsFull);
-    const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''}`;
+    const showAcceptOrRevert = !noButton && (isApplied || actionsFull);
+    const acceptBtnHtml = showAcceptOrRevert
+      ? '<button type="button" class="btn btn-secondary review-detail-accept-btn' + (isApplied ? ' review-detail-accept-btn--revert' : '') + '">' + (isApplied ? 'Revert' : 'Accept') + '</button>'
+      : '';
+    const titlePillsHtml = buildSuggestionTitlePillsHtml(
+      sug,
+      noButton,
+      actionsFull,
+      originals,
+      promptSections,
+      saved.streamComplete === true,
+      cardVerifyStates.get(sugIdx),
+    );
+    const debugActionsHtml =
+      '<button type="button" class="review-detail-debug-reset-btn" title="Debug: reset card to Click-to-verify state">Reset</button>' +
+      '<button type="button" class="review-detail-debug-info-btn" title="Debug: open run info panel">Debug</button>';
+    const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''} <span class="review-detail-debug-btn-group">${debugActionsHtml}</span>`;
 
     const card = document.createElement('div');
     card.className =
@@ -1780,6 +1496,8 @@ function buildReviewResultUI(overlay, options) {
     const mainEl = card.querySelector('.review-detail-suggestion-card__main');
     const acceptBtn = card.querySelector('.review-detail-accept-btn');
     const detailBtn = card.querySelector('.review-detail-diagnosis-detail-btn');
+    const resetBtn = card.querySelector('.review-detail-debug-reset-btn');
+    const debugInfoBtn = card.querySelector('.review-detail-debug-info-btn');
     if (detailBtn) {
       detailBtn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -1790,6 +1508,443 @@ function buildReviewResultUI(overlay, options) {
         });
       });
     }
+    if (resetBtn) {
+      resetBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cardVerifyStates.delete(sugIdx);
+        cardVerifyResults.delete(sugIdx);
+        try { persistVerifyState(sugIdx, 'idle', null); } catch (_) {}
+        updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+        bindVerifyPillClick();
+      });
+    }
+    if (debugInfoBtn) {
+      debugInfoBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openSuggestionDebugOverlay(sug, buildSugDebugData(sug), cardVerifyResults.get(sugIdx) ?? null);
+      });
+    }
+
+    /** Compute debug data (summary numbers + raw targetRows) for this suggestion. */
+    function buildSugDebugData(s) {
+      const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
+      const rowIndices = suggestionTargetScoreRowIndices(s);
+      const targetRows = rowIndices
+        .map((ri) => compRows.find((r) => Number(r?.row_index) === ri))
+        .filter(Boolean);
+
+      const toNums = (arr) => arr.length ? arr.map((n) => `#${n}`).join(', ') : '—';
+
+      const inputSet = [...new Set(
+        targetRows.map((r) => r.input_row_index != null ? r.input_row_index + 1 : null).filter((n) => n != null),
+      )].sort((a, b) => a - b);
+
+      const gtSet = [...new Set(
+        targetRows.map((r) => r.source_gt_row_index != null ? r.source_gt_row_index + 1 : null).filter((n) => n != null),
+      )].sort((a, b) => a - b);
+
+      const scoreLabel = formatScoreTableTargetLabels(compRows, rowIndices) || '—';
+
+      const meta = s.review_finetune_meta;
+      return {
+        inputNums: toNums(inputSet),
+        gtNums: toNums(gtSet),
+        scoreNums: scoreLabel,
+        targetRows,
+        finetuneInputNums: meta?.finetuneInputNums || null,
+        finetuneExtraInputNums: meta?.finetuneExtraInputNums || null,
+        finetuneGtNums: meta?.finetuneGtNums || null,
+      };
+    }
+
+    /**
+     * Store a verify result and, if the debug overlay for this suggestion is already open,
+     * update its verify section in-place. Never re-opens a closed overlay.
+     */
+    function storeVerifyResult(verifyResult) {
+      cardVerifyResults.set(sugIdx, verifyResult);
+      const sid = sug && sug.suggestion_id != null ? String(sug.suggestion_id) : '(no id)';
+      const overlay = document.querySelector('.review-suggestion-debug-overlay');
+      if (overlay && overlay.dataset.suggestionId === sid) {
+        const verifySection = overlay.querySelector('.review-suggest-verify-section');
+        if (verifySection) verifySection.innerHTML = buildVerifySectionHtml(verifyResult);
+      }
+    }
+
+    /** Set to true before calling runVerification() after a finetune run so the finally
+     *  block can distinguish "finetuned but not fully passing" from "plain verify failed". */
+    let _isPostFinetuneVerify = false;
+
+    /** Run the modified prompt against the suggestion's target inputs and store results. */
+    async function runVerification() {
+      try {
+        storeVerifyResult({ status: 'running' });
+      } catch (_) { /* non-fatal */ }
+
+      try {
+        // 1. Get credential + output schema from canvas payload
+        const payload = typeof getPayload === 'function' ? await getPayload() : null;
+        const credentialId = payload?.run_credential_id;
+        const outputSchema = payload?.output_schema;
+        if (!credentialId) throw new Error('No run credential configured on the Run node.');
+        if (!outputSchema) throw new Error('No output schema configured on the Prompt node.');
+
+        // 2. Build modified prompt: apply only this suggestion to originals
+        const modifiedSections = rebuildWorkingFromApplied(originals, [{ ...sug, applied: true }]) || originals;
+        const templateText = modifiedSections.map((s) => (s.content || '').trim()).filter(Boolean).join('\n\n');
+
+        // 3. Collect target comparison rows
+        const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
+        const rowIndices = suggestionTargetScoreRowIndices(sug);
+        const targetRows = rowIndices
+          .map((ri) => compRows.find((r) => Number(r?.row_index) === ri))
+          .filter(Boolean);
+
+        // 4. Build ordered unique input list, collecting associated GTs per input
+        const inputMap = new Map(); // input_row_index → { row, gtRows: [{gtNum, gt}] }
+        for (const row of targetRows) {
+          const inputIdx = row.input_row_index;
+          if (inputIdx == null) continue;
+          if (!inputMap.has(inputIdx)) inputMap.set(inputIdx, { row, gtRows: [] });
+          if (row.ground_truth_output && row.source_gt_row_index != null) {
+            const gtNum = row.source_gt_row_index + 1;
+            const entry = inputMap.get(inputIdx);
+            if (!entry.gtRows.find((g) => g.gtNum === gtNum)) {
+              const filtered = Object.fromEntries(
+                Object.entries(row.ground_truth_output).filter(([k]) => isModelFacingKey(k)),
+              );
+              entry.gtRows.push({ gtNum, gt: filtered });
+            }
+          }
+        }
+        const inputEntries = [...inputMap.entries()].sort(([a], [b]) => a - b);
+        if (inputEntries.length === 0) throw new Error('No inputs found for this suggestion.');
+
+        // 5. Fill template with row_input values (single-brace placeholder substitution)
+        const prompts = inputEntries.map(([, { row }]) => {
+          let text = templateText;
+          for (const [key, val] of Object.entries(row.row_input || {})) {
+            text = text.replace(new RegExp(`\\{${escapeRegex(key)}\\}`, 'g'), String(val ?? ''));
+          }
+          return text;
+        });
+
+        // 6. Submit run job
+        const runRes = await fetch(`${API_BASE}/api/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credential_id: credentialId, prompts, output_schema: outputSchema }),
+        });
+        if (!runRes.ok) {
+          const errText = await runRes.text().catch(() => String(runRes.status));
+          throw new Error(`Run API error ${runRes.status}: ${errText}`);
+        }
+        const { run_id: runId } = await runRes.json();
+
+        // 7. Poll until complete, updating stored state each tick
+        let finalData = null;
+        while (true) {
+          await new Promise((r) => setTimeout(r, 1200));
+          const pollRes = await fetch(`${API_BASE}/api/run/result/${runId}`);
+          const pollData = await pollRes.json();
+          if (pollData.progress) storeVerifyResult({ status: 'running', progress: pollData.progress });
+          if (pollData.status === 'done' || pollData.status === 'cancelled') {
+            finalData = pollData;
+            break;
+          }
+        }
+
+        // 8. Collect all result rows with one-to-one positional GT comparison
+        if (finalData?.error) throw new Error(String(finalData.error));
+        const rawResults = finalData?.results || [];
+
+        // Group outputs by their prompts-array index (input_row_index in rawResults)
+        const outputsByPromptIdx = new Map();
+        for (const r of rawResults) {
+          const idx = r?.input_row_index ?? 0;
+          if (!outputsByPromptIdx.has(idx)) outputsByPromptIdx.set(idx, []);
+          outputsByPromptIdx.get(idx).push(r);
+        }
+
+        // Match each output row to the best-matching GT row (order-independent, greedy one-to-one)
+        const verifyRows = [];
+        for (const [promptArrayIdx, [, { gtRows }]] of inputEntries.entries()) {
+          const outputs = outputsByPromptIdx.get(promptArrayIdx) || [];
+          const usedGtIdx = new Set();
+
+          // First pass: greedily assign each output row to the first matching GT row
+          const assignments = outputs.map((out) => {
+            if (!out?.output) return { out, gtEntry: null, matched: null };
+            for (let gi = 0; gi < gtRows.length; gi++) {
+              if (usedGtIdx.has(gi)) continue;
+              if (compareRowToGt(out.output, gtRows[gi].gt)) {
+                usedGtIdx.add(gi);
+                return { out, gtEntry: gtRows[gi], matched: true };
+              }
+            }
+            return { out, gtEntry: null, matched: false };
+          });
+
+          // Collect unmatched GT rows (for attaching to failed output rows for display)
+          const unmatchedGts = gtRows.filter((_, gi) => !usedGtIdx.has(gi));
+          let unmatchedGtCursor = 0;
+          for (const asgn of assignments) {
+            if (asgn.matched === false && !asgn.gtEntry && unmatchedGtCursor < unmatchedGts.length) {
+              asgn.gtEntry = unmatchedGts[unmatchedGtCursor++];
+            }
+          }
+
+          for (const { out, gtEntry, matched } of assignments) {
+            verifyRows.push({
+              output: out?.output ?? null,
+              error: out?.error ?? null,
+              gt: gtEntry ? gtEntry.gt : null,
+              gtNum: gtEntry ? gtEntry.gtNum : null,
+              matched,
+            });
+          }
+
+          // Any GT rows with no corresponding output at all
+          for (let gi = unmatchedGtCursor; gi < unmatchedGts.length; gi++) {
+            verifyRows.push({ output: null, error: null, gt: unmatchedGts[gi].gt, gtNum: unmatchedGts[gi].gtNum, matched: false });
+          }
+        }
+
+        // 9. Store final results
+        try { storeVerifyResult({ status: 'complete', verifyRows }); } catch (_) { /* non-fatal */ }
+      } catch (err) {
+        try { storeVerifyResult({ status: 'error', message: String(err?.message || err) }); } catch (_) { /* non-fatal */ }
+      } finally {
+        // Determine final pill state from stored result
+        const finalResult = cardVerifyResults.get(sugIdx);
+        const wasPostFinetune = _isPostFinetuneVerify;
+        _isPostFinetuneVerify = false;
+        const postState = wasPostFinetune
+          ? (isVerifyFullPass(finalResult) ? 'finetuned-pass' : (finalResult?.status === 'complete' ? 'finetuned' : 'idle'))
+          : (isVerifyFullPass(finalResult) ? 'verified' : (finalResult?.status === 'complete' ? 'finetune' : 'idle'));
+        cardVerifyStates.set(sugIdx, postState);
+        _verifyPromises.delete(verifyKey(sugIdx));
+        // Persist state + result so they survive app restart
+        try { persistVerifyState(sugIdx, postState, postState !== 'idle' ? finalResult : null); } catch (_) {}
+        // Only update the DOM if this card is still mounted; if the modal was
+        // closed and reopened, the new card's .finally() hook handles the update.
+        if (card.isConnected) {
+          updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+          // If this card's diff is currently pinned on the right, refresh it so
+          // it shows the updated new_sentence (e.g. after finetune rewrites it).
+          applyPinnedPreviewIfAny();
+        }
+      }
+    }
+
+    /** Run compositional finetune for this suggestion. */
+    async function runFinetune() {
+      const ac = new AbortController();
+      registerFinetuneSession(ac);
+      try {
+        const payload = typeof getPayload === 'function' ? await getPayload() : null;
+        const credentialId = payload?.run_credential_id;
+        const outputSchema = payload?.output_schema;
+        if (!credentialId) throw new Error('No run credential configured.');
+        if (!outputSchema) throw new Error('No output schema configured.');
+
+        // Build inputEntries (same as runVerification)
+        const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
+        const rowIndices = suggestionTargetScoreRowIndices(sug);
+        const targetRows = rowIndices
+          .map((ri) => compRows.find((r) => Number(r?.row_index) === ri))
+          .filter(Boolean);
+        const inputMap = new Map();
+        for (const row of targetRows) {
+          const inputIdx = row.input_row_index;
+          if (inputIdx == null) continue;
+          if (!inputMap.has(inputIdx)) inputMap.set(inputIdx, { row, gtRows: [] });
+          if (row.ground_truth_output && row.source_gt_row_index != null) {
+            const gtNum = row.source_gt_row_index + 1;
+            const entry = inputMap.get(inputIdx);
+            if (!entry.gtRows.find((g) => g.gtNum === gtNum)) {
+              const filtered = Object.fromEntries(
+                Object.entries(row.ground_truth_output).filter(([k]) => isModelFacingKey(k)),
+              );
+              entry.gtRows.push({ gtNum, gt: filtered });
+            }
+          }
+        }
+        const inputEntries = [...inputMap.entries()].sort(([a], [b]) => a - b);
+        if (inputEntries.length === 0) throw new Error('No inputs found for this suggestion.');
+
+        // Expand with up to 2 extra inputs from all comparison rows.
+        // Prefer inputs where every comparison row is matched (fully correct); fall back to any unused input.
+        const usedInputIdxs = new Set(inputEntries.map(([idx]) => idx));
+        const allGrouped = new Map();
+        for (const row of compRows) {
+          const iIdx = row.input_row_index;
+          if (iIdx == null) continue;
+          if (!allGrouped.has(iIdx)) allGrouped.set(iIdx, { row, allMatched: true, gtRows: [] });
+          const g = allGrouped.get(iIdx);
+          if (!comparisonRowIsMatched(row)) g.allMatched = false;
+          if (row.ground_truth_output && row.source_gt_row_index != null) {
+            const gtNum = row.source_gt_row_index + 1;
+            if (!g.gtRows.find((x) => x.gtNum === gtNum)) {
+              const filteredGt = Object.fromEntries(
+                Object.entries(row.ground_truth_output).filter(([k]) => isModelFacingKey(k)),
+              );
+              g.gtRows.push({ gtNum, gt: filteredGt });
+            }
+          }
+        }
+        const extraCandidates = [...allGrouped.entries()]
+          .filter(([iIdx]) => !usedInputIdxs.has(iIdx))
+          .sort(([aIdx, a], [bIdx, b]) => {
+            if (a.allMatched !== b.allMatched) return b.allMatched ? 1 : -1;
+            return aIdx - bIdx;
+          });
+        const extraEntries = extraCandidates.slice(0, 2).map(([iIdx, g]) => [iIdx, { row: g.row, gtRows: g.gtRows }]);
+        const expandedInputEntries = [...inputEntries, ...extraEntries].sort(([a], [b]) => a - b);
+
+        let finetuneMaxTrials = 40;
+        try {
+          const stRes = await fetch(`${API_BASE}/api/settings`);
+          if (stRes.ok) {
+            const st = await stRes.json();
+            const v = parseInt(st?.finetune_max_trials, 10);
+            if (!Number.isNaN(v) && v >= 4) finetuneMaxTrials = Math.min(200, v);
+          }
+        } catch (_) {}
+
+        const result = await runSuggestionFinetuneCompositional({
+          credentialId,
+          oldSentence: sug.old_sentence || '',
+          newSentence: sug.new_sentence || '',
+          improvementRationale: sug.reason || '',
+          sectionContext: originalContent || '',
+          maxSegments: 5,
+          candidatesPerSegment: 4,
+          maxTrials: finetuneMaxTrials,
+          allSuggestions,
+          sugIdx,
+          originals,
+          inputEntries: expandedInputEntries,
+          outputSchema,
+          abortController: ac,
+          onProgress: ({ trial, trials, bestRate }) => {
+            try {
+              storeVerifyResult({ status: 'running', progress: { completed: trial, total: trials } });
+            } catch (_) {}
+          },
+        });
+
+        // Build human-readable input/GT # strings for the debug overlay
+        const finetuneInputNums = expandedInputEntries.map(([idx]) => `#${idx + 1}`).join(', ');
+        const finetuneExtraInputNums = extraEntries.length > 0 ? extraEntries.map(([idx]) => `#${idx + 1}`).join(', ') : null;
+        const finetuneGtNums = [...new Set(
+          expandedInputEntries.flatMap(([, { gtRows }]) => gtRows.map((g) => `#${g.gtNum}`)),
+        )].sort((a, b) => parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10)).join(', ');
+
+        // Update suggestion's new_sentence with the best found text
+        sug.new_sentence = result.bestText;
+        sug.review_finetune_completed = true;
+        sug.review_finetune_meta = {
+          bestRate: result.bestObservedRate,
+          trials: result.trialLog.length,
+          finetuneInputNums,
+          finetuneExtraInputNums,
+          finetuneGtNums,
+        };
+        // Persist updated suggestion so new_sentence survives app restart
+        try {
+          if (typeof onReviewResultChange === 'function') {
+            const live = typeof getReviewResult === 'function' ? getReviewResult() : null;
+            const base = live && typeof live === 'object' ? { ...live } : { ...saved };
+            const suggs = Array.isArray(base.suggestions) ? [...base.suggestions] : allSuggestions.map((s) => ({ ...s }));
+            suggs[sugIdx] = { ...suggs[sugIdx], new_sentence: result.bestText, review_finetune_completed: true, review_finetune_meta: sug.review_finetune_meta };
+            onReviewResultChange({ ...base, suggestions: suggs });
+          }
+        } catch (_) {}
+
+        return result;
+      } finally {
+        unregisterFinetuneSession(ac);
+      }
+    }
+
+    /** Attach click handlers to verify + finetune pills (re-called after pill rebuild). */
+    function bindVerifyPillClick() {
+      // Assistant-added proposals don't participate in verify or finetune.
+      if (String(sug?.source || '').toLowerCase() === 'assistant') return;
+      const titleWrap = card.querySelector('.review-detail-suggestion-title-wrap');
+      if (!titleWrap) return;
+
+      // "Click to Verify" pill
+      titleWrap.querySelectorAll('.review-suggestion-verify-pill--clickable').forEach((pill) => {
+        pill.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (_verifyPromises.has(verifyKey(sugIdx))) return;
+          cardVerifyStates.set(sugIdx, 'verifying');
+          updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+          const vp = runVerification();
+          _verifyPromises.set(verifyKey(sugIdx), vp);
+        });
+      });
+
+      // "Click to Finetune" pill
+      titleWrap.querySelectorAll('.review-suggestion-finetune-pill--clickable').forEach((pill) => {
+        pill.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (_verifyPromises.has(verifyKey(sugIdx))) return;
+          // If the suggestion was already accepted, revert it first so the prompt
+          // reflects the finetuned new_sentence once finetune completes.
+          if (sug.applied === true) {
+            sug.applied = false;
+            syncWorkingFromApplied();
+            updateAcceptButtonLabels();
+            renderLeft(-1);
+            persistWorking();
+            if (previewSelectedSuggestionIndex === sugIdx) showPreview();
+          }
+          cardVerifyStates.set(sugIdx, 'finetuning');
+          updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+          const fp = (async () => {
+            try {
+              await runFinetune();
+            } catch (err) {
+              if (err?.name !== 'AbortError') {
+                try { storeVerifyResult({ status: 'error', message: String(err?.message || err) }); } catch (_) {}
+              }
+            } finally {
+              // After finetune, auto-verify the new sentence to set the correct pill state.
+              // Set the flag so runVerification's finally block uses 'finetuned' (not 'finetune')
+              // when verify completes but doesn't achieve full pass.
+              _isPostFinetuneVerify = true;
+              const vp2 = runVerification();
+              _verifyPromises.set(verifyKey(sugIdx), vp2);
+              await vp2;
+            }
+          })();
+          _verifyPromises.set(verifyKey(sugIdx), fp);
+        });
+      });
+    }
+    card._bindVerifyPillClick = bindVerifyPillClick;
+    bindVerifyPillClick();
+
+    // If a verification/finetune was in-flight when the modal was closed, hook the
+    // existing promise so this (newly mounted) card's pill resets when it finishes.
+    if (cardVerifyStates.get(sugIdx) === 'verifying' || cardVerifyStates.get(sugIdx) === 'finetuning') {
+      const inflight = _verifyPromises.get(verifyKey(sugIdx));
+      if (inflight) {
+        inflight.finally(() => {
+          if (card.isConnected) {
+            updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+            applyPinnedPreviewIfAny();
+          }
+        });
+      }
+    }
 
     function currentNewSentence() {
       return effectiveNewSentenceForApply(sug);
@@ -1798,13 +1953,13 @@ function buildReviewResultUI(overlay, options) {
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
       if (!useSentenceEdit) return legacyNewContent;
       const ns = currentNewSentence();
-      const seg = getLocatableSegment(c, oldSentence);
+      const seg = getLocatableSegment(c, rawOldSentence) || getLocatableSegment(c, oldSentence);
       return seg ? c.replace(seg, ns, 1) : c.replace(oldSentence, ns, 1);
     }
     function getRemoveSpanForDiff() {
       if (!useSentenceEdit || currentNewSentence() !== '') return undefined;
       const c = working[secIdx] ? (working[secIdx].content || '') : '';
-      return getLocatableSegment(c, oldSentence) || oldSentence;
+      return getLocatableSegment(c, rawOldSentence) || getLocatableSegment(c, oldSentence) || oldSentence;
     }
     /** Reverted section content (current with new_sentence -> old_sentence, or original for legacy). */
     function getRevertedContent() {
@@ -1812,7 +1967,7 @@ function buildReviewResultUI(overlay, options) {
       if (!useSentenceEdit) return originalContent || '';
       const ns = currentNewSentence();
       const seg = getLocatableSegment(c, ns);
-      return seg ? c.replace(seg, oldSentence, 1) : c.replace(ns, oldSentence, 1);
+      return seg ? c.replace(seg, rawOldSentence, 1) : c.replace(ns, oldSentence, 1);
     }
     function showPreview() {
       if (sug.applied) {
@@ -1831,7 +1986,9 @@ function buildReviewResultUI(overlay, options) {
       mainEl.tabIndex = 0;
       mainEl.setAttribute(
         'aria-label',
-        'Show this change in the prompt; click again to clear. Use Accept or View detail from the buttons below.',
+        showAcceptOrRevert
+          ? 'Show this change in the prompt; click again to clear. Use Accept or View detail from the buttons below.'
+          : 'Show this change in the prompt; click again to clear. Use View detail from the buttons below.',
       );
       mainEl.addEventListener('click', (e) => {
         if (e.target.closest('button')) return;
@@ -1868,7 +2025,7 @@ function buildReviewResultUI(overlay, options) {
       mainEl.removeAttribute('aria-label');
     }
 
-    if (!noButton && actionsFull) {
+    if (!noButton && acceptBtn && (actionsFull || isApplied)) {
       acceptBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1877,7 +2034,7 @@ function buildReviewResultUI(overlay, options) {
         sug.applied = !wasApplied;
         syncWorkingFromApplied();
         updateAcceptButtonLabels();
-        updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections);
+        updateSuggestionTestOutcomeVisual(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
         renderLeft(-1);
         persistWorking();
         if (previewSelectedSuggestionIndex === sugIdx) {
@@ -1893,7 +2050,7 @@ function buildReviewResultUI(overlay, options) {
 
   renderRowDiagnostics();
 
-  dataRefinement.forEach((item) => addOneDataRefinementCard(item));
+  dataRefinement.forEach((item, drIdx) => addOneDataRefinementCard(item, drIdx));
 
   if (saved.streamComplete !== true) {
     if (staleIncompletePersisted) {
@@ -1920,7 +2077,7 @@ function buildReviewResultUI(overlay, options) {
     if (!tabs.length || !panels.length) return;
 
     function activate(name) {
-      const n = name === 'analysis' || name === 'suggestions' ? name : 'suggestions';
+      const n = name === 'analysis' || name === 'suggestions' ? name : 'analysis';
       tabs.forEach((btn) => {
         const on = btn.dataset.tab === n;
         btn.classList.toggle('review-detail-tab--active', on);
@@ -1935,12 +2092,7 @@ function buildReviewResultUI(overlay, options) {
     const stored = overlay.dataset.reviewRightTab;
     let initial = stored === 'analysis' || stored === 'suggestions' ? stored : null;
     if (!initial) {
-      const phase1Only =
-        saved.streamComplete === false &&
-        rowDiagnostics.length > 0 &&
-        allSuggestions.length === 0 &&
-        dataRefinement.length === 0;
-      initial = phase1Only ? 'analysis' : 'suggestions';
+      initial = 'analysis';
     }
     activate(initial);
 
@@ -2011,12 +2163,7 @@ function buildReviewResultUI(overlay, options) {
 
 /** Review node modal: show saved result (sections + suggestions) or empty state. */
 export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, getIsReviewStreaming }) {
-  const saved = getReviewResult ? getReviewResult() : null;
-  if (saved && typeof saved === 'object' && clearStaleFinetuneRunningFlags(saved.suggestions) && typeof updateReviewResult === 'function') {
-    try {
-      updateReviewResult({ ...saved });
-    } catch (_) {}
-  }
+   const saved = getReviewResult ? getReviewResult() : null;
   const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
   const title = `Review: ${reviewName}`;
   const sectionsForDisplay = saved && (
@@ -2124,14 +2271,6 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
         (typeof getReviewResult === 'function' ? getReviewResult() : null) ?? detailData;
       if (!data || typeof data !== 'object') return;
       // 流水线已结束时必须整页 refresh（Issue analysis / 建议列表）；reconcile 只合并已有卡片，不会重建 row_diagnostics。
-      const busySideSession =
-        hasActiveVerifySessions() || hasActiveFinetuneSessions();
-      if (busySideSession && data.streamComplete !== true) {
-        if (typeof overlay._reviewDetailReconcile === 'function') {
-          overlay._reviewDetailReconcile(data);
-        }
-        return;
-      }
       refreshFromSaved(data);
     });
   }
@@ -2145,6 +2284,15 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
     if (!promptWrap.innerHTML.trim()) promptWrap.innerHTML = `<p class="review-detail-placeholder">${escapeHtml(msg)}</p>`;
     suggestionsEl.innerHTML = `<p class="review-detail-placeholder">${escapeHtml(msg)}</p>`;
   }
+
+  // Apply debug mode: fetch settings once and toggle the --debug class on suggestionsEl.
+  // The class persists across buildReviewResultUI re-renders since they only modify content inside suggestionsEl.
+  fetch(`${API_BASE}/api/settings`)
+    .then((r) => r.ok ? r.json() : null)
+    .then((s) => {
+      suggestionsEl.classList.toggle('review-detail-suggestions--debug', s?.debug_mode === true);
+    })
+    .catch(() => {});
 
   if (reviewNodeId) {
     document.addEventListener('workflow:save-review-result', onSaveReviewResult);
@@ -2176,24 +2324,9 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   const saved = typeof getReviewResult === 'function' ? getReviewResult() : null;
   const payload = await Promise.resolve(typeof getPayload === 'function' ? getPayload() : null);
   const rowDiagnostics = Array.isArray(saved?.row_diagnostics)
-    ? saved.row_diagnostics
-        .map((d) => {
-          const rid = Number(d && d.row_index);
-          const ri = Array.isArray(d && d.row_indices)
-            ? d.row_indices.map((x) => Number(x)).filter((x) => !Number.isNaN(x))
-            : [];
-          return {
-            row_index: rid,
-            row_indices: ri.length ? ri : (!Number.isNaN(rid) ? [rid] : []),
-            card_title: String((d && d.card_title) || ''),
-            issue_summary: String((d && d.issue_summary) || ''),
-            rough_modification_opinion: String((d && d.rough_modification_opinion) || ''),
-            problem_category_hint: String((d && d.problem_category_hint) || ''),
-          };
-        })
-        .filter((d) => !Number.isNaN(d.row_index))
+    ? saved.row_diagnostics.map((d) => normalizeRowDiagnosticFromSaved(d)).filter(Boolean)
     : [];
-  rowDiagnostics.sort((a, b) => a.row_index - b.row_index);
+  rowDiagnostics.sort((a, b) => a.input_index - b.input_index);
   const lines = [
     'You are a prompt improvement assistant. Your ONLY job is to help improve the current prompt below. Do not discuss general prompt engineering, other prompts, or unrelated topics. Everything you say and do must directly serve improving this prompt.',
     '',
@@ -2223,12 +2356,17 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     lines.push('');
     rowDiagnostics.forEach((d, i) => {
       const n = i + 1;
-      const multi = Array.isArray(d.row_indices) && d.row_indices.length > 1;
-      const rowLabel = multi
-        ? d.row_indices.map((x) => formatRunRowIndexForDisplay(x)).join(', ')
-        : formatRunRowIndexForDisplay(d.row_index);
-      const rowSuffix = multi ? `rows ${rowLabel} (same input)` : `row ${rowLabel}`;
-      lines.push(`### Issue analysis #${n} · Score comparison run result ${rowSuffix}`);
+      const compIdxs = diagnosticComparisonRowIndices(d);
+      const multi = compIdxs.length > 1;
+      if (multi) {
+        const rowLabel = compIdxs.map((x) => formatRunRowIndexForDisplay(x)).join(', ');
+        lines.push(`### Issue analysis #${n} · Input #${d.input_index} · Score rows ${rowLabel}`);
+      } else if (compIdxs.length === 1) {
+        const rowLabel = formatRunRowIndexForDisplay(compIdxs[0]);
+        lines.push(`### Issue analysis #${n} · Input #${d.input_index} · Score row ${rowLabel}`);
+      } else {
+        lines.push(`### Issue analysis #${n} · worksheet input #${d.input_index}`);
+      }
       const ct = (d.card_title || '').trim();
       if (ct) lines.push(`Headline: ${ct}`);
       lines.push(`Issue: ${(d.issue_summary || '').trim() || '(none)'}`);
@@ -2239,6 +2377,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     });
   }
   const comparisonRows = saved?.comparison_rows || payload?.comparison_rows || [];
+  /* Snapshot from the Score/Run node (assistant chat context only). Row-check mini-run does not use this. */
   const runResults = saved?.run_results || payload?.run_results || [];
   if (comparisonRows.length > 0 || runResults.length > 0) {
     lines.push('## Run Results');
@@ -2299,7 +2438,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
     suggestions.forEach((s) => {
       const sid = (s && s.suggestion_id) ? String(s.suggestion_id) : '';
       const shortLabel = formatSuggestionIdDisplay(sid);
-      const title = (s.name || '').trim() || (s.reason || '').trim().slice(0, 80) || `[Section ${s.section_index ?? 0}] "${(s.old_sentence || '').slice(0, 40)}..." → "${(s.new_sentence || '').slice(0, 40)}..."`;
+      const title = (s.name || '').trim() || (s.reason || '').trim().slice(0, 80) || `"${(s.old_sentence || '').slice(0, 40)}..." → "${(s.new_sentence || '').slice(0, 40)}..."`;
       const applied = s.applied === true ? ' [applied]' : '';
       const src = String(s?.source || '').trim().toLowerCase();
       const tag = src === 'assistant' ? '[assistant — removable]' : '[pipeline — not editable via chat]';
@@ -2308,7 +2447,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
         ? s.phase1_addresses.map((x) => String(x || '').trim()).filter(Boolean)
         : [];
       if (p1s.length) lines.push(`   Responds to: ${p1s.join(' · ')}`);
-      const tIdx = suggestionTargetInputRowIndices(s);
+      const tIdx = suggestionTargetScoreRowIndices(s);
       const tLbl = formatScoreTableTargetLabels(comparisonRows, tIdx);
       if (tLbl) lines.push(`   Score table ${tLbl}`);
       const cf = String(s.chat_focus || '').trim();
@@ -2329,7 +2468,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('When you decide to suggest a concrete edit, include one or more blocks in this exact format:');
   lines.push('[ASSISTANT_SUGGESTION]');
   lines.push(
-    '{"section_index": 0, "old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "focus": "One-line summary from this chat (optional if focus_bullets carry the detail)", "focus_bullets": ["Concrete point from chat, like pipeline phase-1 bullets", "Second point"], "reason": "Why this edit helps (from this chat)", "name": "Short title", "target_input_row_indices": [1]}',
+    '{"old_sentence": "exact text to replace from prompt", "new_sentence": "replacement", "focus": "One-line summary from this chat (optional if focus_bullets carry the detail)", "focus_bullets": ["Concrete point from chat, like pipeline phase-1 bullets", "Second point"], "reason": "Why this edit helps (from this chat)", "name": "Short title", "target_score_row_indices": [1]}',
   );
   lines.push('[/ASSISTANT_SUGGESTION]');
   lines.push(
@@ -2337,7 +2476,7 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   );
   lines.push('When adding suggestions, also write a brief comment (e.g. what you changed or why it helps). The user will see this instead of a generic message. If you omit the comment, we show "Added. Please check the Suggestions panel on the left and choose Accept or Revert."');
   lines.push(
-    'Rules: old_sentence must match the current prompt content exactly. new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_input_row_indices** is required: non-empty JSON array of **1-based** row numbers — same as Issue / Score **#** (and pipeline Phase 2). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
+    'Rules: old_sentence must match the current prompt content exactly and be **locatable in exactly one section** (if the same substring appears in multiple sections, the suggestion is rejected). new_sentence: use "" (empty string) for pure deletion; use the exact replacement for edits. **target_score_row_indices** is required: non-empty JSON array of **1-based** row numbers — same as Issue / Score **#** (and pipeline Phase 2). Do NOT add content when the user asked only to delete. Only suggest what the user explicitly asked for — no extra additions.',
   );
   lines.push('');
   lines.push('## Removing suggestions');
@@ -2361,9 +2500,9 @@ function parseAssistantSuggestions(text, dataRoot) {
   while ((m = re.exec(text)) !== null) {
     try {
       const obj = JSON.parse(m[1].trim());
-      if (obj && typeof obj.section_index === 'number') {
+      if (obj && String(obj.old_sentence || '').trim()) {
         const compRows = dataRoot && Array.isArray(dataRoot.comparison_rows) ? dataRoot.comparison_rows : [];
-        const rawRi = obj.target_input_row_indices ?? obj.row_indices;
+        const rawRi = obj.target_score_row_indices ?? obj.target_input_row_indices ?? obj.row_indices;
         const ri = normalizeAssistantTargetsToRowIndex(Array.isArray(rawRi) ? rawRi : [], compRows);
         if (ri.length === 0) continue;
         const rawBullets = obj.focus_bullets ?? obj.chat_focus_bullets;
@@ -2373,14 +2512,13 @@ function parseAssistantSuggestions(text, dataRoot) {
         blocks.push(
           ensureSuggestionObjectId(
             {
-              section_index: obj.section_index,
               old_sentence: String(obj.old_sentence || '').trim(),
               new_sentence: String(obj.new_sentence || '').trim(),
               chat_focus: String(obj.focus ?? obj.chat_focus ?? '').trim(),
               chat_focus_bullets,
               reason: String(obj.reason || '').trim(),
               name: String(obj.name || '').trim(),
-              target_input_row_indices: ri,
+              target_score_row_indices: ri,
               row_indices: ri,
               source: 'assistant',
             },
@@ -2696,7 +2834,11 @@ function initReviewAssistantChat(overlay, contextOptions = {}) {
       if (reviewSaved && typeof reviewSaved === 'object') {
         if (parsedSuggestions.length > 0) {
           const sections = reviewSaved.workingSections || reviewSaved.promptSections || [];
-          const validSuggestions = parsedSuggestions.filter((s) => s.section_index >= 0 && s.section_index < sections.length);
+          const validSuggestions = parsedSuggestions.filter((s) => {
+            const raw = String(s.old_sentence ?? '');
+            if (!raw.trim()) return false;
+            return findSectionIndexForOldSentence(sections, raw) >= 0;
+          });
           suggestions = suggestions.concat(validSuggestions);
         }
         persistChatResult({
