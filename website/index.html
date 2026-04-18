@@ -1567,7 +1567,7 @@
     <div class="trace-chain-inner">
       <div>
         <h2>Traceable Optimization Chain & Network</h2>
-        <p>Compare prompt improvements in parallel, iterate across versions, sample and test on different datasets, all in one workflow. No rigid structure: branch freely, run the same prompt on multiple datasets, or try multiple refinements side by side.</p>
+        <p>Compare prompt improvements side by side, iterate across versions, sample and test on different datasets, all in one workflow. No rigid structure: branch freely, run the same prompt on multiple datasets, or try multiple refinements on separate branches.</p>
         <ul>
           <li>Parallel comparison of different prompt improvements</li>
           <li>Iterative comparison across versions and refinement paths</li>
@@ -1935,9 +1935,9 @@
         score: `<div class="modal-panel" style="width:min(900px,94vw);max-height:80vh;">
           <div class="modal-header"><h2 class="modal-title">Score: FAQ extraction v2</h2><button type="button" class="modal-close" aria-label="Close">&times;</button></div>
           <div class="modal-body score-detail-body" style="flex:1;min-height:0;display:flex;padding:20px;gap:20px;overflow:hidden;">
-            <div class="score-detail-main"><p class="score-detail-main-label">Score settings</p>
+            <div class="score-detail-main"><p class="score-detail-main-label">Scoring setup</p>
               <div class="dataset-meta-wrap"><div class="dataset-meta-field"><label class="dataset-meta-label">Ground truth dataset</label><div class="run-detail-ws-trigger">faq_ground_truth</div></div>
-              <div class="dataset-meta-field"><span class="dataset-meta-label">Rules</span><table class="dataset-preview-table" style="margin-top:8px;"><thead><tr><th>Output</th><th>Ground truth</th><th>Match</th></tr></thead><tbody><tr><td>answer</td><td>answer</td><td>exact</td></tr><tr><td>answer</td><td>answer</td><td>contains</td></tr></tbody></table></div></div>
+              <div class="dataset-meta-field"><span class="dataset-meta-label">Set rules</span><table class="dataset-preview-table" style="margin-top:8px;"><thead><tr><th>Output</th><th>Ground truth</th><th>Match</th></tr></thead><tbody><tr><td>answer</td><td>answer</td><td>exact</td></tr><tr><td>answer</td><td>answer</td><td>contains</td></tr></tbody></table></div></div>
               <button type="button" class="btn btn-primary" disabled>Review</button>
             </div>
             <div class="score-detail-preview-wrap" style="flex:1;min-width:0;overflow:auto;"><h3 class="score-detail-preview-title">Results</h3>
@@ -1980,7 +1980,7 @@
         sampler: 'Sample a subset for quick iteration. Run prompts on 20 rows instead of 500 before full eval. Choose rows or ratio, with or without replacement.',
         prompt: 'Design prompts in structured sections with version control. Use {placeholders} for inputs. Sections (System, User, Context) keep your prompt organized.',
         run: 'Execute your prompt against a dataset. Map dataset columns to prompt inputs, select model, run. Results appear in a table; resume from checkpoint if interrupted.',
-        score: 'Compare run outputs against ground truth. Map each output field to a GT column. Choose match type: exact, contains, or numeric. See match/mismatch at a glance.',
+        score: 'Compare run outputs against ground truth. Map each output field to a ground truth column. Choose match type: exact, contains, or numeric. See match/mismatch at a glance.',
         review: 'AI analyzes mismatches and proposes concrete prompt edits. Accept or reject each suggestion. Chat with the Review assistant to ask follow-up questions about results.'
       };
       const titles = { dataset: 'Dataset', sampler: 'Sampler', prompt: 'Prompt', run: 'Run', score: 'Score', review: 'Review' };

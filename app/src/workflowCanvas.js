@@ -7,9 +7,8 @@
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
 import { mergeResumeResults, embedInputRow, countCompletedInputRows, markEmptyOutputAsError } from './runResumeUtils.js';
-import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
+import { normalizeUnicodeDashesForDisplay, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
-import { reviewStreamSavedNeedsRowVerifyPhase } from './reviewWorkingSections.js';
 import {
   allocNextReviewSuggestionId,
   ensureReviewResultIds,
@@ -18,10 +17,18 @@ import {
   parseNumericSuggestionId,
   syncReviewSuggestionSeqNext,
 } from './reviewSuggestionIds.js';
+import { computeGreedyRunToGtPairing, flattenScoreRules } from './scoreRunGtPairing.js';
+import {
+  parseScoreMappingBundle,
+  serializeScoreMappingBundle,
+  emptyScoreRuleGroup,
+  scoreBundleRootsForEmbeddingWalk,
+} from './scoreMappingBundle.js';
 import {
   openScoreDetailModal,
   runReviewFromScore,
   getScoreExportData,
+  SCORE_GT_ROW_INDEX_COLUMN,
   canonicalizeMatchFlags,
   getMatchFlags,
   legacyMatchTypeWasContains,
@@ -33,6 +40,9 @@ import {
   prefetchEmbeddingCosineMap,
   embeddingPairMatches,
   isValidRunOutputForScoreRow,
+  buildScoreResultDescriptorsInRunOrder,
+  attachInputMatchedUnpairedGtDescriptors,
+  buildScoreTableGtColumns,
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
@@ -54,11 +64,6 @@ async function resolveRunCredentialId(runNode) {
 }
 
 const MIN_CONTENT_PADDING = 200;
-/**
- * Review bar: LLM stream uses 0..PIPELINE_DONE (~quick); Run+Score row checks use the rest (usually most wall time).
- * Must match reviewDetailModal REVIEW_PROGRESS_PIPELINE_DONE / CHECK_SPAN.
- */
-const REVIEW_PROGRESS_PIPELINE_DONE = 30;
 const REVIEW_STREAM_PLAN_PCT = 4;
 const REVIEW_STREAM_DIAG_END_PCT = 24;
 const REVIEW_STREAM_SUGGESTIONS_PCT = 26;
@@ -198,13 +203,14 @@ function normalizeScoreChild(c) {
     const rawMt = (c && c.matchType) || 'exact';
     const f = { ...DEFAULT_SCORE_MATCH_FLAGS, ...((c && c.matchFlags && typeof c.matchFlags === 'object') ? c.matchFlags : {}) };
     if (legacyMatchTypeWasContains(rawMt)) f.contains = true;
-    return {
+    const leaf = {
       type: 'rule',
       outputKey: (c && c.outputKey) || '',
       gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
       matchType: migrateLegacyMatchType(rawMt),
       matchFlags: canonicalizeMatchFlags(f),
     };
+    return leaf;
   }
   return normalizeScoreGroupChild(c);
 }
@@ -269,11 +275,22 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     return '';
   };
   const getGtValue = (gtContent, rowIndex, columnName) => {
+    if (String(columnName).trim() === SCORE_GT_ROW_INDEX_COLUMN) {
+      if (typeof rowIndex !== 'number' || rowIndex < 0) return '';
+      return toCompareStr(rowIndex);
+    }
     const headers = gtContent.headers || [];
     const rows = gtContent.rows || [];
     const colIdx = headers.findIndex((h) => String(h).trim() === String(columnName).trim());
     if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
     return '';
+  };
+  const getGtValueForDisplay = (gtContent, rowIndex, columnName) => {
+    if (String(columnName).trim() === SCORE_GT_ROW_INDEX_COLUMN) {
+      if (typeof rowIndex !== 'number' || rowIndex < 0) return '';
+      return String(rowIndex + 1);
+    }
+    return getGtValue(gtContent, rowIndex, columnName);
   };
   let reviewEmbeddingCosineMap = new Map();
   const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
@@ -306,15 +323,13 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       return runVal === gtVal;
     });
   };
-  const countMatchingRules = (root, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
-    const rules = flattenScoreTreeToRules(root);
-    return rules.filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;
-  };
-  let scoreRoot = { type: 'group', op: 'AND', children: [] };
+  let inputRoot = emptyScoreRuleGroup();
+  let outputRoot = emptyScoreRuleGroup();
   try {
-    const raw = scoreNode.dataset.scoreMapping || '[]';
-    const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    scoreRoot = parseScoreMappingToTree(data);
+    const raw = scoreNode.dataset.scoreMapping || '{}';
+    const b = parseScoreMappingBundle(typeof raw === 'string' ? raw : JSON.stringify(raw));
+    inputRoot = b.inputRoot;
+    outputRoot = b.outputRoot;
   } catch (_) {}
   let results = [];
   let outputFields = [];
@@ -354,56 +369,18 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     return out;
   }
 
-  let comments = {};
-  try {
-    comments = JSON.parse(scoreNode.dataset.scoreResultComments || '{}');
-  } catch (_) {}
   let excludedFromScoring = {};
   try {
     excludedFromScoring = JSON.parse(scoreNode.dataset.scoreRowExcludedFromScoring || '{}');
   } catch (_) {}
 
-  const rulesFlat = flattenScoreTreeToRules(scoreRoot);
-  const gtColsUsed = [];
-  const outputKeysUsed = [];
-  for (const rule of rulesFlat) {
-    for (const c of (rule.gtColumns || [])) {
-      if (c && !gtColsUsed.includes(c)) gtColsUsed.push(c);
-    }
-    const k = (rule.outputKey || '').trim();
-    if (k && !outputKeysUsed.includes(k)) outputKeysUsed.push(k);
-  }
-  const dedupeGt = (gtC) => {
-    if (!gtColsUsed.length) return gtC;
-    const rows = gtC.rows || [];
-    const seen = new Set();
-    const dedupRows = [];
-    for (let i = 0; i < rows.length; i++) {
-      const key = JSON.stringify(gtColsUsed.map((col) => getGtValue(gtC, i, col)));
-      if (seen.has(key)) continue;
-      seen.add(key);
-      dedupRows.push(rows[i]);
-    }
-    return { ...gtC, rows: dedupRows };
-  };
-  const dedupeRunResults = (resList) => {
-    if (!outputKeysUsed.length) return resList || [];
-    const seen = new Set();
-    const out = [];
-    for (const res of resList || []) {
-      const key = JSON.stringify(outputKeysUsed.map((k) => getRunValue(res, k, runWsSafe, outputFields)));
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(res);
-    }
-    return out;
-  };
+  const rulesFlat = [...flattenScoreRules(inputRoot), ...flattenScoreRules(outputRoot)];
+  const gtColsUsed = buildScoreTableGtColumns(rulesFlat, gtSafe);
 
-  const gtDeduped = dedupeGt(gtSafe);
-  const gtRows = gtDeduped.rows || [];
-  const resultsNoErr = (results || []).filter((r) => r && !r.error);
-  const dedupedResults = dedupeRunResults(resultsNoErr);
-  const validDedupedResults = dedupedResults.filter((r) => isValidRunOutputForScoreRow(r, outputFields));
+  const gtRows = gtSafe.rows || [];
+  const resultsForScore = (results || []).filter((r) => r);
+  const validDedupedResults = resultsForScore.filter((r) => isValidRunOutputForScoreRow(r, outputFields));
+  const outputKeysForBundleInference = (outputFields || []).map((f) => String(f.key || '').trim()).filter(Boolean);
 
   function emptyRowInputPlaceholders() {
     const out = {};
@@ -425,11 +402,11 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
     try {
       reviewEmbeddingCosineMap = await prefetchEmbeddingCosineMap(SCORE_BACKEND_BASE, {
-        root: scoreRoot,
+        root: scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot),
         results: validDedupedResults,
         outputFields,
         runWs: runWsSafe,
-        gtContent: gtDeduped,
+        gtContent: gtSafe,
         getRunValue: (rr, ok, _rowIdx, ws, of) => getRunValue(rr, ok, ws, of),
         getGtValue,
       });
@@ -437,25 +414,22 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       reviewEmbeddingCosineMap = new Map();
     }
   }
-  const inputRowCount = runWsSafe?.rows?.length ?? 0;
   const gtCount = gtRows.length;
   const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
-  const runCount = Math.max(inputRowCount, maxRunRowIndex + 1);
-  const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
-  const gtUsed = new Array(gtCount).fill(false);
-  const pairs = [];
-  for (const i of runRowIndices) {
-    for (let j = 0; j < gtCount; j++) {
-      const scoreN = countMatchingRules(scoreRoot, i, j, resultsByIndex, runWsSafe, outputFields, gtDeduped);
-      if (scoreN > 0) pairs.push({ i, j, score: scoreN });
-    }
-  }
-  pairs.sort((a, b) => b.score - a.score);
-  for (const { i, j } of pairs) {
-    if (runToGt[i] >= 0 || gtUsed[j]) continue;
-    runToGt[i] = j;
-    gtUsed[j] = true;
-  }
+  const getRunValueForPairingBand = (rr, ok, rowIdx, ws, of) => {
+    if (ok === '#' || ok === '[#]') return toCompareStr(rowIdx);
+    return getRunValue(rr, ok, ws, of);
+  };
+  const { runToGt } = computeGreedyRunToGtPairing({
+    inputRoot,
+    outputRoot,
+    results: validDedupedResults,
+    runWs: runWsSafe,
+    gtContent: gtSafe,
+    outputFields,
+    ruleMatchesRow,
+    getRunValue: getRunValueForPairingBand,
+  });
 
   const gtToRun = new Array(gtCount).fill(-1);
   for (let ii = 0; ii < runToGt.length; ii++) {
@@ -466,7 +440,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   function evaluateNodeLocal(node, runRowIndex, gtRowIndex) {
     if (!node) return false;
     if (node.type === 'rule') {
-      return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWsSafe, outputFields, gtDeduped);
+      return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWsSafe, outputFields, gtSafe);
     }
     if (node.type === 'group' && Array.isArray(node.children)) {
       if (node.children.length === 0) return false;
@@ -481,26 +455,32 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     return false;
   }
 
-  /** Same descriptor order as scoreDetailModal.renderResults (unfiltered); 1-based # column when the table is not filtered. */
-  const scoreDetailDescriptors = [];
-  for (let j = 0; j < gtCount; j++) {
-    if (gtToRun[j] >= 0) scoreDetailDescriptors.push({ type: 'gt', j });
+  /** Same descriptor order as scoreDetailModal.renderResults (unfiltered): run row_index order, then unmatched GT. */
+  function treeMatchesPairLocal(rootTree, runRowIndex, gtRowIndex) {
+    const leaves = flattenScoreRules(rootTree || emptyScoreRuleGroup());
+    if (leaves.length === 0) return true;
+    return evaluateNodeLocal(rootTree, runRowIndex, gtRowIndex);
   }
-  for (let j = 0; j < gtCount; j++) {
-    if (gtToRun[j] < 0) scoreDetailDescriptors.push({ type: 'gt', j });
-  }
-  for (const i of runRowIndices) {
-    const paired = i < runToGt.length && runToGt[i] >= 0;
-    if (paired) continue;
-    let matchesAnyGt = false;
-    for (let jj = 0; jj < gtCount; jj++) {
-      if (evaluateNodeLocal(scoreRoot, i, jj)) {
-        matchesAnyGt = true;
-        break;
-      }
-    }
-    if (!matchesAnyGt) scoreDetailDescriptors.push({ type: 'runOnly', i });
-  }
+  const scoreDetailDescriptors = attachInputMatchedUnpairedGtDescriptors(
+    buildScoreResultDescriptorsInRunOrder({
+      runRowIndices,
+      runToGt,
+      gtToRun,
+      gtRowsLength: gtCount,
+      evaluateRunMatchesAnyGt: (i) => {
+        for (let jj = 0; jj < gtCount; jj++) {
+          if (treeMatchesPairLocal(inputRoot, i, jj) && treeMatchesPairLocal(outputRoot, i, jj)) return true;
+        }
+        return false;
+      },
+    }),
+    {
+      runRowIndices,
+      runToGt,
+      gtToRun,
+      inputMatchesPairForRow: (i, jj) => treeMatchesPairLocal(inputRoot, i, jj),
+    },
+  );
   const scoreTableRowByKey = new Map();
   scoreDetailDescriptors.forEach((d, idx) => {
     const n = idx + 1;
@@ -527,7 +507,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     for (const rule of rulesFlat) {
       const outKey = String(rule.outputKey || '').trim();
       if (!isModelFacingOutputKey(outKey)) continue;
-      const gtVals = (rule.gtColumns || []).map((col) => getGtValue(gtDeduped, gtIdxForRules, col));
+      const gtVals = (rule.gtColumns || []).map((col) => getGtValueForDisplay(gtSafe, gtIdxForRules, col));
       groundTruthOutput[outKey] = gtVals.length === 1
         ? (gtVals[0] == null ? '' : String(gtVals[0]))
         : gtVals.map((x) => (x == null ? '' : String(x))).join(' | ');
@@ -563,6 +543,14 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     };
   }
 
+  function isPairMatchLocal(iRun, jGt) {
+    if (iRun < 0 || jGt < 0) return false;
+    if (!treeMatchesPairLocal(inputRoot, iRun, jGt)) return false;
+    const outLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
+    if (outLeaves.length === 0) return true;
+    return evaluateNodeLocal(outputRoot, iRun, jGt);
+  }
+
   const rows = [];
   let outRowIdx = 0;
   for (const r of validDedupedResults) {
@@ -575,13 +563,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     const runOutput = r?.output && typeof r.output === 'object' ? r.output : {};
     const gtIdxForRules = jPaired >= 0 ? jPaired : -1;
     const { expected, comparison_types, ground_truth_output } = expectedAndComparisonTypesForGt(gtIdxForRules);
-    const isFullMatch = gtIdxForRules >= 0 && evaluateNodeLocal(scoreRoot, runR, gtIdxForRules);
-    const legacyCommentKey = gtIdxForRules >= 0 ? `${gtIdxForRules}_${outRowIdx}` : `run:${outRowIdx}`;
-    const comment = comments[modalKey]
-      ?? comments[legacyCommentKey]
-      ?? (gtIdxForRules >= 0 ? comments[String(gtIdxForRules)] : null)
-      ?? comments[`run:${runR}`]
-      ?? null;
+    const isFullMatch = gtIdxForRules >= 0 && isPairMatchLocal(runR, gtIdxForRules);
     const row_input = inputIndicesWithValidRun.has(inpIdx) ? rowInputAsPromptPlaceholders(inpIdx) : emptyRowInputPlaceholders();
     const runRowIdx =
       typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : outRowIdx;
@@ -596,7 +578,6 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       expected,
       comparison_types,
       ground_truth_output,
-      comment,
       row_input,
       gt_only: false,
       source_gt_row_index: jPaired >= 0 ? jPaired : null,
@@ -613,7 +594,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   function findInputRowIndexForUnpairedGt(gtJ) {
     const gtCells = [];
     for (const col of gtColsUsed) {
-      const v = String(getGtValue(gtDeduped, gtJ, col) || '').trim();
+      const v = String(getGtValue(gtSafe, gtJ, col) || '').trim();
       if (v) gtCells.push(v);
     }
     if (gtCells.length === 0) return null;
@@ -671,7 +652,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       for (const r of validDedupedResults) {
         const rInp = typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index;
         if (rInp !== inp) continue;
-        for (const k of outputKeysUsed) {
+        for (const k of outputKeysForBundleInference) {
           const rv = getRunValue(r, k, runWsSafe, outputFields);
           const t = String(rv ?? '').trim();
           if (t) set.add(t);
@@ -704,7 +685,6 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     if (excludedFromScoring[String(j)]) continue;
     const modalKey = String(j);
     const { expected, comparison_types, ground_truth_output } = expectedAndComparisonTypesForGt(j);
-    const comment = comments[modalKey] ?? comments[String(j)] ?? null;
     const score_table_row = scoreTableRowByKey.get(`gt:${j}`) ?? null;
     const inpResolved = findInputRowIndexForUnpairedGt(j);
     const useInp = typeof inpResolved === 'number' && !Number.isNaN(inpResolved) ? inpResolved : null;
@@ -720,7 +700,6 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       expected,
       comparison_types,
       ground_truth_output,
-      comment,
       row_input,
       gt_only: true,
       source_gt_row_index: j,
@@ -897,10 +876,9 @@ export function buildWorkflowCanvas(root) {
   function scoreNodeHasCompleteRules(scoreNode) {
     if (!scoreNode) return false;
     try {
-      const raw = scoreNode.dataset.scoreMapping || '[]';
-      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      const tree = parseScoreMappingToTree(data);
-      const rules = flattenScoreTreeToRules(tree);
+      const raw = scoreNode.dataset.scoreMapping || '{}';
+      const { inputRoot: ir, outputRoot: or } = parseScoreMappingBundle(typeof raw === 'string' ? raw : JSON.stringify(raw));
+      const rules = [...flattenScoreRules(ir), ...flattenScoreRules(or)];
       return rules.some((r) => (r.outputKey || '').trim() && Array.isArray(r.gtColumns) && r.gtColumns.some((c) => String(c || '').trim()));
     } catch (_) {
       return false;
@@ -1138,6 +1116,9 @@ export function buildWorkflowCanvas(root) {
           diagnosisComplete: dt === 0,
           reviewProgress: REVIEW_STREAM_PLAN_PCT,
         };
+        /* Poll replays all events from `plan` each tick; clearing lists without resetting the id cursor made
+         * `allocNextReviewSuggestionId` continue from disk — # on cards crept up every poll. */
+        streamSaved.review_suggestion_seq_next = 1;
         setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_PLAN_PCT);
       } else if (ev.type === 'diagnosis_row') {
         diagnosisDone = ev.done != null ? parseInt(ev.done, 10) : diagnosisDone + 1;
@@ -1150,23 +1131,23 @@ export function buildWorkflowCanvas(root) {
         setReviewNodeProgress(getNodeById(reviewNodeId), pct);
         streamSaved.reviewProgress = pct;
         if (ev.opinion && typeof ev.opinion === 'object') {
-          const rid = ev.row_index != null ? parseInt(ev.row_index, 10) : NaN;
-          if (!Number.isNaN(rid)) {
+          const iid = ev.input_index != null ? parseInt(ev.input_index, 10) : NaN;
+          if (!Number.isNaN(iid)) {
             const list = Array.isArray(streamSaved.row_diagnostics) ? streamSaved.row_diagnostics.slice() : [];
             const rowIndicesRaw = Array.isArray(ev.row_indices) ? ev.row_indices : [];
             const row_indices = rowIndicesRaw.map((x) => parseInt(x, 10)).filter((x) => !Number.isNaN(x));
             const entry = {
-              row_index: rid,
-              row_indices: row_indices.length ? row_indices : [rid],
+              input_index: iid,
+              row_indices,
               card_title: String(ev.opinion.card_title || ''),
               issue_summary: String(ev.opinion.issue_summary || ''),
               rough_modification_opinion: String(ev.opinion.rough_modification_opinion || ''),
               problem_category_hint: String(ev.opinion.problem_category_hint || ''),
             };
-            const idx = list.findIndex((x) => x && Number(x.row_index) === rid);
+            const idx = list.findIndex((x) => x && Number(x.input_index) === iid);
             if (idx >= 0) list[idx] = entry;
             else list.push(entry);
-            list.sort((a, b) => (Number(a.row_index) || 0) - (Number(b.row_index) || 0));
+            list.sort((a, b) => Number(a.input_index) - Number(b.input_index));
             streamSaved.row_diagnostics = list;
           }
         }
@@ -1192,8 +1173,7 @@ export function buildWorkflowCanvas(root) {
         setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_DATA_PCT);
         streamSaved.reviewProgress = REVIEW_STREAM_DATA_PCT;
       } else if (ev.type === 'done') {
-        const needsRowVerifyPhase = reviewStreamSavedNeedsRowVerifyPhase(streamSaved);
-        const finalizePct = needsRowVerifyPhase ? REVIEW_PROGRESS_PIPELINE_DONE : 100;
+        const finalizePct = 100;
         setReviewNodeProgress(getNodeById(reviewNodeId), finalizePct);
         streamSaved = {
           ...streamSaved,
@@ -1372,15 +1352,9 @@ export function buildWorkflowCanvas(root) {
   }
 
   /**
-   * Check if a source dataset name is already used on the canvas (case-insensitive).
+   * Check if a working/subset dataset name is already used on the canvas (case-insensitive).
    * @param {string} nameToCheck
    * @param {string|null} [excludeNodeId=null] - node id to exclude (e.g. when editing that node)
-   * @returns {boolean}
-   */
-  /**
-   * Check if a dataset name is already used on the canvas (case-insensitive).
-   * @param {string} nameToCheck
-   * @param {string|null} [excludeNodeId=null] - node id to exclude
    * @returns {boolean}
    */
   function isDatasetNameAlreadyUsed(nameToCheck, excludeNodeId = null) {
@@ -1388,7 +1362,7 @@ export function buildWorkflowCanvas(root) {
     const datasetNodes = nodesLayer.querySelectorAll('.workflow-node--dataset');
     for (const n of datasetNodes) {
       if (excludeNodeId && n.dataset.nodeId === excludeNodeId) continue;
-      const existing = (n.dataset.datasetName || n.dataset.datasetName || '').trim().toLowerCase();
+      const existing = (n.dataset.datasetName || n.dataset.subsetName || '').trim().toLowerCase();
       if (existing === normalized) return true;
     }
     return false;
@@ -1621,7 +1595,7 @@ export function buildWorkflowCanvas(root) {
     do {
       candidate = isNewVersion ? `${base} v${n}` : `${base} (Copy ${n})`;
       n++;
-    } while (isSubsetNameAlreadyUsed(candidate));
+    } while (isDatasetNameAlreadyUsed(candidate));
     return candidate;
   }
 
@@ -2022,7 +1996,7 @@ export function buildWorkflowCanvas(root) {
             } catch (_) {}
           }
           const outputFields = deriveOutputFields(results, schemaFields);
-          outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+          outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
           const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
@@ -2074,6 +2048,23 @@ export function buildWorkflowCanvas(root) {
           getRunWorkingSetContent,
           getGroundTruthContent,
           getScoreMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).map((n) => n.dataset.scoreMapping || '[]'),
+          getRunInputColsCollapsed: runNode ? () => runNode.dataset.runBracketColsCollapsed !== '0' : undefined,
+          setRunInputColsCollapsed: runNode
+            ? (collapsed) => {
+                runNode.dataset.runBracketColsCollapsed = collapsed ? '1' : '0';
+                document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+              }
+            : undefined,
+          getScoreOutputColsCollapsed: () => scoreNode.dataset.scoreOutputBracketCollapsed === '1',
+          setScoreOutputColsCollapsed: (collapsed) => {
+            scoreNode.dataset.scoreOutputBracketCollapsed = collapsed ? '1' : '0';
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          },
+          getScoreGtColsCollapsed: () => scoreNode.dataset.scoreGtBracketCollapsed === '1',
+          setScoreGtColsCollapsed: (collapsed) => {
+            scoreNode.dataset.scoreGtBracketCollapsed = collapsed ? '1' : '0';
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          },
         });
       }
     } else if (edgeType === EDGE_TYPE_PROMPT_TO_RUN) {
@@ -3057,7 +3048,7 @@ export function buildWorkflowCanvas(root) {
           } catch (_) {}
         }
         const outputFields = deriveOutputFields(results, schemaFields);
-        outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+        outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
         const wsId = (runNode.dataset.runWorkingSetId || '').trim();
         const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
         const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
@@ -3156,6 +3147,23 @@ export function buildWorkflowCanvas(root) {
         getGroundTruthContent,
         getReviewPayload,
         getScoreMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).map((n) => n.dataset.scoreMapping || '[]'),
+        getRunInputColsCollapsed: runNode ? () => runNode.dataset.runBracketColsCollapsed !== '0' : undefined,
+        setRunInputColsCollapsed: runNode
+          ? (collapsed) => {
+              runNode.dataset.runBracketColsCollapsed = collapsed ? '1' : '0';
+              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+            }
+          : undefined,
+        getScoreOutputColsCollapsed: () => node.dataset.scoreOutputBracketCollapsed === '1',
+        setScoreOutputColsCollapsed: (collapsed) => {
+          node.dataset.scoreOutputBracketCollapsed = collapsed ? '1' : '0';
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        },
+        getScoreGtColsCollapsed: () => node.dataset.scoreGtBracketCollapsed === '1',
+        setScoreGtColsCollapsed: (collapsed) => {
+          node.dataset.scoreGtBracketCollapsed = collapsed ? '1' : '0';
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        },
       });
     });
 
@@ -3525,17 +3533,24 @@ export function buildWorkflowCanvas(root) {
         const runCompleted = node.dataset.runCompleted === '1';
         const statusLine = runCompleted ? 'Run completed.' : 'Run incomplete.';
         const description = `Exported from ${promptName} ${runName}.\n${statusLine}`;
-        const headers = outputFields.map((f) => ((f && (f.display || f.key)) ? String(f.display || f.key).trim() || 'output' : 'output'));
-        const rows = results.map((r) =>
-          r.error
+        const headers = [
+          'Input: #',
+          formatResultOutputColumnLabel('#'),
+          ...outputFields.map((f) => formatResultOutputColumnLabel((f && (f.display || f.key)) ? String(f.display || f.key).trim() || 'output' : 'output')),
+        ];
+        const rows = results.map((r) => {
+          const inputNum = String((typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index ?? 0) + 1);
+          const outputNum = String((r.row_index ?? 0) + 1);
+          const outputPart = r.error
             ? outputFields.map(() => String(r.error))
             : (outputFields || []).map((f) => {
                 const val = r.output && f && r.output[f.key];
                 if (val === null || val === undefined) return '—';
                 if (Array.isArray(val)) return val.join(', ');
                 return String(val);
-              })
-        );
+              });
+          return [inputNum, outputNum, ...outputPart];
+        });
         document.dispatchEvent(
           new CustomEvent('workflow:add-dataset-node', {
             detail: { name: datasetName, notes: description, headers, rows },
@@ -3575,7 +3590,7 @@ export function buildWorkflowCanvas(root) {
             const arr = JSON.parse(raw);
             outputFields = Array.isArray(arr) ? arr : [];
           } catch (_) {}
-          outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+          outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
           const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
@@ -3650,26 +3665,19 @@ export function buildWorkflowCanvas(root) {
             comparison_rows,
           };
         }
-        let credentialId = (scoreNode.dataset.reviewCredentialId || '').trim();
+        const credentialId = (scoreNode.dataset.reviewCredentialId || '').trim();
         if (!credentialId) {
-          try {
-            const res = await fetch(`${RUN_API_BASE}/api/credentials`);
-            if (res.ok) {
-              const list = await res.json();
-              const first = Array.isArray(list) && list[0];
-              if (first && first.id) credentialId = String(first.id).trim();
-            }
-          } catch (_) {}
-        }
-        if (!credentialId) {
-          alert('Please select a model in the Score detail first, or add an API credential.');
+          showAlert('Select a Review model on the Score node (open Score detail → Results footer) or in project settings.', { title: 'Review' });
           return;
         }
-        await runReviewFromScore({
+        const started = await runReviewFromScore({
           scoreNodeId: scoreNode.dataset.nodeId,
           getReviewPayload,
           credentialId,
         });
+        if (!started) {
+          showAlert('Could not start Review. Open Score detail and ensure the prompt has sections, Run has results, and ground truth is selected.', { title: 'Review' });
+        }
       },
       'add-sampler': () => {
         if (node.dataset.nodeType !== 'dataset') return;
@@ -3699,8 +3707,7 @@ export function buildWorkflowCanvas(root) {
       },
       'create-working-dataset': () => {
         const samplerNodeId = node.dataset.nodeId || '';
-        const colorIndex = node.dataset.samplerColorIndex != null ? parseInt(node.dataset.samplerColorIndex, 10) : undefined;
-        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId, colorIndex } }));
+        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId } }));
       },
       'run-this-prompt': () => {
         const left = parseFloat(node.style.left) || 0;
@@ -3816,7 +3823,7 @@ export function buildWorkflowCanvas(root) {
             const arr = JSON.parse(raw);
             outputFields = Array.isArray(arr) ? arr : [];
           } catch (_) {}
-          outputFields.forEach((f) => cols.push({ key: f.key || '', label: (f.display || f.key || '').trim() || f.key || '—' }));
+          outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
           const wsId = (runNode.dataset.runWorkingSetId || '').trim();
           const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
@@ -4527,33 +4534,6 @@ export function buildWorkflowCanvas(root) {
               : null;
           const prev = prevById || existSug[i];
           if (prev && prev.applied === true) next.applied = true;
-          if (prev && prev.review_finetune_completed === true) {
-            next.review_finetune_completed = true;
-            const pm = prev.review_finetune_meta;
-            const nm = next.review_finetune_meta;
-            const keepPrevMeta =
-              pm &&
-              typeof pm === 'object' &&
-              (!nm || typeof nm !== 'object' || (nm.bestPassPct == null && pm.bestPassPct != null));
-            if (keepPrevMeta) next.review_finetune_meta = pm;
-          }
-          const prevNumForMerge = prev ? parseNumericSuggestionId(prev.suggestion_id) : null;
-          const sameSuggestionForTestMerge =
-            prevById != null ||
-            (prev != null && nextNum != null && prevNumForMerge != null && prevNumForMerge === nextNum);
-          const nextRowCheckRunning =
-            next.review_test_in_progress === true || next.review_test_in_progress === 1;
-          if (prev && sameSuggestionForTestMerge && !nextRowCheckRunning) {
-            for (const key of ['review_test_result', 'review_test_result_finetune_after', 'review_test_result_finetune_before']) {
-              const pt = prev[key];
-              if (pt === 'pass' || pt === 'fail') {
-                const nt = next[key];
-                if (nt !== 'pass' && nt !== 'fail') {
-                  next[key] = pt;
-                }
-              }
-            }
-          }
           if (nextNum == null) {
             const prevNum = prev ? parseNumericSuggestionId(prev.suggestion_id) : null;
             next.suggestion_id = prevNum != null ? prevNum : allocNextReviewSuggestionId(merged);
@@ -4732,6 +4712,7 @@ export function buildWorkflowCanvas(root) {
           } catch (_) {}
         }
         if (pct > 0) out.runProgress = pct;
+        if (node.dataset.runOutputBracketCollapsed === '1') out.runOutputBracketCollapsed = true;
         return out;
       }
       if (node.classList.contains('workflow-node--score')) {
@@ -4739,16 +4720,11 @@ export function buildWorkflowCanvas(root) {
         const scoreGroundTruthId = (node.dataset.scoreGroundTruthId || '').trim() || undefined;
         let scoreMapping;
         try {
-          const raw = node.dataset.scoreMapping || '[]';
-          const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-          const tree = parseScoreMappingToTree(data);
-          const hasRules = (tree.type === 'group' && tree.children && tree.children.length > 0) || flattenScoreTreeToRules(tree).length > 0;
-          scoreMapping = hasRules ? tree : undefined;
-        } catch (_) {}
-        const scoreResultComments = (node.dataset.scoreResultComments || '').trim();
-        let scoreResultCommentsObj;
-        try {
-          scoreResultCommentsObj = scoreResultComments ? JSON.parse(scoreResultComments) : undefined;
+          const raw = node.dataset.scoreMapping || '{}';
+          const { inputRoot: irS, outputRoot: orS } = parseScoreMappingBundle(typeof raw === 'string' ? raw : JSON.stringify(raw));
+          const rules = [...flattenScoreRules(irS), ...flattenScoreRules(orS)];
+          const hasRules = rules.some((r) => (r.outputKey || '').trim() && Array.isArray(r.gtColumns) && r.gtColumns.some((c) => String(c || '').trim()));
+          scoreMapping = hasRules ? JSON.parse(serializeScoreMappingBundle(irS, orS)) : undefined;
         } catch (_) {}
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const reviewCredentialId = (node.dataset.reviewCredentialId || '').trim() || undefined;
@@ -4757,7 +4733,7 @@ export function buildWorkflowCanvas(root) {
         try {
           scoreRowExcludedFromScoringObj = scoreRowExcludedFromScoring ? JSON.parse(scoreRowExcludedFromScoring) : undefined;
         } catch (_) {}
-        return {
+        const out = {
           type: 'score',
           nodeId,
           left,
@@ -4765,11 +4741,14 @@ export function buildWorkflowCanvas(root) {
           scoreName,
           scoreGroundTruthId,
           scoreMapping,
-          scoreResultComments: scoreResultCommentsObj,
           scoreRowExcludedFromScoring: scoreRowExcludedFromScoringObj,
           reviewResult: reviewResult || undefined,
           reviewCredentialId,
         };
+        if (node.dataset.scoreOutputBracketCollapsed === '1') out.scoreOutputBracketCollapsed = true;
+        if (node.dataset.scoreGtBracketCollapsed === '1') out.scoreGtBracketCollapsed = true;
+        if (node.dataset.scoreTableRulesColumnFilter === '1') out.scoreTableRulesColumnFilter = true;
+        return out;
       }
       if (node.classList.contains('workflow-node--prompt-review')) {
         const promptReviewName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Review';
@@ -4893,6 +4872,7 @@ export function buildWorkflowCanvas(root) {
             }
           } catch (_) {}
         }
+        if (n.runOutputBracketCollapsed === true) runNode.dataset.runOutputBracketCollapsed = '1';
         createdNodes.push(runNode);
       } else if (n.type === 'assessment' || n.type === 'score') {
         const scoreNode = createScoreNode({
@@ -4904,14 +4884,11 @@ export function buildWorkflowCanvas(root) {
         if (n.scoreGroundTruthId) scoreNode.dataset.scoreGroundTruthId = n.scoreGroundTruthId;
         if (n.scoreMapping != null) {
           try {
-            const tree = parseScoreMappingToTree(n.scoreMapping);
-            const hasRules = (tree.type === 'group' && tree.children && tree.children.length > 0) || flattenScoreTreeToRules(tree).length > 0;
-            if (hasRules) scoreNode.dataset.scoreMapping = JSON.stringify(tree);
-          } catch (_) {}
-        }
-        if (n.scoreResultComments && typeof n.scoreResultComments === 'object') {
-          try {
-            scoreNode.dataset.scoreResultComments = JSON.stringify(n.scoreResultComments);
+            const raw = typeof n.scoreMapping === 'string' ? n.scoreMapping : JSON.stringify(n.scoreMapping);
+            const { inputRoot: irL, outputRoot: orL } = parseScoreMappingBundle(raw);
+            const rules = [...flattenScoreRules(irL), ...flattenScoreRules(orL)];
+            const hasRules = rules.some((r) => (r.outputKey || '').trim() && Array.isArray(r.gtColumns) && r.gtColumns.some((c) => String(c || '').trim()));
+            if (hasRules) scoreNode.dataset.scoreMapping = serializeScoreMappingBundle(irL, orL);
           } catch (_) {}
         }
         if (n.scoreRowExcludedFromScoring && typeof n.scoreRowExcludedFromScoring === 'object') {
@@ -4925,6 +4902,9 @@ export function buildWorkflowCanvas(root) {
         if (n.reviewCredentialId && typeof n.reviewCredentialId === 'string') {
           scoreNode.dataset.reviewCredentialId = n.reviewCredentialId;
         }
+        if (n.scoreOutputBracketCollapsed === true) scoreNode.dataset.scoreOutputBracketCollapsed = '1';
+        if (n.scoreGtBracketCollapsed === true) scoreNode.dataset.scoreGtBracketCollapsed = '1';
+        if (n.scoreTableRulesColumnFilter === true) scoreNode.dataset.scoreTableRulesColumnFilter = '1';
         createdNodes.push(scoreNode);
       } else if (n.type === 'promptReview') {
         const promptReviewNode = createPromptReviewNode({

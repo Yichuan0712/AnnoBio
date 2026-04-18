@@ -4,10 +4,30 @@
  */
 
 import { showAlert } from './alertModal.js';
-import { selectPlaceholderLabel } from './displayTextNormalize.js';
+import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
+import { extractInputFieldsFromSections } from './promptDetailModal.js';
+import { computeGreedyRunToGtPairing, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
+import {
+  parseScoreMappingBundle,
+  serializeScoreMappingBundle,
+  emptyScoreRuleGroup,
+  scoreBundleRootsForEmbeddingWalk,
+} from './scoreMappingBundle.js';
 
 const API_BASE = 'http://localhost:8000';
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
+
+/** Stored in rule.gtColumns; UI label {@link SCORE_GT_ROW_INDEX_LABEL}. Value is 0-based GT row index (aligned with run `#` in getRunValue). */
+export const SCORE_GT_ROW_INDEX_COLUMN = '__score_gt_row_index__';
+export const SCORE_GT_ROW_INDEX_LABEL = 'Ground truth: #';
+
+/** UI label for a stored GT column (sheet header or {@link SCORE_GT_ROW_INDEX_COLUMN}). Persistence keeps raw names. */
+export function formatScoreGroundTruthColumnLabel(columnName) {
+  const s = String(columnName ?? '').trim();
+  if (!s) return '';
+  if (s === SCORE_GT_ROW_INDEX_COLUMN) return SCORE_GT_ROW_INDEX_LABEL;
+  return `Ground truth: ${s}`;
+}
 
 /**
  * Normalize row match for logic and API. Accepts boolean, legacy 1/0, or string "true"/"false".
@@ -21,25 +41,305 @@ export function comparisonRowIsMatched(row) {
 }
 
 /**
- * True when this run row should participate in Score / Review: no error and at least one schema output field
- * has a non-empty value (so we do not send placeholder-only row_input for failed or empty model rows).
+ * True when this run row should participate in Score / Review pairing and tables.
+ * Includes API/runtime errors and empty model output (still comparable via input-column rules and shown in UI).
  */
 export function isValidRunOutputForScoreRow(r, outputFields) {
-  if (!r || r.error) return false;
-  const out = r.output;
-  if (!out || typeof out !== 'object') return false;
-  const fields = Array.isArray(outputFields) ? outputFields : [];
-  if (fields.length === 0) return Object.keys(out).length > 0;
-  for (const f of fields) {
-    const key = String(f.key || '').trim();
-    if (!key || !Object.prototype.hasOwnProperty.call(out, key)) continue;
-    const v = out[key];
-    if (v == null) continue;
-    if (Array.isArray(v)) {
-      if (v.some((x) => x != null && String(x).trim() !== '')) return true;
-    } else if (String(v).trim() !== '') return true;
+  void outputFields;
+  if (!r) return false;
+  return typeof r.row_index === 'number' && !Number.isNaN(r.row_index);
+}
+
+/**
+ * Score / Review / export 表格行顺序：按 run 的 row_index 升序，每一行对应一条 run 结果（已配对则 `{ type: 'gt', j }`，
+ * 未配对且不与任一 GT 规则匹配则为 `{ type: 'runOnly', i }`），最后附上「无对应 run」的 GT 行。
+ * 避免「先列全部 GT、再把无 GT 的 run 摞在底部」从而打乱 Run 结果的自然顺序。
+ *
+ * @param {{ runRowIndices: number[], runToGt: number[], gtToRun: number[], gtRowsLength: number, evaluateRunMatchesAnyGt: (i: number) => boolean }} p
+ * @returns {Array<{ type: 'gt', j: number, displayRunRowIndex?: number } | { type: 'runOnly', i: number }>}
+ */
+export function buildScoreResultDescriptorsInRunOrder(p) {
+  const { runRowIndices, runToGt, gtToRun, gtRowsLength, evaluateRunMatchesAnyGt } = p;
+  const sortedRunIndices = [...runRowIndices].sort((a, b) => a - b);
+  const descriptors = [];
+  const gtLen = Math.max(0, Number(gtRowsLength) || 0);
+  const r2g = runToGt || [];
+  for (const i of sortedRunIndices) {
+    const paired = i < r2g.length && r2g[i] >= 0;
+    if (paired) {
+      descriptors.push({ type: 'gt', j: r2g[i] });
+      continue;
+    }
+    if (!evaluateRunMatchesAnyGt(i)) {
+      descriptors.push({ type: 'runOnly', i });
+    }
   }
-  return false;
+  for (let j = 0; j < gtLen; j++) {
+    if (gtToRun[j] < 0) descriptors.push({ type: 'gt', j });
+  }
+  return descriptors;
+}
+
+/**
+ * 贪心配对后仍留在列表末尾、且 `gtToRun[j] < 0` 的 GT 中，若仅 input 规则已与某 run 行一致，则将该行插到该 run 在表中的「块」末尾，
+ * 并设置 `displayRunRowIndex`（用于斑马纹、Match 与未配对行的 **输入列/#**对齐；**输出列**不占用第二条 run，显示为 —）。无任何 input 匹配的 GT 仍留在末尾。
+ *
+ * @param {Array<{ type: 'gt', j: number, displayRunRowIndex?: number } | { type: 'runOnly', i: number }>} descriptors
+ * @param {{ runRowIndices: number[], runToGt: number[], gtToRun: number[], inputMatchesPairForRow: (iRun: number, jGt: number) => boolean }} p
+ */
+export function attachInputMatchedUnpairedGtDescriptors(descriptors, p) {
+  const { runRowIndices, runToGt = [], gtToRun = [], inputMatchesPairForRow } = p;
+  if (!Array.isArray(descriptors) || descriptors.length === 0) return descriptors;
+  if (typeof inputMatchesPairForRow !== 'function') return descriptors;
+
+  const floating = descriptors.filter((d) => d.type === 'gt' && gtToRun[d.j] < 0);
+  if (floating.length === 0) return descriptors;
+
+  const base = descriptors.filter((d) => !(d.type === 'gt' && gtToRun[d.j] < 0));
+  const sortedRuns = [...new Set(runRowIndices || [])].sort((a, b) => a - b);
+  const r2g = runToGt;
+
+  function anchoredRunIndex(d) {
+    if (d.type === 'runOnly') return d.i;
+    if (d.type === 'gt') {
+      const pr = gtToRun[d.j];
+      if (typeof pr === 'number' && pr >= 0) return pr;
+      const dr = d.displayRunRowIndex;
+      if (typeof dr === 'number' && dr >= 0) return dr;
+    }
+    return -1;
+  }
+
+  function findInsertAfterIndex(anchor) {
+    for (let k = base.length - 1; k >= 0; k--) {
+      if (anchoredRunIndex(base[k]) === anchor) return k + 1;
+    }
+    return -1;
+  }
+
+  const sortedFloat = [...floating].sort((a, b) => a.j - b.j);
+  for (const d0 of sortedFloat) {
+    const j = d0.j;
+    const matchedRuns = sortedRuns.filter((i) => inputMatchesPairForRow(i, j));
+    if (matchedRuns.length === 0) {
+      base.push({ type: 'gt', j });
+      continue;
+    }
+    const anchor = matchedRuns.find((i) => i < r2g.length && r2g[i] >= 0) ?? matchedRuns[0];
+    const insertAt = findInsertAfterIndex(anchor);
+    /** @type {{ type: 'gt', j: number, displayRunRowIndex?: number }} */
+    const row = { type: 'gt', j };
+    if (typeof anchor === 'number' && anchor >= 0) row.displayRunRowIndex = anchor;
+    if (insertAt < 0) base.push(row);
+    else base.splice(insertAt, 0, row);
+  }
+  return base;
+}
+
+/**
+ * Ground truth 列在 Score 表中的顺序：与数据表表头一致，不因 rule 树遍历顺序重排。
+ * 规则里引用但表中不存在的列按在规则中首次出现的顺序接在后面。
+ */
+export function orderScoreGtColsBySheetHeaders(colsUsedFirstPass, sheetHeaders) {
+  const used = colsUsedFirstPass || [];
+  const headers = sheetHeaders || [];
+  const want = new Set(used.filter(Boolean).map((c) => String(c).trim()));
+  if (want.size === 0) return [];
+  const out = [];
+  const taken = new Set();
+  for (const h of headers) {
+    const name = String(h ?? '').trim();
+    if (!name || !want.has(name) || taken.has(name)) continue;
+    out.push(h);
+    taken.add(name);
+  }
+  for (const c of used) {
+    if (!c) continue;
+    const name = String(c).trim();
+    if (!name || taken.has(name)) continue;
+    out.push(c);
+    taken.add(name);
+  }
+  return out;
+}
+
+/**
+ * 参与去重的 output key 顺序：与 Run 的 outputFields（schema）一致，不因 rule 顺序重排。
+ */
+export function orderScoreOutputKeysByOutputFields(keysUsedFirstPass, outputFields) {
+  const used = keysUsedFirstPass || [];
+  const fields = outputFields || [];
+  const want = new Set(used.map((k) => String(k).trim()).filter(Boolean));
+  if (want.size === 0) return [];
+  const out = [];
+  const taken = new Set();
+  for (const f of fields) {
+    const k = String(f.key || '').trim();
+    if (!k || !want.has(k) || taken.has(k)) continue;
+    out.push(f.key);
+    taken.add(k);
+  }
+  for (const k of used) {
+    const ks = String(k).trim();
+    if (!ks || taken.has(ks)) continue;
+    out.push(k);
+    taken.add(ks);
+  }
+  return out;
+}
+
+/**
+ * GT columns in Score / export / Review comparison: **all** ground-truth sheet headers (sheet order),
+ * then any rule-only columns (e.g. synthetic row index) not present in the sheet.
+ */
+export function buildScoreTableGtColumns(rulesFlat, rawGtContent) {
+  const sheetHeaders = (rawGtContent && Array.isArray(rawGtContent.headers)) ? rawGtContent.headers.slice() : [];
+  const fromRules = [];
+  for (const r of rulesFlat || []) {
+    for (const c of (r.gtColumns || [])) {
+      if (c && !fromRules.includes(c)) fromRules.push(c);
+    }
+  }
+  if (sheetHeaders.length === 0) {
+    return orderScoreGtColsBySheetHeaders(fromRules, []);
+  }
+  const out = sheetHeaders.slice();
+  const seen = new Set(sheetHeaders.map((h) => String(h ?? '').trim()).filter(Boolean));
+  for (const c of fromRules) {
+    const name = String(c ?? '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push(c);
+  }
+  return out;
+}
+
+/**
+ * GT columns referenced by rules only (sheet order + rule-only columns), for the “only columns used in rules” table filter.
+ */
+export function buildScoreTableGtColumnsRulesOnly(rulesFlat, rawGtContent) {
+  const fromRules = [];
+  for (const r of rulesFlat || []) {
+    for (const c of (r.gtColumns || [])) {
+      if (c && !fromRules.includes(c)) fromRules.push(c);
+    }
+  }
+  const sheetHeaders = (rawGtContent && Array.isArray(rawGtContent.headers)) ? rawGtContent.headers.slice() : [];
+  return orderScoreGtColsBySheetHeaders(fromRules, sheetHeaders);
+}
+
+function filterScoreInputHeadersByRules(rulesFlat, inputHeaders) {
+  const hs = inputHeaders || [];
+  return hs.filter((h) => {
+    const label = String(h ?? '').trim();
+    if (!label) return false;
+    const bracket = `[${label}]`;
+    return (rulesFlat || []).some((r) => String(r.outputKey || '').trim() === bracket);
+  });
+}
+
+function filterScoreOutputFieldsByRules(rulesFlat, outputFields) {
+  const keysFirst = [];
+  for (const r of rulesFlat || []) {
+    const k = String(r.outputKey || '').trim();
+    if (!keysFirst.includes(k)) keysFirst.push(k);
+  }
+  const orderedKeys = orderScoreOutputKeysByOutputFields(keysFirst, outputFields || []);
+  const fields = outputFields || [];
+  return orderedKeys.map((k) => fields.find((f) => String(f.key || '').trim() === String(k).trim())).filter(Boolean);
+}
+
+/** Rule 的 run 侧键是否对应「输出行号」列（# / [#]，与 getRunValue 一致）。 */
+function scoreRulesReferenceRunOutputRowIndex(rulesFlat) {
+  return (rulesFlat || []).some((r) => {
+    const k = String(r.outputKey || '').trim();
+    return k === '#' || k === '[#]';
+  });
+}
+
+const SCORE_ZEBRA_NO_RUN = '__no_run__';
+
+/**
+ * 斑马带键：仅由 input-side 规则在 **run 行**上的取值构成（不含 GT 单元格），同一 run / 同一输入带同色。
+ * 未配对 GT 且无 run 索引时：若当前结果集只有一条 run，则用该 run 取 input，使「1 条 run + 多条 GT」同属一条斑马带。
+ */
+function buildScoreInputBandKey(iRun, jGt, inputLeaves, resultsByIndex, runWs, outputFields, gtContent, getRunValue, getGtValue) {
+  void jGt;
+  void gtContent;
+  void getGtValue;
+  let effectiveIRun = iRun;
+  if (typeof effectiveIRun !== 'number' || effectiveIRun < 0) {
+    if (resultsByIndex.size === 1) {
+      effectiveIRun = resultsByIndex.keys().next().value;
+    }
+  }
+  const rr = typeof effectiveIRun === 'number' && effectiveIRun >= 0 ? resultsByIndex.get(effectiveIRun) : null;
+  const parts = [];
+  for (const rule of inputLeaves) {
+    const rv = rr ? getRunValue(rr, rule.outputKey, effectiveIRun, runWs, outputFields) : '';
+    parts.push(`${String(rule.outputKey || '')}\0${rv}`);
+  }
+  return parts.join('\u0002');
+}
+
+/**
+ * 斑马纹：input 规则树定义带键；无 input 叶子时回退为 input_row_index。
+ */
+function buildScoreZebraStripes(
+  displayDescriptors,
+  resultsByIndex,
+  gtToRun,
+  inputRoot,
+  runWs,
+  outputFields,
+  gtContent,
+  getRunValue,
+  getGtValue,
+) {
+  const inputLeaves = flattenScoreRules(inputRoot || emptyScoreRuleGroup());
+  const g2r = gtToRun || [];
+  const keyToStripe = new Map();
+  let ord = 0;
+  const stripes = [];
+  const list = displayDescriptors || [];
+
+  function effectiveGtRunRowIndex(d) {
+    if (d.type !== 'gt') return -1;
+    let runRowIndex = g2r[d.j];
+    if (typeof runRowIndex !== 'number' || runRowIndex < 0) {
+      const dr = d.displayRunRowIndex;
+      if (typeof dr === 'number' && dr >= 0) runRowIndex = dr;
+    }
+    return typeof runRowIndex === 'number' && runRowIndex >= 0 ? runRowIndex : -1;
+  }
+
+  function stripeKeyFor(d) {
+    if (inputLeaves.length === 0) {
+      if (d.type === 'gt') {
+        const iRun = effectiveGtRunRowIndex(d);
+        if (iRun < 0) return SCORE_ZEBRA_NO_RUN;
+        const rr = resultsByIndex.get(iRun) || null;
+        return rr ? (rr.input_row_index ?? iRun) : SCORE_ZEBRA_NO_RUN;
+      }
+      const rr = resultsByIndex.get(d.i) || null;
+      return rr ? (rr.input_row_index ?? d.i) : d.i;
+    }
+    if (d.type === 'gt') {
+      const i = effectiveGtRunRowIndex(d);
+      return buildScoreInputBandKey(i, d.j, inputLeaves, resultsByIndex, runWs, outputFields, gtContent, getRunValue, getGtValue);
+    }
+    return buildScoreInputBandKey(d.i, -1, inputLeaves, resultsByIndex, runWs, outputFields, gtContent, getRunValue, getGtValue);
+  }
+
+  for (let idx = 0; idx < list.length; idx++) {
+    const k = stripeKeyFor(list[idx]);
+    if (!keyToStripe.has(k)) {
+      keyToStripe.set(k, ord % 2);
+      ord++;
+    }
+    stripes.push(keyToStripe.get(k));
+  }
+  return stripes;
 }
 
 /** Comparison type (single choice). Legacy `contains` / `gt-contains-run` become String match + matchFlags.contains. */
@@ -72,7 +372,7 @@ const DEFAULT_MATCH_FLAGS = {
 /** Numeric compare mode (only when matchType === 'numeric'); single choice in the rule editor. */
 const NUMERIC_COMPARE_MODES = [
   { value: 'exact', label: 'Exact: values must be numerically equal' },
-  { value: 'abs', label: 'Absolute margin: |result - GT| ≤ ε' },
+  { value: 'abs', label: 'Absolute margin: |value − ground truth| ≤ ε' },
   { value: 'rel', label: 'Relative margin: proportional difference (r)' },
   { value: 'decimals', label: 'Decimal rounding: equal after rounding to N places' },
 ];
@@ -243,13 +543,16 @@ export function embeddingPairMatches(runValRaw, gtValRaw, embeddingCosineMap) {
  * Collect unique (result, GT) string pairs for rules that use embedding similarity, then call the backend once per chunk.
  * @param {string} apiBase e.g. http://localhost:8000
  */
-export async function prefetchEmbeddingCosineMap(apiBase, { root, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
+export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
+  const rootsToWalk = Array.isArray(roots) && roots.length > 0 ? roots.filter(Boolean) : (root != null ? [root] : []);
   const leafRules = [];
-  (function walk(n) {
-    if (!n) return;
-    if (n.type === 'rule') leafRules.push(n);
-    if (n.type === 'group' && Array.isArray(n.children)) n.children.forEach(walk);
-  })(root);
+  for (const rt of rootsToWalk) {
+    (function walk(n) {
+      if (!n) return;
+      if (n.type === 'rule') leafRules.push(n);
+      if (n.type === 'group' && Array.isArray(n.children)) n.children.forEach(walk);
+    })(rt);
+  }
   const embeddingRules = leafRules.filter((rule) => {
     const f = getMatchFlags(rule);
     return migrateLegacyMatchType(rule.matchType) === 'exact' && f.embeddingSimilarity;
@@ -345,6 +648,364 @@ export async function runReviewFromScore({ scoreNodeId, getReviewPayload, creden
   return runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview: addEvent.detail?.registerPendingReview }).then(() => ({ reviewNodeId }));
 }
 
+/** @param {unknown} raw */
+function reviewPreviewCellHtml(raw) {
+  if (raw == null || raw === '') return '<span class="review-selection-preview-empty">—</span>';
+  let s;
+  if (typeof raw === 'object') s = JSON.stringify(raw);
+  else s = String(raw);
+  s = s.replace(/\s+/g, ' ').trim();
+  if (!s) return '<span class="review-selection-preview-empty">—</span>';
+  const max = 480;
+  if (s.length <= max) return escapeHtml(s);
+  const short = `${s.slice(0, max)}…`;
+  return `<span class="review-selection-preview-clip" title="${escapeAttr(s)}">${escapeHtml(short)}</span>`;
+}
+
+function buildReviewPreviewInputBlock(rowInput, promptSections) {
+  const obj = rowInput && typeof rowInput === 'object' ? rowInput : {};
+  const ordered = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
+  const seen = new Set();
+  /** @type {{ k: string, raw: unknown }[]} */
+  const pairs = [];
+  for (const k of ordered) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) {
+      pairs.push({ k, raw: obj[k] });
+      seen.add(k);
+    }
+  }
+  for (const k of Object.keys(obj).sort()) {
+    if (!seen.has(k)) pairs.push({ k, raw: obj[k] });
+  }
+  if (pairs.length === 0) {
+    return '<p class="review-selection-preview-empty">No prompt placeholders / inputs for this worksheet row.</p>';
+  }
+  return `<dl class="review-selection-preview-kv">${pairs.map(({ k, raw }) => `
+    <div class="review-selection-preview-kv-pair">
+      <dt>${escapeHtml(k)}</dt>
+      <dd>${reviewPreviewCellHtml(raw)}</dd>
+    </div>`).join('')}</dl>`;
+}
+
+/**
+ * Group key + sort order for Review preview: primary = worksheet input index; GT-only = GT row; else run row fallback.
+ * @param {any} r
+ */
+function reviewPreviewInputGroupMeta(r) {
+  if (typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index)) {
+    const i = r.input_row_index;
+    return {
+      key: `in:${i}`,
+      sortKey: i,
+      title: `Input #${i + 1}`,
+      hint: 'Worksheet row mapped into the prompt',
+    };
+  }
+  if (r.gt_only === true && typeof r.source_gt_row_index === 'number' && !Number.isNaN(r.source_gt_row_index)) {
+    const j = r.source_gt_row_index;
+    return {
+      key: `gtonly:${j}`,
+      sortKey: 1_000_000 + j,
+      title: `Ground truth #${j + 1}`,
+      hint: 'GT-only line in Score — no paired model output',
+    };
+  }
+  const ri = typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : 0;
+  return {
+    key: `run:${ri}`,
+    sortKey: 1_500_000 + ri,
+    title: `${formatResultOutputColumnLabel('#')} ${ri + 1}`,
+    hint: 'No worksheet input index on this payload — grouped by run output row',
+  };
+}
+
+/** True when there is nothing to show as model output (GT-only or empty run_output). */
+function reviewPreviewRowHasNoModelOutput(r) {
+  if (r.gt_only === true) return true;
+  const ro = r?.run_output && typeof r.run_output === 'object' ? r.run_output : {};
+  const keys = Object.keys(ro);
+  if (keys.length === 0) return true;
+  return keys.every((k) => {
+    const v = ro[k];
+    if (v == null) return true;
+    if (typeof v === 'string' && !String(v).trim()) return true;
+    if (Array.isArray(v) && v.length === 0) return true;
+    return false;
+  });
+}
+
+/** True when ground_truth_output is all empty and expected is empty or placeholder em dash. */
+function reviewPreviewRowHasNoGroundTruth(r) {
+  const gto = r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {};
+  const keys = Object.keys(gto);
+  const gtoAllEmpty =
+    keys.length === 0 ||
+    keys.every((k) => {
+      const v = gto[k];
+      if (v == null) return true;
+      if (typeof v === 'string' && !String(v).trim()) return true;
+      if (Array.isArray(v) && v.length === 0) return true;
+      return false;
+    });
+  const exp = r.expected == null ? '' : String(r.expected).replace(/\s+/g, ' ').trim();
+  const expEmpty = exp === '' || exp === '—';
+  return gtoAllEmpty && expEmpty;
+}
+
+/**
+ * Output / GT column keys for the Review preview tables (payload order when configured, else union of row keys).
+ * @param {any[]} outputFields
+ * @param {any[]} rows
+ * @returns {{ key: string, label: string }[]}
+ */
+function collectReviewPreviewOutputColumnDefs(outputFields, rows) {
+  const fields = Array.isArray(outputFields) ? outputFields : [];
+  if (fields.length > 0) {
+    return fields
+      .map((f) => {
+        const key = String(f.key || '').trim();
+        const label = formatResultOutputColumnLabel((f.display || f.key || '').trim() || key || '—');
+        return { key, label };
+      })
+      .filter((c) => c.key);
+  }
+  const keySet = new Set();
+  for (const r of rows) {
+    const ro = r?.run_output && typeof r.run_output === 'object' ? r.run_output : {};
+    for (const k of Object.keys(ro)) keySet.add(k);
+    const gto = r?.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {};
+    for (const k of Object.keys(gto)) keySet.add(k);
+  }
+  return [...keySet].sort().map((key) => ({ key, label: formatResultOutputColumnLabel(key) }));
+}
+
+/** Match / mismatch + GT-only chips for one score line (table cell). */
+function reviewPreviewResultChipsHtml(r) {
+  const matched = comparisonRowIsMatched(r);
+  const gtOnly = r.gt_only === true;
+  const chipMatch = matched
+    ? '<span class="review-selection-preview-chip review-selection-preview-chip--ok">Match</span>'
+    : '<span class="review-selection-preview-chip review-selection-preview-chip--bad">Mismatch</span>';
+  const chipGt = gtOnly ? '<span class="review-selection-preview-chip review-selection-preview-chip--info">GT only</span>' : '';
+  return `<span class="review-selection-preview-table-chips">${chipMatch}${chipGt}</span>`;
+}
+
+/** One table: every checked score line × all model output fields (same order as Score table). */
+function buildReviewPreviewModelOutputTable(rows, outputFields) {
+  if (!rows.length) return '<p class="review-selection-preview-empty">—</p>';
+  const cols = collectReviewPreviewOutputColumnDefs(outputFields, rows);
+  const runHashLabel = formatResultOutputColumnLabel('#');
+  const thFields = cols.map((c) => `<th scope="col">${escapeHtml(c.label)}</th>`).join('');
+  const thead = `<thead><tr>
+    <th scope="col">Score #</th>
+    <th scope="col" title="Run result row (1-based)">${escapeHtml(runHashLabel)}</th>
+    <th scope="col">Result</th>
+    ${thFields}
+  </tr></thead>`;
+  const tbody = `<tbody>${rows
+    .map((r) => {
+      const scoreTableRow = r.score_table_row != null && r.score_table_row !== '' ? String(r.score_table_row) : '—';
+      const runNum =
+        typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? String(r.row_index + 1) : '—';
+      const ro =
+        r.gt_only === true ? {} : r.run_output && typeof r.run_output === 'object' ? r.run_output : {};
+      const cells = cols.map((c) => `<td>${reviewPreviewCellHtml(ro[c.key])}</td>`).join('');
+      return `<tr>
+      <td>${escapeHtml(scoreTableRow)}</td>
+      <td>${escapeHtml(runNum)}</td>
+      <td>${reviewPreviewResultChipsHtml(r)}</td>
+      ${cells}
+    </tr>`;
+    })
+    .join('')}</tbody>`;
+  return `<div class="review-selection-preview-table-scroll"><table class="review-selection-preview-big-table">${thead}${tbody}</table></div>`;
+}
+
+/** One table: every checked score line × expected per field + full rule-target text. */
+function buildReviewPreviewGroundTruthTable(rows, outputFields) {
+  if (!rows.length) return '<p class="review-selection-preview-empty">—</p>';
+  const cols = collectReviewPreviewOutputColumnDefs(outputFields, rows);
+  const runHashLabel = formatResultOutputColumnLabel('#');
+  const thFields = cols
+    .map(
+      (c) =>
+        `<th scope="col">${escapeHtml(c.label)} <span class="review-selection-preview-th-hint">(expected)</span></th>`,
+    )
+    .join('');
+  const thead = `<thead><tr>
+    <th scope="col">Score #</th>
+    <th scope="col" title="Run result row (1-based)">${escapeHtml(runHashLabel)}</th>
+    <th scope="col">Result</th>
+    ${thFields}
+    <th scope="col">Rule targets <span class="review-selection-preview-th-hint">(all text)</span></th>
+  </tr></thead>`;
+  const tbody = `<tbody>${rows
+    .map((r) => {
+      const scoreTableRow = r.score_table_row != null && r.score_table_row !== '' ? String(r.score_table_row) : '—';
+      const runNum =
+        typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? String(r.row_index + 1) : '—';
+      const gto = r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {};
+      const cells = cols.map((c) => `<td>${reviewPreviewCellHtml(gto[c.key])}</td>`).join('');
+      const expRaw = r.expected == null ? '' : String(r.expected).replace(/\s+/g, ' ').trim();
+      const expDisp = expRaw === '—' ? '' : expRaw;
+      return `<tr>
+      <td>${escapeHtml(scoreTableRow)}</td>
+      <td>${escapeHtml(runNum)}</td>
+      <td>${reviewPreviewResultChipsHtml(r)}</td>
+      ${cells}
+      <td>${reviewPreviewCellHtml(expDisp)}</td>
+    </tr>`;
+    })
+    .join('')}</tbody>`;
+  return `<div class="review-selection-preview-table-scroll"><table class="review-selection-preview-big-table">${thead}${tbody}</table></div>`;
+}
+
+/**
+ * Debug modal: Review-checked rows shown as Input # key-value blocks and Ground truth # key-value blocks.
+ * Does not add a Review node or call the analyze API.
+ * @param {{ getReviewPayload: () => unknown }} options
+ */
+export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
+  if (typeof getReviewPayload !== 'function') return;
+  const payload = await Promise.resolve(getReviewPayload());
+  if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) {
+    showAlert('Cannot build Review data. Ensure the Score node is connected to a Run with a prompt that has sections.', { title: 'Debug: Review rows' });
+    return;
+  }
+  const comparisonRows = Array.isArray(payload.comparison_rows) ? payload.comparison_rows : [];
+  if (comparisonRows.length === 0) {
+    showAlert('No rows selected for Review. Turn on the Review checkboxes in the Score results table for the rows you want.', { title: 'Debug: Review rows' });
+    return;
+  }
+
+  /** Render a key-value object as a definition list. */
+  function kvHtml(obj) {
+    if (!obj || typeof obj !== 'object') return '<span class="review-diagnosis-detail-empty">—</span>';
+    const pairs = Object.entries(obj);
+    if (pairs.length === 0) return '<span class="review-diagnosis-detail-empty">—</span>';
+    const MAX = 480;
+    const cell = (raw) => {
+      if (raw == null || raw === '') return '<span class="review-diagnosis-detail-empty">—</span>';
+      let s = typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+      s = s.replace(/\s+/g, ' ').trim();
+      if (!s) return '<span class="review-diagnosis-detail-empty">—</span>';
+      if (s.length > MAX) return `<span title="${escapeAttr(s)}">${escapeHtml(s.slice(0, MAX))}\u2026</span>`;
+      return escapeHtml(s);
+    };
+    return `<dl class="review-suggestion-debug-kv">${pairs.map(([k, v]) =>
+      `<div class="review-suggestion-debug-kv-pair"><dt>${escapeHtml(k)}</dt><dd>${cell(v)}</dd></div>`
+    ).join('')}</dl>`;
+  }
+
+  // Collect unique inputs (by input_row_index) and GT rows (by source_gt_row_index + 1)
+  const inputMap = new Map();      // input_row_index → { rowInput, total, failed, gtNums: Set<gt_row_1based> }
+  const gtMap = new Map();         // source_gt_row_index + 1 → ground_truth_output
+  for (const r of comparisonRows) {
+    const inpKey = r.input_row_index != null ? r.input_row_index : null;
+    const gtKey = r.source_gt_row_index != null ? r.source_gt_row_index + 1 : null;
+    if (inpKey !== null) {
+      if (!inputMap.has(inpKey)) inputMap.set(inpKey, { rowInput: null, total: 0, failed: 0, gtNums: new Set() });
+      const entry = inputMap.get(inpKey);
+      entry.total += 1;
+      if (!comparisonRowIsMatched(r)) entry.failed += 1;
+      if (entry.rowInput == null && r.row_input && typeof r.row_input === 'object') entry.rowInput = r.row_input;
+      if (gtKey !== null) entry.gtNums.add(gtKey);
+    }
+    if (gtKey !== null && !gtMap.has(gtKey)) {
+      const raw = r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : null;
+      if (raw) {
+        const gto = Object.fromEntries(
+          Object.entries(raw).filter(([k]) => {
+            const key = String(k || '').trim();
+            if (!key || key === '#' || key === '[#]') return false;
+            if (key.length >= 2 && key.startsWith('[') && key.endsWith(']')) return false;
+            return true;
+          }),
+        );
+        if (Object.keys(gto).length > 0) gtMap.set(gtKey, gto);
+      }
+    }
+  }
+
+  const inputBlocksHtml = inputMap.size > 0
+    ? [...inputMap.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([idx, { rowInput, total, failed, gtNums }]) => {
+          const failBadge = failed > 0
+            ? ` <span class="review-debug-fail-badge">${escapeHtml(String(failed))}/${escapeHtml(String(total))} failed</span>`
+            : ` <span class="review-debug-pass-badge">passed</span>`;
+          const gtLabel = gtNums.size > 0
+            ? [...gtNums].sort((a, b) => a - b).map((n) => `Ground truth #${n}`).join(', ')
+            : null;
+          const gtLine = gtLabel
+            ? `<p class="review-suggestion-debug-gt-link">${escapeHtml(gtLabel)}</p>`
+            : '';
+          return `<section class="review-suggestion-debug-section">
+            <h3 class="review-suggestion-debug-section-title">Input #${escapeHtml(String(idx + 1))}${failBadge}</h3>
+            ${gtLine}
+            ${kvHtml(rowInput)}
+          </section>`;
+        })
+        .join('')
+    : '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">No input data.</p>';
+
+  const gtBlocksHtml = gtMap.size > 0
+    ? [...gtMap.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([scoreNum, gto]) =>
+          `<section class="review-suggestion-debug-section">
+            <h3 class="review-suggestion-debug-section-title">Ground truth #${escapeHtml(String(scoreNum))}</h3>
+            ${kvHtml(gto)}
+          </section>`)
+        .join('')
+    : '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">No ground truth data.</p>';
+
+  const totalFailed = comparisonRows.filter((r) => !comparisonRowIsMatched(r)).length;
+  const inputsFailed = [...inputMap.values()].filter((e) => e.failed > 0).length;
+
+  const summaryHtml = `
+    <table class="review-suggestion-debug-table">
+      <tbody>
+        <tr><th scope="row">Score lines</th><td>${escapeHtml(String(comparisonRows.length))}${totalFailed > 0 ? ` <span class="review-debug-fail-badge">${escapeHtml(String(totalFailed))} failed</span>` : ''}</td></tr>
+        <tr><th scope="row">Inputs</th><td>${escapeHtml(String(inputMap.size))}${inputsFailed > 0 ? ` <span class="review-debug-fail-badge">${escapeHtml(String(inputsFailed))} with failures</span>` : ''}</td></tr>
+        <tr><th scope="row">Ground truth rows</th><td>${escapeHtml(String(gtMap.size))}</td></tr>
+      </tbody>
+    </table>`;
+
+  const bodyHtml = summaryHtml +
+    `<h2 class="review-suggestion-debug-group-title">Input</h2>${inputBlocksHtml}` +
+    `<h2 class="review-suggestion-debug-group-title">Ground truth</h2>${gtBlocksHtml}`;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'review-selection-preview-title');
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--review-diagnosis-detail" role="dialog">
+      <div class="modal-header">
+        <h2 id="review-selection-preview-title" class="modal-title">Debug: Review rows</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body review-diagnosis-detail-body review-suggestion-debug-body">
+        ${bodyHtml}
+      </div>
+    </div>
+  `;
+
+  function close() {
+    overlay.remove();
+    if (!document.querySelector('.modal-overlay')) document.body.style.overflow = '';
+  }
+
+  overlay.querySelector('.modal-close')?.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  document.body.style.overflow = 'hidden';
+  document.body.appendChild(overlay);
+}
+
 /**
  * Start review API (POST 202). Polling and event processing done by workflowCanvas.
  * @param {{ reviewNodeId: string, payload: object, credentialId: string, registerPendingReview?: (nodeId: string, reviewId: string) => void }} options
@@ -369,7 +1030,6 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
       expected: r.expected || '',
       ground_truth_output: r.ground_truth_output && typeof r.ground_truth_output === 'object' ? r.ground_truth_output : {},
       comparison_types: r.comparison_types ?? null,
-      comment: r.comment ?? null,
       row_input: r.row_input ?? null,
       gt_only: r.gt_only === true,
       source_gt_row_index: typeof r.source_gt_row_index === 'number' && !Number.isNaN(r.source_gt_row_index) ? r.source_gt_row_index : null,
@@ -422,7 +1082,41 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
   }
 }
 
-export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas }) {
+function mergeScoreGroupOpsAfterChildRemove(ops, idx, n) {
+  if (n <= 1) return [];
+  const o = (ops || []).slice();
+  if (idx === 0) return o.slice(1);
+  if (idx === n - 1) return o.slice(0, -1);
+  o.splice(idx - 1, 2, o[idx - 1]);
+  return o;
+}
+
+function insertScoreGroupOpsAfterChildInsert(ops, idx, nChildrenAfterInsert) {
+  if (nChildrenAfterInsert <= 1) return [];
+  const o = (ops || []).slice();
+  if (idx === 0) return ['AND', ...o];
+  if (idx === nChildrenAfterInsert - 1) return [...o, 'AND'];
+  return [...o.slice(0, idx - 1), 'AND', o[idx - 1], ...o.slice(idx)];
+}
+
+/** Reorder one level of a score group (top-level root or nested group). Keeps AND/OR ops with sensible merge/split defaults. */
+function moveScoreGroupChildren(group, fromIndex, toIndex) {
+  if (!group || group.type !== 'group' || !Array.isArray(group.children)) return group;
+  const ch = group.children.slice();
+  const n = ch.length;
+  const ops =
+    Array.isArray(group.ops) && group.ops.length === n - 1
+      ? group.ops.slice()
+      : Array(Math.max(0, n - 1)).fill('AND');
+  if (fromIndex === toIndex || fromIndex < 0 || fromIndex >= n || toIndex < 0 || toIndex >= n) return group;
+  const [el] = ch.splice(fromIndex, 1);
+  const opsAfterRemove = mergeScoreGroupOpsAfterChildRemove(ops, fromIndex, n);
+  ch.splice(toIndex, 0, el);
+  const newOps = insertScoreGroupOpsAfterChildInsert(opsAfterRemove, toIndex, ch.length);
+  return { ...group, children: ch, ops: newOps };
+}
+
+export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas, getRunInputColsCollapsed, setRunInputColsCollapsed, getScoreOutputColsCollapsed, setScoreOutputColsCollapsed, getScoreGtColsCollapsed, setScoreGtColsCollapsed }) {
   getWorkingSets = getWorkingSets || (() => []);
   getRunResultColumns = getRunResultColumns || (() => []);
   getGroundTruthHeaders = getGroundTruthHeaders || (() => []);
@@ -502,31 +1196,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /** Parse stored value: array (legacy) -> tree root; keep tree (groups allowed). */
-  function parseScoreRoot(raw) {
-    let data;
-    try {
-      data = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw;
-    } catch (_) {
-      return { type: 'group', ops: [], children: [] };
-    }
-    if (data && data.type === 'group' && Array.isArray(data.children)) {
-      const children = (data.children || []).map((c) => (c && c.type === 'group')
-        ? normalizeGroupChild(c)
-        : normalizeChild(c));
-      const ops = ensureGroupOps(data, children);
-      return { type: 'group', ops, children };
-    }
-    const rules = normalizeToRules(Array.isArray(data) ? data : []);
-    const children = rules.map((r) => ({
-      type: 'rule',
-      outputKey: r.outputKey || '',
-      gtColumns: (r.gtColumns || []).slice(),
-      matchType: migrateLegacyMatchType(r.matchType || 'exact'),
-      matchFlags: { ...DEFAULT_MATCH_FLAGS, ...(r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {}) },
-    }));
-    return { type: 'group', ops: Array(Math.max(0, children.length - 1)).fill('AND'), children };
-  }
-
   function ensureGroupOps(data, children) {
     const n = (children || []).length;
     const len = Math.max(0, n - 1);
@@ -540,7 +1209,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   function normalizeGroupChild(c) {
     const children = (c.children || []).map((ch) => (ch && ch.type === 'group') ? normalizeGroupChild(ch) : normalizeChild(ch));
     const ops = ensureGroupOps(c, children);
-    return { type: 'group', ops, children };
+    const out = { type: 'group', ops, children };
+    if (typeof c.groupId === 'number' && Number.isInteger(c.groupId) && c.groupId > 0) out.groupId = c.groupId;
+    return out;
   }
 
   function normalizeChild(c) {
@@ -548,25 +1219,65 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const rawMt = (c && c.matchType) || 'exact';
       const f = { ...DEFAULT_MATCH_FLAGS, ...((c && c.matchFlags && typeof c.matchFlags === 'object') ? c.matchFlags : {}) };
       if (legacyMatchTypeWasContains(rawMt)) f.contains = true;
-      return {
+      const leaf = {
         type: 'rule',
         outputKey: (c && c.outputKey) || '',
         gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
         matchType: migrateLegacyMatchType(rawMt),
         matchFlags: canonicalizeMatchFlags(f),
       };
+      return leaf;
     }
     return normalizeGroupChild(c);
   }
 
-  function getRoot() {
-    return parseScoreRoot(node?.dataset?.scoreMapping || '[]');
+  /** Which rule sub-panel is active: 'input' | 'output'. */
+  let activeRulesTab = 'input';
+
+  function loadBundle() {
+    return parseScoreMappingBundle(node?.dataset?.scoreMapping || '{}');
   }
 
-  function setRoot(root) {
+  /**
+   * @param {{ clearOutputOnInputShrink?: boolean }} [opts] - If true (user edited Input tree): when input leaf count
+   *   decreases, clear all Output → GT rules. GT header filter / open-modal sanitize must not pass this.
+   */
+  function persistBundle(inputRoot, outputRoot, opts) {
     if (!node) return;
-    node.dataset.scoreMapping = JSON.stringify(root);
+    const clearOutputOnInputShrink = opts && opts.clearOutputOnInputShrink === true;
+    let out = outputRoot;
+    const nextInCount = flattenScoreRules(inputRoot || emptyScoreRuleGroup()).length;
+    if (nextInCount === 0) {
+      out = emptyScoreRuleGroup();
+    } else if (clearOutputOnInputShrink) {
+      const prev = parseScoreMappingBundle(node.dataset.scoreMapping || '{}');
+      const prevInCount = flattenScoreRules(prev.inputRoot || emptyScoreRuleGroup()).length;
+      if (prevInCount > nextInCount) {
+        out = emptyScoreRuleGroup();
+      }
+    }
+    node.dataset.scoreMapping = serializeScoreMappingBundle(inputRoot, out);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  }
+
+  /** At least one Input → GT leaf rule (required before editing Output → GT). */
+  function hasScoreInputRules() {
+    const { inputRoot } = loadBundle();
+    return flattenScoreRules(inputRoot || emptyScoreRuleGroup()).length > 0;
+  }
+
+  function getActiveRoot() {
+    const { inputRoot, outputRoot } = loadBundle();
+    return activeRulesTab === 'input' ? inputRoot : outputRoot;
+  }
+
+  function setActiveRoot(newRoot) {
+    const { inputRoot, outputRoot } = loadBundle();
+    if (activeRulesTab === 'input') {
+      persistBundle(newRoot, outputRoot, { clearOutputOnInputShrink: true });
+    } else {
+      persistBundle(inputRoot, newRoot);
+    }
   }
 
   /** Flatten tree to array of rules (depth-first) for results table and rule cards by path. */
@@ -583,9 +1294,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return [];
   }
 
-  /** Get flat list of rules for backward-compat APIs (e.g. results table columns). */
+  /** Get flat list of rules from both input and output trees (results table columns, dedupe). */
   function getRulesFlat() {
-    return collectRulesFlat(getRoot()).map((x) => x.rule);
+    const { inputRoot, outputRoot } = loadBundle();
+    return [
+      ...collectRulesFlat(inputRoot).map((x) => x.rule),
+      ...collectRulesFlat(outputRoot).map((x) => x.rule),
+    ];
   }
 
   /** Collect group subtree for memory (preserves ops + nested rules/groups). */
@@ -593,13 +1308,14 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!group || group.type !== 'group' || !Array.isArray(group.children)) return null;
     const children = group.children.map((ch) => {
       if (ch.type === 'rule') {
-        return {
+        const leaf = {
           type: 'rule',
           outputKey: (ch.outputKey || '').trim(),
           gtColumns: (ch.gtColumns || []).slice(),
           matchType: migrateLegacyMatchType(ch.matchType || 'exact'),
           matchFlags: getMatchFlags(ch),
         };
+        return leaf;
       }
       return collectGroupForMemory(ch);
     }).filter(Boolean);
@@ -612,21 +1328,25 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     Object.keys(ruleEditorMemory).forEach((k) => delete ruleEditorMemory[k]);
     (getScoreMappingsFromCanvas() || []).forEach((raw) => {
       try {
-        const root = parseScoreRoot(raw);
-        if (!root || root.type !== 'group' || !Array.isArray(root.children)) return;
-        root.children.forEach((ch) => {
-          if (ch.type === 'rule') {
-            const outputKey = (ch.outputKey || '').trim();
-            const flags = getMatchFlags(ch);
-            const gtCols = (ch.gtColumns || []).map((c) => String(c || '').trim()).filter(Boolean);
-            if (outputKey && gtCols.length > 0) {
-              ruleEditorMemoryOrdered.push({ type: 'rule', outputKey, gtColumns: gtCols, matchType: migrateLegacyMatchType(ch.matchType || 'exact'), matchFlags: { ...flags } });
-              gtCols.forEach((g) => { ruleEditorMemory[outputKey + '\t' + g] = { matchType: migrateLegacyMatchType(ch.matchType || 'exact'), matchFlags: { ...flags } }; });
+        const rawStr = typeof raw === 'string' ? raw : JSON.stringify(raw ?? {});
+        const { inputRoot, outputRoot } = parseScoreMappingBundle(rawStr);
+        [inputRoot, outputRoot].forEach((root, treeIdx) => {
+          const scoreMemorySide = treeIdx === 0 ? 'input' : 'output';
+          if (!root || root.type !== 'group' || !Array.isArray(root.children)) return;
+          root.children.forEach((ch) => {
+            if (ch.type === 'rule') {
+              const outputKey = (ch.outputKey || '').trim();
+              const flags = getMatchFlags(ch);
+              const gtCols = (ch.gtColumns || []).map((c) => String(c || '').trim()).filter(Boolean);
+              if (outputKey && gtCols.length > 0) {
+                ruleEditorMemoryOrdered.push({ type: 'rule', scoreMemorySide, outputKey, gtColumns: gtCols, matchType: migrateLegacyMatchType(ch.matchType || 'exact'), matchFlags: { ...flags } });
+                gtCols.forEach((g) => { ruleEditorMemory[outputKey + '\t' + g] = { matchType: migrateLegacyMatchType(ch.matchType || 'exact'), matchFlags: { ...flags } }; });
+              }
+            } else if (ch.type === 'group') {
+              const collected = collectGroupForMemory(ch);
+              if (collected) ruleEditorMemoryOrdered.push({ type: 'group', scoreMemorySide, ...collected });
             }
-          } else if (ch.type === 'group') {
-            const collected = collectGroupForMemory(ch);
-            if (collected) ruleEditorMemoryOrdered.push({ type: 'group', ...collected });
-          }
+          });
         });
       } catch (_) {}
     });
@@ -667,6 +1387,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   /** Get GT cell value for row i and column name. */
   function getGtValue(gtContent, rowIndex, columnName) {
+    if (String(columnName).trim() === SCORE_GT_ROW_INDEX_COLUMN) {
+      if (typeof rowIndex !== 'number' || rowIndex < 0) return '';
+      return toCompareStr(rowIndex);
+    }
     const headers = gtContent.headers || [];
     const rows = gtContent.rows || [];
     const colIdx = headers.findIndex((h) => String(h).trim() === String(columnName).trim());
@@ -674,33 +1398,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return '';
   }
 
-  /** 按用户选定的 GT 列去重，保留首次出现。 */
-  function deduplicateGtRows(gtContent, gtColsUsed) {
-    if (!gtColsUsed || gtColsUsed.length === 0) return gtContent;
-    const rows = gtContent.rows || [];
-    const seen = new Set();
-    const dedupRows = [];
-    for (let i = 0; i < rows.length; i++) {
-      const key = JSON.stringify(gtColsUsed.map((col) => getGtValue(gtContent, i, col)));
-      if (seen.has(key)) continue;
-      seen.add(key);
-      dedupRows.push(rows[i]);
+  /** Table/search display: synthetic GT row column shows 1-based index (same as fixed “Ground truth: #” column). */
+  function getGtValueForDisplay(gtContent, rowIndex, columnName) {
+    if (String(columnName).trim() === SCORE_GT_ROW_INDEX_COLUMN) {
+      if (typeof rowIndex !== 'number' || rowIndex < 0) return '';
+      return String(rowIndex + 1);
     }
-    return { ...gtContent, rows: dedupRows };
-  }
-
-  /** 按用户选定的 output 列去重，保留首次出现。 */
-  function deduplicateResults(results, outputKeys, runWs, outputFields) {
-    if (!outputKeys || outputKeys.length === 0) return results || [];
-    const seen = new Set();
-    const dedupResults = [];
-    for (const r of (results || [])) {
-      const key = JSON.stringify(outputKeys.map((k) => getRunValue(r, k, r.row_index, runWs, outputFields)));
-      if (seen.has(key)) continue;
-      seen.add(key);
-      dedupResults.push(r);
-    }
-    return dedupResults;
+    return getGtValue(gtContent, rowIndex, columnName);
   }
 
   /**
@@ -760,57 +1464,19 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /**
-   * Count how many leaf rules match for (run row i, GT row j). Used for pairing only.
+   * 贪心配对 run 与 GT（实现见 scoreRunGtPairing.js）。
    */
-  function countMatchingRules(root, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) {
-    const rules = collectRulesFlat(root).map((x) => x.rule);
-    return rules.filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;
-  }
-
-  /**
-   * 贪心配对 run 与 GT。resultsByIndex 用 row_index 做 key（每行唯一）。
-   * 1 input → 多 output 时，每行有独立 row_index，不会覆盖。
-   */
-  function computeMatchPerRow(root, results, outputFields, runWs, gtContent) {
-    const gtRows = gtContent.rows || [];
-    const resultsByIndex = new Map();
-    (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
-    const nonErrorResults = (results || []).filter((r) => !r.error);
-    const inputRowCount = runWs?.rows?.length ?? 0;
-    const gtCount = gtRows.length;
-    const runRowIndices = [...new Set(nonErrorResults.map((r) => r.row_index))];
-    const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
-    const runCount = Math.max(inputRowCount, maxRunRowIndex + 1);
-    const runToGt = new Array(Math.max(runCount, gtCount)).fill(-1);
-    const gtUsed = new Array(gtCount).fill(false);
-
-    const pairs = [];
-    for (const i of runRowIndices) {
-      for (let j = 0; j < gtCount; j++) {
-        const score = countMatchingRules(root, i, j, resultsByIndex, runWs, outputFields, gtContent);
-        if (score > 0) pairs.push({ i, j, score });
-      }
-    }
-    pairs.sort((a, b) => b.score - a.score);
-    for (const { i, j } of pairs) {
-      if (runToGt[i] >= 0 || gtUsed[j]) continue;
-      runToGt[i] = j;
-      gtUsed[j] = true;
-    }
-
-    const matched = [];
-    const maxRow = Math.max(runCount, gtCount);
-    for (let i = 0; i < maxRow; i++) {
-      matched.push(i < runCount && runToGt[i] >= 0);
-    }
-    const matchedCount = runToGt.slice(0, runCount).filter((j) => j >= 0).length;
-    const total = nonErrorResults.length;
-    return {
-      matched,
-      runToGt,
-      total,
-      matchedCount,
-    };
+  function computeMatchPerRow(inputRoot, outputRoot, results, outputFields, runWs, gtContent) {
+    return computeGreedyRunToGtPairing({
+      inputRoot,
+      outputRoot,
+      results,
+      runWs,
+      gtContent,
+      outputFields,
+      ruleMatchesRow,
+      getRunValue,
+    });
   }
 
   /** Get node at path (array of child indices from root). Root = []. */
@@ -853,13 +1519,20 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!root) return null;
     if (root.type === 'rule') {
       const cols = root.gtColumns || [];
-      const allIn = cols.length > 0 && cols.every((c) => gtSet.has(String(c || '').trim()));
+      const allIn = cols.length > 0 && cols.every((c) => {
+        const s = String(c || '').trim();
+        return s === SCORE_GT_ROW_INDEX_COLUMN || gtSet.has(s);
+      });
       return allIn ? root : null;
     }
     if (root.type === 'group' && Array.isArray(root.children)) {
       const filtered = root.children.map((ch) => filterRootByGtHeaders(ch, gtSet)).filter((x) => x != null);
       const ops = (root.ops || []).slice(0, Math.max(0, filtered.length - 1));
-      return { type: 'group', ops, children: filtered };
+      const out = { type: 'group', ops, children: filtered };
+      if (typeof root.groupId === 'number' && Number.isInteger(root.groupId) && root.groupId > 0) {
+        out.groupId = root.groupId;
+      }
+      return out;
     }
     return null;
   }
@@ -876,20 +1549,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const group = root.type === 'group' && root.children ? { ...root, children: root.children.slice() } : root;
     group.children[i] = insertChildAtPath(group.children[i], rest, newChild, index);
     return group;
-  }
-
-  function getResultComments() {
-    try {
-      const raw = node?.dataset?.scoreResultComments || '{}';
-      const obj = JSON.parse(raw);
-      return obj && typeof obj === 'object' ? obj : {};
-    } catch (_) { return {}; }
-  }
-
-  function setResultComments(comments) {
-    if (!node) return;
-    node.dataset.scoreResultComments = JSON.stringify(comments);
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   }
 
   /** Keys: GT row `String(j)` or run-only `run:${rowIndex}`. Value true = excluded from Review + metrics. */
@@ -925,7 +1584,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       </div>
       <div class="modal-body score-detail-body modal-body--score">
         <div class="score-detail-main">
-          <p class="run-detail-main-label score-detail-main-label">Score settings</p>
+          <p class="run-detail-main-label score-detail-main-label">Scoring setup</p>
           <div class="dataset-meta-wrap score-detail-meta-wrap">
             <div class="dataset-meta-field">
               <label class="dataset-meta-label" for="score-detail-gt-picker">Ground truth dataset</label>
@@ -938,9 +1597,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <div class="run-detail-ws-dropdown" id="score-detail-gt-dropdown" role="listbox" hidden></div>
               </div>
             </div>
-            <div class="dataset-meta-field score-detail-rules-section">
-              <span class="dataset-meta-label run-detail-section-label score-detail-rules-label">Rules</span>
-              <p class="score-detail-rules-hint">Use groups to combine rules with AND or OR. Within each rule, run column matches if it equals any selected ground truth column.</p>
+            <div class="dataset-meta-field score-detail-rules-section" id="score-detail-rules-section" hidden>
+              <span class="dataset-meta-label run-detail-section-label score-detail-rules-label">Set rules</span>
+              <div class="review-detail-view-switch score-detail-rules-view-switch" role="tablist" aria-label="Set rules: input or output versus ground truth">
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active score-detail-rules-tab" role="tab" aria-selected="true" data-rules-tab="input">Input → Ground truth</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab score-detail-rules-tab" role="tab" aria-selected="false" data-rules-tab="output">Output → Ground truth</button>
+              </div>
               <div class="score-detail-rules-scroll">
                 <div id="score-detail-rules-list" class="score-detail-rules-list"></div>
               </div>
@@ -953,13 +1615,14 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
             <div class="score-detail-results-card run-detail-results-card" id="score-detail-results-card">
               <div id="score-detail-results-body" class="score-detail-results-body-inner"></div>
               <div id="score-detail-results-toolbar" class="dataset-detail-preview-toolbar score-detail-results-toolbar" style="display: none;"></div>
-              <div class="score-detail-results-footer-row">
+              <div class="score-detail-results-footer-row" id="score-detail-results-footer-row" hidden>
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
                   <div class="score-detail-llm-row">
                     <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model"></select>
                   </div>
-                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Add a Review node and run analysis with the selected model">Review</button>
+                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create a Review node and run analysis with the selected model">Review</button>
+                  <button type="button" class="btn btn-secondary score-detail-review-payload-preview" id="score-detail-review-payload-preview" title="Temporary: preview Review payload by input (model output vs ground-truth tables per group). Does not start a Review job.">Debug</button>
                 </div>
               </div>
             </div>
@@ -969,27 +1632,76 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     </div>
   `;
 
-  const scoreDetailPanel = overlay.querySelector('#score-detail-panel');
   const pickerEl = overlay.querySelector('#score-detail-gt-picker');
   const triggerEl = overlay.querySelector('.run-detail-ws-trigger');
   const triggerColorEl = overlay.querySelector('#score-detail-gt-trigger-color');
   const triggerTextEl = overlay.querySelector('#score-detail-gt-trigger-text');
   const dropdownEl = overlay.querySelector('#score-detail-gt-dropdown');
   const rulesListEl = overlay.querySelector('#score-detail-rules-list');
+  const rulesSectionEl = overlay.querySelector('#score-detail-rules-section');
+  const rulesTabBar = overlay.querySelector('.score-detail-rules-view-switch');
   const llmSelect = overlay.querySelector('#score-detail-llm-select');
   const saveToWorkspaceBtn = overlay.querySelector('#score-detail-save-to-workspace');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
+  const reviewPayloadPreviewBtn = overlay.querySelector('#score-detail-review-payload-preview');
   const resultsBody = overlay.querySelector('#score-detail-results-body');
   const resultsToolbar = overlay.querySelector('#score-detail-results-toolbar');
+  const resultsFooterRowEl = overlay.querySelector('#score-detail-results-footer-row');
 
-  /** 有对比结果时展开右半栏（与 Run 页初始状态一致：无结果时只显示左半栏） */
-  function updatePanelExpanded(hasResults) {
-    if (!scoreDetailPanel) return;
-    if (hasResults) scoreDetailPanel.classList.add('score-detail-panel--expanded');
-    else scoreDetailPanel.classList.remove('score-detail-panel--expanded');
+  const scoreDetailPagination = {
+    rowsPerPage: 25,
+    currentPage: 1,
+    searchQuery: '',
+    rulesColumnFilter: node?.dataset?.scoreTableRulesColumnFilter === '1',
+  };
+
+  function syncRulesSectionVisibility() {
+    if (!rulesSectionEl) return;
+    if (selectedNodeId) rulesSectionEl.removeAttribute('hidden');
+    else rulesSectionEl.setAttribute('hidden', '');
   }
 
-  const scoreDetailPagination = { rowsPerPage: 25, currentPage: 1, searchQuery: '' };
+  function syncScoreResultsFooterVisibility() {
+    if (!resultsFooterRowEl) return;
+    const show = !!(selectedNodeId && hasScoreInputRules());
+    if (show) resultsFooterRowEl.removeAttribute('hidden');
+    else resultsFooterRowEl.setAttribute('hidden', '');
+  }
+
+  function syncRulesTabUi() {
+    if (rulesTabBar) {
+      const inputOk = hasScoreInputRules();
+      const outBtn = rulesTabBar.querySelector('[data-rules-tab="output"]');
+      if (outBtn) {
+        outBtn.disabled = !inputOk;
+        outBtn.title = inputOk
+          ? ''
+          : '请先添加至少一条 Input → Ground truth 规则，再编辑 Output → Ground truth。';
+      }
+      if (!inputOk && activeRulesTab === 'output') {
+        activeRulesTab = 'input';
+      }
+      rulesTabBar.querySelectorAll('[data-rules-tab]').forEach((btn) => {
+        const on = btn.getAttribute('data-rules-tab') === activeRulesTab;
+        btn.classList.toggle('review-detail-tab--active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+    }
+  }
+
+  rulesTabBar?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-rules-tab]');
+    if (!btn || btn.disabled) return;
+    const tab = btn.getAttribute('data-rules-tab');
+    if (tab !== 'input' && tab !== 'output') return;
+    if (tab === 'output' && !hasScoreInputRules()) {
+      showAlert('请先添加至少一条 Input → Ground truth 规则，再设置 Output → Ground truth。', { title: 'Score rules' });
+      return;
+    }
+    activeRulesTab = tab;
+    syncRulesTabUi();
+    renderRules();
+  });
 
   function getSelectedWorkingSet() {
     return workingSets.find((ws) => ws.nodeId === selectedNodeId) || null;
@@ -1013,7 +1725,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     } else {
       triggerColorEl.style.background = '';
       triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = selectPlaceholderLabel('Select');
+      triggerTextEl.textContent = selectPlaceholderLabel('Select ground truth dataset');
     }
   }
 
@@ -1028,22 +1740,38 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /** Open Add rule / Edit rule modal. editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. */
-  function openRuleEditor(editPath, parentPath, indexInParent, onDone) {
+   function openRuleEditor(editPath, parentPath, indexInParent, onDone) {
     const isEdit = Array.isArray(editPath) && editPath.length > 0;
-    const root = getRoot();
+    const root = getActiveRoot();
     const defaultRule = { type: 'rule', outputKey: '', gtColumns: [], matchType: 'exact', matchFlags: { ...DEFAULT_MATCH_FLAGS } };
     const rule = isEdit ? getNodeAtPath(root, editPath) : defaultRule;
     let ruleData = rule && rule.type === 'rule' ? rule : defaultRule;
-    const runColumns = getRunResultColumns();
+    let runColumns = getRunResultColumns();
+    const runWsEd = getRunWorkingSetContent();
+    if (activeRulesTab === 'input') {
+      const headers = runWsEd.headers || [];
+      runColumns = [
+        { key: '#', label: 'Input: #' },
+        ...headers.map((h) => ({ key: `[${String(h).trim()}]`, label: `Input: ${String(h ?? '').trim() || ' '}` })),
+      ];
+    } else {
+      runColumns = (runColumns || []).filter((c) => !isScoreInputSideRuleKey(c.key));
+      runColumns = [
+        { key: '#', label: formatResultOutputColumnLabel('#') },
+        ...runColumns,
+      ];
+    }
     const gtHeaders = getGroundTruthHeaders(selectedNodeId);
     if (!isEdit && (!(ruleData.outputKey || '').trim() || !(ruleData.gtColumns || []).length)) {
       const runKeys = new Set((runColumns || []).map((c) => (c.key || '').trim()).filter(Boolean));
-      const gtSet = new Set(gtHeaders || []);
+      const gtSet = new Set([...(gtHeaders || []), SCORE_GT_ROW_INDEX_COLUMN]);
       for (const key of Object.keys(ruleEditorMemory)) {
         const idx = key.indexOf('\t');
         if (idx <= 0) continue;
         const outputKey = key.slice(0, idx);
         const gtColumn = key.slice(idx + 1);
+        if (activeRulesTab === 'input' && !isScoreInputSideRuleKey(outputKey)) continue;
+        if (activeRulesTab === 'output' && isScoreInputSideRuleKey(outputKey) && outputKey !== '#') continue;
         if (runKeys.has(outputKey) && gtSet.has(gtColumn)) {
           const mem = ruleEditorMemory[key];
           const memMt = (mem && mem.matchType) || 'exact';
@@ -1061,10 +1789,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       }
     }
     const flags = getMatchFlags(ruleData);
+    const resultColumnKeyForSelect = (activeRulesTab === 'input' && String(ruleData.outputKey || '').trim() === '[#]')
+      ? '#'
+      : String(ruleData.outputKey || '').trim();
     const resultSelectOpts = runColumns.map((c) => {
       const label = (c.label || '').trim() || c.key || '—';
       const key = c.key || '';
-      const sel = key === (ruleData.outputKey || '') ? ' selected' : '';
+      const sel = key === resultColumnKeyForSelect ? ' selected' : '';
       return `<option value="${escapeAttr(key)}"${sel}>${escapeHtml(label)}</option>`;
     }).join('');
     const matchSelectOpts = MATCH_TYPES.map((m) => {
@@ -1076,12 +1807,27 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       return `<option value="${escapeAttr(m.value)}"${sel}>${escapeHtml(m.label || m.value)}</option>`;
     }).join('');
     const currentGtColumn = (ruleData.gtColumns && ruleData.gtColumns[0]) ? ruleData.gtColumns[0] : '';
-    const defaultGtColumn = currentGtColumn || ((gtHeaders && gtHeaders[0]) ? gtHeaders[0] : '');
-    const gtSelectOpts = (gtHeaders || []).map((h) => {
-      const sel = h === defaultGtColumn ? ' selected' : '';
-      return `<option value="${escapeAttr(h)}"${sel}>${escapeHtml(h)}</option>`;
+    const defaultGtColumn = currentGtColumn || SCORE_GT_ROW_INDEX_COLUMN;
+    const gtSelectOptsList = [
+      { value: SCORE_GT_ROW_INDEX_COLUMN, label: formatScoreGroundTruthColumnLabel(SCORE_GT_ROW_INDEX_COLUMN) },
+      ...(gtHeaders || []).map((h) => ({ value: h, label: formatScoreGroundTruthColumnLabel(h) })),
+    ];
+    const gtSelectOpts = gtSelectOptsList.map((o) => {
+      const sel = o.value === defaultGtColumn ? ' selected' : '';
+      return `<option value="${escapeAttr(o.value)}"${sel}>${escapeHtml(o.label)}</option>`;
     }).join('');
-    const gtSelectEmptyOpt = (gtHeaders && gtHeaders.length > 0) ? '' : `<option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>`;
+    const gtSelectEmptyOpt = '';
+
+    const runFieldLabel = activeRulesTab === 'input' ? 'Input column' : 'Model output column';
+    const runFieldAria = activeRulesTab === 'input'
+      ? 'Run input column: row index or a dataset input column'
+      : 'Model output column';
+    const epsGapLabel = activeRulesTab === 'input'
+      ? 'ε: max absolute gap (run side vs ground truth)'
+      : 'ε: max absolute gap (output vs ground truth)';
+    const epsHintInequality = activeRulesTab === 'input'
+      ? '|run side value − ground truth| ≤ ε'
+      : '|output − ground truth| ≤ ε';
 
     const editorOverlay = document.createElement('div');
     editorOverlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
@@ -1095,8 +1841,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         <div class="modal-body">
           <div class="dataset-meta-wrap">
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="rule-editor-result-column">Result column</label>
-              <select id="rule-editor-result-column" class="dataset-meta-input rule-editor-select" aria-label="Result column">${resultSelectOpts}</select>
+              <label class="dataset-meta-label" for="rule-editor-result-column">${escapeHtml(runFieldLabel)}</label>
+              <select id="rule-editor-result-column" class="dataset-meta-input rule-editor-select" aria-label="${escapeAttr(runFieldAria)}">${resultSelectOpts}</select>
             </div>
             <div class="dataset-meta-field">
               <label class="dataset-meta-label" for="rule-editor-gt-column">Ground truth column</label>
@@ -1120,9 +1866,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <label class="dataset-meta-label" for="rule-editor-numeric-mode">Number comparison</label>
               <select id="rule-editor-numeric-mode" class="dataset-meta-input rule-editor-select" aria-label="How numbers are compared">${numericModeOpts}</select>
               <div class="rule-editor-numeric-param" id="rule-editor-numeric-abs-wrap" style="display:none;margin-top:0.5rem;">
-                <label class="dataset-meta-label" for="rule-editor-numeric-abs">ε: max absolute gap (result vs GT)</label>
+                <label class="dataset-meta-label" for="rule-editor-numeric-abs">${escapeHtml(epsGapLabel)}</label>
                 <input type="text" id="rule-editor-numeric-abs" class="dataset-meta-input" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="e.g. 0.01 or 1e-3" value="${escapeAttr(String(flags.numericAbsEpsilon))}" aria-describedby="rule-editor-numeric-abs-hint" aria-label="Absolute tolerance epsilon" />
-                <p class="rule-editor-hint" id="rule-editor-numeric-abs-hint">Rows match when <strong>|result - ground truth| ≤ ε</strong>. Use any decimal (e.g. <code>0.05</code>, <code>0.001</code>). ε = 0 means exact numeric equality.</p>
+                <p class="rule-editor-hint" id="rule-editor-numeric-abs-hint">Rows match when <strong>${escapeHtml(epsHintInequality)}</strong>. Use any decimal (e.g. <code>0.05</code>, <code>0.001</code>). ε = 0 means exact numeric equality.</p>
               </div>
               <div class="rule-editor-numeric-param" id="rule-editor-numeric-rel-wrap" style="display:none;margin-top:0.5rem;">
                 <label class="dataset-meta-label" for="rule-editor-numeric-rel">r: relative tolerance (e.g. 0.01 ≈ 1%)</label>
@@ -1140,23 +1886,24 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <input type="checkbox" id="rule-editor-make-group" class="rule-editor-checkbox" aria-label="Make this a rule group">
                 Make this a rule group
               </label>
-              <p class="rule-editor-hint">Convert to a group and edit its rules like the score list.</p>
+              <p class="rule-editor-hint">Turning this on replaces this rule with a group that contains it (this dialog closes). Open the group to add more rules and choose <strong>AND</strong> or <strong>OR</strong> between them—the same as on the Score panel.</p>
             </div>
             ` : (!isEdit && (!parentPath || parentPath.length === 0) ? `
             <div class="dataset-meta-field rule-editor-field-group">
               <label class="dataset-meta-label rule-editor-checkbox-label">
-                <input type="checkbox" id="rule-editor-add-as-group" class="rule-editor-checkbox" aria-label="Add as rule group">
-                Add as rule group
+                <input type="checkbox" id="rule-editor-add-as-group" class="rule-editor-checkbox" aria-label="Add as a new group (starts with this rule)">
+                Add as a new group (starts with this rule)
               </label>
-              <p class="rule-editor-hint">Create a group with this rule; you can add more rules to the group after.</p>
+              <p class="rule-editor-hint">Adds a group that contains only this rule at first. Open the group afterward to add more rules and set <strong>AND</strong> or <strong>OR</strong>.</p>
             </div>
             ` : '')}
           </div>
           <div class="prompt-form-error section-editor-error rule-editor-error" role="alert" aria-live="polite" hidden></div>
+          ${!isEdit ? `
           <div class="modal-footer-actions">
-            <button type="button" class="btn btn-secondary section-editor-cancel rule-editor-cancel">Cancel</button>
-            <button type="button" class="btn btn-secondary section-editor-save rule-editor-save">${isEdit ? 'Save' : 'Add rule'}</button>
+            <button type="button" class="btn btn-secondary section-editor-save rule-editor-save">Add rule</button>
           </div>
+          ` : ''}
         </div>
       </div>
     `;
@@ -1183,10 +1930,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         errorEl.hidden = true;
       }
     }
-
-    resultSelectEl.addEventListener('change', clearError);
-    gtSelectEl.addEventListener('change', clearError);
-    matchSelectEl.addEventListener('change', clearError);
 
     const numericModeEl = editorOverlay.querySelector('#rule-editor-numeric-mode');
     const numericAbsWrap = editorOverlay.querySelector('#rule-editor-numeric-abs-wrap');
@@ -1225,10 +1968,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       syncStringModeFlagInputsDisabled();
       if (showNum) updateNumericParamVisibility();
     }
-    matchSelectEl.addEventListener('change', updateComparisonTypePanels);
+    matchSelectEl.addEventListener('change', () => {
+      updateComparisonTypePanels();
+      clearError();
+      if (isEdit) persistEdit();
+    });
     numericModeEl?.addEventListener('change', () => {
       updateNumericParamVisibility();
       clearError();
+      if (isEdit) persistEdit();
     });
     updateComparisonTypePanels();
     requestAnimationFrame(() => updateComparisonTypePanels());
@@ -1241,6 +1989,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
       }
       clearError();
+      if (isEdit) persistEdit();
     });
     embeddingSimilarityCbEl?.addEventListener('change', () => {
       if (embeddingSimilarityCbEl.checked) {
@@ -1248,6 +1997,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
       }
       clearError();
+      if (isEdit) persistEdit();
     });
     editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
       cb.addEventListener('change', () => {
@@ -1256,19 +2006,22 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           if (embeddingSimilarityCbEl) embeddingSimilarityCbEl.checked = false;
         }
         clearError();
+        if (isEdit) persistEdit();
       });
     });
 
-    function save() {
+    function buildNewRuleFromForm() {
       const outputKey = (resultSelectEl?.value ?? '').trim();
       if (!outputKey) {
-        showError('Please select a result column.');
-        return;
+        showError(activeRulesTab === 'input'
+          ? 'Please select an input column.'
+          : 'Please select a model output column.');
+        return null;
       }
       const gtColumn = (gtSelectEl?.value ?? '').trim();
       if (!gtColumn) {
         showError('Please select a ground truth column.');
-        return;
+        return null;
       }
       const matchType = (matchSelectEl?.value ?? '').trim() || 'exact';
       const flagCbs = editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]');
@@ -1293,15 +2046,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         else matchFlags.numericDecimalPlaces = 2;
         if (matchFlags.numericMode === 'abs' && (!Number.isFinite(absParsed) || absParsed < 0)) {
           showError('Enter a valid ε (≥ 0). Decimals allowed, e.g. 0.01 or 1e-4.');
-          return;
+          return null;
         }
         if (matchFlags.numericMode === 'rel' && (!Number.isFinite(relParsed) || relParsed < 0)) {
           showError('Enter a valid r (≥ 0). Decimals allowed, e.g. 0.01 for ~1%.');
-          return;
+          return null;
         }
         if (matchFlags.numericMode === 'decimals' && !Number.isFinite(decParsed)) {
           showError('Enter decimal places (0-20).');
-          return;
+          return null;
         }
       } else {
         matchFlags.numericMode = 'exact';
@@ -1310,43 +2063,102 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         matchFlags.numericDecimalPlaces = 2;
       }
       const newRule = { type: 'rule', outputKey, gtColumns: [gtColumn], matchType, matchFlags: canonicalizeMatchFlags(matchFlags) };
-      const root = getRoot();
+      return newRule;
+    }
+
+    function persistEdit() {
+      if (!isEdit) return;
+      const newRule = buildNewRuleFromForm();
+      if (!newRule) return;
+      clearError();
+      let nextRoot = getActiveRoot();
       const makeGroupEl = editorOverlay.querySelector('#rule-editor-make-group');
+      const makeGroup = !!(makeGroupEl && makeGroupEl.checked);
+      if (makeGroup) {
+        setActiveRoot(setNodeAtPath(nextRoot, editPath, { type: 'group', ops: [], children: [newRule] }));
+        closeEditor();
+        onDone();
+        return;
+      }
+      setActiveRoot(setNodeAtPath(nextRoot, editPath, newRule));
+      onDone();
+    }
+
+    function persistAdd() {
+      if (isEdit) return;
+      const newRule = buildNewRuleFromForm();
+      if (!newRule) return;
+      clearError();
+      let nextRoot = getActiveRoot();
       const addAsGroupEl = editorOverlay.querySelector('#rule-editor-add-as-group');
-      const makeGroup = isEdit && makeGroupEl && makeGroupEl.checked;
-      const addAsGroup = !isEdit && addAsGroupEl && addAsGroupEl.checked;
-      if (isEdit) {
-        if (makeGroup) {
-          setRoot(setNodeAtPath(root, editPath, { type: 'group', ops: [], children: [newRule] }));
-        } else {
-          setRoot(setNodeAtPath(root, editPath, newRule));
-        }
+      const addAsGroup = !!(addAsGroupEl && addAsGroupEl.checked);
+      if (addAsGroup) {
+        setActiveRoot(insertChildAtPath(nextRoot, parentPath, { type: 'group', ops: [], children: [newRule] }, indexInParent));
       } else {
-        if (addAsGroup) {
-          setRoot(insertChildAtPath(root, parentPath, { type: 'group', ops: [], children: [newRule] }, indexInParent));
-        } else {
-          setRoot(insertChildAtPath(root, parentPath, newRule, indexInParent));
-        }
+        setActiveRoot(insertChildAtPath(nextRoot, parentPath, newRule, indexInParent));
       }
       closeEditor();
       onDone();
     }
 
-    editorOverlay.querySelector('.modal-close').addEventListener('click', closeEditor);
-    editorOverlay.querySelector('.rule-editor-cancel').addEventListener('click', closeEditor);
-    editorOverlay.querySelector('.rule-editor-save').addEventListener('click', save);
-    editorOverlay.addEventListener('click', (e) => {
-      if (e.target === editorOverlay) closeEditor();
+    let editApplyTimer = null;
+    function schedulePersistEdit() {
+      if (!isEdit) return;
+      if (editApplyTimer) clearTimeout(editApplyTimer);
+      editApplyTimer = setTimeout(() => {
+        editApplyTimer = null;
+        persistEdit();
+      }, 200);
+    }
+
+    resultSelectEl.addEventListener('change', () => {
+      clearError();
+      if (isEdit) persistEdit();
     });
+    gtSelectEl.addEventListener('change', () => {
+      clearError();
+      if (isEdit) persistEdit();
+    });
+
+    editorOverlay.querySelector('#rule-editor-make-group')?.addEventListener('change', () => {
+      if (isEdit) persistEdit();
+    });
+
+    numericAbsEl?.addEventListener('input', () => { if (isEdit) schedulePersistEdit(); });
+    numericRelEl?.addEventListener('input', () => { if (isEdit) schedulePersistEdit(); });
+    numericDecEl?.addEventListener('input', () => { if (isEdit) schedulePersistEdit(); });
+    numericAbsEl?.addEventListener('blur', () => { if (isEdit) persistEdit(); });
+    numericRelEl?.addEventListener('blur', () => { if (isEdit) persistEdit(); });
+    numericDecEl?.addEventListener('blur', () => { if (isEdit) persistEdit(); });
+
+    editorOverlay.querySelector('.modal-close').addEventListener('click', closeEditor);
+    const ruleEditorSaveBtn = editorOverlay.querySelector('.rule-editor-save');
+    if (ruleEditorSaveBtn) ruleEditorSaveBtn.addEventListener('click', persistAdd);
     document.body.appendChild(editorOverlay);
     resultSelectEl?.focus();
   }
 
+  /** Run-side label for rule summary: input rules must not match `getRunResultColumns()`’s first `#` (run row #). */
+  function formatScoreRuleRunSideLabel(rule) {
+    const key = String(rule?.outputKey ?? '').trim();
+    if (!key) return '—';
+    if (key === '#') {
+      return activeRulesTab === 'input' ? 'Input: #' : formatResultOutputColumnLabel('#');
+    }
+    if (isScoreInputSideRuleKey(key)) {
+      if (key === '[#]') return 'Input: #';
+      const inner = key.length >= 2 && key.startsWith('[') && key.endsWith(']') ? key.slice(1, -1) : '';
+      return `Input: ${String(inner).trim() || ' '}`;
+    }
+    const runColumns = getRunResultColumns();
+    const col = runColumns.find((c) => c.key === key);
+    return (col && col.label) ? String(col.label).trim() || key : (formatResultOutputColumnLabel(key) || key);
+  }
+
   /** Rule card: optional AND/OR on left (opValue/opIndex), then click to edit, × to delete. */
   function createRuleCard(rule, path, opts = {}) {
-    const runColumns = getRunResultColumns();
-    const runLabel = runColumns.find((c) => c.key === (rule.outputKey || ''))?.label || rule.outputKey || '—';
-    const gtLabel = (rule.gtColumns || []).length === 0 ? '—' : (rule.gtColumns || []).join(', ');
+    const runLabel = formatScoreRuleRunSideLabel(rule);
+    const gtLabel = (rule.gtColumns || []).length === 0 ? '—' : (rule.gtColumns || []).map((c) => formatScoreGroundTruthColumnLabel(c)).join(', ');
     const mt = migrateLegacyMatchType(rule.matchType);
     const typeLabel = MATCH_TYPES.find((m) => m.value === mt)?.label || 'String match';
     const flags = getMatchFlags(rule);
@@ -1384,12 +2196,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       opBtn.textContent = opts.opValue || 'AND';
       opBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const r = getRoot();
+        const r = getActiveRoot();
         const parent = parentPathForOp.length > 0 ? getNodeAtPath(r, parentPathForOp) : r;
         if (!parent || parent.type !== 'group') return;
         const nextOps = (parent.ops || []).slice();
         nextOps[opts.opIndex] = nextOps[opts.opIndex] === 'OR' ? 'AND' : 'OR';
-        setRoot(setNodeAtPath(r, parentPathForOp, { ...parent, ops: nextOps }));
+        setActiveRoot(setNodeAtPath(r, parentPathForOp, { ...parent, ops: nextOps }));
         renderRules();
         if (opts.onAfterChange) opts.onAfterChange();
       });
@@ -1406,16 +2218,19 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     });
     removeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      setRoot(removeNodeAtPath(getRoot(), path));
+      setActiveRoot(removeNodeAtPath(getActiveRoot(), path));
       renderRules();
       if (opts.onAfterChange) opts.onAfterChange();
     });
     return card;
   }
 
-  /** Group card: same look as rule card, shows "Rule group N". Click to edit group. */
-  function createGroupCard(path, groupIndex, opts = {}) {
-    const label = `Rule group ${groupIndex}`;
+  /** Group card: label uses stable persisted {@link groupId} (order-independent). */
+  function createGroupCard(path, groupNode, opts = {}) {
+    const gid = typeof groupNode.groupId === 'number' && Number.isInteger(groupNode.groupId) && groupNode.groupId > 0
+      ? groupNode.groupId
+      : '?';
+    const label = `Rule group ${gid}`;
     const card = document.createElement('div');
     card.className = 'score-rule-card score-rule-card--group';
     const openGroupEditor = () => openGroupEditorModal(path, () => renderRules());
@@ -1433,10 +2248,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       opBtn.textContent = opts.opValue || 'AND';
       opBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const r = getRoot();
+        const r = getActiveRoot();
         const nextOps = (r.ops || []).slice();
         nextOps[opts.opIndex] = nextOps[opts.opIndex] === 'OR' ? 'AND' : 'OR';
-        setRoot({ ...r, ops: nextOps });
+        setActiveRoot({ ...r, ops: nextOps });
         renderRules();
       });
       card.insertBefore(opBtn, card.firstChild);
@@ -1452,7 +2267,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     });
     removeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      setRoot(removeNodeAtPath(getRoot(), path));
+      setActiveRoot(removeNodeAtPath(getActiveRoot(), path));
       renderRules();
     });
     return card;
@@ -1460,12 +2275,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   /** Modal to edit a group's rules (same UI as score rules list). */
   function openGroupEditorModal(groupPath, onDone) {
-    const root = getRoot();
+    const root = getActiveRoot();
     const group = getNodeAtPath(root, groupPath);
     if (!group || group.type !== 'group') return;
-    const firstIndex = groupPath[0];
-    const groupIndex = (root.children || []).slice(0, firstIndex + 1).filter((c) => c && c.type === 'group').length;
-    const title = `Edit Rule group ${groupIndex}`;
+    const gid = typeof group.groupId === 'number' && Number.isInteger(group.groupId) && group.groupId > 0
+      ? group.groupId
+      : '?';
+    const title = `Edit Rule group ${gid}`;
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
     overlay.setAttribute('aria-modal', 'true');
@@ -1487,11 +2303,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const addBtn = overlay.querySelector('#score-group-editor-add-rule');
 
     function getGroup() {
-      return getNodeAtPath(getRoot(), groupPath) || { type: 'group', ops: [], children: [] };
+      return getNodeAtPath(getActiveRoot(), groupPath) || { type: 'group', ops: [], children: [] };
     }
 
     function setGroup(newGroup) {
-      setRoot(setNodeAtPath(getRoot(), groupPath, newGroup));
+      setActiveRoot(setNodeAtPath(getActiveRoot(), groupPath, newGroup));
       renderGroupEditorList();
     }
 
@@ -1521,6 +2337,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           };
           cardWrap.appendChild(createRuleCard(node, pathI, cardOpts));
           row.appendChild(cardWrap);
+          wireScoreRuleRowDrag(row, cardWrap, i, (from, to) => {
+            setGroup(moveScoreGroupChildren(getGroup(), from, to));
+            renderGroupEditorList();
+            renderRules();
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          });
           listEl.appendChild(row);
         }
       });
@@ -1542,38 +2364,67 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     document.body.appendChild(overlay);
   }
 
+  /** Reorder by dragging the rule/group card (not buttons). Greedy run-vs-GT pairing breaks ties by rule tree order. */
+  function wireScoreRuleRowDrag(row, cardWrap, rowIndex, applyMove) {
+    cardWrap.draggable = true;
+    cardWrap.classList.add('score-tree-row-card--draggable');
+    cardWrap.title = 'Drag to reorder. When two run-vs-ground-truth pairs tie on how many rules match, earlier rules in this list win.';
+    cardWrap.addEventListener('dragstart', (e) => {
+      if (e.target.closest('button')) {
+        e.preventDefault();
+        return;
+      }
+      e.stopPropagation();
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(rowIndex));
+      row.classList.add('score-tree-row--drag-source');
+    });
+    cardWrap.addEventListener('dragend', () => {
+      row.classList.remove('score-tree-row--drag-source');
+      document.querySelectorAll('.score-tree-row--drop-target').forEach((el) => el.classList.remove('score-tree-row--drop-target'));
+    });
+
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      row.classList.add('score-tree-row--drop-target');
+    });
+    row.addEventListener('dragleave', (e) => {
+      if (!row.contains(e.relatedTarget)) row.classList.remove('score-tree-row--drop-target');
+    });
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      row.classList.remove('score-tree-row--drop-target');
+      const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+      if (Number.isNaN(from) || from === rowIndex) return;
+      applyMove(from, rowIndex);
+    });
+  }
+
   function renderRules() {
+    syncRulesTabUi();
+    syncScoreResultsFooterVisibility();
     rulesListEl.innerHTML = '';
 
     if (!selectedNodeId) {
-      const p = document.createElement('p');
-      p.className = 'score-detail-placeholder';
-      p.textContent = 'Select a dataset as ground truth, then add rules. Click a rule to edit; use AND/OR to combine.';
-      rulesListEl.appendChild(p);
       void renderResults();
       return;
     }
     const runColumns = getRunResultColumns();
     const gtHeaders = getGroundTruthHeaders(selectedNodeId);
     if (runColumns.length === 0 || gtHeaders.length === 0) {
-      const p = document.createElement('p');
-      p.className = 'score-detail-placeholder';
-      p.textContent = runColumns.length === 0
-        ? 'No run connected or run has no result columns (run once with a dataset to see columns).'
-        : 'Ground truth dataset has no columns.';
-      rulesListEl.appendChild(p);
       void renderResults();
       return;
     }
 
-    const root = getRoot();
+    const root = getActiveRoot();
     if (root.type !== 'group' || !Array.isArray(root.children)) {
       void renderResults();
       return;
     }
     const children = root.children || [];
     const ops = root.ops || Array(Math.max(0, children.length - 1)).fill('AND');
-    let groupCount = 0;
 
     const treeWrap = document.createElement('div');
     treeWrap.className = 'score-rules-tree score-rules-tree--flat';
@@ -1584,12 +2435,18 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       cardWrap.className = 'score-tree-row-card';
       const cardOpts = i > 0 ? { opValue: ops[i - 1] || 'AND', opIndex: i - 1 } : {};
       if (node.type === 'group') {
-        groupCount += 1;
-        cardWrap.appendChild(createGroupCard([i], groupCount, cardOpts));
+        cardWrap.appendChild(createGroupCard([i], node, cardOpts));
       } else {
         cardWrap.appendChild(createRuleCard(node, [i], cardOpts));
       }
       row.appendChild(cardWrap);
+      wireScoreRuleRowDrag(row, cardWrap, i, (from, to) => {
+        const r = getActiveRoot();
+        if (r.type !== 'group') return;
+        setActiveRoot(moveScoreGroupChildren(r, from, to));
+        renderRules();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      });
       treeWrap.appendChild(row);
     });
     const addRow = document.createElement('div');
@@ -1600,7 +2457,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     addBox.setAttribute('aria-label', 'Add rule');
     addBox.textContent = '+ Add rule';
     addBox.addEventListener('click', () => {
-      const r = getRoot();
+      const r = getActiveRoot();
       const len = (r.children || []).length;
       openRuleEditor(null, [], len, () => renderRules());
     });
@@ -1615,20 +2472,19 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   async function renderResults() {
     if (!resultsBody) return;
+    syncScoreResultsFooterVisibility();
     const prevScrollEl = resultsBody.querySelector('.score-detail-results-table-scroll');
     const savedScrollTop = prevScrollEl?.scrollTop ?? 0;
     const savedScrollLeft = prevScrollEl?.scrollLeft ?? 0;
     resultsBody.innerHTML = '';
-    const root = getRoot();
+    const { inputRoot, outputRoot } = loadBundle();
     const rulesFlat = getRulesFlat();
     if (!selectedNodeId) {
-      updatePanelExpanded(false);
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Select ground truth and add rules to see comparison results.</p>';
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
     if (rulesFlat.length === 0) {
-      updatePanelExpanded(false);
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Add at least one rule to compare.</p>';
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
@@ -1636,24 +2492,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const { results: rawResults, outputFields } = getRunResults();
     const runWs = getRunWorkingSetContent();
     const rawGtContent = getGroundTruthContent(selectedNodeId);
-    const runColumns = getRunResultColumns();
 
-    const gtColsUsed = [];
-    const outputKeysUsed = [];
-    for (const r of rulesFlat) {
-      for (const c of (r.gtColumns || [])) {
-        if (c && !gtColsUsed.includes(c)) gtColsUsed.push(c);
-      }
-      const k = (r.outputKey || '').trim();
-      if (k && !outputKeysUsed.includes(k)) outputKeysUsed.push(k);
-    }
+    const gtColsUsed = buildScoreTableGtColumns(rulesFlat, rawGtContent);
 
-    const errorRowCount = (rawResults || []).filter((r) => r && r.error).length;
-    const resultsWithoutError = (rawResults || []).filter((r) => !r || !r.error);
-    const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
-    const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields).filter((r) =>
-      isValidRunOutputForScoreRow(r, outputFields),
-    );
+    const resultsForScore = (rawResults || []).filter((r) => r);
+    const gtContent = rawGtContent;
+    const results = resultsForScore.filter((r) => isValidRunOutputForScoreRow(r, outputFields));
     const gtHeaders = gtContent.headers || [];
     const gtRows = gtContent.rows || [];
     const resultsByIndex = new Map();
@@ -1664,75 +2508,147 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const hasAnyRows = maxRunRow >= 0 || maxGtRow >= 0;
 
     if (!hasAnyRows) {
-      updatePanelExpanded(false);
       resultsBody.innerHTML = '<p class="score-detail-placeholder">No run results and no ground truth rows.</p>';
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
 
-    updatePanelExpanded(true);
     scoreEmbeddingCosineMap = new Map();
+    const embeddingWalkRoot = scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot);
     if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
       try {
         scoreEmbeddingCosineMap = await prefetchEmbeddingCosineMap(API_BASE, {
-          root, results, outputFields, runWs, gtContent, getRunValue, getGtValue,
+          root: embeddingWalkRoot,
+          results,
+          outputFields,
+          runWs,
+          gtContent,
+          getRunValue,
+          getGtValue,
         });
       } catch (e) {
         showAlert(String(e?.message || e), { title: 'Embedding comparison failed' });
         scoreEmbeddingCosineMap = new Map();
       }
     }
-    const { runToGt, total: runCount, matchedCount } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
+    const { runToGt, total: runCount, matchedCount } = computeMatchPerRow(inputRoot, outputRoot, results, outputFields, runWs, gtContent);
     const gtToRun = new Array(gtRows.length).fill(-1);
     for (let i = 0; i < (runToGt || []).length; i++) {
       if (runToGt[i] >= 0) gtToRun[runToGt[i]] = i;
     }
 
-    const descriptors = [];
-    for (let j = 0; j < gtRows.length; j++) {
-      if (gtToRun[j] >= 0) descriptors.push({ type: 'gt', j });
+    function treeMatchesPairForRow(rootTree, iRun, jGt) {
+      const leaves = flattenScoreRules(rootTree || emptyScoreRuleGroup());
+      if (leaves.length === 0) return true;
+      return evaluateNode(rootTree, iRun, jGt, resultsByIndex, runWs, outputFields, gtContent);
     }
-    for (let j = 0; j < gtRows.length; j++) {
-      if (gtToRun[j] < 0) descriptors.push({ type: 'gt', j });
-    }
-    for (const i of runRowIndices) {
-      const paired = i < (runToGt || []).length && runToGt[i] >= 0;
-      if (paired) continue;
-      let matchesAnyGt = false;
-      for (let j = 0; j < gtRows.length; j++) {
-        if (evaluateNode(root, i, j, resultsByIndex, runWs, outputFields, gtContent)) {
-          matchesAnyGt = true;
-          break;
-        }
-      }
-      if (!matchesAnyGt) descriptors.push({ type: 'runOnly', i });
+    function isPairMatchForRow(iRun, jGt) {
+      if (iRun < 0 || jGt < 0) return false;
+      if (!treeMatchesPairForRow(inputRoot, iRun, jGt)) return false;
+      const outLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
+      if (outLeaves.length === 0) return true;
+      return evaluateNode(outputRoot, iRun, jGt, resultsByIndex, runWs, outputFields, gtContent);
     }
 
-    const comments = getResultComments();
+    const descriptors = attachInputMatchedUnpairedGtDescriptors(
+      buildScoreResultDescriptorsInRunOrder({
+        runRowIndices,
+        runToGt,
+        gtToRun,
+        gtRowsLength: gtRows.length,
+        evaluateRunMatchesAnyGt: (i) => {
+          for (let j = 0; j < gtRows.length; j++) {
+            if (treeMatchesPairForRow(inputRoot, i, j) && treeMatchesPairForRow(outputRoot, i, j)) return true;
+          }
+          return false;
+        },
+      }),
+      {
+        runRowIndices,
+        runToGt,
+        gtToRun,
+        inputMatchesPairForRow: (i, jj) => treeMatchesPairForRow(inputRoot, i, jj),
+      },
+    );
+
     const q = (scoreDetailPagination.searchQuery || '').trim().toLowerCase();
+    const inputHeaders = runWs.headers || [];
+    const rulesColumnFilter = !!scoreDetailPagination.rulesColumnFilter;
+    const inputHeadersForTable = rulesColumnFilter ? filterScoreInputHeadersByRules(rulesFlat, inputHeaders) : inputHeaders;
+    const outputFieldsForTable = rulesColumnFilter ? filterScoreOutputFieldsByRules(rulesFlat, outputFields) : outputFields;
+    const gtColsDisplayed = rulesColumnFilter ? buildScoreTableGtColumnsRulesOnly(rulesFlat, rawGtContent) : gtColsUsed;
+    const hasInputBlock = !rulesColumnFilter || inputHeadersForTable.length > 0;
+    const showOutputIndexCol = !rulesColumnFilter || outputFieldsForTable.length > 0 || scoreRulesReferenceRunOutputRowIndex(rulesFlat);
+    const hasOutputBlock = !rulesColumnFilter || outputFieldsForTable.length > 0 || scoreRulesReferenceRunOutputRowIndex(rulesFlat);
+    const runInputColsCollapsed = typeof getRunInputColsCollapsed === 'function' ? !!getRunInputColsCollapsed() : false;
+    const scoreOutputColsCollapsed = typeof getScoreOutputColsCollapsed === 'function' ? !!getScoreOutputColsCollapsed() : false;
+    const scoreGtColsCollapsed = typeof getScoreGtColsCollapsed === 'function' ? !!getScoreGtColsCollapsed() : false;
+    function pushRunBlockStringsForSearch(parts, runResult, runRowIndex, blankOutputsOnly = false) {
+      const ri = runRowIndex;
+      if (runInputColsCollapsed) {
+        if (hasInputBlock) parts.push('Input ...');
+      } else if (hasInputBlock) {
+        parts.push(runResult ? String((runResult.input_row_index ?? 0) + 1) : '');
+        const inputRow = runResult && Array.isArray(runResult.input_row) ? runResult.input_row : [];
+        inputHeadersForTable.forEach((h) => {
+          const ci = inputHeaders.findIndex((x) => String(x ?? '').trim() === String(h ?? '').trim());
+          parts.push(ci >= 0 && inputRow[ci] != null ? String(inputRow[ci]) : '');
+        });
+      }
+      if (!hasOutputBlock) return;
+      if (scoreOutputColsCollapsed) {
+        parts.push('Output ...');
+        return;
+      }
+      if (showOutputIndexCol) {
+        parts.push(runResult ? String((runResult.row_index ?? ri) + 1) : '—');
+      }
+      if (blankOutputsOnly) {
+        outputFieldsForTable.forEach(() => { parts.push(''); });
+      } else if (runResult && runResult.error) {
+        outputFieldsForTable.forEach(() => { parts.push(String(runResult.error)); });
+      } else {
+        outputFieldsForTable.forEach((f) => {
+          parts.push(runResult ? getRunValue(runResult, f.key, ri, runWs, outputFields) : '');
+        });
+      }
+    }
     function getRowStringsForSearch(d) {
       const parts = [];
       if (d.type === 'gt') {
         const j = d.j;
-        const runRowIndex = gtToRun[j];
-        const runResult = runRowIndex >= 0 ? resultsByIndex.get(runRowIndex) || null : null;
-        parts.push(String(j + 1), runRowIndex >= 0 ? String(runRowIndex + 1) : '—');
-        gtColsUsed.forEach((col) => { parts.push(getGtValue(gtContent, j, col)); });
-        outputKeysUsed.forEach((outputKey) => {
-          parts.push(runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : '');
-        });
-        parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
+        const pairedRun = gtToRun[j];
+        const showRunCells = typeof pairedRun === 'number' && pairedRun >= 0;
+        const anchorIn = !showRunCells && typeof d.displayRunRowIndex === 'number' && d.displayRunRowIndex >= 0
+          ? d.displayRunRowIndex
+          : -1;
+        const runRowForCells = showRunCells ? pairedRun : anchorIn;
+        const runResult = runRowForCells >= 0 ? resultsByIndex.get(runRowForCells) || null : null;
+        const blankOutputsOnly = !showRunCells && anchorIn >= 0;
+        pushRunBlockStringsForSearch(parts, runResult, runRowForCells, blankOutputsOnly);
+        if (scoreGtColsCollapsed) {
+          parts.push('Ground truth ...');
+        } else {
+          parts.push(String(j + 1));
+          gtColsDisplayed.forEach((col) => { parts.push(getGtValueForDisplay(gtContent, j, col)); });
+        }
+        const matchEvalRun = showRunCells
+          ? pairedRun
+          : (typeof d.displayRunRowIndex === 'number' && d.displayRunRowIndex >= 0 ? d.displayRunRowIndex : -1);
+        parts.push(matchEvalRun >= 0 && isPairMatchForRow(matchEvalRun, j) ? 'true' : 'false');
         parts.push(isScoreRowExcludedFromScoring(String(j)) ? 'false' : 'true');
-        parts.push(comments[String(j)] ?? '');
       } else {
         const i = d.i;
         const runResult = resultsByIndex.get(i) || null;
-        parts.push('—', String(i + 1));
-        gtColsUsed.forEach(() => { parts.push('—'); });
-        outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
+        pushRunBlockStringsForSearch(parts, runResult, i);
+        if (scoreGtColsCollapsed) {
+          parts.push('Ground truth ...');
+        } else {
+          parts.push('—');
+          gtColsDisplayed.forEach(() => { parts.push('—'); });
+        }
         parts.push('false');
         parts.push(isScoreRowExcludedFromScoring(`run:${i}`) ? 'false' : 'true');
-        parts.push(comments['run:' + i] ?? '');
       }
       return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
     }
@@ -1751,6 +2667,20 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const excludedMap = getScoreRowExcludedFromScoring();
     const isGtExcluded = (j) => !!excludedMap[String(j)];
     const isRunOnlyExcluded = (runRowIdx) => !!excludedMap[`run:${runRowIdx}`];
+    /** Count run rows with API/runtime errors among rows still included for Review (not excluded from scoring). */
+    function errorCountAmongReviewIncluded(excluded) {
+      let n = 0;
+      for (const r of rawResults || []) {
+        if (!r || !r.error) continue;
+        const i = r.row_index;
+        if (typeof i !== 'number' || Number.isNaN(i) || i < 0) continue;
+        const j = i < runToGt.length ? runToGt[i] : -1;
+        const rowKey = j >= 0 ? String(j) : `run:${i}`;
+        if (!excluded[rowKey]) n++;
+      }
+      return n;
+    }
+    const errorRowCount = errorCountAmongReviewIncluded(excludedMap);
     let recallDenom = 0;
     for (let j = 0; j < gtRows.length; j++) {
       if (!isGtExcluded(j)) recallDenom++;
@@ -1759,11 +2689,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     for (let j = 0; j < gtRows.length; j++) {
       if (isGtExcluded(j)) continue;
       const runRowIndex = gtToRun[j];
-      if (runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent)) tp++;
+      if (runRowIndex >= 0 && isPairMatchForRow(runRowIndex, j)) tp++;
     }
-    const nonErrorRunRowIndices = [...new Set((results || []).filter((r) => !r.error).map((r) => r.row_index))];
+    const allRunRowIndicesForPrec = [...new Set((results || []).map((r) => r.row_index))];
     let precDenom = 0;
-    for (const R of nonErrorRunRowIndices) {
+    for (const R of allRunRowIndicesForPrec) {
       const j = R >= 0 && R < (runToGt || []).length ? runToGt[R] : -1;
       if (j >= 0) {
         if (!isGtExcluded(j)) precDenom++;
@@ -1775,7 +2705,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const recall = recallDenom > 0 ? (tp / recallDenom) * 100 : 0;
     const f1 = (precision + recall) > 0 ? (2 * (precision / 100) * (recall / 100) / ((precision + recall) / 100)) * 100 : 0;
     const fmt = (x) => (Number.isFinite(x) ? x.toFixed(2) : '—');
-    const errorNote = errorRowCount > 0 ? ` · ${errorRowCount} error row${errorRowCount === 1 ? '' : 's'} removed` : '';
+    const errorNote = errorRowCount > 0 ? ` · ${errorRowCount} row${errorRowCount === 1 ? '' : 's'} with error` : '';
     const metricsText = `Precision ${fmt(precision)}% · Recall ${fmt(recall)}% · F1 ${fmt(f1)}%${errorNote}`;
 
     const summaryText = `Run result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tp} matched`;
@@ -1793,11 +2723,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       for (let j = 0; j < gtRows.length; j++) {
         if (isGtEx(j)) continue;
         const runRowIndex = gtToRun[j];
-        if (runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent)) tpN++;
+        if (runRowIndex >= 0 && isPairMatchForRow(runRowIndex, j)) tpN++;
       }
-      const nonErrRunIdx = [...new Set((results || []).filter((r) => !r.error).map((r) => r.row_index))];
+      const allRunIdxPrec = [...new Set((results || []).map((r) => r.row_index))];
       let precD = 0;
-      for (const R of nonErrRunIdx) {
+      for (const R of allRunIdxPrec) {
         const j = R >= 0 && R < (runToGt || []).length ? runToGt[R] : -1;
         if (j >= 0) {
           if (!isGtEx(j)) precD++;
@@ -1808,7 +2738,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const prec = precD > 0 ? (tpN / precD) * 100 : 0;
       const rec = recallD > 0 ? (tpN / recallD) * 100 : 0;
       const f1v = (prec + rec) > 0 ? (2 * (prec / 100) * (rec / 100) / ((prec + rec) / 100)) * 100 : 0;
-      const errNote = errorRowCount > 0 ? ` · ${errorRowCount} error row${errorRowCount === 1 ? '' : 's'} removed` : '';
+      const errN = errorCountAmongReviewIncluded(excludedMapNow);
+      const errNote = errN > 0 ? ` · ${errN} row${errN === 1 ? '' : 's'} with error` : '';
       const mTxt = `Precision ${fmt(prec)}% · Recall ${fmt(rec)}% · F1 ${fmt(f1v)}%${errNote}`;
       const sTxt = `Run result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tpN} matched`;
       const summaryEl = resultsBody.querySelector('.score-detail-results-summary');
@@ -1825,10 +2756,25 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         <span class="score-detail-results-metrics" aria-label="Precision, Recall, F1">${escapeHtml(metricsText)}</span>
       </div>
       <div class="score-detail-results-search-inline">
+        <label class="score-detail-rules-column-filter" title="Hide columns not used in any rule (input, model output, GT). Export still has all columns.">
+          Rule columns only
+          <input type="checkbox" id="score-detail-rules-column-only" ${scoreDetailPagination.rulesColumnFilter ? 'checked' : ''} aria-label="Table shows only columns referenced in rules" />
+        </label>
         <label class="dataset-detail-search-label" for="score-detail-results-search">Search</label>
         <input type="text" id="score-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" value="${escapeAttr(scoreDetailPagination.searchQuery)}" />
       </div>
     `;
+    const rulesColumnOnlyCb = topRow.querySelector('#score-detail-rules-column-only');
+    if (rulesColumnOnlyCb) {
+      rulesColumnOnlyCb.addEventListener('change', () => {
+        const on = rulesColumnOnlyCb.checked;
+        scoreDetailPagination.rulesColumnFilter = on;
+        if (node) node.dataset.scoreTableRulesColumnFilter = on ? '1' : '0';
+        scoreDetailPagination.currentPage = 1;
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        void renderResults();
+      });
+    }
     const searchInp = topRow.querySelector('#score-detail-results-search');
     if (searchInp) {
       searchInp.addEventListener('input', () => {
@@ -1844,142 +2790,426 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       return s.length > maxLen ? s.slice(0, maxLen) + '…' : s;
     }
 
-    const runColLabels = outputKeysUsed.map((k) => (runColumns.find((c) => c.key === k)?.label || k || '—').trim() || '—');
-
-    let headerRow = '<thead><tr><th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--row-num" title="Row number">#</th><th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--gt-block score-detail-results-th--block-sep" title="Ground truth row index">Ground truth #</th>';
-    if (gtColsUsed.length > 0) {
-      gtColsUsed.forEach((col) => { headerRow += `<th class="score-detail-results-th score-detail-results-th--gt score-detail-results-th--gt-block">${escapeHtml(col)}</th>`; });
-    } else {
-      headerRow += '<th class="score-detail-results-th score-detail-results-th--gt score-detail-results-th--gt-block">Ground truth</th>';
+    function runResultCellsHtml(runResult, runRowIndex, scoreTableRowNum, collapsedInputs, collapsedOutputs, blankOutputsOnly = false) {
+      const idxDisplay = runResult ? String((runResult.row_index ?? runRowIndex) + 1) : '—';
+      const idxTitle = scoreTableRowNum != null
+        ? `Score table row ${scoreTableRowNum}${runResult ? `; Run result row ${(runResult.row_index ?? runRowIndex) + 1}` : ''}`
+        : (runResult ? `Run result row ${(runResult.row_index ?? runRowIndex) + 1}` : 'No run result');
+      const inpDisplay = runResult ? String((runResult.input_row_index ?? 0) + 1) : '—';
+      const inpTitle = runResult ? `Dataset input row ${inpDisplay}` : '';
+      let html = '';
+      if (hasInputBlock) {
+        if (collapsedInputs) {
+          html += '<td class="score-detail-results-td run-detail-td run-detail-td--dataset-row-col run-detail-td--input-block-start run-detail-bracket-collapsed" title="">Input ...</td>';
+        } else {
+          html += `<td class="score-detail-results-td run-detail-td run-detail-td--dataset-row-col run-detail-td--input-block-start" title="${escapeAttr(inpTitle)}">${inpDisplay}</td>`;
+          const inputRow = runResult && Array.isArray(runResult.input_row) ? runResult.input_row : [];
+          inputHeadersForTable.forEach((h) => {
+            const ci = inputHeaders.findIndex((x) => String(x ?? '').trim() === String(h ?? '').trim());
+            const v = ci >= 0 ? inputRow[ci] : null;
+            const disp = v == null ? '—' : cellText(v);
+            html += `<td class="score-detail-results-td run-detail-td run-detail-td--dataset-row-col" title="${escapeAttr(v == null ? '' : String(v))}">${v == null ? '—' : escapeHtml(disp)}</td>`;
+          });
+        }
+      }
+      if (!hasOutputBlock) return html;
+      if (collapsedOutputs) {
+        html += '<td class="score-detail-results-td run-detail-td run-detail-td--dataset-row-col run-detail-td--input-block-sep run-detail-bracket-collapsed" title="">Output ...</td>';
+        return html;
+      }
+      if (showOutputIndexCol) {
+        html += `<td class="score-detail-results-td run-detail-td run-detail-td--index run-detail-td--input-block-sep" title="${escapeAttr(idxTitle)}">${idxDisplay}</td>`;
+      }
+      if (blankOutputsOnly) {
+        outputFieldsForTable.forEach(() => {
+          html += '<td class="score-detail-results-td run-detail-td" title="">—</td>';
+        });
+        return html;
+      }
+      const hasErr = !!(runResult && runResult.error);
+      outputFieldsForTable.forEach((f) => {
+        if (hasErr) {
+          const errText = cellText(runResult.error);
+          html += `<td class="score-detail-results-td run-detail-td run-detail-td--error" title="${escapeAttr(runResult.error)}">${escapeHtml(errText)}</td>`;
+        } else {
+          const val = runResult && runResult.output ? runResult.output[f.key] : null;
+          const str = val == null ? '—' : (Array.isArray(val) ? cellText(val.join(', ')) : cellText(val));
+          const fullTitle = val == null ? '' : (Array.isArray(val) ? val.join(', ') : String(val));
+          html += `<td class="score-detail-results-td run-detail-td" title="${escapeAttr(fullTitle)}">${val == null ? '—' : escapeHtml(str)}</td>`;
+        }
+      });
+      return html;
     }
-    headerRow += '<th class="score-detail-results-th score-detail-results-th--idx score-detail-results-th--run-block score-detail-results-th--block-sep" title="Run result row index (matched to this ground truth row)">Run result #</th>';
-    runColLabels.forEach((label) => { headerRow += `<th class="score-detail-results-th score-detail-results-th--run score-detail-results-th--run-block">${escapeHtml(label)}</th>`; });
-    headerRow += '<th class="score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block score-detail-results-th--block-sep">Match</th><th class="score-detail-results-th score-detail-results-th--review score-detail-results-th--result-block" title="Include in Review API and in Precision / Recall / F1">Review</th><th class="score-detail-results-th score-detail-results-th--comment score-detail-results-th--result-block">Comment</th></tr></thead><tbody>';
     const tableWrap = document.createElement('div');
     tableWrap.className = 'score-detail-results-table-wrap';
     const tbl = document.createElement('table');
     tbl.className = 'score-detail-results-table run-detail-results-table';
-    tbl.innerHTML = headerRow;
-    const tbody = tbl.querySelector('tbody');
-
-    function appendGtRow(j, rowNum) {
-      const runRowIndex = gtToRun[j];
-      const runResult = runRowIndex >= 0 ? resultsByIndex.get(runRowIndex) || null : null;
-      const isMatch = runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent);
-      const rowClass = isMatch ? 'score-detail-results-tr--match' : 'score-detail-results-tr--unmatch';
-      const runNum = runRowIndex >= 0 ? String(runRowIndex + 1) : '—';
-      const commentKey = String(j);
-      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--row-num" title="Row ${rowNum}">${rowNum}</td><td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="GT row ${j + 1}">${j + 1}</td>`;
-      if (gtColsUsed.length > 0) {
-        gtColsUsed.forEach((col) => {
-          const val = getGtValue(gtContent, j, col);
-          tr += `<td class="score-detail-results-td score-detail-results-td--gt" title="${escapeAttr(val)}">${escapeHtml(cellText(val))}</td>`;
+    const thead = document.createElement('thead');
+    const trHead = document.createElement('tr');
+    const thListNum = document.createElement('th');
+    thListNum.className = 'score-detail-results-th run-detail-th run-detail-th--row-display-num';
+    thListNum.textContent = '#';
+    thListNum.title = 'Row number in the current list (after sort/filter)';
+    trHead.appendChild(thListNum);
+    const canToggleInputs = typeof getRunInputColsCollapsed === 'function' && typeof setRunInputColsCollapsed === 'function';
+    const onToggleInputs = () => {
+      if (!canToggleInputs) return;
+      setRunInputColsCollapsed(!getRunInputColsCollapsed());
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void renderResults();
+    };
+    const canToggleOutputs = typeof getScoreOutputColsCollapsed === 'function' && typeof setScoreOutputColsCollapsed === 'function';
+    const onToggleOutputs = () => {
+      if (!canToggleOutputs) return;
+      setScoreOutputColsCollapsed(!getScoreOutputColsCollapsed());
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void renderResults();
+    };
+    const canToggleGt = typeof getScoreGtColsCollapsed === 'function' && typeof setScoreGtColsCollapsed === 'function';
+    const onToggleGt = () => {
+      if (!canToggleGt) return;
+      setScoreGtColsCollapsed(!getScoreGtColsCollapsed());
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      void renderResults();
+    };
+    function wireScoreInputHeader(th, title) {
+      if (!canToggleInputs) return;
+      th.classList.add('run-detail-th--bracket-toggle');
+      th.title = title;
+      th.setAttribute('role', 'button');
+      th.setAttribute('tabindex', '0');
+      th.addEventListener('click', onToggleInputs);
+      th.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggleInputs();
+        }
+      });
+    }
+    function wireScoreOutputHeader(th, title) {
+      if (!canToggleOutputs) return;
+      th.classList.add('run-detail-th--bracket-toggle');
+      th.title = title;
+      th.setAttribute('role', 'button');
+      th.setAttribute('tabindex', '0');
+      th.addEventListener('click', onToggleOutputs);
+      th.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggleOutputs();
+        }
+      });
+    }
+    function wireScoreGtHeader(th, title) {
+      if (!canToggleGt) return;
+      th.classList.add('run-detail-th--bracket-toggle');
+      th.title = title;
+      th.setAttribute('role', 'button');
+      th.setAttribute('tabindex', '0');
+      th.addEventListener('click', onToggleGt);
+      th.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggleGt();
+        }
+      });
+    }
+    if (hasInputBlock) {
+      const thBracket = document.createElement('th');
+      thBracket.className = `score-detail-results-th run-detail-th run-detail-th--dataset-row-col run-detail-th--input-block-start${runInputColsCollapsed ? ' run-detail-bracket-collapsed' : ''}`;
+      thBracket.textContent = runInputColsCollapsed ? 'Input ...' : 'Input: #';
+      if (canToggleInputs) {
+        wireScoreInputHeader(
+          thBracket,
+          runInputColsCollapsed
+            ? 'Click to expand input columns.'
+            : 'Input: # — Dataset input row index. Click any input column header to hide input columns.',
+        );
+      } else {
+        thBracket.title = runInputColsCollapsed
+          ? 'Input columns hidden. Click a header with toggle to expand.'
+          : 'Input: # — Dataset input row index.';
+      }
+      trHead.appendChild(thBracket);
+      if (!runInputColsCollapsed) {
+        inputHeadersForTable.forEach((h) => {
+          const th = document.createElement('th');
+          th.className = 'score-detail-results-th run-detail-th run-detail-th--dataset-row-col';
+          const label = `Input: ${String(h ?? '').trim() || ' '}`;
+          th.textContent = label;
+          wireScoreInputHeader(th, `${label} — Click to hide input columns.`);
+          trHead.appendChild(th);
+        });
+      }
+    }
+    if (hasOutputBlock) {
+      if (scoreOutputColsCollapsed) {
+        const thOutBracket = document.createElement('th');
+        thOutBracket.className = 'score-detail-results-th run-detail-th run-detail-th--dataset-row-col run-detail-th--input-block-sep run-detail-bracket-collapsed';
+        thOutBracket.textContent = 'Output ...';
+        if (canToggleOutputs) {
+          wireScoreOutputHeader(
+            thOutBracket,
+            'Click to expand model output columns.',
+          );
+        } else {
+          thOutBracket.title = 'Output columns hidden. Click a header with toggle to expand.';
+        }
+        trHead.appendChild(thOutBracket);
+      } else {
+        if (showOutputIndexCol) {
+          const thRunIdx = document.createElement('th');
+          thRunIdx.className = 'score-detail-results-th run-detail-th run-detail-th--index run-detail-th--input-block-sep';
+          const outputRowIdxLabel = formatResultOutputColumnLabel('#');
+          thRunIdx.textContent = outputRowIdxLabel;
+          if (canToggleOutputs) {
+            wireScoreOutputHeader(
+              thRunIdx,
+              'Output: # — Run output row index. Click any output column header to hide output columns.',
+            );
+          } else {
+            thRunIdx.title = 'Run output row index (row_index + 1)';
+          }
+          trHead.appendChild(thRunIdx);
+        }
+        outputFieldsForTable.forEach((f) => {
+          const th = document.createElement('th');
+          const label = formatResultOutputColumnLabel((f.display || f.key || '').trim() || '—');
+          th.className = 'score-detail-results-th run-detail-th';
+          th.textContent = label;
+          th.title = label;
+          wireScoreOutputHeader(th, `${label} — Click to hide output columns.`);
+          trHead.appendChild(th);
+        });
+      }
+    }
+    if (scoreGtColsCollapsed) {
+      const thGtBracket = document.createElement('th');
+      thGtBracket.className = 'score-detail-results-th score-detail-results-th--gt score-detail-results-th--gt-block score-detail-results-th--block-sep score-detail-results-th--gt-collapse-bracket run-detail-bracket-collapsed';
+      thGtBracket.textContent = 'Ground truth ...';
+      if (canToggleGt) {
+        wireScoreGtHeader(
+          thGtBracket,
+          'Click to expand ground truth columns.',
+        );
+      } else {
+        thGtBracket.title = 'Ground truth columns hidden. Click a header with toggle to expand.';
+      }
+      trHead.appendChild(thGtBracket);
+    } else {
+      const thGtNum = document.createElement('th');
+      thGtNum.className = 'score-detail-results-th score-detail-results-th--idx score-detail-results-th--gt-block score-detail-results-th--block-sep';
+      thGtNum.textContent = SCORE_GT_ROW_INDEX_LABEL;
+      if (canToggleGt) {
+        wireScoreGtHeader(
+          thGtNum,
+          'Ground truth row index. Click any ground truth column header to hide ground truth columns.',
+        );
+      } else {
+        thGtNum.title = 'Ground truth row index';
+      }
+      trHead.appendChild(thGtNum);
+      if (gtColsDisplayed.length > 0) {
+        gtColsDisplayed.forEach((col) => {
+          const th = document.createElement('th');
+          th.className = 'score-detail-results-th score-detail-results-th--gt score-detail-results-th--gt-block';
+          const headLabel = formatScoreGroundTruthColumnLabel(col);
+          th.textContent = headLabel;
+          th.title = headLabel;
+          wireScoreGtHeader(th, `${headLabel} — Click to hide ground truth columns.`);
+          trHead.appendChild(th);
         });
       } else {
-        tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>';
+        const th = document.createElement('th');
+        th.className = 'score-detail-results-th score-detail-results-th--gt score-detail-results-th--gt-block';
+        th.textContent = 'Ground truth';
+        th.title = 'Ground truth';
+        wireScoreGtHeader(th, 'Ground truth — Click to hide ground truth columns.');
+        trHead.appendChild(th);
       }
-      tr += `<td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="${runRowIndex >= 0 ? 'Run result row ' + (runRowIndex + 1) : 'No match'}">${runNum}</td>`;
-      for (const outputKey of outputKeysUsed) {
-        const runVal = runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : null;
-        tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
+    }
+    const thMatch = document.createElement('th');
+    thMatch.className = 'score-detail-results-th score-detail-results-th--match score-detail-results-th--result-block score-detail-results-th--block-sep';
+    thMatch.textContent = 'Match';
+    thMatch.title = 'Match';
+    trHead.appendChild(thMatch);
+    const thReview = document.createElement('th');
+    thReview.className = 'score-detail-results-th score-detail-results-th--review score-detail-results-th--result-block';
+    thReview.title = 'Include in Review API and in Precision / Recall / F1';
+    const reviewLab = document.createElement('label');
+    reviewLab.className = 'score-detail-results-review-th-label';
+    const reviewSpan = document.createElement('span');
+    reviewSpan.textContent = 'Review';
+    reviewLab.appendChild(reviewSpan);
+    const masterCb = document.createElement('input');
+    masterCb.type = 'checkbox';
+    masterCb.className = 'score-detail-results-review-master-cb';
+    masterCb.setAttribute('aria-label', 'Select or clear all Review checkboxes (all rows)');
+    reviewLab.appendChild(masterCb);
+    thReview.appendChild(reviewLab);
+    trHead.appendChild(thReview);
+    thead.appendChild(trHead);
+    tbl.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    tbl.appendChild(tbody);
+
+    function appendGtRowFromDescriptor(d, rowNum, zebraStripe = null) {
+      const j = d.j;
+      const pairedRun = gtToRun[j];
+      const showRunCells = typeof pairedRun === 'number' && pairedRun >= 0;
+      const anchorIn = !showRunCells && typeof d.displayRunRowIndex === 'number' && d.displayRunRowIndex >= 0
+        ? d.displayRunRowIndex
+        : -1;
+      const runRowIndexForCells = showRunCells ? pairedRun : anchorIn;
+      const runResult = runRowIndexForCells >= 0 ? resultsByIndex.get(runRowIndexForCells) || null : null;
+      const blankOutputsOnly = !showRunCells && anchorIn >= 0;
+      const matchEvalRun = showRunCells
+        ? pairedRun
+        : (typeof d.displayRunRowIndex === 'number' && d.displayRunRowIndex >= 0 ? d.displayRunRowIndex : -1);
+      const isMatch = matchEvalRun >= 0 && isPairMatchForRow(matchEvalRun, j);
+      const rowClass = isMatch ? 'score-detail-results-tr--match' : 'score-detail-results-tr--unmatch';
+      const rowKey = String(j);
+      const zebraClass = zebraStripe === 0 || zebraStripe === 1 ? ` score-detail-results-tr--input-zebra-${zebraStripe}` : '';
+      const trClasses = `score-detail-results-tr ${rowClass}${zebraClass}`;
+      let tr = `<tr class="${trClasses}" data-score-row-key="${escapeAttr(rowKey)}">`;
+      tr += `<td class="score-detail-results-td run-detail-td run-detail-td--row-display-num">${rowNum}</td>`;
+      tr += runResultCellsHtml(runResult, runRowIndexForCells, rowNum, runInputColsCollapsed, scoreOutputColsCollapsed, blankOutputsOnly);
+      if (scoreGtColsCollapsed) {
+        tr += '<td class="score-detail-results-td score-detail-results-td--gt score-detail-results-td--block-sep score-detail-results-td--gt-collapse-bracket run-detail-bracket-collapsed" title="">Ground truth ...</td>';
+      } else {
+        tr += `<td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="Ground truth row ${j + 1}">${j + 1}</td>`;
+        if (gtColsDisplayed.length > 0) {
+          gtColsDisplayed.forEach((col) => {
+            const val = getGtValueForDisplay(gtContent, j, col);
+            tr += `<td class="score-detail-results-td score-detail-results-td--gt" title="${escapeAttr(val)}">${escapeHtml(cellText(val))}</td>`;
+          });
+        } else {
+          tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>';
+        }
       }
       tr += `<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="${isMatch ? 'Matched' : 'Not matched'}">${isMatch ? 'true' : 'false'}</td>`;
-      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td><td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
 
-    function appendRunOnlyRow(i, rowNum) {
+    function appendRunOnlyRow(i, rowNum, zebraStripe = null) {
       const runResult = resultsByIndex.get(i) || null;
       const rowClass = 'score-detail-results-tr--run-only';
-      const commentKey = 'run:' + i;
-      let tr = `<tr class="score-detail-results-tr ${rowClass}" data-comment-key="${escapeAttr(commentKey)}"><td class="score-detail-results-td score-detail-results-td--row-num" title="Row ${rowNum}">${rowNum}</td><td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="No GT row">—</td>`;
-      if (gtColsUsed.length > 0) {
-        gtColsUsed.forEach(() => { tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>'; });
+      const rowKey = 'run:' + i;
+      const zebraClass = zebraStripe === 0 || zebraStripe === 1 ? ` score-detail-results-tr--input-zebra-${zebraStripe}` : '';
+      let tr = `<tr class="score-detail-results-tr ${rowClass}${zebraClass}" data-score-row-key="${escapeAttr(rowKey)}">`;
+      tr += `<td class="score-detail-results-td run-detail-td run-detail-td--row-display-num">${rowNum}</td>`;
+      tr += runResultCellsHtml(runResult, i, rowNum, runInputColsCollapsed, scoreOutputColsCollapsed);
+      if (scoreGtColsCollapsed) {
+        tr += '<td class="score-detail-results-td score-detail-results-td--gt score-detail-results-td--block-sep score-detail-results-td--gt-collapse-bracket run-detail-bracket-collapsed" title="">Ground truth ...</td>';
       } else {
-        tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>';
-      }
-      tr += `<td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="Run result row ${i + 1}">${i + 1}</td>`;
-      for (const outputKey of outputKeysUsed) {
-        const runVal = runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : '';
-        tr += `<td class="score-detail-results-td score-detail-results-td--run" title="${escapeAttr(runVal)}">${escapeHtml(cellText(runVal))}</td>`;
+        tr += '<td class="score-detail-results-td score-detail-results-td--idx score-detail-results-td--block-sep" title="No ground truth row">—</td>';
+        if (gtColsDisplayed.length > 0) {
+          gtColsDisplayed.forEach(() => { tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>'; });
+        } else {
+          tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>';
+        }
       }
       tr += '<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="Run result row without ground truth match">false</td>';
-      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td><td class="score-detail-results-td score-detail-results-td--comment"></td></tr>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--review"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }
 
+    const inputZebraStripes = buildScoreZebraStripes(
+      filteredDescriptors,
+      resultsByIndex,
+      gtToRun,
+      inputRoot,
+      runWs,
+      outputFields,
+      gtContent,
+      getRunValue,
+      getGtValue,
+    );
     let rowNum = start + 1;
-    for (const d of pageDescriptors) {
-      if (d.type === 'gt') appendGtRow(d.j, rowNum++);
-      else appendRunOnlyRow(d.i, rowNum++);
+    for (let idx = 0; idx < pageDescriptors.length; idx++) {
+      const d = pageDescriptors[idx];
+      const globalIdx = start + idx;
+      const zs = inputZebraStripes[globalIdx];
+      if (d.type === 'gt') {
+        appendGtRowFromDescriptor(d, rowNum++, zs);
+      } else {
+        appendRunOnlyRow(d.i, rowNum++, zs);
+      }
+    }
+
+    function descriptorToReviewKey(d) {
+      return d.type === 'gt' ? String(d.j) : `run:${d.i}`;
+    }
+    function allReviewRowKeys() {
+      return descriptors.map(descriptorToReviewKey);
+    }
+    function syncReviewMasterCheckbox() {
+      const masterCb = tbl.querySelector('.score-detail-results-review-master-cb');
+      if (!masterCb) return;
+      const keys = allReviewRowKeys();
+      if (keys.length === 0) {
+        masterCb.checked = false;
+        masterCb.indeterminate = false;
+        masterCb.disabled = true;
+        return;
+      }
+      masterCb.disabled = false;
+      const ex = getScoreRowExcludedFromScoring();
+      let included = 0;
+      for (const k of keys) {
+        if (!ex[k]) included++;
+      }
+      masterCb.checked = included === keys.length;
+      masterCb.indeterminate = included > 0 && included < keys.length;
     }
 
     tbody.querySelectorAll('tr').forEach((tr) => {
-      const commentKey = tr.getAttribute('data-comment-key');
-      const td = tr.querySelector('.score-detail-results-td--comment');
+      const rowKey = tr.getAttribute('data-score-row-key');
       const tdReview = tr.querySelector('.score-detail-results-td--review');
-      if (commentKey == null) return;
-      if (td) {
-        const textarea = document.createElement('textarea');
-        textarea.rows = 2;
-        textarea.className = 'score-detail-results-comment-textarea';
-        textarea.placeholder = 'Comment...';
-        textarea.value = comments[commentKey] ?? '';
-        textarea.setAttribute('aria-label', 'Comment');
-        textarea.addEventListener('change', () => {
-          const c = getResultComments();
-          const v = (textarea.value || '').trim();
-          if (v) c[commentKey] = textarea.value;
-          else delete c[commentKey];
-          setResultComments(c);
-        });
-        td.appendChild(textarea);
-      }
+      if (rowKey == null) return;
       if (tdReview) {
         const wrap = document.createElement('label');
         wrap.className = 'score-detail-results-review-label';
         const cb = document.createElement('input');
         cb.type = 'checkbox';
-        cb.checked = !isScoreRowExcludedFromScoring(commentKey);
+        cb.checked = !isScoreRowExcludedFromScoring(rowKey);
         cb.setAttribute('aria-label', 'Include in Review and in Precision / Recall / F1');
         cb.addEventListener('change', () => {
           const ex = { ...getScoreRowExcludedFromScoring() };
-          if (cb.checked) delete ex[commentKey];
-          else ex[commentKey] = true;
+          if (cb.checked) delete ex[rowKey];
+          else ex[rowKey] = true;
           setScoreRowExcludedFromScoring(ex);
           refreshScoreMetricsBanner();
+          syncReviewMasterCheckbox();
         });
         wrap.appendChild(cb);
         tdReview.appendChild(wrap);
       }
     });
 
-    const commentTh = tbl.querySelector('thead .score-detail-results-th--comment');
-    if (commentTh) {
-      const resizeHandle = document.createElement('div');
-      resizeHandle.className = 'score-detail-results-comment-resize-handle';
-      resizeHandle.setAttribute('aria-label', 'Resize column');
-      resizeHandle.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const startX = e.clientX;
-        const startW = commentTh.offsetWidth;
-        document.body.classList.add('wd-col-resizing');
-        const onMove = (moveE) => {
-          const dx = moveE.clientX - startX;
-          const newW = Math.max(100, startW + dx);
-          commentTh.style.width = `${newW}px`;
-          commentTh.style.minWidth = `${newW}px`;
-        };
-        const onUp = () => {
-          document.body.classList.remove('wd-col-resizing');
-          document.removeEventListener('mousemove', onMove);
-          document.removeEventListener('mouseup', onUp);
-        };
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
+    const masterReviewCb = tbl.querySelector('.score-detail-results-review-master-cb');
+    if (masterReviewCb) {
+      masterReviewCb.addEventListener('change', () => {
+        const keys = allReviewRowKeys();
+        if (keys.length === 0) return;
+        const ex = { ...getScoreRowExcludedFromScoring() };
+        if (masterReviewCb.checked) {
+          for (const k of keys) delete ex[k];
+        } else {
+          for (const k of keys) ex[k] = true;
+        }
+        setScoreRowExcludedFromScoring(ex);
+        tbody.querySelectorAll('tr[data-score-row-key] .score-detail-results-td--review input[type="checkbox"]').forEach((el) => {
+          const row = el.closest('tr');
+          const key = row?.getAttribute('data-score-row-key');
+          if (key == null) return;
+          el.checked = !ex[key];
+        });
+        masterReviewCb.indeterminate = false;
+        refreshScoreMetricsBanner();
       });
-      commentTh.appendChild(resizeHandle);
+      syncReviewMasterCheckbox();
     }
 
     tableWrap.appendChild(tbl);
@@ -2044,9 +3274,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   async function updateReviewButtonState() {
-    if (!addPromptReviewBtn) return;
     const payload = await Promise.resolve(getReviewPayload());
-    addPromptReviewBtn.disabled = !payload || !payload.prompt_sections || payload.prompt_sections.length === 0 || !selectedNodeId;
+    const reviewDisabled =
+      !payload || !payload.prompt_sections || payload.prompt_sections.length === 0 || !selectedNodeId;
+    if (addPromptReviewBtn) addPromptReviewBtn.disabled = reviewDisabled;
+    if (reviewPayloadPreviewBtn) reviewPayloadPreviewBtn.disabled = reviewDisabled;
     await updateSaveToWorkspaceButton();
   }
 
@@ -2062,6 +3294,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const defaultId = (settings.default_review_credential_id || '').trim();
         if (defaultId && (list || []).some((c) => c.id === defaultId)) credentialId = defaultId;
       }
+      if (reviewPayloadPreviewBtn) reviewPayloadPreviewBtn.hidden = !(settings?.debug_mode === true);
       if (credentialId) {
         llmSelect.value = credentialId;
         if (node) node.dataset.reviewCredentialId = credentialId;
@@ -2100,21 +3333,25 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   addPromptReviewBtn.addEventListener('click', async () => {
-    const scoreNodeId = node?.dataset?.nodeId || '';
-    if (!scoreNodeId) return;
+    if (!node?.dataset?.nodeId) return;
     const credentialId = (llmSelect?.value || '').trim();
     if (!credentialId) {
-      showAlert('Please select a model first.', { title: 'No model selected' });
+      showAlert('Select a model for Review before starting.', { title: 'Review' });
       return;
     }
-    const payload = await Promise.resolve(getReviewPayload());
-    if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) return;
-    const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } });
-    document.dispatchEvent(addEvent);
-    const reviewNodeId = addEvent.detail?.reviewNodeId || '';
-    close();
-    if (reviewNodeId) await runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview: addEvent.detail?.registerPendingReview });
+    await runReviewFromScore({
+      scoreNodeId: node.dataset.nodeId,
+      getReviewPayload,
+      credentialId,
+    });
   });
+
+  if (reviewPayloadPreviewBtn) {
+    reviewPayloadPreviewBtn.addEventListener('click', async () => {
+      if (!node?.dataset?.nodeId) return;
+      await openReviewSelectionPreviewModal({ getReviewPayload });
+    });
+  }
 
   /** Filter group for memory apply: keep only rules valid for runKeys/gtSet, update existingSet. Returns null if empty. */
   function filterGroupForApply(g, runKeys, gtSet, existingSet) {
@@ -2141,28 +3378,48 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!selectedNodeId) return false;
     const runColumns = getRunResultColumns();
     const gtHeaders = getGroundTruthHeaders(selectedNodeId);
+    const runWsMem = getRunWorkingSetContent();
     const runKeys = new Set((runColumns || []).map((c) => (c.key || '').trim()).filter(Boolean));
-    const gtSet = new Set(gtHeaders || []);
+    (runWsMem.headers || []).forEach((h) => {
+      const name = String(h ?? '').trim();
+      if (name) runKeys.add(`[${name}]`);
+    });
+    runKeys.add('#');
+    runKeys.add('[#]');
+    const gtSet = new Set([...(gtHeaders || []), SCORE_GT_ROW_INDEX_COLUMN]);
     const existingSet = new Set();
-    collectRulesFlat(getRoot()).forEach(({ rule: r }) => {
-      const ok = (r.outputKey || '').trim();
-      (r.gtColumns || []).forEach((gc) => {
-        const g = String(gc || '').trim();
-        if (ok && g) existingSet.add(ok + '\t' + g);
+    const { inputRoot: ir0, outputRoot: or0 } = loadBundle();
+    [ir0, or0].forEach((r0) => {
+      collectRulesFlat(r0).forEach(({ rule: r }) => {
+        const ok = (r.outputKey || '').trim();
+        const okNorm = ok === '[#]' ? '#' : ok;
+        (r.gtColumns || []).forEach((gc) => {
+          const g = String(gc || '').trim();
+          if (ok && g) existingSet.add(okNorm + '\t' + g);
+        });
       });
     });
-    let root = getRoot();
+    let inputRoot = ir0;
+    let outputRoot = or0;
     let added = false;
 
     for (const item of ruleEditorMemoryOrdered || []) {
       if (item.type === 'group') {
         const filtered = filterGroupForApply(item, runKeys, gtSet, existingSet);
         if (!filtered) continue;
-        root = insertChildAtPath(root, [], filtered, (root.children || []).length);
+        const memSide = item.scoreMemorySide || (activeRulesTab === 'input' ? 'input' : 'output');
+        if (memSide === 'output' && flattenScoreRules(inputRoot || emptyScoreRuleGroup()).length === 0) {
+          continue;
+        }
+        const target = memSide === 'input' ? inputRoot : outputRoot;
+        const next = insertChildAtPath(target, [], filtered, (target.children || []).length);
+        if (memSide === 'input') inputRoot = next;
+        else outputRoot = next;
         added = true;
       } else if (item.type === 'rule') {
-        const outputKey = (item.outputKey || '').trim();
-        const cols = (item.gtColumns || []).map((c) => String(c || '').trim()).filter((c) => runKeys.has(outputKey) && gtSet.has(c) && !existingSet.has(outputKey + '\t' + c));
+        const outputKeyRaw = (item.outputKey || '').trim();
+        const outputKey = outputKeyRaw === '[#]' ? '#' : outputKeyRaw;
+        const cols = (item.gtColumns || []).map((c) => String(c || '').trim()).filter((c) => runKeys.has(outputKeyRaw) && gtSet.has(c) && !existingSet.has(outputKey + '\t' + c));
         if (cols.length === 0) continue;
         cols.forEach((c) => existingSet.add(outputKey + '\t' + c));
         const rawMt = item.matchType || 'exact';
@@ -2175,11 +3432,18 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           matchType: migrateLegacyMatchType(rawMt),
           matchFlags: mf,
         };
-        root = insertChildAtPath(root, [], newRule, (root.children || []).length);
+        const memSide = item.scoreMemorySide ?? (isScoreInputSideRuleKey(outputKey) ? 'input' : 'output');
+        if (memSide === 'output' && flattenScoreRules(inputRoot || emptyScoreRuleGroup()).length === 0) {
+          continue;
+        }
+        const target = memSide === 'input' ? inputRoot : outputRoot;
+        const next = insertChildAtPath(target, [], newRule, (target.children || []).length);
+        if (memSide === 'input') inputRoot = next;
+        else outputRoot = next;
         added = true;
       }
     }
-    if (added) setRoot(root);
+    if (added) persistBundle(inputRoot, outputRoot);
     return added;
   }
 
@@ -2191,16 +3455,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
     updateTriggerDisplay();
     updateScoreNodeBorder();
+    syncRulesSectionVisibility();
     closeDropdown();
     dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.nodeId === selectedNodeId ? 'true' : 'false'));
     void updateReviewButtonState();
     if (selectedNodeId) {
-      const gtSet = new Set(getGroundTruthHeaders(selectedNodeId) || []);
-      let root = getRoot();
-      const filtered = filterRootByGtHeaders(root, gtSet);
-      if (filtered && JSON.stringify(filtered) !== JSON.stringify(root)) {
-        setRoot(filtered);
-        root = getRoot();
+      const gtSet = new Set([...(getGroundTruthHeaders(selectedNodeId) || []), SCORE_GT_ROW_INDEX_COLUMN]);
+      const { inputRoot: ir1, outputRoot: or1 } = loadBundle();
+      const inF = filterRootByGtHeaders(ir1, gtSet) || emptyScoreRuleGroup();
+      const outF = filterRootByGtHeaders(or1, gtSet) || emptyScoreRuleGroup();
+      if (JSON.stringify(inF) !== JSON.stringify(ir1) || JSON.stringify(outF) !== JSON.stringify(or1)) {
+        persistBundle(inF, outF);
       }
       applyRulesFromMemory();
     }
@@ -2263,16 +3528,19 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   updateTriggerDisplay();
   updateScoreNodeBorder();
+  syncRulesSectionVisibility();
+  syncRulesTabUi();
   renderRules();
   loadReviewCredentials();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
   if (selectedNodeId) {
-    const gtSet = new Set(getGroundTruthHeaders(selectedNodeId) || []);
-    let root = getRoot();
-    const filtered = filterRootByGtHeaders(root, gtSet);
-    if (filtered && JSON.stringify(filtered) !== JSON.stringify(root)) {
-      setRoot(filtered);
+    const gtSet = new Set([...(getGroundTruthHeaders(selectedNodeId) || []), SCORE_GT_ROW_INDEX_COLUMN]);
+    const { inputRoot: ir2, outputRoot: or2 } = loadBundle();
+    const inF2 = filterRootByGtHeaders(ir2, gtSet) || emptyScoreRuleGroup();
+    const outF2 = filterRootByGtHeaders(or2, gtSet) || emptyScoreRuleGroup();
+    if (JSON.stringify(inF2) !== JSON.stringify(ir2) || JSON.stringify(outF2) !== JSON.stringify(or2)) {
+      persistBundle(inF2, outF2);
     }
     applyRulesFromMemory();
     renderRules();
@@ -2287,7 +3555,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
 /**
  * Build score comparison table for export (Save to workspace).
- * Column names and order match the Score page display.
+ * Column names and order match the Score table except the leading list «#» column (omitted to avoid duplicate # with Input:/Output: indices).
  * @param {{ node: HTMLElement, getRunResults: () => { results, outputFields }, getRunWorkingSetContent: () => { headers, rows }, getGroundTruthContent: (wsNodeId: string) => { headers, rows }, getGroundTruthHeaders: (wsNodeId: string) => string[], getRunResultColumns?: () => Array<{ key: string, label: string }> }} options
  * @returns {Promise<{ headers: string[], rows: string[][] } | null>}
  */
@@ -2295,98 +3563,8 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
   if (!node) return null;
   const selectedNodeId = (node.dataset.scoreGroundTruthId || '').trim();
   if (!selectedNodeId) return null;
-  const raw = (node.dataset.scoreMapping || '[]').trim();
-  let data;
-  try {
-    data = JSON.parse(raw || '[]');
-  } catch (_) {
-    return null;
-  }
-  function normalizeToRules(arr) {
-    if (!Array.isArray(arr) || arr.length === 0) return [];
-    const first = arr[0];
-    if (first && typeof first === 'object' && Array.isArray(first.gtColumns)) {
-      return arr.map((r) => {
-        const raw = r.matchType || 'exact';
-        const baseF = r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {};
-        return {
-          outputKey: r.outputKey || '',
-          gtColumns: Array.isArray(r.gtColumns) ? r.gtColumns.filter(Boolean) : [],
-          matchType: migrateLegacyMatchType(raw),
-          matchFlags: {
-            ...DEFAULT_MATCH_FLAGS,
-            ...baseF,
-            contains: !!(baseF.contains || legacyMatchTypeWasContains(raw)),
-          },
-        };
-      }).filter((r) => r.outputKey || r.gtColumns.length > 0);
-    }
-    const pairs = [];
-    if (first && first.outputKey !== undefined && !first.rules) {
-      arr.forEach((r) => { pairs.push({ outputKey: r.outputKey || '', gtColumn: r.gtColumn || '', matchType: r.matchType || 'exact' }); });
-    } else if (first && first.rules) {
-      arr.forEach((g) => { (g.rules || []).forEach((r) => { pairs.push({ outputKey: r.outputKey || '', gtColumn: r.gtColumn || '', matchType: r.matchType || 'exact' }); }); });
-    } else return [];
-    const byKey = {};
-    pairs.forEach((p) => {
-      const raw = p.matchType || 'exact';
-      if (!byKey[p.outputKey]) {
-        byKey[p.outputKey] = { outputKey: p.outputKey, gtColumns: [], matchType: migrateLegacyMatchType(raw), anyContains: false };
-      }
-      if (legacyMatchTypeWasContains(raw)) byKey[p.outputKey].anyContains = true;
-      byKey[p.outputKey].matchType = migrateLegacyMatchType(raw);
-      if (p.gtColumn && !byKey[p.outputKey].gtColumns.includes(p.gtColumn)) byKey[p.outputKey].gtColumns.push(p.gtColumn);
-    });
-    return Object.values(byKey)
-      .filter((r) => r.outputKey || r.gtColumns.length > 0)
-      .map((r) => ({
-        outputKey: r.outputKey,
-        gtColumns: r.gtColumns,
-        matchType: r.matchType,
-        matchFlags: { ...DEFAULT_MATCH_FLAGS, contains: r.anyContains },
-      }));
-  }
-  function ensureGroupOps(data, children) {
-    const n = (children || []).length;
-    const len = Math.max(0, n - 1);
-    if (Array.isArray(data.ops) && data.ops.length >= len) return data.ops.slice(0, len).map((o) => (o === 'OR' ? 'OR' : 'AND'));
-    return Array(len).fill(data && data.op === 'OR' ? 'OR' : 'AND');
-  }
-  function normalizeChild(c) {
-    if (!c || c.type === 'rule') {
-      const rawMt = (c && c.matchType) || 'exact';
-      const f = { ...DEFAULT_MATCH_FLAGS, ...((c && c.matchFlags && typeof c.matchFlags === 'object') ? c.matchFlags : {}) };
-      if (legacyMatchTypeWasContains(rawMt)) f.contains = true;
-      return {
-        type: 'rule',
-        outputKey: (c && c.outputKey) || '',
-        gtColumns: Array.isArray(c && c.gtColumns) ? c.gtColumns.filter(Boolean) : [],
-        matchType: migrateLegacyMatchType(rawMt),
-        matchFlags: canonicalizeMatchFlags(f),
-      };
-    }
-    return normalizeGroupChild(c);
-  }
-  function normalizeGroupChild(c) {
-    const children = (c.children || []).map((ch) => (ch && ch.type === 'group') ? normalizeGroupChild(ch) : normalizeChild(ch));
-    return { type: 'group', ops: ensureGroupOps(c, children), children };
-  }
-  function parseRoot() {
-    if (data && data.type === 'group' && Array.isArray(data.children)) {
-      const children = (data.children || []).map((c) => (c && c.type === 'group') ? normalizeGroupChild(c) : normalizeChild(c));
-      return { type: 'group', ops: ensureGroupOps(data, children), children };
-    }
-    const rules = normalizeToRules(Array.isArray(data) ? data : []);
-    const children = rules.map((r) => ({
-      type: 'rule',
-      outputKey: r.outputKey || '',
-      gtColumns: (r.gtColumns || []).slice(),
-      matchType: migrateLegacyMatchType(r.matchType || 'exact'),
-      matchFlags: { ...DEFAULT_MATCH_FLAGS, ...(r.matchFlags && typeof r.matchFlags === 'object' ? r.matchFlags : {}) },
-    }));
-    return { type: 'group', ops: Array(Math.max(0, children.length - 1)).fill('AND'), children };
-  }
-  const root = parseRoot();
+  const raw = (node.dataset.scoreMapping || '{}').trim();
+  const { inputRoot, outputRoot } = parseScoreMappingBundle(raw || '{}');
   function collectRulesFlat(r, path = []) {
     if (!r) return [];
     if (r.type === 'rule') return [{ rule: r, path: path.slice() }];
@@ -2397,7 +3575,10 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     }
     return [];
   }
-  const rulesFlat = collectRulesFlat(root).map((x) => x.rule);
+  const rulesFlat = [
+    ...collectRulesFlat(inputRoot).map((x) => x.rule),
+    ...collectRulesFlat(outputRoot).map((x) => x.rule),
+  ];
   if (rulesFlat.length === 0) return null;
   const toCompareStr = (v) => {
     if (v === null || v === undefined) return '';
@@ -2422,11 +3603,22 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     return '';
   };
   const getGtValue = (gtContent, rowIndex, columnName) => {
+    if (String(columnName).trim() === SCORE_GT_ROW_INDEX_COLUMN) {
+      if (typeof rowIndex !== 'number' || rowIndex < 0) return '';
+      return toCompareStr(rowIndex);
+    }
     const headers = gtContent.headers || [];
     const rows = gtContent.rows || [];
     const colIdx = headers.findIndex((h) => String(h).trim() === String(columnName).trim());
     if (colIdx >= 0 && rows[rowIndex]) return toCompareStr(rows[rowIndex][colIdx]);
     return '';
+  };
+  const getGtValueExportDisplay = (gtContent, rowIndex, columnName) => {
+    if (String(columnName).trim() === SCORE_GT_ROW_INDEX_COLUMN) {
+      if (typeof rowIndex !== 'number' || rowIndex < 0) return '';
+      return String(rowIndex + 1);
+    }
+    return getGtValue(gtContent, rowIndex, columnName);
   };
   let exportEmbeddingCosineMap = new Map();
   const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
@@ -2458,8 +3650,6 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
       return runVal === gtVal;
     });
   };
-  const countMatchingRules = (r, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) =>
-    collectRulesFlat(r).map((x) => x.rule).filter((rule) => ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent)).length;
   const evaluateNode = (nd, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
     if (!nd) return false;
     if (nd.type === 'rule') return ruleMatchesRow(nd, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent);
@@ -2475,76 +3665,28 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     }
     return false;
   };
-  const computeMatchPerRow = (r, results, outputFields, runWs, gtContent) => {
-    const gtRows = gtContent.rows || [];
-    const resultsByIndex = new Map();
-    (results || []).forEach((res) => { resultsByIndex.set(res.row_index, res); });
-    const runRowIndices = [...new Set((results || []).map((res) => res.row_index))];
-    const maxRunRowIndex = runRowIndices.length ? Math.max(...runRowIndices) : -1;
-    const gtCount = gtRows.length;
-    const runToGtSize = Math.max(maxRunRowIndex + 1, gtCount);
-    const runToGt = new Array(runToGtSize).fill(-1);
-    const gtUsed = new Array(gtCount).fill(false);
-    const pairs = [];
-    for (const i of runRowIndices) {
-      for (let j = 0; j < gtCount; j++) {
-        const score = countMatchingRules(r, i, j, resultsByIndex, runWs, outputFields, gtContent);
-        if (score > 0) pairs.push({ i, j, score });
-      }
-    }
-    pairs.sort((a, b) => b.score - a.score);
-    for (const { i, j } of pairs) {
-      if (runToGt[i] >= 0 || gtUsed[j]) continue;
-      runToGt[i] = j;
-      gtUsed[j] = true;
-    }
+  const computeMatchPerRow = (inR, outR, results, outputFields, runWs, gtContent) => {
+    const { runToGt } = computeGreedyRunToGtPairing({
+      inputRoot: inR,
+      outputRoot: outR,
+      results,
+      runWs,
+      gtContent,
+      outputFields,
+      ruleMatchesRow,
+      getRunValue,
+    });
     return { runToGt, total: (results || []).length };
   };
-
-  const gtColsUsed = [];
-  const outputKeysUsed = [];
-  for (const r of rulesFlat) {
-    for (const c of (r.gtColumns || [])) {
-      if (c && !gtColsUsed.includes(c)) gtColsUsed.push(c);
-    }
-    const k = (r.outputKey || '').trim();
-    if (k && !outputKeysUsed.includes(k)) outputKeysUsed.push(k);
-  }
 
   const { results: rawResults, outputFields } = getRunResults();
   const runWs = getRunWorkingSetContent();
   const rawGtContent = getGroundTruthContent(selectedNodeId);
-  const deduplicateGtRows = (gtContent, gtCols) => {
-    if (!gtCols || gtCols.length === 0) return gtContent;
-    const rows = gtContent.rows || [];
-    const seen = new Set();
-    const dedupRows = [];
-    for (let i = 0; i < rows.length; i++) {
-      const key = JSON.stringify(gtCols.map((col) => getGtValue(gtContent, i, col)));
-      if (seen.has(key)) continue;
-      seen.add(key);
-      dedupRows.push(rows[i]);
-    }
-    return { ...gtContent, rows: dedupRows };
-  };
-  const deduplicateResults = (results, outputKeys, runWs, outputFields) => {
-    if (!outputKeys || outputKeys.length === 0) return results || [];
-    const seen = new Set();
-    const dedupResults = [];
-    for (const res of (results || [])) {
-      const key = JSON.stringify(outputKeys.map((k) => getRunValue(res, k, res.row_index, runWs, outputFields)));
-      if (seen.has(key)) continue;
-      seen.add(key);
-      dedupResults.push(res);
-    }
-    return dedupResults;
-  };
+  const gtColsUsed = buildScoreTableGtColumns(rulesFlat, rawGtContent);
 
-  const resultsWithoutError = (rawResults || []).filter((r) => !r || !r.error);
-  const gtContent = deduplicateGtRows(rawGtContent, gtColsUsed);
-  const results = deduplicateResults(resultsWithoutError, outputKeysUsed, runWs, outputFields).filter((r) =>
-    isValidRunOutputForScoreRow(r, outputFields),
-  );
+  const resultsForScore = (rawResults || []).filter((r) => r);
+  const gtContent = rawGtContent;
+  const results = resultsForScore.filter((r) => isValidRunOutputForScoreRow(r, outputFields));
   const gtRows = gtContent.rows || [];
   const gtHeaders = gtContent.headers || [];
   if (!Array.isArray(gtRows)) return null;
@@ -2556,70 +3698,118 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
   if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
     try {
       exportEmbeddingCosineMap = await prefetchEmbeddingCosineMap(API_BASE, {
-        root, results, outputFields, runWs, gtContent, getRunValue, getGtValue,
+        root: scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot),
+        results,
+        outputFields,
+        runWs,
+        gtContent,
+        getRunValue,
+        getGtValue,
       });
     } catch (_) {
       exportEmbeddingCosineMap = new Map();
     }
   }
-  const { runToGt } = computeMatchPerRow(root, results, outputFields, runWs, gtContent);
+  const { runToGt } = computeMatchPerRow(inputRoot, outputRoot, results, outputFields, runWs, gtContent);
   const gtToRun = new Array(gtRows.length).fill(-1);
   for (let i = 0; i < (runToGt || []).length; i++) {
     if (runToGt[i] >= 0) gtToRun[runToGt[i]] = i;
   }
-  const descriptors = [];
-  for (let j = 0; j < gtRows.length; j++) {
-    if (gtToRun[j] >= 0) descriptors.push({ type: 'gt', j });
+  function treeMatchesPairForRow(rootTree, iRun, jGt) {
+    const leaves = flattenScoreRules(rootTree || emptyScoreRuleGroup());
+    if (leaves.length === 0) return true;
+    return evaluateNode(rootTree, iRun, jGt, resultsByIndex, runWs, outputFields, gtContent);
   }
-  for (let j = 0; j < gtRows.length; j++) {
-    if (gtToRun[j] < 0) descriptors.push({ type: 'gt', j });
+  function isPairMatchForRow(iRun, jGt) {
+    if (iRun < 0 || jGt < 0) return false;
+    if (!treeMatchesPairForRow(inputRoot, iRun, jGt)) return false;
+    const outLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
+    if (outLeaves.length === 0) return true;
+    return evaluateNode(outputRoot, iRun, jGt, resultsByIndex, runWs, outputFields, gtContent);
   }
-  for (const i of runRowIndices) {
-    const paired = i < (runToGt || []).length && runToGt[i] >= 0;
-    if (paired) continue;
-    let matchesAnyGt = false;
-    for (let j = 0; j < gtRows.length; j++) {
-      if (evaluateNode(root, i, j, resultsByIndex, runWs, outputFields, gtContent)) { matchesAnyGt = true; break; }
-    }
-    if (!matchesAnyGt) descriptors.push({ type: 'runOnly', i });
-  }
-  let comments = {};
-  try {
-    comments = JSON.parse(node.dataset.scoreResultComments || '{}');
-  } catch (_) {}
+  const descriptors = attachInputMatchedUnpairedGtDescriptors(
+    buildScoreResultDescriptorsInRunOrder({
+      runRowIndices,
+      runToGt,
+      gtToRun,
+      gtRowsLength: gtRows.length,
+      evaluateRunMatchesAnyGt: (i) => {
+        for (let j = 0; j < gtRows.length; j++) {
+          if (treeMatchesPairForRow(inputRoot, i, j) && treeMatchesPairForRow(outputRoot, i, j)) return true;
+        }
+        return false;
+      },
+    }),
+    {
+      runRowIndices,
+      runToGt,
+      gtToRun,
+      inputMatchesPairForRow: (i, jj) => treeMatchesPairForRow(inputRoot, i, jj),
+    },
+  );
   let excludedFromScoring = {};
   try {
     excludedFromScoring = JSON.parse(node.dataset.scoreRowExcludedFromScoring || '{}');
   } catch (_) {}
   const rowIncludedInReview = (key) => !excludedFromScoring[key];
-  const runColumns = typeof getRunResultColumns === 'function' ? getRunResultColumns() : [];
-  const runLabels = outputKeysUsed.map((k) => (runColumns.find((c) => c.key === k)?.label || k || '—').trim() || '—');
-  const headers = ['Ground truth #', ...(gtColsUsed.length > 0 ? gtColsUsed : ['Ground truth']), 'Run result #', ...runLabels, 'Match', 'Review', 'Comment'];
+  const inputHeadersExport = runWs.headers || [];
+  const runExportHeaders = [
+    'Input: #',
+    ...inputHeadersExport.map((h) => `Input: ${String(h ?? '').trim() || ' '}`),
+    formatResultOutputColumnLabel('#'),
+    ...outputFields.map((f) => formatResultOutputColumnLabel((f.display || f.key || '').trim() || '—')),
+  ];
+  const gtExportColLabels = (gtColsUsed.length > 0
+    ? gtColsUsed.map((c) => formatScoreGroundTruthColumnLabel(c))
+    : ['Ground truth']);
+  const headers = [...runExportHeaders, SCORE_GT_ROW_INDEX_LABEL, ...gtExportColLabels, 'Match', 'Review'];
+  function pushRunExportRowCells(parts, runResult, rowIndex, blankOutputsOnly = false) {
+    parts.push(runResult ? String((runResult.input_row_index ?? 0) + 1) : '—');
+    const inputRow = runResult && Array.isArray(runResult.input_row) ? runResult.input_row : [];
+    inputHeadersExport.forEach((_, ci) => {
+      parts.push(inputRow[ci] != null ? String(inputRow[ci]) : '');
+    });
+    parts.push(runResult ? String((runResult.row_index ?? rowIndex) + 1) : '—');
+    if (blankOutputsOnly) {
+      outputFields.forEach(() => { parts.push(''); });
+    } else if (runResult && runResult.error) {
+      outputFields.forEach(() => { parts.push(String(runResult.error)); });
+    } else {
+      outputFields.forEach((f) => {
+        parts.push(runResult ? getRunValue(runResult, f.key, rowIndex, runWs, outputFields) : '');
+      });
+    }
+  }
   const rows = descriptors.map((d) => {
     const parts = [];
     if (d.type === 'gt') {
       const j = d.j;
-      const runRowIndex = gtToRun[j];
-      const runResult = runRowIndex >= 0 ? resultsByIndex.get(runRowIndex) || null : null;
+      const pairedRun = gtToRun[j];
+      const showRunCells = typeof pairedRun === 'number' && pairedRun >= 0;
+      const anchorIn = !showRunCells && typeof d.displayRunRowIndex === 'number' && d.displayRunRowIndex >= 0
+        ? d.displayRunRowIndex
+        : -1;
+      const runRowForCells = showRunCells ? pairedRun : anchorIn;
+      const runResult = runRowForCells >= 0 ? resultsByIndex.get(runRowForCells) || null : null;
+      const blankOutputsOnly = !showRunCells && anchorIn >= 0;
+      pushRunExportRowCells(parts, runResult, runRowForCells, blankOutputsOnly);
       parts.push(String(j + 1));
       if (gtColsUsed.length === 0) parts.push('—');
-      gtColsUsed.forEach((col) => { parts.push(getGtValue(gtContent, j, col)); });
-      parts.push(runRowIndex >= 0 ? String(runRowIndex + 1) : '—');
-      outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, runRowIndex, runWs, outputFields) : ''); });
-      parts.push(runRowIndex >= 0 && evaluateNode(root, runRowIndex, j, resultsByIndex, runWs, outputFields, gtContent) ? 'true' : 'false');
+      gtColsUsed.forEach((col) => { parts.push(getGtValueExportDisplay(gtContent, j, col)); });
+      const matchEvalRun = showRunCells
+        ? pairedRun
+        : (typeof d.displayRunRowIndex === 'number' && d.displayRunRowIndex >= 0 ? d.displayRunRowIndex : -1);
+      parts.push(matchEvalRun >= 0 && isPairMatchForRow(matchEvalRun, j) ? 'true' : 'false');
       parts.push(rowIncludedInReview(String(j)) ? 'true' : 'false');
-      parts.push(comments[String(j)] ?? '');
     } else {
       const i = d.i;
       const runResult = resultsByIndex.get(i) || null;
+      pushRunExportRowCells(parts, runResult, i);
       parts.push('—');
       if (gtColsUsed.length === 0) parts.push('—');
       gtColsUsed.forEach(() => { parts.push('—'); });
-      parts.push(String(i + 1));
-      outputKeysUsed.forEach((outputKey) => { parts.push(runResult ? getRunValue(runResult, outputKey, i, runWs, outputFields) : ''); });
       parts.push('false');
       parts.push(rowIncludedInReview(`run:${i}`) ? 'true' : 'false');
-      parts.push(comments['run:' + i] ?? '');
     }
     return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
   });

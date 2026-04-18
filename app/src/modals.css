@@ -152,6 +152,10 @@
   max-width: min(420px, 92vw);
 }
 
+.modal-panel--alert.modal-panel--alert-wide {
+  max-width: min(760px, 94vw);
+}
+
 .modal-body--alert {
   min-height: 0;
 }
@@ -680,12 +684,6 @@
   overflow: hidden;
 }
 
-/* Review → Finetune number fields: 两列须用相同 padding-bottom，否则 .defaults-row的 align-items:end 会让两个输入框上下错开 */
-.modal-panel--defaults .defaults-field--review-finetune-input,
-.modal-panel--model-settings-combined .defaults-row .defaults-field--review-finetune-input {
-  padding-bottom: 0.5rem;
-}
-
 .modal-panel--defaults .model-settings-defaults-card .credentials-select,
 .modal-panel--defaults .model-settings-defaults-card .dataset-meta-input {
   height: 40px;
@@ -780,6 +778,7 @@
   gap: 0;
   padding: 6px 0 20px 0;
   border-right: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .dataset-add-step {
@@ -846,6 +845,7 @@
   gap: 20px;
   padding: 20px;
   border-right: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .dataset-preview-wrap {
@@ -946,7 +946,7 @@
 }
 
 .dataset-preview-table {
-  width: 100%;
+  width: max-content;
   border-collapse: collapse;
 }
 
@@ -2147,7 +2147,7 @@
 }
 
 .dataset-detail-preview-table {
-  width: 100%;
+  width: max-content;
   border-collapse: collapse;
   font-size: 12px;
 }
@@ -2260,25 +2260,17 @@
   --detail-llm-inline-gap: 12px;
 }
 
-/* Score detail modal: layout aligned with Run detail (main + preview-wrap) */
+/* Score detail modal: 默认双栏全宽（与原先 expanded 一致，无展开动画） */
 .modal-panel--score-detail {
-  width: min(400px, 92vw);
-  min-width: min(400px, 92vw);
-  max-width: 92vw;
-  max-height: 98vh;
-  min-height: min(520px, 85vh);
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  transition: width 0.35s ease-out, min-width 0.35s ease-out, max-width 0.35s ease-out;
-}
-
-.modal-panel--score-detail.score-detail-panel--expanded {
   width: 88%;
   min-width: min(960px, 85%);
   max-width: 88%;
+  max-height: 98vh;
   height: min(85vh, 98vh);
   min-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
 }
 
 .modal-panel--score-detail .modal-body.score-detail-body,
@@ -2292,8 +2284,303 @@
   overflow: hidden;
 }
 
+.modal-panel--review-selection-preview {
+  min-width: min(720px, 96vw);
+  max-width: 96vw;
+  width: min(1100px, 96vw);
+}
+.modal-panel--review-selection-preview .modal-body {
+  overflow: auto;
+  padding: 16px 20px 20px;
+}
+.review-selection-preview-intro {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.review-selection-preview-intro strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.review-selection-preview-list-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: min(62vh, 560px);
+  overflow: auto;
+  padding-right: 4px;
+}
+.review-selection-preview-row {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 0;
+}
+.review-selection-preview-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--hover);
+  border-bottom: 1px solid var(--border);
+}
+.review-selection-preview-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.review-selection-preview-row-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.review-selection-preview-row-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+.review-selection-preview-input-block-wrap {
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.review-selection-preview-input-block-wrap .review-selection-preview-section-title {
+  margin-top: 0;
+}
+.review-selection-preview-compare-columns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  padding: 10px 12px 12px;
+}
+@media (min-width: 720px) {
+  .review-selection-preview-compare-columns {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+}
+.review-selection-preview-aggregate {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.review-selection-preview-aggregate-title {
+  margin: 0;
+  padding: 10px 10px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--hover);
+  border-bottom: 1px solid var(--border);
+}
+.review-selection-preview-aggregate-body {
+  padding: 10px;
+  flex: 1;
+  min-height: 0;
+}
+.review-selection-preview-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -2px;
+}
+.review-selection-preview-big-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.review-selection-preview-big-table th,
+.review-selection-preview-big-table td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.review-selection-preview-big-table th {
+  background: var(--hover);
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.review-selection-preview-th-hint {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.review-selection-preview-table-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.review-selection-preview-line-chunk {
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
+}
+.review-selection-preview-line-chunk:last-child {
+  margin-bottom: 0;
+}
+.review-selection-preview-line-chunk-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--hover);
+  border-bottom: 1px solid var(--border);
+}
+.review-selection-preview-line-chunk-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.review-selection-preview-line-chunk-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.review-selection-preview-line-chunk-body {
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.review-selection-preview-merged-refs {
+  margin: 0;
+  padding: 6px 8px 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  word-break: break-word;
+  border-bottom: 1px solid var(--border);
+}
+.review-selection-preview-line-chunk--merged-no-output .review-selection-preview-line-chunk-body,
+.review-selection-preview-line-chunk--merged-no-gt .review-selection-preview-line-chunk-body {
+  padding-top: 8px;
+}
+.review-selection-preview-of {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.review-selection-preview-meta-bits {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.review-selection-preview-meta-sep {
+  margin: 0 0.35em;
+}
+.review-selection-preview-row-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.review-selection-preview-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 0;
+  border: 1px solid var(--border);
+}
+.review-selection-preview-chip--ok {
+  color: var(--success, #0a0);
+  background: color-mix(in srgb, var(--success, #0a0) 12%, var(--bg));
+}
+.review-selection-preview-chip--bad {
+  color: var(--danger, #c00);
+  background: color-mix(in srgb, var(--danger, #c00) 10%, var(--bg));
+}
+.review-selection-preview-chip--info {
+  color: var(--text-muted);
+  background: var(--bg);
+}
+.review-selection-preview-sections {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+@media (min-width: 900px) {
+  .review-selection-preview-sections {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+.review-selection-preview-section {
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+@media (min-width: 900px) {
+  .review-selection-preview-section {
+    border-bottom: none;
+    border-right: 1px solid var(--border);
+  }
+  .review-selection-preview-section:last-child {
+    border-right: none;
+  }
+}
+.review-selection-preview-section-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.review-selection-preview-section-hint {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.review-selection-preview-section-body {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+}
+.review-selection-preview-kv {
+  margin: 0;
+}
+.review-selection-preview-kv-pair {
+  margin: 0 0 10px;
+}
+.review-selection-preview-kv-pair:last-child {
+  margin-bottom: 0;
+}
+.review-selection-preview-kv dt {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.review-selection-preview-kv dd {
+  margin: 0;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.review-selection-preview-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.review-selection-preview-clip {
+  cursor: help;
+}
+.review-selection-preview-expected-all {
+  margin: 0;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.review-selection-preview-expected-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.review-selection-preview-note-label {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .score-detail-main {
-  flex: 1 1 0;
+  flex: 0 0 36%;
+  max-width: 380px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -2301,12 +2588,7 @@
   padding: 0 20px 20px 20px;
   border-right: 1px solid var(--border);
   overflow: hidden;
-  transition: flex 0.35s ease-out, max-width 0.35s ease-out;
-}
-
-.modal-panel--score-detail.score-detail-panel--expanded .score-detail-main {
-  flex: 0 0 36%;
-  max-width: 380px;
+  background: var(--bg);
 }
 
 .score-detail-main-label {
@@ -2337,15 +2619,24 @@
   flex: 1;
 }
 
+/* [hidden] must win over display:flex above, or “Set rules” stays visible when no GT dataset */
+.score-detail-rules-section[hidden] {
+  display: none !important;
+}
+
 .score-detail-rules-label {
   display: block;
 }
 
-.score-detail-rules-hint {
-  margin: 0 0 10px;
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.4;
+/* Review 顶栏里 tab 用 flex:1 抢横向空间；在 Score 规则区纵向 flex 里会误抢竖向空间，导致 Tab 上下大块留白 */
+.score-detail-rules-view-switch.review-detail-view-switch {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
+.score-detail-rules-view-switch .score-detail-rules-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .score-detail-rules-scroll {
@@ -2354,6 +2645,7 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  margin-top: 10px;
 }
 
 .score-detail-rules-list {
@@ -2420,6 +2712,24 @@
   align-items: center;
   gap: 10px;
   min-height: 40px;
+}
+
+.score-tree-row-card--draggable {
+  cursor: grab;
+}
+
+.score-tree-row-card--draggable:active {
+  cursor: grabbing;
+}
+
+.score-tree-row--drag-source {
+  opacity: 0.65;
+}
+
+.score-tree-row--drop-target {
+  outline: 2px dashed var(--accent, #3b82f6);
+  outline-offset: 2px;
+  border-radius: 8px;
 }
 
 .score-tree-row--flat .score-tree-op-toggle {
@@ -2704,24 +3014,16 @@
   background: var(--hover);
 }
 
-/* Score right column: Results. 无结果时收起（max-width:0），有结果时展开，带过渡动画 */
+/* Score right column: Results，始终占位 */
 .score-detail-preview-wrap {
   flex: 1 1 0;
-  min-width: 0;
-  max-width: 0;
+  min-width: 320px;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  border-left: none;
-  overflow: hidden;
-  transition: max-width 0.35s ease-out, flex 0.35s ease-out;
-}
-
-.modal-panel--score-detail.score-detail-panel--expanded .score-detail-preview-wrap {
-  max-width: 100vw;
-  min-width: 320px;
   border-left: 1px solid var(--border);
+  overflow: hidden;
 }
 
 .score-detail-preview-title {
@@ -2771,7 +3073,8 @@
   margin: 0;
 }
 
-.score-detail-add-prompt-review {
+.score-detail-add-prompt-review,
+.score-detail-review-payload-preview {
   flex-shrink: 0;
 }
 
@@ -2792,6 +3095,10 @@
   padding-left: 0;
   padding-right: 0;
   flex-shrink: 0;
+}
+
+.score-detail-results-footer-row[hidden] {
+  display: none !important;
 }
 
 .score-detail-results-footer-right {
@@ -3325,6 +3632,21 @@
   justify-content: flex-end;
 }
 
+.review-detail-suggestions-footer-stack {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  width: 100%;
+}
+
+.review-detail-suggestions-footer-stack .review-detail-status-note {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .review-detail-suggestions-footer:empty,
 .review-detail-analysis-footer:empty {
   display: none;
@@ -3459,7 +3781,7 @@
   border-radius: 4px;
 }
 
-/* Inline flow: full title can wrap; row-check pass pill stays after text (same line when space, or after last line). */
+/* Inline flow: full title can wrap; title-line pills follow the title. */
 .review-detail-suggestion-section-name {
   display: inline;
   font-weight: 600;
@@ -3472,18 +3794,15 @@
   vertical-align: baseline;
 }
 
-/* Title-line finetune uses native <button>; strip UA chrome. Do not use margin: 0 — it overrides pill margin-left vs title. */
-button.review-suggestion-title-pill {
-  appearance: none;
-  -webkit-appearance: none;
-  margin-top: 0;
-  margin-right: 0;
-  margin-bottom: 0;
-  font-family: inherit;
-}
-
-/* Dialogue proposal (`source=assistant`); non-interactive, distinct from pipeline status pills. */
-.review-suggestion-proposal-tag-pill {
+/* Base pill shared by Click-to-verify and Verifying states */
+.review-suggestion-verify-pill,
+.review-suggestion-verifying-pill,
+.review-suggestion-verified-pill,
+.review-suggestion-finetune-pill,
+.review-suggestion-finetuning-pill,
+.review-suggestion-finetuned-pill,
+.review-suggestion-finetuned-pass-pill,
+.review-suggestion-proposal-pill {
   display: inline-flex;
   align-items: center;
   vertical-align: baseline;
@@ -3494,143 +3813,176 @@ button.review-suggestion-title-pill {
   font-weight: 500;
   line-height: 1.4;
   letter-spacing: 0.02em;
-  border-radius: 4px;
+  border-radius: 999px;
   border: none;
-  color: var(--review-proposal-tag-text, #1d4ed8);
-  background: color-mix(in srgb, var(--review-proposal-tag-text, #3b82f6) 20%, transparent);
+  color: #b45309;
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
   box-shadow: none;
   cursor: default;
   pointer-events: none;
   user-select: none;
 }
 
-/*状态标签：与 .review-detail-diagnosis-tag 同类弱样式，避免像 .btn（无边框、不可点） */
-.review-suggestion-verified-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--diff-added-text, #15803d);
-  background: var(--diff-added-bg, rgba(22, 163, 74, 0.22));
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* Run+Score row-check in progress. */
-.review-suggestion-verifying-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--text-muted, #64748b);
-  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* Finetune optimization in progress (title); same muted gray as Verifying. */
-.review-suggestion-tuning-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--text-muted, #64748b);
-  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* Finetune completed (title). Default: muted when row-check outcome not yet set. */
-.review-suggestion-finetuned-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--text-muted, #64748b);
-  background: color-mix(in srgb, var(--text-muted, #64748b) 14%, transparent);
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-.review-suggestion-finetuned-pill--pass {
-  color: var(--diff-added-text, #15803d);
-  background: var(--diff-added-bg, rgba(22, 163, 74, 0.22));
-}
-
-.review-suggestion-finetuned-pill--fail {
-  color: var(--warning, #b45309);
-  background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
-}
-
-/* Row-check did not pass; label is always “Click to Finetune”; --click-finetune enables pointer/hover. */
-.review-suggestion-rowcheck-fail-pill {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: baseline;
-  margin-left: 6px;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-  border-radius: 4px;
-  border: none;
-  color: var(--warning, #b45309);
-  background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
-  box-shadow: none;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
-.review-suggestion-rowcheck-fail-pill--click-finetune {
+/* Clickable variant – active when stream is complete and state is idle */
+.review-suggestion-verify-pill--clickable {
   cursor: pointer;
   pointer-events: auto;
+  transition: background 0.12s, color 0.12s;
 }
 
-.review-suggestion-rowcheck-fail-pill--click-finetune:hover {
-  filter: brightness(1.06);
+.review-suggestion-verify-pill--clickable:hover {
+  background: color-mix(in srgb, #f59e0b 32%, transparent);
+  color: #92400e;
+}
+
+/* Verifying state – pulsing amber */
+.review-suggestion-verifying-pill {
+  color: #b45309;
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  animation: review-verifying-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes review-verifying-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+
+.review-suggestion-verified-pill {
+  color: #166534;
+  background: color-mix(in srgb, #22c55e 22%, transparent);
+  cursor: default;
+  pointer-events: none;
+}
+
+.review-suggestion-finetuned-pill {
+  color: #b45309;
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  cursor: default;
+  pointer-events: none;
+}
+
+.review-suggestion-finetuned-pass-pill {
+  color: #166534;
+  background: color-mix(in srgb, #22c55e 22%, transparent);
+  cursor: default;
+  pointer-events: none;
+}
+
+.review-suggestion-proposal-pill {
+  color: #1d4ed8;
+  background: color-mix(in srgb, #3b82f6 18%, transparent);
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Click to Finetune – same amber as Click to Verify */
+.review-suggestion-finetune-pill {
+  color: #b45309;
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Clickable Click-to-Finetune variant */
+.review-suggestion-finetune-pill--clickable {
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.12s, color 0.12s;
+}
+
+.review-suggestion-finetune-pill--clickable:hover {
+  background: color-mix(in srgb, #f59e0b 32%, transparent);
+  color: #92400e;
+}
+
+/* Finetuning state – pulsing amber (same rhythm as Verifying) */
+.review-suggestion-finetuning-pill {
+  color: #b45309;
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  animation: review-verifying-pulse 1.2s ease-in-out infinite;
+}
+
+/* ── Verify results section in debug overlay ── */
+.review-verify-status-running {
+  color: var(--text-muted, #64748b);
+  font-style: italic;
+  padding: 4px 0 8px;
+  font-size: 12px;
+}
+
+.review-verify-status-error {
+  color: var(--red, #ef4444);
+  padding: 4px 0 8px;
+  font-size: 12px;
+}
+
+.review-verify-status-empty {
+  color: var(--text-muted, #64748b);
+  padding: 4px 0 8px;
+  font-size: 12px;
+}
+
+.review-verify-summary {
+  padding: 2px 0 8px;
+  font-size: 12px;
+}
+
+.review-verify-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  table-layout: auto;
+}
+
+.review-verify-results-table th,
+.review-verify-results-table td {
+  padding: 3px 7px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border, rgba(0,0,0,0.08));
+  white-space: nowrap;
+}
+
+.review-verify-results-table thead th {
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #64748b);
+  background: var(--surface-alt, rgba(0,0,0,0.03));
+}
+
+.review-verify-cell-output {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono, 'Menlo', monospace);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.review-verify-cell-gt-header {
+  color: #888;
+  font-style: italic;
+}
+
+.review-verify-cell-gt {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono, 'Menlo', monospace);
+  font-size: 10px;
+  white-space: nowrap;
+  color: #888;
+  background: rgba(0,0,0,0.04);
+}
+
+.review-verify-row-error td {
+  color: var(--red, #ef4444);
+}
+
+.review-verify-error-cell {
+  font-size: 11px;
 }
 
 .review-detail-suggestion-card__actions {
@@ -3680,6 +4032,156 @@ button.review-suggestion-title-pill {
   color: var(--diff-removed-text) !important;
   border-color: var(--diff-removed-text, currentColor) !important;
   text-decoration: none;
+}
+
+/* Debug button group – visually separated from regular actions */
+.review-detail-debug-btn-group {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.review-detail-suggestions--debug .review-detail-debug-btn-group {
+  display: inline-flex;
+}
+
+.review-detail-suggestions--debug .review-detail-suggestion-card:hover .review-detail-debug-btn-group,
+.review-detail-suggestions--debug .review-detail-suggestion-card--active .review-detail-debug-btn-group {
+  opacity: 0.85;
+}
+
+.review-detail-debug-reset-btn,
+.review-detail-debug-info-btn {
+  font-size: 11px;
+  padding: 3px 6px;
+  line-height: 1.4;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.review-detail-debug-reset-btn:hover,
+.review-detail-debug-info-btn:hover {
+  background: color-mix(in srgb, var(--text-muted, #64748b) 12%, transparent);
+  color: var(--text, inherit);
+  border-color: var(--border);
+}
+
+.review-detail-suggestion-debug-body {
+  min-height: 80px;
+}
+
+/* Debug overlay: summary table */
+.review-suggestion-debug-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.review-suggestion-debug-table th[scope="row"] {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  padding: 3px 12px 3px 0;
+  white-space: nowrap;
+  width: 1%;
+}
+
+.review-suggestion-debug-table td {
+  padding: 3px 0;
+  color: var(--text, inherit);
+  font-size: 12px;
+}
+
+/* Debug overlay: section group title (Input / Ground truth) */
+.review-suggestion-debug-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted, #64748b);
+  margin: 12px 0 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+
+/* Debug overlay: individual Input #N / Ground truth #N section */
+.review-suggestion-debug-section {
+  margin-bottom: 8px;
+}
+
+.review-suggestion-debug-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  margin: 0 0 4px;
+}
+
+/* Debug overlay: key-value definition list */
+.review-suggestion-debug-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.review-suggestion-debug-kv-pair {
+  display: contents;
+}
+
+.review-suggestion-debug-kv dt {
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  white-space: nowrap;
+  align-self: start;
+}
+
+.review-suggestion-debug-kv dd {
+  margin: 0;
+  color: var(--text, inherit);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* GT association line under input section title */
+.review-suggestion-debug-gt-link {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+}
+
+/* Fail / pass badges in debug section titles */
+.review-debug-fail-badge,
+.review-debug-pass-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  border-radius: 999px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.review-debug-fail-badge {
+  color: var(--diff-removed-text, #dc2626);
+  background: color-mix(in srgb, var(--diff-removed-text, #dc2626) 12%, transparent);
+}
+
+.review-debug-pass-badge {
+  color: var(--diff-added-text, #16a34a);
+  background: color-mix(in srgb, var(--diff-added-text, #16a34a) 12%, transparent);
 }
 
 .review-detail-suggestion-card:hover,
@@ -3763,15 +4265,18 @@ button.review-suggestion-title-pill {
   flex-direction: column;
 }
 
-/* 仅表格区域纵向滚动，摘要 / 指标 / Search 始终可见 */
+/* 表格区域纵横滚动同一容器，横向条始终在可视区域底部（不必滚到整表末尾） */
 .score-detail-results-table-scroll {
   flex: 1;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
+  min-width: 0;
+  overflow: auto;
+  /* 竖向滚动条出现时不挤占横向布局，减轻滑到最右端时 sticky 列微抖 */
+  scrollbar-gutter: stable;
+  overflow-anchor: none;
 }
 
-/* # 列与 Ground truth #、Run result # 右对齐，与 dataset 节点一致 */
+/* # 列与 Ground truth: #、Run result # 右对齐，与 dataset 节点一致 */
 .score-detail-results-table .score-detail-results-th--row-num,
 .score-detail-results-table .score-detail-results-td--row-num,
 .score-detail-results-table .score-detail-results-th--idx,
@@ -3785,7 +4290,7 @@ button.review-suggestion-title-pill {
   min-width: 2.5em;
 }
 
-/* 块分割线：三处完全统一（2px，颜色加深便于区分）——# 后、GT/Run 间、Run/Result 间 */
+/* 块分割线：三处完全统一（2px，颜色加深便于区分）——# 后、ground truth/Run 间、Run/Result 间 */
 .score-detail-results-table .score-detail-results-th--block-sep,
 .score-detail-results-table .score-detail-results-td--block-sep {
   border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
@@ -3810,8 +4315,6 @@ button.review-suggestion-title-pill {
 
 .rule-editor-field-group {
   margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
 }
 
 .rule-editor-checkbox-label {
@@ -3899,7 +4402,7 @@ button.review-suggestion-title-pill {
 }
 
 .rule-editor-option--selected {
-  background: var(--bg-bar);
+  background: var(--hover);
   border-color: var(--text-muted);
   font-weight: 600;
 }
@@ -3952,8 +4455,26 @@ button.review-suggestion-title-pill {
 .score-detail-results-search-inline {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   flex-shrink: 0;
+}
+
+.score-detail-rules-column-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.score-detail-rules-column-filter input {
+  margin: 0;
+  cursor: pointer;
 }
 
 .score-detail-results-search-inline .dataset-detail-search-label {
@@ -3963,27 +4484,33 @@ button.review-suggestion-title-pill {
   white-space: nowrap;
 }
 
+/* 与表同宽，避免外层块被拉满 100% 后列宽「吃」剩余空间，导致滚到横向尽头时 sticky 在粘住/自然位之间跳1px */
 .score-detail-results-table-wrap {
-  overflow-x: auto;
-  overflow-y: visible;
+  overflow: visible;
+  width: max-content;
+  min-width: min-content;
 }
 
 .score-detail-results-table {
-  width: 100%;
+  width: max-content;
   border-collapse: collapse;
   font-size: 12px;
+  /* Match列 sticky 的 right = Review 列总占位（与宽度一致，避免两列叠字） */
+  --score-sticky-review-w: 72px;
 }
 
 .score-detail-results-th,
 .score-detail-results-td {
-  padding: 8px 10px;
+  padding: 6px 10px;
   text-align: left;
   border: 1px solid var(--border);
   font-size: 12px;
 }
 
-/* 表头行：与 Run/Dataset 等表头一致用 var(--hover)，用分割线区分三块 */
+/* 表头行：与 .prompt-schema-preview-table th / .prompt-detail-inputs-table th 一致 */
 .score-detail-results-table thead .score-detail-results-th {
+  padding: 6px 8px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
@@ -4000,6 +4527,33 @@ button.review-suggestion-title-pill {
   background: var(--bg);
 }
 
+/* 按 dataset input斑马纹：同一 input_row_index 同色（与 Run 表 color-mix一致） */
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-0 .score-detail-results-td {
+  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-1 .score-detail-results-td {
+  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-0 .run-detail-td {
+  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-1 .run-detail-td {
+  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-0:hover .score-detail-results-td,
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-1:hover .score-detail-results-td {
+  background: var(--hover);
+}
+
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-0:hover .run-detail-td,
+.score-detail-results-table tbody tr.score-detail-results-tr--input-zebra-1:hover .run-detail-td {
+  background: var(--hover);
+}
+
 .score-detail-results-table tbody tr:hover .score-detail-results-td {
   background: var(--hover);
 }
@@ -4011,7 +4565,7 @@ button.review-suggestion-title-pill {
 }
 
 
-/* 三块分割线：Ground truth | Run result | Match+Comment，加粗加深以更明显 */
+/* 三块分割线：Ground truth | Run result | Match+Review，加粗加深以更明显 */
 .score-detail-results-th--block-sep,
 .score-detail-results-td--block-sep {
   border-left: 4px solid var(--text-muted);
@@ -4019,15 +4573,20 @@ button.review-suggestion-title-pill {
 
 .score-detail-results-th--match,
 .score-detail-results-td--match {
+  box-sizing: border-box;
   border-left: 4px solid var(--text-muted);
-  width: 3em;
-  min-width: 3em;
+  /* 14px 的 true/false 需大于3em，否则与 Review 粘滞列互相压字 */
+  width: 5rem;
+  min-width: 5rem;
+  max-width: 5rem;
+  padding-left: 6px;
+  padding-right: 6px;
   text-align: center;
   vertical-align: middle;
 }
 
 .score-detail-results-table thead .score-detail-results-th--match {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .score-detail-results-table tbody .score-detail-results-td--match {
@@ -4051,13 +4610,43 @@ button.review-suggestion-title-pill {
   color: var(--danger, #c00);
 }
 
+.score-detail-results-table tbody tr:hover .run-detail-td {
+  background: var(--hover);
+}
+
 .score-detail-results-th--review,
 .score-detail-results-td--review {
-  width: 52px;
-  min-width: 52px;
-  max-width: 64px;
+  box-sizing: border-box;
+  width: var(--score-sticky-review-w, 72px);
+  min-width: var(--score-sticky-review-w, 72px);
+  max-width: var(--score-sticky-review-w, 72px);
+  padding-left: 6px;
+  padding-right: 6px;
   text-align: center;
   vertical-align: middle;
+}
+
+/* Match / Review：横向滚动时固定在表格可视区右侧（与 .score-detail-results-table-scroll 配合） */
+.score-detail-results-table thead .score-detail-results-th--match,
+.score-detail-results-table tbody .score-detail-results-td--match {
+  position: sticky;
+  right: var(--score-sticky-review-w, 72px);
+  z-index: 2;
+}
+
+.score-detail-results-table thead .score-detail-results-th--review,
+.score-detail-results-table tbody .score-detail-results-td--review {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+}
+
+.score-detail-results-table thead .score-detail-results-th--match {
+  z-index: 4;
+}
+
+.score-detail-results-table thead .score-detail-results-th--review {
+  z-index: 5;
 }
 
 .score-detail-results-review-label {
@@ -4068,65 +4657,18 @@ button.review-suggestion-title-pill {
   cursor: pointer;
 }
 
-.score-detail-results-th--comment,
-.score-detail-results-td--comment {
-  min-width: 100px;
-  width: 140px;
-  vertical-align: top;
+.score-detail-results-review-th-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  cursor: pointer;
+  font-weight: inherit;
 }
 
-/* Comment 格子内边距缩小，让文本框占满更多空间 */
-.score-detail-results-td--comment {
-  padding: 4px 6px;
-}
-
-.score-detail-results-table thead .score-detail-results-th--comment {
-  position: relative;
-  padding-right: 14px;
-}
-
-.score-detail-results-comment-resize-handle {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 10px;
-  height: 100%;
-  cursor: col-resize;
-  z-index: 2;
-}
-
-.score-detail-results-comment-textarea {
-  width: 100%;
-  min-width: 0;
-  min-height: 2.5em;
-  box-sizing: border-box;
-  padding: 4px 6px;
-  font-size: 12px;
-  font-family: inherit;
-  border: 1px solid transparent;
-  border-radius: 0;
-  background: var(--bg);
-  color: var(--text);
-  resize: vertical;
-  display: block;
-  overflow-y: auto;
-}
-
-.score-detail-results-comment-textarea::-webkit-resizer {
-  display: none;
-}
-
-.score-detail-results-comment-textarea::placeholder {
-  color: var(--text-muted);
-}
-
-.score-detail-results-comment-textarea:hover {
-  border-color: var(--border);
-}
-
-.score-detail-results-comment-textarea:focus {
-  outline: none;
-  border-color: var(--text-muted);
+.score-detail-results-review-th-label input {
+  margin: 0;
 }
 
 .score-detail-card {
@@ -4164,13 +4706,6 @@ button.review-suggestion-title-pill {
   margin-bottom: 4px;
 }
 
-.score-detail-rules-hint {
-  margin: 0 0 10px;
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.4;
-}
-
 .score-detail-rules-wrap {
   flex: 1;
   min-height: 0;
@@ -4191,7 +4726,7 @@ button.review-suggestion-title-pill {
   gap: 2px;
   font-size: 11px;
   padding: 2px 6px;
-  background: var(--bg-bar);
+  background: var(--hover);
   border: 1px solid var(--border);
   border-radius: 2px;
 }
@@ -4285,7 +4820,7 @@ button.review-suggestion-title-pill {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
-  background: var(--bg-bar);
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
 
@@ -4365,25 +4900,17 @@ button.review-suggestion-title-pill {
   margin: 12px;
 }
 
-/* Run detail modal：略窄一些；min-height 与 source 典型内容高度一致（source 左侧卡片等会撑高，故用 85vh） */
-/* Run detail：与 Add prompt 一致，一开始只显示左半部分（窄 panel），Run 开始后 panel 变宽并显示右半部分（带动画） */
+/* Run detail modal：默认双栏全宽（与原先 expanded 一致，无展开动画） */
 .modal-panel--run-detail {
-  width: min(400px, 92vw);
-  min-width: min(400px, 92vw);
-  max-width: 92vw;
-  max-height: 98vh;
-  min-height: min(520px, 85vh);
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  transition: width 0.35s ease-out, min-width 0.35s ease-out;
-}
-.modal-panel--run-detail.run-detail-panel--expanded {
   width: 88%;
   min-width: min(960px, 85%);
   max-width: 92vw;
+  max-height: 98vh;
   height: min(85vh, 98vh);
   min-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
 }
 
 .modal-panel--run-detail .modal-body.run-detail-body,
@@ -4398,7 +4925,8 @@ button.review-suggestion-title-pill {
 }
 
 .run-detail-main {
-  flex: 1 1 0;
+  flex: 0 0 36%;
+  max-width: 380px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -4406,10 +4934,7 @@ button.review-suggestion-title-pill {
   padding: 0 20px 16px 20px;
   border-right: 1px solid var(--border);
   overflow: hidden;
-}
-.modal-panel--run-detail.run-detail-panel--expanded .run-detail-main {
-  flex: 0 0 36%;
-  max-width: 380px;
+  background: var(--bg);
 }
 
 .run-detail-main-label {
@@ -4484,9 +5009,9 @@ button.review-suggestion-title-pill {
   flex-shrink: 0;
 }
 
-/* 未展开时隐藏右半部分（与 add prompt step1 的 prompt-preview-wrap 一致） */
+/* Run 右侧 Results，始终显示 */
 .run-detail-preview-wrap {
-  display: none;
+  display: flex;
   flex: 1 1 0;
   min-width: 320px;
   min-height: 0;
@@ -4494,9 +5019,6 @@ button.review-suggestion-title-pill {
   background: var(--bg);
   border-left: 1px solid var(--border);
   overflow: hidden;
-}
-.modal-panel--run-detail.run-detail-panel--expanded .run-detail-preview-wrap {
-  display: flex;
 }
 
 .run-detail-preview-title {
@@ -4656,7 +5178,7 @@ button.review-suggestion-title-pill {
   margin-top: 2px;
   max-height: 240px;
   overflow-y: auto;
-  background: var(--bg-bar);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 0;
   z-index: 10;
@@ -4699,7 +5221,7 @@ button.review-suggestion-title-pill {
   font-size: 13px;
   padding: 8px 10px;
   color: var(--text);
-  background: var(--bg-bar);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 0;
   font-family: inherit;
@@ -4842,7 +5364,7 @@ button.review-suggestion-title-pill {
   flex-direction: column;
   gap: 10px;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .run-detail-results .run-detail-section-title {
@@ -4871,7 +5393,9 @@ button.review-suggestion-title-pill {
 }
 
 .run-detail-results-table-wrap {
+  flex: 1 1 0;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
 }
 
@@ -4928,16 +5452,18 @@ button.review-suggestion-title-pill {
 }
 
 .run-detail-results-table {
-  width: 100%;
+  width: max-content;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12px;
   background: var(--bg);
   border: 1px solid var(--border);
+  /* 两档：超短=仅列表「#」；较短=Input:# / Output:#（max 120px 与内容列一致） */
+  --run-detail-col-w-tight: 2.5em;
 }
 
 .run-detail-results-table th,
 .run-detail-results-table td {
-  padding: 6px 8px;
+  padding: 6px 10px;
   text-align: left;
   border: 1px solid var(--border);
   max-width: 120px;
@@ -4948,27 +5474,103 @@ button.review-suggestion-title-pill {
 }
 
 .run-detail-results-table thead th {
+  padding: 6px 8px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--text-muted);
-  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* 列表「#」与输入块分界：竖线在 Input: #（或折叠 Input ...）列左侧 */
+.run-detail-results-table .run-detail-th--input-block-start,
+.run-detail-results-table .run-detail-td--input-block-start {
+  border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
+}
+
+/* 输入块与「Output: # + 模型列」分界：竖线在 Output: # 列左侧 */
+.run-detail-results-table .run-detail-th--input-block-sep,
+.run-detail-results-table .run-detail-td--input-block-sep {
+  border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
 }
 
 .run-detail-results-table tbody td {
   color: var(--text);
   background: var(--bg);
 }
-/* Input / 折叠列：与展开前一致，保持浅底以区分于输出列 */
-.run-detail-results-table tbody tr td.run-detail-td--dataset-row-col,
-.run-detail-results-table tbody tr td.run-detail-td--error-col {
-  background: var(--hover) !important;
-  color: var(--text);
+
+/* 按 input_row_index 分组：同一 input 的多行共用一条斑马（与 Score 表 input 斑马同一套 color-mix） */
+.run-detail-results-table tbody tr.run-detail-results-tr--zebra-0 td {
+  background: color-mix(in srgb, var(--bg) 94%, var(--border) 6%);
 }
 
+.run-detail-results-table tbody tr.run-detail-results-tr--zebra-1 td {
+  background: color-mix(in srgb, var(--bg) 72%, var(--border) 28%);
+}
+
+.run-detail-results-table tbody tr.run-detail-results-tr--zebra-0:hover td,
+.run-detail-results-table tbody tr.run-detail-results-tr--zebra-1:hover td {
+  background: var(--hover);
+}
+
+/* 超短：列表「#」 */
+.run-detail-results-table .run-detail-th--row-display-num,
+.run-detail-results-table .run-detail-td--row-display-num {
+  width: var(--run-detail-col-w-tight);
+  min-width: var(--run-detail-col-w-tight);
+  max-width: var(--run-detail-col-w-tight) !important;
+  box-sizing: border-box;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 较短：Input: # / Input ...（折叠）/ Output: # / Output ...（折叠），与索引列同为右对齐，顶格 120px */
+.run-detail-results-table .run-detail-th--input-block-start,
+.run-detail-results-table .run-detail-td--input-block-start,
+.run-detail-results-table .run-detail-th--input-block-sep,
+.run-detail-results-table .run-detail-td--input-block-sep,
 .run-detail-results-table .run-detail-th--index,
 .run-detail-results-table .run-detail-td--index {
-  width: 2.5em;
-  max-width: 2.5em;
+  width: auto;
+  min-width: 3.25em;
+  max-width: 120px !important;
+  box-sizing: border-box;
   text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Score：Ground truth 折叠占位列与上列折叠样式一致（右对齐） */
+.score-detail-results-table .score-detail-results-th--gt-collapse-bracket,
+.score-detail-results-table .score-detail-results-td--gt-collapse-bracket {
+  text-align: right;
+  width: auto;
+  min-width: 3.25em;
+  max-width: 120px;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 折叠占位列（Input ... / Output ... / Ground truth ...）：斜体 + 次要色，与展开的数据列区分 */
+.run-detail-results-table .run-detail-bracket-collapsed,
+.score-detail-results-table .run-detail-bracket-collapsed {
+  font-style: italic;
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.92em;
+}
+
+/* 表头默认 13px / 600 优先级更高，单独压低折叠列样式 */
+.run-detail-results-table thead th.run-detail-bracket-collapsed,
+.score-detail-results-table thead .score-detail-results-th.run-detail-bracket-collapsed {
+  color: var(--text-muted);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 12px;
 }
 
 .run-detail-results-table td[title] {
@@ -4980,20 +5582,21 @@ button.review-suggestion-title-pill {
   font-size: 12px;
 }
 
-/* [Error] 与 [#] 等中括号列：标题行与标题行同色，内容行随行背景 */
+/* [#] / [Error] 列表头：与 Prompt 预览表 thead 一致 */
 .run-detail-results-table .run-detail-th--error-col,
 .run-detail-results-table .run-detail-th--dataset-row-col {
-  background: var(--hover);
-  color: var(--text);
+  padding: 6px 8px;
+  font-size: 13px;
   font-weight: 600;
-  font-size: 11px;
+  color: var(--text);
+  background: var(--hover);
 }
 .run-detail-results-table .run-detail-th--bracket-toggle {
   cursor: pointer;
   user-select: none;
 }
 .run-detail-results-table .run-detail-th--bracket-toggle:hover {
-  background: var(--hover-hover, #e8e8e8);
+  background: var(--hover);
 }
 .run-detail-results-table .run-detail-td--error-col,
 .run-detail-results-table .run-detail-td--dataset-row-col {
@@ -5001,6 +5604,83 @@ button.review-suggestion-title-pill {
 }
 .run-detail-results-table .run-detail-td--error-col.run-detail-td--error {
   color: var(--danger, #c00);
+}
+
+/*
+ * Score 结果表同时带 .score-detail-results-table与 .run-detail-results-table。
+ * 仅靠前面的 score 规则会被后面的 run-detail 的 border-collapse: collapse 覆盖，
+ * 导致 sticky 的 Match/Review 与相邻格「抢」折叠边框——表现为无边线 + 横向滚到尽头时微抖。
+ * 此处用更高优先级 + separate，在 Score 表上单独恢复稳定格线与 sticky。
+ */
+.score-detail-results-table.run-detail-results-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: unset;
+  width: max-content;
+}
+
+.score-detail-results-table.run-detail-results-table th,
+.score-detail-results-table.run-detail-results-table td {
+  border-style: solid;
+  border-color: var(--border);
+  border-width: 0 1px 1px 0;
+}
+
+.score-detail-results-table.run-detail-results-table thead tr:first-child th {
+  border-top-width: 0;
+}
+
+.score-detail-results-table.run-detail-results-table tbody tr:last-child td {
+  border-bottom-width: 0;
+}
+
+.score-detail-results-table.run-detail-results-table thead tr th:last-child,
+.score-detail-results-table.run-detail-results-table tbody tr td:last-child {
+  border-right-width: 0;
+}
+
+/* 与原有 Score 块分界一致（需压过上面单元格规则的 border-left:0） */
+.score-detail-results-table.run-detail-results-table .score-detail-results-th--block-sep,
+.score-detail-results-table.run-detail-results-table .score-detail-results-td--block-sep {
+  border-left-width: 2px !important;
+  border-left-style: solid !important;
+  border-left-color: var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
+}
+
+/* Match / Review：Review 的 z-index 更高，会盖住 Match 的右边框，分隔线画在 Review 的 border-left */
+.score-detail-results-table.run-detail-results-table .score-detail-results-th--match,
+.score-detail-results-table.run-detail-results-table .score-detail-results-td--match {
+  border-left: 4px solid var(--text-muted);
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  border-top: none;
+}
+
+.score-detail-results-table.run-detail-results-table .score-detail-results-th--review,
+.score-detail-results-table.run-detail-results-table .score-detail-results-td--review {
+  border-left: 1px solid var(--border);
+  border-top: none;
+  border-right: none;
+}
+
+/*
+ * run-detail 对全体 th/td 有 max-width:120px + overflow:hidden（特异性高于仅带 score 类名的规则），
+ * 会盖掉 Match/Review 的固定列宽；滑到横向最右时与 sticky 叠加易出现列宽被「挤窄」。
+ */
+.score-detail-results-table.run-detail-results-table .score-detail-results-th--match,
+.score-detail-results-table.run-detail-results-table .score-detail-results-td--match {
+  width: 5rem;
+  min-width: 5rem;
+  max-width: 5rem;
+  overflow: visible;
+}
+
+.score-detail-results-table.run-detail-results-table .score-detail-results-th--review,
+.score-detail-results-table.run-detail-results-table .score-detail-results-td--review {
+  width: var(--score-sticky-review-w, 72px);
+  min-width: var(--score-sticky-review-w, 72px);
+  max-width: var(--score-sticky-review-w, 72px);
+  overflow: visible;
 }
 
 .run-detail-error {
@@ -5162,7 +5842,7 @@ button.review-suggestion-title-pill {
 }
 
 .working-dataset-edit-table {
-  width: 100%;
+  width: max-content;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
@@ -5636,6 +6316,7 @@ body.wd-row-resizing {
   gap: 0;
   padding: 6px 0 20px 0;
   border-right: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .prompt-step {
@@ -6522,6 +7203,13 @@ body.wd-row-resizing {
 .modal-panel--section-editor {
   min-width: min(420px, 92vw);
   max-width: 92vw;
+}
+
+/* Score rule / group editor: cap width (section-editor otherwise grows with long hint text) */
+.modal-panel--rule-editor.modal-panel--section-editor {
+  width: min(480px, 92vw);
+  max-width: min(480px, 92vw);
+  min-width: min(360px, 92vw);
 }
 
 /* Edit prompt name & description (from node click or context menu): same as Add prompt step 1 */
