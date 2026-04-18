@@ -85,6 +85,10 @@ DEFAULT_SETTINGS = {
     "run_max_retries": 2,
     # Cap: distinct worksheet inputs that have at least one unmatched Score comparison row (not raw row count).
     "review_max_failed_rows": 30,
+    # Thompson-sampling trials per finetune run (4–200).
+    "finetune_max_trials": 40,
+    # Show Reset & Debug buttons on suggestion cards.
+    "debug_mode": False,
 }
 
 
@@ -177,6 +181,13 @@ class SettingsPatch(BaseModel):
         le=200,
         description="Cap Phase-1 review to this many distinct inputs that have at least one unmatched comparison row (not a raw comparison-row count).",
     )
+    finetune_max_trials: int | None = Field(
+        default=None,
+        ge=4,
+        le=200,
+        description="Maximum Thompson-sampling trials per compositional finetune run (4–200).",
+    )
+    debug_mode: bool | None = None
 
 
 class CredentialResponse(BaseModel):
@@ -1272,3 +1283,130 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             _review_cancelled.discard(review_id)
 
 
+# ---------- Finetune: Compositional segments + candidates ----------
+
+class FinetuneSegmentsRequest(BaseModel):
+    credential_id: str = Field(..., description="Credential id (LLM used for generation)")
+    old_sentence: str = Field(default="", description="Original sentence (context)")
+    new_sentence: str = Field(..., description="Improved sentence to split into segments")
+    improvement_rationale: str = Field(default="", description="Why this change was proposed")
+    max_segments: int = Field(default=5, ge=1, le=8, description="Max number of segments (1–8)")
+
+
+class FinetuneCandidatesRequest(BaseModel):
+    credential_id: str = Field(..., description="Credential id (LLM used for generation)")
+    old_sentence: str = Field(default="")
+    new_sentence: str = Field(..., description="Full improved sentence")
+    improvement_rationale: str = Field(default="")
+    segment_text: str = Field(..., description="The focus segment to paraphrase")
+    prefix: str = Field(default="", description="Text before the segment in new_sentence")
+    suffix: str = Field(default="", description="Text after the segment in new_sentence")
+    section_context: str = Field(default="", description="Full prompt section/paragraph containing the sentence (read-only context for the LLM)")
+    num_candidates: int = Field(default=4, ge=1, le=8, description="Number of candidates (1–8)")
+    segment_index: int = Field(default=0, ge=0, description="0-based index of this segment among all segments")
+    total_segments: int = Field(default=1, ge=1, description="Total number of segments")
+
+
+@app.post("/api/review/finetune-compositional/segments")
+def finetune_segments(body: FinetuneSegmentsRequest):
+    """Split an improved sentence into contiguous segments for compositional finetune."""
+    from review_finetune_compositional import compositional_finetune_segments
+    items = _load_credentials()
+    cred = next((c for c in items if c.get("id") == body.credential_id), None)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    model = cred.get("llm", "")
+    api_key = cred.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing API key")
+    provider = cred.get("provider", "openai")
+    settings = _load_settings()
+    max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
+    _safe_print(_HL + "[Finetune] POST /segments" + _R + f"  model={model}  new_sentence={body.new_sentence[:80]!r}")
+    try:
+        segments = compositional_finetune_segments(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            max_tokens=max_tokens,
+            old_sentence=body.old_sentence,
+            new_sentence=body.new_sentence,
+            improvement_rationale=body.improvement_rationale,
+            max_segments=body.max_segments,
+        )
+    except Exception as e:
+        _safe_print(_HL + "[Finetune] /segments ERROR" + _R + f"  {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    _safe_print(_HL + "[Finetune] /segments OK" + _R + f"  → {len(segments)} segment(s): {segments}")
+    return {"segments": segments}
+
+
+@app.post("/api/review/finetune-compositional/candidates")
+def finetune_candidates(body: FinetuneCandidatesRequest):
+    """Generate paraphrase candidates for one segment of the improved sentence."""
+    from review_finetune_compositional import compositional_finetune_segment_candidates
+    items = _load_credentials()
+    cred = next((c for c in items if c.get("id") == body.credential_id), None)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    model = cred.get("llm", "")
+    api_key = cred.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing API key")
+    provider = cred.get("provider", "openai")
+    settings = _load_settings()
+    max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
+    _safe_print(_HL + "[Finetune] POST /candidates" + _R + f"  model={model}  segment={body.segment_text[:60]!r}")
+    try:
+        candidates = compositional_finetune_segment_candidates(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            max_tokens=max_tokens,
+            old_sentence=body.old_sentence,
+            new_sentence=body.new_sentence,
+            improvement_rationale=body.improvement_rationale,
+            segment_text=body.segment_text,
+            prefix=body.prefix,
+            suffix=body.suffix,
+            section_context=body.section_context,
+            num_candidates=body.num_candidates,
+            segment_index=body.segment_index,
+            total_segments=body.total_segments,
+        )
+    except Exception as e:
+        _safe_print(_HL + "[Finetune] /candidates ERROR" + _R + f"  {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    _safe_print(_HL + "[Finetune] /candidates OK" + _R + f"  → {len(candidates)} candidate(s): {candidates}")
+    return {"candidates": candidates}
+
+
+class FinetuneLogResultRequest(BaseModel):
+    segments: list[str] = Field(default_factory=list, description="Segment texts")
+    lattice: list[list[str]] = Field(default_factory=list, description="lattice[seg][cand]")
+    best_picks: list[int] = Field(default_factory=list, description="Winning candidate index per segment")
+    best_text: str = Field(default="", description="Composed best sentence")
+    best_rate: float = Field(default=0.0, description="Best observed pass rate (0–1)")
+    trials_run: int = Field(default=0, description="Number of Thompson-sampling trials actually run")
+    trials_total: int = Field(default=0, description="Max trials configured")
+
+
+@app.post("/api/review/finetune-compositional/log-result")
+def finetune_log_result(body: FinetuneLogResultRequest):
+    """Log the final finetune result to the terminal for visibility. No persistence."""
+    rate_pct = f"{body.best_rate * 100:.1f}%"
+    _safe_print("")
+    _safe_print(_HL + "[Finetune] ══════════════════ RESULT ══════════════════════════════" + _R)
+    _safe_print(_HL + f"[Finetune]  Trials: {body.trials_run} / {body.trials_total}   Best pass rate: {rate_pct}" + _R)
+    if body.segments and body.lattice and body.best_picks:
+        _safe_print(_HL + "[Finetune] ── Winner per segment ────────────────────────────────" + _R)
+        for i, (seg, cands, pick) in enumerate(zip(body.segments, body.lattice, body.best_picks)):
+            chosen = cands[pick] if 0 <= pick < len(cands) else "?"
+            orig_marker = "  ← original" if chosen == seg else ""
+            _safe_print(f"[Finetune]   [{i}] cand[{pick}]{orig_marker}")
+            _safe_print(f"[Finetune]        {chosen!r}")
+    _safe_print(_HL + "[Finetune] ── Best sentence ──────────────────────────────────────" + _R)
+    _safe_print(f"[Finetune]   {body.best_text!r}")
+    _safe_print(_HL + "[Finetune] ══════════════════════════════════════════════════════════" + _R)
+    _safe_print("")
+    return {"ok": True}
