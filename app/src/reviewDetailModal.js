@@ -5,6 +5,12 @@
  */
 
 import { showConfirm } from './alertModal.js';
+import {
+  runSuggestionFinetuneCompositional,
+  registerFinetuneSession,
+  unregisterFinetuneSession,
+  hasActiveFinetuneSessions,
+} from './reviewSuggestionFinetune.js';
 import { comparisonRowIsMatched } from './scoreDetailModal.js';
 import {
   rebuildWorkingFromApplied,
@@ -36,6 +42,8 @@ const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
 const REVIEW_SUGGESTION_VERIFIED_LABEL = 'Verified';
 const REVIEW_SUGGESTION_FINETUNE_LABEL = 'Click to Finetune';
+const REVIEW_SUGGESTION_FINETUNING_LABEL = 'Finetuning\u2026';
+const REVIEW_SUGGESTION_FINETUNED_LABEL = 'Finetuned';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
@@ -53,6 +61,9 @@ function isVerifyFullPass(result) {
  */
 function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState) {
   if (streamComplete !== true) return [];
+  if (String(_sug?.source || '').toLowerCase() === 'assistant') {
+    return [{ cls: 'review-suggestion-proposal-pill', text: 'Proposal', ariaLabel: 'Added via Review Assistant' }];
+  }
   if (verifyState === 'verifying') {
     return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL, ariaLabel: 'Verifying…' }];
   }
@@ -60,7 +71,16 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
     return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_VERIFIED_LABEL, ariaLabel: 'All outputs matched ground truth' }];
   }
   if (verifyState === 'finetune') {
-    return [{ cls: 'review-suggestion-finetune-pill', text: REVIEW_SUGGESTION_FINETUNE_LABEL, ariaLabel: 'Some outputs did not match — click to finetune' }];
+    return [{ cls: 'review-suggestion-finetune-pill review-suggestion-finetune-pill--clickable', text: REVIEW_SUGGESTION_FINETUNE_LABEL, ariaLabel: 'Some outputs did not match — click to finetune' }];
+  }
+  if (verifyState === 'finetuning') {
+    return [{ cls: 'review-suggestion-finetuning-pill', text: REVIEW_SUGGESTION_FINETUNING_LABEL, ariaLabel: 'Finetuning in progress…' }];
+  }
+  if (verifyState === 'finetuned') {
+    return [{ cls: 'review-suggestion-finetuned-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Finetune complete — some outputs still differ from ground truth' }];
+  }
+  if (verifyState === 'finetuned-pass') {
+    return [{ cls: 'review-suggestion-finetuned-pass-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Finetune complete — all outputs matched ground truth' }];
   }
   return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
@@ -462,26 +482,11 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
 
   let detailBodyHtml;
   if (isAssistant) {
-    const inputIdx = suggestionTargetScoreRowIndices(sug);
-    const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
-    const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
-    const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
-    const chatFocus = String(sug.chat_focus || '').trim();
-    const bullets = Array.isArray(sug.chat_focus_bullets)
-      ? sug.chat_focus_bullets.map((x) => String(x || '').trim()).filter(Boolean)
-      : [];
-    const respondsToHead = scorePhrase
-      ? `<span class="review-diagnosis-detail-lead">Focus:</span> ${escapeHtml(scorePhrase)}`
-      : chatFocus
-        ? `<span class="review-diagnosis-detail-lead">Focus:</span> ${escapeHtml(chatFocus)}`
-        : `<span class="review-diagnosis-detail-lead">Focus:</span>`;
-    const focusHtml = bullets.length
-      ? `<p class="review-diagnosis-detail-prose">${respondsToHead}</p><ul class="review-suggestion-detail-list">${bullets.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
-      : `<p class="review-diagnosis-detail-prose">${respondsToHead} <span class="review-diagnosis-detail-empty">(none)</span></p>`;
+    const sourcePara = `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Source:</span> Added via Review Assistant</p>`;
     const rationalePara = `<p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Rationale:</span> ${
       reason ? escapeHtml(reason) : '<span class="review-diagnosis-detail-empty">(none)</span>'
     }</p>`;
-    detailBodyHtml = focusHtml + rationalePara;
+    detailBodyHtml = sourcePara + rationalePara;
   } else {
     const inputIdx = suggestionTargetScoreRowIndices(sug);
     const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
@@ -574,12 +579,17 @@ function openSuggestionDebugOverlay(sug, debugData, verifyResult = null) {
   let bodyHtml;
   if (debugData) {
     // Summary row
+    const finetuneInputCell = debugData.finetuneInputNums
+      ? escapeHtml(debugData.finetuneInputNums) + (debugData.finetuneExtraInputNums ? ` <span style="opacity:0.6">(extra: ${escapeHtml(debugData.finetuneExtraInputNums)})</span>` : '')
+      : null;
     const summaryHtml = `
       <table class="review-suggestion-debug-table">
         <tbody>
           <tr><th scope="row">Input</th><td>${escapeHtml(debugData.inputNums)}</td></tr>
           <tr><th scope="row">Ground truth</th><td>${escapeHtml(debugData.gtNums)}</td></tr>
           <tr><th scope="row">Score table</th><td>${escapeHtml(debugData.scoreNums)}</td></tr>
+          ${finetuneInputCell ? `<tr><th scope="row">Finetune inputs</th><td>${finetuneInputCell}</td></tr>` : ''}
+          ${debugData.finetuneGtNums ? `<tr><th scope="row">Finetune GT</th><td>${escapeHtml(debugData.finetuneGtNums)}</td></tr>` : ''}
         </tbody>
       </table>`;
 
@@ -974,10 +984,15 @@ function buildReviewResultUI(overlay, options) {
   savedSuggestionsForVerify.forEach((sug, si) => {
     const sid = sug && sug.suggestion_id != null ? String(sug.suggestion_id) : '';
     if (!sid) return;
-    const st = _savedVerifyStates[sid];
-    if (st && st !== 'idle') _verifyStates.set(verifyKey(si), st);
-    const res = _savedVerifyResults[sid];
-    if (res) _verifyResults.set(verifyKey(si), res);
+    // Don't overwrite an in-flight state that's already tracked in memory.
+    const currentSt = _verifyStates.get(verifyKey(si));
+    const isInFlight = currentSt === 'verifying' || currentSt === 'finetuning';
+    if (!isInFlight) {
+      const st = _savedVerifyStates[sid];
+      if (st && st !== 'idle') _verifyStates.set(verifyKey(si), st);
+      const res = _savedVerifyResults[sid];
+      if (res) _verifyResults.set(verifyKey(si), res);
+    }
   });
 
   function updateSuggestionPreviewSelectionVisual() {
@@ -1456,8 +1471,8 @@ function buildReviewResultUI(overlay, options) {
       cardVerifyStates.get(sugIdx),
     );
     const debugActionsHtml =
-      '<button type="button" class="btn review-detail-debug-reset-btn" title="Debug: reset card to Click-to-verify state">↺ Reset</button>' +
-      '<button type="button" class="btn review-detail-debug-info-btn" title="Debug: open run info panel">⚙ Debug</button>';
+      '<button type="button" class="review-detail-debug-reset-btn" title="Debug: reset card to Click-to-verify state">Reset</button>' +
+      '<button type="button" class="review-detail-debug-info-btn" title="Debug: open run info panel">Debug</button>';
     const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''} <span class="review-detail-debug-btn-group">${debugActionsHtml}</span>`;
 
     const card = document.createElement('div');
@@ -1532,7 +1547,16 @@ function buildReviewResultUI(overlay, options) {
 
       const scoreLabel = formatScoreTableTargetLabels(compRows, rowIndices) || '—';
 
-      return { inputNums: toNums(inputSet), gtNums: toNums(gtSet), scoreNums: scoreLabel, targetRows };
+      const meta = s.review_finetune_meta;
+      return {
+        inputNums: toNums(inputSet),
+        gtNums: toNums(gtSet),
+        scoreNums: scoreLabel,
+        targetRows,
+        finetuneInputNums: meta?.finetuneInputNums || null,
+        finetuneExtraInputNums: meta?.finetuneExtraInputNums || null,
+        finetuneGtNums: meta?.finetuneGtNums || null,
+      };
     }
 
     /**
@@ -1548,6 +1572,10 @@ function buildReviewResultUI(overlay, options) {
         if (verifySection) verifySection.innerHTML = buildVerifySectionHtml(verifyResult);
       }
     }
+
+    /** Set to true before calling runVerification() after a finetune run so the finally
+     *  block can distinguish "finetuned but not fully passing" from "plain verify failed". */
+    let _isPostFinetuneVerify = false;
 
     /** Run the modified prompt against the suggestion's target inputs and store results. */
     async function runVerification() {
@@ -1691,7 +1719,11 @@ function buildReviewResultUI(overlay, options) {
       } finally {
         // Determine final pill state from stored result
         const finalResult = cardVerifyResults.get(sugIdx);
-        const postState = isVerifyFullPass(finalResult) ? 'verified' : (finalResult?.status === 'complete' ? 'finetune' : 'idle');
+        const wasPostFinetune = _isPostFinetuneVerify;
+        _isPostFinetuneVerify = false;
+        const postState = wasPostFinetune
+          ? (isVerifyFullPass(finalResult) ? 'finetuned-pass' : (finalResult?.status === 'complete' ? 'finetuned' : 'idle'))
+          : (isVerifyFullPass(finalResult) ? 'verified' : (finalResult?.status === 'complete' ? 'finetune' : 'idle'));
         cardVerifyStates.set(sugIdx, postState);
         _verifyPromises.delete(verifyKey(sugIdx));
         // Persist state + result so they survive app restart
@@ -1700,19 +1732,156 @@ function buildReviewResultUI(overlay, options) {
         // closed and reopened, the new card's .finally() hook handles the update.
         if (card.isConnected) {
           updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+          // If this card's diff is currently pinned on the right, refresh it so
+          // it shows the updated new_sentence (e.g. after finetune rewrites it).
+          applyPinnedPreviewIfAny();
         }
       }
     }
 
-    /** Attach click handler to the "Click to verify" pill (re-called after reset or pill rebuild). */
+    /** Run compositional finetune for this suggestion. */
+    async function runFinetune() {
+      const ac = new AbortController();
+      registerFinetuneSession(ac);
+      try {
+        const payload = typeof getPayload === 'function' ? await getPayload() : null;
+        const credentialId = payload?.run_credential_id;
+        const outputSchema = payload?.output_schema;
+        if (!credentialId) throw new Error('No run credential configured.');
+        if (!outputSchema) throw new Error('No output schema configured.');
+
+        // Build inputEntries (same as runVerification)
+        const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
+        const rowIndices = suggestionTargetScoreRowIndices(sug);
+        const targetRows = rowIndices
+          .map((ri) => compRows.find((r) => Number(r?.row_index) === ri))
+          .filter(Boolean);
+        const inputMap = new Map();
+        for (const row of targetRows) {
+          const inputIdx = row.input_row_index;
+          if (inputIdx == null) continue;
+          if (!inputMap.has(inputIdx)) inputMap.set(inputIdx, { row, gtRows: [] });
+          if (row.ground_truth_output && row.source_gt_row_index != null) {
+            const gtNum = row.source_gt_row_index + 1;
+            const entry = inputMap.get(inputIdx);
+            if (!entry.gtRows.find((g) => g.gtNum === gtNum)) {
+              const filtered = Object.fromEntries(
+                Object.entries(row.ground_truth_output).filter(([k]) => isModelFacingKey(k)),
+              );
+              entry.gtRows.push({ gtNum, gt: filtered });
+            }
+          }
+        }
+        const inputEntries = [...inputMap.entries()].sort(([a], [b]) => a - b);
+        if (inputEntries.length === 0) throw new Error('No inputs found for this suggestion.');
+
+        // Expand with up to 2 extra inputs from all comparison rows.
+        // Prefer inputs where every comparison row is matched (fully correct); fall back to any unused input.
+        const usedInputIdxs = new Set(inputEntries.map(([idx]) => idx));
+        const allGrouped = new Map();
+        for (const row of compRows) {
+          const iIdx = row.input_row_index;
+          if (iIdx == null) continue;
+          if (!allGrouped.has(iIdx)) allGrouped.set(iIdx, { row, allMatched: true, gtRows: [] });
+          const g = allGrouped.get(iIdx);
+          if (!comparisonRowIsMatched(row)) g.allMatched = false;
+          if (row.ground_truth_output && row.source_gt_row_index != null) {
+            const gtNum = row.source_gt_row_index + 1;
+            if (!g.gtRows.find((x) => x.gtNum === gtNum)) {
+              const filteredGt = Object.fromEntries(
+                Object.entries(row.ground_truth_output).filter(([k]) => isModelFacingKey(k)),
+              );
+              g.gtRows.push({ gtNum, gt: filteredGt });
+            }
+          }
+        }
+        const extraCandidates = [...allGrouped.entries()]
+          .filter(([iIdx]) => !usedInputIdxs.has(iIdx))
+          .sort(([aIdx, a], [bIdx, b]) => {
+            if (a.allMatched !== b.allMatched) return b.allMatched ? 1 : -1;
+            return aIdx - bIdx;
+          });
+        const extraEntries = extraCandidates.slice(0, 2).map(([iIdx, g]) => [iIdx, { row: g.row, gtRows: g.gtRows }]);
+        const expandedInputEntries = [...inputEntries, ...extraEntries].sort(([a], [b]) => a - b);
+
+        let finetuneMaxTrials = 40;
+        try {
+          const stRes = await fetch(`${API_BASE}/api/settings`);
+          if (stRes.ok) {
+            const st = await stRes.json();
+            const v = parseInt(st?.finetune_max_trials, 10);
+            if (!Number.isNaN(v) && v >= 4) finetuneMaxTrials = Math.min(200, v);
+          }
+        } catch (_) {}
+
+        const result = await runSuggestionFinetuneCompositional({
+          credentialId,
+          oldSentence: sug.old_sentence || '',
+          newSentence: sug.new_sentence || '',
+          improvementRationale: sug.reason || '',
+          sectionContext: originalContent || '',
+          maxSegments: 5,
+          candidatesPerSegment: 4,
+          maxTrials: finetuneMaxTrials,
+          allSuggestions,
+          sugIdx,
+          originals,
+          inputEntries: expandedInputEntries,
+          outputSchema,
+          abortController: ac,
+          onProgress: ({ trial, trials, bestRate }) => {
+            try {
+              storeVerifyResult({ status: 'running', progress: { completed: trial, total: trials } });
+            } catch (_) {}
+          },
+        });
+
+        // Build human-readable input/GT # strings for the debug overlay
+        const finetuneInputNums = expandedInputEntries.map(([idx]) => `#${idx + 1}`).join(', ');
+        const finetuneExtraInputNums = extraEntries.length > 0 ? extraEntries.map(([idx]) => `#${idx + 1}`).join(', ') : null;
+        const finetuneGtNums = [...new Set(
+          expandedInputEntries.flatMap(([, { gtRows }]) => gtRows.map((g) => `#${g.gtNum}`)),
+        )].sort((a, b) => parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10)).join(', ');
+
+        // Update suggestion's new_sentence with the best found text
+        sug.new_sentence = result.bestText;
+        sug.review_finetune_completed = true;
+        sug.review_finetune_meta = {
+          bestRate: result.bestObservedRate,
+          trials: result.trialLog.length,
+          finetuneInputNums,
+          finetuneExtraInputNums,
+          finetuneGtNums,
+        };
+        // Persist updated suggestion so new_sentence survives app restart
+        try {
+          if (typeof onReviewResultChange === 'function') {
+            const live = typeof getReviewResult === 'function' ? getReviewResult() : null;
+            const base = live && typeof live === 'object' ? { ...live } : { ...saved };
+            const suggs = Array.isArray(base.suggestions) ? [...base.suggestions] : allSuggestions.map((s) => ({ ...s }));
+            suggs[sugIdx] = { ...suggs[sugIdx], new_sentence: result.bestText, review_finetune_completed: true, review_finetune_meta: sug.review_finetune_meta };
+            onReviewResultChange({ ...base, suggestions: suggs });
+          }
+        } catch (_) {}
+
+        return result;
+      } finally {
+        unregisterFinetuneSession(ac);
+      }
+    }
+
+    /** Attach click handlers to verify + finetune pills (re-called after pill rebuild). */
     function bindVerifyPillClick() {
+      // Assistant-added proposals don't participate in verify or finetune.
+      if (String(sug?.source || '').toLowerCase() === 'assistant') return;
       const titleWrap = card.querySelector('.review-detail-suggestion-title-wrap');
       if (!titleWrap) return;
-      titleWrap.querySelectorAll(`.review-suggestion-verify-pill--clickable`).forEach((pill) => {
+
+      // "Click to Verify" pill
+      titleWrap.querySelectorAll('.review-suggestion-verify-pill--clickable').forEach((pill) => {
         pill.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          // Guard: if a run is already in flight for this suggestion, ignore the click
           if (_verifyPromises.has(verifyKey(sugIdx))) return;
           cardVerifyStates.set(sugIdx, 'verifying');
           updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
@@ -1720,18 +1889,58 @@ function buildReviewResultUI(overlay, options) {
           _verifyPromises.set(verifyKey(sugIdx), vp);
         });
       });
+
+      // "Click to Finetune" pill
+      titleWrap.querySelectorAll('.review-suggestion-finetune-pill--clickable').forEach((pill) => {
+        pill.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (_verifyPromises.has(verifyKey(sugIdx))) return;
+          // If the suggestion was already accepted, revert it first so the prompt
+          // reflects the finetuned new_sentence once finetune completes.
+          if (sug.applied === true) {
+            sug.applied = false;
+            syncWorkingFromApplied();
+            updateAcceptButtonLabels();
+            renderLeft(-1);
+            persistWorking();
+            if (previewSelectedSuggestionIndex === sugIdx) showPreview();
+          }
+          cardVerifyStates.set(sugIdx, 'finetuning');
+          updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+          const fp = (async () => {
+            try {
+              await runFinetune();
+            } catch (err) {
+              if (err?.name !== 'AbortError') {
+                try { storeVerifyResult({ status: 'error', message: String(err?.message || err) }); } catch (_) {}
+              }
+            } finally {
+              // After finetune, auto-verify the new sentence to set the correct pill state.
+              // Set the flag so runVerification's finally block uses 'finetuned' (not 'finetune')
+              // when verify completes but doesn't achieve full pass.
+              _isPostFinetuneVerify = true;
+              const vp2 = runVerification();
+              _verifyPromises.set(verifyKey(sugIdx), vp2);
+              await vp2;
+            }
+          })();
+          _verifyPromises.set(verifyKey(sugIdx), fp);
+        });
+      });
     }
     card._bindVerifyPillClick = bindVerifyPillClick;
     bindVerifyPillClick();
 
-    // If a verification was in-flight when the modal was closed, hook the existing
-    // promise so this (newly mounted) card's pill resets when the run finishes.
-    if (cardVerifyStates.get(sugIdx) === 'verifying') {
+    // If a verification/finetune was in-flight when the modal was closed, hook the
+    // existing promise so this (newly mounted) card's pill resets when it finishes.
+    if (cardVerifyStates.get(sugIdx) === 'verifying' || cardVerifyStates.get(sugIdx) === 'finetuning') {
       const inflight = _verifyPromises.get(verifyKey(sugIdx));
       if (inflight) {
         inflight.finally(() => {
           if (card.isConnected) {
             updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+            applyPinnedPreviewIfAny();
           }
         });
       }
@@ -2075,6 +2284,15 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
     if (!promptWrap.innerHTML.trim()) promptWrap.innerHTML = `<p class="review-detail-placeholder">${escapeHtml(msg)}</p>`;
     suggestionsEl.innerHTML = `<p class="review-detail-placeholder">${escapeHtml(msg)}</p>`;
   }
+
+  // Apply debug mode: fetch settings once and toggle the --debug class on suggestionsEl.
+  // The class persists across buildReviewResultUI re-renders since they only modify content inside suggestionsEl.
+  fetch(`${API_BASE}/api/settings`)
+    .then((r) => r.ok ? r.json() : null)
+    .then((s) => {
+      suggestionsEl.classList.toggle('review-detail-suggestions--debug', s?.debug_mode === true);
+    })
+    .catch(() => {});
 
   if (reviewNodeId) {
     document.addEventListener('workflow:save-review-result', onSaveReviewResult);

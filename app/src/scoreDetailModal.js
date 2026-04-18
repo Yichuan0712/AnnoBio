@@ -3294,6 +3294,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const defaultId = (settings.default_review_credential_id || '').trim();
         if (defaultId && (list || []).some((c) => c.id === defaultId)) credentialId = defaultId;
       }
+      if (reviewPayloadPreviewBtn) reviewPayloadPreviewBtn.hidden = !(settings?.debug_mode === true);
       if (credentialId) {
         llmSelect.value = credentialId;
         if (node) node.dataset.reviewCredentialId = credentialId;
