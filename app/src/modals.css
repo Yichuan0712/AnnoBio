@@ -1532,9 +1532,9 @@
   overflow: hidden;
 }
 
-/* Main column (sections): no outer border so no extra right edge */
+/* Main column (sections): 右侧 70%，与左侧预览栏 3:7 比例 */
 .prompt-detail-main {
-  flex: 1;
+  flex: 7 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1582,8 +1582,8 @@
 
 /* Side column (inputs + schema): right border = divider between side and main */
 .prompt-detail-side.prompt-preview-wrap {
-  flex: 1 1 0;
-  min-width: 320px;
+  flex: 3 1 0;
+  min-width: 280px;
   overflow: hidden;
   border-right: 1px solid var(--border);
 }
@@ -1606,7 +1606,7 @@
 }
 
 .prompt-detail-side .prompt-detail-inputs-content.prompt-preview {
-  flex: 1 1 0;
+  flex: 4 1 0;
   min-height: 100px;
   padding: 16px;
   overflow: auto;
@@ -1670,7 +1670,7 @@
 }
 
 .prompt-detail-side .prompt-detail-schema-wrap {
-  flex: 1 1 0;
+  flex: 6 1 0;
   min-height: 100px;
   display: flex;
   flex-direction: column;
@@ -3821,6 +3821,33 @@
   cursor: default;
   pointer-events: none;
   user-select: none;
+}
+
+/* Dark mode: brighter text + stronger background for all pill variants */
+html.dark .review-suggestion-verify-pill,
+html.dark .review-suggestion-verifying-pill,
+html.dark .review-suggestion-finetuned-pill,
+html.dark .review-suggestion-finetune-pill,
+html.dark .review-suggestion-finetuning-pill {
+  color: #fbbf24;
+  background: color-mix(in srgb, #f59e0b 28%, transparent);
+}
+
+html.dark .review-suggestion-verified-pill,
+html.dark .review-suggestion-finetuned-pass-pill {
+  color: #4ade80;
+  background: color-mix(in srgb, #22c55e 28%, transparent);
+}
+
+html.dark .review-suggestion-proposal-pill {
+  color: #93c5fd;
+  background: color-mix(in srgb, #3b82f6 28%, transparent);
+}
+
+html.dark .review-suggestion-verify-pill--clickable:hover,
+html.dark .review-suggestion-finetune-pill--clickable:hover {
+  background: color-mix(in srgb, #f59e0b 42%, transparent);
+  color: #fcd34d;
 }
 
 /* Clickable variant – active when stream is complete and state is idle */
@@ -7439,6 +7466,22 @@ body.wd-row-resizing {
 
 .modal-panel--section-editor .section-editor-error {
   margin: 0;
+}
+
+.section-editor-hint {
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.section-editor-hint code {
+  font-family: monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--hover);
+  color: var(--text);
 }
 
 /* string/number 模式下 Examples：多行，每行一个输入 + Delete */
