@@ -3150,9 +3150,9 @@
   background: var(--bg);
 }
 
-/* Left column: Findings — 与 Prompt sections 同底色；三列 flex29:42:29（中间 42%，左右各 29%） */
+/* Left column: Findings — 两列布局 flex30:70（原三列 29:42:29，右侧 Review Assistant chat 栏已移除） */
 .review-detail-main {
-  flex: 29 1 0;
+  flex: 30 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -3441,9 +3441,9 @@
   margin-bottom: 12px;
 }
 
-/* Middle column: Prompt sections — 占行宽 42% */
+/* Middle column: Prompt sections — 右侧 chat 栏移除后扩至 70% */
 .review-detail-preview-wrap {
-  flex: 42 1 0;
+  flex: 70 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
