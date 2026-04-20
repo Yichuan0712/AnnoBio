@@ -313,6 +313,7 @@ function normalizeRowDiagnosticFromSaved(d) {
     issue_summary: String(d.issue_summary || ''),
     rough_modification_opinion: String(d.rough_modification_opinion || ''),
     problem_category_hint: String(d.problem_category_hint || ''),
+    gt_suspect_note: String(d.gt_suspect_note || ''),
   };
 }
 
@@ -421,6 +422,7 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
   const issue = (diagnostic.issue_summary || '').trim();
   const rough = (diagnostic.rough_modification_opinion || '').trim();
   const cardTitle = (diagnostic.card_title || '').trim();
+  const gtNote = (diagnostic.gt_suspect_note || '').trim();
   const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
   const compIdxs = diagnosticComparisonRowIndices(diagnostic);
   const multiIdx = compIdxs.length > 1 ? compIdxs : null;
@@ -454,6 +456,7 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
         <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Source:</span> ${escapeHtml(sourceLine)}</p>
         <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Issue:</span> ${issue ? escapeHtml(issue) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
         <p class="review-diagnosis-detail-prose"><span class="review-diagnosis-detail-lead">Suggested direction:</span> ${rough ? escapeHtml(rough) : '<span class="review-diagnosis-detail-empty">(none)</span>'}</p>
+        ${gtNote ? `<p class="review-diagnosis-detail-prose review-diagnosis-gt-suspect"><span class="review-diagnosis-detail-lead review-diagnosis-gt-suspect__lead">⚠ Possible ground truth issue:</span> ${escapeHtml(gtNote)}</p>` : ''}
       </div>
     </div>
   `;
@@ -2373,6 +2376,8 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
       lines.push(`Suggested direction (prompt-level): ${(d.rough_modification_opinion || '').trim() || '(none)'}`);
       const hint = (d.problem_category_hint || '').trim();
       if (hint) lines.push(`Category hint: ${hint}`);
+      const gtNote = (d.gt_suspect_note || '').trim();
+      if (gtNote) lines.push(`Possible ground truth issue: ${gtNote}`);
       lines.push('');
     });
   }
