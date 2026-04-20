@@ -71,6 +71,7 @@
   line-height: 1;
   transform: translateY(-0.5px);
   display: inline-block;
+  color: var(--text-muted);
 }
 
 .workflow-canvas__controls-stack {

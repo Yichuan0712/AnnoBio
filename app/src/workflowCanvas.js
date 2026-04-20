@@ -2287,9 +2287,9 @@ export function buildWorkflowCanvas(root) {
   const autopilotToolbar = document.createElement('div');
   autopilotToolbar.className = 'workflow-canvas__autopilot-toolbar';
   autopilotToolbar.innerHTML = `
-    <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agents Window">
+    <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agent Window">
       <span class="workflow-canvas__autopilot-icon">✦</span>
-      <span>Agents Window</span>
+      <span>Agent Window</span>
     </button>
   `;
   autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', openAgentWindowModal);
