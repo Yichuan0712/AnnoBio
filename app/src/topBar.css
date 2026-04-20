@@ -131,16 +131,3 @@
   display: block;
 }
 
-.top-bar__autopilot-btn {
-  margin-left: auto;
-  gap: 5px;
-  font-size: 13px;
-  padding: 0 14px;
-}
-
-.top-bar__autopilot-icon {
-  font-size: 11px;
-  line-height: 1;
-  transform: translateY(-0.5px);
-  display: inline-block;
-}
