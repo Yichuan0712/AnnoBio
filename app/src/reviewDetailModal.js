@@ -62,7 +62,7 @@ function isVerifyFullPass(result) {
 function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState) {
   if (streamComplete !== true) return [];
   if (String(_sug?.source || '').toLowerCase() === 'assistant') {
-    return [{ cls: 'review-suggestion-proposal-pill', text: 'Proposal', ariaLabel: 'Added via Review Assistant' }];
+    return [{ cls: 'review-suggestion-proposal-pill', text: 'Agent', ariaLabel: 'Added via Agent' }];
   }
   if (verifyState === 'verifying') {
     return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL, ariaLabel: 'Verifying…' }];
