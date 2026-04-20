@@ -733,6 +733,7 @@ export function openAddPromptModal(workflowCanvasApi) {
             <div class="dataset-meta-field">
               <label class="dataset-meta-label" for="section-editor-content">Content</label>
               <textarea id="section-editor-content" class="dataset-meta-input dataset-meta-textarea" rows="6" aria-label="Section content">${escapeHtml(section.content)}</textarea>
+              <p class="section-editor-hint">Use <code>{variable}</code> for input placeholders; <code>{{</code> for a literal brace</p>
             </div>
           </div>
           <div class="prompt-form-error section-editor-error" role="alert" aria-live="polite" hidden></div>
