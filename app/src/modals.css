@@ -946,7 +946,8 @@
 }
 
 .dataset-preview-table {
-  width: max-content;
+  width: 100%;
+  min-width: max-content;
   border-collapse: collapse;
 }
 
@@ -1532,10 +1533,27 @@
   overflow: hidden;
 }
 
+/* Four detail views share the same 3:7 split: left pane 30, right pane 70. */
+.prompt-detail-side.prompt-preview-wrap,
+.review-detail-main,
+.score-detail-main,
+.run-detail-main {
+  flex: 30 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.prompt-detail-main,
+.review-detail-preview-wrap,
+.score-detail-preview-wrap,
+.run-detail-preview-wrap {
+  flex: 70 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Main column (sections): 右侧 70%，与左侧预览栏 3:7 比例 */
 .prompt-detail-main {
-  flex: 7 1 0;
-  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -1582,10 +1600,11 @@
 
 /* Side column (inputs + schema): right border = divider between side and main */
 .prompt-detail-side.prompt-preview-wrap {
-  flex: 3 1 0;
-  min-width: 280px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border-right: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .prompt-detail-side-scroll {
@@ -1631,17 +1650,12 @@
 
 .prompt-detail-inputs-table th:nth-child(1),
 .prompt-detail-inputs-table td:nth-child(1) {
-  width: 18%;
+  width: 24%;
 }
 
 .prompt-detail-inputs-table th:nth-child(2),
 .prompt-detail-inputs-table td:nth-child(2) {
-  width: 22%;
-}
-
-.prompt-detail-inputs-table th:nth-child(3),
-.prompt-detail-inputs-table td:nth-child(3) {
-  width: 60%;
+  width: 76%;
 }
 
 .prompt-detail-inputs-table th,
@@ -2579,8 +2593,7 @@
 }
 
 .score-detail-main {
-  flex: 0 0 36%;
-  max-width: 380px;
+  flex: 30 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -3016,13 +3029,12 @@
 
 /* Score right column: Results，始终占位 */
 .score-detail-preview-wrap {
-  flex: 1 1 0;
-  min-width: 320px;
+  flex: 70 1 0;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  border-left: 1px solid var(--border);
   overflow: hidden;
 }
 
@@ -4523,7 +4535,7 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
   border-collapse: collapse;
   font-size: 12px;
   /* Match列 sticky 的 right = Review 列总占位（与宽度一致，避免两列叠字） */
-  --score-sticky-review-w: 72px;
+  --score-sticky-review-w: 78px;
 }
 
 .score-detail-results-th,
@@ -4648,7 +4660,7 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
   min-width: var(--score-sticky-review-w, 72px);
   max-width: var(--score-sticky-review-w, 72px);
   padding-left: 6px;
-  padding-right: 6px;
+  padding-right: 10px;
   text-align: center;
   vertical-align: middle;
 }
@@ -4952,8 +4964,7 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
 }
 
 .run-detail-main {
-  flex: 0 0 36%;
-  max-width: 380px;
+  flex: 30 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -5039,12 +5050,11 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
 /* Run 右侧 Results，始终显示 */
 .run-detail-preview-wrap {
   display: flex;
-  flex: 1 1 0;
-  min-width: 320px;
+  flex: 70 1 0;
+  min-width: 0;
   min-height: 0;
   flex-direction: column;
   background: var(--bg);
-  border-left: 1px solid var(--border);
   overflow: hidden;
 }
 

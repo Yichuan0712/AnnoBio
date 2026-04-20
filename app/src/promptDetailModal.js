@@ -50,18 +50,17 @@ function getSentenceAround(content, matchStart, matchEnd) {
 }
 
 /**
- * Get one row per input key, with all occurrences: { key, sections: string, sentences: string }
- * sections and sentences are newline-separated so multiple occurrences show in one table row.
+ * Get one row per input key, with all occurrences: { key, sentences: string }.
+ * Sentences are newline-separated so multiple occurrences show in one table row.
  */
-function getInputsWithSectionAndSentence(sectionsList) {
+function getInputsWithSentence(sectionsList) {
   if (!sectionsList || sectionsList.length === 0) return [];
   const re = /\{([^{}]+)\}/g;
-  const byKey = {}; // key -> { firstOrder, items: [{ sectionName, sentence }] }
+  const byKey = {}; // key -> { firstOrder, items: [{ sentence }] }
   let order = 0;
   for (let i = 0; i < sectionsList.length; i++) {
     const s = sectionsList[i];
     const content = s.content || '';
-    const sectionName = (s.name || '').trim() || 'Unnamed';
     let m;
     re.lastIndex = 0;
     while ((m = re.exec(content)) !== null) {
@@ -72,30 +71,29 @@ function getInputsWithSectionAndSentence(sectionsList) {
       if (!key) continue;
       if (!byKey[key]) byKey[key] = { firstOrder: order++, items: [] };
       const sentence = getSentenceAround(content, m.index, m.index + m[0].length);
-      byKey[key].items.push({ sectionName, sentence });
+      byKey[key].items.push({ sentence });
     }
   }
   const keysOrdered = Object.keys(byKey).sort((a, b) => byKey[a].firstOrder - byKey[b].firstOrder);
   return keysOrdered.map((key) => {
     const items = byKey[key].items;
-    const sections = items.map((it) => it.sectionName).join('\n');
     const sentences = items.map((it) => it.sentence).join('\n');
-    return { key, sections, sentences };
+    return { key, sentences };
   });
 }
 
 function inputsToViewHtml(sectionsList) {
-  const rows = getInputsWithSectionAndSentence(sectionsList);
+  const rows = getInputsWithSentence(sectionsList);
   if (rows.length === 0) return '<p class="prompt-detail-placeholder">No inputs.</p>';
   const tbody = rows
     .map(
       (r) =>
-        `<tr><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sections)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences)}</td></tr>`
+        `<tr><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences)}</td></tr>`
     )
     .join('');
   return `<div class="prompt-detail-inputs-table-wrap">
   <table class="prompt-detail-inputs-table" aria-readonly="true">
-    <thead><tr><th>Input</th><th>Section</th><th>Sentence</th></tr></thead>
+    <thead><tr><th>Input</th><th>Sentence</th></tr></thead>
     <tbody>${tbody}</tbody>
   </table>
 </div>`;

@@ -47,6 +47,7 @@ import {
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { showAlert, showConfirm } from './alertModal.js';
+import { openAgentWindowModal } from './agentWindowModal.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = 'http://localhost:8000';
@@ -2291,6 +2292,7 @@ export function buildWorkflowCanvas(root) {
       <span>Agents Window</span>
     </button>
   `;
+  autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', openAgentWindowModal);
   canvasControlsStack.appendChild(autopilotToolbar);
 
   const zoomToolbar = document.createElement('div');
