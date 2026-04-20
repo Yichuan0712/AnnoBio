@@ -2220,20 +2220,9 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
           </div>
           <div class="review-detail-prompt-footer" id="review-detail-prompt-footer"></div>
         </div>
-        <div class="review-detail-third-column">
-          <h3 class="review-detail-preview-title">Review assistant</h3>
-          <div class="review-assistant-chat-wrap">
-            <div class="review-assistant-messages" id="review-detail-assistant-messages"></div>
-            <div class="review-assistant-clear-bar">
-              <button type="button" class="review-assistant-clear-btn" aria-label="Clear chat history">Clear chat history</button>
-            </div>
-            <div class="review-assistant-input-wrap">
-              <div class="review-assistant-input-inner">
-                <textarea class="review-assistant-input" id="review-detail-assistant-input" placeholder="Ask anything" rows="2"></textarea>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Review Assistant chat 栏已移除。原为右侧第三列，供用户通过内置 chatbot 添加/删除 prompt 建议。
+             相关业务逻辑（parseAssistantSuggestions、parseAssistantRemoveSuggestions、removeSuggestionBy* 等）
+             已予以保留，待未来外部 AI agent 接管时复用。 -->
       </div>
     </div>
   `;
@@ -2496,6 +2485,26 @@ async function buildReviewAssistantContext(getPayload, getReviewResult) {
   lines.push('Stay focused ONLY on improving the current prompt. Answer directly and solve problems. Do not describe your context or internal structure to the user. If the user asks something unrelated to this prompt, briefly redirect to prompt improvement.');
   return lines.join('\n');
 }
+
+// ---------------------------------------------------------------------------
+// Legacy Review Assistant — 业务逻辑保留区
+//
+// 原第三栏为内置 chatbot（Review Assistant），允许用户通过对话向 Suggestions 列表
+// 添加或删除 prompt 编辑条目（[ASSISTANT_SUGGESTION] / [ASSISTANT_REMOVE_SUGGESTION]
+// 标记块协议）。该 UI 栏已于布局中移除，但下方的纯函数逻辑完整保留，
+// 待未来外部 AI agent 接管 Review 页面操作时直接复用，无需重写。
+//
+// 保留函数清单：
+//   parseAssistantSuggestions          — 解析 LLM 返回的 ADD 块，生成 suggestion 对象
+//   parseAssistantRemoveSuggestions    — 解析 LLM 返回的 REMOVE 块
+//   isPipelineLockedSuggestionItem     — 判断条目是否为 pipeline 锁定（不可删）
+//   removeSuggestionByIdFromState      — 按 suggestion_id 从 state 中删除条目
+//   removeSuggestionByGlobalIndexFromState — 按全局序号删除条目
+//   stripAssistantSuggestionBlocks     — 清理标记块用于纯文本展示
+//   reviewAssistantRemoveOutcomeMessage — 生成删除操作的结果提示文案
+//   buildReviewAssistantContext        — 构建发送给 LLM 的上下文快照
+//   initReviewAssistantChat            — 原 chat UI 初始化（DOM 元素不存在时安全 no-op）
+// ---------------------------------------------------------------------------
 
 /** Parse [ASSISTANT_SUGGESTION]...[/ASSISTANT_SUGGESTION] blocks from assistant response. */
 function parseAssistantSuggestions(text, dataRoot) {
