@@ -53,7 +53,7 @@ function setMaximized(overlay, maximized) {
 }
 
 function addMaximizeButton(overlay) {
-  if (overlay.classList.contains('modal-overlay--alert')) return;
+  if (overlay.classList.contains('modal-overlay--alert') || overlay.classList.contains('modal-overlay--no-maximize')) return;
   const header = overlay.querySelector('.modal-header');
   const closeBtn = overlay.querySelector('.modal-close');
   if (!header || !closeBtn || overlay.querySelector('.modal-maximize')) return;
