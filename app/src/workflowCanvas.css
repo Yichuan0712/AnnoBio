@@ -37,6 +37,42 @@
   background-size: 24px 24px;
 }
 
+.workflow-canvas__autopilot-toolbar {
+  display: flex;
+}
+
+.workflow-canvas__autopilot-btn {
+  flex: 1;
+  height: 30px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 6px);
+  box-shadow: 0 2px 6px var(--shadow);
+  cursor: pointer;
+  font-family: inherit;
+  transition: box-shadow 0.12s, background 0.12s;
+}
+
+.workflow-canvas__autopilot-btn:hover {
+  background: var(--hover);
+  box-shadow: 0 3px 10px var(--shadow);
+}
+
+.workflow-canvas__autopilot-icon {
+  font-size: 11px;
+  line-height: 1;
+  transform: translateY(-0.5px);
+  display: inline-block;
+}
+
 .workflow-canvas__controls-stack {
   position: absolute;
   right: 12px;

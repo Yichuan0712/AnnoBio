@@ -95,13 +95,6 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
   settingsBtn.appendChild(settingsDrop);
   bar.appendChild(settingsBtn);
 
-  const autopilotBtn = document.createElement('button');
-  autopilotBtn.type = 'button';
-  autopilotBtn.className = 'menu-item top-bar__autopilot-btn';
-  autopilotBtn.setAttribute('aria-label', 'Open Autopilot');
-  autopilotBtn.innerHTML = `<span class="top-bar__autopilot-icon">✦</span> Autopilot`;
-  bar.appendChild(autopilotBtn);
-
   root.insertBefore(bar, root.firstChild);
 
   function setSaveAsEnabled(enabled) {

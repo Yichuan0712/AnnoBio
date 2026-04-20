@@ -2283,6 +2283,16 @@ export function buildWorkflowCanvas(root) {
   const canvasControlsStack = document.createElement('div');
   canvasControlsStack.className = 'workflow-canvas__controls-stack';
 
+  const autopilotToolbar = document.createElement('div');
+  autopilotToolbar.className = 'workflow-canvas__autopilot-toolbar';
+  autopilotToolbar.innerHTML = `
+    <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agents Window">
+      <span class="workflow-canvas__autopilot-icon">✦</span>
+      <span>Agents Window</span>
+    </button>
+  `;
+  canvasControlsStack.appendChild(autopilotToolbar);
+
   const zoomToolbar = document.createElement('div');
   zoomToolbar.className = 'workflow-canvas__zoom-toolbar';
   zoomToolbar.setAttribute('role', 'toolbar');
