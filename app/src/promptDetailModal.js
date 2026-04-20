@@ -1,3 +1,5 @@
+import { attachModalPaneToggle } from './paneToggleButton.js';
+
 /**
  * Prompt detail modal: view/edit name, description, sections, output schema.
  * @param {{ name?: string, note?: string, sections?: Array<{name:string,content:string}>, node?: HTMLElement | null, isPromptNameAlreadyUsed?: (name: string, excludeNodeId?: string | null) => boolean }} options
@@ -1180,6 +1182,17 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
   if (schemaBtnEdit) {
     schemaBtnEdit.addEventListener('click', () => openEditSchemaOverlay());
   }
+
+  const promptPaneToggle = attachModalPaneToggle({
+    overlay,
+    isCollapsed: () => overlay.classList.contains('modal-overlay--left-pane-collapsed'),
+    onToggle: () => {
+      overlay.classList.toggle('modal-overlay--left-pane-collapsed');
+      promptPaneToggle.update();
+    },
+    expandedLabel: 'Hide prompt inputs panel',
+    collapsedLabel: 'Show prompt inputs panel',
+  });
 
   overlay.querySelector('.modal-close').addEventListener('click', () => {
     overlay.remove();
