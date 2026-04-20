@@ -2280,6 +2280,9 @@ export function buildWorkflowCanvas(root) {
     zoomOuter.style.height = `${height * zoomLevel}px`;
   }
 
+  const canvasControlsStack = document.createElement('div');
+  canvasControlsStack.className = 'workflow-canvas__controls-stack';
+
   const zoomToolbar = document.createElement('div');
   zoomToolbar.className = 'workflow-canvas__zoom-toolbar';
   zoomToolbar.setAttribute('role', 'toolbar');
@@ -2305,7 +2308,9 @@ export function buildWorkflowCanvas(root) {
     updateContentSize();
     updateZoomLabel();
   });
-  canvas.appendChild(zoomToolbar);
+
+  canvasControlsStack.appendChild(zoomToolbar);
+  canvas.appendChild(canvasControlsStack);
 
   scrollWrapper.addEventListener('wheel', (e) => {
     if (!e.ctrlKey && !e.metaKey) return;
