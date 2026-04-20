@@ -117,7 +117,6 @@
 }
 
 .agent-window__main-header {
-  position: relative;
   padding: 12px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
@@ -130,35 +129,6 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text);
-}
-
-.agent-window__sidebar-toggle {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: none;
-  color: var(--text-muted);
-  font-size: 16px;
-  line-height: 1;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.agent-window__sidebar-toggle svg {
-  display: block;
-}
-
-.agent-window__sidebar-toggle:hover {
-  color: var(--text);
-  background: var(--hover);
 }
 
 .agent-window__content {

@@ -5,6 +5,7 @@
 
 import { showAlert } from './alertModal.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
+import { attachModalPaneToggle } from './paneToggleButton.js';
 import { extractInputFieldsFromSections } from './promptDetailModal.js';
 import { computeGreedyRunToGtPairing, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import {
@@ -3525,6 +3526,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
+  const scorePaneToggle = attachModalPaneToggle({
+    overlay,
+    isCollapsed: () => overlay.classList.contains('modal-overlay--left-pane-collapsed'),
+    onToggle: () => {
+      overlay.classList.toggle('modal-overlay--left-pane-collapsed');
+      scorePaneToggle.update();
+    },
+    expandedLabel: 'Hide scoring setup panel',
+    collapsedLabel: 'Show scoring setup panel',
+  });
 
   updateTriggerDisplay();
   updateScoreNodeBorder();

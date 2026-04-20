@@ -1,3 +1,5 @@
+import { attachModalPaneToggle } from './paneToggleButton.js';
+
 const MOCK_CHATS = [
   {
     id: 'new-chat',
@@ -64,48 +66,6 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str == null ? '' : String(str);
   return div.innerHTML;
-}
-
-function createSidebarToggleIcon(collapsed) {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 16 16');
-  svg.setAttribute('width', '14');
-  svg.setAttribute('height', '14');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.4');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.setAttribute('aria-hidden', 'true');
-
-  const outer = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-  outer.setAttribute('x', '2');
-  outer.setAttribute('y', '3');
-  outer.setAttribute('width', '12');
-  outer.setAttribute('height', '10');
-  outer.setAttribute('rx', '0.6');
-  svg.appendChild(outer);
-
-  if (collapsed) {
-    const line1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    line1.setAttribute('d', 'M5.5 6.25h5');
-    svg.appendChild(line1);
-    const line2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    line2.setAttribute('d', 'M5.5 9.75h5');
-    svg.appendChild(line2);
-  } else {
-    const divider = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    divider.setAttribute('d', 'M5.5 3.75v8.5');
-    svg.appendChild(divider);
-    const line1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    line1.setAttribute('d', 'M8 6.25h3.5');
-    svg.appendChild(line1);
-    const line2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    line2.setAttribute('d', 'M8 9.75h3.5');
-    svg.appendChild(line2);
-  }
-
-  return svg;
 }
 
 function createSidebarItem(chat, isActive) {
@@ -178,7 +138,6 @@ export function openAgentWindowModal() {
         </aside>
         <section class="agent-window__main">
           <div class="agent-window__main-header">
-            <button type="button" class="agent-window__sidebar-toggle" aria-label="Hide agents panel" aria-pressed="false"></button>
             <p class="agent-window__main-label">Agent</p>
           </div>
           <div class="agent-window__content"></div>
@@ -201,17 +160,9 @@ export function openAgentWindowModal() {
   const contentEl = overlay.querySelector('.agent-window__content');
   const mainLabelEl = overlay.querySelector('.agent-window__main-label');
   const composerInputEl = overlay.querySelector('.agent-window__composer-input');
-  const sidebarToggleEl = overlay.querySelector('.agent-window__sidebar-toggle');
 
   function setSidebarCollapsed(collapsed) {
     overlay.classList.toggle('agent-window-overlay--sidebar-collapsed', collapsed);
-    if (sidebarToggleEl) {
-      sidebarToggleEl.innerHTML = '';
-      sidebarToggleEl.appendChild(createSidebarToggleIcon(collapsed));
-      sidebarToggleEl.setAttribute('aria-label', collapsed ? 'Show agents panel' : 'Hide agents panel');
-      sidebarToggleEl.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
-      sidebarToggleEl.title = collapsed ? 'Show agents panel' : 'Hide agents panel';
-    }
   }
 
   function autoResizeComposer() {
@@ -240,6 +191,16 @@ export function openAgentWindowModal() {
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
+  const agentPaneToggle = attachModalPaneToggle({
+    overlay,
+    isCollapsed: () => overlay.classList.contains('agent-window-overlay--sidebar-collapsed'),
+    onToggle: () => {
+      setSidebarCollapsed(!overlay.classList.contains('agent-window-overlay--sidebar-collapsed'));
+      agentPaneToggle.update();
+    },
+    expandedLabel: 'Hide agents panel',
+    collapsedLabel: 'Show agents panel',
+  });
   chatListEl.addEventListener('click', (e) => {
     const newChatBtn = e.target.closest('[data-action="new-chat"]');
     if (newChatBtn) {
@@ -268,14 +229,12 @@ export function openAgentWindowModal() {
     activeChatId = button.getAttribute('data-chat-id') || chats[0].id;
     render();
   });
-  sidebarToggleEl?.addEventListener('click', () => {
-    setSidebarCollapsed(!overlay.classList.contains('agent-window-overlay--sidebar-collapsed'));
-  });
   composerInputEl?.addEventListener('input', autoResizeComposer);
 
   document.addEventListener('keydown', onKeyDown);
   document.body.appendChild(overlay);
-  setSidebarCollapsed(false);
+  setSidebarCollapsed(true);
+  agentPaneToggle.update();
   render();
   autoResizeComposer();
 }

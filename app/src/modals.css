@@ -81,11 +81,13 @@
   margin-left: auto;
 }
 
+.modal-header-actions .modal-pane-toggle,
 .modal-header-actions .modal-maximize,
 .modal-header-actions .modal-close {
   margin: 0;
 }
 
+.modal-pane-toggle,
 .modal-maximize {
   width: 28px;
   height: 28px;
@@ -101,9 +103,15 @@
   cursor: pointer;
 }
 
+.modal-pane-toggle:hover,
 .modal-maximize:hover {
   color: var(--text);
   background: var(--hover);
+}
+
+.modal-pane-toggle svg,
+.modal-maximize svg {
+  display: block;
 }
 
 .modal-overlay--maximized {
@@ -1550,6 +1558,20 @@
   flex: 70 1 0;
   min-width: 0;
   min-height: 0;
+}
+
+.modal-overlay--left-pane-collapsed .prompt-detail-side.prompt-preview-wrap,
+.modal-overlay--left-pane-collapsed .review-detail-main,
+.modal-overlay--left-pane-collapsed .score-detail-main,
+.modal-overlay--left-pane-collapsed .run-detail-main {
+  display: none;
+}
+
+.modal-overlay--left-pane-collapsed .prompt-detail-main,
+.modal-overlay--left-pane-collapsed .review-detail-preview-wrap,
+.modal-overlay--left-pane-collapsed .score-detail-preview-wrap,
+.modal-overlay--left-pane-collapsed .run-detail-preview-wrap {
+  flex: 1 1 0;
 }
 
 /* Main column (sections): 右侧 70%，与左侧预览栏 3:7 比例 */
@@ -4326,7 +4348,10 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
 .score-detail-results-table .score-detail-results-th--row-num,
 .score-detail-results-table .score-detail-results-td--row-num {
   width: 1%;
-  min-width: 2.5em;
+  min-width: 4.5em;
+  max-width: none !important;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 /* 块分割线：三处完全统一（2px，颜色加深便于区分）——# 后、ground truth/Run 间、Run/Result 间 */
@@ -4599,7 +4624,11 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
 
 .score-detail-results-th--idx,
 .score-detail-results-td--idx {
-  width: 2.5em;
+  width: 1%;
+  min-width: 4.5em;
+  max-width: none !important;
+  overflow: visible;
+  text-overflow: clip;
   text-align: right;
 }
 
@@ -5495,7 +5524,7 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
   background: var(--bg);
   border: 1px solid var(--border);
   /* 两档：超短=仅列表「#」；较短=Input:# / Output:#（max 120px 与内容列一致） */
-  --run-detail-col-w-tight: 2.5em;
+  --run-detail-col-w-tight: 4.5em;
 }
 
 .run-detail-results-table th,
@@ -5552,14 +5581,14 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
 /* 超短：列表「#」 */
 .run-detail-results-table .run-detail-th--row-display-num,
 .run-detail-results-table .run-detail-td--row-display-num {
-  width: var(--run-detail-col-w-tight);
+  width: 1%;
   min-width: var(--run-detail-col-w-tight);
-  max-width: var(--run-detail-col-w-tight) !important;
+  max-width: none !important;
   box-sizing: border-box;
   text-align: right;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 /* 较短：Input: # / Input ...（折叠）/ Output: # / Output ...（折叠），与索引列同为右对齐，顶格 120px */
@@ -5598,7 +5627,7 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
   font-style: italic;
   color: var(--text-muted);
   font-weight: 500;
-  font-size: 0.92em;
+  font-size: 12px;
 }
 
 /* 表头默认 13px / 600 优先级更高，单独压低折叠列样式 */
@@ -5628,6 +5657,21 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
   color: var(--text);
   background: var(--hover);
 }
+
+/* 折叠占位列表头统一回到同一套小号斜体，避免被上面的普通表头字号重新覆盖 */
+.run-detail-results-table thead th.run-detail-bracket-collapsed,
+.score-detail-results-table thead th.run-detail-bracket-collapsed {
+  color: var(--text-muted);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.run-detail-results-table tbody td.run-detail-bracket-collapsed,
+.score-detail-results-table tbody td.run-detail-bracket-collapsed {
+  font-size: 12px;
+}
+
 .run-detail-results-table .run-detail-th--bracket-toggle {
   cursor: pointer;
   user-select: none;
