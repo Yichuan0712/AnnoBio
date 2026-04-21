@@ -47,6 +47,7 @@ import {
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { showAlert, showConfirm } from './alertModal.js';
+import { openAgentWindowModal } from './agentWindowModal.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = 'http://localhost:8000';
@@ -2280,6 +2281,20 @@ export function buildWorkflowCanvas(root) {
     zoomOuter.style.height = `${height * zoomLevel}px`;
   }
 
+  const canvasControlsStack = document.createElement('div');
+  canvasControlsStack.className = 'workflow-canvas__controls-stack';
+
+  const autopilotToolbar = document.createElement('div');
+  autopilotToolbar.className = 'workflow-canvas__autopilot-toolbar';
+  autopilotToolbar.innerHTML = `
+    <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agent Window">
+      <span class="workflow-canvas__autopilot-icon">✦</span>
+      <span>Agent Window</span>
+    </button>
+  `;
+  autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', openAgentWindowModal);
+  canvasControlsStack.appendChild(autopilotToolbar);
+
   const zoomToolbar = document.createElement('div');
   zoomToolbar.className = 'workflow-canvas__zoom-toolbar';
   zoomToolbar.setAttribute('role', 'toolbar');
@@ -2305,7 +2320,9 @@ export function buildWorkflowCanvas(root) {
     updateContentSize();
     updateZoomLabel();
   });
-  canvas.appendChild(zoomToolbar);
+
+  canvasControlsStack.appendChild(zoomToolbar);
+  canvas.appendChild(canvasControlsStack);
 
   scrollWrapper.addEventListener('wheel', (e) => {
     if (!e.ctrlKey && !e.metaKey) return;

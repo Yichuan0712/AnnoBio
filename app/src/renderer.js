@@ -22,6 +22,7 @@ import './index.css';
 import './topBar.css';
 import './workflowCanvas.css';
 import './modals.css';
+import './agentWindow.css';
 import { getStoredTheme, setTheme } from './theme.js';
 import { buildTopBar } from './topBar.js';
 import { buildWorkflowCanvas } from './workflowCanvas.js';

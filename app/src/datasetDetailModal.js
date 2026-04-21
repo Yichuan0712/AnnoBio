@@ -149,6 +149,56 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   const summaryEl = overlay.querySelector('.wd-summary');
   const tableWrap = overlay.querySelector('.working-dataset-table-wrap');
 
+  function getTableLayoutMetrics() {
+    const rowNumWidth = 40;
+    const widths = headers.map((_, colIdx) => Math.max(60, (columnWidths[colIdx] ?? 140)));
+    if (!tableWrap || headers.length === 0) {
+      return {
+        rowNumWidth,
+        widths,
+        tableWidth: rowNumWidth + widths.reduce((sum, width) => sum + width, 0),
+      };
+    }
+    const wrapStyles = window.getComputedStyle(tableWrap);
+    const innerWidth = Math.max(
+      0,
+      tableWrap.clientWidth
+        - (parseFloat(wrapStyles.paddingLeft) || 0)
+        - (parseFloat(wrapStyles.paddingRight) || 0),
+    );
+    const naturalWidth = rowNumWidth + widths.reduce((sum, width) => sum + width, 0);
+    if (naturalWidth >= innerWidth || innerWidth <= 0) {
+      return { rowNumWidth, widths, tableWidth: naturalWidth };
+    }
+    const extra = innerWidth - naturalWidth;
+    const evenExtra = Math.floor(extra / headers.length);
+    const remainder = extra - (evenExtra * headers.length);
+    const stretchedWidths = widths.map((width, idx) => width + evenExtra + (idx < remainder ? 1 : 0));
+    return { rowNumWidth, widths: stretchedWidths, tableWidth: innerWidth };
+  }
+
+  function applyTableLayout() {
+    const table = overlay.querySelector('.working-dataset-edit-table');
+    if (!table) return;
+    let colgroup = table.querySelector('colgroup');
+    if (!colgroup) {
+      colgroup = document.createElement('colgroup');
+      table.insertBefore(colgroup, table.firstChild);
+    }
+    const { rowNumWidth, widths, tableWidth } = getTableLayoutMetrics();
+    colgroup.innerHTML = '';
+    const colNum = document.createElement('col');
+    colNum.style.width = `${rowNumWidth}px`;
+    colgroup.appendChild(colNum);
+    headers.forEach((_, colIdx) => {
+      const col = document.createElement('col');
+      col.dataset.colIndex = String(colIdx);
+      col.style.width = `${widths[colIdx]}px`;
+      colgroup.appendChild(col);
+    });
+    table.style.width = `${Math.max(tableWidth, rowNumWidth)}px`;
+  }
+
   const tableTooltip = document.createElement('div');
   tableTooltip.className = 'prompt-detail-schema-tooltip';
   tableTooltip.setAttribute('role', 'tooltip');
@@ -219,23 +269,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       while (columnWidths.length < headers.length) columnWidths.push(140);
       if (columnWidths.length > headers.length) columnWidths = columnWidths.slice(0, headers.length);
     }
-    let colgroup = table?.querySelector('colgroup');
-    if (table) {
-      if (!colgroup) {
-        colgroup = document.createElement('colgroup');
-        table.insertBefore(colgroup, table.firstChild);
-      }
-      colgroup.innerHTML = '';
-      const colNum = document.createElement('col');
-      colNum.style.width = '40px';
-      colgroup.appendChild(colNum);
-      headers.forEach((_, colIdx) => {
-        const col = document.createElement('col');
-        col.dataset.colIndex = String(colIdx);
-        col.style.width = `${Math.max(60, (columnWidths[colIdx] ?? 140))}px`;
-        colgroup.appendChild(col);
-      });
-    }
+    applyTableLayout();
 
     // Header row: # + editable headers (click header to select column for delete) + column resize handles
     theadRow.innerHTML = '';
@@ -275,13 +309,12 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         e.stopPropagation();
         const startX = e.clientX;
         const startW = columnWidths[colIdx] ?? 140;
-        const col = table?.querySelector(`colgroup col[data-col-index="${colIdx}"]`);
         document.body.classList.add('wd-col-resizing');
         const onMove = (moveE) => {
           const dx = moveE.clientX - startX;
           const newW = Math.max(60, startW + dx);
           columnWidths[colIdx] = newW;
-          if (col) col.style.width = `${newW}px`;
+          applyTableLayout();
         };
         const onUp = () => {
           document.body.classList.remove('wd-col-resizing');
@@ -374,13 +407,12 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
           e.stopPropagation();
           const startX = e.clientX;
           const startW = columnWidths[colIdx] ?? 140;
-          const col = table?.querySelector(`colgroup col[data-col-index="${colIdx}"]`);
           document.body.classList.add('wd-col-resizing');
           const onMove = (moveE) => {
             const dx = moveE.clientX - startX;
             const newW = Math.max(60, startW + dx);
             columnWidths[colIdx] = newW;
-            if (col) col.style.width = `${newW}px`;
+          applyTableLayout();
           };
           const onUp = () => {
             document.body.classList.remove('wd-col-resizing');
@@ -549,6 +581,18 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       render();
     });
   }
+  let layoutFrame = 0;
+  const scheduleTableLayout = () => {
+    if (layoutFrame) cancelAnimationFrame(layoutFrame);
+    layoutFrame = requestAnimationFrame(() => {
+      layoutFrame = 0;
+      applyTableLayout();
+    });
+  };
+  const resizeObserver = typeof ResizeObserver === 'function' && tableWrap
+    ? new ResizeObserver(scheduleTableLayout)
+    : null;
+  resizeObserver?.observe(tableWrap);
   rowsPerPageSelect.addEventListener('change', () => {
     rowsPerPage = parseInt(rowsPerPageSelect.value, 10);
     currentPage = 1;
@@ -577,6 +621,8 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
 
   function close() {
     persistContent();
+    resizeObserver?.disconnect();
+    if (layoutFrame) cancelAnimationFrame(layoutFrame);
     overlay.remove();
     document.body.style.overflow = '';
   }
