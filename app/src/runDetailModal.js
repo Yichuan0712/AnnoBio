@@ -832,7 +832,7 @@ export function openRunDetailModal({
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
         fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
       ]);
-      (list || []).forEach((c) => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name || c.llm || c.id; llmSelectEl.appendChild(o); });
+      (list || []).forEach((c) => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.model || c.llm || c.id; llmSelectEl.appendChild(o); });
       if (!selectedCredentialId && settings) {
         const defaultId = (settings.default_run_credential_id || '').trim();
         if (defaultId && (list || []).some((c) => c.id === defaultId)) selectedCredentialId = defaultId;
