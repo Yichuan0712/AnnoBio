@@ -491,6 +491,16 @@ class Phase1LlmOutput(BaseModel):
         default="",
         description="Short English snake_case or hyphen tag for grouping similar failures.",
     )
+    gt_suspect_note: str = Field(
+        default="",
+        description=(
+            "Leave empty in the vast majority of cases. "
+            "Set only if—after carefully re-examining the model output, the expected output, and the prompt—"
+            "you remain highly confident the model output is actually correct and the ground truth contains an error. "
+            "State the specific evidence concisely: what the model produced, why it is correct, and what is wrong in the GT. "
+            "If there is any ambiguity or room for doubt, leave empty."
+        ),
+    )
 
 
 class PerRowOpinion(BaseModel):
@@ -504,6 +514,7 @@ class PerRowOpinion(BaseModel):
     issue_summary: str = Field(..., description="Diagnosis from Phase 1 LLM")
     rough_modification_opinion: str = Field(..., description="Rough fix idea from Phase 1 LLM")
     problem_category_hint: str = Field(default="", description="Grouping tag from Phase 1 LLM")
+    gt_suspect_note: str = Field(default="", description="Non-empty only when Phase 1 LLM suspects GT is wrong (display-only; not forwarded to Phase 1.5 or Phase 2).")
 
 
 class PromptEditLlm(BaseModel):
@@ -951,10 +962,11 @@ def _build_phase1_prompt_for_input_group(*, prompt_text: str, group_rows: list[A
 - **issue_summary**: Describe the failure; reference the expected output when relevant; note missing or extra extractive items when relevant.
 - **rough_modification_opinion**: Concrete prompt-level changes only; do not paste a full rewritten prompt.
 - **problem_category_hint**: Short grouping tag in English snake_case or hyphen form.
+- **gt_suspect_note**: **Default: empty string.** Only set this if—after carefully reconsidering the model output, the expected output, and the prompt—you remain highly confident that the **model output is actually correct** and the **ground truth is the error**. State the specific evidence: what the model produced, why it is correct, and what specifically is wrong in the ground truth. If there is any ambiguity or room for doubt, leave this empty. Do not use this to excuse genuine prompt failures.
 
 When **Model output** is missing or empty, infer how the **prompt template** should be clearer or stricter so extraction is **more complete and reliable**—not generic “always emit output” unless the template truly lacks required fields or shape. When **Expected output** is missing or empty, still reason about tightening or clarifying the **prompt** so behavior is **more precise** where scoring is possible. When both sides have content, treat **extra** model items vs GT as over-generation (tighten constraints) and **missing** items as **under-spec**—including **partial** under-coverage (**fewer** extractive items, rows, or relations than expected, not only a wholly empty model section): say what is missing vs expected and how the prompt should be expanded, clarified, or exemplified. Never mention internal code, class, or schema names (e.g. Python types) in any field.
 
-Return only those four fields.
+Return only those five fields.
 """
 
 
@@ -1363,6 +1375,7 @@ def run_review_pipeline(
                     "issue_summary": op.issue_summary,
                     "rough_modification_opinion": op.rough_modification_opinion,
                     "problem_category_hint": op.problem_category_hint or "",
+                    "gt_suspect_note": op.gt_suspect_note or "",
                 },
             }
         )

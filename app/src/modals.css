@@ -81,11 +81,13 @@
   margin-left: auto;
 }
 
+.modal-header-actions .modal-pane-toggle,
 .modal-header-actions .modal-maximize,
 .modal-header-actions .modal-close {
   margin: 0;
 }
 
+.modal-pane-toggle,
 .modal-maximize {
   width: 28px;
   height: 28px;
@@ -101,9 +103,15 @@
   cursor: pointer;
 }
 
+.modal-pane-toggle:hover,
 .modal-maximize:hover {
   color: var(--text);
   background: var(--hover);
+}
+
+.modal-pane-toggle svg,
+.modal-maximize svg {
+  display: block;
 }
 
 .modal-overlay--maximized {
@@ -946,7 +954,8 @@
 }
 
 .dataset-preview-table {
-  width: max-content;
+  width: 100%;
+  min-width: max-content;
   border-collapse: collapse;
 }
 
@@ -1532,10 +1541,41 @@
   overflow: hidden;
 }
 
-/* Main column (sections): no outer border so no extra right edge */
-.prompt-detail-main {
-  flex: 1;
+/* Four detail views share the same 3:7 split: left pane 30, right pane 70. */
+.prompt-detail-side.prompt-preview-wrap,
+.review-detail-main,
+.score-detail-main,
+.run-detail-main {
+  flex: 30 1 0;
   min-width: 0;
+  min-height: 0;
+}
+
+.prompt-detail-main,
+.review-detail-preview-wrap,
+.score-detail-preview-wrap,
+.run-detail-preview-wrap {
+  flex: 70 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.modal-overlay--left-pane-collapsed .prompt-detail-side.prompt-preview-wrap,
+.modal-overlay--left-pane-collapsed .review-detail-main,
+.modal-overlay--left-pane-collapsed .score-detail-main,
+.modal-overlay--left-pane-collapsed .run-detail-main {
+  display: none;
+}
+
+.modal-overlay--left-pane-collapsed .prompt-detail-main,
+.modal-overlay--left-pane-collapsed .review-detail-preview-wrap,
+.modal-overlay--left-pane-collapsed .score-detail-preview-wrap,
+.modal-overlay--left-pane-collapsed .run-detail-preview-wrap {
+  flex: 1 1 0;
+}
+
+/* Main column (sections): 右侧 70%，与左侧预览栏 3:7 比例 */
+.prompt-detail-main {
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -1582,10 +1622,11 @@
 
 /* Side column (inputs + schema): right border = divider between side and main */
 .prompt-detail-side.prompt-preview-wrap {
-  flex: 1 1 0;
-  min-width: 320px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border-right: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .prompt-detail-side-scroll {
@@ -1606,7 +1647,7 @@
 }
 
 .prompt-detail-side .prompt-detail-inputs-content.prompt-preview {
-  flex: 1 1 0;
+  flex: 4 1 0;
   min-height: 100px;
   padding: 16px;
   overflow: auto;
@@ -1631,17 +1672,12 @@
 
 .prompt-detail-inputs-table th:nth-child(1),
 .prompt-detail-inputs-table td:nth-child(1) {
-  width: 18%;
+  width: 24%;
 }
 
 .prompt-detail-inputs-table th:nth-child(2),
 .prompt-detail-inputs-table td:nth-child(2) {
-  width: 22%;
-}
-
-.prompt-detail-inputs-table th:nth-child(3),
-.prompt-detail-inputs-table td:nth-child(3) {
-  width: 60%;
+  width: 76%;
 }
 
 .prompt-detail-inputs-table th,
@@ -1670,7 +1706,7 @@
 }
 
 .prompt-detail-side .prompt-detail-schema-wrap {
-  flex: 1 1 0;
+  flex: 6 1 0;
   min-height: 100px;
   display: flex;
   flex-direction: column;
@@ -1981,28 +2017,30 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
-  font-size: 12px;
-  color: var(--text);
-  background: var(--bg-bar);
-  border: 1px solid var(--border);
-  border-radius: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  border: none;
+  border-radius: 999px;
 }
 
 .sampler-row-spec-chip-remove {
-  padding: 0 2px;
-  font-size: 14px;
+  padding: 0 1px;
+  font-size: 13px;
   line-height: 1;
   color: var(--text-muted);
   background: none;
   border: none;
   cursor: pointer;
-  border-radius: 0;
+  border-radius: 999px;
 }
 
 .sampler-row-spec-chip-remove:hover {
   color: var(--text);
-  background: var(--hover);
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
 }
 
 .sampler-row-spec-block {
@@ -2579,8 +2617,7 @@
 }
 
 .score-detail-main {
-  flex: 0 0 36%;
-  max-width: 380px;
+  flex: 30 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -3016,13 +3053,12 @@
 
 /* Score right column: Results，始终占位 */
 .score-detail-preview-wrap {
-  flex: 1 1 0;
-  min-width: 320px;
+  flex: 70 1 0;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  border-left: 1px solid var(--border);
   overflow: hidden;
 }
 
@@ -3150,9 +3186,9 @@
   background: var(--bg);
 }
 
-/* Left column: Findings — 与 Prompt sections 同底色；三列 flex29:42:29（中间 42%，左右各 29%） */
+/* Left column: Findings — 两列布局 flex30:70（原三列 29:42:29，右侧 Review Assistant chat 栏已移除） */
 .review-detail-main {
-  flex: 29 1 0;
+  flex: 30 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -3441,9 +3477,9 @@
   margin-bottom: 12px;
 }
 
-/* Middle column: Prompt sections — 占行宽 42% */
+/* Middle column: Prompt sections — 右侧 chat 栏移除后扩至 70% */
 .review-detail-preview-wrap {
-  flex: 42 1 0;
+  flex: 70 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -3821,6 +3857,33 @@
   cursor: default;
   pointer-events: none;
   user-select: none;
+}
+
+/* Dark mode: brighter text + stronger background for all pill variants */
+html.dark .review-suggestion-verify-pill,
+html.dark .review-suggestion-verifying-pill,
+html.dark .review-suggestion-finetuned-pill,
+html.dark .review-suggestion-finetune-pill,
+html.dark .review-suggestion-finetuning-pill {
+  color: #fbbf24;
+  background: color-mix(in srgb, #f59e0b 28%, transparent);
+}
+
+html.dark .review-suggestion-verified-pill,
+html.dark .review-suggestion-finetuned-pass-pill {
+  color: #4ade80;
+  background: color-mix(in srgb, #22c55e 28%, transparent);
+}
+
+html.dark .review-suggestion-proposal-pill {
+  color: #93c5fd;
+  background: color-mix(in srgb, #3b82f6 28%, transparent);
+}
+
+html.dark .review-suggestion-verify-pill--clickable:hover,
+html.dark .review-suggestion-finetune-pill--clickable:hover {
+  background: color-mix(in srgb, #f59e0b 42%, transparent);
+  color: #fcd34d;
 }
 
 /* Clickable variant – active when stream is complete and state is idle */
@@ -4287,7 +4350,10 @@
 .score-detail-results-table .score-detail-results-th--row-num,
 .score-detail-results-table .score-detail-results-td--row-num {
   width: 1%;
-  min-width: 2.5em;
+  min-width: 4.5em;
+  max-width: none !important;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 /* 块分割线：三处完全统一（2px，颜色加深便于区分）——# 后、ground truth/Run 间、Run/Result 间 */
@@ -4496,7 +4562,7 @@
   border-collapse: collapse;
   font-size: 12px;
   /* Match列 sticky 的 right = Review 列总占位（与宽度一致，避免两列叠字） */
-  --score-sticky-review-w: 72px;
+  --score-sticky-review-w: 78px;
 }
 
 .score-detail-results-th,
@@ -4560,7 +4626,11 @@
 
 .score-detail-results-th--idx,
 .score-detail-results-td--idx {
-  width: 2.5em;
+  width: 1%;
+  min-width: 4.5em;
+  max-width: none !important;
+  overflow: visible;
+  text-overflow: clip;
   text-align: right;
 }
 
@@ -4621,7 +4691,7 @@
   min-width: var(--score-sticky-review-w, 72px);
   max-width: var(--score-sticky-review-w, 72px);
   padding-left: 6px;
-  padding-right: 6px;
+  padding-right: 10px;
   text-align: center;
   vertical-align: middle;
 }
@@ -4925,8 +4995,7 @@
 }
 
 .run-detail-main {
-  flex: 0 0 36%;
-  max-width: 380px;
+  flex: 30 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -5012,12 +5081,11 @@
 /* Run 右侧 Results，始终显示 */
 .run-detail-preview-wrap {
   display: flex;
-  flex: 1 1 0;
-  min-width: 320px;
+  flex: 70 1 0;
+  min-width: 0;
   min-height: 0;
   flex-direction: column;
   background: var(--bg);
-  border-left: 1px solid var(--border);
   overflow: hidden;
 }
 
@@ -5458,7 +5526,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   /* 两档：超短=仅列表「#」；较短=Input:# / Output:#（max 120px 与内容列一致） */
-  --run-detail-col-w-tight: 2.5em;
+  --run-detail-col-w-tight: 4.5em;
 }
 
 .run-detail-results-table th,
@@ -5515,14 +5583,14 @@
 /* 超短：列表「#」 */
 .run-detail-results-table .run-detail-th--row-display-num,
 .run-detail-results-table .run-detail-td--row-display-num {
-  width: var(--run-detail-col-w-tight);
+  width: 1%;
   min-width: var(--run-detail-col-w-tight);
-  max-width: var(--run-detail-col-w-tight) !important;
+  max-width: none !important;
   box-sizing: border-box;
   text-align: right;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 /* 较短：Input: # / Input ...（折叠）/ Output: # / Output ...（折叠），与索引列同为右对齐，顶格 120px */
@@ -5561,7 +5629,7 @@
   font-style: italic;
   color: var(--text-muted);
   font-weight: 500;
-  font-size: 0.92em;
+  font-size: 12px;
 }
 
 /* 表头默认 13px / 600 优先级更高，单独压低折叠列样式 */
@@ -5591,6 +5659,21 @@
   color: var(--text);
   background: var(--hover);
 }
+
+/* 折叠占位列表头统一回到同一套小号斜体，避免被上面的普通表头字号重新覆盖 */
+.run-detail-results-table thead th.run-detail-bracket-collapsed,
+.score-detail-results-table thead th.run-detail-bracket-collapsed {
+  color: var(--text-muted);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.run-detail-results-table tbody td.run-detail-bracket-collapsed,
+.score-detail-results-table tbody td.run-detail-bracket-collapsed {
+  font-size: 12px;
+}
+
 .run-detail-results-table .run-detail-th--bracket-toggle {
   cursor: pointer;
   user-select: none;
@@ -6513,29 +6596,11 @@ body.wd-row-resizing {
   white-space: nowrap;
 }
 
-.prompt-output-field-card-edit {
-  flex-shrink: 0;
-  padding: 4px 10px;
-  font-size: 12px;
-  line-height: 1.2;
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  border-left: 1px solid var(--border);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.prompt-output-field-card-edit:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-
 .prompt-output-field-card-remove {
   flex-shrink: 0;
   padding: 4px 10px;
-  font-size: 12px;
-  line-height: 1.2;
+  font-size: 14px;
+  line-height: 1;
   color: var(--text-muted);
   background: none;
   border: none;
@@ -7064,7 +7129,6 @@ body.wd-row-resizing {
 .preview-field-name {
   font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
   flex-shrink: 0;
@@ -7119,7 +7183,7 @@ body.wd-row-resizing {
   background: var(--hover);
 }
 
-/* Section card: name only, edit + remove */
+/* Section card: click row to edit, × to remove */
 .prompt-section-card {
   display: flex;
   align-items: center;
@@ -7159,29 +7223,11 @@ body.wd-row-resizing {
   white-space: nowrap;
 }
 
-.prompt-section-card-edit {
-  flex-shrink: 0;
-  padding: 4px 10px;
-  font-size: 12px;
-  line-height: 1.2;
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  border-left: 1px solid var(--border);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.prompt-section-card-edit:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-
 .prompt-section-card-remove {
   flex-shrink: 0;
   padding: 4px 10px;
-  font-size: 12px;
-  line-height: 1.2;
+  font-size: 14px;
+  line-height: 1;
   color: var(--text-muted);
   background: none;
   border: none;
@@ -7201,8 +7247,12 @@ body.wd-row-resizing {
 }
 
 .modal-panel--section-editor {
-  min-width: min(420px, 92vw);
-  max-width: 92vw;
+  width: min(680px, 96vw);
+  min-width: min(520px, 96vw);
+  max-width: 96vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Score rule / group editor: cap width (section-editor otherwise grows with long hint text) */
@@ -7289,9 +7339,9 @@ body.wd-row-resizing {
 
 /* Edit sections popup (prompt detail): same look as Add prompt step 2 left */
 .modal-panel--edit-sections {
-  width: min(480px, 92vw);
-  min-width: min(400px, 92vw);
-  max-width: 92vw;
+  width: min(620px, 96vw);
+  min-width: min(480px, 96vw);
+  max-width: 96vw;
   max-height: 90vh;
   min-height: 320px;
   display: flex;
@@ -7342,9 +7392,9 @@ body.wd-row-resizing {
 
 /* Edit output schema popup: same structure as Add prompt step 3 left */
 .modal-panel--edit-schema {
-  width: min(560px, 92vw);
-  min-width: min(420px, 92vw);
-  max-width: 92vw;
+  width: min(700px, 96vw);
+  min-width: min(560px, 96vw);
+  max-width: 96vw;
   max-height: 90vh;
   min-height: 320px;
   display: flex;
@@ -7411,6 +7461,9 @@ body.wd-row-resizing {
 }
 
 .modal-panel--field-editor {
+  width: min(760px, 96vw);
+  min-width: min(620px, 96vw);
+  max-width: 96vw;
   max-height: 85vh;
   display: flex;
   flex-direction: column;
@@ -7424,21 +7477,47 @@ body.wd-row-resizing {
 }
 
 .modal-panel--section-editor .modal-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 20px;
+  overflow-y: auto;
 }
 
 .modal-footer-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
   margin-top: 8px;
 }
 
 .modal-panel--section-editor .section-editor-error {
   margin: 0;
+}
+
+.modal-panel--section-editor #section-editor-content {
+  min-height: 240px;
+  resize: vertical;
+}
+
+.section-editor-hint {
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.section-editor-hint code {
+  font-family: monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--hover);
+  color: var(--text);
 }
 
 /* string/number 模式下 Examples：多行，每行一个输入 + Delete */
@@ -7458,7 +7537,7 @@ body.wd-row-resizing {
 
 .field-editor-scalar-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
 }
 
@@ -7473,10 +7552,16 @@ body.wd-row-resizing {
   box-sizing: border-box;
 }
 
+.field-editor-scalar-input-wrap textarea.field-editor-scalar-inp {
+  min-height: 30px;
+  resize: vertical;
+}
+
 .field-editor-scalar-del {
   flex-shrink: 0;
   padding: 4px 10px;
   font-size: 12px;
+  line-height: 1.2;
   color: var(--text-muted);
   background: none;
   border: 1px solid var(--border);
@@ -7536,10 +7621,16 @@ body.wd-row-resizing {
   box-sizing: border-box;
 }
 
+.field-editor-element-input-wrap textarea.field-editor-element-inp {
+  min-height: 30px;
+  resize: vertical;
+}
+
 .field-editor-del-element {
   flex-shrink: 0;
   padding: 4px 10px;
   font-size: 12px;
+  line-height: 1.2;
   color: var(--text-muted);
   background: none;
   border: 1px solid var(--border);
@@ -7577,6 +7668,7 @@ body.wd-row-resizing {
 .field-editor-del-example {
   padding: 4px 10px;
   font-size: 12px;
+  line-height: 1.2;
   color: var(--text-muted);
   background: none;
   border: 1px solid var(--border);
@@ -7597,6 +7689,43 @@ body.wd-row-resizing {
 .modal-panel--section-editor .btn:hover {
   background: var(--hover);
   border-color: var(--border);
+}
+
+@media (max-width: 560px) {
+  .modal-panel--section-editor {
+    width: calc(100vw - 16px);
+    min-width: 0;
+    max-width: calc(100vw - 16px);
+  }
+
+  .modal-panel--edit-sections {
+    width: calc(100vw - 16px);
+    min-width: 0;
+    max-width: calc(100vw - 16px);
+  }
+
+  .modal-panel--edit-schema,
+  .modal-panel--field-editor {
+    width: calc(100vw - 16px);
+    min-width: 0;
+    max-width: calc(100vw - 16px);
+  }
+
+  .modal-panel--section-editor .modal-body {
+    padding: 16px;
+  }
+
+  .modal-panel--section-editor .modal-footer-actions {
+    justify-content: flex-end;
+  }
+
+  .modal-panel--section-editor .modal-footer-actions .btn {
+    max-width: 100%;
+  }
+
+  .modal-panel--section-editor #section-editor-content {
+    min-height: 180px;
+  }
 }
 
 /* Output schema key block reuses same look as section */

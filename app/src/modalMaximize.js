@@ -53,13 +53,20 @@ function setMaximized(overlay, maximized) {
 }
 
 function addMaximizeButton(overlay) {
-  if (overlay.classList.contains('modal-overlay--alert')) return;
+  if (overlay.classList.contains('modal-overlay--alert') || overlay.classList.contains('modal-overlay--no-maximize')) return;
   const header = overlay.querySelector('.modal-header');
   const closeBtn = overlay.querySelector('.modal-close');
   if (!header || !closeBtn || overlay.querySelector('.modal-maximize')) return;
 
-  const actions = document.createElement('div');
-  actions.className = 'modal-header-actions';
+  let actions = header.querySelector('.modal-header-actions');
+  if (!actions) {
+    actions = document.createElement('div');
+    actions.className = 'modal-header-actions';
+    header.appendChild(actions);
+  }
+  if (closeBtn.parentElement !== actions) {
+    actions.appendChild(closeBtn);
+  }
 
   const maximizeBtn = document.createElement('button');
   maximizeBtn.type = 'button';
@@ -71,9 +78,7 @@ function addMaximizeButton(overlay) {
     e.preventDefault();
     setMaximized(overlay, !isMaximized(overlay));
   });
-  actions.appendChild(maximizeBtn);
-  actions.appendChild(closeBtn);
-  header.appendChild(actions);
+  actions.insertBefore(maximizeBtn, closeBtn);
 }
 
 export function initModalMaximize() {
