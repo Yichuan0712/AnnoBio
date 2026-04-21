@@ -572,7 +572,7 @@
 /* Percentages sum to 100% so the table always fills the scroll area (no empty strip on the right) */
 .credentials-panel-host .credentials-table th:nth-child(1),
 .credentials-panel-host .credentials-table td:nth-child(1) {
-  width: 14%;
+  width: 34%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -581,7 +581,7 @@
 
 .credentials-panel-host .credentials-table th:nth-child(2),
 .credentials-panel-host .credentials-table td:nth-child(2) {
-  width: 13%;
+  width: 28%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -590,7 +590,7 @@
 
 .credentials-panel-host .credentials-table th:nth-child(3),
 .credentials-panel-host .credentials-table td:nth-child(3) {
-  width: 35%;
+  width: 10%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -599,15 +599,6 @@
 
 .credentials-panel-host .credentials-table th:nth-child(4),
 .credentials-panel-host .credentials-table td:nth-child(4) {
-  width: 10%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.credentials-panel-host .credentials-table th:nth-child(5),
-.credentials-panel-host .credentials-table td:nth-child(5) {
   width: 28%;
   min-width: 0;
   white-space: nowrap;
