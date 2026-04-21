@@ -58,10 +58,11 @@ function getSentenceAround(content, matchStart, matchEnd) {
 function getInputsWithSentence(sectionsList) {
   if (!sectionsList || sectionsList.length === 0) return [];
   const re = /\{([^{}]+)\}/g;
-  const byKey = {}; // key -> { firstOrder, items: [{ sentence }] }
+  const byKey = {}; // key -> { firstOrder, items: [{ sectionName, sentence }] }
   let order = 0;
   for (let i = 0; i < sectionsList.length; i++) {
     const s = sectionsList[i];
+    const sectionName = (s.name || 'Unnamed').trim() || 'Unnamed';
     const content = s.content || '';
     let m;
     re.lastIndex = 0;
@@ -73,14 +74,15 @@ function getInputsWithSentence(sectionsList) {
       if (!key) continue;
       if (!byKey[key]) byKey[key] = { firstOrder: order++, items: [] };
       const sentence = getSentenceAround(content, m.index, m.index + m[0].length);
-      byKey[key].items.push({ sentence });
+      byKey[key].items.push({ sectionName, sentence });
     }
   }
   const keysOrdered = Object.keys(byKey).sort((a, b) => byKey[a].firstOrder - byKey[b].firstOrder);
   return keysOrdered.map((key) => {
     const items = byKey[key].items;
-    const sentences = items.map((it) => it.sentence).join('\n');
-    return { key, sentences };
+    const sectionNames = items.map((it) => it.sectionName);
+    const sentences = items.map((it) => it.sentence);
+    return { key, sectionNames, sentences };
   });
 }
 
@@ -90,7 +92,7 @@ function inputsToViewHtml(sectionsList) {
   const tbody = rows
     .map(
       (r) =>
-        `<tr><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences)}</td></tr>`
+        `<tr data-section-names="${escapeAttr(JSON.stringify(r.sectionNames))}" data-sentences="${escapeAttr(JSON.stringify(r.sentences))}"><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences.join('\n'))}</td></tr>`
     )
     .join('');
   return `<div class="prompt-detail-inputs-table-wrap">
@@ -652,11 +654,14 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       return false;
     }
     function highlightSentencesForRow(row) {
-      const sectionCell = row.querySelector('td:nth-child(2)');
-      const sentenceCell = row.querySelector('td:nth-child(3)');
-      if (!sectionCell || !sentenceCell) return;
-      const sectionNames = (sectionCell.textContent || '').split('\n').map((s) => s.trim());
-      const sentences = (sentenceCell.textContent || '').split('\n').map((s) => s.trim());
+      let sectionNames = [];
+      let sentences = [];
+      try {
+        sectionNames = JSON.parse(row.dataset.sectionNames || '[]');
+        sentences = JSON.parse(row.dataset.sentences || '[]');
+      } catch (_) {
+        return;
+      }
       clearLineHighlight();
       sectionsView.querySelectorAll('.preview-field-block').forEach((block) => {
         const nameEl = block.querySelector('.preview-field-name');
