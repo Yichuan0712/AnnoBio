@@ -43,7 +43,7 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
   const readOnly = !!(typeof hasSampledDatasets === 'function' && hasSampledDatasets(nodeId));
 
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
+  overlay.className = 'modal-overlay modal-overlay--no-maximize';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'sampler-detail-title');
   overlay.innerHTML = `
