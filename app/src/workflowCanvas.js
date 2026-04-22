@@ -4566,17 +4566,6 @@ export function buildWorkflowCanvas(root) {
         syncReviewSuggestionSeqNext(merged);
         toWrite = merged;
       }
-      // Preserve chatHistory and chatRequestInProgress when stream/other updates would overwrite them
-      if (existing && typeof existing === 'object') {
-        if (!Array.isArray(toWrite.chatHistory) || toWrite.chatHistory.length === 0) {
-          if (Array.isArray(existing.chatHistory) && existing.chatHistory.length > 0) {
-            toWrite = { ...toWrite, chatHistory: existing.chatHistory };
-          }
-        }
-        if (toWrite.chatRequestInProgress !== true && existing.chatRequestInProgress === true) {
-          toWrite = { ...toWrite, chatRequestInProgress: true };
-        }
-      }
       reviewNode.dataset.reviewResult = JSON.stringify(toWrite);
       if (toWrite.reviewProgress != null) {
         setReviewNodeProgress(reviewNode, toWrite.reviewProgress);
