@@ -2295,6 +2295,10 @@ export function buildWorkflowCanvas(root) {
   autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', openAgentWindowModal);
   canvasControlsStack.appendChild(autopilotToolbar);
 
+  function setAgentWindowVisible(visible) {
+    autopilotToolbar.style.display = visible ? '' : 'none';
+  }
+
   const zoomToolbar = document.createElement('div');
   zoomToolbar.className = 'workflow-canvas__zoom-toolbar';
   zoomToolbar.setAttribute('role', 'toolbar');
@@ -5031,6 +5035,7 @@ export function buildWorkflowCanvas(root) {
     getCanvasState,
     loadCanvasState,
     setOnCanvasChange,
+    setAgentWindowVisible,
     isPromptNameAlreadyUsed,
     isDatasetNameAlreadyUsed,
     shutdownRunPoll,

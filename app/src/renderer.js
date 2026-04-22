@@ -78,6 +78,7 @@ window.addEventListener('DOMContentLoaded', () => {
     await api.saveProject(path, state);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
+    canvasAPI.setAgentWindowVisible?.(true);
   };
 
   const onOpenProject = async () => {
@@ -91,6 +92,7 @@ window.addEventListener('DOMContentLoaded', () => {
     updateWindowTitle(path);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
+    canvasAPI.setAgentWindowVisible?.(true);
   };
 
   const onSaveAsProject = async () => {
@@ -104,6 +106,7 @@ window.addEventListener('DOMContentLoaded', () => {
     updateWindowTitle(path);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
+    canvasAPI.setAgentWindowVisible?.(true);
   };
 
   const topBarAPI = buildTopBar(root, {
@@ -114,6 +117,7 @@ window.addEventListener('DOMContentLoaded', () => {
     onSaveAsProject,
   });
   topBarAPI.setAddMenuEnabled(false);
+  canvasAPI.setAgentWindowVisible?.(false);
 
   let saveTimeout = null;
   canvasAPI.setOnCanvasChange(() => {
