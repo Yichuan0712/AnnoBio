@@ -1,48 +1,5 @@
 import { attachModalPaneToggle } from './paneToggleButton.js';
-
-const MOCK_CHATS = [
-  {
-    id: 'new-chat',
-    title: 'New Agent',
-    subtitle: 'Placeholder agent',
-    messages: [
-      {
-        role: 'assistant',
-        text: 'This is a placeholder agent. Real agent actions can be connected here later.',
-      },
-    ],
-  },
-  {
-    id: 'prompt-tuning',
-    title: 'Prompt Tuning',
-    subtitle: 'gpt-5-mini · 5m ago',
-    messages: [
-      {
-        role: 'user',
-        text: 'Help me improve the evaluation prompt for tone consistency.',
-      },
-      {
-        role: 'assistant',
-        text: 'I can help with that. We can tighten the scoring rubric and add clearer examples before wiring up real agent actions.',
-      },
-    ],
-  },
-  {
-    id: 'review-agent',
-    title: 'Review Agent',
-    subtitle: 'gpt-5 · Yesterday',
-    messages: [
-      {
-        role: 'user',
-        text: 'Summarize what changed in my latest workflow run.',
-      },
-      {
-        role: 'assistant',
-        text: 'This is a placeholder agent view. Real review output can be connected here later.',
-      },
-    ],
-  },
-];
+import { mountAgentChatSession } from './agentChatSession.js';
 
 function createChatId() {
   return `chat-${Math.random().toString(36).slice(2, 10)}`;
@@ -52,13 +9,10 @@ function createDraftChat(index = 1) {
   return {
     id: createChatId(),
     title: index <= 1 ? 'New Agent' : `New Agent ${index}`,
-    subtitle: 'Placeholder agent',
-    messages: [
-      {
-        role: 'assistant',
-        text: 'This is a placeholder agent. Real agent actions can be connected here later.',
-      },
-    ],
+    generatedTitle: true,
+    updatedAt: Date.now(),
+    messages: [],
+    pending: false,
   };
 }
 
@@ -68,8 +22,16 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function buildChatSubtitle(chat) {
+  const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+  const lastMessage = messages.length ? String(messages[messages.length - 1]?.content || '').trim() : '';
+  if (!lastMessage) return chat?.pending ? 'Thinking...' : 'No messages yet';
+  const compact = lastMessage.replace(/\s+/g, ' ').trim();
+  return compact.length <= 42 ? compact : `${compact.slice(0, 41).trimEnd()}...`;
+}
+
 function createSidebarItem(chat, isActive) {
-  const summary = chat.subtitle ? `${chat.title} · ${chat.subtitle}` : chat.title;
+  const summary = `${chat.title} · ${buildChatSubtitle(chat)}`;
   return `
     <div class="agent-window__chat-item score-rule-card${isActive ? ' is-active' : ''}" data-chat-id="${escapeHtml(chat.id)}">
       <button type="button" class="agent-window__chat-item-inner score-rule-card-inner" data-chat-id="${escapeHtml(chat.id)}" title="${escapeHtml(summary)}">
@@ -86,26 +48,6 @@ function createNewChatItem() {
   `;
 }
 
-function createChatMarkup(chat) {
-  const messages = Array.isArray(chat.messages) ? chat.messages : [];
-  return `
-    <div class="agent-window__conversation">
-      <div class="agent-window__messages">
-        ${messages.map((message) => `
-          <div class="agent-window__message agent-window__message--${escapeHtml(message.role)}">
-            <div class="agent-window__message-role">${message.role === 'assistant' ? 'Agent' : 'You'}</div>
-            <div class="agent-window__message-bubble">${escapeHtml(message.text)}</div>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-}
-
-function renderContent(contentEl, activeChat) {
-  contentEl.innerHTML = createChatMarkup(activeChat);
-}
-
 export function openAgentWindowModal() {
   const existing = document.querySelector('.agent-window-overlay');
   if (existing) {
@@ -114,10 +56,8 @@ export function openAgentWindowModal() {
     return;
   }
 
-  let chats = MOCK_CHATS.map((chat) => ({
-    ...chat,
-    messages: Array.isArray(chat.messages) ? chat.messages.map((message) => ({ ...message })) : [],
-  }));
+  let nextDraftIndex = 1;
+  let chats = [createDraftChat(nextDraftIndex)];
   let activeChatId = chats[0].id;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-overlay--no-maximize agent-window-overlay';
@@ -140,13 +80,17 @@ export function openAgentWindowModal() {
           <div class="agent-window__main-header">
             <p class="agent-window__main-label">Agent</p>
           </div>
-          <div class="agent-window__content"></div>
+          <div class="agent-window__content">
+            <div class="agent-window__conversation">
+              <div class="agent-window__messages" aria-live="polite"></div>
+            </div>
+          </div>
           <div class="agent-window__composer">
             <div class="agent-window__composer-field">
               <textarea
                 class="agent-window__composer-input"
                 rows="3"
-                placeholder="Message agents... (UI placeholder)"
+                placeholder="Loading Review model..."
               ></textarea>
               <button type="button" class="agent-window__composer-send" aria-label="Send" disabled>↑</button>
             </div>
@@ -157,9 +101,29 @@ export function openAgentWindowModal() {
   `;
 
   const chatListEl = overlay.querySelector('.agent-window__chat-list');
-  const contentEl = overlay.querySelector('.agent-window__content');
   const mainLabelEl = overlay.querySelector('.agent-window__main-label');
+  const messagesEl = overlay.querySelector('.agent-window__messages');
   const composerInputEl = overlay.querySelector('.agent-window__composer-input');
+  const composerSendEl = overlay.querySelector('.agent-window__composer-send');
+  let chatSession = null;
+
+  function getActiveChat() {
+    return chats.find((chat) => chat.id === activeChatId) || chats[0] || null;
+  }
+
+  function renderSidebar() {
+    if (!chatListEl) return;
+    chatListEl.innerHTML =
+      chats.map((chat) => createSidebarItem(chat, chat.id === activeChatId)).join('') +
+      createNewChatItem();
+  }
+
+  function syncActiveChatUI() {
+    const activeChat = getActiveChat();
+    if (mainLabelEl) mainLabelEl.textContent = activeChat?.title || 'Agent';
+    chatSession?.setConversation(activeChat);
+    renderSidebar();
+  }
 
   function setSidebarCollapsed(collapsed) {
     overlay.classList.toggle('agent-window-overlay--sidebar-collapsed', collapsed);
@@ -173,21 +137,13 @@ export function openAgentWindowModal() {
   }
 
   function close() {
+    chatSession?.destroy?.();
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);
   }
 
   function onKeyDown(e) {
     if (e.key === 'Escape') close();
-  }
-
-  function render() {
-    chatListEl.innerHTML =
-      chats.map((chat) => createSidebarItem(chat, chat.id === activeChatId)).join('') +
-      createNewChatItem();
-    const activeChat = chats.find((chat) => chat.id === activeChatId) || chats[0];
-    if (mainLabelEl) mainLabelEl.textContent = activeChat?.title || 'Agent';
-    renderContent(contentEl, activeChat);
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
@@ -204,10 +160,11 @@ export function openAgentWindowModal() {
   chatListEl.addEventListener('click', (e) => {
     const newChatBtn = e.target.closest('[data-action="new-chat"]');
     if (newChatBtn) {
-      const newChat = createDraftChat(chats.filter((chat) => chat.title.startsWith('New Agent')).length + 1);
+      nextDraftIndex += 1;
+      const newChat = createDraftChat(nextDraftIndex);
       chats = [...chats, newChat];
       activeChatId = newChat.id;
-      render();
+      syncActiveChatUI();
       return;
     }
     const deleteBtn = e.target.closest('[data-action="delete-chat"]');
@@ -215,26 +172,37 @@ export function openAgentWindowModal() {
       const chatId = deleteBtn.getAttribute('data-chat-id') || '';
       chats = chats.filter((chat) => chat.id !== chatId);
       if (chats.length === 0) {
-        const fallbackChat = createDraftChat(1);
+        nextDraftIndex += 1;
+        const fallbackChat = createDraftChat(nextDraftIndex);
         chats = [fallbackChat];
         activeChatId = fallbackChat.id;
       } else if (activeChatId === chatId) {
         activeChatId = chats[0].id;
       }
-      render();
+      syncActiveChatUI();
       return;
     }
     const button = e.target.closest('[data-chat-id]');
     if (!button) return;
-    activeChatId = button.getAttribute('data-chat-id') || chats[0].id;
-    render();
+    activeChatId = button.getAttribute('data-chat-id') || chats[0]?.id || '';
+    syncActiveChatUI();
   });
-  composerInputEl?.addEventListener('input', autoResizeComposer);
-
   document.addEventListener('keydown', onKeyDown);
   document.body.appendChild(overlay);
-  setSidebarCollapsed(true);
+  chatSession = mountAgentChatSession({
+    overlay,
+    messagesEl,
+    inputEl: composerInputEl,
+    sendButtonEl: composerSendEl,
+    autoResizeComposer,
+    onConversationUpdated: () => {
+      const activeChat = getActiveChat();
+      if (mainLabelEl) mainLabelEl.textContent = activeChat?.title || 'Agent';
+      renderSidebar();
+    },
+  });
+  syncActiveChatUI();
+  setSidebarCollapsed(false);
   agentPaneToggle.update();
-  render();
   autoResizeComposer();
 }
