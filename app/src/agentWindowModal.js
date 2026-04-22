@@ -202,7 +202,7 @@ export function openAgentWindowModal() {
     },
   });
   syncActiveChatUI();
-  setSidebarCollapsed(false);
+  setSidebarCollapsed(true);
   agentPaneToggle.update();
   autoResizeComposer();
 }
