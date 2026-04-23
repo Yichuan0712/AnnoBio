@@ -8,8 +8,9 @@
 import { getNextRowIndex, mergeResumeResults, embedInputRow, processApiResults, markEmptyOutputAsError } from './runResumeUtils.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { attachModalPaneToggle } from './paneToggleButton.js';
+import { BACKEND_API_BASE } from './backendConfig.js';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 const STATUS_TEXT = {
