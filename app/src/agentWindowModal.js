@@ -48,7 +48,53 @@ function createNewChatItem() {
   `;
 }
 
-export function openAgentWindowModal() {
+function sortChatsByRecent(chats) {
+  return (Array.isArray(chats) ? chats : [])
+    .slice()
+    .sort((a, b) => {
+      const aTime = Number(a?.updatedAt) || 0;
+      const bTime = Number(b?.updatedAt) || 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return String(a?.id || '').localeCompare(String(b?.id || ''));
+    });
+}
+
+function normalizeStoredChats(data) {
+  const conversations = Array.isArray(data?.conversations)
+    ? data.conversations
+        .filter((chat) => chat && typeof chat === 'object' && String(chat.id || '').trim())
+        .map((chat) => ({
+          id: String(chat.id || '').trim(),
+          title: String(chat.title || '').trim() || 'New Agent',
+          generatedTitle: chat.generatedTitle === true,
+          updatedAt: Number.isFinite(Number(chat.updatedAt)) ? Number(chat.updatedAt) : Date.now(),
+          pending: chat.pending === true,
+          messages: Array.isArray(chat.messages)
+            ? chat.messages
+                .filter((message) => message && typeof message === 'object')
+                .map((message) => ({
+                  role: String(message.role || 'assistant'),
+                  content: String(message.content || ''),
+                }))
+            : [],
+        }))
+    : [];
+  const activeChatId = String(data?.activeConversationId || '').trim();
+  return { conversations: sortChatsByRecent(conversations), activeChatId };
+}
+
+function nextDraftIndexFromChats(chats) {
+  const nums = (Array.isArray(chats) ? chats : [])
+    .map((chat) => {
+      const m = String(chat?.title || '').match(/^New Agent(?: (\d+))?$/);
+      if (!m) return 0;
+      return m[1] ? Number(m[1]) : 1;
+    })
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return nums.length ? Math.max(...nums) : 0;
+}
+
+export async function openAgentWindowModal(options = {}) {
   const existing = document.querySelector('.agent-window-overlay');
   if (existing) {
     const closeButton = existing.querySelector('.modal-close');
@@ -56,8 +102,20 @@ export function openAgentWindowModal() {
     return;
   }
 
-  let nextDraftIndex = 1;
-  let chats = [createDraftChat(nextDraftIndex)];
+  const projectPath = String(options?.projectPath || '').trim();
+  const storageApi = window.electronAPI;
+  let storedState = { conversations: [], activeConversationId: '' };
+  if (projectPath && storageApi?.loadAgentConversations) {
+    try {
+      storedState = normalizeStoredChats(await storageApi.loadAgentConversations(projectPath));
+    } catch (error) {
+      console.error('Load agent conversations:', error);
+    }
+  }
+
+  let nextDraftIndex = nextDraftIndexFromChats(storedState.conversations);
+  let chats = storedState.conversations.length ? storedState.conversations : [createDraftChat(1)];
+  if (storedState.conversations.length === 0) nextDraftIndex = 1;
   let activeChatId = chats[0].id;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-overlay--no-maximize agent-window-overlay';
@@ -92,7 +150,11 @@ export function openAgentWindowModal() {
                 rows="3"
                 placeholder="Loading Review model..."
               ></textarea>
-              <button type="button" class="agent-window__composer-send" aria-label="Send" disabled>↑</button>
+              <button type="button" class="agent-window__composer-send" aria-label="Send" disabled>
+                <svg class="agent-window__button-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 13.5a.75.75 0 0 1-.75-.75V5.56L4.78 8.03a.75.75 0 1 1-1.06-1.06l3.75-3.75a.75.75 0 0 1 1.06 0l3.75 3.75a.75.75 0 0 1-1.06 1.06L8.75 5.56v7.19a.75.75 0 0 1-.75.75Z"></path>
+                </svg>
+              </button>
             </div>
           </div>
         </section>
@@ -106,6 +168,26 @@ export function openAgentWindowModal() {
   const composerInputEl = overlay.querySelector('.agent-window__composer-input');
   const composerSendEl = overlay.querySelector('.agent-window__composer-send');
   let chatSession = null;
+
+  function saveConversations() {
+    if (!projectPath || !storageApi?.saveAgentConversations) return;
+    const payload = {
+      activeConversationId: activeChatId,
+      conversations: chats.map((chat) => ({
+        ...chat,
+        pending: chat.pending === true,
+        messages: Array.isArray(chat.messages)
+          ? chat.messages.map((message) => ({
+              role: String(message.role || 'assistant'),
+              content: String(message.content || ''),
+            }))
+          : [],
+      })),
+    };
+    storageApi.saveAgentConversations(projectPath, payload).catch((error) => {
+      console.error('Save agent conversations:', error);
+    });
+  }
 
   function getActiveChat() {
     return chats.find((chat) => chat.id === activeChatId) || chats[0] || null;
@@ -162,15 +244,16 @@ export function openAgentWindowModal() {
     if (newChatBtn) {
       nextDraftIndex += 1;
       const newChat = createDraftChat(nextDraftIndex);
-      chats = [...chats, newChat];
+      chats = sortChatsByRecent([...chats, newChat]);
       activeChatId = newChat.id;
       syncActiveChatUI();
+      saveConversations();
       return;
     }
     const deleteBtn = e.target.closest('[data-action="delete-chat"]');
     if (deleteBtn) {
       const chatId = deleteBtn.getAttribute('data-chat-id') || '';
-      chats = chats.filter((chat) => chat.id !== chatId);
+      chats = sortChatsByRecent(chats.filter((chat) => chat.id !== chatId));
       if (chats.length === 0) {
         nextDraftIndex += 1;
         const fallbackChat = createDraftChat(nextDraftIndex);
@@ -180,12 +263,14 @@ export function openAgentWindowModal() {
         activeChatId = chats[0].id;
       }
       syncActiveChatUI();
+      saveConversations();
       return;
     }
     const button = e.target.closest('[data-chat-id]');
     if (!button) return;
     activeChatId = button.getAttribute('data-chat-id') || chats[0]?.id || '';
     syncActiveChatUI();
+    saveConversations();
   });
   document.addEventListener('keydown', onKeyDown);
   document.body.appendChild(overlay);
@@ -196,9 +281,11 @@ export function openAgentWindowModal() {
     sendButtonEl: composerSendEl,
     autoResizeComposer,
     onConversationUpdated: () => {
+      chats = sortChatsByRecent(chats);
       const activeChat = getActiveChat();
       if (mainLabelEl) mainLabelEl.textContent = activeChat?.title || 'Agent';
       renderSidebar();
+      saveConversations();
     },
   });
   syncActiveChatUI();

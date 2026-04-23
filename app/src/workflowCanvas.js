@@ -722,7 +722,11 @@ function generateNodeId() {
   return 'n_' + Date.now() + '_' + (Math.random() * 1e9 | 0);
 }
 
-export function buildWorkflowCanvas(root) {
+export function buildWorkflowCanvas(root, options = {}) {
+  const getCurrentProjectPath =
+    options && typeof options.getCurrentProjectPath === 'function'
+      ? options.getCurrentProjectPath
+      : () => '';
   const canvas = document.createElement('div');
   canvas.className = 'workflow-canvas';
 
@@ -2292,7 +2296,9 @@ export function buildWorkflowCanvas(root) {
       <span>Agent Window</span>
     </button>
   `;
-  autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', openAgentWindowModal);
+  autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', () => {
+    openAgentWindowModal({ projectPath: getCurrentProjectPath() });
+  });
   canvasControlsStack.appendChild(autopilotToolbar);
 
   function setAgentWindowVisible(visible) {
