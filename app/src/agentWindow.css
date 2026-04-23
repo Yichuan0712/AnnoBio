@@ -103,7 +103,7 @@
   display: block;
   max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -134,9 +134,15 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text);
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
+}
+
+/* Sidebar list reuses score-rule-card-summary (ellipsis in modals.css); show full title in one line. */
+.agent-window .score-rule-card-summary {
+  text-overflow: clip;
 }
 
 .agent-window__content {
