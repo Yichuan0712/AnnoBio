@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
+import { clampAgentTitle } from './agentTitleLimits.js';
 
 /**
  * ===== Python backend =====
@@ -75,7 +76,7 @@ function normalizeAgentConversationPayload(payload) {
         .map((item) => ({
           ...item,
           id: String(item.id || '').trim(),
-          title: String(item.title || '').trim() || 'New Agent',
+          title: clampAgentTitle(String(item.title || '').trim() || 'New Agent'),
           generatedTitle: item.generatedTitle === true,
           updatedAt: Number.isFinite(Number(item.updatedAt)) ? Number(item.updatedAt) : Date.now(),
           pending: item.pending === true,
@@ -189,6 +190,7 @@ const createWindow = () => {
     height,
     minWidth: 640,
     minHeight: 480,
+    frame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
@@ -196,6 +198,15 @@ const createWindow = () => {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setMenu(null);
+
+  const sendWindowChromeState = () => {
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:maximized-changed', mainWindow.isMaximized());
+    }
+  };
+  mainWindow.on('maximize', sendWindowChromeState);
+  mainWindow.on('unmaximize', sendWindowChromeState);
+  mainWindow.webContents.on('did-finish-load', sendWindowChromeState);
 
   // and load the index.html of the app.
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
@@ -280,6 +291,29 @@ ipcMain.handle('fs:write-file', async (_e, filePath, data, encoding) => {
   const enc = encoding === 'base64' ? 'base64' : 'utf8';
   const buf = enc === 'base64' ? Buffer.from(data, 'base64') : data;
   await fs.writeFile(filePath, buf, enc === 'base64' ? undefined : enc);
+});
+
+ipcMain.handle('window:minimize', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) win.minimize();
+});
+
+ipcMain.handle('window:toggle-maximize', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return false;
+  if (win.isMaximized()) win.unmaximize();
+  else win.maximize();
+  return win.isMaximized();
+});
+
+ipcMain.handle('window:close', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) win.close();
+});
+
+ipcMain.handle('window:is-maximized', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return !!win && !win.isDestroyed() && win.isMaximized();
 });
 
 // This method will be called when Electron has finished

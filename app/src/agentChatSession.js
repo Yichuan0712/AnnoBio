@@ -1,7 +1,8 @@
+import { AGENT_TITLE_MAX_CHARS, clampAgentTitle } from './agentTitleLimits.js';
+
 const API_BASE = 'http://localhost:8000';
 const CHAT_MAX_MESSAGES = 40;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
-const TITLE_SUMMARY_MAX_LENGTH = 48;
 
 function sliceChatHistoryForApi(messages) {
   if (!Array.isArray(messages) || messages.length <= CHAT_MAX_MESSAGES) {
@@ -17,8 +18,7 @@ function sliceChatHistoryForApi(messages) {
 function deriveConversationTitle(text) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return 'New Agent';
-  if (normalized.length <= 28) return normalized;
-  return `${normalized.slice(0, 27).trimEnd()}...`;
+  return clampAgentTitle(normalized);
 }
 
 function getTitleSummarySourceMessages(messages) {
@@ -57,7 +57,7 @@ function buildTitleSummaryPrompt(messages) {
     },
     {
       role: 'user',
-      content: `Summarize this conversation into a short title.\nRequirements:\n- Use the first three rounds only\n- 4 to 8 words\n- Clear and specific\n\nConversation:\n${transcript}`,
+      content: `Summarize this conversation into a short title.\nRequirements:\n- Use the first three rounds of the conversation only\n- Maximum ${AGENT_TITLE_MAX_CHARS} characters total (including spaces), single line, no line breaks\n- Prefer about 4–6 words in English when it fits; be concise\n- Clear and specific; do not end with punctuation\n\nConversation:\n${transcript}`,
     },
   ];
 }
@@ -68,8 +68,7 @@ function normalizeGeneratedTitle(title, fallbackText = '') {
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) return deriveConversationTitle(fallbackText);
-  if (normalized.length <= TITLE_SUMMARY_MAX_LENGTH) return normalized;
-  return `${normalized.slice(0, TITLE_SUMMARY_MAX_LENGTH - 3).trimEnd()}...`;
+  return clampAgentTitle(normalized);
 }
 
 function autoResizeTextarea(textareaEl) {
@@ -210,6 +209,7 @@ export function mountAgentChatSession({
   sendButtonEl,
   autoResizeComposer,
   onConversationUpdated,
+  resolveConversation,
 }) {
   if (!overlay || !messagesEl || !inputEl || !sendButtonEl) {
     return {
@@ -220,7 +220,7 @@ export function mountAgentChatSession({
 
   let credentialId = '';
   let sendInFlight = false;
-  let activeConversation = null;
+  let activeConversationId = '';
   let editingMessageIndex = -1;
   let editingDraft = '';
   const titleRequestSerialByConversation = new Map();
@@ -235,8 +235,17 @@ export function mountAgentChatSession({
     return conversation.messages;
   }
 
+  function getActiveConversation() {
+    if (!activeConversationId || typeof resolveConversation !== 'function') return null;
+    return resolveConversation(activeConversationId) || null;
+  }
+
   function scrollToBottom() {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    const scrollContainer =
+      messagesEl.closest('.agent-window__content') ||
+      messagesEl.parentElement ||
+      messagesEl;
+    scrollContainer.scrollTop = scrollContainer.scrollHeight;
   }
 
   function notifyConversationUpdated(conversation) {
@@ -246,6 +255,7 @@ export function mountAgentChatSession({
   }
 
   function renderActiveConversation() {
+    const activeConversation = getActiveConversation();
     messagesEl.innerHTML = '';
     const messages = ensureConversationMessages(activeConversation);
     messages.forEach((message, index) => {
@@ -276,6 +286,7 @@ export function mountAgentChatSession({
   }
 
   function updateComposerState() {
+    const activeConversation = getActiveConversation();
     const hasText = Boolean((inputEl.value || '').trim());
     const composerLocked = sendInFlight || editingMessageIndex !== -1;
     inputEl.disabled = !credentialId || composerLocked || !activeConversation;
@@ -304,6 +315,7 @@ export function mountAgentChatSession({
   }
 
   function startEditingMessage(messageIndex) {
+    const activeConversation = getActiveConversation();
     if (!activeConversation || sendInFlight || activeConversation.pending) return;
     const messages = ensureConversationMessages(activeConversation);
     const targetMessage = messages[messageIndex];
@@ -364,8 +376,9 @@ export function mountAgentChatSession({
         sourceMessages.find((message) => message.role === 'user')?.content || targetConversation.title;
       targetConversation.title = normalizeGeneratedTitle(content, fallbackText);
       targetConversation.generatedTitle = true;
+      targetConversation.updatedAt = Date.now();
       notifyConversationUpdated(targetConversation);
-      if (isMounted() && activeConversation?.id === targetConversation.id) renderActiveConversation();
+      if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
     } catch (error) {
       console.error('Generate conversation title:', error);
     } finally {
@@ -383,7 +396,7 @@ export function mountAgentChatSession({
       targetMessages.push({ role: 'assistant', content: reply });
       targetConversation.updatedAt = Date.now();
       notifyConversationUpdated(targetConversation);
-      if (isMounted() && activeConversation?.id === targetConversation.id) renderActiveConversation();
+      if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
       if (ok) void refreshConversationTitle(targetConversation);
     } catch (error) {
       const reply = `Error: ${error instanceof Error ? error.message : 'Request failed'}`;
@@ -391,16 +404,17 @@ export function mountAgentChatSession({
       targetMessages.push({ role: 'assistant', content: reply });
       targetConversation.updatedAt = Date.now();
       notifyConversationUpdated(targetConversation);
-      if (isMounted() && activeConversation?.id === targetConversation.id) renderActiveConversation();
+      if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
     } finally {
       sendInFlight = false;
-      if (isMounted() && activeConversation?.id === targetConversation.id) renderActiveConversation();
+      if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
       if (isMounted()) updateComposerState();
     }
   }
 
   async function submitEditedMessage() {
     const text = String(editingDraft || '').trim();
+    const activeConversation = getActiveConversation();
     if (!text || !credentialId || sendInFlight || !activeConversation || editingMessageIndex === -1) return;
 
     const targetConversation = activeConversation;
@@ -421,7 +435,7 @@ export function mountAgentChatSession({
       targetConversation.generatedTitle = true;
     }
     notifyConversationUpdated(targetConversation);
-    if (activeConversation?.id === targetConversation.id) renderActiveConversation();
+    if (activeConversationId === targetConversation.id) renderActiveConversation();
     updateComposerState();
 
     await requestAssistantReply(targetConversation, targetMessages);
@@ -445,6 +459,7 @@ export function mountAgentChatSession({
 
   async function sendMessage() {
     const text = String(inputEl.value || '').trim();
+    const activeConversation = getActiveConversation();
     if (!text || !credentialId || sendInFlight || !activeConversation || editingMessageIndex !== -1) return;
 
     const targetConversation = activeConversation;
@@ -462,7 +477,7 @@ export function mountAgentChatSession({
     targetConversation.updatedAt = Date.now();
     targetConversation.pending = true;
     notifyConversationUpdated(targetConversation);
-    if (activeConversation?.id === targetConversation.id) renderActiveConversation();
+    if (activeConversationId === targetConversation.id) renderActiveConversation();
     updateComposerState();
 
     await requestAssistantReply(targetConversation, targetMessages);
@@ -485,7 +500,7 @@ export function mountAgentChatSession({
   }
 
   function setConversation(conversation) {
-    activeConversation = conversation || null;
+    activeConversationId = String(conversation?.id || '').trim();
     editingMessageIndex = -1;
     editingDraft = '';
     renderActiveConversation();
