@@ -14,8 +14,9 @@ import {
   emptyScoreRuleGroup,
   scoreBundleRootsForEmbeddingWalk,
 } from './scoreMappingBundle.js';
+import { BACKEND_API_BASE } from './backendConfig.js';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = BACKEND_API_BASE;
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 
 /** Stored in rule.gtColumns; UI label {@link SCORE_GT_ROW_INDEX_LABEL}. Value is 0-based GT row index (aligned with run `#` in getRunValue). */
@@ -542,7 +543,7 @@ export function embeddingPairMatches(runValRaw, gtValRaw, embeddingCosineMap) {
 
 /**
  * Collect unique (result, GT) string pairs for rules that use embedding similarity, then call the backend once per chunk.
- * @param {string} apiBase e.g. http://localhost:8000
+ * @param {string} apiBase e.g. BACKEND_API_BASE
  */
 export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
   const rootsToWalk = Array.isArray(roots) && roots.length > 0 ? roots.filter(Boolean) : (root != null ? [root] : []);
@@ -586,7 +587,7 @@ export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results
   if (pairs.length === 0) return new Map();
 
   const map = new Map();
-  const base = String(apiBase || 'http://localhost:8000').replace(/\/$/, '');
+  const base = String(apiBase || BACKEND_API_BASE).replace(/\/$/, '');
   const CHUNK = 320;
   for (let off = 0; off < pairs.length; off += CHUNK) {
     const chunk = pairs.slice(off, off + CHUNK);

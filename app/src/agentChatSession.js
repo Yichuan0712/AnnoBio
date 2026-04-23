@@ -1,6 +1,7 @@
 import { AGENT_TITLE_MAX_CHARS, clampAgentTitle } from './agentTitleLimits.js';
+import { BACKEND_API_BASE } from './backendConfig.js';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = BACKEND_API_BASE;
 const CHAT_MAX_MESSAGES = 40;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
 

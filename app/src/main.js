@@ -5,13 +5,13 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
 import { clampAgentTitle } from './agentTitleLimits.js';
+import { BACKEND_PORT } from './backendConfig.js';
 
 /**
  * ===== Python backend =====
  * Dev: repo backend/.venv (Scripts/python.exe on Windows, bin/python on macOS/Linux).
  * Packaged: resources/backend/python-embed (python.exe on Windows, bin/python on macOS/Linux).
  */
-const BACKEND_PORT = 8000;
 let pyProc = null;
 
 // Dev: find repo root by walking up from __dirname until we see backend/main.py (this repo's backend).

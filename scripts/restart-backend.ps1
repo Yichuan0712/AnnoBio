@@ -1,4 +1,4 @@
-# Restart backend: kill process on port 8000, remove __pycache__
+# Restart backend: kill process on the configured backend port, remove __pycache__
 # Run from repo root:  powershell -ExecutionPolicy Bypass -File scripts\restart-backend.ps1
 # Or from app folder:  powershell -ExecutionPolicy Bypass -File ..\scripts\restart-backend.ps1
 
@@ -43,6 +43,6 @@ if (Test-Path $pycache) {
 }
 
 Write-Host "`n=== 3) Next steps ===" -ForegroundColor Cyan
-Write-Host "  After starting the app, open: http://localhost:8000/api/debug/backend-info"
+Write-Host "  After starting the app, open: http://127.0.0.1:$port/api/debug/backend-info"
 Write-Host "  New backend shows models_count=11 and model_ids with claude/gemini."
 Write-Host "`nClose all Electron windows, then run: npm run start" -ForegroundColor Yellow

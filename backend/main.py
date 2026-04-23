@@ -41,10 +41,18 @@ from llm import chat as llm_chat, run_structured as llm_run_structured
 
 app = FastAPI()
 
-# Allow CORS for Electron renderer (Vite dev server localhost:5173)
+BACKEND_HOST = os.environ.get("PROMPT_STUDIO_BACKEND_HOST", "127.0.0.1")
+BACKEND_PORT = int(os.environ.get("PROMPT_STUDIO_BACKEND_PORT", "8000"))
+VITE_DEV_SERVER_PORT = int(os.environ.get("PROMPT_STUDIO_VITE_DEV_SERVER_PORT", "5173"))
+VITE_DEV_SERVER_ORIGINS = [
+    f"http://localhost:{VITE_DEV_SERVER_PORT}",
+    f"http://127.0.0.1:{VITE_DEV_SERVER_PORT}",
+]
+
+# Allow CORS for the Electron renderer in dev mode.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=VITE_DEV_SERVER_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

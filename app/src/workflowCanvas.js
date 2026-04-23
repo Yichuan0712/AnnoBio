@@ -48,9 +48,10 @@ import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { showAlert, showConfirm } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
+import { BACKEND_API_BASE } from './backendConfig.js';
 
 /** Same backend as Run/Review (embeddings API). */
-const SCORE_BACKEND_BASE = 'http://localhost:8000';
+const SCORE_BACKEND_BASE = BACKEND_API_BASE;
 
 /** Run node may not have dataset.runCredentialId until user opens Run modal; fall back to Settings default. */
 async function resolveRunCredentialId(runNode) {
@@ -847,7 +848,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   function unregisterPendingReview(nodeId) {
     if (nodeId) pendingReviews.delete(nodeId);
   }
-  const RUN_API_BASE = 'http://localhost:8000';
+  const RUN_API_BASE = BACKEND_API_BASE;
   function registerPendingRun(nodeId, runId) {
     if (nodeId && runId) pendingRuns.set(nodeId, runId);
   }
