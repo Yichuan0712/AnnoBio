@@ -57,8 +57,10 @@ window.addEventListener('DOMContentLoaded', () => {
     appBody.appendChild(appMain);
     root.appendChild(appBody);
 
-    const canvasAPI = buildWorkflowCanvas(appMain);
     let currentProjectPath = null;
+    const canvasAPI = buildWorkflowCanvas(appMain, {
+      getCurrentProjectPath: () => currentProjectPath,
+    });
 
   const APP_TITLE = 'Prompt Studio';
   function updateWindowTitle(projectPath) {
