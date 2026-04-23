@@ -100,7 +100,11 @@
 }
 
 .agent-window__chat-title {
+  display: block;
   max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-window__chat-remove {
@@ -130,6 +134,9 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-window__content {
