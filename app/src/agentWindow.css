@@ -100,7 +100,11 @@
 }
 
 .agent-window__chat-title {
+  display: block;
   max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-window__chat-remove {
@@ -111,6 +115,7 @@
 
 .agent-window__main {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -129,6 +134,9 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-window__content {
@@ -156,6 +164,30 @@
   gap: 8px;
 }
 
+.agent-window__message-action {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.agent-window__message-action:hover {
+  color: var(--text);
+}
+
+.agent-window__message-action.is-disabled,
+.agent-window__message-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .agent-window__message-role {
   font-size: 12px;
   font-weight: 600;
@@ -163,6 +195,7 @@
 }
 
 .agent-window__message-bubble {
+  position: relative;
   max-width: min(680px, 100%);
   padding: 14px 16px;
   border: 1px solid var(--border);
@@ -173,6 +206,77 @@
   white-space: pre-wrap;
 }
 
+.agent-window__message-content {
+  min-width: 0;
+}
+
+.agent-window__message-editor {
+  width: 100%;
+  min-height: 74px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: inherit;
+  resize: none;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.agent-window__message-editor:focus {
+  outline: none;
+}
+
+.agent-window__message-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.agent-window__composer-send {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 6px);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.agent-window__button-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: currentColor;
+}
+
+.agent-window__composer-send:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.agent-window__composer-send:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.agent-window__message--user .agent-window__message-bubble {
+  padding-right: 34px;
+}
+
+.agent-window__message--editing .agent-window__message-bubble {
+  padding-right: 16px;
+}
+
 .agent-window__message--assistant .agent-window__message-bubble {
   max-width: none;
   padding: 0;
@@ -181,9 +285,28 @@
   background: transparent;
 }
 
+.agent-window__message--loading .agent-window__message-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-window__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: agent-window-spin 0.8s linear infinite;
+}
+
+.agent-window__loading-text {
+  color: var(--text-muted);
+}
+
 .agent-window__composer {
+  flex-shrink: 0;
   padding: 12px 12px 16px;
-  border-top: 1px solid var(--border);
   background: var(--bg);
 }
 
@@ -220,26 +343,18 @@
   position: absolute;
   right: 10px;
   bottom: 10px;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--control-radius, 6px);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 18px;
-  line-height: 1;
-  font-family: inherit;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 
-.agent-window__composer-send:hover:not(:disabled) {
-  background: var(--hover);
+.agent-window__message-editor-save {
+  position: static;
 }
 
-.agent-window__composer-send:disabled {
-  cursor: not-allowed;
-  opacity: 0.7;
+@keyframes agent-window-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }

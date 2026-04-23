@@ -1,14 +1,20 @@
 """
-LLM client via LangChain. Reusable by credentials test, agents, and runs
+LLM client via LiteLLM. Reusable by credentials test, agents, and runs
 with user-defined output schema (structured output).
-Provider-agnostic: add new providers by registering in PROVIDER_REGISTRY below.
+
+Default path is OpenAI-compatible (optionally with a custom base_url). A few
+providers still need explicit routing hints so LiteLLM can call their native
+APIs directly.
 """
 
 import json
 import os
 import re
-import sys
 import time
+from typing import Any
+
+import litellm
+from litellm import completion
 
 from safe_stdio import safe_print
 
@@ -17,179 +23,24 @@ _HL = "\033[1;33m"
 _R = "\033[0m"
 _SEP = "=" * 60
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI
+litellm.telemetry = False
 
-try:
-    from langchain_aws import ChatBedrock
-except ImportError:
-    ChatBedrock = None
-
-try:
-    from langchain_mistralai import ChatMistralAI
-except ImportError:
-    ChatMistralAI = None
-
-# ---------------------------------------------------------------------------
-# Provider: OpenAI
-# ---------------------------------------------------------------------------
-
-OPENAI_MODEL_MAP = {
-    "gpt-5": "gpt-5",
-    "gpt-5-mini": "gpt-5-mini",
-    "gpt-5-nano": "gpt-5-nano",
+# OpenAI-compatible providers can be reached through one client, using an
+# optional custom base_url or a provider default.
+OPENAI_COMPATIBLE_BASE_URLS = {
+    "deepseek": "https://api.deepseek.com",
+    "mistral": "https://api.mistral.ai/v1",
 }
 
-
-def _build_openai(model: str, api_key: str, **kwargs) -> ChatOpenAI:
-    model_id = OPENAI_MODEL_MAP.get(model) or model
-    return ChatOpenAI(
-        model=model_id,
-        api_key=api_key,
-        max_tokens=kwargs.pop("max_tokens", 1024),
-        **kwargs,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Provider: Anthropic (Claude)
-# ---------------------------------------------------------------------------
-
-ANTHROPIC_MODEL_MAP = {
-    "claude-opus-4-6": "claude-opus-4-6",
-    "claude-sonnet-4-6": "claude-sonnet-4-6",
+LITELLM_PROVIDER_PREFIX = {
+    "anthropic": "anthropic",
+    "deepseek": "deepseek",
+    "google": "gemini",
+    "gemini": "gemini",
+    "mistral": "mistral",
+    "bedrock": "bedrock",
+    "amazon-bedrock": "bedrock",
 }
-
-
-def _build_anthropic(model: str, api_key: str, **kwargs) -> ChatAnthropic:
-    model_id = ANTHROPIC_MODEL_MAP.get(model) or model
-    return ChatAnthropic(
-        model=model_id,
-        api_key=api_key,
-        max_tokens=kwargs.pop("max_tokens", 1024),
-        **kwargs,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Provider: Google (Gemini)
-# ---------------------------------------------------------------------------
-
-GOOGLE_MODEL_MAP = {
-    "gemini-2.5-pro": "gemini-2.5-pro",
-    "gemini-2.5-flash": "gemini-2.5-flash",
-    "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
-}
-
-
-def _build_google(model: str, api_key: str, **kwargs) -> ChatGoogleGenerativeAI:
-    model_id = GOOGLE_MODEL_MAP.get(model) or model
-    return ChatGoogleGenerativeAI(
-        model=model_id,
-        api_key=api_key,
-        max_output_tokens=kwargs.pop("max_tokens", 1024),
-        **kwargs,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Provider: DeepSeek (OpenAI-compatible API)
-# ---------------------------------------------------------------------------
-
-DEEPSEEK_MODEL_MAP = {
-    "deepseek-chat": "deepseek-chat",
-    "deepseek-reasoner": "deepseek-reasoner",
-}
-
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-
-
-def _build_deepseek(model: str, api_key: str, **kwargs) -> ChatOpenAI:
-    model_id = DEEPSEEK_MODEL_MAP.get(model) or model
-    return ChatOpenAI(
-        model=model_id,
-        api_key=api_key,
-        base_url=DEEPSEEK_BASE_URL,
-        max_tokens=kwargs.pop("max_tokens", 1024),
-        **kwargs,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Provider: Mistral AI
-# ---------------------------------------------------------------------------
-
-MISTRAL_MODEL_MAP = {
-    "mistral-large-2512": "mistral-large-2512",
-}
-
-
-def _build_mistral(model: str, api_key: str, **kwargs):
-    if ChatMistralAI is None:
-        raise ValueError(
-            "Mistral requires langchain-mistralai. Install with: pip install langchain-mistralai"
-        )
-    model_id = MISTRAL_MODEL_MAP.get(model) or model
-    return ChatMistralAI(
-        model=model_id,
-        api_key=api_key,
-        max_tokens=kwargs.pop("max_tokens", 1024),
-        **kwargs,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Provider: Amazon Bedrock
-# ---------------------------------------------------------------------------
-# Region 固定 us-east-1（支持最全）。API key 栏可留空（用环境变量鉴权）或填 Bearer token。
-
-BEDROCK_MODEL_MAP = {
-    "openai.gpt-oss-20b-1:0": "openai.gpt-oss-20b-1:0",
-    "openai.gpt-oss-120b-1:0": "openai.gpt-oss-120b-1:0",
-}
-
-
-def _build_bedrock(model: str, api_key: str, **kwargs):
-    if ChatBedrock is None:
-        raise ValueError(
-            "Amazon Bedrock requires langchain-aws. Install with: pip install langchain-aws"
-        )
-    model_id = BEDROCK_MODEL_MAP.get(model) or model
-    raw = (api_key or "").strip()
-    if raw:
-        if "=" in raw:
-            raw = raw.split("=", 1)[-1]
-        raw = raw.strip()
-        if raw:
-            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = raw
-    return ChatBedrock(
-        model_id=model_id,
-        region_name="us-east-1",
-        max_tokens=kwargs.pop("max_tokens", 1024),
-        **kwargs,
-    )
-
-
-PROVIDER_REGISTRY = {
-    "openai": _build_openai,
-    "anthropic": _build_anthropic,
-    "google": _build_google,
-    "deepseek": _build_deepseek,
-    "mistral": _build_mistral,
-    "bedrock": _build_bedrock,
-}
-
-
-def get_chat_model(provider: str, model: str, api_key: str, **kwargs):
-    """
-    Build a LangChain chat model for the given provider. Use for simple invoke
-    or .with_structured_output(schema) when you have user-defined output schema.
-    """
-    if provider not in PROVIDER_REGISTRY:
-        raise ValueError(f"Unsupported provider: {provider}. Known: {list(PROVIDER_REGISTRY)}")
-    return PROVIDER_REGISTRY[provider](model, api_key, **kwargs)
 
 
 def _is_retryable_error(e: Exception) -> bool:
@@ -219,39 +70,145 @@ def _retry_invoke(fn, max_retries: int = 3):
     raise last_e
 
 
-def _messages_to_langchain(messages: list[dict]) -> list[BaseMessage]:
-    out = []
+def _normalize_messages(messages: list[dict]) -> list[dict]:
+    out: list[dict] = []
     for m in messages:
         role = (m.get("role") or "user").lower()
         content = m.get("content") or ""
-        if role == "user":
-            out.append(HumanMessage(content=content))
-        elif role == "assistant":
-            out.append(AIMessage(content=content))
-        elif role == "system":
-            out.append(SystemMessage(content=content))
-        else:
-            out.append(HumanMessage(content=content))
+        if not isinstance(content, (str, list, dict)):
+            content = str(content)
+        out.append({"role": role, "content": content})
     return out
+
+
+def _resolve_model_name(provider: str, model: str) -> str:
+    model_name = (model or "").strip()
+    if "/" in model_name:
+        return model_name
+    prefix = LITELLM_PROVIDER_PREFIX.get((provider or "").strip().lower())
+    if prefix:
+        return f"{prefix}/{model_name}"
+    return model_name
+
+
+def _prepare_provider_env(provider: str, api_key: str) -> None:
+    provider_id = (provider or "").strip().lower()
+    if provider_id in ("bedrock", "amazon-bedrock"):
+        raw = (api_key or "").strip()
+        if raw:
+            if "=" in raw:
+                raw = raw.split("=", 1)[-1]
+            raw = raw.strip()
+            if raw:
+                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = raw
+        os.environ.setdefault("AWS_REGION_NAME", "us-east-1")
+
+
+def _make_completion_kwargs(
+    *,
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: str,
+    max_tokens: int,
+    response_format: Any | None = None,
+) -> dict[str, Any]:
+    provider_id = (provider or "").strip().lower()
+    resolved_base_url = (base_url or "").strip() or OPENAI_COMPATIBLE_BASE_URLS.get(provider_id, "")
+    kwargs: dict[str, Any] = {
+        "model": _resolve_model_name(provider_id, model),
+        "api_key": api_key,
+        "max_tokens": max_tokens,
+    }
+    if resolved_base_url:
+        kwargs["api_base"] = resolved_base_url
+    if response_format is not None:
+        kwargs["response_format"] = response_format
+    return kwargs
+
+
+def _message_content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif item.get("type") == "text" and isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+        return "\n".join(p for p in parts if p).strip()
+    if isinstance(content, dict):
+        if isinstance(content.get("text"), str):
+            return content["text"]
+        return json.dumps(content, ensure_ascii=False)
+    return str(content)
+
+
+def _extract_completion_text(response: Any) -> str:
+    try:
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return ""
+        msg = getattr(choices[0], "message", None) or {}
+        content = getattr(msg, "content", None)
+        if content is None and isinstance(msg, dict):
+            content = msg.get("content")
+        return _message_content_to_text(content).strip()
+    except Exception:
+        return ""
+
+
+def _call_completion(
+    *,
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: str,
+    messages: list[dict],
+    max_tokens: int,
+    response_format: Any | None = None,
+) -> Any:
+    _prepare_provider_env(provider, api_key)
+    kwargs = _make_completion_kwargs(
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        max_tokens=max_tokens,
+        response_format=response_format,
+    )
+    kwargs["messages"] = _normalize_messages(messages)
+    return _retry_invoke(lambda: completion(**kwargs))
 
 
 def chat(
     provider: str,
     model: str,
     api_key: str,
+    base_url: str,
     messages: list[dict],
     max_tokens: int = 1024,
 ) -> str:
     """
-    Call LLM via LangChain. Raises on error.
-    provider: e.g. "openai" (must be in PROVIDER_REGISTRY).
+    Call LLM via LiteLLM. Raises on error.
     messages: [{"role": "user", "content": "..."}, ...]
     Returns the assistant message content.
     """
-    llm = get_chat_model(provider=provider, model=model, api_key=api_key, max_tokens=max_tokens)
-    lc_messages = _messages_to_langchain(messages)
-    response = _retry_invoke(lambda: llm.invoke(lc_messages))
-    return (response.content or "").strip()
+    response = _call_completion(
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        messages=messages,
+        max_tokens=max_tokens,
+    )
+    return _extract_completion_text(response)
 
 
 def _extract_json_from_text(text: str) -> str:
@@ -307,8 +264,17 @@ def _resolve_ref(schema: dict, ref: str) -> dict:
     return cur if isinstance(cur, dict) else {}
 
 
-def _run_structured_fallback(llm, prompt: str, response_model: type, return_shape: str = "single"):
-    """Fallback when with_structured_output is not supported: ask for JSON in prompt and parse.
+def _run_structured_fallback(
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: str,
+    prompt: str,
+    response_model: type,
+    max_tokens: int,
+    return_shape: str = "single",
+):
+    """Fallback when native structured output is not supported: ask for JSON in prompt and parse.
     return_shape: 'single' -> one JSON object; 'table' -> JSON array of objects (each item same schema).
     """
     schema = response_model.model_json_schema()
@@ -327,9 +293,14 @@ def _run_structured_fallback(llm, prompt: str, response_model: type, return_shap
         safe_print(_HL + _SEP + _R)
         safe_print(instruction)
         safe_print(_HL + _SEP + _R + "\n", flush=True)
-        messages = [HumanMessage(content=full_prompt)]
-        response = _retry_invoke(lambda: llm.invoke(messages))
-        text = (response.content or "").strip()
+        text = chat(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            messages=[{"role": "user", "content": full_prompt}],
+            max_tokens=max_tokens,
+        )
         json_str = _extract_json_array_from_text(text)
         data = json.loads(json_str)
         if not isinstance(data, list):
@@ -355,9 +326,14 @@ def _run_structured_fallback(llm, prompt: str, response_model: type, return_shap
     safe_print(_HL + _SEP + _R)
     safe_print(instruction)
     safe_print(_HL + _SEP + _R + "\n", flush=True)
-    messages = [HumanMessage(content=full_prompt)]
-    response = _retry_invoke(lambda: llm.invoke(messages))
-    text = (response.content or "").strip()
+    text = chat(
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        messages=[{"role": "user", "content": full_prompt}],
+        max_tokens=max_tokens,
+    )
     json_str = _extract_json_from_text(text)
     data = json.loads(json_str)
     for key, prop in schema.get("properties", {}).items():
@@ -371,6 +347,7 @@ def run_structured(
     provider: str,
     model: str,
     api_key: str,
+    base_url: str,
     prompt: str,
     response_model: type,
     max_tokens: int = 8192,
@@ -379,17 +356,36 @@ def run_structured(
     """
     Call LLM with structured output (Pydantic model). Returns (result_dict | result_list, used_fallback: bool).
     return_shape: 'single' -> one object per prompt; 'table' -> one array of objects per prompt (response_model must have "rows" field).
-    If the provider does not support structured output, falls back to prompt + JSON parse.
+    If the provider does not support native structured output, falls back to prompt + JSON parse.
     """
-    llm = get_chat_model(provider=provider, model=model, api_key=api_key, max_tokens=max_tokens)
     try:
-        structured_llm = llm.with_structured_output(response_model)
-        messages = [HumanMessage(content=prompt)]
-        result = _retry_invoke(lambda: structured_llm.invoke(messages))
-        # LangChain may return AIMessage with .parsed; model_dump() on the message triggers Pydantic warnings on `parsed`.
-        obj = getattr(result, "parsed", None) if result is not None else None
-        if obj is None:
-            obj = result
+        response = _call_completion(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            response_format=response_model,
+        )
+        msg = None
+        choices = getattr(response, "choices", None) or []
+        if choices:
+            msg = getattr(choices[0], "message", None)
+        parsed = getattr(msg, "parsed", None) if msg is not None else None
+        if parsed is None:
+            parsed = getattr(response, "parsed", None)
+        if parsed is None:
+            text = _extract_completion_text(response)
+            if return_shape == "table":
+                data = json.loads(_extract_json_array_from_text(text))
+                if not isinstance(data, list):
+                    data = [data] if isinstance(data, dict) else []
+                parsed = response_model.model_validate({"rows": data})
+            else:
+                data = json.loads(_extract_json_from_text(text))
+                parsed = response_model.model_validate(data)
+        obj = parsed
         out = obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
         return (out, False)
     except Exception as e:
@@ -399,11 +395,23 @@ def run_structured(
             for x in (
                 "structured output",
                 "response_format",
+                "json_schema",
                 "unavailable",
                 "not supported",
                 "invalid_request_error",
+                "does not support",
+                "unsupported",
             )
         ):
-            out = _run_structured_fallback(llm, prompt, response_model, return_shape=return_shape)
+            out = _run_structured_fallback(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                prompt=prompt,
+                response_model=response_model,
+                max_tokens=max_tokens,
+                return_shape=return_shape,
+            )
             return (out, True)
         raise

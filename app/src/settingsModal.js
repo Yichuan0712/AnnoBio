@@ -31,50 +31,26 @@ function escapeHtml(str) {
 
 /* ——— Credentials panel (table left, add form right) ——— */
 
-const CREDENTIAL_PROVIDERS = [
-  { id: 'openai', name: 'OpenAI' },
-  { id: 'anthropic', name: 'Anthropic' },
-  { id: 'google', name: 'Google' },
-  { id: 'deepseek', name: 'DeepSeek' },
-  { id: 'mistral', name: 'Mistral' },
-  { id: 'bedrock', name: 'Amazon Bedrock' },
-];
-
-const CREDENTIAL_MODELS = [
-  { id: 'gpt-5', name: 'gpt-5', provider: 'openai' },
-  { id: 'gpt-5-mini', name: 'gpt-5-mini', provider: 'openai' },
-  { id: 'gpt-5-nano', name: 'gpt-5-nano', provider: 'openai' },
-  { id: 'claude-opus-4-6', name: 'claude-opus-4-6', provider: 'anthropic' },
-  { id: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6', provider: 'anthropic' },
-  { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', provider: 'google' },
-  { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash', provider: 'google' },
-  { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite', provider: 'google' },
-  { id: 'openai.gpt-oss-20b-1:0', name: 'openai.gpt-oss-20b-1:0', provider: 'bedrock' },
-  { id: 'openai.gpt-oss-120b-1:0', name: 'openai.gpt-oss-120b-1:0', provider: 'bedrock' },
-  { id: 'deepseek-chat', name: 'deepseek-chat', provider: 'deepseek' },
-  { id: 'deepseek-reasoner', name: 'deepseek-reasoner', provider: 'deepseek' },
-  { id: 'mistral-large-2512', name: 'mistral-large-2512', provider: 'mistral' },
-];
-
 function getCredTbody(scope) {
   return scope.querySelector('.credentials-table tbody');
+}
+
+function credentialModelLabel(credential) {
+  return credential?.model || credential?.llm || '—';
 }
 
 function renderCredentialsTable(scope, list) {
   const tbody = getCredTbody(scope);
   if (!tbody) return;
-  const providerName = (id) => (scope._providersMap && scope._providersMap[id]) || id || '—';
-  const modelLabel = (v) => (scope._modelsMap && scope._modelsMap[v] && scope._modelsMap[v].name) || v || '—';
   if (!list || list.length === 0) {
-    tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="5">No credentials added yet.</td></tr>';
+    tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="4">No credentials added yet.</td></tr>';
     return;
   }
   const maskedPlaceholder = '••••••••';
   tbody.innerHTML = list.map((c) => `
     <tr data-credential-id="${c.id}">
-      <td class="credentials-name-cell">${escapeHtml(c.name || 'Unnamed')}</td>
-      <td class="credentials-provider-cell">${escapeHtml(providerName(c.provider))}</td>
-      <td>${escapeHtml(modelLabel(c.llm))}</td>
+      <td>${escapeHtml(credentialModelLabel(c))}</td>
+      <td class="credentials-provider-cell">${escapeHtml(c.base_url || 'Default')}</td>
       <td class="credentials-key-cell">
         <code class="credentials-key-value">${maskedPlaceholder}</code>
       </td>
@@ -98,76 +74,19 @@ async function loadAndRenderCredentials(scope) {
   try {
     const list = await fetchCredentialsStrict();
     renderCredentialsTable(scope, list);
-    bindCredNameCellClick(scope);
     bindCredKeyCellClick(scope);
     bindCredTestButtons(scope);
     bindCredDeleteButtons(scope);
   } catch (e) {
     console.error('Load credentials:', e);
     const tbody = getCredTbody(scope);
-    if (tbody) tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="5">Unable to load (is the backend running?).</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="4">Unable to load (is the backend running?).</td></tr>';
   }
 }
 
 function notifyCredentialsPanelChanged(el) {
   const panel = el?.closest?.('.credentials-panel-host');
   panel?._onCredentialsChange?.();
-}
-
-function openCredNameEditInCell(id, nameCell, currentName) {
-  if (nameCell.querySelector('.credentials-cell-edit-wrap')) return;
-  const wrap = document.createElement('div');
-  wrap.className = 'credentials-cell-edit-wrap';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.value = currentName;
-  input.setAttribute('aria-label', 'Name');
-  const doSave = async () => {
-    const trimmed = input.value.trim();
-    wrap.remove();
-    if (!trimmed) {
-      nameCell.textContent = currentName;
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/api/credentials/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed }),
-      });
-      if (res.ok) {
-        nameCell.textContent = trimmed;
-        notifyCredentialsPanelChanged(nameCell);
-      } else {
-        nameCell.textContent = currentName;
-      }
-    } catch (e) {
-      console.error('Rename credential:', e);
-      nameCell.textContent = currentName;
-    }
-  };
-  input.addEventListener('blur', doSave);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); doSave(); }
-    if (e.key === 'Escape') { e.preventDefault(); wrap.remove(); nameCell.textContent = currentName; }
-  });
-  wrap.appendChild(input);
-  nameCell.textContent = '';
-  nameCell.appendChild(wrap);
-  input.focus();
-  input.select();
-}
-
-function bindCredNameCellClick(scope) {
-  scope.querySelectorAll('.credentials-name-cell').forEach((cell) => {
-    cell.addEventListener('click', () => {
-      const row = cell.closest('tr');
-      const id = row?.getAttribute('data-credential-id');
-      if (!id) return;
-      const currentName = (cell.textContent || '').trim();
-      openCredNameEditInCell(id, cell, currentName);
-    });
-  });
 }
 
 const MASKED_PLACEHOLDER = '••••••••';
@@ -290,16 +209,15 @@ function mountCredentialsTableHost(tableHost, options = {}) {
           <table class="credentials-table" aria-label="Model credentials">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Provider</th>
-                <th>Model type</th>
+                <th>Model</th>
+                <th>API Base</th>
                 <th>API key</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               <tr class="credentials-table-empty">
-                <td colspan="5">No credentials added yet.</td>
+                <td colspan="4">No credentials added yet.</td>
               </tr>
             </tbody>
           </table>
@@ -311,10 +229,6 @@ function mountCredentialsTableHost(tableHost, options = {}) {
   tableHost._onCredentialsChange = typeof options.onCredentialsChange === 'function' ? options.onCredentialsChange : undefined;
 
   return (async () => {
-    tableHost._providers = CREDENTIAL_PROVIDERS;
-    tableHost._models = CREDENTIAL_MODELS;
-    tableHost._providersMap = Object.fromEntries(CREDENTIAL_PROVIDERS.map((p) => [p.id, p.name]));
-    tableHost._modelsMap = Object.fromEntries(CREDENTIAL_MODELS.map((m) => [m.id, m]));
     await loadAndRenderCredentials(tableHost);
   })();
 }
@@ -325,50 +239,15 @@ function mountCredentialsTableHost(tableHost, options = {}) {
  * @param {HTMLElement} tableHost
  */
 function wireCredentialsAddForm(addFormRoot, tableHost) {
-  function fillProviderSelect() {
-    const sel = addFormRoot.querySelector('#credentials-provider-select');
-    if (!sel || !tableHost._providers) return;
-    const placeholder = `<option value="">${selectPlaceholderLabel('Select provider')}</option>`;
-    const optionsHtml = tableHost._providers.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
-    sel.innerHTML = placeholder + optionsHtml;
-    fillModelSelect();
-  }
-
-  function fillModelSelect() {
-    const providerSel = addFormRoot.querySelector('#credentials-provider-select');
-    const modelSel = addFormRoot.querySelector('#credentials-model-select');
-    if (!modelSel || !tableHost._models) return;
-    const providerId = (providerSel && providerSel.value) || '';
-    const modelsForProvider = providerId ? tableHost._models.filter((m) => m.provider === providerId) : [];
-    const customOption = providerId ? `<option value="__custom__">${selectPlaceholderLabel('Custom')}</option>` : '';
-    modelSel.innerHTML = `<option value="">${selectPlaceholderLabel('Select model type')}</option>` + modelsForProvider.map((m) => `<option value="${m.id}">${m.name}</option>`).join('') + customOption;
-    toggleModelCustomVisibility();
-  }
-
-  function toggleModelCustomVisibility() {
-    const modelSel = addFormRoot.querySelector('#credentials-model-select');
-    const presetWrap = addFormRoot.querySelector('.credentials-model-preset-wrap');
-    const customWrap = addFormRoot.querySelector('#credentials-model-custom-wrap');
-    const isCustom = modelSel?.value === '__custom__';
-    if (presetWrap) presetWrap.classList.toggle('is-hidden', isCustom);
-    if (customWrap) customWrap.classList.toggle('is-visible', isCustom);
-  }
-
   async function onAddCredentialSubmit() {
-    const providerSelect = addFormRoot.querySelector('#credentials-provider-select');
-    const modelSelect = addFormRoot.querySelector('#credentials-model-select');
-    const modelCustomInput = addFormRoot.querySelector('#credentials-model-custom');
+    const modelInput = addFormRoot.querySelector('#credentials-model');
+    const baseUrlInput = addFormRoot.querySelector('#credentials-base-url');
     const apiKeyInput = addFormRoot.querySelector('#credentials-api-key');
-    const provider = (providerSelect?.value || '').trim();
-    const modelValue = (modelSelect?.value || '').trim();
-    const llm = modelValue === '__custom__' ? (modelCustomInput?.value || '').trim() : modelValue;
+    const llm = (modelInput?.value || '').trim();
+    const base_url = (baseUrlInput?.value || '').trim();
     const api_key = (apiKeyInput?.value || '').trim();
-    if (!provider) {
-      console.warn('Please select a provider');
-      return;
-    }
     if (!llm) {
-      console.warn('Please select a model type or enter a custom model ID');
+      console.warn('Please enter a model ID');
       return;
     }
     if (!api_key) {
@@ -379,7 +258,11 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
       const res = await fetch(`${API_BASE}/api/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, llm, api_key }),
+        body: JSON.stringify({
+          model: llm,
+          base_url,
+          api_key,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -388,9 +271,8 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
         return;
       }
       apiKeyInput.value = '';
-      if (modelCustomInput) modelCustomInput.value = '';
-      if (providerSelect) providerSelect.value = '';
-      fillModelSelect();
+      if (modelInput) modelInput.value = '';
+      if (baseUrlInput) baseUrlInput.value = '';
       await loadAndRenderCredentials(tableHost);
       tableHost._onCredentialsChange?.();
     } catch (e) {
@@ -402,20 +284,6 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
 
   const footerAdd = addFormRoot.closest('.model-settings-col-right')?.querySelector('#settings-footer-add');
   footerAdd?.addEventListener('click', onAddCredentialSubmit);
-
-  addFormRoot.querySelector('#credentials-provider-select')?.addEventListener('change', fillModelSelect);
-  addFormRoot.querySelector('#credentials-model-select')?.addEventListener('change', () => toggleModelCustomVisibility());
-  addFormRoot.querySelector('#credentials-model-custom')?.addEventListener('blur', () => {
-    const modelCustomInput = addFormRoot.querySelector('#credentials-model-custom');
-    const modelSel = addFormRoot.querySelector('#credentials-model-select');
-    if (modelSel?.value === '__custom__' && (!modelCustomInput?.value || !modelCustomInput.value.trim())) {
-      if (modelSel) modelSel.value = '';
-      if (modelCustomInput) modelCustomInput.value = '';
-      toggleModelCustomVisibility();
-    }
-  });
-
-  fillProviderSelect();
 }
 
 /* ——— Modal ——— */
@@ -454,22 +322,13 @@ export function openSettingsModal() {
                       <div class="defaults-page-scroll settings-credentials-tab-body">
                         <div id="model-settings-credentials-add" class="model-settings-credentials-add">
                           <div class="credentials-add-row">
-                            <div class="credentials-add-field">
-                              <label class="dataset-meta-label" for="credentials-provider-select">Provider</label>
-                              <select id="credentials-provider-select" class="credentials-select dataset-meta-input" aria-label="Select provider">
-                                <option value="">${selectPlaceholderLabel('Select provider')}</option>
-                              </select>
+                            <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
+                              <label class="dataset-meta-label" for="credentials-model">Model ID</label>
+                              <input type="text" id="credentials-model" class="dataset-meta-input" placeholder="e.g. gpt-5, anthropic/claude-sonnet-4-6" autocomplete="off" aria-label="Model ID" />
                             </div>
-                            <div class="credentials-add-field credentials-model-cell">
-                              <label class="dataset-meta-label" for="credentials-model-select">Model type</label>
-                              <div class="credentials-model-preset-wrap">
-                                <select id="credentials-model-select" class="credentials-select dataset-meta-input" aria-label="Select model type">
-                                  <option value="">${selectPlaceholderLabel('Select model type')}</option>
-                                </select>
-                              </div>
-                              <div class="credentials-model-custom-wrap" id="credentials-model-custom-wrap">
-                                <input type="text" id="credentials-model-custom" class="dataset-meta-input" placeholder="e.g. gpt-4o, claude-3-opus-20240229" autocomplete="off" aria-label="Custom model ID" />
-                              </div>
+                            <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
+                              <label class="dataset-meta-label" for="credentials-base-url">Base URL (optional)</label>
+                              <input type="text" id="credentials-base-url" class="dataset-meta-input" placeholder="OpenAI-compatible endpoint" autocomplete="off" aria-label="Base URL" />
                             </div>
                             <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
                               <label class="dataset-meta-label" for="credentials-api-key">API key</label>
@@ -609,7 +468,7 @@ export function openSettingsModal() {
 
   function populateCredentialSelects(credentials) {
     const optHtml = credentials.map((c) =>
-      `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name || c.llm || c.id)}</option>`
+      `<option value="${escapeHtml(c.id)}">${escapeHtml(c.model || c.llm || c.id)}</option>`
     ).join('');
     const optNone = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`;
     runCredSelect.innerHTML = optNone + optHtml;

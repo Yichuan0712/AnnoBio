@@ -92,81 +92,41 @@ DEFAULT_SETTINGS = {
 }
 
 
-# Supported providers and models (maintained here; frontend fetches via GET /api/credentials/models)
-PROVIDERS = [
-    {"id": "openai", "name": "OpenAI"},
-    {"id": "anthropic", "name": "Anthropic"},
-    {"id": "google", "name": "Google"},
-    {"id": "deepseek", "name": "DeepSeek"},
-    {"id": "mistral", "name": "Mistral"},
-    {"id": "bedrock", "name": "Amazon Bedrock"},
-]
-# name = display name in dropdown; matches API model id (GPT uses id, Anthropic uses actual API model id)
-MODELS = [
-    {"id": "gpt-5", "name": "gpt-5", "provider": "openai"},
-    {"id": "gpt-5-mini", "name": "gpt-5-mini", "provider": "openai"},
-    {"id": "gpt-5-nano", "name": "gpt-5-nano", "provider": "openai"},
-    {"id": "claude-opus-4-6", "name": "claude-opus-4-6", "provider": "anthropic"},
-    {"id": "claude-sonnet-4-6", "name": "claude-sonnet-4-6", "provider": "anthropic"},
-    {"id": "gemini-2.5-pro", "name": "gemini-2.5-pro", "provider": "google"},
-    {"id": "gemini-2.5-flash", "name": "gemini-2.5-flash", "provider": "google"},
-    {"id": "gemini-2.5-flash-lite", "name": "gemini-2.5-flash-lite", "provider": "google"},
-    {"id": "openai.gpt-oss-20b-1:0", "name": "openai.gpt-oss-20b-1:0", "provider": "bedrock"},
-    {"id": "openai.gpt-oss-120b-1:0", "name": "openai.gpt-oss-120b-1:0", "provider": "bedrock"},
-    {"id": "deepseek-chat", "name": "deepseek-chat", "provider": "deepseek"},
-    {"id": "deepseek-reasoner", "name": "deepseek-reasoner", "provider": "deepseek"},
-    {"id": "mistral-large-2512", "name": "mistral-large-2512", "provider": "mistral"},
-]
-ALLOWED_MODELS = {m["id"] for m in MODELS}
-ALLOWED_PROVIDERS = {p["id"] for p in PROVIDERS}
+LEGACY_MODEL_PROVIDER_HINTS = {
+    "gpt-5": "openai",
+    "gpt-5-mini": "openai",
+    "gpt-5-nano": "openai",
+    "claude-opus-4-6": "anthropic",
+    "claude-sonnet-4-6": "anthropic",
+    "gemini-2.5-pro": "google",
+    "gemini-2.5-flash": "google",
+    "gemini-2.5-flash-lite": "google",
+    "openai.gpt-oss-20b-1:0": "bedrock",
+    "openai.gpt-oss-120b-1:0": "bedrock",
+    "deepseek-chat": "deepseek",
+    "deepseek-reasoner": "deepseek",
+    "mistral-large-2512": "mistral",
+}
+
+DEFAULT_BASE_URLS_BY_PROVIDER = {
+    "deepseek": "https://api.deepseek.com",
+    "mistral": "https://api.mistral.ai/v1",
+}
 
 
 def _log_backend_version():
     """Print on startup to confirm this file is loaded."""
     _safe_print(f"[backend] main.py loaded from: {Path(__file__).resolve()}")
-    _safe_print(f"[backend] MODELS={len(MODELS)}, PROVIDERS={len(PROVIDERS)}")
 
 
 _log_backend_version()
 
 
-def _infer_provider(llm: str) -> str:
-    """Infer provider from llm; fallback for legacy data without provider field."""
-    for m in MODELS:
-        if m["id"] == llm:
-            return m["provider"]
-    return "openai"
-
-
-def _check_model_for_provider(provider: str, llm: str) -> None:
-    """Validate (provider, llm) is a valid combination in MODELS; raise HTTPException otherwise."""
-    for m in MODELS:
-        if m["id"] == llm and m["provider"] == provider:
-            return
-    by_provider: dict[str, list[str]] = {}
-    for m in MODELS:
-        p = m["provider"]
-        if p not in by_provider:
-            by_provider[p] = []
-        by_provider[p].append(m["id"])
-    parts = [f"{p}: {sorted(ids)}" for p, ids in sorted(by_provider.items())]
-    raise HTTPException(
-        status_code=400,
-        detail=f"model '{llm}' is not valid for provider '{provider}'. Valid by provider: " + "; ".join(parts),
-    )
-
-
 class CredentialCreate(BaseModel):
     """Not used for POST /api/credentials (we parse Request body by hand). Kept for OpenAPI docs only."""
-    name: str | None = Field(default=None, description="Optional display name")
-    llm: str = Field(..., description="Model id from MODELS (openai/anthropic/google)")
+    model: str = Field(..., description="LiteLLM model string, e.g. gpt-5 or anthropic/claude-sonnet-4-6")
     api_key: str = Field(..., min_length=1, description="API key")
-    provider: str = Field(default="openai", description="Provider id from PROVIDERS")
-
-
-class CredentialRenameBody(BaseModel):
-    name: str = Field(..., min_length=1, description="New name")
-
+    base_url: str | None = Field(default=None, description="Optional custom OpenAI-compatible base URL")
 
 class SettingsPatch(BaseModel):
     """Partial settings update; only provided fields are updated."""
@@ -192,9 +152,9 @@ class SettingsPatch(BaseModel):
 
 class CredentialResponse(BaseModel):
     id: str
-    name: str
+    model: str
     llm: str
-    provider: str
+    base_url: str = ""
     api_key_masked: str
 
 
@@ -202,9 +162,9 @@ class CredentialDetailResponse(BaseModel):
     """Single credential with full api_key for in-app display only."""
 
     id: str
-    name: str
+    model: str
     llm: str
-    provider: str
+    base_url: str = ""
     api_key: str
 
 
@@ -383,43 +343,39 @@ def _mask_key(key: str) -> str:
     return key[:4] + "..." + key[-4:]
 
 
-def _unique_name_for_model(items: list[dict], model: str) -> str:
-    """Return model, or 'model 2', 'model 3', ... if name exists."""
-    existing = {item.get("name", "").strip() for item in items}
-    if model not in existing:
-        return model
-    n = 2
-    while f"{model} {n}" in existing:
-        n += 1
-    return f"{model} {n}"
+def _credential_model(item: dict) -> str:
+    """Prefer new 'model' field; fall back to legacy 'llm'."""
+    return (item.get("model") or item.get("llm") or "").strip()
 
 
 def _credential_provider(item: dict) -> str:
-    """Get provider from stored item; infer from llm if missing (legacy compatibility)."""
-    return item.get("provider") or _infer_provider(item.get("llm", ""))
+    """Get provider hint from stored item; infer from known legacy model ids if missing."""
+    provider = (item.get("provider") or "").strip()
+    if provider:
+        return provider
+    return LEGACY_MODEL_PROVIDER_HINTS.get(_credential_model(item), "")
+
+
+def _credential_base_url(item: dict) -> str:
+    """Use explicit base_url when present, otherwise derive a provider default for legacy creds."""
+    base_url = (item.get("base_url") or "").strip()
+    if base_url:
+        return base_url
+    return DEFAULT_BASE_URLS_BY_PROVIDER.get(_credential_provider(item), "")
 
 
 @app.get("/health")
 def health():
-    """Health check; returns models/providers count to confirm backend version."""
-    return {"ok": True, "models": len(MODELS), "providers": len(PROVIDERS)}
+    """Health check."""
+    return {"ok": True}
 
 
 @app.get("/api/debug/backend-info")
 def debug_backend_info():
-    """Debug: confirm this is the current repo version. New version should have 11 model_ids."""
+    """Debug: confirm this is the current repo version."""
     return {
         "main_file": str(Path(__file__).resolve()),
-        "models_count": len(MODELS),
-        "model_ids": [m["id"] for m in MODELS],
-        "providers_count": len(PROVIDERS),
     }
-
-
-@app.get("/api/credentials/models")
-def list_credential_models():
-    """Return supported providers and models for frontend dropdown."""
-    return {"providers": list(PROVIDERS), "models": list(MODELS)}
 
 
 class EmbeddingPairSimRequest(BaseModel):
@@ -465,9 +421,9 @@ def list_credentials():
     return [
         CredentialResponse(
             id=item["id"],
-            name=item.get("name", "Unnamed"),
-            llm=item["llm"],
-            provider=_credential_provider(item),
+            model=_credential_model(item),
+            llm=_credential_model(item),
+            base_url=_credential_base_url(item),
             api_key_masked=_mask_key(item["api_key"]),
         )
         for item in items
@@ -481,36 +437,28 @@ async def add_credential(request: Request):
         body = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
-    llm = (body.get("llm") or body.get("model") or "").strip()
+    model = (body.get("model") or body.get("llm") or "").strip()
     api_key = (body.get("api_key") or "").strip()
-    if not llm:
-        raise HTTPException(status_code=400, detail="llm is required")
+    base_url = (body.get("base_url") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
-    provider = (body.get("provider") or "").strip() or _infer_provider(llm)
-    if provider not in ALLOWED_PROVIDERS:
-        raise HTTPException(status_code=400, detail=f"provider must be one of {sorted(ALLOWED_PROVIDERS)}")
-    if llm in ALLOWED_MODELS:
-        _check_model_for_provider(provider, llm)
     items = _load_credentials()
     new_id = str(uuid.uuid4())
-    name = (body.get("name") or "").strip() if body.get("name") else ""
-    if not name:
-        name = _unique_name_for_model(items, llm)
     new_item = {
         "id": new_id,
-        "name": name,
-        "llm": llm,
+        "model": model,
         "api_key": api_key,
-        "provider": provider,
+        "base_url": base_url,
     }
     items.append(new_item)
     _save_credentials(items)
     return CredentialResponse(
         id=new_id,
-        name=new_item["name"],
-        llm=new_item["llm"],
-        provider=new_item["provider"],
+        model=new_item["model"],
+        llm=new_item["model"],
+        base_url=new_item["base_url"],
         api_key_masked=_mask_key(new_item["api_key"]),
     )
 
@@ -523,32 +471,10 @@ def get_credential(credential_id: str):
         if item.get("id") == credential_id:
             return CredentialDetailResponse(
                 id=item["id"],
-                name=item.get("name", "Unnamed"),
-                llm=item["llm"],
-                provider=_credential_provider(item),
+                model=_credential_model(item),
+                llm=_credential_model(item),
+                base_url=_credential_base_url(item),
                 api_key=item["api_key"],
-            )
-    raise HTTPException(status_code=404, detail="Credential not found")
-
-
-@app.patch("/api/credentials/{credential_id}", response_model=CredentialResponse)
-def rename_credential(credential_id: str, body: CredentialRenameBody):
-    """Rename a credential by id. Rejects if name is already used by another credential."""
-    items = _load_credentials()
-    new_name = body.name.strip()
-    for item in items:
-        if item.get("id") != credential_id and (item.get("name") or "").strip() == new_name:
-            raise HTTPException(status_code=400, detail="Name already in use")
-    for item in items:
-        if item.get("id") == credential_id:
-            item["name"] = new_name
-            _save_credentials(items)
-            return CredentialResponse(
-                id=item["id"],
-                name=item["name"],
-                llm=item["llm"],
-                provider=_credential_provider(item),
-                api_key_masked=_mask_key(item["api_key"]),
             )
     raise HTTPException(status_code=404, detail="Credential not found")
 
@@ -564,16 +490,18 @@ def test_credential(credential_id: str):
             break
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    model = cred.get("llm", "")
+    model = _credential_model(cred)
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
-    provider = cred.get("provider", "openai")
+    provider = _credential_provider(cred)
+    base_url = _credential_base_url(cred)
     try:
         llm_chat(
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
             messages=[{"role": "user", "content": "Reply with exactly: OK"}],
             max_tokens=50,
         )
@@ -604,11 +532,12 @@ def chat(body: ChatRequest):
             break
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    model = cred.get("llm", "")
+    model = _credential_model(cred)
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
-    provider = cred.get("provider", "openai")
+    provider = _credential_provider(cred)
+    base_url = _credential_base_url(cred)
     settings = _load_settings()
     max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     msgs = [{"role": m.role, "content": m.content or ""} for m in body.messages]
@@ -617,6 +546,7 @@ def chat(body: ChatRequest):
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
             messages=msgs,
             max_tokens=max_tokens,
         )
@@ -773,15 +703,10 @@ def _do_run_work(
                 _run_jobs[run_id] = {"status": "done", "error": "Credential not found", "run_node_id": nid}
             _persist_run_jobs()
             return
-        provider = cred.get("provider", "openai")
-        model = cred.get("llm", "")
+        provider = _credential_provider(cred)
+        model = _credential_model(cred)
         api_key = cred.get("api_key", "")
-        if provider not in ALLOWED_PROVIDERS:
-            with _run_jobs_lock:
-                nid = _run_jobs.get(run_id, {}).get("run_node_id")
-                _run_jobs[run_id] = {"status": "done", "error": "Unsupported provider", "run_node_id": nid}
-            _persist_run_jobs()
-            return
+        base_url = _credential_base_url(cred)
         if not api_key:
             with _run_jobs_lock:
                 nid = _run_jobs.get(run_id, {}).get("run_node_id")
@@ -851,6 +776,7 @@ def _do_run_work(
                         provider=provider,
                         model=model,
                         api_key=api_key,
+                        base_url=base_url,
                         prompt=prompt,
                         response_model=ResponseModel,
                         max_tokens=run_max_tokens,
@@ -1242,8 +1168,9 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
 
         from review_pipeline import run_review_pipeline
 
-        provider = cred.get("provider", "openai")
-        model = cred.get("llm", "") or ""
+        provider = _credential_provider(cred)
+        model = _credential_model(cred) or ""
+        base_url = _credential_base_url(cred)
         st = _load_settings()
         max_tokens = int(st.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"])
         try:
@@ -1256,6 +1183,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
             body=body,
             max_tokens=max_tokens,
             max_failed_inputs=max_failed,
@@ -1315,11 +1243,12 @@ def finetune_segments(body: FinetuneSegmentsRequest):
     cred = next((c for c in items if c.get("id") == body.credential_id), None)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    model = cred.get("llm", "")
+    model = _credential_model(cred)
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
-    provider = cred.get("provider", "openai")
+    provider = _credential_provider(cred)
+    base_url = _credential_base_url(cred)
     settings = _load_settings()
     max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     _safe_print(_HL + "[Finetune] POST /segments" + _R + f"  model={model}  new_sentence={body.new_sentence[:80]!r}")
@@ -1328,6 +1257,7 @@ def finetune_segments(body: FinetuneSegmentsRequest):
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
             max_tokens=max_tokens,
             old_sentence=body.old_sentence,
             new_sentence=body.new_sentence,
@@ -1349,11 +1279,12 @@ def finetune_candidates(body: FinetuneCandidatesRequest):
     cred = next((c for c in items if c.get("id") == body.credential_id), None)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    model = cred.get("llm", "")
+    model = _credential_model(cred)
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
-    provider = cred.get("provider", "openai")
+    provider = _credential_provider(cred)
+    base_url = _credential_base_url(cred)
     settings = _load_settings()
     max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     _safe_print(_HL + "[Finetune] POST /candidates" + _R + f"  model={model}  segment={body.segment_text[:60]!r}")
@@ -1362,6 +1293,7 @@ def finetune_candidates(body: FinetuneCandidatesRequest):
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
             max_tokens=max_tokens,
             old_sentence=body.old_sentence,
             new_sentence=body.new_sentence,

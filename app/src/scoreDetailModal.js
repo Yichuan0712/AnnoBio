@@ -3289,7 +3289,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
         fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
       ]);
-      llmSelect.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>` + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.name || c.llm || '')}</option>`).join('');
+      llmSelect.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>` + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.model || c.llm || '')}</option>`).join('');
       let credentialId = (node?.dataset?.reviewCredentialId || '').trim();
       if (!credentialId && settings) {
         const defaultId = (settings.default_review_credential_id || '').trim();
