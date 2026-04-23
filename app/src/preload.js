@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSetTheme: (callback) => {
     ipcRenderer.on('set-theme', (_event, mode) => callback(mode));
   },
+  onWindowMaximizedChanged: (callback) => {
+    ipcRenderer.on('window:maximized-changed', (_event, isMaximized) => callback(!!isMaximized));
+  },
   showNewProjectDialog: () => ipcRenderer.invoke('project:new-dialog'),
   showOpenProjectDialog: () => ipcRenderer.invoke('project:open-dialog'),
   showSaveAsProjectDialog: (defaultPath) => ipcRenderer.invoke('project:save-as-dialog', defaultPath),
@@ -13,4 +16,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveAgentConversations: (projectPath, data) => ipcRenderer.invoke('agent-conversations:save', projectPath, data),
   showSaveFileDialog: (opts) => ipcRenderer.invoke('dialog:show-save', opts),
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('fs:write-file', filePath, data, encoding),
+  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+  isWindowMaximized: () => ipcRenderer.invoke('window:is-maximized'),
 });
