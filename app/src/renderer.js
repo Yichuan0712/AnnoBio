@@ -67,6 +67,7 @@ window.addEventListener('DOMContentLoaded', () => {
     let name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
     if (name && name.endsWith('.json')) name = name.slice(0, -5);
     document.title = name ? `${name} - ${APP_TITLE}` : APP_TITLE;
+    topBarAPI?.setProjectTitle?.(name || APP_TITLE);
   }
 
   const onNewProject = async () => {
@@ -118,6 +119,7 @@ window.addEventListener('DOMContentLoaded', () => {
     onOpenProject,
     onSaveAsProject,
   });
+  topBarAPI.setProjectTitle?.(APP_TITLE);
   topBarAPI.setAddMenuEnabled(false);
   canvasAPI.setAgentWindowVisible?.(false);
 

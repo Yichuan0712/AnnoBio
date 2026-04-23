@@ -10,6 +10,19 @@ function ensureResizeHandle(panel) {
   panel.appendChild(h);
 }
 
+function clampModalPosition(left, top, panelRect, headerRect) {
+  const visibleEdge = 80;
+  const visibleHeader = Math.max(40, headerRect?.height || 0);
+  const minLeft = visibleEdge - panelRect.width;
+  const maxLeft = window.innerWidth - visibleEdge;
+  const minTop = 0;
+  const maxTop = window.innerHeight - visibleHeader;
+  return {
+    left: Math.min(maxLeft, Math.max(minLeft, left)),
+    top: Math.min(maxTop, Math.max(minTop, top)),
+  };
+}
+
 export function initModalDrag() {
   const observer = new MutationObserver((list) => {
     list.forEach((m) => {
@@ -75,7 +88,9 @@ export function initModalDrag() {
     if (!header || e.target.closest('.modal-close') || e.target.closest('.modal-maximize') || e.target.closest('.modal-header-actions')) return;
     e.preventDefault();
     const rect = panel.getBoundingClientRect();
-    let x = e.clientX, y = e.clientY, left = rect.left, top = rect.top;
+    const headerRect = header.getBoundingClientRect();
+    const clampedStart = clampModalPosition(rect.left, rect.top, rect, headerRect);
+    let x = e.clientX, y = e.clientY, left = clampedStart.left, top = clampedStart.top;
     panel.style.position = 'fixed';
     panel.style.left = left + 'px';
     panel.style.top = top + 'px';
@@ -84,6 +99,9 @@ export function initModalDrag() {
     const onMove = (e2) => {
       const dx = e2.clientX - x, dy = e2.clientY - y;
       left += dx; top += dy; x = e2.clientX; y = e2.clientY;
+      const clamped = clampModalPosition(left, top, rect, headerRect);
+      left = clamped.left;
+      top = clamped.top;
       panel.style.left = left + 'px';
       panel.style.top = top + 'px';
     };
