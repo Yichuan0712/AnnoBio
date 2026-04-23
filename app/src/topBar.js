@@ -4,15 +4,21 @@
 
 import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 import { openSettingsModal } from './settingsModal.js';
+import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaximize.js';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
  * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void }} options
- * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void }}
+ * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void, setProjectTitle: (title: string) => void }}
  */
 export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
+
+  const projectTitleEl = document.createElement('div');
+  projectTitleEl.className = 'top-bar-project-title';
+  projectTitleEl.textContent = 'Prompt Studio';
+  bar.appendChild(projectTitleEl);
 
   const fileBtn = document.createElement('button');
   fileBtn.className = 'menu-item has-submenu';
@@ -95,11 +101,70 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
   settingsBtn.appendChild(settingsDrop);
   bar.appendChild(settingsBtn);
 
+  const spacer = document.createElement('div');
+  spacer.className = 'top-bar-spacer';
+  bar.appendChild(spacer);
+
+  const windowControls = document.createElement('div');
+  windowControls.className = 'top-bar-window-controls';
+
+  const minimizeBtn = document.createElement('button');
+  minimizeBtn.className = 'top-bar-window-btn';
+  minimizeBtn.type = 'button';
+  minimizeBtn.setAttribute('aria-label', 'Minimize window');
+  minimizeBtn.title = 'Minimize';
+  minimizeBtn.appendChild(iconMinimize());
+  minimizeBtn.addEventListener('click', () => {
+    window.electronAPI?.minimizeWindow?.();
+  });
+
+  const maximizeBtn = document.createElement('button');
+  maximizeBtn.className = 'top-bar-window-btn';
+  maximizeBtn.type = 'button';
+
+  function applyMaximizedState(isMaximized) {
+    maximizeBtn.dataset.maximized = isMaximized ? 'true' : 'false';
+    maximizeBtn.setAttribute('aria-label', isMaximized ? 'Restore window' : 'Maximize window');
+    maximizeBtn.title = isMaximized ? 'Restore' : 'Maximize';
+    maximizeBtn.innerHTML = '';
+    maximizeBtn.appendChild(isMaximized ? iconRestore() : iconMaximize());
+  }
+
+  applyMaximizedState(false);
+  maximizeBtn.addEventListener('click', async () => {
+    const next = await window.electronAPI?.toggleMaximizeWindow?.();
+    applyMaximizedState(!!next);
+  });
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'top-bar-window-btn top-bar-window-btn--close';
+  closeBtn.type = 'button';
+  closeBtn.setAttribute('aria-label', 'Close window');
+  closeBtn.title = 'Close';
+  closeBtn.appendChild(iconClose());
+  closeBtn.addEventListener('click', () => {
+    window.electronAPI?.closeWindow?.();
+  });
+
+  windowControls.appendChild(minimizeBtn);
+  windowControls.appendChild(maximizeBtn);
+  windowControls.appendChild(closeBtn);
+  bar.appendChild(windowControls);
+
+  window.electronAPI?.isWindowMaximized?.().then(applyMaximizedState).catch(() => {});
+  window.electronAPI?.onWindowMaximizedChanged?.(applyMaximizedState);
+
   root.insertBefore(bar, root.firstChild);
 
   function setSaveAsEnabled(enabled) {
     saveAsOpt.disabled = !enabled;
   }
 
-  return { setAddMenuEnabled, setSaveAsEnabled };
+  function setProjectTitle(title) {
+    const normalized = String(title || '').trim();
+    projectTitleEl.textContent = normalized || 'Prompt Studio';
+    projectTitleEl.title = normalized || 'Prompt Studio';
+  }
+
+  return { setAddMenuEnabled, setSaveAsEnabled, setProjectTitle };
 }

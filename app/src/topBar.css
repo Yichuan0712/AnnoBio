@@ -12,6 +12,24 @@
   -webkit-app-region: drag;
 }
 
+.top-bar-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.top-bar-project-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 320px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
 .top-bar .menu-item {
   -webkit-app-region: no-drag;
   position: relative;
@@ -29,6 +47,41 @@
 
 .top-bar .menu-item:hover {
   background: var(--hover);
+}
+
+.top-bar-window-controls {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: stretch;
+  margin-left: auto;
+}
+
+.top-bar-window-btn {
+  width: 46px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.top-bar-window-btn svg {
+  display: block;
+}
+
+.top-bar-window-btn:hover {
+  background: var(--hover);
+}
+
+.top-bar-window-btn--close:hover {
+  background: #c42b1c;
+  color: #fff;
 }
 
 .top-bar .menu-item.has-submenu::after {
