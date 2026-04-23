@@ -119,6 +119,7 @@
 
 .agent-window__main-header {
   padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
   background: var(--bg);
   flex-shrink: 0;
 }

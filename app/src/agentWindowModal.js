@@ -282,9 +282,7 @@ export async function openAgentWindowModal(options = {}) {
     autoResizeComposer,
     onConversationUpdated: () => {
       chats = sortChatsByRecent(chats);
-      const activeChat = getActiveChat();
-      if (mainLabelEl) mainLabelEl.textContent = activeChat?.title || 'Agent';
-      renderSidebar();
+      syncActiveChatUI();
       saveConversations();
     },
   });
