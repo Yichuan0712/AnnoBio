@@ -1149,6 +1149,7 @@ export function buildWorkflowCanvas(root, options = {}) {
               issue_summary: String(ev.opinion.issue_summary || ''),
               rough_modification_opinion: String(ev.opinion.rough_modification_opinion || ''),
               problem_category_hint: String(ev.opinion.problem_category_hint || ''),
+              gt_suspect_note: String(ev.opinion.gt_suspect_note || ''),
             };
             const idx = list.findIndex((x) => x && Number(x.input_index) === iid);
             if (idx >= 0) list[idx] = entry;
