@@ -23,15 +23,18 @@ function escapeHtml(str) {
 }
 
 function buildChatSubtitle(chat) {
+  const title = String(chat?.title || '').trim();
+  if (title && !/^New Agent(?: \d+)?$/.test(title)) return title;
+
   const messages = Array.isArray(chat?.messages) ? chat.messages : [];
-  const lastMessage = messages.length ? String(messages[messages.length - 1]?.content || '').trim() : '';
-  if (!lastMessage) return chat?.pending ? 'Thinking...' : 'No messages yet';
-  const compact = lastMessage.replace(/\s+/g, ' ').trim();
-  return compact.length <= 42 ? compact : `${compact.slice(0, 41).trimEnd()}...`;
+  const firstUserMessage = messages.find((message) => message?.role === 'user' && String(message.content || '').trim());
+  const fallback = String(firstUserMessage?.content || '').replace(/\s+/g, ' ').trim();
+  if (!fallback) return chat?.pending ? 'Thinking...' : 'New Agent';
+  return fallback.length <= 42 ? fallback : `${fallback.slice(0, 41).trimEnd()}...`;
 }
 
 function createSidebarItem(chat, isActive) {
-  const summary = `${chat.title} · ${buildChatSubtitle(chat)}`;
+  const summary = buildChatSubtitle(chat);
   return `
     <div class="agent-window__chat-item score-rule-card${isActive ? ' is-active' : ''}" data-chat-id="${escapeHtml(chat.id)}">
       <button type="button" class="agent-window__chat-item-inner score-rule-card-inner" data-chat-id="${escapeHtml(chat.id)}" title="${escapeHtml(summary)}">
