@@ -722,7 +722,11 @@ function generateNodeId() {
   return 'n_' + Date.now() + '_' + (Math.random() * 1e9 | 0);
 }
 
-export function buildWorkflowCanvas(root) {
+export function buildWorkflowCanvas(root, options = {}) {
+  const getCurrentProjectPath =
+    options && typeof options.getCurrentProjectPath === 'function'
+      ? options.getCurrentProjectPath
+      : () => '';
   const canvas = document.createElement('div');
   canvas.className = 'workflow-canvas';
 
@@ -2292,8 +2296,14 @@ export function buildWorkflowCanvas(root) {
       <span>Agent Window</span>
     </button>
   `;
-  autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', openAgentWindowModal);
+  autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', () => {
+    openAgentWindowModal({ projectPath: getCurrentProjectPath() });
+  });
   canvasControlsStack.appendChild(autopilotToolbar);
+
+  function setAgentWindowVisible(visible) {
+    autopilotToolbar.style.display = visible ? '' : 'none';
+  }
 
   const zoomToolbar = document.createElement('div');
   zoomToolbar.className = 'workflow-canvas__zoom-toolbar';
@@ -4562,17 +4572,6 @@ export function buildWorkflowCanvas(root) {
         syncReviewSuggestionSeqNext(merged);
         toWrite = merged;
       }
-      // Preserve chatHistory and chatRequestInProgress when stream/other updates would overwrite them
-      if (existing && typeof existing === 'object') {
-        if (!Array.isArray(toWrite.chatHistory) || toWrite.chatHistory.length === 0) {
-          if (Array.isArray(existing.chatHistory) && existing.chatHistory.length > 0) {
-            toWrite = { ...toWrite, chatHistory: existing.chatHistory };
-          }
-        }
-        if (toWrite.chatRequestInProgress !== true && existing.chatRequestInProgress === true) {
-          toWrite = { ...toWrite, chatRequestInProgress: true };
-        }
-      }
       reviewNode.dataset.reviewResult = JSON.stringify(toWrite);
       if (toWrite.reviewProgress != null) {
         setReviewNodeProgress(reviewNode, toWrite.reviewProgress);
@@ -5031,6 +5030,7 @@ export function buildWorkflowCanvas(root) {
     getCanvasState,
     loadCanvasState,
     setOnCanvasChange,
+    setAgentWindowVisible,
     isPromptNameAlreadyUsed,
     isDatasetNameAlreadyUsed,
     shutdownRunPoll,

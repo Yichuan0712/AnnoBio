@@ -668,6 +668,7 @@ def _cluster_opinions_for_phase2(
     provider: str,
     model: str,
     api_key: str,
+    base_url: str,
     max_tokens: int,
     is_cancelled: Callable[[], bool],
 ) -> list[list[int]]:
@@ -730,6 +731,7 @@ def _cluster_opinions_for_phase2(
                 provider=provider,
                 model=model,
                 api_key=api_key,
+                base_url=base_url,
                 prompt=prompt,
                 response_model=Phase15Clustering,
                 max_tokens=max_tokens,
@@ -1237,6 +1239,7 @@ def _analyze_input_group(
     provider: str,
     model: str,
     api_key: str,
+    base_url: str,
     max_tokens: int,
 ) -> tuple[PerRowOpinion, list[int]]:
     prompt = _build_phase1_prompt_for_input_group(prompt_text=prompt_text, group_rows=group_rows)
@@ -1265,6 +1268,7 @@ def _analyze_input_group(
         provider=provider,
         model=model,
         api_key=api_key,
+        base_url=base_url,
         prompt=prompt,
         response_model=Phase1LlmOutput,
         max_tokens=max_tokens,
@@ -1286,6 +1290,7 @@ def run_review_pipeline(
     provider: str,
     model: str,
     api_key: str,
+    base_url: str,
     body: Any,
     max_tokens: int,
     max_failed_inputs: int,
@@ -1353,6 +1358,7 @@ def run_review_pipeline(
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
             max_tokens=max_tokens,
         )
 
@@ -1390,6 +1396,7 @@ def run_review_pipeline(
         provider=provider,
         model=model,
         api_key=api_key,
+        base_url=base_url,
         max_tokens=max_tokens,
         is_cancelled=is_cancelled,
     )
@@ -1451,6 +1458,7 @@ def run_review_pipeline(
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
             prompt=mod_prompt,
             response_model=Phase2ModificationsLlm,
             max_tokens=max_tokens,

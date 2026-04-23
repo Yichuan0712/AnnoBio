@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, screen } from 'electron';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
@@ -50,6 +51,49 @@ function getBackendCwd() {
     return path.join(process.resourcesPath, 'backend');
   }
   return path.join(getRepoRoot(), 'backend');
+}
+
+function getAgentSessionsDir() {
+  return path.join(getBackendCwd(), 'data', 'agent_sessions');
+}
+
+function getAgentSessionFile(projectPath) {
+  const normalized = String(projectPath || '').trim();
+  if (!normalized) return null;
+  const hash = crypto
+    .createHash('sha256')
+    .update(path.resolve(normalized).toLowerCase())
+    .digest('hex');
+  return path.join(getAgentSessionsDir(), `${hash}.json`);
+}
+
+function normalizeAgentConversationPayload(payload) {
+  const data = payload && typeof payload === 'object' ? payload : {};
+  const conversations = Array.isArray(data.conversations)
+    ? data.conversations
+        .filter((item) => item && typeof item === 'object' && String(item.id || '').trim())
+        .map((item) => ({
+          ...item,
+          id: String(item.id || '').trim(),
+          title: String(item.title || '').trim() || 'New Agent',
+          generatedTitle: item.generatedTitle === true,
+          updatedAt: Number.isFinite(Number(item.updatedAt)) ? Number(item.updatedAt) : Date.now(),
+          pending: item.pending === true,
+          messages: Array.isArray(item.messages)
+            ? item.messages
+                .filter((msg) => msg && typeof msg === 'object')
+                .map((msg) => ({
+                  role: String(msg.role || 'assistant'),
+                  content: String(msg.content || ''),
+                }))
+            : [],
+        }))
+    : [];
+  const activeConversationId = String(data.activeConversationId || '').trim();
+  return {
+    activeConversationId,
+    conversations,
+  };
 }
 
 function killProcessOnPort(port) {
@@ -198,6 +242,28 @@ ipcMain.handle('project:save', async (_e, filePath, state) => {
 ipcMain.handle('project:load', async (_e, filePath) => {
   const raw = await fs.readFile(filePath, 'utf-8');
   return JSON.parse(raw);
+});
+
+ipcMain.handle('agent-conversations:load', async (_e, projectPath) => {
+  const filePath = getAgentSessionFile(projectPath);
+  if (!filePath || !fsSync.existsSync(filePath)) {
+    return { activeConversationId: '', conversations: [] };
+  }
+  try {
+    const raw = await fs.readFile(filePath, 'utf-8');
+    return normalizeAgentConversationPayload(JSON.parse(raw));
+  } catch (_) {
+    return { activeConversationId: '', conversations: [] };
+  }
+});
+
+ipcMain.handle('agent-conversations:save', async (_e, projectPath, payload) => {
+  const filePath = getAgentSessionFile(projectPath);
+  if (!filePath) return { ok: false };
+  const normalized = normalizeAgentConversationPayload(payload);
+  await fs.mkdir(getAgentSessionsDir(), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(normalized, null, 2), 'utf-8');
+  return { ok: true };
 });
 
 // Dataset/table export: save dialog then write file (CSV/TSV = utf8, XLSX = base64)

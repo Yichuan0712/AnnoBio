@@ -57,8 +57,10 @@ window.addEventListener('DOMContentLoaded', () => {
     appBody.appendChild(appMain);
     root.appendChild(appBody);
 
-    const canvasAPI = buildWorkflowCanvas(appMain);
     let currentProjectPath = null;
+    const canvasAPI = buildWorkflowCanvas(appMain, {
+      getCurrentProjectPath: () => currentProjectPath,
+    });
 
   const APP_TITLE = 'Prompt Studio';
   function updateWindowTitle(projectPath) {
@@ -78,6 +80,7 @@ window.addEventListener('DOMContentLoaded', () => {
     await api.saveProject(path, state);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
+    canvasAPI.setAgentWindowVisible?.(true);
   };
 
   const onOpenProject = async () => {
@@ -91,6 +94,7 @@ window.addEventListener('DOMContentLoaded', () => {
     updateWindowTitle(path);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
+    canvasAPI.setAgentWindowVisible?.(true);
   };
 
   const onSaveAsProject = async () => {
@@ -104,6 +108,7 @@ window.addEventListener('DOMContentLoaded', () => {
     updateWindowTitle(path);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
+    canvasAPI.setAgentWindowVisible?.(true);
   };
 
   const topBarAPI = buildTopBar(root, {
@@ -114,6 +119,7 @@ window.addEventListener('DOMContentLoaded', () => {
     onSaveAsProject,
   });
   topBarAPI.setAddMenuEnabled(false);
+  canvasAPI.setAgentWindowVisible?.(false);
 
   let saveTimeout = null;
   canvasAPI.setOnCanvasChange(() => {

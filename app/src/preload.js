@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showSaveAsProjectDialog: (defaultPath) => ipcRenderer.invoke('project:save-as-dialog', defaultPath),
   saveProject: (filePath, state) => ipcRenderer.invoke('project:save', filePath, state),
   loadProject: (filePath) => ipcRenderer.invoke('project:load', filePath),
+  loadAgentConversations: (projectPath) => ipcRenderer.invoke('agent-conversations:load', projectPath),
+  saveAgentConversations: (projectPath, data) => ipcRenderer.invoke('agent-conversations:save', projectPath, data),
   showSaveFileDialog: (opts) => ipcRenderer.invoke('dialog:show-save', opts),
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('fs:write-file', filePath, data, encoding),
 });

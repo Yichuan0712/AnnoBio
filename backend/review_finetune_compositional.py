@@ -28,6 +28,7 @@ def compositional_finetune_segments(
     provider: str,
     model: str,
     api_key: str,
+    base_url: str,
     max_tokens: int,
     old_sentence: str,
     new_sentence: str,
@@ -68,6 +69,7 @@ def compositional_finetune_segments(
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=min(4096, int(max_tokens or 8192)),
         )
@@ -126,6 +128,7 @@ def compositional_finetune_segment_candidates(
     provider: str,
     model: str,
     api_key: str,
+    base_url: str,
     max_tokens: int,
     old_sentence: str,
     new_sentence: str,
@@ -180,6 +183,7 @@ def compositional_finetune_segment_candidates(
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=min(4096, int(max_tokens or 8192)),
         )
