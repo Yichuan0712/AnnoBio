@@ -1,14 +1,15 @@
 import { attachModalPaneToggle } from './paneToggleButton.js';
 import { mountAgentChatSession } from './agentChatSession.js';
+import { clampAgentTitle } from './agentTitleLimits.js';
 
 function createChatId() {
   return `chat-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function createDraftChat(index = 1) {
+function createDraftChat() {
   return {
     id: createChatId(),
-    title: index <= 1 ? 'New Agent' : `New Agent ${index}`,
+    title: 'New Agent',
     generatedTitle: true,
     updatedAt: Date.now(),
     messages: [],
@@ -24,13 +25,13 @@ function escapeHtml(str) {
 
 function buildChatSubtitle(chat) {
   const title = String(chat?.title || '').trim();
-  if (title && !/^New Agent(?: \d+)?$/.test(title)) return title;
+  if (title && !/^New Agent(?: \d+)?$/.test(title)) return clampAgentTitle(title);
 
   const messages = Array.isArray(chat?.messages) ? chat.messages : [];
   const firstUserMessage = messages.find((message) => message?.role === 'user' && String(message.content || '').trim());
   const fallback = String(firstUserMessage?.content || '').replace(/\s+/g, ' ').trim();
   if (!fallback) return chat?.pending ? 'Thinking...' : 'New Agent';
-  return fallback.length <= 42 ? fallback : `${fallback.slice(0, 41).trimEnd()}...`;
+  return clampAgentTitle(fallback);
 }
 
 function createSidebarItem(chat, isActive) {
@@ -68,7 +69,7 @@ function normalizeStoredChats(data) {
         .filter((chat) => chat && typeof chat === 'object' && String(chat.id || '').trim())
         .map((chat) => ({
           id: String(chat.id || '').trim(),
-          title: String(chat.title || '').trim() || 'New Agent',
+          title: clampAgentTitle(String(chat.title || '').trim() || 'New Agent'),
           generatedTitle: chat.generatedTitle === true,
           updatedAt: Number.isFinite(Number(chat.updatedAt)) ? Number(chat.updatedAt) : Date.now(),
           pending: chat.pending === true,
@@ -82,19 +83,34 @@ function normalizeStoredChats(data) {
             : [],
         }))
     : [];
-  const activeChatId = String(data?.activeConversationId || '').trim();
+  const activeChatId = String(data?.activeConversationId || data?.activeChatId || '').trim();
   return { conversations: sortChatsByRecent(conversations), activeChatId };
 }
 
-function nextDraftIndexFromChats(chats) {
-  const nums = (Array.isArray(chats) ? chats : [])
-    .map((chat) => {
-      const m = String(chat?.title || '').match(/^New Agent(?: (\d+))?$/);
-      if (!m) return 0;
-      return m[1] ? Number(m[1]) : 1;
-    })
-    .filter((n) => Number.isFinite(n) && n > 0);
-  return nums.length ? Math.max(...nums) : 0;
+/** Apply disk snapshot onto an in-memory chat when disk is newer or has completed a pending reply. */
+function mergeRemoteConversationIntoLocal(local, remote) {
+  if (!local || !remote || local.id !== remote.id) return false;
+  if (!Array.isArray(local.messages)) local.messages = [];
+  if (!Array.isArray(remote.messages)) return false;
+  const lm = local.messages.length;
+  const rm = remote.messages.length;
+  const lt = Number(local.updatedAt) || 0;
+  const rt = Number(remote.updatedAt) || 0;
+  const localPending = local.pending === true;
+  const remotePending = remote.pending === true;
+
+  const remoteAhead = rm > lm || (rt > lt && rm >= lm) || (localPending && !remotePending);
+  if (!remoteAhead) return false;
+
+  local.title = remote.title;
+  local.generatedTitle = remote.generatedTitle === true;
+  local.pending = remotePending;
+  local.updatedAt = Math.max(lt, rt);
+  local.messages = remote.messages.map((m) => ({
+    role: String(m.role || 'assistant'),
+    content: String(m.content || ''),
+  }));
+  return true;
 }
 
 export async function openAgentWindowModal(options = {}) {
@@ -107,7 +123,7 @@ export async function openAgentWindowModal(options = {}) {
 
   const projectPath = String(options?.projectPath || '').trim();
   const storageApi = window.electronAPI;
-  let storedState = { conversations: [], activeConversationId: '' };
+  let storedState = { conversations: [], activeChatId: '' };
   if (projectPath && storageApi?.loadAgentConversations) {
     try {
       storedState = normalizeStoredChats(await storageApi.loadAgentConversations(projectPath));
@@ -116,10 +132,10 @@ export async function openAgentWindowModal(options = {}) {
     }
   }
 
-  let nextDraftIndex = nextDraftIndexFromChats(storedState.conversations);
-  let chats = storedState.conversations.length ? storedState.conversations : [createDraftChat(1)];
-  if (storedState.conversations.length === 0) nextDraftIndex = 1;
-  let activeChatId = chats[0].id;
+  let chats = storedState.conversations.length ? storedState.conversations : [createDraftChat()];
+  const savedActiveId = String(storedState.activeChatId || '').trim();
+  let activeChatId =
+    savedActiveId && chats.some((c) => c.id === savedActiveId) ? savedActiveId : chats[0].id;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-overlay--no-maximize agent-window-overlay';
   overlay.setAttribute('aria-labelledby', 'agent-window-title');
@@ -166,11 +182,92 @@ export async function openAgentWindowModal(options = {}) {
   `;
 
   const chatListEl = overlay.querySelector('.agent-window__chat-list');
-  const mainLabelEl = overlay.querySelector('.agent-window__main-label');
   const messagesEl = overlay.querySelector('.agent-window__messages');
   const composerInputEl = overlay.querySelector('.agent-window__composer-input');
   const composerSendEl = overlay.querySelector('.agent-window__composer-send');
   let chatSession = null;
+  let pendingPollTimeout = null;
+
+  function stopPendingPoll() {
+    if (pendingPollTimeout != null) {
+      clearTimeout(pendingPollTimeout);
+      pendingPollTimeout = null;
+    }
+  }
+
+  /** If a chat was left pending while a request finished after the UI closed, merge from disk until caught up. */
+  function finalizeStalePendingChats() {
+    let changed = false;
+    for (const c of chats) {
+      if (!c.pending) continue;
+      if (!Array.isArray(c.messages)) c.messages = [];
+      const msgs = c.messages;
+      const last = msgs[msgs.length - 1];
+      if (last?.role === 'user' && String(last.content || '').trim()) {
+        c.pending = false;
+        msgs.push({
+          role: 'assistant',
+          content:
+            'No response was saved for the previous in-flight request. Send again if you still need a reply.',
+        });
+        c.updatedAt = Date.now();
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  async function pollAgentConversationsFromDiskOnce() {
+    if (!projectPath || !storageApi?.loadAgentConversations) return false;
+    const disk = normalizeStoredChats(await storageApi.loadAgentConversations(projectPath));
+    let changed = false;
+    for (const local of chats) {
+      const remote = disk.conversations.find((x) => x.id === local.id);
+      if (remote && mergeRemoteConversationIntoLocal(local, remote)) changed = true;
+    }
+    return changed;
+  }
+
+  function startPendingResolutionLoop() {
+    stopPendingPoll();
+    if (!projectPath || !storageApi?.loadAgentConversations) return;
+    if (!chats.some((c) => c.pending === true)) return;
+
+    const maxTicks = 90;
+    let tick = 0;
+
+    const step = async () => {
+      pendingPollTimeout = null;
+      if (!overlay.isConnected) return;
+      if (!chats.some((c) => c.pending === true)) return;
+
+      tick += 1;
+      try {
+        const changed = await pollAgentConversationsFromDiskOnce();
+        if (changed && overlay.isConnected) {
+          chats = sortChatsByRecent(chats);
+          syncActiveChatUI();
+          saveConversations();
+        }
+      } catch (e) {
+        console.error('Agent conversations poll:', e);
+      }
+
+      if (!overlay.isConnected) return;
+      if (!chats.some((c) => c.pending === true)) return;
+      if (tick >= maxTicks) {
+        if (finalizeStalePendingChats() && overlay.isConnected) {
+          chats = sortChatsByRecent(chats);
+          syncActiveChatUI();
+          saveConversations();
+        }
+        return;
+      }
+      pendingPollTimeout = setTimeout(step, 600);
+    };
+
+    pendingPollTimeout = setTimeout(step, 350);
+  }
 
   function saveConversations() {
     if (!projectPath || !storageApi?.saveAgentConversations) return;
@@ -204,10 +301,20 @@ export async function openAgentWindowModal(options = {}) {
   }
 
   function syncActiveChatUI() {
+    if (!overlay.isConnected) return;
     const activeChat = getActiveChat();
-    if (mainLabelEl) mainLabelEl.textContent = activeChat?.title || 'Agent';
-    chatSession?.setConversation(activeChat);
-    renderSidebar();
+    const labelEl = overlay.querySelector('.agent-window__main-label');
+    if (labelEl) {
+      const raw = String(activeChat?.title || '').trim();
+      labelEl.textContent = raw ? clampAgentTitle(raw) : 'Agent';
+    }
+    try {
+      chatSession?.setConversation(activeChat);
+    } catch (err) {
+      console.error('Agent chat setConversation:', err);
+    } finally {
+      renderSidebar();
+    }
   }
 
   function setSidebarCollapsed(collapsed) {
@@ -222,7 +329,9 @@ export async function openAgentWindowModal(options = {}) {
   }
 
   function close() {
+    stopPendingPoll();
     chatSession?.destroy?.();
+    chatSession = null;
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);
   }
@@ -245,8 +354,7 @@ export async function openAgentWindowModal(options = {}) {
   chatListEl.addEventListener('click', (e) => {
     const newChatBtn = e.target.closest('[data-action="new-chat"]');
     if (newChatBtn) {
-      nextDraftIndex += 1;
-      const newChat = createDraftChat(nextDraftIndex);
+      const newChat = createDraftChat();
       chats = sortChatsByRecent([...chats, newChat]);
       activeChatId = newChat.id;
       syncActiveChatUI();
@@ -258,8 +366,7 @@ export async function openAgentWindowModal(options = {}) {
       const chatId = deleteBtn.getAttribute('data-chat-id') || '';
       chats = sortChatsByRecent(chats.filter((chat) => chat.id !== chatId));
       if (chats.length === 0) {
-        nextDraftIndex += 1;
-        const fallbackChat = createDraftChat(nextDraftIndex);
+        const fallbackChat = createDraftChat();
         chats = [fallbackChat];
         activeChatId = fallbackChat.id;
       } else if (activeChatId === chatId) {
@@ -283,13 +390,17 @@ export async function openAgentWindowModal(options = {}) {
     inputEl: composerInputEl,
     sendButtonEl: composerSendEl,
     autoResizeComposer,
+    resolveConversation: (conversationId) =>
+      chats.find((chat) => chat.id === String(conversationId || '').trim()) || null,
     onConversationUpdated: () => {
       chats = sortChatsByRecent(chats);
-      syncActiveChatUI();
       saveConversations();
+      startPendingResolutionLoop();
+      if (overlay.isConnected) syncActiveChatUI();
     },
   });
   syncActiveChatUI();
+  startPendingResolutionLoop();
   setSidebarCollapsed(true);
   agentPaneToggle.update();
   autoResizeComposer();

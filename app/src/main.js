@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
+import { clampAgentTitle } from './agentTitleLimits.js';
 
 /**
  * ===== Python backend =====
@@ -75,7 +76,7 @@ function normalizeAgentConversationPayload(payload) {
         .map((item) => ({
           ...item,
           id: String(item.id || '').trim(),
-          title: String(item.title || '').trim() || 'New Agent',
+          title: clampAgentTitle(String(item.title || '').trim() || 'New Agent'),
           generatedTitle: item.generatedTitle === true,
           updatedAt: Number.isFinite(Number(item.updatedAt)) ? Number(item.updatedAt) : Date.now(),
           pending: item.pending === true,
