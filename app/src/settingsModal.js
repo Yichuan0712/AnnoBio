@@ -5,8 +5,9 @@
 
 import { showAlert, showConfirm } from './alertModal.js';
 import { selectPlaceholderLabel } from './displayTextNormalize.js';
+import { BACKEND_API_BASE } from './backendConfig.js';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = BACKEND_API_BASE;
 
 /** Must stay aligned with backend DEFAULT_SETTINGS in main.py */
 const MODEL_SETTINGS_DEFAULTS = {

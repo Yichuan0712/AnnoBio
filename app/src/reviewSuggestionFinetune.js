@@ -17,8 +17,9 @@
  */
 
 import { rebuildWorkingFromApplied } from './reviewWorkingSections.js';
+import { BACKEND_API_BASE } from './backendConfig.js';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = BACKEND_API_BASE;
 
 // ─── Session management (abort on app close) ─────────────────────────────────
 

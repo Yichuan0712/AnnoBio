@@ -109,7 +109,7 @@ Output: Windows executable in `out/`. Backend is bundled with an embedded Python
 
 ## API
 
-REST API on `http://localhost:8000`:
+REST API on `http://127.0.0.1:8000`:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|

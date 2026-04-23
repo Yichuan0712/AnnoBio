@@ -27,8 +27,9 @@ import {
   formatSuggestionIdDisplay,
   parseNumericSuggestionId,
 } from './reviewSuggestionIds.js';
+import { BACKEND_API_BASE } from './backendConfig.js';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = BACKEND_API_BASE;
 
 /** Module-level verify state so verification survives review modal close/reopen.
  *  Keys are `reviewNodeId:sugIdx`. */
