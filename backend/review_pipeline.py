@@ -1162,76 +1162,6 @@ def _sanitize_prompt_edits(
     return out
 
 
-_PHASE2_FALLBACK_ANCHOR_CANDIDATES: tuple[str, ...] = (
-    "Providing these identifiers from the source ensures other scientists can accurately look up the entry in UniProt.",
-    "Whenever possible, use standardized identifiers:",
-)
-
-
-def _phase2_edits_when_llm_abstains(
-    sections: list[Any],
-    cluster_pairs: list[tuple[PerRowOpinion, list[int]]],
-) -> list[PromptEditLlm]:
-    """
-    If Phase2 returns an empty ``prompt_edits`` list, emit one anchored edit so the UI still receives suggestions.
-    Anchors on the WORKFLOW **Normalize Names** paragraph when that wording exists in stored sections.
-    """
-    if not cluster_pairs:
-        return []
-    p1: list[str] = []
-    for op, _ in cluster_pairs:
-        lab = ((op.card_title or "").strip() or (op.issue_summary or "").strip())[:200]
-        if lab and lab not in p1:
-            p1.append(lab)
-        if len(p1) >= 3:
-            break
-    if not p1:
-        p1 = ["Cluster findings"]
-    bits: list[str] = []
-    for op, _ in cluster_pairs:
-        r = (op.rough_modification_opinion or "").strip()
-        if r and r not in bits:
-            bits.append(r[:500])
-    tail = " ".join(bits)[:900].strip()
-    guidance = (
-        "Also require mapping holoenzyme, complex, or informal protein names to **gene symbols** required by scoring, "
-        "and emit **every distinct** phosphatase–substrate pair the passage supports, including multiple isoforms on one substrate when the text implies them."
-    )
-    if tail:
-        guidance = (guidance + " Context from diagnosis: " + tail[:450]).strip()
-
-    old_span: str | None = None
-    for sec in sections or []:
-        _, body = _sec_name_content(sec)
-        for cand in _PHASE2_FALLBACK_ANCHOR_CANDIDATES:
-            resolved = _resolve_old_sentence_span(body, cand)
-            if resolved:
-                old_span = resolved
-                break
-        if old_span:
-            break
-    if not old_span:
-        safe_print(
-            "[Review] Phase 2 fallback skipped (no Normalize Names anchor in stored sections).",
-            flush=True,
-        )
-        return []
-
-    new_sent = (old_span.rstrip() + " " + guidance).strip()
-    return [
-        PromptEditLlm(
-            name="Clarify normalization and multi-pair coverage",
-            phase1_addresses=p1,
-            old_sentence=old_span,
-            new_sentence=new_sent,
-            reason=(
-                "Phase 2 returned no edits; this server fallback extends the Normalize Names line in the stored prompt so the run "
-                "still yields an applyable patch aligned with the cluster diagnosis."
-            ),
-        )
-    ]
-
-
 def _analyze_input_group(
     *,
     group_rows: list[Any],
@@ -1473,12 +1403,6 @@ def run_review_pipeline(
             )
         target_labels = _cluster_fallback_target_score_labels(comparison_rows, cluster_pairs)
         raw_llm_edits = list(mod_raw.prompt_edits or [])
-        if not raw_llm_edits:
-            safe_print(
-                "[Review] Phase 2 LLM returned empty prompt_edits; applying anchored fallback if possible.",
-                flush=True,
-            )
-            raw_llm_edits = _phase2_edits_when_llm_abstains(sections, cluster_pairs)
         full_edits: list[PromptEditSuggestion] = []
         tgt = list(target_labels)
         for el in raw_llm_edits:
