@@ -37,6 +37,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
+from agent.chat.agent_chat import build_agent_messages, format_agent_messages_for_log
 from llm import chat as llm_chat, run_structured as llm_run_structured
 
 app = FastAPI()
@@ -529,27 +530,73 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1, description="Conversation history; last message should be user")
 
 
-@app.post("/api/chat")
-def chat(body: ChatRequest):
-    """Simple chat using the given credential. Uses review_max_tokens from settings."""
+class AgentChatRequest(ChatRequest):
+    workflow_snapshot: dict[str, Any] | None = Field(
+        default=None,
+        description="Agent-friendly snapshot of the current workflow canvas",
+    )
+    node_inspection: dict[str, Any] | None = Field(
+        default=None,
+        description="Detailed context for one workflow node",
+    )
+
+
+def _resolve_chat_credential(credential_id: str) -> tuple[dict, int]:
     items = _load_credentials()
     cred = None
     for item in items:
-        if item.get("id") == body.credential_id:
+        if item.get("id") == credential_id:
             cred = item
             break
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    max_tokens = _load_settings().get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
+    return cred, max_tokens
+
+
+@app.post("/api/chat")
+def chat(body: ChatRequest):
+    """Simple chat using the given credential. Uses review_max_tokens from settings."""
+    cred, max_tokens = _resolve_chat_credential(body.credential_id)
     model = _credential_model(cred)
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
     provider = _credential_provider(cred)
     base_url = _credential_base_url(cred)
-    settings = _load_settings()
-    max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     msgs = [{"role": m.role, "content": m.content or ""} for m in body.messages]
     try:
+        content = llm_chat(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            messages=msgs,
+            max_tokens=max_tokens,
+        )
+        return {"content": content}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/agent/chat")
+def agent_chat(body: AgentChatRequest):
+    """Agent chat using the given credential, enriched with a workflow snapshot."""
+    cred, max_tokens = _resolve_chat_credential(body.credential_id)
+    model = _credential_model(cred)
+    api_key = cred.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing API key")
+    provider = _credential_provider(cred)
+    base_url = _credential_base_url(cred)
+    msgs = build_agent_messages(
+        [{"role": m.role, "content": m.content or ""} for m in body.messages],
+        workflow_snapshot=body.workflow_snapshot,
+        node_inspection=body.node_inspection,
+    )
+    try:
+        _safe_print(_HL + "[Agent Chat] Messages sent to LLM" + _R)
+        _safe_print(format_agent_messages_for_log(msgs), flush=True)
         content = llm_chat(
             provider=provider,
             model=model,

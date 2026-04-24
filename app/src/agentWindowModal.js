@@ -122,6 +122,7 @@ export async function openAgentWindowModal(options = {}) {
   }
 
   const projectPath = String(options?.projectPath || '').trim();
+  const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
   const storageApi = window.electronAPI;
   let storedState = { conversations: [], activeChatId: '' };
   if (projectPath && storageApi?.loadAgentConversations) {
@@ -390,6 +391,7 @@ export async function openAgentWindowModal(options = {}) {
     inputEl: composerInputEl,
     sendButtonEl: composerSendEl,
     autoResizeComposer,
+    getWorkflowSnapshot,
     resolveConversation: (conversationId) =>
       chats.find((chat) => chat.id === String(conversationId || '').trim()) || null,
     onConversationUpdated: () => {

@@ -46,6 +46,9 @@ import {
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
+import { buildWorkflowSnapshot } from './agent/canvas/workflowSnapshot.js';
+import { inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
+import { DATASET_BORDER_COLORS } from './workflowNodeColors.js';
 import { showAlert, showConfirm } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
@@ -2299,7 +2302,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     </button>
   `;
   autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', () => {
-    openAgentWindowModal({ projectPath: getCurrentProjectPath() });
+    openAgentWindowModal({
+      projectPath: getCurrentProjectPath(),
+      getWorkflowSnapshot,
+    });
   });
   canvasControlsStack.appendChild(autopilotToolbar);
 
@@ -2551,15 +2557,6 @@ export function buildWorkflowCanvas(root, options = {}) {
 
     return node;
   }
-
-  // 高对比度调色板：相邻色相差异大，便于区分不同数据集
-  const DATASET_BORDER_COLORS = [
-    '#2563eb', '#dc2626', '#16a34a', '#c026d3', '#ea580c', '#0891b2', '#ca8a04', '#7c3aed',
-    '#0d9488', '#b91c1c', '#65a30d', '#a855f7', '#f59e0b', '#06b6d4', '#84cc16', '#6366f1',
-    '#10b981', '#ef4444', '#22c55e', '#d946ef', '#f97316', '#0ea5e9', '#eab308', '#8b5cf6',
-    '#14b8a6', '#f43f5e', '#4ade80', '#c084fc', '#fb923c', '#38bdf8', '#a3e635', '#a78bfa',
-    '#2dd4bf', '#ec4899', '#86efac', '#e879f9', '#fdba74', '#7dd3fc', '#bef264', '#c4b5fd',
-  ]; // 40 colors
 
   /** 从 sampler 节点生成简短描述（用于 dataset 节点下方） */
   function formatSamplerDescription(samplerNode) {
@@ -5027,9 +5024,25 @@ export function buildWorkflowCanvas(root, options = {}) {
     document.addEventListener('workflow:canvas-changed', fn);
   }
 
+  function getWorkflowSnapshot() {
+    return buildWorkflowSnapshot(getCanvasState(), {
+      extractInputFields: extractInputFieldsFromSections,
+      datasetPreviewRows: 3,
+    });
+  }
+
+  function inspectNode(nodeId, options = {}) {
+    return inspectWorkflowNode(getCanvasState(), nodeId, {
+      ...options,
+      extractInputFields: extractInputFieldsFromSections,
+    });
+  }
+
   root.appendChild(canvas);
   return {
     getCanvasState,
+    getWorkflowSnapshot,
+    inspectNode,
     loadCanvasState,
     setOnCanvasChange,
     setAgentWindowVisible,
