@@ -1,6 +1,6 @@
 import { AGENT_TITLE_MAX_CHARS, clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
-
+import { requestAgentChat, requestSimpleChat } from './agent/api/agentChatClient.js';
 const API_BASE = BACKEND_API_BASE;
 const CHAT_MAX_MESSAGES = 40;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
@@ -211,6 +211,7 @@ export function mountAgentChatSession({
   autoResizeComposer,
   onConversationUpdated,
   resolveConversation,
+  getWorkflowSnapshot,
 }) {
   if (!overlay || !messagesEl || !inputEl || !sendButtonEl) {
     return {
@@ -344,22 +345,27 @@ export function mountAgentChatSession({
     cancelEditingMessage();
   }
 
-  async function requestChatCompletion(messages) {
-    const res = await fetch(`${API_BASE}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        credential_id: credentialId,
+  function readWorkflowSnapshot() {
+    if (typeof getWorkflowSnapshot !== 'function') return null;
+    try {
+      const snapshot = getWorkflowSnapshot();
+      return snapshot && typeof snapshot === 'object' ? snapshot : null;
+    } catch (error) {
+      console.error('Read workflow snapshot:', error);
+      return null;
+    }
+  }
+
+  async function requestChatCompletion(messages, options = {}) {
+    const useWorkflowContext = options.useWorkflowContext === true;
+    if (useWorkflowContext) {
+      return requestAgentChat({
+        credentialId,
         messages,
-      }),
-    });
-    const payload = await res.json().catch(() => ({}));
-    return {
-      ok: res.ok,
-      content: res.ok
-        ? String(payload?.content || '').trim() || '(No response)'
-        : `Error: ${payload?.detail || res.statusText}`,
-    };
+        workflowSnapshot: readWorkflowSnapshot(),
+      });
+    }
+    return requestSimpleChat({ credentialId, messages });
   }
 
   async function refreshConversationTitle(targetConversation) {
@@ -371,7 +377,7 @@ export function mountAgentChatSession({
     const requestId = (titleRequestSerialByConversation.get(targetConversation.id) || 0) + 1;
     titleRequestSerialByConversation.set(targetConversation.id, requestId);
     try {
-      const { ok, content } = await requestChatCompletion(buildTitleSummaryPrompt(sourceMessages));
+      const { ok, content } = await requestChatCompletion(buildTitleSummaryPrompt(sourceMessages), { useWorkflowContext: false });
       if (!ok || titleRequestSerialByConversation.get(targetConversation.id) !== requestId) return;
       const fallbackText =
         sourceMessages.find((message) => message.role === 'user')?.content || targetConversation.title;
@@ -391,7 +397,7 @@ export function mountAgentChatSession({
 
   async function requestAssistantReply(targetConversation, targetMessages) {
     try {
-      const { ok, content: reply } = await requestChatCompletion(sliceChatHistoryForApi(targetMessages));
+      const { ok, content: reply } = await requestChatCompletion(sliceChatHistoryForApi(targetMessages), { useWorkflowContext: true });
 
       targetConversation.pending = false;
       targetMessages.push({ role: 'assistant', content: reply });
