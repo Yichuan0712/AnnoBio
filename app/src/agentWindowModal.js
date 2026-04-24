@@ -14,6 +14,8 @@ function createDraftChat() {
     updatedAt: Date.now(),
     messages: [],
     pending: false,
+    pendingStatus: '',
+    unsentDraft: '',
   };
 }
 
@@ -73,6 +75,8 @@ function normalizeStoredChats(data) {
           generatedTitle: chat.generatedTitle === true,
           updatedAt: Number.isFinite(Number(chat.updatedAt)) ? Number(chat.updatedAt) : Date.now(),
           pending: chat.pending === true,
+          pendingStatus: String(chat.pendingStatus || '').trim(),
+          unsentDraft: String(chat.unsentDraft || ''),
           messages: Array.isArray(chat.messages)
             ? chat.messages
                 .filter((message) => message && typeof message === 'object')
@@ -105,6 +109,8 @@ function mergeRemoteConversationIntoLocal(local, remote) {
   local.title = remote.title;
   local.generatedTitle = remote.generatedTitle === true;
   local.pending = remotePending;
+  local.pendingStatus = String(remote.pendingStatus || '').trim();
+  local.unsentDraft = String(remote.unsentDraft || '');
   local.updatedAt = Math.max(lt, rt);
   local.messages = remote.messages.map((m) => ({
     role: String(m.role || 'assistant'),
@@ -123,6 +129,7 @@ export async function openAgentWindowModal(options = {}) {
 
   const projectPath = String(options?.projectPath || '').trim();
   const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
+  const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
   const storageApi = window.electronAPI;
   let storedState = { conversations: [], activeChatId: '' };
   if (projectPath && storageApi?.loadAgentConversations) {
@@ -206,6 +213,7 @@ export async function openAgentWindowModal(options = {}) {
       const last = msgs[msgs.length - 1];
       if (last?.role === 'user' && String(last.content || '').trim()) {
         c.pending = false;
+        c.pendingStatus = '';
         msgs.push({
           role: 'assistant',
           content:
@@ -234,7 +242,7 @@ export async function openAgentWindowModal(options = {}) {
     if (!projectPath || !storageApi?.loadAgentConversations) return;
     if (!chats.some((c) => c.pending === true)) return;
 
-    const maxTicks = 90;
+    const maxTicks = 700;
     let tick = 0;
 
     const step = async () => {
@@ -277,6 +285,8 @@ export async function openAgentWindowModal(options = {}) {
       conversations: chats.map((chat) => ({
         ...chat,
         pending: chat.pending === true,
+        pendingStatus: String(chat.pendingStatus || '').trim(),
+        unsentDraft: String(chat.unsentDraft || ''),
         messages: Array.isArray(chat.messages)
           ? chat.messages.map((message) => ({
               role: String(message.role || 'assistant'),
@@ -392,6 +402,10 @@ export async function openAgentWindowModal(options = {}) {
     sendButtonEl: composerSendEl,
     autoResizeComposer,
     getWorkflowSnapshot,
+    inspectNode,
+    onConversationDraftChanged: () => {
+      saveConversations();
+    },
     resolveConversation: (conversationId) =>
       chats.find((chat) => chat.id === String(conversationId || '').trim()) || null,
     onConversationUpdated: () => {

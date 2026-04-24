@@ -1,9 +1,18 @@
 import { AGENT_TITLE_MAX_CHARS, clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
-import { requestAgentChat, requestSimpleChat } from './agent/api/agentChatClient.js';
+import { requestAgentChat, requestAgentPlan, requestSimpleChat } from './agent/api/agentChatClient.js';
+import { AGENT_SKILL_REGISTRY, getAgentSkillByName } from './agent/skills/registry.js';
 const API_BASE = BACKEND_API_BASE;
 const CHAT_MAX_MESSAGES = 40;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
+const AGENT_SKILL_NAMES = new Set(
+  AGENT_SKILL_REGISTRY.map((skill) => String(skill?.name || '').trim()).filter(Boolean)
+);
+const AGENT_LOOP_MAX_RUNTIME_MS = 7 * 60 * 1000;
+const AGENT_LOOP_REPEAT_WARNING_THRESHOLD = 2;
+const AGENT_LOOP_REPEAT_CRITICAL_THRESHOLD = 3;
+const AGENT_LOOP_STALL_WARNING_THRESHOLD = 2;
+const AGENT_LOOP_STALL_CRITICAL_THRESHOLD = 3;
 
 function sliceChatHistoryForApi(messages) {
   if (!Array.isArray(messages) || messages.length <= CHAT_MAX_MESSAGES) {
@@ -87,7 +96,7 @@ function getSendIconSvg() {
 }
 
 function createMessageNode(role, content, options = {}) {
-  const { loading = false, editable = false, actionDisabled = false, onEdit = null } = options;
+  const { loading = false, loadingText = 'Thinking...', editable = false, actionDisabled = false, onEdit = null } = options;
   const wrapper = document.createElement('div');
   wrapper.className = `agent-window__message agent-window__message--${role}`;
   if (loading) wrapper.classList.add('agent-window__message--loading');
@@ -102,7 +111,7 @@ function createMessageNode(role, content, options = {}) {
   if (loading) {
     bubbleEl.innerHTML = `
       <span class="agent-window__spinner" aria-hidden="true"></span>
-      <span class="agent-window__loading-text">Thinking...</span>
+      <span class="agent-window__loading-text">${String(loadingText || 'Thinking...')}</span>
     `;
   } else {
     const contentEl = document.createElement('div');
@@ -210,8 +219,10 @@ export function mountAgentChatSession({
   sendButtonEl,
   autoResizeComposer,
   onConversationUpdated,
+  onConversationDraftChanged,
   resolveConversation,
   getWorkflowSnapshot,
+  inspectNode,
 }) {
   if (!overlay || !messagesEl || !inputEl || !sendButtonEl) {
     return {
@@ -256,6 +267,20 @@ export function mountAgentChatSession({
     }
   }
 
+  function notifyConversationDraftChanged(conversation) {
+    if (typeof onConversationDraftChanged === 'function' && conversation) {
+      onConversationDraftChanged(conversation);
+    }
+  }
+
+  function setPendingStatus(conversation, status) {
+    if (!conversation) return;
+    conversation.pendingStatus = String(status || '').trim();
+    conversation.updatedAt = Date.now();
+    notifyConversationUpdated(conversation);
+    if (isMounted() && activeConversationId === conversation.id) renderActiveConversation();
+  }
+
   function renderActiveConversation() {
     const activeConversation = getActiveConversation();
     messagesEl.innerHTML = '';
@@ -283,7 +308,10 @@ export function mountAgentChatSession({
       });
     });
     if (activeConversation?.pending) {
-      appendMessage('assistant', '', { loading: true });
+      appendMessage('assistant', '', {
+        loading: true,
+        loadingText: String(activeConversation?.pendingStatus || 'Thinking...'),
+      });
     }
   }
 
@@ -300,6 +328,12 @@ export function mountAgentChatSession({
       : credentialId
         ? (sendInFlight ? 'Waiting for response...' : 'Send a message...')
         : 'Select a Review model in Settings first';
+  }
+
+  function syncComposerDraftFromConversation() {
+    const activeConversation = getActiveConversation();
+    inputEl.value = String(activeConversation?.unsentDraft || '');
+    if (typeof autoResizeComposer === 'function') autoResizeComposer();
   }
 
   function appendMessage(role, content, options = {}) {
@@ -356,13 +390,305 @@ export function mountAgentChatSession({
     }
   }
 
+  function stableStringify(value) {
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+    }
+    if (value && typeof value === 'object') {
+      const entries = Object.keys(value)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`);
+      return `{${entries.join(',')}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  function normalizeSkillArgs(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  }
+
+  function addLoopSignal(loopSignals, signal) {
+    const normalizedSignal = String(signal || '').trim();
+    if (!normalizedSignal) return;
+    if (!loopSignals.includes(normalizedSignal)) loopSignals.push(normalizedSignal);
+  }
+
+  function buildSkillCallFingerprint(skillCall) {
+    return `${String(skillCall?.skillName || '').trim()}:${stableStringify(normalizeSkillArgs(skillCall?.args))}`;
+  }
+
+  function buildObservationFingerprint(observation) {
+    return `${String(observation?.skillName || '').trim()}:${stableStringify(normalizeSkillArgs(observation?.args))}:${stableStringify(observation?.result ?? null)}`;
+  }
+
+  function buildObservationSummary(skill, skillCall, result, workflowSnapshot) {
+    if (skill && typeof skill.summarizeResult === 'function') {
+      return String(
+        skill.summarizeResult({
+          args: normalizeSkillArgs(skillCall?.args),
+          result,
+          runtime: {
+            inspectNode,
+            workflowSnapshot,
+          },
+        }) || ''
+      ).trim();
+    }
+    return result && typeof result === 'object'
+      ? `Executed ${String(skillCall?.skillName || 'skill').trim()} successfully`
+      : `Executed ${String(skillCall?.skillName || 'skill').trim()} with no result`;
+  }
+
+  function getSkillProgressLabel(skill, skillCall, workflowSnapshot) {
+    if (skill && typeof skill.getProgressLabel === 'function') {
+      return String(
+        skill.getProgressLabel({
+          args: normalizeSkillArgs(skillCall?.args),
+          runtime: {
+            inspectNode,
+            workflowSnapshot,
+          },
+        }) || ''
+      ).trim();
+    }
+    return `Running ${String(skillCall?.skillName || 'skill').trim()}...`;
+  }
+
+  function executeSkillCall(skillCall, workflowSnapshot) {
+    const skillName = String(skillCall?.skillName || '').trim();
+    const args = normalizeSkillArgs(skillCall?.args);
+    const skill = getAgentSkillByName(skillName);
+    if (!skill || typeof skill.execute !== 'function') {
+      return {
+        skillName,
+        args,
+        ok: false,
+        summary: `Skill ${skillName || 'unknown'} is unavailable`,
+        result: null,
+      };
+    }
+    try {
+      const result = skill.execute({
+        args,
+        runtime: {
+          inspectNode,
+          workflowSnapshot,
+        },
+      });
+      return {
+        skillName,
+        args,
+        ok: result !== null && result !== undefined,
+        summary: buildObservationSummary(skill, skillCall, result, workflowSnapshot),
+        result,
+      };
+    } catch (error) {
+      console.error(`Execute agent skill ${skillName}:`, error);
+      return {
+        skillName,
+        args,
+        ok: false,
+        summary: `Skill ${skillName || 'unknown'} failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        result: null,
+      };
+    }
+  }
+
+  function normalizePlannedSkillCalls(plan) {
+    const calls = Array.isArray(plan?.skill_calls) ? plan.skill_calls : [];
+    const seen = new Set();
+    return calls
+      .map((call) => {
+        const args = normalizeSkillArgs(call?.args);
+        const legacyNodeId = String(call?.node_id || '').trim();
+        if (legacyNodeId && !String(args?.node_id || '').trim()) {
+          args.node_id = legacyNodeId;
+        }
+        return {
+          skillName: String(call?.skill_name || '').trim(),
+          args,
+          reason: String(call?.reason || '').trim(),
+        };
+      })
+      .filter((call) => AGENT_SKILL_NAMES.has(call.skillName))
+      .filter((call) => {
+        const fingerprint = buildSkillCallFingerprint(call);
+        if (seen.has(fingerprint)) return false;
+        seen.add(fingerprint);
+        return true;
+      });
+  }
+
+  function normalizePlannerPayload(plan) {
+    return {
+      done: plan?.done === true,
+      planSummary: String(plan?.plan_summary || '').trim(),
+      expectedProgress: String(plan?.expected_progress || '').trim(),
+      skillCalls: normalizePlannedSkillCalls(plan),
+    };
+  }
+
+  async function planAgentSkills(messages, workflowSnapshot, observations, loopSignals, roundIndex) {
+    if (!workflowSnapshot) {
+      return {
+        ok: true,
+        plan: {
+          done: true,
+          planSummary: 'No workflow snapshot available',
+          expectedProgress: '',
+          skillCalls: [],
+        },
+      };
+    }
+    const { ok, plan } = await requestAgentPlan({
+      credentialId,
+      messages,
+      workflowSnapshot,
+      observations,
+      availableSkills: AGENT_SKILL_REGISTRY,
+      loopSignals,
+      roundIndex,
+    });
+    return {
+      ok,
+      plan: normalizePlannerPayload(plan),
+    };
+  }
+
   async function requestChatCompletion(messages, options = {}) {
     const useWorkflowContext = options.useWorkflowContext === true;
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
     if (useWorkflowContext) {
+      const agentTrace = [`LOOP START: evaluating ${AGENT_SKILL_REGISTRY.length} available skills`];
+      const workflowSnapshot = readWorkflowSnapshot();
+      if (!workflowSnapshot) {
+        return requestSimpleChat({ credentialId, messages });
+      }
+      const observations = [];
+      const loopSignals = [];
+      const seenObservationFingerprints = new Set();
+      const callCountsByFingerprint = new Map();
+      const loopStartedAt = Date.now();
+      let stalledCount = 0;
+      let roundIndex = 0;
+      try {
+        while (true) {
+          roundIndex += 1;
+          const elapsedMs = Date.now() - loopStartedAt;
+          if (elapsedMs >= AGENT_LOOP_MAX_RUNTIME_MS) {
+            addLoopSignal(loopSignals, `Agent loop runtime exceeded ${Math.round(AGENT_LOOP_MAX_RUNTIME_MS / 1000)} seconds.`);
+            agentTrace.push(`ROUND ${roundIndex} STOP: runtime watchdog reached after ${elapsedMs}ms`);
+            break;
+          }
+
+          if (onProgress) onProgress(`Planning round ${roundIndex}...`);
+          const { ok, plan } = await planAgentSkills(messages, workflowSnapshot, observations, loopSignals, roundIndex);
+          if (!ok) {
+            addLoopSignal(loopSignals, 'Planner request failed');
+            agentTrace.push(`ROUND ${roundIndex} PLAN ERROR: planner request failed, answering with current evidence`);
+            if (onProgress) onProgress('Planning failed, answering with current evidence...');
+            break;
+          }
+
+          agentTrace.push(
+            `ROUND ${roundIndex} PLAN: done=${plan.done} skills=${plan.skillCalls.length}`
+            + (plan.planSummary ? ` | summary=${plan.planSummary}` : '')
+            + (plan.expectedProgress ? ` | expect=${plan.expectedProgress}` : '')
+          );
+
+          if (plan.done) {
+            agentTrace.push(`ROUND ${roundIndex} STOP: planner marked evidence sufficient`);
+            break;
+          }
+
+          if (plan.skillCalls.length === 0) {
+            addLoopSignal(loopSignals, 'Planner returned no skill calls and did not mark the task done.');
+            agentTrace.push(`ROUND ${roundIndex} STOP: no skill call selected`);
+            break;
+          }
+
+          let roundMadeProgress = false;
+          for (const skillCall of plan.skillCalls) {
+            const skill = getAgentSkillByName(skillCall.skillName);
+            if (onProgress) onProgress(getSkillProgressLabel(skill, skillCall, workflowSnapshot));
+
+            const callFingerprint = buildSkillCallFingerprint(skillCall);
+            const repeatCount = (callCountsByFingerprint.get(callFingerprint) || 0) + 1;
+            callCountsByFingerprint.set(callFingerprint, repeatCount);
+            if (repeatCount >= AGENT_LOOP_REPEAT_WARNING_THRESHOLD) {
+              addLoopSignal(loopSignals, `Repeated skill call detected: ${callFingerprint}`);
+            }
+
+            const observation = executeSkillCall(skillCall, workflowSnapshot);
+            observations.push(observation);
+            const observationFingerprint = buildObservationFingerprint(observation);
+            const isNewObservation = !seenObservationFingerprints.has(observationFingerprint);
+            if (isNewObservation) {
+              seenObservationFingerprints.add(observationFingerprint);
+              roundMadeProgress = true;
+            }
+
+            agentTrace.push(
+              `ROUND ${roundIndex} ACT: ${skillCall.skillName}(${stableStringify(skillCall.args)}) -> `
+              + `${observation.ok ? 'ok' : 'error'} | ${observation.summary || 'no summary'} | progress=${isNewObservation ? 'yes' : 'no'}`
+            );
+
+            if (!isNewObservation && repeatCount >= AGENT_LOOP_REPEAT_CRITICAL_THRESHOLD) {
+              addLoopSignal(loopSignals, `Critical repeated skill call: ${callFingerprint}`);
+              agentTrace.push(`ROUND ${roundIndex} STOP: repeated identical observation for ${callFingerprint}`);
+              stalledCount = Math.max(stalledCount, AGENT_LOOP_STALL_CRITICAL_THRESHOLD);
+              break;
+            }
+          }
+
+          if (roundMadeProgress) {
+            stalledCount = 0;
+            if (onProgress) onProgress('Reviewing new observations...');
+            agentTrace.push(`ROUND ${roundIndex} OBSERVE: progress detected`);
+          } else {
+            stalledCount += 1;
+            if (stalledCount >= AGENT_LOOP_STALL_WARNING_THRESHOLD) {
+              addLoopSignal(loopSignals, `No new information after ${stalledCount} consecutive rounds.`);
+            }
+            agentTrace.push(`ROUND ${roundIndex} OBSERVE: no new information`);
+          }
+
+          if (stalledCount >= AGENT_LOOP_STALL_CRITICAL_THRESHOLD) {
+            agentTrace.push(`ROUND ${roundIndex} STOP: stalled with no new information`);
+            break;
+          }
+        }
+
+        const latestNodeInspection = [...observations]
+          .reverse()
+          .find((observation) => observation.skillName === 'inspect_node' && observation.ok && observation.result && typeof observation.result === 'object');
+
+        agentTrace.push(`FINAL ANSWER: workflow_snapshot=yes, observations=${observations.length}`);
+        if (onProgress) onProgress('Drafting final answer...');
+        return requestAgentChat({
+          credentialId,
+          messages,
+          workflowSnapshot,
+          observations,
+          nodeInspection: latestNodeInspection?.result || null,
+          agentTrace,
+        });
+      } catch (error) {
+        console.error('Run agent loop:', error);
+        agentTrace.push(`LOOP ERROR: ${error instanceof Error ? error.message : 'unknown error'}`);
+        addLoopSignal(loopSignals, `Agent loop error: ${error instanceof Error ? error.message : 'unknown error'}`);
+        if (onProgress) onProgress('Agent loop error, answering with current evidence...');
+      }
+      const latestNodeInspection = [...observations]
+        .reverse()
+        .find((observation) => observation.skillName === 'inspect_node' && observation.ok && observation.result && typeof observation.result === 'object');
       return requestAgentChat({
         credentialId,
         messages,
-        workflowSnapshot: readWorkflowSnapshot(),
+        workflowSnapshot,
+        observations,
+        nodeInspection: latestNodeInspection?.result || null,
+        agentTrace,
       });
     }
     return requestSimpleChat({ credentialId, messages });
@@ -397,9 +723,14 @@ export function mountAgentChatSession({
 
   async function requestAssistantReply(targetConversation, targetMessages) {
     try {
-      const { ok, content: reply } = await requestChatCompletion(sliceChatHistoryForApi(targetMessages), { useWorkflowContext: true });
+      setPendingStatus(targetConversation, 'Planning next steps...');
+      const { ok, content: reply } = await requestChatCompletion(sliceChatHistoryForApi(targetMessages), {
+        useWorkflowContext: true,
+        onProgress: (status) => setPendingStatus(targetConversation, status),
+      });
 
       targetConversation.pending = false;
+      targetConversation.pendingStatus = '';
       targetMessages.push({ role: 'assistant', content: reply });
       targetConversation.updatedAt = Date.now();
       notifyConversationUpdated(targetConversation);
@@ -408,6 +739,7 @@ export function mountAgentChatSession({
     } catch (error) {
       const reply = `Error: ${error instanceof Error ? error.message : 'Request failed'}`;
       targetConversation.pending = false;
+      targetConversation.pendingStatus = '';
       targetMessages.push({ role: 'assistant', content: reply });
       targetConversation.updatedAt = Date.now();
       notifyConversationUpdated(targetConversation);
@@ -436,6 +768,7 @@ export function mountAgentChatSession({
     targetMessage.content = text;
     targetMessages.splice(messageIndex + 1);
     targetConversation.pending = true;
+    targetConversation.pendingStatus = 'Planning next steps...';
     targetConversation.updatedAt = Date.now();
     if (messageIndex === 0) {
       targetConversation.title = deriveConversationTitle(text);
@@ -472,6 +805,8 @@ export function mountAgentChatSession({
     const targetConversation = activeConversation;
     const targetMessages = ensureConversationMessages(targetConversation);
     sendInFlight = true;
+    targetConversation.unsentDraft = '';
+    notifyConversationDraftChanged(targetConversation);
     inputEl.value = '';
     if (typeof autoResizeComposer === 'function') autoResizeComposer();
 
@@ -483,6 +818,7 @@ export function mountAgentChatSession({
     targetMessages.push({ role: 'user', content: text });
     targetConversation.updatedAt = Date.now();
     targetConversation.pending = true;
+    targetConversation.pendingStatus = 'Planning next steps...';
     notifyConversationUpdated(targetConversation);
     if (activeConversationId === targetConversation.id) renderActiveConversation();
     updateComposerState();
@@ -491,6 +827,11 @@ export function mountAgentChatSession({
   }
 
   function handleInput() {
+    const activeConversation = getActiveConversation();
+    if (activeConversation) {
+      activeConversation.unsentDraft = String(inputEl.value || '');
+      notifyConversationDraftChanged(activeConversation);
+    }
     if (typeof autoResizeComposer === 'function') autoResizeComposer();
     updateComposerState();
   }
@@ -510,6 +851,7 @@ export function mountAgentChatSession({
     activeConversationId = String(conversation?.id || '').trim();
     editingMessageIndex = -1;
     editingDraft = '';
+    syncComposerDraftFromConversation();
     renderActiveConversation();
     updateComposerState();
   }
