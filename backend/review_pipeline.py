@@ -727,7 +727,7 @@ def _cluster_opinions_for_phase2(
             flush=True,
         )
         try:
-            out, _ = llm_run_structured(
+            out, used_fallback, debug = llm_run_structured(
                 provider=provider,
                 model=model,
                 api_key=api_key,
@@ -735,6 +735,7 @@ def _cluster_opinions_for_phase2(
                 prompt=prompt,
                 response_model=Phase15Clustering,
                 max_tokens=max_tokens,
+                return_debug=True,
             )
             if isinstance(out, dict):
                 parsed = Phase15Clustering(**out)
@@ -768,6 +769,13 @@ def _cluster_opinions_for_phase2(
         report["llm_structured_output"] = (
             llm_parsed.model_dump() if hasattr(llm_parsed, "model_dump") else llm_parsed.dict()
         )
+    if "debug" in locals() and isinstance(debug, dict):
+        report["llm_transport"] = debug.get("path")
+        report["used_fallback"] = bool(locals().get("used_fallback"))
+        if debug.get("raw_response") is not None:
+            report["llm_raw_output"] = debug.get("raw_response")
+        elif debug.get("raw_text"):
+            report["llm_raw_text"] = debug.get("raw_text")
     _print_review_result_banner("PHASE 1.5", _review_json_for_print(report))
     return final
 
@@ -1194,7 +1202,7 @@ def _analyze_input_group(
         + "\n",
         flush=True,
     )
-    out, _ = llm_run_structured(
+    out, used_fallback, debug = llm_run_structured(
         provider=provider,
         model=model,
         api_key=api_key,
@@ -1202,6 +1210,7 @@ def _analyze_input_group(
         prompt=prompt,
         response_model=Phase1LlmOutput,
         max_tokens=max_tokens,
+        return_debug=True,
     )
     if isinstance(out, dict):
         diag = Phase1LlmOutput(**out)
@@ -1211,7 +1220,16 @@ def _analyze_input_group(
         diag = Phase1LlmOutput(**(out.model_dump() if hasattr(out, "model_dump") else out.dict()))
     input_one_based = _phase1_input_one_based_from_group(group_rows)
     op = PerRowOpinion(input_index=int(input_one_based), **diag.model_dump())
-    _print_review_result_banner("PHASE 1", _review_json_for_print(op))
+    phase1_report: dict[str, Any] = {
+        "llm_transport": debug.get("path") if isinstance(debug, dict) else None,
+        "used_fallback": used_fallback,
+        "parsed_output": op.model_dump(),
+    }
+    if isinstance(debug, dict) and debug.get("raw_response") is not None:
+        phase1_report["llm_raw_output"] = debug.get("raw_response")
+    elif isinstance(debug, dict) and debug.get("raw_text"):
+        phase1_report["llm_raw_text"] = debug.get("raw_text")
+    _print_review_result_banner("PHASE 1", _review_json_for_print(phase1_report))
     return op, idxs_all
 
 
@@ -1384,7 +1402,7 @@ def run_review_pipeline(
             + "\n",
             flush=True,
         )
-        out_mod, _ = llm_run_structured(
+        out_mod, used_fallback, debug = llm_run_structured(
             provider=provider,
             model=model,
             api_key=api_key,
@@ -1392,6 +1410,7 @@ def run_review_pipeline(
             prompt=mod_prompt,
             response_model=Phase2ModificationsLlm,
             max_tokens=max_tokens,
+            return_debug=True,
         )
         if isinstance(out_mod, dict):
             mod_raw = Phase2ModificationsLlm(**out_mod)
@@ -1413,6 +1432,10 @@ def run_review_pipeline(
             f"PHASE 2 (cluster {cluster_idx + 1}/{n_clusters})",
             _review_json_for_print(
                 {
+                    "llm_transport": debug.get("path") if isinstance(debug, dict) else None,
+                    "used_fallback": used_fallback,
+                    "llm_raw_output": debug.get("raw_response") if isinstance(debug, dict) else None,
+                    "llm_raw_text": debug.get("raw_text") if isinstance(debug, dict) else None,
                     "llm_output": mod_raw.model_dump() if hasattr(mod_raw, "model_dump") else mod_raw.dict(),
                     "target_score_row_indices_filled_server_side": target_labels,
                     "prompt_edits": [e.model_dump() if hasattr(e, "model_dump") else e.dict() for e in full_edits],

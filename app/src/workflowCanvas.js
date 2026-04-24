@@ -2305,6 +2305,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     openAgentWindowModal({
       projectPath: getCurrentProjectPath(),
       getWorkflowSnapshot,
+      inspectNode,
     });
   });
   canvasControlsStack.appendChild(autopilotToolbar);

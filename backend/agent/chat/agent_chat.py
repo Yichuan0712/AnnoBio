@@ -18,6 +18,7 @@ def format_agent_messages_for_log(messages: list[dict[str, Any]]) -> str:
 def build_agent_messages(
     messages: list[dict[str, Any]],
     workflow_snapshot: dict[str, Any] | None = None,
+    observations: list[dict[str, Any]] | None = None,
     node_inspection: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     normalized_messages = [
@@ -32,6 +33,7 @@ def build_agent_messages(
     system_parts.extend(
         build_agent_context_blocks(
             workflow_snapshot=workflow_snapshot,
+            observations=observations,
             node_inspection=node_inspection,
         )
     )
