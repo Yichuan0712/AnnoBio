@@ -130,6 +130,8 @@ export async function openAgentWindowModal(options = {}) {
   const projectPath = String(options?.projectPath || '').trim();
   const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
   const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
+  const addPromptNode = typeof options?.addPromptNode === 'function' ? options.addPromptNode : null;
+  const addDatasetNode = typeof options?.addDatasetNode === 'function' ? options.addDatasetNode : null;
   const storageApi = window.electronAPI;
   let storedState = { conversations: [], activeChatId: '' };
   if (projectPath && storageApi?.loadAgentConversations) {
@@ -403,6 +405,8 @@ export async function openAgentWindowModal(options = {}) {
     autoResizeComposer,
     getWorkflowSnapshot,
     inspectNode,
+    addPromptNode,
+    addDatasetNode,
     onConversationDraftChanged: () => {
       saveConversations();
     },

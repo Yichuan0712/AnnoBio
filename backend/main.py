@@ -583,7 +583,10 @@ class AgentObservation(BaseModel):
 
 class AgentSkillCall(BaseModel):
     skill_name: str = Field(..., description="Chosen skill name")
-    node_id: str = Field(..., description="Exact workflow node id for inspect_node")
+    args: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Arguments for the selected skill, matching the skill input schema",
+    )
     reason: str = Field(..., description="Why this skill was chosen")
 
 
@@ -648,8 +651,11 @@ def _build_agent_plan_prompt(
         "Avoid repeating identical skill calls that already appear in observation history unless you have a concrete reason to expect a different result.\n"
         "If loop signals indicate repeated no-progress patterns, prefer done=true unless a clearly different skill call would add new evidence.\n"
         "When the question depends on node-level details, aggressively use inspect_node rather than guessing from the workflow snapshot.\n"
-        "If you use inspect_node, node_id must be an exact node id from the workflow snapshot.\n"
-        "Do not return an args object inside skill_calls.\n\n"
+        "Return each skill_call as an object with skill_name, args, and reason.\n"
+        "args must match the selected skill input schema.\n"
+        "For inspect_node, node_id must be an exact node id from the workflow snapshot.\n"
+        "For dataset or run nodes, you may optionally set start_row and max_rows when the user asks about a specific row range or when the first preview rows are insufficient.\n"
+        "start_row is 1-based.\n\n"
         f"Planning round: {max(1, int(round_index or 1))}\n\n"
         "Available skills JSON:\n"
         + json.dumps(serialized_skills, ensure_ascii=False, indent=2)
@@ -759,7 +765,13 @@ def agent_plan(body: AgentPlanRequest):
             _safe_print(
                 f"[Agent] PLAN round {max(1, int(body.round_index or 1))} result: done={plan.done} "
                 + ", ".join(
-                    f"{call.skill_name}({json.dumps({'node_id': call.node_id}, ensure_ascii=False, sort_keys=True)})"
+                    f"{call.skill_name}("
+                    + json.dumps(
+                        call.args if isinstance(call.args, dict) else {},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    + ")"
                     for call in plan.skill_calls
                 ),
                 flush=True,

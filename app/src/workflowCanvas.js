@@ -2306,6 +2306,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       projectPath: getCurrentProjectPath(),
       getWorkflowSnapshot,
       inspectNode,
+      addPromptNode,
+      addDatasetNode,
     });
   });
   canvasControlsStack.appendChild(autopilotToolbar);
@@ -4324,10 +4326,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   document.addEventListener('workflow:add-prompt-node', (e) => {
-    const { name = '', note = '', sections = [], outputFormat } = e.detail || {};
-    createPromptNode({ name, note, sections, outputFormat });
-    updateContentSize();
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    const { name = '', note = '', sections = [], outputFormat, left, top } = e.detail || {};
+    addPromptNode({ name, note, sections, outputFormat, left, top, ensureUniqueName: false });
   });
 
   document.addEventListener('workflow:score-export-to-workspace', (e) => {
@@ -4400,7 +4400,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       datasetName = datasetName || findUniqueWorkingDatasetName('Dataset', false);
     }
 
-    const newNode = createDatasetNode({
+    const newNode = addDatasetNode({
       name: datasetName,
       notes: datasetNotes,
       left: startLeft,
@@ -4409,17 +4409,16 @@ export function buildWorkflowCanvas(root, options = {}) {
       colorIndex: detailColorIndex,
       headers: datasetHeaders,
       rows: datasetRows,
+      ensureUniqueName: false,
     });
-    if (samplerNodeId && newNode?.dataset?.nodeId) {
+    if (samplerNodeId && newNode?.nodeId) {
       connections.push({
         fromId: samplerNodeId,
-        toId: newNode.dataset.nodeId,
+        toId: newNode.nodeId,
         type: EDGE_TYPE_SAMPLER_TO_DATASET,
       });
       updateEdges();
     }
-    updateContentSize();
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
   document.addEventListener('workflow:add-sampler-node', (e) => {
@@ -5032,6 +5031,94 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
+  function addPromptNode({
+    name = '',
+    note = '',
+    sections = [],
+    outputFormat,
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const requestedName = (name || '').trim() || 'Prompt';
+    const finalName = ensureUniqueName && isPromptNameAlreadyUsed(requestedName)
+      ? findUniquePromptName(requestedName, false)
+      : requestedName;
+    const node = createPromptNode({
+      name: finalName,
+      note: String(note || ''),
+      sections: Array.isArray(sections) ? sections : [],
+      outputFormat,
+      left,
+      top,
+    });
+    updateContentSize();
+    updateEdges();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    const data = getPromptDataFromNode(node) || {};
+    return {
+      created: true,
+      nodeId: String(node?.dataset?.nodeId || '').trim(),
+      name: String(data?.name || finalName).trim() || finalName,
+      note: String(data?.note || ''),
+      sections: Array.isArray(data?.sections) ? data.sections : [],
+      outputFormat: data?.outputFormat && typeof data.outputFormat === 'object'
+        ? data.outputFormat
+        : { returnShape: 'single', fields: [] },
+      position: {
+        left: Number.parseFloat(node?.style?.left || '') || 0,
+        top: Number.parseFloat(node?.style?.top || '') || 0,
+      },
+      nameWasAdjusted: finalName !== requestedName,
+      requestedName,
+    };
+  }
+
+  function addDatasetNode({
+    name = '',
+    notes = '',
+    headers = [],
+    rows = [],
+    left,
+    top,
+    samplerNodeId = '',
+    colorIndex,
+    ensureUniqueName = true,
+  } = {}) {
+    const requestedName = (name || '').trim() || 'Dataset';
+    const finalName = ensureUniqueName && isDatasetNameAlreadyUsed(requestedName)
+      ? findUniqueWorkingDatasetName(requestedName, false)
+      : requestedName;
+    const node = createDatasetNode({
+      name: finalName,
+      notes: String(notes || ''),
+      left,
+      top,
+      samplerNodeId: String(samplerNodeId || '').trim(),
+      colorIndex,
+      headers: Array.isArray(headers) ? headers.map((h) => String(h == null ? '' : h)) : [],
+      rows: Array.isArray(rows) ? rows.map((row) => (Array.isArray(row) ? row.map((cell) => String(cell == null ? '' : cell)) : [])) : [],
+    });
+    updateContentSize();
+    updateEdges();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    const content = datasetContentByNodeId.get(node?.dataset?.nodeId || '') || { headers: [], rows: [] };
+    return {
+      created: true,
+      nodeId: String(node?.dataset?.nodeId || '').trim(),
+      name: String(node?.dataset?.datasetName || finalName).trim() || finalName,
+      notes: String(node?.dataset?.datasetNote || notes || ''),
+      headers: Array.isArray(content.headers) ? content.headers.slice() : [],
+      rows: Array.isArray(content.rows) ? content.rows.map((row) => (Array.isArray(row) ? row.slice() : [])) : [],
+      position: {
+        left: Number.parseFloat(node?.style?.left || '') || 0,
+        top: Number.parseFloat(node?.style?.top || '') || 0,
+      },
+      nameWasAdjusted: finalName !== requestedName,
+      requestedName,
+    };
+  }
+
   function inspectNode(nodeId, options = {}) {
     return inspectWorkflowNode(getCanvasState(), nodeId, {
       ...options,
@@ -5044,6 +5131,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     getCanvasState,
     getWorkflowSnapshot,
     inspectNode,
+    addPromptNode,
+    addDatasetNode,
     loadCanvasState,
     setOnCanvasChange,
     setAgentWindowVisible,

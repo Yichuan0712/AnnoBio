@@ -223,6 +223,8 @@ export function mountAgentChatSession({
   resolveConversation,
   getWorkflowSnapshot,
   inspectNode,
+  addPromptNode,
+  addDatasetNode,
 }) {
   if (!overlay || !messagesEl || !inputEl || !sendButtonEl) {
     return {
@@ -429,6 +431,8 @@ export function mountAgentChatSession({
           result,
           runtime: {
             inspectNode,
+            addPromptNode,
+            addDatasetNode,
             workflowSnapshot,
           },
         }) || ''
@@ -446,6 +450,8 @@ export function mountAgentChatSession({
           args: normalizeSkillArgs(skillCall?.args),
           runtime: {
             inspectNode,
+            addPromptNode,
+            addDatasetNode,
             workflowSnapshot,
           },
         }) || ''
@@ -472,6 +478,8 @@ export function mountAgentChatSession({
         args,
         runtime: {
           inspectNode,
+          addPromptNode,
+          addDatasetNode,
           workflowSnapshot,
         },
       });
@@ -500,10 +508,6 @@ export function mountAgentChatSession({
     return calls
       .map((call) => {
         const args = normalizeSkillArgs(call?.args);
-        const legacyNodeId = String(call?.node_id || '').trim();
-        if (legacyNodeId && !String(args?.node_id || '').trim()) {
-          args.node_id = legacyNodeId;
-        }
         return {
           skillName: String(call?.skill_name || '').trim(),
           args,
@@ -560,7 +564,7 @@ export function mountAgentChatSession({
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
     if (useWorkflowContext) {
       const agentTrace = [`LOOP START: evaluating ${AGENT_SKILL_REGISTRY.length} available skills`];
-      const workflowSnapshot = readWorkflowSnapshot();
+      let workflowSnapshot = readWorkflowSnapshot();
       if (!workflowSnapshot) {
         return requestSimpleChat({ credentialId, messages });
       }
@@ -621,6 +625,8 @@ export function mountAgentChatSession({
 
             const observation = executeSkillCall(skillCall, workflowSnapshot);
             observations.push(observation);
+            const refreshedSnapshot = readWorkflowSnapshot();
+            if (refreshedSnapshot) workflowSnapshot = refreshedSnapshot;
             const observationFingerprint = buildObservationFingerprint(observation);
             const isNewObservation = !seenObservationFingerprints.has(observationFingerprint);
             if (isNewObservation) {
