@@ -1,6 +1,14 @@
+import { createSyntheticDatasetNodeSkill } from './create_synthetic_dataset_node/execute.js';
+import { createPromptNodeSkill } from './create_prompt_node/execute.js';
+import { designSyntheticDatasetSkill } from './design_synthetic_dataset/execute.js';
+import { designPromptNodeSkill } from './design_prompt_node/execute.js';
 import { inspectNodeSkill } from './inspect_node/execute.js';
 
 export const AGENT_SKILLS = Object.freeze([
+  designSyntheticDatasetSkill,
+  designPromptNodeSkill,
+  createSyntheticDatasetNodeSkill,
+  createPromptNodeSkill,
   inspectNodeSkill,
 ]);
 

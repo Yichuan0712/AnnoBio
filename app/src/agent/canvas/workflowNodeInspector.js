@@ -94,6 +94,31 @@ function addDiagnostic(list, level, code, message) {
   list.push({ level, code, message });
 }
 
+function normalizePositiveInteger(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  const normalized = Math.floor(n);
+  return normalized >= 1 ? normalized : fallback;
+}
+
+function buildRowWindow(items, options = {}, defaultMaxRows = 3) {
+  const totalCount = Array.isArray(items) ? items.length : 0;
+  const startRow = normalizePositiveInteger(options?.startRow ?? options?.start_row, 1);
+  const maxRows = normalizePositiveInteger(options?.maxRows ?? options?.max_rows, defaultMaxRows);
+  const startIndex = Math.min(totalCount, Math.max(0, startRow - 1));
+  const windowItems = safeArray(items).slice(startIndex, startIndex + maxRows);
+  return {
+    items: windowItems,
+    window: {
+      startRow: totalCount === 0 ? 1 : startIndex + 1,
+      maxRows,
+      returnedRowCount: windowItems.length,
+      hasMoreBefore: startIndex > 0,
+      hasMoreAfter: startIndex + windowItems.length < totalCount,
+    },
+  };
+}
+
 function buildBaseInspection(rawNode, canvasState) {
   const nodeId = normalizeNodeId(rawNode?.nodeId);
   const nodes = safeArray(canvasState?.nodes);
@@ -149,7 +174,14 @@ function inspectDatasetNode(rawNode, canvasState, options = {}) {
   const content = rawNode?.subsetContent || rawNode?.datasetContent || { headers: [], rows: [] };
   const headers = safeArray(content?.headers).map((header) => String(header ?? ''));
   const rows = safeArray(content?.rows).map((row) => safeArray(row).map((cell) => String(cell ?? '')));
-  const sampleRows = rows.slice(0, Math.max(0, Number.isFinite(Number(options.sampleRows)) ? Number(options.sampleRows) : 3));
+  const rowWindow = buildRowWindow(
+    rows,
+    {
+      startRow: options?.startRow ?? options?.start_row,
+      maxRows: options?.maxRows ?? options?.max_rows ?? options?.sampleRows,
+    },
+    3
+  );
 
   result.details = {
     note: String(rawNode?.note || ''),
@@ -157,7 +189,8 @@ function inspectDatasetNode(rawNode, canvasState, options = {}) {
     headers,
     rowCount: rows.length,
     columnCount: headers.length,
-    sampleRows,
+    rowWindow: rowWindow.window,
+    sampleRows: rowWindow.items,
   };
 
   if (headers.length === 0) {
@@ -191,7 +224,6 @@ function inspectRunNode(rawNode, canvasState, options = {}) {
   const runInputToColumn = parseJsonObject(rawNode?.runInputToColumn, {});
   const runResults = parseJsonArray(rawNode?.runResults);
   const runInputContent = parseJsonObject(rawNode?.runInputContent, { headers: [], rows: [] });
-  const outputPreviewCount = Number.isFinite(Number(options.sampleRunResults)) ? Number(options.sampleRunResults) : 3;
   const promptUpstream = result.upstream.find((item) => item.nodeType === 'prompt');
 
   let promptInputFields = [];
@@ -202,7 +234,15 @@ function inspectRunNode(rawNode, canvasState, options = {}) {
     }
   }
 
-  const resultPreview = runResults.slice(0, Math.max(0, outputPreviewCount)).map((row) => ({
+  const resultWindow = buildRowWindow(
+    runResults,
+    {
+      startRow: options?.startRow ?? options?.start_row,
+      maxRows: options?.maxRows ?? options?.max_rows ?? options?.sampleRunResults,
+    },
+    3
+  );
+  const resultPreview = resultWindow.items.map((row) => ({
     row_index: row?.row_index,
     input_row_index: row?.input_row_index,
     output: row?.output ?? null,
@@ -219,6 +259,7 @@ function inspectRunNode(rawNode, canvasState, options = {}) {
     inputHeaders: safeArray(runInputContent?.headers).map((header) => String(header ?? '')),
     inputRowCount: safeArray(runInputContent?.rows).length,
     resultsCount: runResults.length,
+    resultWindow: resultWindow.window,
     resultPreview,
   };
 
