@@ -94,8 +94,8 @@ DEFAULT_SETTINGS = {
     "run_max_retries": 2,
     # Cap: distinct worksheet inputs that have at least one unmatched Score comparison row (not raw row count).
     "review_max_failed_rows": 30,
-    # Thompson-sampling trials per finetune run (4–200).
-    "finetune_max_trials": 40,
+    # Thompson-sampling trials per optimization run (4–200).
+    "optimization_max_trials": 40,
     # Show Reset & Debug buttons on suggestion cards.
     "debug_mode": False,
 }
@@ -148,11 +148,11 @@ class SettingsPatch(BaseModel):
         le=200,
         description="Cap Phase-1 review to this many distinct inputs that have at least one unmatched comparison row (not a raw comparison-row count).",
     )
-    finetune_max_trials: int | None = Field(
+    optimization_max_trials: int | None = Field(
         default=None,
         ge=4,
         le=200,
-        description="Maximum Thompson-sampling trials per compositional finetune run (4–200).",
+        description="Maximum Thompson-sampling trials per compositional optimization run (4–200).",
     )
     debug_mode: bool | None = None
 
@@ -1506,9 +1506,9 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             _review_cancelled.discard(review_id)
 
 
-# ---------- Finetune: Compositional segments + candidates ----------
+# ---------- Optimization: Compositional segments + candidates ----------
 
-class FinetuneSegmentsRequest(BaseModel):
+class OptimizationSegmentsRequest(BaseModel):
     credential_id: str = Field(..., description="Credential id (LLM used for generation)")
     old_sentence: str = Field(default="", description="Original sentence (context)")
     new_sentence: str = Field(..., description="Improved sentence to split into segments")
@@ -1516,7 +1516,7 @@ class FinetuneSegmentsRequest(BaseModel):
     max_segments: int = Field(default=5, ge=1, le=8, description="Max number of segments (1–8)")
 
 
-class FinetuneCandidatesRequest(BaseModel):
+class OptimizationCandidatesRequest(BaseModel):
     credential_id: str = Field(..., description="Credential id (LLM used for generation)")
     old_sentence: str = Field(default="")
     new_sentence: str = Field(..., description="Full improved sentence")
@@ -1530,10 +1530,10 @@ class FinetuneCandidatesRequest(BaseModel):
     total_segments: int = Field(default=1, ge=1, description="Total number of segments")
 
 
-@app.post("/api/review/finetune-compositional/segments")
-def finetune_segments(body: FinetuneSegmentsRequest):
-    """Split an improved sentence into contiguous segments for compositional finetune."""
-    from review_finetune_compositional import compositional_finetune_segments
+@app.post("/api/review/optimization-compositional/segments")
+def optimization_segments(body: OptimizationSegmentsRequest):
+    """Split an improved sentence into contiguous segments for compositional optimization."""
+    from review_optimization_compositional import compositional_optimization_segments
     items = _load_credentials()
     cred = next((c for c in items if c.get("id") == body.credential_id), None)
     if not cred:
@@ -1546,9 +1546,9 @@ def finetune_segments(body: FinetuneSegmentsRequest):
     base_url = _credential_base_url(cred)
     settings = _load_settings()
     max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
-    _safe_print(_HL + "[Finetune] POST /segments" + _R + f"  model={model}  new_sentence={body.new_sentence[:80]!r}")
+    _safe_print(_HL + "[Optimization] POST /segments" + _R + f"  model={model}  new_sentence={body.new_sentence[:80]!r}")
     try:
-        segments = compositional_finetune_segments(
+        segments = compositional_optimization_segments(
             provider=provider,
             model=model,
             api_key=api_key,
@@ -1560,16 +1560,16 @@ def finetune_segments(body: FinetuneSegmentsRequest):
             max_segments=body.max_segments,
         )
     except Exception as e:
-        _safe_print(_HL + "[Finetune] /segments ERROR" + _R + f"  {e}")
+        _safe_print(_HL + "[Optimization] /segments ERROR" + _R + f"  {e}")
         raise HTTPException(status_code=400, detail=str(e))
-    _safe_print(_HL + "[Finetune] /segments OK" + _R + f"  → {len(segments)} segment(s): {segments}")
+    _safe_print(_HL + "[Optimization] /segments OK" + _R + f"  → {len(segments)} segment(s): {segments}")
     return {"segments": segments}
 
 
-@app.post("/api/review/finetune-compositional/candidates")
-def finetune_candidates(body: FinetuneCandidatesRequest):
+@app.post("/api/review/optimization-compositional/candidates")
+def optimization_candidates(body: OptimizationCandidatesRequest):
     """Generate paraphrase candidates for one segment of the improved sentence."""
-    from review_finetune_compositional import compositional_finetune_segment_candidates
+    from review_optimization_compositional import compositional_optimization_segment_candidates
     items = _load_credentials()
     cred = next((c for c in items if c.get("id") == body.credential_id), None)
     if not cred:
@@ -1582,9 +1582,9 @@ def finetune_candidates(body: FinetuneCandidatesRequest):
     base_url = _credential_base_url(cred)
     settings = _load_settings()
     max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
-    _safe_print(_HL + "[Finetune] POST /candidates" + _R + f"  model={model}  segment={body.segment_text[:60]!r}")
+    _safe_print(_HL + "[Optimization] POST /candidates" + _R + f"  model={model}  segment={body.segment_text[:60]!r}")
     try:
-        candidates = compositional_finetune_segment_candidates(
+        candidates = compositional_optimization_segment_candidates(
             provider=provider,
             model=model,
             api_key=api_key,
@@ -1602,13 +1602,13 @@ def finetune_candidates(body: FinetuneCandidatesRequest):
             total_segments=body.total_segments,
         )
     except Exception as e:
-        _safe_print(_HL + "[Finetune] /candidates ERROR" + _R + f"  {e}")
+        _safe_print(_HL + "[Optimization] /candidates ERROR" + _R + f"  {e}")
         raise HTTPException(status_code=400, detail=str(e))
-    _safe_print(_HL + "[Finetune] /candidates OK" + _R + f"  → {len(candidates)} candidate(s): {candidates}")
+    _safe_print(_HL + "[Optimization] /candidates OK" + _R + f"  → {len(candidates)} candidate(s): {candidates}")
     return {"candidates": candidates}
 
 
-class FinetuneLogResultRequest(BaseModel):
+class OptimizationLogResultRequest(BaseModel):
     segments: list[str] = Field(default_factory=list, description="Segment texts")
     lattice: list[list[str]] = Field(default_factory=list, description="lattice[seg][cand]")
     best_picks: list[int] = Field(default_factory=list, description="Winning candidate index per segment")
@@ -1618,22 +1618,22 @@ class FinetuneLogResultRequest(BaseModel):
     trials_total: int = Field(default=0, description="Max trials configured")
 
 
-@app.post("/api/review/finetune-compositional/log-result")
-def finetune_log_result(body: FinetuneLogResultRequest):
-    """Log the final finetune result to the terminal for visibility. No persistence."""
+@app.post("/api/review/optimization-compositional/log-result")
+def optimization_log_result(body: OptimizationLogResultRequest):
+    """Log the final optimization result to the terminal for visibility. No persistence."""
     rate_pct = f"{body.best_rate * 100:.1f}%"
     _safe_print("")
-    _safe_print(_HL + "[Finetune] ══════════════════ RESULT ══════════════════════════════" + _R)
-    _safe_print(_HL + f"[Finetune]  Trials: {body.trials_run} / {body.trials_total}   Best pass rate: {rate_pct}" + _R)
+    _safe_print(_HL + "[Optimization] ═══════════════ RESULT ════════════════════════════" + _R)
+    _safe_print(_HL + f"[Optimization]  Trials: {body.trials_run} / {body.trials_total}   Best pass rate: {rate_pct}" + _R)
     if body.segments and body.lattice and body.best_picks:
-        _safe_print(_HL + "[Finetune] ── Winner per segment ────────────────────────────────" + _R)
+        _safe_print(_HL + "[Optimization] ── Winner per segment ─────────────────────────────" + _R)
         for i, (seg, cands, pick) in enumerate(zip(body.segments, body.lattice, body.best_picks)):
             chosen = cands[pick] if 0 <= pick < len(cands) else "?"
             orig_marker = "  ← original" if chosen == seg else ""
-            _safe_print(f"[Finetune]   [{i}] cand[{pick}]{orig_marker}")
-            _safe_print(f"[Finetune]        {chosen!r}")
-    _safe_print(_HL + "[Finetune] ── Best sentence ──────────────────────────────────────" + _R)
-    _safe_print(f"[Finetune]   {body.best_text!r}")
-    _safe_print(_HL + "[Finetune] ══════════════════════════════════════════════════════════" + _R)
+            _safe_print(f"[Optimization]   [{i}] cand[{pick}]{orig_marker}")
+            _safe_print(f"[Optimization]        {chosen!r}")
+    _safe_print(_HL + "[Optimization] ── Best sentence ───────────────────────────────────" + _R)
+    _safe_print(f"[Optimization]   {body.best_text!r}")
+    _safe_print(_HL + "[Optimization] ═════════════════════════════════════════════════════" + _R)
     _safe_print("")
     return {"ok": True}
