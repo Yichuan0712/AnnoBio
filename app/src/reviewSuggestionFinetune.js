@@ -13,11 +13,12 @@
  *   4. Return bestText (highest passRate seen), bestRate, trialLog.
  *
  * Input/GT uses the same pipeline as the current branch's runVerification
- * (comparison_rows, {placeholder} substitution, compareRowToGt key-insensitive match).
+ * and reuses the Score output->gt rules for pass-rate evaluation.
  */
 
 import { rebuildWorkingFromApplied } from './reviewWorkingSections.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { evaluateScoreOutputGt } from './scoreOutputGtMatcher.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -40,30 +41,7 @@ export function hasActiveFinetuneSessions() {
   return _finetuneACs.size > 0;
 }
 
-// ─── Utility (mirrored from reviewDetailModal to avoid circular import) ───────
-
-function isModelFacingKey(k) {
-  const key = String(k || '').trim();
-  if (!key || key === '#' || key === '[#]') return false;
-  if (key.length >= 2 && key.startsWith('[') && key.endsWith(']')) return false;
-  return true;
-}
-
-function normalizeForCompare(v) {
-  if (v == null) return '';
-  return String(v).trim().toLowerCase();
-}
-
-function compareRowToGt(output, gt) {
-  if (!output || !gt) return false;
-  const keys = Object.keys(gt);
-  if (keys.length === 0) return true;
-  const outLower = new Map(Object.entries(output).map(([k, v]) => [k.toLowerCase().trim(), v]));
-  return keys.every((k) => {
-    const outVal = outLower.get(k.toLowerCase().trim());
-    return normalizeForCompare(outVal) === normalizeForCompare(gt[k]);
-  });
-}
+// ─── Utility ───────────────────────────────────────────────────────────────────
 
 function escapeRegex(str) {
   return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -108,13 +86,27 @@ function throwIfAborted(signal) {
  * @param {{
  *   credentialId: string,
  *   templateText: string,
- *   inputEntries: Array<[number, {row: object, gtRows: Array<{gtNum:number, gt:object}>}]>,
+ *   inputEntries: Array<[number, {row: object, gtRows: Array<{gtNum:number, gtRowIndex:number}>}]>,
  *   outputSchema: object,
+ *   outputFields?: Array<object>,
+ *   scoreMapping?: string,
+ *   runWs?: {headers?: string[], rows?: Array},
+ *   gtContent?: {headers?: string[], rows?: Array},
  *   signal?: AbortSignal,
  * }} opts
  * @returns {Promise<{passRate: number, ok: boolean, aborted: boolean}>}
  */
-export async function runVerifyPassRate({ credentialId, templateText, inputEntries, outputSchema, signal }) {
+export async function runVerifyPassRate({
+  credentialId,
+  templateText,
+  inputEntries,
+  outputSchema,
+  outputFields = [],
+  scoreMapping = '{}',
+  runWs = { headers: [], rows: [] },
+  gtContent = { headers: [], rows: [] },
+  signal,
+}) {
   throwIfAborted(signal);
 
   // Fill prompts
@@ -155,42 +147,16 @@ export async function runVerifyPassRate({ credentialId, templateText, inputEntri
 
   if (finalData?.error) throw new Error(String(finalData.error));
   const rawResults = finalData?.results || [];
-
-  // Group outputs by prompt index
-  const outputsByIdx = new Map();
-  for (const r of rawResults) {
-    const idx = r?.input_row_index ?? 0;
-    if (!outputsByIdx.has(idx)) outputsByIdx.set(idx, []);
-    outputsByIdx.get(idx).push(r);
-  }
-
-  // Count matched vs total (greedy one-to-one, order-independent)
-  let matched = 0;
-  let total = 0;
-  for (const [promptArrayIdx, [, { gtRows }]] of inputEntries.entries()) {
-    const outputs = outputsByIdx.get(promptArrayIdx) || [];
-    const usedGt = new Set();
-    for (const out of outputs) {
-      if (!out?.output) { total++; continue; }
-      let found = false;
-      for (let gi = 0; gi < gtRows.length; gi++) {
-        if (usedGt.has(gi)) continue;
-        if (compareRowToGt(out.output, gtRows[gi].gt)) {
-          usedGt.add(gi);
-          found = true;
-          break;
-        }
-      }
-      matched += found ? 1 : 0;
-      total++;
-    }
-    // GT rows with no output count as failures
-    for (let gi = 0; gi < gtRows.length; gi++) {
-      if (!usedGt.has(gi)) { total++; }
-    }
-  }
-
-  const passRate = total > 0 ? matched / total : 0;
+  const { matchedCount, total } = await evaluateScoreOutputGt({
+    apiBase: API_BASE,
+    scoreMapping,
+    results: rawResults,
+    inputEntries,
+    outputFields: Array.isArray(finalData?.output_fields) ? finalData.output_fields : outputFields,
+    runWs,
+    gtContent,
+  });
+  const passRate = total > 0 ? matchedCount / total : 0;
   return { passRate, ok: true, aborted: false };
 }
 
@@ -211,6 +177,10 @@ export async function runVerifyPassRate({ credentialId, templateText, inputEntri
  *   originals: object[],
  *   inputEntries: Array<[number, {row:object, gtRows:object[]}]>,
  *   outputSchema: object,
+ *   outputFields?: Array<object>,
+ *   scoreMapping?: string,
+ *   runWs?: {headers?: string[], rows?: Array},
+ *   gtContent?: {headers?: string[], rows?: Array},
  *   abortController?: AbortController,
  *   onProgress?: (info:{trial:number,trials:number,bestRate:number}) => void,
  * }} options
@@ -230,6 +200,10 @@ export async function runSuggestionFinetuneCompositional(options) {
     originals,
     inputEntries,
     outputSchema,
+    outputFields = [],
+    scoreMapping = '{}',
+    runWs = { headers: [], rows: [] },
+    gtContent = { headers: [], rows: [] },
     abortController = null,
     onProgress,
   } = options;
@@ -352,7 +326,17 @@ export async function runSuggestionFinetuneCompositional(options) {
 
       let metrics;
       try {
-        metrics = await runVerifyPassRate({ credentialId, templateText, inputEntries, outputSchema, signal });
+        metrics = await runVerifyPassRate({
+          credentialId,
+          templateText,
+          inputEntries,
+          outputSchema,
+          outputFields,
+          scoreMapping,
+          runWs,
+          gtContent,
+          signal,
+        });
       } catch (err) {
         if (err?.name === 'AbortError') throw err;
         for (let s = 0; s < S; s++) beta[s][picks[s]] += 1;

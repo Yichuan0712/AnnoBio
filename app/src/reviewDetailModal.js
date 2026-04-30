@@ -28,6 +28,7 @@ import {
   parseNumericSuggestionId,
 } from './reviewSuggestionIds.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { evaluateScoreOutputGt } from './scoreOutputGtMatcher.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -43,9 +44,9 @@ const _verifyPromises = new Map(); // → in-flight Promise | undefined
 const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
 const REVIEW_SUGGESTION_VERIFIED_LABEL = 'Verified';
-const REVIEW_SUGGESTION_FINETUNE_LABEL = 'Click to Finetune';
-const REVIEW_SUGGESTION_FINETUNING_LABEL = 'Finetuning\u2026';
-const REVIEW_SUGGESTION_FINETUNED_LABEL = 'Finetuned';
+const REVIEW_SUGGESTION_FINETUNE_LABEL = 'Click to Optimize';
+const REVIEW_SUGGESTION_FINETUNING_LABEL = 'Optimizing\u2026';
+const REVIEW_SUGGESTION_FINETUNED_LABEL = 'Optimized';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
@@ -70,16 +71,16 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
     return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_VERIFIED_LABEL, ariaLabel: 'All outputs matched ground truth' }];
   }
   if (verifyState === 'finetune') {
-    return [{ cls: 'review-suggestion-finetune-pill review-suggestion-finetune-pill--clickable', text: REVIEW_SUGGESTION_FINETUNE_LABEL, ariaLabel: 'Some outputs did not match — click to finetune' }];
+    return [{ cls: 'review-suggestion-optimization-pill review-suggestion-optimization-pill--clickable', text: REVIEW_SUGGESTION_FINETUNE_LABEL, ariaLabel: 'Some outputs did not match — click to optimize' }];
   }
   if (verifyState === 'finetuning') {
-    return [{ cls: 'review-suggestion-finetuning-pill', text: REVIEW_SUGGESTION_FINETUNING_LABEL, ariaLabel: 'Finetuning in progress…' }];
+    return [{ cls: 'review-suggestion-optimizing-pill', text: REVIEW_SUGGESTION_FINETUNING_LABEL, ariaLabel: 'Optimization in progress…' }];
   }
   if (verifyState === 'finetuned') {
-    return [{ cls: 'review-suggestion-finetuned-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Finetune complete — some outputs still differ from ground truth' }];
+    return [{ cls: 'review-suggestion-optimized-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Optimization complete — some outputs still differ from ground truth' }];
   }
   if (verifyState === 'finetuned-pass') {
-    return [{ cls: 'review-suggestion-finetuned-pass-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Finetune complete — all outputs matched ground truth' }];
+    return [{ cls: 'review-suggestion-optimized-pass-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Optimization complete — all outputs matched ground truth' }];
   }
   return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
@@ -107,25 +108,6 @@ function escapeHtml(str) {
 
 function escapeRegex(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function normalizeForCompare(v) {
-  if (v == null) return '';
-  return String(v).trim().toLowerCase();
-}
-
-/** Compare one output row dict against one GT row dict (model-facing keys only).
- *  Key lookup is case-insensitive to handle score-rule outputKey vs actual LLM output field name mismatches. */
-function compareRowToGt(output, gt) {
-  if (!output || !gt) return false;
-  const keys = Object.keys(gt);
-  if (keys.length === 0) return true;
-  // Build case-insensitive lookup for output keys
-  const outLower = new Map(Object.entries(output).map(([k, v]) => [k.toLowerCase().trim(), v]));
-  return keys.every((k) => {
-    const outVal = outLower.get(k.toLowerCase().trim());
-    return normalizeForCompare(outVal) === normalizeForCompare(gt[k]);
-  });
 }
 
 /**
@@ -1524,8 +1506,17 @@ function buildReviewResultUI(overlay, options) {
         const payload = typeof getPayload === 'function' ? await getPayload() : null;
         const credentialId = payload?.run_credential_id;
         const outputSchema = payload?.output_schema;
+        const scoreMapping = payload?.score_mapping;
+        const outputFields = Array.isArray(payload?.output_fields) ? payload.output_fields : [];
+        const runWs = typeof payload?.getRunWorkingSetContent === 'function'
+          ? payload.getRunWorkingSetContent()
+          : { headers: [], rows: [] };
+        const gtContent = typeof payload?.getGroundTruthContent === 'function'
+          ? payload.getGroundTruthContent()
+          : { headers: [], rows: [] };
         if (!credentialId) throw new Error('No run credential configured on the Run node.');
         if (!outputSchema) throw new Error('No output schema configured on the Prompt node.');
+        if (!scoreMapping) throw new Error('No Score mapping configured.');
 
         // 2. Build modified prompt: apply only this suggestion to originals
         const modifiedSections = rebuildWorkingFromApplied(originals, [{ ...sug, applied: true }]) || originals;
@@ -1539,7 +1530,7 @@ function buildReviewResultUI(overlay, options) {
           .filter(Boolean);
 
         // 4. Build ordered unique input list, collecting associated GTs per input
-        const inputMap = new Map(); // input_row_index → { row, gtRows: [{gtNum, gt}] }
+        const inputMap = new Map(); // input_row_index → { row, gtRows: [{gtNum, gtRowIndex}] }
         for (const row of targetRows) {
           const inputIdx = row.input_row_index;
           if (inputIdx == null) continue;
@@ -1548,10 +1539,7 @@ function buildReviewResultUI(overlay, options) {
             const gtNum = row.source_gt_row_index + 1;
             const entry = inputMap.get(inputIdx);
             if (!entry.gtRows.find((g) => g.gtNum === gtNum)) {
-              const filtered = Object.fromEntries(
-                Object.entries(row.ground_truth_output).filter(([k]) => isModelFacingKey(k)),
-              );
-              entry.gtRows.push({ gtNum, gt: filtered });
+              entry.gtRows.push({ gtNum, gtRowIndex: row.source_gt_row_index });
             }
           }
         }
@@ -1592,61 +1580,18 @@ function buildReviewResultUI(overlay, options) {
           }
         }
 
-        // 8. Collect all result rows with one-to-one positional GT comparison
+        // 8. Evaluate with the same Score output->gt rules (no simplified compare).
         if (finalData?.error) throw new Error(String(finalData.error));
         const rawResults = finalData?.results || [];
-
-        // Group outputs by their prompts-array index (input_row_index in rawResults)
-        const outputsByPromptIdx = new Map();
-        for (const r of rawResults) {
-          const idx = r?.input_row_index ?? 0;
-          if (!outputsByPromptIdx.has(idx)) outputsByPromptIdx.set(idx, []);
-          outputsByPromptIdx.get(idx).push(r);
-        }
-
-        // Match each output row to the best-matching GT row (order-independent, greedy one-to-one)
-        const verifyRows = [];
-        for (const [promptArrayIdx, [, { gtRows }]] of inputEntries.entries()) {
-          const outputs = outputsByPromptIdx.get(promptArrayIdx) || [];
-          const usedGtIdx = new Set();
-
-          // First pass: greedily assign each output row to the first matching GT row
-          const assignments = outputs.map((out) => {
-            if (!out?.output) return { out, gtEntry: null, matched: null };
-            for (let gi = 0; gi < gtRows.length; gi++) {
-              if (usedGtIdx.has(gi)) continue;
-              if (compareRowToGt(out.output, gtRows[gi].gt)) {
-                usedGtIdx.add(gi);
-                return { out, gtEntry: gtRows[gi], matched: true };
-              }
-            }
-            return { out, gtEntry: null, matched: false };
-          });
-
-          // Collect unmatched GT rows (for attaching to failed output rows for display)
-          const unmatchedGts = gtRows.filter((_, gi) => !usedGtIdx.has(gi));
-          let unmatchedGtCursor = 0;
-          for (const asgn of assignments) {
-            if (asgn.matched === false && !asgn.gtEntry && unmatchedGtCursor < unmatchedGts.length) {
-              asgn.gtEntry = unmatchedGts[unmatchedGtCursor++];
-            }
-          }
-
-          for (const { out, gtEntry, matched } of assignments) {
-            verifyRows.push({
-              output: out?.output ?? null,
-              error: out?.error ?? null,
-              gt: gtEntry ? gtEntry.gt : null,
-              gtNum: gtEntry ? gtEntry.gtNum : null,
-              matched,
-            });
-          }
-
-          // Any GT rows with no corresponding output at all
-          for (let gi = unmatchedGtCursor; gi < unmatchedGts.length; gi++) {
-            verifyRows.push({ output: null, error: null, gt: unmatchedGts[gi].gt, gtNum: unmatchedGts[gi].gtNum, matched: false });
-          }
-        }
+        const { verifyRows } = await evaluateScoreOutputGt({
+          apiBase: API_BASE,
+          scoreMapping,
+          results: rawResults,
+          inputEntries,
+          outputFields: Array.isArray(finalData?.output_fields) ? finalData.output_fields : outputFields,
+          runWs,
+          gtContent,
+        });
 
         // 9. Store final results
         try { storeVerifyResult({ status: 'complete', verifyRows }); } catch (_) { /* non-fatal */ }
@@ -1683,8 +1628,17 @@ function buildReviewResultUI(overlay, options) {
         const payload = typeof getPayload === 'function' ? await getPayload() : null;
         const credentialId = payload?.run_credential_id;
         const outputSchema = payload?.output_schema;
+        const outputFields = Array.isArray(payload?.output_fields) ? payload.output_fields : [];
+        const scoreMapping = payload?.score_mapping;
+        const runWs = typeof payload?.getRunWorkingSetContent === 'function'
+          ? payload.getRunWorkingSetContent()
+          : { headers: [], rows: [] };
+        const gtContent = typeof payload?.getGroundTruthContent === 'function'
+          ? payload.getGroundTruthContent()
+          : { headers: [], rows: [] };
         if (!credentialId) throw new Error('No run credential configured.');
         if (!outputSchema) throw new Error('No output schema configured.');
+        if (!scoreMapping) throw new Error('No Score mapping configured.');
 
         // Build inputEntries (same as runVerification)
         const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
@@ -1701,10 +1655,7 @@ function buildReviewResultUI(overlay, options) {
             const gtNum = row.source_gt_row_index + 1;
             const entry = inputMap.get(inputIdx);
             if (!entry.gtRows.find((g) => g.gtNum === gtNum)) {
-              const filtered = Object.fromEntries(
-                Object.entries(row.ground_truth_output).filter(([k]) => isModelFacingKey(k)),
-              );
-              entry.gtRows.push({ gtNum, gt: filtered });
+              entry.gtRows.push({ gtNum, gtRowIndex: row.source_gt_row_index });
             }
           }
         }
@@ -1724,10 +1675,7 @@ function buildReviewResultUI(overlay, options) {
           if (row.ground_truth_output && row.source_gt_row_index != null) {
             const gtNum = row.source_gt_row_index + 1;
             if (!g.gtRows.find((x) => x.gtNum === gtNum)) {
-              const filteredGt = Object.fromEntries(
-                Object.entries(row.ground_truth_output).filter(([k]) => isModelFacingKey(k)),
-              );
-              g.gtRows.push({ gtNum, gt: filteredGt });
+              g.gtRows.push({ gtNum, gtRowIndex: row.source_gt_row_index });
             }
           }
         }
@@ -1764,6 +1712,10 @@ function buildReviewResultUI(overlay, options) {
           originals,
           inputEntries: expandedInputEntries,
           outputSchema,
+          outputFields,
+          scoreMapping,
+          runWs,
+          gtContent,
           abortController: ac,
           onProgress: ({ trial, trials, bestRate }) => {
             try {
@@ -1827,7 +1779,7 @@ function buildReviewResultUI(overlay, options) {
       });
 
       // "Click to Finetune" pill
-      titleWrap.querySelectorAll('.review-suggestion-finetune-pill--clickable').forEach((pill) => {
+      titleWrap.querySelectorAll('.review-suggestion-optimization-pill--clickable').forEach((pill) => {
         pill.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();

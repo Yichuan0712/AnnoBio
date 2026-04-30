@@ -37,6 +37,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
+from agent.chat.agent_chat import build_agent_messages, format_agent_messages_for_log
 from llm import chat as llm_chat, run_structured as llm_run_structured
 
 app = FastAPI()
@@ -113,12 +114,10 @@ LEGACY_MODEL_PROVIDER_HINTS = {
     "openai.gpt-oss-120b-1:0": "bedrock",
     "deepseek-chat": "deepseek",
     "deepseek-reasoner": "deepseek",
-    "mistral-large-2512": "mistral",
 }
 
 DEFAULT_BASE_URLS_BY_PROVIDER = {
     "deepseek": "https://api.deepseek.com",
-    "mistral": "https://api.mistral.ai/v1",
 }
 
 
@@ -529,25 +528,171 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1, description="Conversation history; last message should be user")
 
 
-@app.post("/api/chat")
-def chat(body: ChatRequest):
-    """Simple chat using the given credential. Uses review_max_tokens from settings."""
+class AgentChatRequest(ChatRequest):
+    workflow_snapshot: dict[str, Any] | None = Field(
+        default=None,
+        description="Agent-friendly snapshot of the current workflow canvas",
+    )
+    node_inspection: dict[str, Any] | None = Field(
+        default=None,
+        description="Detailed context for one workflow node",
+    )
+    observations: list["AgentObservation"] = Field(
+        default_factory=list,
+        description="Structured observations gathered from previous skill calls",
+    )
+    agent_trace: list[str] = Field(
+        default_factory=list,
+        description="Ordered trace lines describing plan, skill execution, and answer stages",
+    )
+
+
+class AgentSkillDescriptor(BaseModel):
+    name: str = Field(..., description="Skill name")
+    description: str = Field(default="", description="What the skill does")
+    input_schema: dict[str, Any] = Field(default_factory=dict, description="Lightweight argument schema for the skill")
+
+
+class AgentPlanRequest(ChatRequest):
+    workflow_snapshot: dict[str, Any] | None = Field(
+        default=None,
+        description="Agent-friendly snapshot of the current workflow canvas",
+    )
+    observations: list["AgentObservation"] = Field(
+        default_factory=list,
+        description="Structured observations gathered from previous skill calls",
+    )
+    available_skills: list[AgentSkillDescriptor] = Field(
+        default_factory=list,
+        description="All skills that the planner may choose from",
+    )
+    loop_signals: list[str] = Field(
+        default_factory=list,
+        description="Warnings about repeated calls, no-progress patterns, or runtime guardrails",
+    )
+    round_index: int = Field(default=1, description="Current planning round number")
+
+
+class AgentObservation(BaseModel):
+    skill_name: str = Field(..., description="Executed skill name")
+    args: dict[str, Any] = Field(default_factory=dict, description="Arguments used for the skill call")
+    ok: bool = Field(default=True, description="Whether the skill execution succeeded")
+    summary: str = Field(default="", description="Short summary of the observation")
+    result: Any | None = Field(default=None, description="Raw structured result returned by the skill")
+
+
+class AgentSkillCall(BaseModel):
+    skill_name: str = Field(..., description="Chosen skill name")
+    args: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Arguments for the selected skill, matching the skill input schema",
+    )
+    reason: str = Field(..., description="Why this skill was chosen")
+
+
+class AgentPlanResponse(BaseModel):
+    done: bool = Field(..., description="Whether the agent has enough evidence to answer now")
+    plan_summary: str = Field(..., description="Short summary of the planner's current intent")
+    expected_progress: str = Field(..., description="What new information the planner expects to learn")
+    skill_calls: list[AgentSkillCall] = Field(..., description="Ordered list of skills to run before answering")
+
+
+AgentChatRequest.model_rebuild()
+AgentPlanRequest.model_rebuild()
+
+
+def _resolve_chat_credential(credential_id: str) -> tuple[dict, int]:
     items = _load_credentials()
     cred = None
     for item in items:
-        if item.get("id") == body.credential_id:
+        if item.get("id") == credential_id:
             cred = item
             break
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    max_tokens = _load_settings().get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
+    return cred, max_tokens
+
+
+def _build_agent_plan_prompt(
+    messages: list[dict[str, str]],
+    workflow_snapshot: dict[str, Any] | None,
+    available_skills: list[AgentSkillDescriptor],
+    observations: list[AgentObservation],
+    loop_signals: list[str],
+    round_index: int,
+) -> str:
+    serialized_skills = [
+        {
+            "name": skill.name,
+            "description": skill.description,
+            "input_schema": skill.input_schema,
+        }
+        for skill in available_skills
+    ]
+    serialized_observations = [
+        {
+            "skill_name": observation.skill_name,
+            "args": observation.args,
+            "ok": observation.ok,
+            "summary": observation.summary,
+            "result": observation.result,
+        }
+        for observation in observations
+    ]
+    return (
+        "You are one planning round inside a continuous Prompt Studio Agent loop.\n"
+        "Decide whether the agent should gather more evidence or answer now.\n"
+        "Only choose from the provided skills.\n"
+        "The workflow snapshot is already available to the final answering step by default.\n"
+        "If the current evidence is enough to answer well, set done=true and return no skill calls.\n"
+        "If more evidence is needed, set done=false and return one or more skill_calls.\n"
+        "Prefer skill calls that add new evidence.\n"
+        "Avoid repeating identical skill calls that already appear in observation history unless you have a concrete reason to expect a different result.\n"
+        "If loop signals indicate repeated no-progress patterns, prefer done=true unless a clearly different skill call would add new evidence.\n"
+        "When the question depends on node-level details, aggressively use inspect_node rather than guessing from the workflow snapshot.\n"
+        "Return each skill_call as an object with skill_name, args, and reason.\n"
+        "args must match the selected skill input schema.\n"
+        "For inspect_node, node_id must be an exact node id from the workflow snapshot.\n"
+        "For dataset or run nodes, you may optionally set start_row and max_rows when the user asks about a specific row range or when the first preview rows are insufficient.\n"
+        "start_row is 1-based.\n\n"
+        f"Planning round: {max(1, int(round_index or 1))}\n\n"
+        "Available skills JSON:\n"
+        + json.dumps(serialized_skills, ensure_ascii=False, indent=2)
+        + "\n\nObservation history JSON:\n"
+        + json.dumps(serialized_observations, ensure_ascii=False, indent=2)
+        + "\n\nLoop signals JSON:\n"
+        + json.dumps(loop_signals or [], ensure_ascii=False, indent=2)
+        + "\n\nWorkflow snapshot JSON:\n"
+        + json.dumps(workflow_snapshot or {}, ensure_ascii=False, indent=2)
+        + "\n\nConversation:\n"
+        + format_agent_messages_for_log(messages)
+    )
+
+
+def _summarize_messages_for_log(messages: list[dict[str, Any]]) -> str:
+    if not messages:
+        return "(no messages)"
+    parts: list[str] = []
+    for idx, message in enumerate(messages, start=1):
+        role = str(message.get("role") or "user").upper()
+        content = re.sub(r"\s+", " ", str(message.get("content") or "")).strip()
+        if len(content) > 160:
+            content = content[:157] + "..."
+        parts.append(f"[{idx}] {role}: {content or '(empty)'}")
+    return "\n".join(parts)
+
+
+@app.post("/api/chat")
+def chat(body: ChatRequest):
+    """Simple chat using the given credential. Uses review_max_tokens from settings."""
+    cred, max_tokens = _resolve_chat_credential(body.credential_id)
     model = _credential_model(cred)
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
     provider = _credential_provider(cred)
     base_url = _credential_base_url(cred)
-    settings = _load_settings()
-    max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     msgs = [{"role": m.role, "content": m.content or ""} for m in body.messages]
     try:
         content = llm_chat(
@@ -560,6 +705,131 @@ def chat(body: ChatRequest):
         )
         return {"content": content}
     except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/agent/plan", response_model=AgentPlanResponse)
+def agent_plan(body: AgentPlanRequest):
+    """Plan which agent skills should run before final answering."""
+    if not body.available_skills:
+        return AgentPlanResponse(done=True, plan_summary="No skills available", skill_calls=[])
+    cred, max_tokens = _resolve_chat_credential(body.credential_id)
+    model = _credential_model(cred)
+    api_key = cred.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing API key")
+    provider = _credential_provider(cred)
+    base_url = _credential_base_url(cred)
+    prompt = _build_agent_plan_prompt(
+        [{"role": m.role, "content": m.content or ""} for m in body.messages],
+        workflow_snapshot=body.workflow_snapshot,
+        available_skills=body.available_skills,
+        observations=body.observations,
+        loop_signals=body.loop_signals,
+        round_index=body.round_index,
+    )
+    try:
+        _safe_print(_HL + f"[Agent] PLAN round {max(1, int(body.round_index or 1))} start" + _R)
+        _safe_print(
+            f"[Agent] Available skills: {', '.join(skill.name for skill in body.available_skills) or '(none)'}",
+            flush=True,
+        )
+        _safe_print(
+            f"[Agent] Observations so far: {len(body.observations)} | Loop signals: {len(body.loop_signals)}",
+            flush=True,
+        )
+        result, used_fallback, debug = llm_run_structured(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            prompt=prompt,
+            response_model=AgentPlanResponse,
+            max_tokens=max_tokens,
+            return_debug=True,
+        )
+        _safe_print(_HL + "[Agent] PLAN raw output" + _R)
+        if isinstance(debug, dict) and debug.get("path"):
+            _safe_print(
+                f"[Agent] PLAN transport={debug.get('path')} fallback={'yes' if used_fallback else 'no'}",
+                flush=True,
+            )
+        if isinstance(debug, dict) and debug.get("raw_response") is not None:
+            _safe_print(json.dumps(debug.get("raw_response"), ensure_ascii=False, indent=2, default=str), flush=True)
+        elif isinstance(debug, dict) and debug.get("raw_text"):
+            _safe_print(str(debug.get("raw_text")), flush=True)
+        else:
+            _safe_print("[Agent] PLAN raw output unavailable", flush=True)
+        plan = AgentPlanResponse.model_validate(result)
+        if plan.skill_calls:
+            _safe_print(
+                f"[Agent] PLAN round {max(1, int(body.round_index or 1))} result: done={plan.done} "
+                + ", ".join(
+                    f"{call.skill_name}("
+                    + json.dumps(
+                        call.args if isinstance(call.args, dict) else {},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    + ")"
+                    for call in plan.skill_calls
+                ),
+                flush=True,
+            )
+        else:
+            _safe_print(
+                f"[Agent] PLAN round {max(1, int(body.round_index or 1))} result: done={plan.done}, no skill selected",
+                flush=True,
+            )
+        return plan
+    except Exception as e:
+        _safe_print(_HL + f"[Agent] PLAN round {max(1, int(body.round_index or 1))} error: " + _R + str(e), flush=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/agent/chat")
+def agent_chat(body: AgentChatRequest):
+    """Agent chat using the given credential, enriched with a workflow snapshot."""
+    cred, max_tokens = _resolve_chat_credential(body.credential_id)
+    model = _credential_model(cred)
+    api_key = cred.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing API key")
+    provider = _credential_provider(cred)
+    base_url = _credential_base_url(cred)
+    msgs = build_agent_messages(
+        [{"role": m.role, "content": m.content or ""} for m in body.messages],
+        workflow_snapshot=body.workflow_snapshot,
+        observations=[observation.model_dump() for observation in body.observations],
+        node_inspection=body.node_inspection,
+    )
+    try:
+        _safe_print(_HL + "[Agent] ROUND TRACE" + _R)
+        if body.agent_trace:
+            for line in body.agent_trace:
+                _safe_print(f"[Agent] {line}")
+        else:
+            _safe_print("[Agent] No execution trace received from client")
+        _safe_print(
+            f"[Agent] FINAL ANSWER start: workflow_snapshot={'yes' if body.workflow_snapshot else 'no'}, "
+            f"observations={len(body.observations)}, "
+            f"legacy_node_inspection={'yes' if body.node_inspection else 'no'}",
+            flush=True,
+        )
+        _safe_print(_HL + "[Agent] FINAL ANSWER message summary" + _R)
+        _safe_print(_summarize_messages_for_log(msgs), flush=True)
+        content = llm_chat(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            messages=msgs,
+            max_tokens=max_tokens,
+        )
+        _safe_print(_HL + "[Agent] FINAL ANSWER complete" + _R, flush=True)
+        return {"content": content}
+    except Exception as e:
+        _safe_print(_HL + "[Agent] FINAL ANSWER error: " + _R + str(e), flush=True)
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -780,7 +1050,7 @@ def _do_run_work(
                     _safe_print(_HL + _SEP + _R)
                     _safe_print(prompt)
                     _safe_print(_HL + _SEP + _R + "\n")
-                    out, used_fallback = llm_run_structured(
+                    out, used_fallback, debug = llm_run_structured(
                         provider=provider,
                         model=model,
                         api_key=api_key,
@@ -789,9 +1059,26 @@ def _do_run_work(
                         response_model=ResponseModel,
                         max_tokens=run_max_tokens,
                         return_shape=return_shape,
+                        return_debug=True,
                     )
                     _safe_print(_HL + _SEP + _R)
-                    _safe_print(_HL + f"[Run] Row {row_index} LLM OUTPUT:" + _R)
+                    _safe_print(
+                        _HL
+                        + f"[Run] Row {row_index} LLM RAW OUTPUT"
+                        + (f" ({debug.get('path')})" if isinstance(debug, dict) and debug.get("path") else "")
+                        + (", fallback" if used_fallback else "")
+                        + ":"
+                        + _R
+                    )
+                    _safe_print(_HL + _SEP + _R)
+                    if isinstance(debug, dict) and debug.get("raw_response") is not None:
+                        _safe_print(json.dumps(debug.get("raw_response"), ensure_ascii=False, indent=2, default=str))
+                    elif isinstance(debug, dict) and debug.get("raw_text"):
+                        _safe_print(str(debug.get("raw_text")))
+                    else:
+                        _safe_print("(raw output unavailable)")
+                    _safe_print(_HL + _SEP + _R)
+                    _safe_print(_HL + f"[Run] Row {row_index} LLM PARSED OUTPUT:" + _R)
                     _safe_print(_HL + _SEP + _R)
                     _safe_print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
                     _safe_print(_HL + _SEP + _R + "\n")
