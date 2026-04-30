@@ -44,9 +44,9 @@ const _verifyPromises = new Map(); // → in-flight Promise | undefined
 const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
 const REVIEW_SUGGESTION_VERIFIED_LABEL = 'Verified';
-const REVIEW_SUGGESTION_FINETUNE_LABEL = 'Click to Finetune';
-const REVIEW_SUGGESTION_FINETUNING_LABEL = 'Finetuning\u2026';
-const REVIEW_SUGGESTION_FINETUNED_LABEL = 'Finetuned';
+const REVIEW_SUGGESTION_FINETUNE_LABEL = 'Click to Optimize';
+const REVIEW_SUGGESTION_FINETUNING_LABEL = 'Optimizing\u2026';
+const REVIEW_SUGGESTION_FINETUNED_LABEL = 'Optimized';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
@@ -71,16 +71,16 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
     return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_VERIFIED_LABEL, ariaLabel: 'All outputs matched ground truth' }];
   }
   if (verifyState === 'finetune') {
-    return [{ cls: 'review-suggestion-finetune-pill review-suggestion-finetune-pill--clickable', text: REVIEW_SUGGESTION_FINETUNE_LABEL, ariaLabel: 'Some outputs did not match — click to finetune' }];
+    return [{ cls: 'review-suggestion-optimization-pill review-suggestion-optimization-pill--clickable', text: REVIEW_SUGGESTION_FINETUNE_LABEL, ariaLabel: 'Some outputs did not match — click to optimize' }];
   }
   if (verifyState === 'finetuning') {
-    return [{ cls: 'review-suggestion-finetuning-pill', text: REVIEW_SUGGESTION_FINETUNING_LABEL, ariaLabel: 'Finetuning in progress…' }];
+    return [{ cls: 'review-suggestion-optimizing-pill', text: REVIEW_SUGGESTION_FINETUNING_LABEL, ariaLabel: 'Optimization in progress…' }];
   }
   if (verifyState === 'finetuned') {
-    return [{ cls: 'review-suggestion-finetuned-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Finetune complete — some outputs still differ from ground truth' }];
+    return [{ cls: 'review-suggestion-optimized-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Optimization complete — some outputs still differ from ground truth' }];
   }
   if (verifyState === 'finetuned-pass') {
-    return [{ cls: 'review-suggestion-finetuned-pass-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Finetune complete — all outputs matched ground truth' }];
+    return [{ cls: 'review-suggestion-optimized-pass-pill', text: REVIEW_SUGGESTION_FINETUNED_LABEL, ariaLabel: 'Optimization complete — all outputs matched ground truth' }];
   }
   return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
@@ -1779,7 +1779,7 @@ function buildReviewResultUI(overlay, options) {
       });
 
       // "Click to Finetune" pill
-      titleWrap.querySelectorAll('.review-suggestion-finetune-pill--clickable').forEach((pill) => {
+      titleWrap.querySelectorAll('.review-suggestion-optimization-pill--clickable').forEach((pill) => {
         pill.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
