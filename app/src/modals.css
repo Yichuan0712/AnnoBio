@@ -3693,10 +3693,10 @@
 .review-suggestion-verify-pill,
 .review-suggestion-verifying-pill,
 .review-suggestion-verified-pill,
-.review-suggestion-finetune-pill,
-.review-suggestion-finetuning-pill,
-.review-suggestion-finetuned-pill,
-.review-suggestion-finetuned-pass-pill,
+.review-suggestion-optimization-pill,
+.review-suggestion-optimizing-pill,
+.review-suggestion-optimized-pill,
+.review-suggestion-optimized-pass-pill,
 .review-suggestion-proposal-pill {
   display: inline-flex;
   align-items: center;
@@ -3721,15 +3721,15 @@
 /* Dark mode: brighter text + stronger background for all pill variants */
 html.dark .review-suggestion-verify-pill,
 html.dark .review-suggestion-verifying-pill,
-html.dark .review-suggestion-finetuned-pill,
-html.dark .review-suggestion-finetune-pill,
-html.dark .review-suggestion-finetuning-pill {
+html.dark .review-suggestion-optimized-pill,
+html.dark .review-suggestion-optimization-pill,
+html.dark .review-suggestion-optimizing-pill {
   color: #fbbf24;
   background: color-mix(in srgb, #f59e0b 28%, transparent);
 }
 
 html.dark .review-suggestion-verified-pill,
-html.dark .review-suggestion-finetuned-pass-pill {
+html.dark .review-suggestion-optimized-pass-pill {
   color: #4ade80;
   background: color-mix(in srgb, #22c55e 28%, transparent);
 }
@@ -3740,7 +3740,7 @@ html.dark .review-suggestion-proposal-pill {
 }
 
 html.dark .review-suggestion-verify-pill--clickable:hover,
-html.dark .review-suggestion-finetune-pill--clickable:hover {
+html.dark .review-suggestion-optimization-pill--clickable:hover {
   background: color-mix(in srgb, #f59e0b 42%, transparent);
   color: #fcd34d;
 }
@@ -3777,14 +3777,14 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
   pointer-events: none;
 }
 
-.review-suggestion-finetuned-pill {
+.review-suggestion-optimized-pill {
   color: #b45309;
   background: color-mix(in srgb, #f59e0b 18%, transparent);
   cursor: default;
   pointer-events: none;
 }
 
-.review-suggestion-finetuned-pass-pill {
+.review-suggestion-optimized-pass-pill {
   color: #166534;
   background: color-mix(in srgb, #22c55e 22%, transparent);
   cursor: default;
@@ -3799,7 +3799,7 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
 }
 
 /* Click to Finetune – same amber as Click to Verify */
-.review-suggestion-finetune-pill {
+.review-suggestion-optimization-pill {
   color: #b45309;
   background: color-mix(in srgb, #f59e0b 18%, transparent);
   cursor: default;
@@ -3807,19 +3807,19 @@ html.dark .review-suggestion-finetune-pill--clickable:hover {
 }
 
 /* Clickable Click-to-Finetune variant */
-.review-suggestion-finetune-pill--clickable {
+.review-suggestion-optimization-pill--clickable {
   cursor: pointer;
   pointer-events: auto;
   transition: background 0.12s, color 0.12s;
 }
 
-.review-suggestion-finetune-pill--clickable:hover {
+.review-suggestion-optimization-pill--clickable:hover {
   background: color-mix(in srgb, #f59e0b 32%, transparent);
   color: #92400e;
 }
 
 /* Finetuning state – pulsing amber (same rhythm as Verifying) */
-.review-suggestion-finetuning-pill {
+.review-suggestion-optimizing-pill {
   color: #b45309;
   background: color-mix(in srgb, #f59e0b 18%, transparent);
   animation: review-verifying-pulse 1.2s ease-in-out infinite;
