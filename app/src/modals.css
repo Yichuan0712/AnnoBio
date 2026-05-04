@@ -3798,7 +3798,7 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   pointer-events: none;
 }
 
-/* Click to Finetune – same amber as Click to Verify */
+/* Click to Optimize – same amber as Click to Verify */
 .review-suggestion-optimization-pill {
   color: #b45309;
   background: color-mix(in srgb, #f59e0b 18%, transparent);
@@ -3806,7 +3806,7 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   pointer-events: none;
 }
 
-/* Clickable Click-to-Finetune variant */
+/* Clickable Click-to-Optimize variant */
 .review-suggestion-optimization-pill--clickable {
   cursor: pointer;
   pointer-events: auto;

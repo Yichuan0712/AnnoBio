@@ -1,5 +1,5 @@
 """
-Reason-guided compositional finetune: split improved sentence into substrings,
+Reason-guided compositional optimization: split improved sentence into substrings,
 per-segment candidates via LLM; Thompson-sampling search is done in the frontend.
 """
 
@@ -23,7 +23,7 @@ def _preview(s: str, max_len: int = 140) -> str:
     return t if len(t) <= max_len else t[: max_len - 1] + "…"
 
 
-def compositional_finetune_segments(
+def compositional_optimization_segments(
     *,
     provider: str,
     model: str,
@@ -59,10 +59,10 @@ def compositional_finetune_segments(
         '- No markdown, no keys other than "segments".'
     )
 
-    _print(f"\n[Finetune] ── STEP 1: Split sentence ({len(new_sentence)} chars) ──────────────────")
-    _print(f"[Finetune]   model: {model}")
-    _print(f"[Finetune]   sentence: {new_sentence!r}")
-    _print(f"[Finetune] ── LLM response ──────────────────────────────────────────")
+    _print(f"\n[Optimization] ── STEP 1: Split sentence ({len(new_sentence)} chars) ────────────────")
+    _print(f"[Optimization]   model: {model}")
+    _print(f"[Optimization]   sentence: {new_sentence!r}")
+    _print(f"[Optimization] ── LLM response ────────────────────────────────────────")
 
     try:
         text = llm_chat(
@@ -74,20 +74,20 @@ def compositional_finetune_segments(
             max_tokens=min(4096, int(max_tokens or 8192)),
         )
         for line in (text or "").splitlines():
-            _print(f"[Finetune]   {line}")
+            _print(f"[Optimization]   {line}")
         raw = _extract_json_from_text(text)
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError, ValueError) as e:
-        _print(f"[Finetune] ✘ JSON parse failed: {e}  → fallback to single segment")
-        logger.warning("compositional segments JSON parse failed: %s", e)
+        _print(f"[Optimization] ✘ JSON parse failed: {e}  → fallback to single segment")
+        logger.warning("compositional optimization segments JSON parse failed: %s", e)
         return [new_sentence]
 
     if not isinstance(data, dict):
-        _print(f"[Finetune] ✘ unexpected data type {type(data)}  → fallback")
+        _print(f"[Optimization] ✘ unexpected data type {type(data)}  → fallback")
         return [new_sentence]
     segs = data.get("segments")
     if not isinstance(segs, list) or not segs:
-        _print("[Finetune] ✘ no 'segments' list in response  → fallback")
+        _print("[Optimization] ✘ no 'segments' list in response  → fallback")
         return [new_sentence]
 
     parts: list[str] = []
@@ -97,13 +97,13 @@ def compositional_finetune_segments(
             parts.append(s)
 
     if not parts:
-        _print("[Finetune] ✘ all segments empty  → fallback")
+        _print("[Optimization] ✘ all segments empty  → fallback")
         return [new_sentence]
 
     # Log concat status (informational only — we trust the LLM split)
     joined = "".join(parts)
     if joined != new_sentence:
-        _print(f"[Finetune] ⚠ concat differs from original (likely punctuation/encoding diff); continuing with LLM split")
+        _print(f"[Optimization] ⚠ concat differs from original (likely punctuation/encoding diff); continuing with LLM split")
 
     # Cap at max_segments by merging chunks
     if len(parts) > ms:
@@ -115,15 +115,15 @@ def compositional_finetune_segments(
             i += chunk
         parts = merged
 
-    _print(f"[Finetune] ── {len(parts)} segment(s) ──────────────────────────────────────────")
+    _print(f"[Optimization] ── {len(parts)} segment(s) ────────────────────────────────────────")
     for i, p in enumerate(parts):
-        _print(f"[Finetune]   [{i}] {p!r}")
+        _print(f"[Optimization]   [{i}] {p!r}")
     _print("")
 
     return parts
 
 
-def compositional_finetune_segment_candidates(
+def compositional_optimization_segment_candidates(
     *,
     provider: str,
     model: str,
@@ -174,9 +174,9 @@ def compositional_finetune_segment_candidates(
         f"Return ONLY a JSON array of {n} strings. No markdown, no commentary."
     )
 
-    _print(f"\n[Finetune] ── STEP 2: Candidates for segment [{segment_index}/{total_segments - 1}] ──────────────")
-    _print(f"[Finetune]   focus: {seg!r}")
-    _print(f"[Finetune] ── LLM response ──────────────────────────────────────────")
+    _print(f"\n[Optimization] ── STEP 2: Candidates for segment [{segment_index}/{total_segments - 1}] ────────────")
+    _print(f"[Optimization]   focus: {seg!r}")
+    _print(f"[Optimization] ── LLM response ────────────────────────────────────────")
 
     try:
         text = llm_chat(
@@ -188,16 +188,16 @@ def compositional_finetune_segment_candidates(
             max_tokens=min(4096, int(max_tokens or 8192)),
         )
         for line in (text or "").splitlines():
-            _print(f"[Finetune]   {line}")
+            _print(f"[Optimization]   {line}")
         raw = _extract_json_array_from_text(text)
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError, ValueError) as e:
-        _print(f"[Finetune] ✘ JSON parse failed: {e}  → fallback to original segment")
-        logger.warning("compositional candidates JSON parse failed: %s", e)
+        _print(f"[Optimization] ✘ JSON parse failed: {e}  → fallback to original segment")
+        logger.warning("compositional optimization candidates JSON parse failed: %s", e)
         return [seg]
 
     if not isinstance(data, list):
-        _print(f"[Finetune] ✘ unexpected type {type(data)}  → fallback")
+        _print(f"[Optimization] ✘ unexpected type {type(data)}  → fallback")
         return [seg]
 
     out: list[str] = []
@@ -220,10 +220,10 @@ def compositional_finetune_segment_candidates(
 
     final = out if out else [seg]
 
-    _print(f"[Finetune] ── {len(final)} candidate(s) ─────────────────────────────────────────")
+    _print(f"[Optimization] ── {len(final)} candidate(s) ───────────────────────────────────────")
     for j, c in enumerate(final):
         orig_marker = "  ← original" if c == seg else ""
-        _print(f"[Finetune]   [{j}] {c!r}{orig_marker}")
+        _print(f"[Optimization]   [{j}] {c!r}{orig_marker}")
     _print("")
 
     return final
