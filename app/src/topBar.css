@@ -6,7 +6,7 @@
   align-items: center;
   gap: 0;
   padding: 0 0 0 12px;
-  height: 30px;
+  height: var(--app-top-bar-height);
   background: var(--bg-bar);
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
@@ -58,7 +58,7 @@
 
 .top-bar-window-btn {
   width: 46px;
-  height: 30px;
+  height: var(--app-top-bar-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
