@@ -115,6 +115,7 @@
 }
 
 .modal-overlay--maximized {
+  inset: var(--app-top-bar-height) 0 0 0;
   align-items: stretch;
   justify-content: stretch;
   padding: 0;

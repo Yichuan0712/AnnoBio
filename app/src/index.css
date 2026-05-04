@@ -1,5 +1,6 @@
 /* Base: theme variables, layout — light mode: 略深背景减轻刺眼 */
 :root {
+  --app-top-bar-height: 30px;
   --bg: #e2e6ea;
   --bg-bar: #e8eaee;
   --bg-canvas: #bcc2cb;
