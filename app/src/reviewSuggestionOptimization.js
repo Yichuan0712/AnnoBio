@@ -1,5 +1,5 @@
 /**
- * Compositional finetune for Review suggestion cards.
+ * Compositional optimization for Review suggestion cards.
  *
  * Algorithm (Thompson sampling over a segment × candidate lattice):
  *   1. Backend splits improved sentence into N segments.
@@ -25,20 +25,20 @@ const API_BASE = BACKEND_API_BASE;
 // ─── Session management (abort on app close) ─────────────────────────────────
 
 /** @type {Set<AbortController>} */
-const _finetuneACs = new Set();
+const _optimizationACs = new Set();
 
-export function registerFinetuneSession(ac) {
-  if (ac && typeof ac.abort === 'function') _finetuneACs.add(ac);
+export function registerOptimizationSession(ac) {
+  if (ac && typeof ac.abort === 'function') _optimizationACs.add(ac);
 }
-export function unregisterFinetuneSession(ac) {
-  _finetuneACs.delete(ac);
+export function unregisterOptimizationSession(ac) {
+  _optimizationACs.delete(ac);
 }
-export function abortAllFinetuneJobs() {
-  for (const c of _finetuneACs) { try { c.abort(); } catch (_) {} }
-  _finetuneACs.clear();
+export function abortAllOptimizationJobs() {
+  for (const c of _optimizationACs) { try { c.abort(); } catch (_) {} }
+  _optimizationACs.clear();
 }
-export function hasActiveFinetuneSessions() {
-  return _finetuneACs.size > 0;
+export function hasActiveOptimizationSessions() {
+  return _optimizationACs.size > 0;
 }
 
 // ─── Utility ───────────────────────────────────────────────────────────────────
@@ -160,7 +160,7 @@ export async function runVerifyPassRate({
   return { passRate, ok: true, aborted: false };
 }
 
-// ─── Main compositional finetune algorithm ────────────────────────────────────
+// ─── Main compositional optimization algorithm ────────────────────────────────
 
 /**
  * @param {{
@@ -185,7 +185,7 @@ export async function runVerifyPassRate({
  *   onProgress?: (info:{trial:number,trials:number,bestRate:number}) => void,
  * }} options
  */
-export async function runSuggestionFinetuneCompositional(options) {
+export async function runSuggestionOptimizationCompositional(options) {
   const {
     credentialId,
     oldSentence = '',
@@ -212,13 +212,13 @@ export async function runSuggestionFinetuneCompositional(options) {
   const signal = ac?.signal ?? null;
   const base = API_BASE;
   const proposal = String(newSentence || '').trim();
-  if (!proposal) throw new Error('Empty new_sentence for finetune.');
-  if (!inputEntries || inputEntries.length === 0) throw new Error('No input entries for finetune.');
+  if (!proposal) throw new Error('Empty new_sentence for optimization.');
+  if (!inputEntries || inputEntries.length === 0) throw new Error('No input entries for optimization.');
 
   try {
     // ── Step 1: Get segments ────────────────────────────────────────────────
     throwIfAborted(signal);
-    const segRes = await fetch(`${base}/api/review/finetune-compositional/segments`, {
+    const segRes = await fetch(`${base}/api/review/optimization-compositional/segments`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal,
@@ -233,7 +233,7 @@ export async function runSuggestionFinetuneCompositional(options) {
     const segData = await segRes.json().catch(() => ({}));
     if (!segRes.ok) {
       const d = typeof segData.detail === 'string' ? segData.detail : JSON.stringify(segData.detail || segData);
-      throw new Error(d || 'finetune/segments failed');
+      throw new Error(d || 'optimization/segments failed');
     }
     const segments = Array.isArray(segData.segments) ? segData.segments.map((x) => String(x || '')) : [];
     if (!segments.length) {
@@ -250,7 +250,7 @@ export async function runSuggestionFinetuneCompositional(options) {
       const seg = segments[i];
       const prefix = proposal.slice(0, offset);
       const suffix = proposal.slice(offset + seg.length);
-      const cRes = await fetch(`${base}/api/review/finetune-compositional/candidates`, {
+      const cRes = await fetch(`${base}/api/review/optimization-compositional/candidates`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal,
@@ -271,7 +271,7 @@ export async function runSuggestionFinetuneCompositional(options) {
       const cData = await cRes.json().catch(() => ({}));
       if (!cRes.ok) {
         const d = typeof cData.detail === 'string' ? cData.detail : JSON.stringify(cData.detail || cData);
-        throw new Error(d || 'finetune/candidates failed');
+        throw new Error(d || 'optimization/candidates failed');
       }
       const cands = Array.isArray(cData.candidates)
         ? cData.candidates.map((x) => String(x || '').trim()).filter(Boolean)
@@ -358,7 +358,7 @@ export async function runSuggestionFinetuneCompositional(options) {
 
     // Log final result to backend terminal
     try {
-      await fetch(`${base}/api/review/finetune-compositional/log-result`, {
+      await fetch(`${base}/api/review/optimization-compositional/log-result`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -381,6 +381,6 @@ export async function runSuggestionFinetuneCompositional(options) {
       lattice,
     };
   } finally {
-    if (ac) unregisterFinetuneSession(ac);
+    if (ac) unregisterOptimizationSession(ac);
   }
 }
