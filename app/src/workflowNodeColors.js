@@ -1,8 +1,7 @@
-// High-contrast palette so adjacent workflow datasets remain easy to distinguish.
+// High-contrast palette ordered to keep consecutively assigned colors visually distinct.
 export const DATASET_BORDER_COLORS = [
-  '#2563eb', '#dc2626', '#16a34a', '#c026d3', '#ea580c', '#0891b2', '#ca8a04', '#7c3aed',
-  '#0d9488', '#b91c1c', '#65a30d', '#a855f7', '#f59e0b', '#06b6d4', '#84cc16', '#6366f1',
-  '#10b981', '#ef4444', '#22c55e', '#d946ef', '#f97316', '#0ea5e9', '#eab308', '#8b5cf6',
-  '#14b8a6', '#f43f5e', '#4ade80', '#c084fc', '#fb923c', '#38bdf8', '#a3e635', '#a78bfa',
-  '#2dd4bf', '#ec4899', '#86efac', '#e879f9', '#fdba74', '#7dd3fc', '#bef264', '#c4b5fd',
+  '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2',
+  '#ca8a04', '#be123c', '#0f766e', '#4f46e5', '#65a30d', '#c026d3',
+  '#0369a1', '#b45309', '#15803d', '#7c3aed', '#b91c1c', '#0d9488',
+  '#a16207', '#1d4ed8', '#9d174d', '#059669', '#7e22ce', '#c2410c',
 ];

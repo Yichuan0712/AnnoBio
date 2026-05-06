@@ -3,9 +3,12 @@ import { createSampledDatasetNodeSkill } from './create_sampled_dataset_node/exe
 import { createSyntheticDatasetNodeSkill } from './create_synthetic_dataset_node/execute.js';
 import { createPromptNodeSkill } from './create_prompt_node/execute.js';
 import { createRunNodeSkill } from './create_run_node/execute.js';
+import { createScoreNodeSkill } from './create_score_node/execute.js';
 import { runExistingNodeSkill } from './run_existing_node/execute.js';
 import { saveRunResultsToWorkspaceSkill } from './save_run_results_to_workspace/execute.js';
+import { saveScoreResultsToWorkspaceSkill } from './save_score_results_to_workspace/execute.js';
 import { designSamplerNodeSkill } from './design_sampler_node/execute.js';
+import { designScoreNodeSkill } from './design_score_node/execute.js';
 import { designSyntheticDatasetSkill } from './design_synthetic_dataset/execute.js';
 import { designPromptNodeSkill } from './design_prompt_node/execute.js';
 import { designRunNodeSkill } from './design_run_node/execute.js';
@@ -16,13 +19,16 @@ export const AGENT_SKILLS = Object.freeze([
   designSyntheticDatasetSkill,
   designPromptNodeSkill,
   designRunNodeSkill,
+  designScoreNodeSkill,
   createSamplerNodeSkill,
   createSampledDatasetNodeSkill,
   createSyntheticDatasetNodeSkill,
   createPromptNodeSkill,
   createRunNodeSkill,
+  createScoreNodeSkill,
   runExistingNodeSkill,
   saveRunResultsToWorkspaceSkill,
+  saveScoreResultsToWorkspaceSkill,
   inspectNodeSkill,
 ]);
 
