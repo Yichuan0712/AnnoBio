@@ -2395,6 +2395,18 @@ export function buildWorkflowCanvas(root, options = {}) {
     zoomOuter.style.height = `${height * zoomLevel}px`;
   }
 
+  function clampCanvasPosition(value) {
+    const normalized = Number(value);
+    if (!Number.isFinite(normalized)) return 0;
+    return Math.max(0, normalized);
+  }
+
+  function setNodeCanvasPosition(node, left, top) {
+    if (!node) return;
+    node.style.left = `${clampCanvasPosition(left)}px`;
+    node.style.top = `${clampCanvasPosition(top)}px`;
+  }
+
   const canvasControlsStack = document.createElement('div');
   canvasControlsStack.className = 'workflow-canvas__controls-stack';
 
@@ -2494,8 +2506,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
-    node.style.left = `${x}px`;
-    node.style.top = `${y}px`;
+    setNodeCanvasPosition(node, x, y);
     const noteTrimmed = (note || '').trim();
     const hasNote = noteTrimmed.length > 0;
     if (!hasNote) node.classList.add('workflow-node--no-body');
@@ -2550,8 +2561,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       lastInteractionWasDrag = true;
       const dx = (e.clientX - dragStartX) / zoomLevel;
       const dy = (e.clientY - dragStartY) / zoomLevel;
-      node.style.left = `${nodeStartLeft + dx}px`;
-      node.style.top = `${nodeStartTop + dy}px`;
+      setNodeCanvasPosition(node, nodeStartLeft + dx, nodeStartTop + dy);
       updateEdges();
     }
 
@@ -2710,8 +2720,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
-    node.style.left = `${x}px`;
-    node.style.top = `${y}px`;
+    setNodeCanvasPosition(node, x, y);
     node.innerHTML = `
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--sampler" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 2h10l-2 5H4L2 2z"/><line x1="4" y1="7" x2="10" y2="7"/><line x1="5" y1="11" x2="9" y2="11"/><line x1="6" y1="13" x2="8" y2="13"/></svg></span>
@@ -2757,8 +2766,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       lastInteractionWasDrag = true;
       const dx = (e.clientX - dragStartX) / zoomLevel;
       const dy = (e.clientY - dragStartY) / zoomLevel;
-      node.style.left = `${nodeStartLeft + dx}px`;
-      node.style.top = `${nodeStartTop + dy}px`;
+      setNodeCanvasPosition(node, nodeStartLeft + dx, nodeStartTop + dy);
       updateEdges();
     }
     function onPointerUp() {
@@ -2813,8 +2821,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
-    node.style.left = `${x}px`;
-    node.style.top = `${y}px`;
+    setNodeCanvasPosition(node, x, y);
     node.innerHTML = `
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="12" height="12" rx="0.5"/><line x1="1" y1="4" x2="13" y2="4"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="1" y1="10" x2="13" y2="10"/><line x1="4.5" y1="1" x2="4.5" y2="13"/><line x1="8" y1="1" x2="8" y2="13"/></svg></span>
@@ -2862,8 +2869,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       lastInteractionWasDrag = true;
       const dx = (e.clientX - dragStartX) / zoomLevel;
       const dy = (e.clientY - dragStartY) / zoomLevel;
-      node.style.left = `${nodeStartLeft + dx}px`;
-      node.style.top = `${nodeStartTop + dy}px`;
+      setNodeCanvasPosition(node, nodeStartLeft + dx, nodeStartTop + dy);
       updateEdges();
     }
     function onPointerUp() {
@@ -2913,8 +2919,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
-    node.style.left = `${x}px`;
-    node.style.top = `${y}px`;
+    setNodeCanvasPosition(node, x, y);
     node.innerHTML = `
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--run" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M3 2v10l8-5-8-5z"/></svg></span>
@@ -2970,8 +2975,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       lastInteractionWasDrag = true;
       const dx = (e.clientX - dragStartX) / zoomLevel;
       const dy = (e.clientY - dragStartY) / zoomLevel;
-      node.style.left = `${nodeStartLeft + dx}px`;
-      node.style.top = `${nodeStartTop + dy}px`;
+      setNodeCanvasPosition(node, nodeStartLeft + dx, nodeStartTop + dy);
       updateEdges();
     }
     function onPointerUp() {
@@ -3078,8 +3082,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
-    node.style.left = `${x}px`;
-    node.style.top = `${y}px`;
+    setNodeCanvasPosition(node, x, y);
     node.innerHTML = `
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--score" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8v4M6 5v7M9 3v9M12 6v6"/></svg></span>
@@ -3126,8 +3129,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       lastInteractionWasDrag = true;
       const dx = (e.clientX - dragStartX) / zoomLevel;
       const dy = (e.clientY - dragStartY) / zoomLevel;
-      node.style.left = `${nodeStartLeft + dx}px`;
-      node.style.top = `${nodeStartTop + dy}px`;
+      setNodeCanvasPosition(node, nodeStartLeft + dx, nodeStartTop + dy);
       updateEdges();
     }
     function onPointerUp() {
@@ -3319,8 +3321,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
-    node.style.left = `${x}px`;
-    node.style.top = `${y}px`;
+    setNodeCanvasPosition(node, x, y);
     node.innerHTML = `
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--prompt-review" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="10" height="10" rx="1"/><path d="M4 7l2.5 2.5L10 4"/></svg></span>
@@ -3379,8 +3380,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       lastInteractionWasDrag = true;
       const dx = (e.clientX - dragStartX) / zoomLevel;
       const dy = (e.clientY - dragStartY) / zoomLevel;
-      node.style.left = `${nodeStartLeft + dx}px`;
-      node.style.top = `${nodeStartTop + dy}px`;
+      setNodeCanvasPosition(node, nodeStartLeft + dx, nodeStartTop + dy);
       updateEdges();
     }
     function onPointerUp() {
@@ -4716,7 +4716,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (refNode && newNode?.dataset?.nodeId) {
       const refHeight = refNode.offsetHeight || 80;
       const newHeight = newNode.offsetHeight || 80;
-      newNode.style.top = `${refTop + refHeight / 2 - newHeight / 2}px`;
+      setNodeCanvasPosition(
+        newNode,
+        parseFloat(newNode.style.left) || 0,
+        refTop + refHeight / 2 - newHeight / 2
+      );
       connections.push({
         fromId: refNode.dataset.nodeId,
         toId: newNode.dataset.nodeId,
