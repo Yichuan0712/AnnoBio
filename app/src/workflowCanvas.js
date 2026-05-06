@@ -1534,7 +1534,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     notes = '',
     left,
     top,
-    maxSampleUses = null,
   } = {}) {
     const normalizedSamplerNodeId = String(samplerNodeId || '').trim();
     if (!normalizedSamplerNodeId) {
@@ -1546,12 +1545,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
 
     const existingCount = countSampledDatasetsForSampler(normalizedSamplerNodeId);
-    if (Number.isFinite(Number(maxSampleUses))) {
-      const normalizedMaxSampleUses = Math.max(1, Math.floor(Number(maxSampleUses)));
-      if (existingCount >= normalizedMaxSampleUses) {
-        throw new Error(`This sampler has already been used ${existingCount} time(s), which reaches the max sample uses (${normalizedMaxSampleUses}).`);
-      }
-    }
 
     const sourceNodeId = samplerNode.dataset.sourceNodeId;
     const sourceContent = sourceNodeId ? datasetContentByNodeId.get(sourceNodeId) : null;
@@ -1569,7 +1562,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       datasetRows = indices.map((i) => sourceContent.rows[i].slice());
     } else {
       const sampleSize = parseInt(samplerNode.dataset.samplerSampleSize, 10) || 100;
-      const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'rows';
+      const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'ratio';
       const totalRows = sourceContent.rows.length;
       const requestedCount = sampleSizeType === 'rows'
         ? Math.max(0, Math.floor(sampleSize))
@@ -2669,13 +2662,13 @@ export function buildWorkflowCanvas(root, options = {}) {
       const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
       return rowSpec ? `${name} · ${typeLabel}: ${rowSpec}` : `${name} · ${typeLabel}`;
     }
-    const sizeType = samplerNode.dataset.samplerSampleSizeType || 'rows';
+    const sizeType = samplerNode.dataset.samplerSampleSizeType || 'ratio';
     const size = samplerNode.dataset.samplerSampleSize != null ? String(samplerNode.dataset.samplerSampleSize).trim() : '100';
     const sizeLabel = sizeType === 'ratio' ? `${size}%` : `${size} rows`;
     return `${name} · ${typeLabel}, ${sizeLabel}`;
   }
 
-  function createSamplerNode({ name = '', notes = '', left, top, nodeId: givenNodeId, sourceNodeId = '', colorIndex: givenColorIndex, samplingType = 'without-replacement', sampleSizeType = 'rows', sampleSize = 100, rowSpec = '' }) {
+  function createSamplerNode({ name = '', notes = '', left, top, nodeId: givenNodeId, sourceNodeId = '', colorIndex: givenColorIndex, samplingType = 'without-replacement', sampleSizeType = 'ratio', sampleSize = 100, rowSpec = '' }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Sample';
     const node = document.createElement('div');
@@ -4498,7 +4491,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:add-sampler-node', (e) => {
-    const { sourceNodeId = '', colorIndex, name: nameParam, samplingType = 'without-replacement', sampleSizeType = 'rows', sampleSize = 100, rowSpec = '' } = e.detail || {};
+    const { sourceNodeId = '', colorIndex, name: nameParam, samplingType = 'without-replacement', sampleSizeType = 'ratio', sampleSize = 100, rowSpec = '' } = e.detail || {};
     const name = (nameParam && nameParam.trim()) ? nameParam.trim() : 'Sample';
     let left, top;
     const sourceNode = sourceNodeId ? getNodeById(sourceNodeId) : null;
@@ -4755,7 +4748,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (samplingType === 'specify-rows') {
           out.rowSpec = (node.dataset.samplerRowSpec || '').trim();
         } else {
-          out.sampleSizeType = node.dataset.samplerSampleSizeType || 'rows';
+          out.sampleSizeType = node.dataset.samplerSampleSizeType || 'ratio';
           out.sampleSize = node.dataset.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
         }
         return out;
@@ -4916,7 +4909,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           sourceNodeId: n.sourceNodeId || '',
           colorIndex: n.colorIndex,
           samplingType,
-          sampleSizeType: n.sampleSizeType || 'rows',
+          sampleSizeType: n.sampleSizeType || 'ratio',
           sampleSize: n.sampleSize != null ? n.sampleSize : 100,
           rowSpec: (n.rowSpec || '').trim(),
         });
@@ -5280,7 +5273,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       notes,
       left,
       top,
-      maxSampleUses,
     });
 
     const newNode = addDatasetNode({

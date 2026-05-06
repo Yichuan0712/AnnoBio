@@ -411,6 +411,12 @@ export function mountAgentChatSession({
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   }
 
+function normalizePositiveInteger(value, fallback = null) {
+  const normalized = Number.parseInt(value, 10);
+  if (!Number.isFinite(normalized) || normalized < 1) return fallback;
+  return normalized;
+}
+
   function addLoopSignal(loopSignals, signal) {
     const normalizedSignal = String(signal || '').trim();
     if (!normalizedSignal) return;
@@ -580,6 +586,7 @@ export function mountAgentChatSession({
       const loopSignals = [];
       const seenObservationFingerprints = new Set();
       const callCountsByFingerprint = new Map();
+      const sampledDatasetCreateCountsBySampler = new Map();
       const loopStartedAt = Date.now();
       let stalledCount = 0;
       let roundIndex = 0;
@@ -631,8 +638,39 @@ export function mountAgentChatSession({
               addLoopSignal(loopSignals, `Repeated skill call detected: ${callFingerprint}`);
             }
 
+            if (skillCall.skillName === 'create_sampled_dataset_node') {
+              const samplerNodeId = String(
+                skillCall.args?.sampler_node_id || skillCall.args?.samplerNodeId || ''
+              ).trim();
+              const maxSampleUses = normalizePositiveInteger(
+                skillCall.args?.max_sample_uses ?? skillCall.args?.maxSampleUses,
+                1
+              );
+              if (samplerNodeId && maxSampleUses != null) {
+                const usedCount = sampledDatasetCreateCountsBySampler.get(samplerNodeId) || 0;
+                if (usedCount >= maxSampleUses) {
+                  const limitSummary = `Agent-side sample limit reached for sampler ${samplerNodeId}: ${usedCount}/${maxSampleUses} in this request.`;
+                  addLoopSignal(loopSignals, limitSummary);
+                  agentTrace.push(`ROUND ${roundIndex} STOP: ${limitSummary}`);
+                  stalledCount = Math.max(stalledCount, AGENT_LOOP_STALL_CRITICAL_THRESHOLD);
+                  break;
+                }
+              }
+            }
+
             const observation = executeSkillCall(skillCall, workflowSnapshot);
             observations.push(observation);
+            if (observation.ok && skillCall.skillName === 'create_sampled_dataset_node') {
+              const samplerNodeId = String(
+                skillCall.args?.sampler_node_id || skillCall.args?.samplerNodeId || ''
+              ).trim();
+              if (samplerNodeId) {
+                sampledDatasetCreateCountsBySampler.set(
+                  samplerNodeId,
+                  (sampledDatasetCreateCountsBySampler.get(samplerNodeId) || 0) + 1
+                );
+              }
+            }
             const refreshedSnapshot = readWorkflowSnapshot();
             if (refreshedSnapshot) workflowSnapshot = refreshedSnapshot;
             const observationFingerprint = buildObservationFingerprint(observation);

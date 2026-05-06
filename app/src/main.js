@@ -80,6 +80,8 @@ function normalizeAgentConversationPayload(payload) {
           generatedTitle: item.generatedTitle === true,
           updatedAt: Number.isFinite(Number(item.updatedAt)) ? Number(item.updatedAt) : Date.now(),
           pending: item.pending === true,
+          pendingStatus: String(item.pendingStatus || '').trim(),
+          unsentDraft: String(item.unsentDraft || ''),
           messages: Array.isArray(item.messages)
             ? item.messages
                 .filter((msg) => msg && typeof msg === 'object')
@@ -95,6 +97,14 @@ function normalizeAgentConversationPayload(payload) {
     activeConversationId,
     conversations,
   };
+}
+
+async function atomicWriteJson(filePath, payload) {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const tempPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.tmp`);
+  await fs.writeFile(tempPath, JSON.stringify(payload, null, 2), 'utf-8');
+  await fs.rename(tempPath, filePath);
 }
 
 function killProcessOnPort(port) {
@@ -273,7 +283,7 @@ ipcMain.handle('agent-conversations:save', async (_e, projectPath, payload) => {
   if (!filePath) return { ok: false };
   const normalized = normalizeAgentConversationPayload(payload);
   await fs.mkdir(getAgentSessionsDir(), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(normalized, null, 2), 'utf-8');
+  await atomicWriteJson(filePath, normalized);
   return { ok: true };
 });
 
