@@ -13,6 +13,9 @@ const AGENT_LOOP_REPEAT_WARNING_THRESHOLD = 2;
 const AGENT_LOOP_REPEAT_CRITICAL_THRESHOLD = 3;
 const AGENT_LOOP_STALL_WARNING_THRESHOLD = 2;
 const AGENT_LOOP_STALL_CRITICAL_THRESHOLD = 3;
+const AGENT_RUN_WAIT_HEARTBEAT_MS = 2000;
+const AGENT_RUN_WAIT_MAX_MS = 10 * 60 * 1000;
+const AGENT_RUN_WAIT_STALL_WARNING_MS = 60 * 1000;
 
 function sliceChatHistoryForApi(messages) {
   if (!Array.isArray(messages) || messages.length <= CHAT_MAX_MESSAGES) {
@@ -85,6 +88,12 @@ function autoResizeTextarea(textareaEl) {
   if (!textareaEl) return;
   textareaEl.style.height = 'auto';
   textareaEl.style.height = `${textareaEl.scrollHeight}px`;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, ms | 0));
+  });
 }
 
 function getSendIconSvg() {
@@ -224,6 +233,8 @@ export function mountAgentChatSession({
   getWorkflowSnapshot,
   inspectNode,
   addRunNode,
+  startRunNode,
+  saveRunResultsToWorkspace,
   addSamplerNode,
   addSampledDatasetNode,
   addPromptNode,
@@ -418,6 +429,14 @@ function normalizePositiveInteger(value, fallback = null) {
   return normalized;
 }
 
+function findNodeInSnapshot(workflowSnapshot, nodeId) {
+  const normalizedNodeId = String(nodeId || '').trim();
+  if (!normalizedNodeId) return null;
+  return Array.isArray(workflowSnapshot?.nodes)
+    ? workflowSnapshot.nodes.find((node) => String(node?.id || '').trim() === normalizedNodeId) || null
+    : null;
+}
+
   function addLoopSignal(loopSignals, signal) {
     const normalizedSignal = String(signal || '').trim();
     if (!normalizedSignal) return;
@@ -441,6 +460,8 @@ function normalizePositiveInteger(value, fallback = null) {
           runtime: {
             inspectNode,
             addRunNode,
+            startRunNode,
+            saveRunResultsToWorkspace,
             addSamplerNode,
             addSampledDatasetNode,
             addPromptNode,
@@ -463,6 +484,8 @@ function normalizePositiveInteger(value, fallback = null) {
           runtime: {
             inspectNode,
             addRunNode,
+            startRunNode,
+            saveRunResultsToWorkspace,
             addSamplerNode,
             addSampledDatasetNode,
             addPromptNode,
@@ -475,7 +498,7 @@ function normalizePositiveInteger(value, fallback = null) {
     return `Running ${String(skillCall?.skillName || 'skill').trim()}...`;
   }
 
-  function executeSkillCall(skillCall, workflowSnapshot) {
+  async function executeSkillCall(skillCall, workflowSnapshot) {
     const skillName = String(skillCall?.skillName || '').trim();
     const args = normalizeSkillArgs(skillCall?.args);
     const skill = getAgentSkillByName(skillName);
@@ -489,11 +512,13 @@ function normalizePositiveInteger(value, fallback = null) {
       };
     }
     try {
-      const result = skill.execute({
+      const result = await skill.execute({
         args,
         runtime: {
           inspectNode,
           addRunNode,
+          startRunNode,
+          saveRunResultsToWorkspace,
           addSamplerNode,
           addSampledDatasetNode,
           addPromptNode,
@@ -517,6 +542,128 @@ function normalizePositiveInteger(value, fallback = null) {
         summary: `Skill ${skillName || 'unknown'} failed: ${error instanceof Error ? error.message : 'unknown error'}`,
         result: null,
       };
+    }
+  }
+
+  async function waitForRunCompletion(waitState, workflowSnapshot, loopSignals, agentTrace, onProgress) {
+    const startedAt = waitState?.startedAt || Date.now();
+    let lastProgress = Number(waitState?.lastObservedProgress) || 0;
+    let lastResultsCount = Number(waitState?.lastObservedResultsCount) || 0;
+    let lastProgressAt = waitState?.lastProgressAt || startedAt;
+    let warnedForStall = false;
+
+    while (true) {
+      const latestSnapshot = readWorkflowSnapshot();
+      if (latestSnapshot) workflowSnapshot = latestSnapshot;
+      const runNode = findNodeInSnapshot(workflowSnapshot, waitState?.runNodeId);
+      if (!runNode || String(runNode?.type || '').trim() !== 'run') {
+        return {
+          workflowSnapshot,
+          observation: {
+            skillName: 'wait_for_run_completion',
+            args: { run_node_id: waitState?.runNodeId || '' },
+            ok: false,
+            summary: `Run node ${String(waitState?.runNodeId || '').trim() || 'unknown'} was not found while waiting.`,
+            result: {
+              runNodeId: String(waitState?.runNodeId || '').trim(),
+              status: 'missing',
+            },
+          },
+          shouldBreak: true,
+        };
+      }
+
+      const runName = String(runNode?.title || waitState?.runNodeId || 'run').trim() || 'run';
+      const pending = runNode?.status?.pending === true;
+      const progress = Number(runNode?.status?.progress) || 0;
+      const resultsCount = Number(runNode?.status?.resultsCount) || 0;
+      const completed = runNode?.status?.completed === true;
+
+      if (progress > lastProgress || resultsCount > lastResultsCount) {
+        lastProgress = progress;
+        lastResultsCount = resultsCount;
+        lastProgressAt = Date.now();
+        warnedForStall = false;
+      }
+
+      if (completed) {
+        return {
+          workflowSnapshot,
+          observation: {
+            skillName: 'wait_for_run_completion',
+            args: { run_node_id: waitState?.runNodeId || '' },
+            ok: true,
+            summary: `Run ${runName} completed.`,
+            result: {
+              runNodeId: String(waitState?.runNodeId || '').trim(),
+              status: 'completed',
+              progress,
+              resultsCount,
+            },
+          },
+          shouldBreak: false,
+        };
+      }
+
+      if (!pending) {
+        const stoppedMessage = `Run ${runName} stopped before completion.`;
+        addLoopSignal(loopSignals, stoppedMessage);
+        agentTrace.push(`WAIT STOP: ${stoppedMessage}`);
+        return {
+          workflowSnapshot,
+          observation: {
+            skillName: 'wait_for_run_completion',
+            args: { run_node_id: waitState?.runNodeId || '' },
+            ok: false,
+            summary: stoppedMessage,
+            result: {
+              runNodeId: String(waitState?.runNodeId || '').trim(),
+              status: 'stopped',
+              progress,
+              resultsCount,
+            },
+          },
+          shouldBreak: true,
+        };
+      }
+
+      const waitElapsedMs = Date.now() - startedAt;
+      const stalledForMs = Date.now() - lastProgressAt;
+      if (waitElapsedMs >= AGENT_RUN_WAIT_MAX_MS) {
+        const timeoutMessage = `Timed out waiting for run ${runName} after ${Math.round(AGENT_RUN_WAIT_MAX_MS / 1000)} seconds.`;
+        addLoopSignal(loopSignals, timeoutMessage);
+        agentTrace.push(`WAIT STOP: ${timeoutMessage}`);
+        return {
+          workflowSnapshot,
+          observation: {
+            skillName: 'wait_for_run_completion',
+            args: { run_node_id: waitState?.runNodeId || '' },
+            ok: false,
+            summary: timeoutMessage,
+            result: {
+              runNodeId: String(waitState?.runNodeId || '').trim(),
+              status: 'timeout',
+              progress,
+              resultsCount,
+            },
+          },
+          shouldBreak: true,
+        };
+      }
+
+      if (!warnedForStall && stalledForMs >= AGENT_RUN_WAIT_STALL_WARNING_MS) {
+        const stallMessage = `Run ${runName} has shown no new progress for ${Math.round(stalledForMs / 1000)} seconds.`;
+        addLoopSignal(loopSignals, stallMessage);
+        agentTrace.push(`WAIT WARN: ${stallMessage}`);
+        warnedForStall = true;
+      }
+
+      if (onProgress) {
+        onProgress(progress > 0
+          ? `Waiting for run ${runName} to finish (${progress}%)...`
+          : `Waiting for run ${runName} to finish...`);
+      }
+      await sleep(AGENT_RUN_WAIT_HEARTBEAT_MS);
     }
   }
 
@@ -594,6 +741,7 @@ function normalizePositiveInteger(value, fallback = null) {
       const loopStartedAt = Date.now();
       let stalledCount = 0;
       let roundIndex = 0;
+      let waitingState = null;
       try {
         while (true) {
           roundIndex += 1;
@@ -602,6 +750,24 @@ function normalizePositiveInteger(value, fallback = null) {
             addLoopSignal(loopSignals, `Agent loop runtime exceeded ${Math.round(AGENT_LOOP_MAX_RUNTIME_MS / 1000)} seconds.`);
             agentTrace.push(`ROUND ${roundIndex} STOP: runtime watchdog reached after ${elapsedMs}ms`);
             break;
+          }
+
+          if (waitingState) {
+            const waitResult = await waitForRunCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress);
+            workflowSnapshot = waitResult.workflowSnapshot || workflowSnapshot;
+            if (waitResult.observation) {
+              observations.push(waitResult.observation);
+              const observationFingerprint = buildObservationFingerprint(waitResult.observation);
+              seenObservationFingerprints.add(observationFingerprint);
+              agentTrace.push(
+                `ROUND ${roundIndex} WAIT: ${waitResult.observation.ok ? 'ok' : 'error'} | ${waitResult.observation.summary || 'no summary'}`
+              );
+            }
+            waitingState = null;
+            if (waitResult.shouldBreak) break;
+            stalledCount = 0;
+            if (onProgress) onProgress('Run finished, replanning next steps...');
+            continue;
           }
 
           if (onProgress) onProgress(`Planning round ${roundIndex}...`);
@@ -662,7 +828,7 @@ function normalizePositiveInteger(value, fallback = null) {
               }
             }
 
-            const observation = executeSkillCall(skillCall, workflowSnapshot);
+            const observation = await executeSkillCall(skillCall, workflowSnapshot);
             observations.push(observation);
             if (observation.ok && skillCall.skillName === 'create_sampled_dataset_node') {
               const samplerNodeId = String(
@@ -688,6 +854,20 @@ function normalizePositiveInteger(value, fallback = null) {
               `ROUND ${roundIndex} ACT: ${skillCall.skillName}(${stableStringify(skillCall.args)}) -> `
               + `${observation.ok ? 'ok' : 'error'} | ${observation.summary || 'no summary'} | progress=${isNewObservation ? 'yes' : 'no'}`
             );
+
+            if (observation.ok && observation.result?.waitRequired === true && observation.result?.runNodeId) {
+              waitingState = {
+                kind: 'run',
+                runNodeId: String(observation.result.runNodeId || '').trim(),
+                runId: String(observation.result.runId || '').trim(),
+                startedAt: Date.now(),
+                lastObservedProgress: 0,
+                lastObservedResultsCount: Number(observation.result?.resultsCount) || 0,
+                lastProgressAt: Date.now(),
+              };
+              agentTrace.push(`ROUND ${roundIndex} WAIT START: run ${waitingState.runNodeId}`);
+              break;
+            }
 
             if (!isNewObservation && repeatCount >= AGENT_LOOP_REPEAT_CRITICAL_THRESHOLD) {
               addLoopSignal(loopSignals, `Critical repeated skill call: ${callFingerprint}`);

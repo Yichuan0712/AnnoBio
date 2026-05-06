@@ -3,6 +3,8 @@ import { createSampledDatasetNodeSkill } from './create_sampled_dataset_node/exe
 import { createSyntheticDatasetNodeSkill } from './create_synthetic_dataset_node/execute.js';
 import { createPromptNodeSkill } from './create_prompt_node/execute.js';
 import { createRunNodeSkill } from './create_run_node/execute.js';
+import { runExistingNodeSkill } from './run_existing_node/execute.js';
+import { saveRunResultsToWorkspaceSkill } from './save_run_results_to_workspace/execute.js';
 import { designSamplerNodeSkill } from './design_sampler_node/execute.js';
 import { designSyntheticDatasetSkill } from './design_synthetic_dataset/execute.js';
 import { designPromptNodeSkill } from './design_prompt_node/execute.js';
@@ -19,6 +21,8 @@ export const AGENT_SKILLS = Object.freeze([
   createSyntheticDatasetNodeSkill,
   createPromptNodeSkill,
   createRunNodeSkill,
+  runExistingNodeSkill,
+  saveRunResultsToWorkspaceSkill,
   inspectNodeSkill,
 ]);
 
