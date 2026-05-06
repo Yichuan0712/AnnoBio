@@ -131,6 +131,8 @@ export async function openAgentWindowModal(options = {}) {
   const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
   const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
   const addRunNode = typeof options?.addRunNode === 'function' ? options.addRunNode : null;
+  const startRunNode = typeof options?.startRunNode === 'function' ? options.startRunNode : null;
+  const saveRunResultsToWorkspace = typeof options?.saveRunResultsToWorkspace === 'function' ? options.saveRunResultsToWorkspace : null;
   const addSamplerNode = typeof options?.addSamplerNode === 'function' ? options.addSamplerNode : null;
   const addSampledDatasetNode = typeof options?.addSampledDatasetNode === 'function' ? options.addSampledDatasetNode : null;
   const addPromptNode = typeof options?.addPromptNode === 'function' ? options.addPromptNode : null;
@@ -417,6 +419,8 @@ export async function openAgentWindowModal(options = {}) {
     getWorkflowSnapshot,
     inspectNode,
     addRunNode,
+    startRunNode,
+    saveRunResultsToWorkspace,
     addSamplerNode,
     addSampledDatasetNode,
     addPromptNode,

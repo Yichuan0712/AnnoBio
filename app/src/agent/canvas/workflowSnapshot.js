@@ -129,6 +129,7 @@ function getRunPreview(node) {
     runWorkingSetId: normalizeNodeId(node?.runWorkingSetId),
     runCredentialId: normalizeNodeId(node?.runCredentialId),
     runInputToColumn,
+    runPending: node?.runPending === true,
     runCompleted: node?.runCompleted === true || node?.runCompleted === '1',
     runProgress: Number.isFinite(Number(node?.runProgress)) ? Number(node.runProgress) : 0,
     resultsCount: results.length,
@@ -325,6 +326,7 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
         runInputToColumn: preview.runInputToColumn,
       },
       status: {
+        pending: preview.runPending,
         completed: preview.runCompleted,
         progress: preview.runProgress,
         hasResults: preview.resultsCount > 0,

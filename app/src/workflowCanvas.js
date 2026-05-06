@@ -6,7 +6,14 @@
 
 import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
 import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
-import { mergeResumeResults, embedInputRow, countCompletedInputRows, markEmptyOutputAsError } from './runResumeUtils.js';
+import {
+  getNextRowIndex,
+  mergeResumeResults,
+  embedInputRow,
+  processApiResults,
+  countCompletedInputRows,
+  markEmptyOutputAsError,
+} from './runResumeUtils.js';
 import { normalizeUnicodeDashesForDisplay, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { openReviewDetailModal } from './reviewDetailModal.js';
 import {
@@ -2407,6 +2414,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     node.style.top = `${clampCanvasPosition(top)}px`;
   }
 
+  function escapeRegex(value) {
+    return String(value == null ? '' : value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   const canvasControlsStack = document.createElement('div');
   canvasControlsStack.className = 'workflow-canvas__controls-stack';
 
@@ -2424,6 +2435,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       getWorkflowSnapshot,
       inspectNode,
       addRunNode,
+      startRunNode,
+      saveRunResultsToWorkspace,
       addSamplerNode,
       addSampledDatasetNode,
       addPromptNode,
@@ -4804,6 +4817,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           runResults,
           runCompleted: node.dataset.runCompleted || undefined,
           runInputContent: node.dataset.runInputContent || undefined,
+          runPending: pendingRuns.has(nodeId),
         };
         if (pct <= 0 && node.dataset.runResults && node.dataset.runInputContent) {
           try {
@@ -5281,6 +5295,345 @@ export function buildWorkflowCanvas(root, options = {}) {
     };
   }
 
+  async function startRunNode({
+    runNodeId = '',
+  } = {}) {
+    const normalizedRunNodeId = String(runNodeId || '').trim();
+    if (!normalizedRunNodeId) {
+      throw new Error('Run node id is required.');
+    }
+    const node = getNodeById(normalizedRunNodeId);
+    if (!node || !node.classList.contains('workflow-node--run')) {
+      throw new Error('Run node was not found.');
+    }
+
+    const existingPendingRunId = pendingRuns.get(normalizedRunNodeId) || null;
+    if (existingPendingRunId) {
+      return {
+        started: true,
+        alreadyRunning: true,
+        waitRequired: true,
+        runNodeId: normalizedRunNodeId,
+        runId: existingPendingRunId,
+      };
+    }
+
+    const promptEdge = connections.find((c) => c.toId === normalizedRunNodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+    const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+    if (!promptNode) {
+      throw new Error('This run node is not connected to an upstream prompt.');
+    }
+
+    const workingSetId = String(node.dataset.runWorkingSetId || '').trim();
+    if (!workingSetId) {
+      throw new Error('This run node has no selected input dataset.');
+    }
+    const content = datasetContentByNodeId.get(workingSetId);
+    const headers = Array.isArray(content?.headers) ? content.headers.slice() : [];
+    const rows = Array.isArray(content?.rows) ? content.rows.map((row) => (Array.isArray(row) ? row.slice() : [])) : [];
+    if (rows.length === 0) {
+      throw new Error('Dataset has no rows.');
+    }
+
+    let sections = [];
+    try {
+      sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+    } catch (_) {}
+    const templateText = (Array.isArray(sections) ? sections : [])
+      .map((section) => String(section?.content || '').trim())
+      .filter(Boolean)
+      .join('\n\n');
+    if (!templateText) {
+      throw new Error('Prompt has no content.');
+    }
+
+    let outputFields = [];
+    try {
+      outputFields = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
+    } catch (_) {}
+    if (!Array.isArray(outputFields)) outputFields = [];
+    const outputSchema = {
+      return_shape: promptNode.dataset.promptOutputReturnShape || 'single',
+      fields: outputFields.map((field) => ({
+        key: field?.key,
+        type: field?.type || 'str',
+        description: field?.description,
+        allow_none: field?.allowNone ?? field?.allow_none ?? false,
+      })),
+    };
+    if (!outputSchema.fields.length) {
+      throw new Error('Prompt output schema has no fields.');
+    }
+
+    let runInputToColumn = {};
+    try {
+      const raw = node.dataset.runInputToColumn || '{}';
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) runInputToColumn = parsed;
+    } catch (_) {}
+    const inputFields = extractInputFieldsFromSections(Array.isArray(sections) ? sections : []);
+    const unmapped = inputFields.filter((name) => !String(runInputToColumn[name] || '').trim());
+    if (unmapped.length > 0) {
+      throw new Error(`Please map all prompt inputs. Unmapped: ${unmapped.join(', ')}`);
+    }
+
+    const credentialId = await resolveRunCredentialId(node);
+    if (!credentialId) {
+      throw new Error('This run node has no selected credential.');
+    }
+
+    let existingResults = [];
+    try {
+      existingResults = JSON.parse(node.dataset.runResults || '[]');
+      if (!Array.isArray(existingResults)) existingResults = [];
+    } catch (_) {
+      existingResults = [];
+    }
+    const nextRowIndex = getNextRowIndex(existingResults, rows.length);
+    const rowsToRun = rows.slice(nextRowIndex);
+    if (rowsToRun.length === 0) {
+      if (existingResults.length > 0) {
+        node.dataset.runCompleted = '1';
+        setRunNodeProgress(node, rows.length, rows.length);
+        document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId: normalizedRunNodeId, results: existingResults, isComplete: true } }));
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      }
+      return {
+        started: false,
+        alreadyComplete: true,
+        waitRequired: false,
+        runNodeId: normalizedRunNodeId,
+        runId: null,
+        resultsCount: existingResults.length,
+      };
+    }
+
+    const prompts = rowsToRun.map((row) => {
+      let text = templateText;
+      inputFields.forEach((inputName) => {
+        const columnName = String(runInputToColumn[inputName] || '').trim();
+        const headerIndex = headers.indexOf(columnName);
+        const value = headerIndex >= 0 ? row[headerIndex] ?? '' : '';
+        text = text.replace(new RegExp(`\\{${escapeRegex(inputName)}\\}`, 'g'), String(value));
+      });
+      return text;
+    });
+
+    node.dataset.runInputContent = JSON.stringify({ headers, rows });
+    if (nextRowIndex === 0) {
+      if (existingResults.length === 0) {
+        node.dataset.runResults = JSON.stringify([]);
+      }
+      node.dataset.runCompleted = '';
+      setRunNodeProgress(node, 0, rows.length);
+      delete node.dataset.runResumeStartIndex;
+      delete node.dataset.runResumeExistingResults;
+      delete node.dataset.runResumeTotalRows;
+    } else {
+      node.dataset.runResumeStartIndex = String(nextRowIndex);
+      node.dataset.runResumeExistingResults = node.dataset.runResults || '[]';
+      node.dataset.runResumeTotalRows = String(rows.length);
+    }
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+
+    const response = await fetch(`${RUN_API_BASE}/api/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        credential_id: credentialId,
+        prompts,
+        output_schema: outputSchema,
+        run_node_id: normalizedRunNodeId,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (response.status === 202) {
+      const runId = String(data?.run_id || '').trim();
+      if (!runId) {
+        throw new Error('Run started but no run id was returned by the backend.');
+      }
+      if (runId) registerPendingRun(normalizedRunNodeId, runId);
+      return {
+        started: true,
+        waitRequired: true,
+        runNodeId: normalizedRunNodeId,
+        runId: runId || null,
+        resultsCount: existingResults.length,
+      };
+    }
+
+    if (!response.ok) {
+      if (nextRowIndex > 0) {
+        delete node.dataset.runResumeStartIndex;
+        delete node.dataset.runResumeExistingResults;
+        delete node.dataset.runResumeTotalRows;
+      }
+      throw new Error(String(data?.detail || response.statusText || 'Request failed'));
+    }
+
+    let results = Array.isArray(data?.results) ? data.results : [];
+    const returnedOutputFields = Array.isArray(data?.output_fields) ? data.output_fields : [];
+    const runContent = { headers, rows };
+    if (nextRowIndex > 0) {
+      results = mergeResumeResults(existingResults, results, nextRowIndex, runContent);
+      delete node.dataset.runResumeStartIndex;
+      delete node.dataset.runResumeExistingResults;
+      delete node.dataset.runResumeTotalRows;
+    } else {
+      results = processApiResults(results, runContent);
+    }
+    results = markEmptyOutputAsError(results);
+    node.dataset.runResults = JSON.stringify(results);
+    node.dataset.runCompleted = '1';
+    setRunNodeProgress(node, rows.length, rows.length);
+    document.dispatchEvent(new CustomEvent('workflow:run-results-updated', {
+      detail: {
+        nodeId: normalizedRunNodeId,
+        results,
+        outputFields: returnedOutputFields,
+        isComplete: true,
+      },
+    }));
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    return {
+      started: true,
+      completed: true,
+      waitRequired: false,
+      runNodeId: normalizedRunNodeId,
+      runId: null,
+      resultsCount: results.length,
+    };
+  }
+
+  function saveRunResultsToWorkspace({
+    runNodeId = '',
+    name = '',
+    notes = '',
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedRunNodeId = String(runNodeId || '').trim();
+    if (!normalizedRunNodeId) {
+      throw new Error('Run node id is required.');
+    }
+    const runNode = getNodeById(normalizedRunNodeId);
+    if (!runNode || !runNode.classList.contains('workflow-node--run')) {
+      throw new Error('Run node was not found.');
+    }
+
+    let results = [];
+    try {
+      results = JSON.parse(runNode.dataset.runResults || '[]');
+      if (!Array.isArray(results)) results = [];
+    } catch (_) {
+      results = [];
+    }
+    if (results.length === 0) {
+      throw new Error('Run node has no saved results.');
+    }
+
+    const promptEdge = connections.find((c) => c.toId === normalizedRunNodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+    const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+    const promptName = (promptNode?.dataset?.promptName || promptNode?.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Prompt';
+    const runName = (runNode.dataset.runName || runNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run';
+    const baseName = `${promptName} ${runName}`.trim();
+    const requestedName = String(name || '').trim();
+
+    let runContent = null;
+    if (runNode.dataset.runInputContent) {
+      try {
+        runContent = JSON.parse(runNode.dataset.runInputContent);
+      } catch (_) {}
+    }
+    if (!runContent) {
+      const workingSetId = String(runNode.dataset.runWorkingSetId || '').trim();
+      const workingSetContent = datasetContentByNodeId.get(workingSetId);
+      if (workingSetContent) {
+        runContent = {
+          headers: Array.isArray(workingSetContent.headers) ? workingSetContent.headers.slice() : [],
+          rows: Array.isArray(workingSetContent.rows) ? workingSetContent.rows.map((row) => (Array.isArray(row) ? row.slice() : [])) : [],
+        };
+      }
+    }
+    results = runContent ? embedInputRow(results, runContent) : results;
+    results = markEmptyOutputAsError(results);
+
+    let schemaFields = [];
+    try {
+      const raw = promptNode?.dataset?.promptOutputFormat || '[]';
+      schemaFields = JSON.parse(raw);
+      if (!Array.isArray(schemaFields)) schemaFields = [];
+    } catch (_) {
+      schemaFields = [];
+    }
+    let outputFields = deriveOutputFields(results, schemaFields);
+    if (outputFields.length === 0 && results.some((item) => item && item.error)) {
+      outputFields = [{ key: 'error', display: 'Error' }];
+    }
+    if (outputFields.length === 0 && results.length > 0) {
+      const first = results.find((item) => item?.output && typeof item.output === 'object' && Object.keys(item.output).length > 0);
+      if (first) outputFields = Object.keys(first.output).map((key) => ({ key, display: key }));
+    }
+    if (outputFields.length === 0 && schemaFields.length > 0) {
+      outputFields = schemaFields
+        .map((field) => ({
+          key: String(field?.key || '').trim(),
+          display: String(field?.display || field?.key || '').trim() || 'field',
+        }))
+        .filter((field) => field.key);
+    }
+
+    const inputHeaders = Array.isArray(runContent?.headers) ? runContent.headers.slice() : [];
+    const inputHeaderLabels = inputHeaders.map((header) => `Input: ${String(header ?? '').trim() || ' '}`);
+    const exportHeaders = [
+      'Input: #',
+      ...inputHeaderLabels,
+      formatResultOutputColumnLabel('#'),
+      ...outputFields.map((field) => formatResultOutputColumnLabel((field?.display || field?.key || '').trim() || 'output')),
+    ];
+    const exportRows = results.map((result) => {
+      const outputPart = result?.error
+        ? outputFields.map(() => String(result.error))
+        : outputFields.map((field) => {
+            const value = result?.output?.[field.key];
+            if (value == null) return '—';
+            if (Array.isArray(value)) return value.join(', ');
+            return String(value);
+          });
+      const inputRow = Array.isArray(result?.input_row) ? result.input_row : [];
+      const inputPart = inputHeaders.map((_, index) => (inputRow[index] == null ? '—' : String(inputRow[index])));
+      const inputNum = String((result?.input_row_index ?? 0) + 1);
+      const outputNum = String((result?.row_index ?? 0) + 1);
+      return [inputNum, ...inputPart, outputNum, ...outputPart];
+    });
+
+    const runCompleted = runNode.dataset.runCompleted === '1';
+    const defaultNotes = `Exported from ${promptName} ${runName}.\n${runCompleted ? 'Run completed.' : 'Run incomplete.'}`;
+    const datasetName = requestedName || findUniqueDatasetExportName(baseName);
+    const VISIBLE_PADDING = 40;
+    const startLeft = typeof left === 'number' ? left : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
+    const startTop = typeof top === 'number' ? top : (scrollWrapper.scrollTop + VISIBLE_PADDING);
+    const created = addDatasetNode({
+      name: datasetName,
+      notes: String(notes || '').trim() || defaultNotes,
+      headers: exportHeaders,
+      rows: exportRows,
+      left: startLeft,
+      top: startTop,
+      ensureUniqueName: requestedName ? ensureUniqueName : false,
+    });
+    return {
+      ...created,
+      runNodeId: normalizedRunNodeId,
+      exportedRowCount: exportRows.length,
+      runCompleted,
+      sourcePromptName: promptName,
+      sourceRunName: runName,
+    };
+  }
+
   function addDatasetNode({
     name = '',
     notes = '',
@@ -5454,6 +5807,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     getWorkflowSnapshot,
     inspectNode,
     addRunNode,
+    startRunNode,
+    saveRunResultsToWorkspace,
     addSamplerNode,
     addSampledDatasetNode,
     addPromptNode,
