@@ -223,6 +223,7 @@ export function mountAgentChatSession({
   resolveConversation,
   getWorkflowSnapshot,
   inspectNode,
+  addRunNode,
   addSamplerNode,
   addSampledDatasetNode,
   addPromptNode,
@@ -439,6 +440,7 @@ function normalizePositiveInteger(value, fallback = null) {
           result,
           runtime: {
             inspectNode,
+            addRunNode,
             addSamplerNode,
             addSampledDatasetNode,
             addPromptNode,
@@ -460,6 +462,7 @@ function normalizePositiveInteger(value, fallback = null) {
           args: normalizeSkillArgs(skillCall?.args),
           runtime: {
             inspectNode,
+            addRunNode,
             addSamplerNode,
             addSampledDatasetNode,
             addPromptNode,
@@ -490,6 +493,7 @@ function normalizePositiveInteger(value, fallback = null) {
         args,
         runtime: {
           inspectNode,
+          addRunNode,
           addSamplerNode,
           addSampledDatasetNode,
           addPromptNode,

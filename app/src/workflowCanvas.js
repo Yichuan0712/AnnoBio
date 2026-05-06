@@ -1443,12 +1443,10 @@ export function buildWorkflowCanvas(root, options = {}) {
    * @param {string|null} [excludeRunNodeId=null] - run node id to exclude (the one being edited)
    * @returns {boolean}
    */
-  function isRunNameAlreadyUsedForPrompt(nameToCheck, excludeRunNodeId = null) {
+  function isRunNameAlreadyUsedForPromptNodeId(nameToCheck, promptNodeId, excludeRunNodeId = null) {
     const normalized = (nameToCheck || '').trim().toLowerCase();
     if (!normalized) return true;
-    const promptEdge = connections.find((c) => c.toId === excludeRunNodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
-    if (!promptEdge) return false;
-    const promptNodeId = promptEdge.fromId;
+    if (!promptNodeId) return false;
     const runEdges = connections.filter((c) => c.fromId === promptNodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
     for (const e of runEdges) {
       if (e.toId === excludeRunNodeId) continue;
@@ -1457,6 +1455,24 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (existing.toLowerCase() === normalized) return true;
     }
     return false;
+  }
+
+  function isRunNameAlreadyUsedForPrompt(nameToCheck, excludeRunNodeId = null) {
+    const promptEdge = connections.find((c) => c.toId === excludeRunNodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+    if (!promptEdge) return false;
+    return isRunNameAlreadyUsedForPromptNodeId(nameToCheck, promptEdge.fromId, excludeRunNodeId);
+  }
+
+  function findUniqueRunName(baseName, promptNodeId) {
+    const base = (baseName || '').trim() || 'Run';
+    if (!isRunNameAlreadyUsedForPromptNodeId(base, promptNodeId)) return base;
+    let n = 2;
+    let candidate = '';
+    do {
+      candidate = `${base} ${n}`;
+      n += 1;
+    } while (isRunNameAlreadyUsedForPromptNodeId(candidate, promptNodeId));
+    return candidate;
   }
 
   /**
@@ -2395,6 +2411,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       projectPath: getCurrentProjectPath(),
       getWorkflowSnapshot,
       inspectNode,
+      addRunNode,
       addSamplerNode,
       addSampledDatasetNode,
       addPromptNode,
@@ -5143,6 +5160,123 @@ export function buildWorkflowCanvas(root, options = {}) {
     };
   }
 
+  function addRunNode({
+    promptNodeId = '',
+    workingSetId = '',
+    inputToColumn = {},
+    credentialId = '',
+    name = '',
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedPromptNodeId = String(promptNodeId || '').trim();
+    const normalizedWorkingSetId = String(workingSetId || '').trim();
+    if (!normalizedPromptNodeId) {
+      throw new Error('Prompt node id is required.');
+    }
+    if (!normalizedWorkingSetId) {
+      throw new Error('Working set dataset node id is required.');
+    }
+    const promptNode = getNodeById(normalizedPromptNodeId);
+    if (!promptNode || !promptNode.classList.contains('workflow-node--prompt')) {
+      throw new Error('Prompt node was not found.');
+    }
+    const workingSetNode = getNodeById(normalizedWorkingSetId);
+    if (!workingSetNode || !workingSetNode.classList.contains('workflow-node--dataset')) {
+      throw new Error('Working set dataset node was not found.');
+    }
+
+    let promptSections = [];
+    try {
+      promptSections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+    } catch (_) {}
+    const promptInputFields = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
+    const content = datasetContentByNodeId.get(normalizedWorkingSetId) || { headers: [], rows: [] };
+    const datasetHeaders = Array.isArray(content.headers) ? content.headers.map((header) => String(header ?? '')) : [];
+    const headerSet = new Set(datasetHeaders);
+    const normalizedCredentialId = String(credentialId == null ? '' : credentialId).trim();
+    const normalizedInputToColumn = inputToColumn && typeof inputToColumn === 'object' && !Array.isArray(inputToColumn)
+      ? Object.fromEntries(
+        Object.entries(inputToColumn)
+          .map(([key, value]) => [String(key || '').trim(), String(value == null ? '' : value).trim()])
+          .filter(([key]) => Boolean(key))
+      )
+      : {};
+    const promptFieldSet = new Set(promptInputFields);
+    const unknownInputs = Object.keys(normalizedInputToColumn).filter((field) => promptInputFields.length > 0 && !promptFieldSet.has(field));
+    if (unknownInputs.length > 0) {
+      throw new Error(`Unknown prompt inputs in mapping: ${unknownInputs.join(', ')}.`);
+    }
+    const missingInputs = promptInputFields.filter((field) => !String(normalizedInputToColumn[field] || '').trim());
+    if (missingInputs.length > 0) {
+      throw new Error(`Missing input mappings for: ${missingInputs.join(', ')}.`);
+    }
+    const unknownColumns = Object.values(normalizedInputToColumn).filter((column) => column && !headerSet.has(column));
+    if (unknownColumns.length > 0) {
+      throw new Error(`Mapped dataset columns were not found: ${unknownColumns.join(', ')}.`);
+    }
+
+    const requestedName = (name || '').trim() || 'Run';
+    const finalName = ensureUniqueName && isRunNameAlreadyUsedForPromptNodeId(requestedName, normalizedPromptNodeId)
+      ? findUniqueRunName(requestedName, normalizedPromptNodeId)
+      : requestedName;
+    const resolvedLeft = typeof left === 'number'
+      ? left
+      : (parseFloat(promptNode.style.left) || 0) + (promptNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+    const resolvedTop = typeof top === 'number' ? top : (parseFloat(promptNode.style.top) || 0);
+    const node = createRunNode({
+      left: resolvedLeft,
+      top: resolvedTop,
+      title: finalName,
+    });
+    if (node?.dataset) {
+      node.dataset.runName = finalName;
+      node.dataset.runWorkingSetId = normalizedWorkingSetId;
+      node.dataset.runInputToColumn = JSON.stringify(normalizedInputToColumn);
+      if (normalizedCredentialId) {
+        node.dataset.runCredentialId = normalizedCredentialId;
+      } else {
+        delete node.dataset.runCredentialId;
+      }
+      const workingSetColorIndex = workingSetNode.dataset.datasetColorIndex != null
+        ? parseInt(workingSetNode.dataset.datasetColorIndex, 10)
+        : 0;
+      const workingSetColor = DATASET_BORDER_COLORS[workingSetColorIndex % DATASET_BORDER_COLORS.length];
+      node.style.borderColor = workingSetColor || '';
+      const bar = node.querySelector('.workflow-node__run-progress');
+      if (bar) bar.style.background = workingSetColor || bar.style.background;
+    }
+    if (node?.dataset?.nodeId) {
+      connections.push({
+        fromId: normalizedPromptNodeId,
+        toId: node.dataset.nodeId,
+        type: EDGE_TYPE_PROMPT_TO_RUN,
+      });
+      updateEdges();
+    }
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    return {
+      created: true,
+      nodeId: String(node?.dataset?.nodeId || '').trim(),
+      promptNodeId: normalizedPromptNodeId,
+      workingSetId: normalizedWorkingSetId,
+      name: String(node?.dataset?.runName || finalName).trim() || finalName,
+      credentialId: String(node?.dataset?.runCredentialId || '').trim(),
+      credentialMode: normalizedCredentialId ? 'explicit' : 'default-if-available',
+      inputToColumn: normalizedInputToColumn,
+      mappedInputs: Object.keys(normalizedInputToColumn),
+      missingInputs: [],
+      position: {
+        left: Number.parseFloat(node?.style?.left || '') || 0,
+        top: Number.parseFloat(node?.style?.top || '') || 0,
+      },
+      nameWasAdjusted: finalName !== requestedName,
+      requestedName,
+    };
+  }
+
   function addDatasetNode({
     name = '',
     notes = '',
@@ -5315,6 +5449,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     getCanvasState,
     getWorkflowSnapshot,
     inspectNode,
+    addRunNode,
     addSamplerNode,
     addSampledDatasetNode,
     addPromptNode,
