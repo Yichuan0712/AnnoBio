@@ -130,6 +130,8 @@ export async function openAgentWindowModal(options = {}) {
   const projectPath = String(options?.projectPath || '').trim();
   const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
   const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
+  const addSamplerNode = typeof options?.addSamplerNode === 'function' ? options.addSamplerNode : null;
+  const addSampledDatasetNode = typeof options?.addSampledDatasetNode === 'function' ? options.addSampledDatasetNode : null;
   const addPromptNode = typeof options?.addPromptNode === 'function' ? options.addPromptNode : null;
   const addDatasetNode = typeof options?.addDatasetNode === 'function' ? options.addDatasetNode : null;
   const storageApi = window.electronAPI;
@@ -405,6 +407,8 @@ export async function openAgentWindowModal(options = {}) {
     autoResizeComposer,
     getWorkflowSnapshot,
     inspectNode,
+    addSamplerNode,
+    addSampledDatasetNode,
     addPromptNode,
     addDatasetNode,
     onConversationDraftChanged: () => {

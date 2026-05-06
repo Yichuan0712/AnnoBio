@@ -1,6 +1,7 @@
 /**
- * Sampler detail modal: view/edit sampler settings (name, sampling type, sample size, row spec).
- * @param {{ node: HTMLElement, isSamplerNameAlreadyUsedForSource?: (name: string, sourceNodeId: string, excludeNodeId?: string | null) => boolean, hasSampledDatasets?: (samplerNodeId: string) => boolean }} options
+ * Sampler detail modal: view/edit sampler settings (sampling type, sample size, row spec).
+ * Sample name is edited separately from the node context menu.
+ * @param {{ node: HTMLElement, hasSampledDatasets?: (samplerNodeId: string) => boolean }} options
  */
 
 function escapeHtml(str) {
@@ -31,9 +32,8 @@ function parseRowSpecToItems(spec) {
   return items;
 }
 
-export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource, hasSampledDatasets }) {
+export function openSamplerDetailModal({ node, hasSampledDatasets }) {
   const nodeId = node?.dataset?.nodeId ?? '';
-  const sourceNodeId = (node?.dataset?.sourceNodeId ?? '').trim();
   const name = (node?.dataset?.samplerName ?? '').trim() || 'Sample';
   const samplingType = node?.dataset?.samplerSamplingType || 'without-replacement';
   const sampleSizeType = node?.dataset?.samplerSampleSizeType || 'rows';

@@ -223,6 +223,8 @@ export function mountAgentChatSession({
   resolveConversation,
   getWorkflowSnapshot,
   inspectNode,
+  addSamplerNode,
+  addSampledDatasetNode,
   addPromptNode,
   addDatasetNode,
 }) {
@@ -431,6 +433,8 @@ export function mountAgentChatSession({
           result,
           runtime: {
             inspectNode,
+            addSamplerNode,
+            addSampledDatasetNode,
             addPromptNode,
             addDatasetNode,
             workflowSnapshot,
@@ -450,6 +454,8 @@ export function mountAgentChatSession({
           args: normalizeSkillArgs(skillCall?.args),
           runtime: {
             inspectNode,
+            addSamplerNode,
+            addSampledDatasetNode,
             addPromptNode,
             addDatasetNode,
             workflowSnapshot,
@@ -478,6 +484,8 @@ export function mountAgentChatSession({
         args,
         runtime: {
           inspectNode,
+          addSamplerNode,
+          addSampledDatasetNode,
           addPromptNode,
           addDatasetNode,
           workflowSnapshot,

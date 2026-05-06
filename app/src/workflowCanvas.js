@@ -1425,6 +1425,18 @@ export function buildWorkflowCanvas(root, options = {}) {
     return `Sample ${count + 1}`;
   }
 
+  function findUniqueSamplerName(baseName, sourceNodeId) {
+    const base = (baseName || '').trim() || 'Sample';
+    if (!isSamplerNameAlreadyUsedForSource(base, sourceNodeId)) return base;
+    let n = 2;
+    let candidate = '';
+    do {
+      candidate = `${base} ${n}`;
+      n += 1;
+    } while (isSamplerNameAlreadyUsedForSource(candidate, sourceNodeId));
+    return candidate;
+  }
+
   /**
    * Check if a run name is already used by another run under the same prompt (case-insensitive).
    * @param {string} nameToCheck
@@ -1506,6 +1518,90 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
     picked.sort((a, b) => a - b);
     return picked.map((i) => sourceRows[i].slice());
+  }
+
+  function countSampledDatasetsForSampler(samplerNodeId) {
+    let count = 0;
+    nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
+      if ((dsNode.dataset.samplerNodeId || '') === samplerNodeId) count += 1;
+    });
+    return count;
+  }
+
+  function prepareSampledDatasetFromSampler({
+    samplerNodeId = '',
+    name = '',
+    notes = '',
+    left,
+    top,
+    maxSampleUses = null,
+  } = {}) {
+    const normalizedSamplerNodeId = String(samplerNodeId || '').trim();
+    if (!normalizedSamplerNodeId) {
+      throw new Error('Sampler node id is required.');
+    }
+    const samplerNode = getNodeById(normalizedSamplerNodeId);
+    if (!samplerNode || !samplerNode.classList.contains('workflow-node--sampler')) {
+      throw new Error('Sampler node was not found.');
+    }
+
+    const existingCount = countSampledDatasetsForSampler(normalizedSamplerNodeId);
+    if (Number.isFinite(Number(maxSampleUses))) {
+      const normalizedMaxSampleUses = Math.max(1, Math.floor(Number(maxSampleUses)));
+      if (existingCount >= normalizedMaxSampleUses) {
+        throw new Error(`This sampler has already been used ${existingCount} time(s), which reaches the max sample uses (${normalizedMaxSampleUses}).`);
+      }
+    }
+
+    const sourceNodeId = samplerNode.dataset.sourceNodeId;
+    const sourceContent = sourceNodeId ? datasetContentByNodeId.get(sourceNodeId) : null;
+    if (!sourceContent?.headers?.length || !Array.isArray(sourceContent.rows)) {
+      throw new Error('Sampler source dataset has no available content.');
+    }
+
+    const samplingType = samplerNode.dataset.samplerSamplingType || 'without-replacement';
+    const datasetHeaders = sourceContent.headers.slice();
+    let datasetRows = [];
+    if (samplingType === 'specify-rows') {
+      const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
+      const totalRows = sourceContent.rows.length;
+      const indices = parseRowSpec(rowSpec, totalRows);
+      datasetRows = indices.map((i) => sourceContent.rows[i].slice());
+    } else {
+      const sampleSize = parseInt(samplerNode.dataset.samplerSampleSize, 10) || 100;
+      const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'rows';
+      const totalRows = sourceContent.rows.length;
+      const requestedCount = sampleSizeType === 'rows'
+        ? Math.max(0, Math.floor(sampleSize))
+        : Math.max(0, Math.floor((totalRows * sampleSize) / 100));
+      if (samplingType === 'without-replacement' && requestedCount > 0) {
+        let alreadyUsed = 0;
+        nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
+          if ((dsNode.dataset.samplerNodeId || '') === normalizedSamplerNodeId) {
+            const content = datasetContentByNodeId.get(dsNode.dataset.nodeId);
+            if (content?.rows?.length) alreadyUsed += content.rows.length;
+          }
+        });
+        const remaining = totalRows - alreadyUsed;
+        if (remaining < requestedCount) {
+          throw new Error('Not enough remaining data to create a new dataset when sampling without replacement.');
+        }
+      }
+      datasetRows = sampleRows(sourceContent.rows, sampleSize, sampleSizeType, samplingType);
+    }
+
+    return {
+      sourceNodeId: String(sourceNodeId || '').trim(),
+      existingCount,
+      datasetHeaders,
+      datasetRows,
+      datasetName: (name && name.trim()) ? name.trim() : findNextWorkingDatasetName(normalizedSamplerNodeId),
+      datasetNotes: notes || formatSamplerDescription(samplerNode),
+      startLeft: typeof left === 'number'
+        ? left
+        : (parseFloat(samplerNode.style.left) || 0) + (samplerNode.offsetWidth || 280) + NEW_NODE_OFFSET,
+      startTop: typeof top === 'number' ? top : (parseFloat(samplerNode.style.top) || 0),
+    };
   }
 
   /**
@@ -1966,7 +2062,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       e.preventDefault();
       e.stopPropagation();
       const samplerNode = getNodeById(edge.toId);
-      if (samplerNode) openSamplerDetailModal({ node: samplerNode, isSamplerNameAlreadyUsedForSource, hasSampledDatasets });
+      if (samplerNode) openSamplerDetailModal({ node: samplerNode, hasSampledDatasets });
     } else if (edgeType === EDGE_TYPE_RUN_TO_SCORE) {
       e.preventDefault();
       e.stopPropagation();
@@ -2306,6 +2402,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       projectPath: getCurrentProjectPath(),
       getWorkflowSnapshot,
       inspectNode,
+      addSamplerNode,
+      addSampledDatasetNode,
       addPromptNode,
       addDatasetNode,
     });
@@ -2667,7 +2765,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (lastInteractionWasDrag) return;
       e.preventDefault();
       e.stopPropagation();
-      openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource, hasSampledDatasets });
+      openSamplerDetailModal({ node, hasSampledDatasets });
     });
 
     node.addEventListener('contextmenu', (e) => {
@@ -4352,49 +4450,26 @@ export function buildWorkflowCanvas(root, options = {}) {
     let datasetNotes = notes || '';
 
     if (samplerNodeId) {
-      const samplerNode = getNodeById(samplerNodeId);
-      if (samplerNode) {
-        startLeft = (parseFloat(samplerNode.style.left) || 0) + (samplerNode.offsetWidth || 280) + NEW_NODE_OFFSET;
-        startTop = parseFloat(samplerNode.style.top) || 0;
-        const sourceNodeId = samplerNode.dataset.sourceNodeId;
-        const sourceContent = sourceNodeId ? datasetContentByNodeId.get(sourceNodeId) : null;
-        if (sourceContent?.headers?.length && Array.isArray(sourceContent.rows)) {
-          datasetHeaders = sourceContent.headers.slice();
-          const samplingType = samplerNode.dataset.samplerSamplingType || 'without-replacement';
-          if (samplingType === 'specify-rows') {
-            const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
-            const totalRows = sourceContent.rows.length;
-            const indices = parseRowSpec(rowSpec, totalRows);
-            datasetRows = indices.map((i) => sourceContent.rows[i].slice());
-          } else {
-            const sampleSize = parseInt(samplerNode.dataset.samplerSampleSize, 10) || 100;
-            const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'rows';
-            const totalRows = sourceContent.rows.length;
-            const requestedCount = sampleSizeType === 'rows'
-              ? Math.max(0, Math.floor(sampleSize))
-              : Math.max(0, Math.floor((totalRows * sampleSize) / 100));
-            if (samplingType === 'without-replacement' && requestedCount > 0) {
-              let alreadyUsed = 0;
-              nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
-                if ((dsNode.dataset.samplerNodeId || '') === samplerNodeId) {
-                  const content = datasetContentByNodeId.get(dsNode.dataset.nodeId);
-                  if (content?.rows?.length) alreadyUsed += content.rows.length;
-                }
-              });
-              const remaining = totalRows - alreadyUsed;
-              if (remaining < requestedCount) {
-                showAppAlert(
-                  'Not enough remaining data to create a new dataset when sampling without replacement.',
-                  'Cannot create dataset'
-                );
-                return;
-              }
-            }
-            datasetRows = sampleRows(sourceContent.rows, sampleSize, sampleSizeType, samplingType);
-          }
-        }
-        datasetName = findNextWorkingDatasetName(samplerNodeId);
-        datasetNotes = formatSamplerDescription(samplerNode);
+      try {
+        const prepared = prepareSampledDatasetFromSampler({
+          samplerNodeId,
+          name: datasetName,
+          notes: datasetNotes,
+          left: startLeft,
+          top: startTop,
+        });
+        startLeft = prepared.startLeft;
+        startTop = prepared.startTop;
+        datasetHeaders = prepared.datasetHeaders;
+        datasetRows = prepared.datasetRows;
+        datasetName = prepared.datasetName;
+        datasetNotes = prepared.datasetNotes;
+      } catch (error) {
+        showAppAlert(
+          error instanceof Error ? error.message : 'Could not create dataset from sampler.',
+          'Cannot create dataset'
+        );
+        return;
       }
     } else {
       datasetName = datasetName || findUniqueWorkingDatasetName('Dataset', false);
@@ -4418,6 +4493,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         type: EDGE_TYPE_SAMPLER_TO_DATASET,
       });
       updateEdges();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
   });
 
@@ -5119,6 +5195,122 @@ export function buildWorkflowCanvas(root, options = {}) {
     };
   }
 
+  function addSamplerNode({
+    sourceNodeId = '',
+    name = '',
+    samplingType = 'without-replacement',
+    sampleSizeType = 'ratio',
+    sampleSize = 100,
+    rowSpec = '',
+    left,
+    top,
+    colorIndex,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedSourceNodeId = String(sourceNodeId || '').trim();
+    if (!normalizedSourceNodeId) {
+      throw new Error('Sampler source dataset node id is required.');
+    }
+    const sourceNode = getNodeById(normalizedSourceNodeId);
+    if (!sourceNode || !sourceNode.classList.contains('workflow-node--dataset')) {
+      throw new Error('Sampler source dataset node was not found.');
+    }
+
+    const requestedName = (name || '').trim() || getNextDefaultSamplerName(normalizedSourceNodeId);
+    const finalName = ensureUniqueName && isSamplerNameAlreadyUsedForSource(requestedName, normalizedSourceNodeId)
+      ? findUniqueSamplerName(requestedName, normalizedSourceNodeId)
+      : requestedName;
+    const resolvedLeft = typeof left === 'number'
+      ? left
+      : (parseFloat(sourceNode.style.left) || 0) + (sourceNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+    const resolvedTop = typeof top === 'number' ? top : (parseFloat(sourceNode.style.top) || 0);
+    const node = createSamplerNode({
+      name: finalName,
+      notes: '',
+      left: resolvedLeft,
+      top: resolvedTop,
+      sourceNodeId: normalizedSourceNodeId,
+      colorIndex,
+      samplingType,
+      sampleSizeType,
+      sampleSize,
+      rowSpec,
+    });
+    if (node?.dataset?.nodeId) {
+      connections.push({
+        fromId: normalizedSourceNodeId,
+        toId: node.dataset.nodeId,
+        type: EDGE_TYPE_DATASET_TO_SAMPLER,
+      });
+      updateEdges();
+    }
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    return {
+      created: true,
+      nodeId: String(node?.dataset?.nodeId || '').trim(),
+      sourceNodeId: normalizedSourceNodeId,
+      name: String(node?.dataset?.samplerName || finalName).trim() || finalName,
+      samplingType: String(node?.dataset?.samplerSamplingType || samplingType || 'without-replacement'),
+      sampleSizeType: String(node?.dataset?.samplerSampleSizeType || sampleSizeType || ''),
+      sampleSize: node?.dataset?.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : null,
+      rowSpec: String(node?.dataset?.samplerRowSpec || rowSpec || '').trim(),
+      position: {
+        left: Number.parseFloat(node?.style?.left || '') || 0,
+        top: Number.parseFloat(node?.style?.top || '') || 0,
+      },
+      nameWasAdjusted: finalName !== requestedName,
+      requestedName,
+    };
+  }
+
+  function addSampledDatasetNode({
+    samplerNodeId = '',
+    name = '',
+    notes = '',
+    maxSampleUses = null,
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedSamplerNodeId = String(samplerNodeId || '').trim();
+    const prepared = prepareSampledDatasetFromSampler({
+      samplerNodeId: normalizedSamplerNodeId,
+      name,
+      notes,
+      left,
+      top,
+      maxSampleUses,
+    });
+
+    const newNode = addDatasetNode({
+      name: prepared.datasetName,
+      notes: prepared.datasetNotes,
+      left: prepared.startLeft,
+      top: prepared.startTop,
+      samplerNodeId: normalizedSamplerNodeId,
+      headers: prepared.datasetHeaders,
+      rows: prepared.datasetRows,
+      ensureUniqueName,
+    });
+    if (newNode?.nodeId) {
+      connections.push({
+        fromId: normalizedSamplerNodeId,
+        toId: newNode.nodeId,
+        type: EDGE_TYPE_SAMPLER_TO_DATASET,
+      });
+      updateEdges();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    }
+    return {
+      ...newNode,
+      samplerNodeId: normalizedSamplerNodeId,
+      sourceNodeId: prepared.sourceNodeId,
+      sampleUseCount: prepared.existingCount + (newNode?.nodeId ? 1 : 0),
+      maxSampleUses: Number.isFinite(Number(maxSampleUses)) ? Math.max(1, Math.floor(Number(maxSampleUses))) : null,
+    };
+  }
+
   function inspectNode(nodeId, options = {}) {
     return inspectWorkflowNode(getCanvasState(), nodeId, {
       ...options,
@@ -5131,6 +5323,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     getCanvasState,
     getWorkflowSnapshot,
     inspectNode,
+    addSamplerNode,
+    addSampledDatasetNode,
     addPromptNode,
     addDatasetNode,
     loadCanvasState,
