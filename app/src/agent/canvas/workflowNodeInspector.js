@@ -254,6 +254,7 @@ function inspectRunNode(rawNode, canvasState, options = {}) {
     runCredentialId: normalizeNodeId(rawNode?.runCredentialId),
     runInputToColumn,
     promptInputFields,
+    runPending: rawNode?.runPending === true,
     runCompleted: rawNode?.runCompleted === true || rawNode?.runCompleted === '1',
     runProgress: Number.isFinite(Number(rawNode?.runProgress)) ? Number(rawNode.runProgress) : 0,
     inputHeaders: safeArray(runInputContent?.headers).map((header) => String(header ?? '')),

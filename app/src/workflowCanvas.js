@@ -839,6 +839,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   let nodeCount = 0;
+  let lastAutoDatasetColorIndex = -1;
   const STAGGER = 36;
   /** @type {{ fromId: string, toId: string, type: string }[]} */
   let connections = [];
@@ -852,6 +853,33 @@ export function buildWorkflowCanvas(root, options = {}) {
   const pendingReviews = new Map();
   /** Review nodes currently streaming (UI progress); used for delete-confirm "cancel job" messaging. */
   const pendingReviewNodeIds = new Set();
+  function normalizeDatasetColorIndex(value) {
+    if (!Array.isArray(DATASET_BORDER_COLORS) || DATASET_BORDER_COLORS.length === 0) return 0;
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return null;
+    return parsed % DATASET_BORDER_COLORS.length;
+  }
+  function chooseAutomaticDatasetColorIndex() {
+    if (!Array.isArray(DATASET_BORDER_COLORS) || DATASET_BORDER_COLORS.length === 0) return 0;
+    const usageCounts = Array(DATASET_BORDER_COLORS.length).fill(0);
+    nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((existingNode) => {
+      const existingIndex = normalizeDatasetColorIndex(existingNode?.dataset?.datasetColorIndex);
+      if (existingIndex != null) usageCounts[existingIndex] += 1;
+    });
+    const minUsage = usageCounts.reduce((min, count) => Math.min(min, count), Number.POSITIVE_INFINITY);
+    const startIndex = lastAutoDatasetColorIndex >= 0
+      ? ((lastAutoDatasetColorIndex + 1) % DATASET_BORDER_COLORS.length)
+      : 0;
+    for (let offset = 0; offset < DATASET_BORDER_COLORS.length; offset += 1) {
+      const candidateIndex = (startIndex + offset) % DATASET_BORDER_COLORS.length;
+      if (usageCounts[candidateIndex] === minUsage) {
+        lastAutoDatasetColorIndex = candidateIndex;
+        return candidateIndex;
+      }
+    }
+    lastAutoDatasetColorIndex = startIndex;
+    return startIndex;
+  }
   function registerPendingReview(nodeId, reviewId) {
     if (nodeId && reviewId) pendingReviews.set(nodeId, reviewId);
   }
@@ -2435,8 +2463,10 @@ export function buildWorkflowCanvas(root, options = {}) {
       getWorkflowSnapshot,
       inspectNode,
       addRunNode,
+      addScoreNode,
       startRunNode,
       saveRunResultsToWorkspace,
+      saveScoreResultsToWorkspace,
       addSamplerNode,
       addSampledDatasetNode,
       addPromptNode,
@@ -2825,9 +2855,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (notes !== undefined && notes !== null) node.dataset.datasetNote = String(notes);
     node.dataset.nodeType = 'dataset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
-    const colorIndex = (typeof givenColorIndex === 'number' && givenColorIndex >= 0)
-      ? (givenColorIndex % DATASET_BORDER_COLORS.length)
-      : Math.floor(Math.random() * DATASET_BORDER_COLORS.length);
+    const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticDatasetColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = DATASET_BORDER_COLORS[colorIndex];
     if (Array.isArray(headers) && Array.isArray(rows)) datasetContentByNodeId.set(nodeId, { headers: headers.slice(), rows: rows.map((r) => r.slice()) });
@@ -5634,6 +5662,223 @@ export function buildWorkflowCanvas(root, options = {}) {
     };
   }
 
+  async function saveScoreResultsToWorkspace({
+    scoreNodeId = '',
+    name = '',
+    notes = '',
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedScoreNodeId = String(scoreNodeId || '').trim();
+    if (!normalizedScoreNodeId) {
+      throw new Error('Score node id is required.');
+    }
+    const scoreNode = getNodeById(normalizedScoreNodeId);
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
+      throw new Error('Score node was not found.');
+    }
+
+    const runEdge = connections.find((c) => c.toId === normalizedScoreNodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+    const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+    const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN) : null;
+    const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+
+    function getRunResultColumns() {
+      if (!runNode) return [];
+      const cols = [];
+      cols.push({ key: '#', label: '#' });
+      let results = [];
+      try {
+        results = JSON.parse(runNode.dataset.runResults || '[]');
+        if (!Array.isArray(results)) results = [];
+      } catch (_) {}
+      let schemaFields = [];
+      if (promptNode) {
+        try {
+          const raw = promptNode.dataset.promptOutputFormat || '[]';
+          schemaFields = JSON.parse(raw);
+          if (!Array.isArray(schemaFields)) schemaFields = [];
+        } catch (_) {}
+      }
+      const outputFields = deriveOutputFields(results, schemaFields);
+      outputFields.forEach((field) => cols.push({
+        key: field.key || '',
+        label: formatResultOutputColumnLabel((field.display || field.key || '').trim() || field.key || '—'),
+      }));
+      const wsId = (runNode.dataset.runWorkingSetId || '').trim();
+      const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
+      const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
+      cols.push({ key: '[#]', label: 'Input: #' });
+      wsHeaders.forEach((header) => {
+        const headerText = String(header ?? '').trim() || ' ';
+        cols.push({ key: `[${headerText}]`, label: `Input: ${headerText}` });
+      });
+      return cols;
+    }
+
+    function getRunResults() {
+      if (!runNode) return { results: [], outputFields: [] };
+      let results = [];
+      try {
+        results = JSON.parse(runNode.dataset.runResults || '[]');
+        if (!Array.isArray(results)) results = [];
+      } catch (_) {}
+      let schemaFields = [];
+      if (promptNode) {
+        try {
+          const raw = promptNode.dataset.promptOutputFormat || '[]';
+          schemaFields = JSON.parse(raw);
+          if (!Array.isArray(schemaFields)) schemaFields = [];
+        } catch (_) {}
+      }
+      const outputFields = deriveOutputFields(results, schemaFields);
+      return { results, outputFields };
+    }
+
+    function getRunWorkingSetContent() {
+      const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
+      const content = wsId ? datasetContentByNodeId.get(wsId) : null;
+      return content
+        ? { headers: (content.headers || []).slice(), rows: (content.rows || []).map((row) => row.slice()) }
+        : { headers: [], rows: [] };
+    }
+
+    function getGroundTruthContent(wsNodeId) {
+      const content = datasetContentByNodeId.get(wsNodeId || '');
+      if (!content) return { headers: [], rows: [] };
+      return { headers: (content.headers || []).slice(), rows: (content.rows || []).map((row) => row.slice()) };
+    }
+
+    function getGroundTruthHeaders(wsNodeId) {
+      const content = datasetContentByNodeId.get(wsNodeId || '');
+      return (content && content.headers) ? content.headers.slice() : [];
+    }
+
+    const payload = await getScoreExportData({
+      node: scoreNode,
+      getRunResults,
+      getRunWorkingSetContent,
+      getGroundTruthContent,
+      getGroundTruthHeaders,
+      getRunResultColumns,
+    });
+    if (!payload || !Array.isArray(payload.headers) || !Array.isArray(payload.rows)) {
+      throw new Error('Score node has no exportable comparison results.');
+    }
+
+    const scoreName = (scoreNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Score';
+    const requestedName = String(name || '').trim();
+    const datasetName = requestedName || findUniqueDatasetExportName(`${scoreName} comparison`);
+    const datasetNotes = String(notes || '').trim() || `Exported from Score "${scoreName}". Run vs ground truth comparison.`;
+    const VISIBLE_PADDING = 40;
+    const startLeft = typeof left === 'number' ? left : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
+    const startTop = typeof top === 'number' ? top : (scrollWrapper.scrollTop + VISIBLE_PADDING);
+    const created = addDatasetNode({
+      name: datasetName,
+      notes: datasetNotes,
+      headers: payload.headers,
+      rows: payload.rows,
+      left: startLeft,
+      top: startTop,
+      ensureUniqueName: requestedName ? ensureUniqueName : false,
+    });
+    return {
+      ...created,
+      scoreNodeId: normalizedScoreNodeId,
+      exportedRowCount: payload.rows.length,
+      sourceScoreName: scoreName,
+    };
+  }
+
+  function addScoreNode({
+    runNodeId = '',
+    groundTruthNodeId = '',
+    scoreMapping = null,
+    reviewCredentialId = '',
+    name = '',
+    left,
+    top,
+  } = {}) {
+    const normalizedRunNodeId = String(runNodeId || '').trim();
+    const normalizedGroundTruthNodeId = String(groundTruthNodeId || '').trim();
+    if (!normalizedRunNodeId) {
+      throw new Error('Run node id is required.');
+    }
+    if (!normalizedGroundTruthNodeId) {
+      throw new Error('Ground-truth dataset node id is required.');
+    }
+    const runNode = getNodeById(normalizedRunNodeId);
+    if (!runNode || !runNode.classList.contains('workflow-node--run')) {
+      throw new Error('Run node was not found.');
+    }
+    const groundTruthNode = getNodeById(normalizedGroundTruthNodeId);
+    if (!groundTruthNode || !groundTruthNode.classList.contains('workflow-node--dataset')) {
+      throw new Error('Ground-truth dataset node was not found.');
+    }
+
+    const mappingRaw = scoreMapping == null
+      ? ''
+      : (typeof scoreMapping === 'string' ? scoreMapping : JSON.stringify(scoreMapping));
+    const { inputRoot, outputRoot } = parseScoreMappingBundle(mappingRaw);
+    const rules = [...flattenScoreRules(inputRoot), ...flattenScoreRules(outputRoot)];
+    const hasRules = rules.some((rule) => (rule.outputKey || '').trim() && Array.isArray(rule.gtColumns) && rule.gtColumns.some((column) => String(column || '').trim()));
+    if (!hasRules) {
+      throw new Error('Score mapping must include at least one rule.');
+    }
+
+    const requestedName = (name || '').trim() || 'Score';
+    const resolvedLeft = typeof left === 'number'
+      ? left
+      : (parseFloat(runNode.style.left) || 0) + (runNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+    const resolvedTop = typeof top === 'number' ? top : (parseFloat(runNode.style.top) || 0);
+    const scoreNode = createScoreNode({
+      left: resolvedLeft,
+      top: resolvedTop,
+      title: requestedName,
+    });
+    if (scoreNode?.dataset) {
+      scoreNode.dataset.scoreGroundTruthId = normalizedGroundTruthNodeId;
+      scoreNode.dataset.scoreMapping = serializeScoreMappingBundle(inputRoot, outputRoot);
+      if (reviewCredentialId) {
+        scoreNode.dataset.reviewCredentialId = String(reviewCredentialId).trim();
+      } else {
+        delete scoreNode.dataset.reviewCredentialId;
+      }
+      const colorIndex = groundTruthNode.dataset.datasetColorIndex != null ? parseInt(groundTruthNode.dataset.datasetColorIndex, 10) : 0;
+      const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+      scoreNode.style.borderColor = color;
+      const progressBar = scoreNode.querySelector('.workflow-node__score-progress');
+      if (progressBar) progressBar.style.background = color;
+    }
+    if (scoreNode?.dataset?.nodeId) {
+      connections.push({
+        fromId: normalizedRunNodeId,
+        toId: scoreNode.dataset.nodeId,
+        type: EDGE_TYPE_RUN_TO_SCORE,
+      });
+      updateEdges();
+      syncScoreNodeProgressFromUpstreamRun(scoreNode);
+    }
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    return {
+      created: true,
+      nodeId: String(scoreNode?.dataset?.nodeId || '').trim(),
+      runNodeId: normalizedRunNodeId,
+      groundTruthNodeId: normalizedGroundTruthNodeId,
+      name: requestedName,
+      reviewCredentialId: String(scoreNode?.dataset?.reviewCredentialId || '').trim(),
+      scoreMapping: JSON.parse(serializeScoreMappingBundle(inputRoot, outputRoot)),
+      ruleCount: rules.length,
+      position: {
+        left: Number.parseFloat(scoreNode?.style?.left || '') || 0,
+        top: Number.parseFloat(scoreNode?.style?.top || '') || 0,
+      },
+      requestedName,
+    };
+  }
+
   function addDatasetNode({
     name = '',
     notes = '',
@@ -5807,8 +6052,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     getWorkflowSnapshot,
     inspectNode,
     addRunNode,
+    addScoreNode,
     startRunNode,
     saveRunResultsToWorkspace,
+    saveScoreResultsToWorkspace,
     addSamplerNode,
     addSampledDatasetNode,
     addPromptNode,
