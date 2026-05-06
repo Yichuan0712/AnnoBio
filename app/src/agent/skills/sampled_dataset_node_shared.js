@@ -42,6 +42,7 @@ export function summarizeSampledDatasetNodeSpec(spec = {}) {
     samplerNodeId: toCleanString(spec?.samplerNodeId || spec?.sampler_node_id),
     name: toCleanString(spec?.name),
     notes: String(spec?.notes || ''),
+    // This is an agent-loop safety cap, not a sampler's lifetime usage limit.
     maxSampleUses: normalizePositiveInteger(spec?.maxSampleUses ?? spec?.max_sample_uses, 1),
   };
 }

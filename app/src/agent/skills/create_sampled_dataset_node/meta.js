@@ -5,7 +5,7 @@ export const createSampledDatasetNodeMeta = Object.freeze({
     sampler_node_id: 'string (required exact sampler node id)',
     name: 'string (optional sampled dataset node name; defaults to sampler-based generated name)',
     notes: 'string (optional sampled dataset description; defaults to sampler summary)',
-    max_sample_uses: 'integer (optional maximum number of times this sampler may be used to create sampled datasets; defaults to 1)',
+    max_sample_uses: 'integer (optional agent-side safety cap for this request when repeatedly sampling the same sampler; defaults to 1)',
     left: 'number (optional x position)',
     top: 'number (optional y position)',
     ensure_unique_name: 'boolean (optional, defaults to true)',

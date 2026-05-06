@@ -199,6 +199,25 @@ export async function openAgentWindowModal(options = {}) {
   const composerSendEl = overlay.querySelector('.agent-window__composer-send');
   let chatSession = null;
   let pendingPollTimeout = null;
+  let saveChain = Promise.resolve();
+
+  function buildSavePayload() {
+    return {
+      activeConversationId: activeChatId,
+      conversations: chats.map((chat) => ({
+        ...chat,
+        pending: chat.pending === true,
+        pendingStatus: String(chat.pendingStatus || '').trim(),
+        unsentDraft: String(chat.unsentDraft || ''),
+        messages: Array.isArray(chat.messages)
+          ? chat.messages.map((message) => ({
+              role: String(message.role || 'assistant'),
+              content: String(message.content || ''),
+            }))
+          : [],
+      })),
+    };
+  }
 
   function stopPendingPoll() {
     if (pendingPollTimeout != null) {
@@ -284,24 +303,13 @@ export async function openAgentWindowModal(options = {}) {
 
   function saveConversations() {
     if (!projectPath || !storageApi?.saveAgentConversations) return;
-    const payload = {
-      activeConversationId: activeChatId,
-      conversations: chats.map((chat) => ({
-        ...chat,
-        pending: chat.pending === true,
-        pendingStatus: String(chat.pendingStatus || '').trim(),
-        unsentDraft: String(chat.unsentDraft || ''),
-        messages: Array.isArray(chat.messages)
-          ? chat.messages.map((message) => ({
-              role: String(message.role || 'assistant'),
-              content: String(message.content || ''),
-            }))
-          : [],
-      })),
-    };
-    storageApi.saveAgentConversations(projectPath, payload).catch((error) => {
-      console.error('Save agent conversations:', error);
-    });
+    const payload = buildSavePayload();
+    saveChain = saveChain
+      .catch(() => {})
+      .then(() => storageApi.saveAgentConversations(projectPath, payload))
+      .catch((error) => {
+        console.error('Save agent conversations:', error);
+      });
   }
 
   function getActiveChat() {

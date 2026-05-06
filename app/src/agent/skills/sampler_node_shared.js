@@ -67,7 +67,8 @@ export function formatSamplerModeSummary(spec = {}) {
   return `${typeLabel}, ${sizeLabel}`;
 }
 
-export function buildSamplerNodeSpec(args = {}) {
+export function buildSamplerNodeSpec(args = {}, options = {}) {
+  const strict = options?.strict === true;
   const sourceNodeId = toCleanString(args?.source_node_id || args?.sourceNodeId);
   const name = toCleanString(args?.name) || 'Sample';
   const samplingType = normalizeSamplingType(args?.sampling_type || args?.samplingType);
@@ -93,7 +94,12 @@ export function buildSamplerNodeSpec(args = {}) {
   }
 
   const sampleSizeType = normalizeSampleSizeType(args?.sample_size_type || args?.sampleSizeType);
-  const sampleSize = normalizePositiveInteger(args?.sample_size ?? args?.sampleSize, 100);
+  const sampleSize = normalizePositiveInteger(args?.sample_size ?? args?.sampleSize, strict ? null : 100);
+  if (sampleSize == null) {
+    throw new Error(sampleSizeType === 'ratio'
+      ? 'Ratio is required. Enter a number between 1 and 100.'
+      : 'Sample size (rows) is required. Enter at least 1 row.');
+  }
   if (sampleSizeType === 'ratio' && sampleSize > 100) {
     throw new Error('Ratio sample size must be between 1 and 100.');
   }
