@@ -130,6 +130,8 @@ export async function openAgentWindowModal(options = {}) {
   const projectPath = String(options?.projectPath || '').trim();
   const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
   const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
+  const addSamplerNode = typeof options?.addSamplerNode === 'function' ? options.addSamplerNode : null;
+  const addSampledDatasetNode = typeof options?.addSampledDatasetNode === 'function' ? options.addSampledDatasetNode : null;
   const addPromptNode = typeof options?.addPromptNode === 'function' ? options.addPromptNode : null;
   const addDatasetNode = typeof options?.addDatasetNode === 'function' ? options.addDatasetNode : null;
   const storageApi = window.electronAPI;
@@ -197,6 +199,25 @@ export async function openAgentWindowModal(options = {}) {
   const composerSendEl = overlay.querySelector('.agent-window__composer-send');
   let chatSession = null;
   let pendingPollTimeout = null;
+  let saveChain = Promise.resolve();
+
+  function buildSavePayload() {
+    return {
+      activeConversationId: activeChatId,
+      conversations: chats.map((chat) => ({
+        ...chat,
+        pending: chat.pending === true,
+        pendingStatus: String(chat.pendingStatus || '').trim(),
+        unsentDraft: String(chat.unsentDraft || ''),
+        messages: Array.isArray(chat.messages)
+          ? chat.messages.map((message) => ({
+              role: String(message.role || 'assistant'),
+              content: String(message.content || ''),
+            }))
+          : [],
+      })),
+    };
+  }
 
   function stopPendingPoll() {
     if (pendingPollTimeout != null) {
@@ -282,24 +303,13 @@ export async function openAgentWindowModal(options = {}) {
 
   function saveConversations() {
     if (!projectPath || !storageApi?.saveAgentConversations) return;
-    const payload = {
-      activeConversationId: activeChatId,
-      conversations: chats.map((chat) => ({
-        ...chat,
-        pending: chat.pending === true,
-        pendingStatus: String(chat.pendingStatus || '').trim(),
-        unsentDraft: String(chat.unsentDraft || ''),
-        messages: Array.isArray(chat.messages)
-          ? chat.messages.map((message) => ({
-              role: String(message.role || 'assistant'),
-              content: String(message.content || ''),
-            }))
-          : [],
-      })),
-    };
-    storageApi.saveAgentConversations(projectPath, payload).catch((error) => {
-      console.error('Save agent conversations:', error);
-    });
+    const payload = buildSavePayload();
+    saveChain = saveChain
+      .catch(() => {})
+      .then(() => storageApi.saveAgentConversations(projectPath, payload))
+      .catch((error) => {
+        console.error('Save agent conversations:', error);
+      });
   }
 
   function getActiveChat() {
@@ -405,6 +415,8 @@ export async function openAgentWindowModal(options = {}) {
     autoResizeComposer,
     getWorkflowSnapshot,
     inspectNode,
+    addSamplerNode,
+    addSampledDatasetNode,
     addPromptNode,
     addDatasetNode,
     onConversationDraftChanged: () => {

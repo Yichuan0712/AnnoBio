@@ -1,7 +1,10 @@
 /**
- * Sampler detail modal: view/edit sampler settings (name, sampling type, sample size, row spec).
- * @param {{ node: HTMLElement, isSamplerNameAlreadyUsedForSource?: (name: string, sourceNodeId: string, excludeNodeId?: string | null) => boolean, hasSampledDatasets?: (samplerNodeId: string) => boolean }} options
+ * Sampler detail modal: view/edit sampler settings (sampling type, sample size, row spec).
+ * Sample name is edited separately from the node context menu.
+ * @param {{ node: HTMLElement, hasSampledDatasets?: (samplerNodeId: string) => boolean }} options
  */
+
+import { buildSamplerNodeSpec } from './agent/skills/sampler_node_shared.js';
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -31,12 +34,11 @@ function parseRowSpecToItems(spec) {
   return items;
 }
 
-export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource, hasSampledDatasets }) {
+export function openSamplerDetailModal({ node, hasSampledDatasets }) {
   const nodeId = node?.dataset?.nodeId ?? '';
-  const sourceNodeId = (node?.dataset?.sourceNodeId ?? '').trim();
   const name = (node?.dataset?.samplerName ?? '').trim() || 'Sample';
   const samplingType = node?.dataset?.samplerSamplingType || 'without-replacement';
-  const sampleSizeType = node?.dataset?.samplerSampleSizeType || 'rows';
+  const sampleSizeType = node?.dataset?.samplerSampleSizeType || 'ratio';
   const sampleSize = node?.dataset?.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
   const rowSpec = (node?.dataset?.samplerRowSpec ?? '').trim();
   const rowSpecItems = parseRowSpecToItems(rowSpec);
@@ -110,7 +112,6 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
     </div>
   `;
 
-  const titleEl = overlay.querySelector('#sampler-detail-title');
   const samplerRowsInp = overlay.querySelector('#sampler-rows-inp');
   const samplerRatioInp = overlay.querySelector('#sampler-ratio-inp');
   const samplerSizeWrap = overlay.querySelector('.sampler-size-wrap');
@@ -156,30 +157,10 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
     return editRowSpecItems.map((item) => (item.type === 'single' ? String(item.value) : `${item.from}-${item.to}`)).join(' ');
   }
 
-  /** Current form state for dirty check (normalized). */
-  function getFormState() {
-    const samplingTypeVal = overlay.querySelector('input[name="sampler-replacement"]:checked')?.value || 'without-replacement';
-    const isSpecify = samplingTypeVal === 'specify-rows';
-    const sampleSizeTypeVal = overlay.querySelector('input[name="sampler-size-type"]:checked')?.value || 'rows';
-    const rowsVal = samplerRowsInp?.value != null ? samplerRowsInp.value.trim() : '';
-    const ratioVal = samplerRatioInp?.value != null ? samplerRatioInp.value.trim() : '';
-    const sizeNum = sampleSizeTypeVal === 'rows' ? parseInt(rowsVal, 10) : parseInt(ratioVal, 10);
-    const sampleSize = sampleSizeTypeVal === 'rows'
-      ? (Number.isFinite(sizeNum) && sizeNum >= 1 ? sizeNum : 100)
-      : (Number.isFinite(sizeNum) && sizeNum >= 1 && sizeNum <= 100 ? sizeNum : 100);
-    return {
-      name: (node?.dataset?.samplerName ?? '').trim() || 'Sample',
-      samplingType: samplingTypeVal,
-      sampleSizeType: isSpecify ? 'rows' : sampleSizeTypeVal,
-      sampleSize: isSpecify ? 100 : sampleSize,
-      rowSpec: isSpecify ? buildRowSpecString() : '',
-    };
-  }
-
   function populateForm() {
     const st = node?.dataset?.samplerSamplingType || 'without-replacement';
     overlay.querySelector(`input[name="sampler-replacement"][value="${st}"]`)?.click();
-    const sst = node?.dataset?.samplerSampleSizeType || 'rows';
+    const sst = node?.dataset?.samplerSampleSizeType || 'ratio';
     overlay.querySelector(`input[name="sampler-size-type"][value="${sst}"]`)?.click();
     const size = node?.dataset?.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
     if (samplerRowsInp) samplerRowsInp.value = sst === 'rows' ? String(size) : '';
@@ -243,14 +224,9 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
     const samplingTypeVal = overlay.querySelector('input[name="sampler-replacement"]:checked')?.value || 'without-replacement';
     const isSpecifyRowsVal = samplingTypeVal === 'specify-rows';
     const rowSpecVal = isSpecifyRowsVal ? buildRowSpecString() : '';
-    const sampleSizeTypeVal = overlay.querySelector('input[name="sampler-size-type"]:checked')?.value || 'rows';
+    const sampleSizeTypeVal = overlay.querySelector('input[name="sampler-size-type"]:checked')?.value || 'ratio';
     const rowsValue = samplerRowsInp?.value != null ? samplerRowsInp.value.trim() : '';
-    const rowsNum = sampleSizeTypeVal === 'rows' ? parseInt(rowsValue, 10) : NaN;
     const ratioValue = samplerRatioInp?.value != null ? samplerRatioInp.value.trim() : '';
-    const ratioNum = sampleSizeTypeVal === 'ratio' ? parseInt(ratioValue, 10) : NaN;
-    const sampleSizeVal = sampleSizeTypeVal === 'rows'
-      ? (Number.isFinite(rowsNum) && rowsNum >= 1 ? rowsNum : 100)
-      : (Number.isFinite(ratioNum) && ratioNum >= 1 && ratioNum <= 100 ? ratioNum : 100);
 
     if (!newName) {
       if (samplerFormErrorEl) {
@@ -259,37 +235,33 @@ export function openSamplerDetailModal({ node, isSamplerNameAlreadyUsedForSource
       }
       return false;
     }
-    if (isSpecifyRowsVal && editRowSpecItems.length === 0) {
+    let normalizedSpec = null;
+    try {
+      normalizedSpec = buildSamplerNodeSpec({
+        source_node_id: node?.dataset?.sourceNodeId || '',
+        name: newName,
+        sampling_type: samplingTypeVal,
+        sample_size_type: sampleSizeTypeVal,
+        sample_size: sampleSizeTypeVal === 'rows' ? rowsValue : ratioValue,
+        row_spec: rowSpecVal,
+      }, { strict: true });
+    } catch (error) {
       if (samplerFormErrorEl) {
-        samplerFormErrorEl.textContent = 'Add at least one row number or range.';
-        samplerFormErrorEl.hidden = false;
-      }
-      return false;
-    }
-    if (!isSpecifyRowsVal && sampleSizeTypeVal === 'rows' && (!Number.isFinite(rowsNum) || rowsNum < 1)) {
-      if (samplerFormErrorEl) {
-        samplerFormErrorEl.textContent = 'Sample size (rows) is required. Enter at least 1 row.';
-        samplerFormErrorEl.hidden = false;
-      }
-      return false;
-    }
-    if (!isSpecifyRowsVal && sampleSizeTypeVal === 'ratio' && (!Number.isFinite(ratioNum) || ratioNum < 1 || ratioNum > 100)) {
-      if (samplerFormErrorEl) {
-        samplerFormErrorEl.textContent = 'Ratio is required. Enter a number between 1 and 100.';
+        samplerFormErrorEl.textContent = error instanceof Error ? error.message : 'Could not save sampler settings.';
         samplerFormErrorEl.hidden = false;
       }
       return false;
     }
     if (node) {
       node.dataset.samplerName = newName;
-      node.dataset.samplerSamplingType = samplingTypeVal;
+      node.dataset.samplerSamplingType = normalizedSpec.samplingType;
       if (isSpecifyRowsVal) {
-        node.dataset.samplerRowSpec = rowSpecVal;
+        node.dataset.samplerRowSpec = normalizedSpec.rowSpec;
         delete node.dataset.samplerSampleSizeType;
         delete node.dataset.samplerSampleSize;
       } else {
-        node.dataset.samplerSampleSizeType = sampleSizeTypeVal;
-        node.dataset.samplerSampleSize = String(sampleSizeVal);
+        node.dataset.samplerSampleSizeType = normalizedSpec.sampleSizeType;
+        node.dataset.samplerSampleSize = String(normalizedSpec.sampleSize);
         delete node.dataset.samplerRowSpec;
       }
       const titleElNode = node.querySelector('.workflow-node__title');
