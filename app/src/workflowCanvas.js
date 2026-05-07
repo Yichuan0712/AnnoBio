@@ -57,7 +57,7 @@ import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { buildWorkflowSnapshot } from './agent/canvas/workflowSnapshot.js';
 import { inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
-import { createWorkflowNodeFactories } from './workflowNodeFactories.js';
+import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS } from './workflowNodeColors.js';
 import { showAlert, showConfirm } from './alertModal.js';
