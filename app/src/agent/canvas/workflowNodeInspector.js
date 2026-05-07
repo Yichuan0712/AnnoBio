@@ -339,6 +339,7 @@ function inspectPromptReviewNode(rawNode, canvasState) {
   const scoreUpstream = result.upstream.find((item) => item.nodeType === 'score');
 
   result.details = {
+    reviewPending: rawNode?.reviewPending === true,
     reviewProgress: Number.isFinite(Number(rawNode?.reviewProgress)) ? Number(rawNode.reviewProgress) : 0,
     reviewSummary: reviewResult?.summary ? String(reviewResult.summary) : '',
     suggestionCount: safeArray(reviewResult?.suggestions).length,

@@ -132,6 +132,7 @@ export async function openAgentWindowModal(options = {}) {
   const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
   const addRunNode = typeof options?.addRunNode === 'function' ? options.addRunNode : null;
   const addScoreNode = typeof options?.addScoreNode === 'function' ? options.addScoreNode : null;
+  const createAndRunReviewNode = typeof options?.createAndRunReviewNode === 'function' ? options.createAndRunReviewNode : null;
   const startRunNode = typeof options?.startRunNode === 'function' ? options.startRunNode : null;
   const saveRunResultsToWorkspace = typeof options?.saveRunResultsToWorkspace === 'function' ? options.saveRunResultsToWorkspace : null;
   const saveScoreResultsToWorkspace = typeof options?.saveScoreResultsToWorkspace === 'function' ? options.saveScoreResultsToWorkspace : null;
@@ -422,6 +423,7 @@ export async function openAgentWindowModal(options = {}) {
     inspectNode,
     addRunNode,
     addScoreNode,
+    createAndRunReviewNode,
     startRunNode,
     saveRunResultsToWorkspace,
     saveScoreResultsToWorkspace,

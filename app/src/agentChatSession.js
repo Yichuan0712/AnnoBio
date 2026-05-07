@@ -234,6 +234,7 @@ export function mountAgentChatSession({
   inspectNode,
   addRunNode,
   addScoreNode,
+  createAndRunReviewNode,
   startRunNode,
   saveRunResultsToWorkspace,
   saveScoreResultsToWorkspace,
@@ -463,6 +464,7 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
             inspectNode,
             addRunNode,
             addScoreNode,
+            createAndRunReviewNode,
             startRunNode,
             saveRunResultsToWorkspace,
             saveScoreResultsToWorkspace,
@@ -489,6 +491,7 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
             inspectNode,
             addRunNode,
             addScoreNode,
+            createAndRunReviewNode,
             startRunNode,
             saveRunResultsToWorkspace,
             saveScoreResultsToWorkspace,
@@ -524,6 +527,7 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
           inspectNode,
           addRunNode,
           addScoreNode,
+          createAndRunReviewNode,
           startRunNode,
           saveRunResultsToWorkspace,
           saveScoreResultsToWorkspace,
@@ -675,6 +679,132 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
     }
   }
 
+  async function waitForReviewCompletion(waitState, workflowSnapshot, loopSignals, agentTrace, onProgress) {
+    const startedAt = waitState?.startedAt || Date.now();
+    let lastProgress = Number(waitState?.lastObservedProgress) || 0;
+    let lastSuggestionCount = Number(waitState?.lastObservedSuggestionCount) || 0;
+    let lastProgressAt = waitState?.lastProgressAt || startedAt;
+    let warnedForStall = false;
+
+    while (true) {
+      const latestSnapshot = readWorkflowSnapshot();
+      if (latestSnapshot) workflowSnapshot = latestSnapshot;
+      const reviewNode = findNodeInSnapshot(workflowSnapshot, waitState?.reviewNodeId);
+      if (!reviewNode || String(reviewNode?.type || '').trim() !== 'promptReview') {
+        return {
+          workflowSnapshot,
+          observation: {
+            skillName: 'wait_for_review_completion',
+            args: { review_node_id: waitState?.reviewNodeId || '' },
+            ok: false,
+            summary: `Review node ${String(waitState?.reviewNodeId || '').trim() || 'unknown'} was not found while waiting.`,
+            result: {
+              reviewNodeId: String(waitState?.reviewNodeId || '').trim(),
+              status: 'missing',
+            },
+          },
+          shouldBreak: true,
+        };
+      }
+
+      const reviewName = String(reviewNode?.title || waitState?.reviewNodeId || 'review').trim() || 'review';
+      const pending = reviewNode?.status?.pending === true;
+      const progress = Number(reviewNode?.status?.progress) || 0;
+      const suggestionCount = Number(reviewNode?.preview?.reviewSuggestionCount) || 0;
+      const reviewSummary = String(reviewNode?.preview?.reviewSummary || '').trim();
+      const completed = !pending && (suggestionCount > 0 || Boolean(reviewSummary));
+
+      if (progress > lastProgress || suggestionCount > lastSuggestionCount) {
+        lastProgress = progress;
+        lastSuggestionCount = suggestionCount;
+        lastProgressAt = Date.now();
+        warnedForStall = false;
+      }
+
+      if (completed) {
+        return {
+          workflowSnapshot,
+          observation: {
+            skillName: 'wait_for_review_completion',
+            args: { review_node_id: waitState?.reviewNodeId || '' },
+            ok: true,
+            summary: `Review ${reviewName} completed.`,
+            result: {
+              reviewNodeId: String(waitState?.reviewNodeId || '').trim(),
+              status: 'completed',
+              progress,
+              suggestionCount,
+              reviewSummary,
+            },
+          },
+          shouldBreak: false,
+        };
+      }
+
+      if (!pending) {
+        const stoppedMessage = `Review ${reviewName} stopped before completion.`;
+        addLoopSignal(loopSignals, stoppedMessage);
+        agentTrace.push(`WAIT STOP: ${stoppedMessage}`);
+        return {
+          workflowSnapshot,
+          observation: {
+            skillName: 'wait_for_review_completion',
+            args: { review_node_id: waitState?.reviewNodeId || '' },
+            ok: false,
+            summary: stoppedMessage,
+            result: {
+              reviewNodeId: String(waitState?.reviewNodeId || '').trim(),
+              status: 'stopped',
+              progress,
+              suggestionCount,
+              reviewSummary,
+            },
+          },
+          shouldBreak: true,
+        };
+      }
+
+      const waitElapsedMs = Date.now() - startedAt;
+      const stalledForMs = Date.now() - lastProgressAt;
+      if (waitElapsedMs >= AGENT_RUN_WAIT_MAX_MS) {
+        const timeoutMessage = `Timed out waiting for review ${reviewName} after ${Math.round(AGENT_RUN_WAIT_MAX_MS / 1000)} seconds.`;
+        addLoopSignal(loopSignals, timeoutMessage);
+        agentTrace.push(`WAIT STOP: ${timeoutMessage}`);
+        return {
+          workflowSnapshot,
+          observation: {
+            skillName: 'wait_for_review_completion',
+            args: { review_node_id: waitState?.reviewNodeId || '' },
+            ok: false,
+            summary: timeoutMessage,
+            result: {
+              reviewNodeId: String(waitState?.reviewNodeId || '').trim(),
+              status: 'timeout',
+              progress,
+              suggestionCount,
+              reviewSummary,
+            },
+          },
+          shouldBreak: true,
+        };
+      }
+
+      if (!warnedForStall && stalledForMs >= AGENT_RUN_WAIT_STALL_WARNING_MS) {
+        const stallMessage = `Review ${reviewName} has shown no new progress for ${Math.round(stalledForMs / 1000)} seconds.`;
+        addLoopSignal(loopSignals, stallMessage);
+        agentTrace.push(`WAIT WARN: ${stallMessage}`);
+        warnedForStall = true;
+      }
+
+      if (onProgress) {
+        onProgress(progress > 0
+          ? `Waiting for review ${reviewName} to finish (${progress}%)...`
+          : `Waiting for review ${reviewName} to finish...`);
+      }
+      await sleep(AGENT_RUN_WAIT_HEARTBEAT_MS);
+    }
+  }
+
   function normalizePlannedSkillCalls(plan) {
     const calls = Array.isArray(plan?.skill_calls) ? plan.skill_calls : [];
     const seen = new Set();
@@ -761,7 +891,9 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
           }
 
           if (waitingState) {
-            const waitResult = await waitForRunCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress);
+            const waitResult = waitingState.kind === 'review'
+              ? await waitForReviewCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress)
+              : await waitForRunCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress);
             workflowSnapshot = waitResult.workflowSnapshot || workflowSnapshot;
             if (waitResult.observation) {
               observations.push(waitResult.observation);
@@ -774,7 +906,7 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
             waitingState = null;
             if (waitResult.shouldBreak) break;
             stalledCount = 0;
-            if (onProgress) onProgress('Run finished, replanning next steps...');
+            if (onProgress) onProgress('Node finished, replanning next steps...');
             continue;
           }
 
@@ -874,6 +1006,19 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
                 lastProgressAt: Date.now(),
               };
               agentTrace.push(`ROUND ${roundIndex} WAIT START: run ${waitingState.runNodeId}`);
+              break;
+            }
+
+            if (observation.ok && observation.result?.waitRequired === true && observation.result?.reviewNodeId) {
+              waitingState = {
+                kind: 'review',
+                reviewNodeId: String(observation.result.reviewNodeId || '').trim(),
+                startedAt: Date.now(),
+                lastObservedProgress: Number(observation.result?.reviewProgress) || 0,
+                lastObservedSuggestionCount: 0,
+                lastProgressAt: Date.now(),
+              };
+              agentTrace.push(`ROUND ${roundIndex} WAIT START: review ${waitingState.reviewNodeId}`);
               break;
             }
 
