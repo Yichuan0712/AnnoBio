@@ -127,12 +127,24 @@ export async function openAgentWindowModal(options = {}) {
     return;
   }
 
+  const onOpen = typeof options?.onOpen === 'function' ? options.onOpen : null;
+  const onClose = typeof options?.onClose === 'function' ? options.onClose : null;
   const projectPath = String(options?.projectPath || '').trim();
   const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
   const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
+  const addRunNode = typeof options?.addRunNode === 'function' ? options.addRunNode : null;
+  const addScoreNode = typeof options?.addScoreNode === 'function' ? options.addScoreNode : null;
+  const createAndRunReviewNode = typeof options?.createAndRunReviewNode === 'function' ? options.createAndRunReviewNode : null;
+  const verifyReviewSuggestions = typeof options?.verifyReviewSuggestions === 'function' ? options.verifyReviewSuggestions : null;
+  const acceptReviewSuggestions = typeof options?.acceptReviewSuggestions === 'function' ? options.acceptReviewSuggestions : null;
+  const applyReviewSuggestions = typeof options?.applyReviewSuggestions === 'function' ? options.applyReviewSuggestions : null;
+  const startRunNode = typeof options?.startRunNode === 'function' ? options.startRunNode : null;
+  const saveRunResultsToWorkspace = typeof options?.saveRunResultsToWorkspace === 'function' ? options.saveRunResultsToWorkspace : null;
+  const saveScoreResultsToWorkspace = typeof options?.saveScoreResultsToWorkspace === 'function' ? options.saveScoreResultsToWorkspace : null;
   const addSamplerNode = typeof options?.addSamplerNode === 'function' ? options.addSamplerNode : null;
   const addSampledDatasetNode = typeof options?.addSampledDatasetNode === 'function' ? options.addSampledDatasetNode : null;
   const addPromptNode = typeof options?.addPromptNode === 'function' ? options.addPromptNode : null;
+  const addPromptVersion = typeof options?.addPromptVersion === 'function' ? options.addPromptVersion : null;
   const addDatasetNode = typeof options?.addDatasetNode === 'function' ? options.addDatasetNode : null;
   const storageApi = window.electronAPI;
   let storedState = { conversations: [], activeChatId: '' };
@@ -357,6 +369,11 @@ export async function openAgentWindowModal(options = {}) {
     chatSession = null;
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);
+    try {
+      onClose?.();
+    } catch (error) {
+      console.error('Agent window onClose callback:', error);
+    }
   }
 
   function onKeyDown(e) {
@@ -407,6 +424,11 @@ export async function openAgentWindowModal(options = {}) {
   });
   document.addEventListener('keydown', onKeyDown);
   document.body.appendChild(overlay);
+  try {
+    onOpen?.();
+  } catch (error) {
+    console.error('Agent window onOpen callback:', error);
+  }
   chatSession = mountAgentChatSession({
     overlay,
     messagesEl,
@@ -415,9 +437,19 @@ export async function openAgentWindowModal(options = {}) {
     autoResizeComposer,
     getWorkflowSnapshot,
     inspectNode,
+    addRunNode,
+    addScoreNode,
+    createAndRunReviewNode,
+    verifyReviewSuggestions,
+    acceptReviewSuggestions,
+    applyReviewSuggestions,
+    startRunNode,
+    saveRunResultsToWorkspace,
+    saveScoreResultsToWorkspace,
     addSamplerNode,
     addSampledDatasetNode,
     addPromptNode,
+    addPromptVersion,
     addDatasetNode,
     onConversationDraftChanged: () => {
       saveConversations();
