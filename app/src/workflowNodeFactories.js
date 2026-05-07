@@ -1,3 +1,18 @@
+export function formatSamplerDescription(samplerNode) {
+  if (!samplerNode || !samplerNode.dataset) return '';
+  const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
+  const type = samplerNode.dataset.samplerSamplingType || 'without-replacement';
+  const typeLabel = type === 'with-replacement' ? 'with replacement' : type === 'specify-rows' ? 'specify rows' : 'without replacement';
+  if (type === 'specify-rows') {
+    const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
+    return rowSpec ? `${name} · ${typeLabel}: ${rowSpec}` : `${name} · ${typeLabel}`;
+  }
+  const sizeType = samplerNode.dataset.samplerSampleSizeType || 'ratio';
+  const size = samplerNode.dataset.samplerSampleSize != null ? String(samplerNode.dataset.samplerSampleSize).trim() : '100';
+  const sizeLabel = sizeType === 'ratio' ? `${size}%` : `${size} rows`;
+  return `${name} · ${typeLabel}, ${sizeLabel}`;
+}
+
 export function createWorkflowNodeFactories(deps = {}) {
   const {
     generateNodeId,
@@ -94,21 +109,6 @@ export function createWorkflowNodeFactories(deps = {}) {
     return {
       wasDrag: () => lastInteractionWasDrag,
     };
-  }
-
-  function formatSamplerDescription(samplerNode) {
-    if (!samplerNode || !samplerNode.dataset) return '';
-    const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
-    const type = samplerNode.dataset.samplerSamplingType || 'without-replacement';
-    const typeLabel = type === 'with-replacement' ? 'with replacement' : type === 'specify-rows' ? 'specify rows' : 'without replacement';
-    if (type === 'specify-rows') {
-      const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
-      return rowSpec ? `${name} · ${typeLabel}: ${rowSpec}` : `${name} · ${typeLabel}`;
-    }
-    const sizeType = samplerNode.dataset.samplerSampleSizeType || 'ratio';
-    const size = samplerNode.dataset.samplerSampleSize != null ? String(samplerNode.dataset.samplerSampleSize).trim() : '100';
-    const sizeLabel = sizeType === 'ratio' ? `${size}%` : `${size} rows`;
-    return `${name} · ${typeLabel}, ${sizeLabel}`;
   }
 
   function createPromptNode({ name = '', note = '', sections = [], outputFormat, left, top, nodeId: givenNodeId }) {
