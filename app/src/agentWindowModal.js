@@ -145,6 +145,7 @@ export async function openAgentWindowModal(options = {}) {
   const addSampledDatasetNode = typeof options?.addSampledDatasetNode === 'function' ? options.addSampledDatasetNode : null;
   const addPromptNode = typeof options?.addPromptNode === 'function' ? options.addPromptNode : null;
   const addPromptVersion = typeof options?.addPromptVersion === 'function' ? options.addPromptVersion : null;
+  const updateScoreNode = typeof options?.updateScoreNode === 'function' ? options.updateScoreNode : null;
   const addDatasetNode = typeof options?.addDatasetNode === 'function' ? options.addDatasetNode : null;
   const storageApi = window.electronAPI;
   let storedState = { conversations: [], activeChatId: '' };
@@ -439,6 +440,7 @@ export async function openAgentWindowModal(options = {}) {
     inspectNode,
     addRunNode,
     addScoreNode,
+    updateScoreNode,
     createAndRunReviewNode,
     verifyReviewSuggestions,
     acceptReviewSuggestions,
