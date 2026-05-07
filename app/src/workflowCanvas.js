@@ -34,6 +34,7 @@ import {
 import {
   openScoreDetailModal,
   runReviewFromScore,
+  runReviewStart,
   getScoreExportData,
   SCORE_GT_ROW_INDEX_COLUMN,
   canonicalizeMatchFlags,
@@ -71,6 +72,19 @@ async function resolveRunCredentialId(runNode) {
     const res = await fetch(`${SCORE_BACKEND_BASE}/api/settings`);
     const s = res.ok ? await res.json() : null;
     id = s && s.default_run_credential_id ? String(s.default_run_credential_id).trim() : '';
+  } catch (_) {}
+  return id;
+}
+
+async function resolveReviewCredentialId(scoreNode, preferredCredentialId = '') {
+  let id = String(preferredCredentialId || '').trim();
+  if (id) return id;
+  id = (scoreNode?.dataset?.reviewCredentialId || '').trim();
+  if (id) return id;
+  try {
+    const res = await fetch(`${SCORE_BACKEND_BASE}/api/settings`);
+    const settings = res.ok ? await res.json() : null;
+    id = settings && settings.default_review_credential_id ? String(settings.default_review_credential_id).trim() : '';
   } catch (_) {}
   return id;
 }
@@ -1510,6 +1524,36 @@ export function buildWorkflowCanvas(root, options = {}) {
     return candidate;
   }
 
+  function isReviewNameAlreadyUsedForScoreNodeId(nameToCheck, scoreNodeId, excludeReviewNodeId = null) {
+    const normalized = (nameToCheck || '').trim().toLowerCase();
+    if (!normalized) return true;
+    if (!scoreNodeId) return false;
+    const reviewEdges = connections.filter((c) => c.fromId === scoreNodeId && c.type === EDGE_TYPE_SCORE_TO_PROMPT_REVIEW);
+    for (const edge of reviewEdges) {
+      if (edge.toId === excludeReviewNodeId) continue;
+      const reviewNode = getNodeById(edge.toId);
+      const existing = (
+        reviewNode?.dataset?.promptReviewName
+        ?? reviewNode?.querySelector?.('.workflow-node__title')?.textContent
+        ?? ''
+      ).trim() || 'Review';
+      if (existing.toLowerCase() === normalized) return true;
+    }
+    return false;
+  }
+
+  function findUniqueReviewName(baseName, scoreNodeId) {
+    const base = (baseName || '').trim() || 'Review';
+    if (!isReviewNameAlreadyUsedForScoreNodeId(base, scoreNodeId)) return base;
+    let n = 2;
+    let candidate = '';
+    do {
+      candidate = `${base} ${n}`;
+      n += 1;
+    } while (isReviewNameAlreadyUsedForScoreNodeId(candidate, scoreNodeId));
+    return candidate;
+  }
+
   /**
    * Parse row spec in order; duplicates and order are preserved (e.g. "1-2 1 2" → [0,1,0,1] → row1, row2, row1, row2).
    * @param {string} text - e.g. "1 3 5-10 15"
@@ -2464,6 +2508,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       inspectNode,
       addRunNode,
       addScoreNode,
+      createAndRunReviewNode,
       startRunNode,
       saveRunResultsToWorkspace,
       saveScoreResultsToWorkspace,
@@ -3359,6 +3404,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     node.dataset.nodeId = nodeId;
     node.dataset.nodeType = 'promptReview';
     const promptReviewTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Review';
+    node.dataset.promptReviewName = String(promptReviewTitle || '').trim() || 'Review';
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
@@ -3539,6 +3585,149 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
 
     return node;
+  }
+
+  async function buildReviewPayloadForScoreNode(scoreNode) {
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
+      throw new Error('Score node was not found.');
+    }
+    const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
+    const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+    if (!runNode || !runNode.classList.contains('workflow-node--run')) {
+      throw new Error('Score node is not connected to an upstream run.');
+    }
+    const promptEdge = connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
+    const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+    if (!promptNode || !promptNode.classList.contains('workflow-node--prompt')) {
+      throw new Error('Run node is not connected to an upstream prompt.');
+    }
+
+    let sections = [];
+    try {
+      sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+    } catch (_) {}
+    if (!Array.isArray(sections) || sections.length === 0) {
+      throw new Error('Upstream prompt must include at least one section.');
+    }
+
+    const promptFullText = sections.map((section) => (
+      `## ${(section.name || '').trim() || '(unnamed)'}\n\n${(section.content || '').trim()}`
+    )).join('\n\n');
+
+    let runResults = [];
+    try {
+      runResults = JSON.parse(runNode.dataset.runResults || '[]');
+      if (!Array.isArray(runResults)) runResults = [];
+    } catch (_) {}
+    if (runResults.length === 0) {
+      throw new Error('Upstream run must have results before starting review.');
+    }
+
+    let schemaFields = [];
+    try {
+      const raw = promptNode.dataset.promptOutputFormat || '[]';
+      schemaFields = JSON.parse(raw);
+      if (!Array.isArray(schemaFields)) schemaFields = [];
+    } catch (_) {}
+    const outputFields = deriveOutputFields(runResults, schemaFields);
+
+    let outputSchema = null;
+    try {
+      const raw = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
+      const fields = (Array.isArray(raw) ? raw : []).map((field) => ({
+        key: field.key || '',
+        type: field.type || 'str',
+        description: field.description,
+        allow_none: field.allowNone === true || field.allow_none === true,
+      })).filter((field) => (field.key || '').trim());
+      if (fields.length > 0) {
+        outputSchema = {
+          return_shape: promptNode.dataset.promptOutputReturnShape || 'single',
+          fields,
+        };
+      }
+    } catch (_) {}
+
+    const scoreMappingRaw = String(scoreNode.dataset.scoreMapping || '').trim();
+    const { inputRoot, outputRoot } = parseScoreMappingBundle(scoreMappingRaw || '{}');
+    const ruleCount = [...flattenScoreRules(inputRoot), ...flattenScoreRules(outputRoot)].length;
+    if (ruleCount <= 0) {
+      throw new Error('Score node must include at least one scoring rule.');
+    }
+
+    const groundTruthNodeId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
+    if (!groundTruthNodeId) {
+      throw new Error('Score node must select a ground-truth dataset before review.');
+    }
+
+    const comparisonRows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections);
+    return {
+      scoreNode,
+      runNode,
+      promptNode,
+      payload: {
+        prompt_sections: sections,
+        prompt_full_text: promptFullText,
+        run_results: runResults,
+        output_fields: outputFields,
+        output_schema: outputSchema,
+        comparison_rows: comparisonRows,
+      },
+    };
+  }
+
+  function addPromptReviewNode({
+    scoreNodeId = '',
+    name = '',
+    left,
+    top,
+    ensureUniqueName = false,
+  } = {}) {
+    const normalizedScoreNodeId = String(scoreNodeId || '').trim();
+    if (!normalizedScoreNodeId) {
+      throw new Error('Score node id is required.');
+    }
+    const scoreNode = getNodeById(normalizedScoreNodeId);
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
+      throw new Error('Score node was not found.');
+    }
+    const requestedName = (name || '').trim() || 'Review';
+    const finalName = ensureUniqueName
+      ? findUniqueReviewName(requestedName, normalizedScoreNodeId)
+      : requestedName;
+    const resolvedLeft = typeof left === 'number'
+      ? left
+      : (parseFloat(scoreNode.style.left) || 0) + (scoreNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+    const resolvedTop = typeof top === 'number' ? top : (parseFloat(scoreNode.style.top) || 0);
+    const promptReviewNode = createPromptReviewNode({
+      left: resolvedLeft,
+      top: resolvedTop,
+      title: finalName,
+    });
+    if (promptReviewNode?.dataset?.nodeId) {
+      promptReviewNode.dataset.promptReviewName = finalName;
+      connections.push({
+        fromId: normalizedScoreNodeId,
+        toId: promptReviewNode.dataset.nodeId,
+        type: EDGE_TYPE_SCORE_TO_PROMPT_REVIEW,
+      });
+      updateEdges();
+    }
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    return {
+      created: true,
+      nodeId: String(promptReviewNode?.dataset?.nodeId || '').trim(),
+      reviewNodeId: String(promptReviewNode?.dataset?.nodeId || '').trim(),
+      scoreNodeId: normalizedScoreNodeId,
+      name: finalName,
+      requestedName,
+      nameWasAdjusted: finalName !== requestedName,
+      position: {
+        left: Number.parseFloat(promptReviewNode?.style?.left || '') || 0,
+        top: Number.parseFloat(promptReviewNode?.style?.top || '') || 0,
+      },
+    };
   }
 
   function removeConnectionsInvolvingNodeId(id) {
@@ -4048,6 +4237,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           placeholder: 'Review',
           getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Review',
           onSave: (name) => {
+            node.dataset.promptReviewName = name;
             const titleEl = node.querySelector('.workflow-node__title');
             if (titleEl) titleEl.textContent = name;
           },
@@ -4601,25 +4791,18 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   document.addEventListener('workflow:add-prompt-review-node', (e) => {
     const scoreNodeId = e.detail?.scoreNodeId || '';
-    const scoreNode = scoreNodeId ? getNodeById(scoreNodeId) : null;
-    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return;
-    const left = (parseFloat(scoreNode.style.left) || 0) + (scoreNode.offsetWidth || 280) + NEW_NODE_OFFSET;
-    const top = parseFloat(scoreNode.style.top) || 0;
-    const promptReviewNode = createPromptReviewNode({ left, top, title: 'Review' });
-    if (promptReviewNode?.dataset?.nodeId) {
-      const reviewNodeId = promptReviewNode.dataset.nodeId;
-      connections.push({
-        fromId: scoreNodeId,
-        toId: reviewNodeId,
-        type: EDGE_TYPE_SCORE_TO_PROMPT_REVIEW,
+    try {
+      const created = addPromptReviewNode({
+        scoreNodeId,
+        name: e.detail?.name,
+        left: Number.isFinite(Number(e.detail?.left)) ? Number(e.detail.left) : undefined,
+        top: Number.isFinite(Number(e.detail?.top)) ? Number(e.detail.top) : undefined,
+        ensureUniqueName: e.detail?.ensureUniqueName === true,
       });
-      updateEdges();
       if (!e.detail) e.detail = {};
-      e.detail.reviewNodeId = reviewNodeId;
+      e.detail.reviewNodeId = created.reviewNodeId;
       e.detail.registerPendingReview = registerPendingReview;
-    }
-    updateContentSize();
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    } catch (_) {}
   });
 
   document.addEventListener('workflow:review-stream-started', (e) => {
@@ -4911,6 +5094,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           reviewResult: reviewResult || undefined,
         };
         if (pct > 0) out.reviewProgress = pct;
+        if (pendingReviews.has(nodeId) || pendingReviewNodeIds.has(nodeId)) out.reviewPending = true;
         return out;
       }
       let sections = [];
@@ -5879,6 +6063,66 @@ export function buildWorkflowCanvas(root, options = {}) {
     };
   }
 
+  async function createAndRunReviewNode({
+    scoreNodeId = '',
+    reviewCredentialId = '',
+    name = '',
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedScoreNodeId = String(scoreNodeId || '').trim();
+    if (!normalizedScoreNodeId) {
+      throw new Error('Score node id is required.');
+    }
+    const scoreNode = getNodeById(normalizedScoreNodeId);
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
+      throw new Error('Score node was not found.');
+    }
+
+    const { payload } = await buildReviewPayloadForScoreNode(scoreNode);
+    const resolvedReviewCredentialId = await resolveReviewCredentialId(scoreNode, reviewCredentialId);
+    if (!resolvedReviewCredentialId) {
+      throw new Error('Review credential id is required before starting review.');
+    }
+    scoreNode.dataset.reviewCredentialId = resolvedReviewCredentialId;
+
+    const created = addPromptReviewNode({
+      scoreNodeId: normalizedScoreNodeId,
+      name,
+      left,
+      top,
+      ensureUniqueName,
+    });
+    const reviewNodeId = String(created?.reviewNodeId || created?.nodeId || '').trim();
+    if (!reviewNodeId) {
+      throw new Error('Review node could not be created.');
+    }
+
+    await runReviewStart({
+      reviewNodeId,
+      payload,
+      credentialId: resolvedReviewCredentialId,
+      registerPendingReview,
+    });
+
+    const reviewNode = getNodeById(reviewNodeId);
+    const pending = pendingReviewNodeIds.has(reviewNodeId) || pendingReviews.has(reviewNodeId);
+    if (!pending) {
+      throw new Error('Review request did not start successfully.');
+    }
+
+    return {
+      ...created,
+      started: true,
+      waitRequired: true,
+      scoreNodeId: normalizedScoreNodeId,
+      reviewNodeId,
+      reviewCredentialId: resolvedReviewCredentialId,
+      reviewProgress: Number.parseInt(reviewNode?.dataset?.reviewProgress || '0', 10) || 0,
+    };
+  }
+
   function addDatasetNode({
     name = '',
     notes = '',
@@ -6053,6 +6297,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     inspectNode,
     addRunNode,
     addScoreNode,
+    createAndRunReviewNode,
     startRunNode,
     saveRunResultsToWorkspace,
     saveScoreResultsToWorkspace,
