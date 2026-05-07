@@ -216,6 +216,22 @@
   z-index: 10;
 }
 
+.workflow-node--agent-created .workflow-node__icon {
+  position: relative;
+  overflow: visible;
+}
+
+.workflow-node--agent-created .workflow-node__icon::after {
+  content: '✦';
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
 /* Run node: 保证标题能显示全，略短于 dataset 节点，小圆角 */
 .workflow-node--run {
   min-width: 110px;

@@ -129,6 +129,7 @@ function getRunPreview(node) {
     runWorkingSetId: normalizeNodeId(node?.runWorkingSetId),
     runCredentialId: normalizeNodeId(node?.runCredentialId),
     runInputToColumn,
+    runPending: node?.runPending === true,
     runCompleted: node?.runCompleted === true || node?.runCompleted === '1',
     runProgress: Number.isFinite(Number(node?.runProgress)) ? Number(node.runProgress) : 0,
     resultsCount: results.length,
@@ -154,6 +155,7 @@ function getScorePreview(node) {
 function getReviewPreview(node) {
   const reviewResult = parseReviewResult(node?.reviewResult);
   return {
+    reviewPending: node?.reviewPending === true,
     reviewProgress: Number.isFinite(Number(node?.reviewProgress)) ? Number(node.reviewProgress) : 0,
     reviewSuggestionCount: safeArray(reviewResult?.suggestions).length,
     reviewSummary: reviewResult?.summary ? String(reviewResult.summary) : '',
@@ -325,6 +327,7 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
         runInputToColumn: preview.runInputToColumn,
       },
       status: {
+        pending: preview.runPending,
         completed: preview.runCompleted,
         progress: preview.runProgress,
         hasResults: preview.resultsCount > 0,
@@ -376,6 +379,7 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
       downstream,
       config: {},
       status: {
+        pending: preview.reviewPending,
         progress: preview.reviewProgress,
         hasReviewResult: preview.reviewSuggestionCount > 0 || Boolean(preview.reviewSummary),
       },

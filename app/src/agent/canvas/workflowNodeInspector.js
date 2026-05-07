@@ -254,6 +254,7 @@ function inspectRunNode(rawNode, canvasState, options = {}) {
     runCredentialId: normalizeNodeId(rawNode?.runCredentialId),
     runInputToColumn,
     promptInputFields,
+    runPending: rawNode?.runPending === true,
     runCompleted: rawNode?.runCompleted === true || rawNode?.runCompleted === '1',
     runProgress: Number.isFinite(Number(rawNode?.runProgress)) ? Number(rawNode.runProgress) : 0,
     inputHeaders: safeArray(runInputContent?.headers).map((header) => String(header ?? '')),
@@ -338,6 +339,7 @@ function inspectPromptReviewNode(rawNode, canvasState) {
   const scoreUpstream = result.upstream.find((item) => item.nodeType === 'score');
 
   result.details = {
+    reviewPending: rawNode?.reviewPending === true,
     reviewProgress: Number.isFinite(Number(rawNode?.reviewProgress)) ? Number(rawNode.reviewProgress) : 0,
     reviewSummary: reviewResult?.summary ? String(reviewResult.summary) : '',
     suggestionCount: safeArray(reviewResult?.suggestions).length,
