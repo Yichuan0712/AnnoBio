@@ -2,7 +2,11 @@ import { createSamplerNodeSkill } from './create_sampler_node/execute.js';
 import { createSampledDatasetNodeSkill } from './create_sampled_dataset_node/execute.js';
 import { createSyntheticDatasetNodeSkill } from './create_synthetic_dataset_node/execute.js';
 import { createPromptNodeSkill } from './create_prompt_node/execute.js';
+import { addPromptVersionSkill } from './add_prompt_version/execute.js';
 import { createAndRunReviewNodeSkill } from './create_and_run_review_node/execute.js';
+import { verifyReviewSuggestionsSkill } from './verify_review_suggestions/execute.js';
+import { acceptReviewSuggestionsSkill } from './accept_review_suggestions/execute.js';
+import { applyReviewSuggestionsSkill } from './apply_review_suggestions/execute.js';
 import { createRunNodeSkill } from './create_run_node/execute.js';
 import { createScoreNodeSkill } from './create_score_node/execute.js';
 import { runExistingNodeSkill } from './run_existing_node/execute.js';
@@ -27,7 +31,11 @@ export const AGENT_SKILLS = Object.freeze([
   createSampledDatasetNodeSkill,
   createSyntheticDatasetNodeSkill,
   createPromptNodeSkill,
+  addPromptVersionSkill,
   createAndRunReviewNodeSkill,
+  verifyReviewSuggestionsSkill,
+  acceptReviewSuggestionsSkill,
+  applyReviewSuggestionsSkill,
   createRunNodeSkill,
   createScoreNodeSkill,
   runExistingNodeSkill,
