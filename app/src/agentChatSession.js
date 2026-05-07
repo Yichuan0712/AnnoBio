@@ -2,6 +2,7 @@ import { AGENT_TITLE_MAX_CHARS, clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { requestAgentChat, requestAgentPlan, requestSimpleChat } from './agent/api/agentChatClient.js';
 import { AGENT_SKILL_REGISTRY, getAgentSkillByName } from './agent/skills/registry.js';
+import { compactObservationsForPlanner } from './agent/payload/compactObservations.js';
 const API_BASE = BACKEND_API_BASE;
 const CHAT_MAX_MESSAGES = 40;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
@@ -936,7 +937,15 @@ function shouldPreventRepeatedExecution(skillName) {
           }
 
           if (onProgress) onProgress(`Planning round ${roundIndex}...`);
-          const { ok, plan } = await planAgentSkills(messages, workflowSnapshot, observations, loopSignals, roundIndex);
+          const { observations: compactedObservations, stats: compactionStats } = compactObservationsForPlanner(observations);
+          if (compactionStats.superseded > 0 || compactionStats.agedOut > 0) {
+            agentTrace.push(
+              `ROUND ${roundIndex} COMPACT: total=${compactionStats.total} `
+              + `keptFull=${compactionStats.keptFull} superseded=${compactionStats.superseded} `
+              + `agedOut=${compactionStats.agedOut} skipped=${compactionStats.skipped}`
+            );
+          }
+          const { ok, plan } = await planAgentSkills(messages, workflowSnapshot, compactedObservations, loopSignals, roundIndex);
           if (!ok) {
             addLoopSignal(loopSignals, 'Planner request failed');
             agentTrace.push(`ROUND ${roundIndex} PLAN ERROR: planner request failed, answering with current evidence`);
