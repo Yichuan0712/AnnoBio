@@ -137,18 +137,42 @@ function getRunPreview(node) {
   };
 }
 
+function buildScoreMetricsFromComparisonRows(comparisonRows) {
+  const rows = safeArray(comparisonRows);
+  const total = rows.length;
+  if (total === 0) return null;
+  let matched = 0;
+  let unmatched = 0;
+  let gtOnly = 0;
+  for (const row of rows) {
+    if (row?.gt_only === true) gtOnly += 1;
+    if (row?.matched === true) matched += 1;
+    else unmatched += 1;
+  }
+  return {
+    totalRows: total,
+    matchedRows: matched,
+    unmatchedRows: unmatched,
+    gtOnlyRows: gtOnly,
+    passRate: total > 0 ? Number((matched / total).toFixed(4)) : 0,
+  };
+}
+
 function getScorePreview(node) {
   const scoreMapping = typeof node?.scoreMapping === 'string'
     ? parseReviewResult(node.scoreMapping)
     : (node?.scoreMapping ?? null);
   const reviewResult = parseReviewResult(node?.reviewResult);
   const ruleCount = countRules(scoreMapping);
+  const comparisonRows = safeArray(reviewResult?.comparison_rows);
   return {
     scoreGroundTruthId: normalizeNodeId(node?.scoreGroundTruthId),
     reviewCredentialId: normalizeNodeId(node?.reviewCredentialId),
     scoreMapping,
     ruleCount,
     reviewSuggestionCount: safeArray(reviewResult?.suggestions).length,
+    metrics: buildScoreMetricsFromComparisonRows(comparisonRows),
+    comparisonRowCount: comparisonRows.length,
   };
 }
 
@@ -237,6 +261,7 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
 
   if (type === 'prompt') {
     const preview = getPromptPreview(rawNode, options.extractInputFields);
+    const nodeOrigin = String(rawNode?.nodeOrigin || '').trim() || 'user';
     return {
       id,
       type,
@@ -244,6 +269,7 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
       position,
       upstream,
       downstream,
+      nodeOrigin,
       config: {
         note: String(rawNode?.note || ''),
         sections: preview.sections,
@@ -343,6 +369,7 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
   if (type === 'score') {
     const preview = getScorePreview(rawNode);
     const color = resolveLinkedDatasetColor(rawNodeById, preview.scoreGroundTruthId);
+    const nodeOrigin = String(rawNode?.nodeOrigin || '').trim() || 'user';
     return {
       id,
       type,
@@ -351,6 +378,7 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
       color,
       upstream,
       downstream,
+      nodeOrigin,
       config: {
         scoreGroundTruthId: preview.scoreGroundTruthId,
         reviewCredentialId: preview.reviewCredentialId,
@@ -360,10 +388,13 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
         hasGroundTruth: Boolean(preview.scoreGroundTruthId),
         hasScoreMapping: preview.ruleCount > 0,
         hasReviewResult: preview.reviewSuggestionCount > 0,
+        hasMetrics: preview.metrics !== null,
       },
       preview: {
         ruleCount: preview.ruleCount,
         reviewSuggestionCount: preview.reviewSuggestionCount,
+        metrics: preview.metrics,
+        comparisonRowCount: preview.comparisonRowCount,
       },
     };
   }
