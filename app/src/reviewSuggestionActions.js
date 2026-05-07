@@ -200,6 +200,24 @@ export function decideSuggestionAcceptance({
   const suggestionId = String(suggestion?.suggestion_id ?? '').trim();
   const targetRowCount = suggestionTargetScoreRowIndices(suggestion).length;
 
+  if (isVerifyFullPass(verifyResult)) {
+    const verifyRowsForFullPass = Array.isArray(verifyResult?.verifyRows) ? verifyResult.verifyRows : [];
+    const matchedCountForFullPass = Number.isFinite(Number(verifyResult?.matchedCount))
+      ? Number(verifyResult.matchedCount)
+      : countMatchedVerifyRows(verifyRowsForFullPass);
+    const totalForFullPass = Number.isFinite(Number(verifyResult?.total))
+      ? Number(verifyResult.total)
+      : verifyRowsForFullPass.length;
+    return {
+      suggestionId,
+      accept: true,
+      reason: `Accepted (verified): all ${matchedCountForFullPass}/${totalForFullPass} verification rows matched ground truth.`,
+      targetRowCount,
+      matchedCount: matchedCountForFullPass,
+      total: totalForFullPass,
+    };
+  }
+
   if (!suggestionWouldChangePrompt(normalizeSections(originals), suggestion)) {
     return {
       suggestionId,
@@ -241,17 +259,6 @@ export function decideSuggestionAcceptance({
     ? Number(verifyResult.matchedCount)
     : countMatchedVerifyRows(verifyRows);
   const total = Number.isFinite(Number(verifyResult.total)) ? Number(verifyResult.total) : verifyRows.length;
-
-  if (isVerifyFullPass(verifyResult)) {
-    return {
-      suggestionId,
-      accept: true,
-      reason: `Accepted because all ${matchedCount}/${total} verification rows matched ground truth.`,
-      targetRowCount,
-      matchedCount,
-      total,
-    };
-  }
 
   const errorRowCount = verifyRows.reduce((sum, row) => sum + (row?.error ? 1 : 0), 0);
   if (errorRowCount > 0) {
