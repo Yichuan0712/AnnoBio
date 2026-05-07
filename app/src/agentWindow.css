@@ -10,8 +10,8 @@
 
 .agent-window {
   width: min(640px, 92vw);
-  min-width: min(640px, 92vw);
-  max-width: min(640px, 92vw);
+  min-width: min(520px, 92vw);
+  max-width: 92vw;
   height: min(85vh, 98vh);
   max-height: 98vh;
   min-height: 70vh;

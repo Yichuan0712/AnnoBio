@@ -16,6 +16,17 @@ const AGENT_LOOP_STALL_CRITICAL_THRESHOLD = 3;
 const AGENT_RUN_WAIT_HEARTBEAT_MS = 2000;
 const AGENT_RUN_WAIT_MAX_MS = 10 * 60 * 1000;
 const AGENT_RUN_WAIT_STALL_WARNING_MS = 60 * 1000;
+const AGENT_SINGLE_EXECUTION_SKILLS = new Set([
+  'create_prompt_node',
+  'add_prompt_version',
+  'create_run_node',
+  'create_score_node',
+  'create_sampler_node',
+  'create_sampled_dataset_node',
+  'create_synthetic_dataset_node',
+  'create_and_run_review_node',
+  'apply_review_suggestions',
+]);
 
 function sliceChatHistoryForApi(messages) {
   if (!Array.isArray(messages) || messages.length <= CHAT_MAX_MESSAGES) {
@@ -235,12 +246,16 @@ export function mountAgentChatSession({
   addRunNode,
   addScoreNode,
   createAndRunReviewNode,
+  verifyReviewSuggestions,
+  acceptReviewSuggestions,
+  applyReviewSuggestions,
   startRunNode,
   saveRunResultsToWorkspace,
   saveScoreResultsToWorkspace,
   addSamplerNode,
   addSampledDatasetNode,
   addPromptNode,
+  addPromptVersion,
   addDatasetNode,
 }) {
   if (!overlay || !messagesEl || !inputEl || !sendButtonEl) {
@@ -454,6 +469,10 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
     return `${String(observation?.skillName || '').trim()}:${stableStringify(normalizeSkillArgs(observation?.args))}:${stableStringify(observation?.result ?? null)}`;
   }
 
+function shouldPreventRepeatedExecution(skillName) {
+  return AGENT_SINGLE_EXECUTION_SKILLS.has(String(skillName || '').trim());
+}
+
   function buildObservationSummary(skill, skillCall, result, workflowSnapshot) {
     if (skill && typeof skill.summarizeResult === 'function') {
       return String(
@@ -528,12 +547,16 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
           addRunNode,
           addScoreNode,
           createAndRunReviewNode,
+          verifyReviewSuggestions,
+          acceptReviewSuggestions,
+          applyReviewSuggestions,
           startRunNode,
           saveRunResultsToWorkspace,
           saveScoreResultsToWorkspace,
           addSamplerNode,
           addSampledDatasetNode,
           addPromptNode,
+          addPromptVersion,
           addDatasetNode,
           workflowSnapshot,
         },
@@ -946,6 +969,14 @@ function findNodeInSnapshot(workflowSnapshot, nodeId) {
             callCountsByFingerprint.set(callFingerprint, repeatCount);
             if (repeatCount >= AGENT_LOOP_REPEAT_WARNING_THRESHOLD) {
               addLoopSignal(loopSignals, `Repeated skill call detected: ${callFingerprint}`);
+            }
+
+            if (repeatCount >= AGENT_LOOP_REPEAT_WARNING_THRESHOLD && shouldPreventRepeatedExecution(skillCall.skillName)) {
+              const stopSummary = `Prevented repeated create/apply action in the same request: ${callFingerprint}`;
+              addLoopSignal(loopSignals, stopSummary);
+              agentTrace.push(`ROUND ${roundIndex} STOP: ${stopSummary}`);
+              stalledCount = Math.max(stalledCount, AGENT_LOOP_STALL_CRITICAL_THRESHOLD);
+              break;
             }
 
             if (skillCall.skillName === 'create_sampled_dataset_node') {

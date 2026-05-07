@@ -1,3 +1,10 @@
+import {
+  decideSuggestionAcceptance,
+  reviewVerifyStateFromResult,
+  verifyReviewSuggestion,
+} from './reviewSuggestionActions.js';
+import { rebuildWorkingFromApplied } from './reviewWorkingSections.js';
+
 export function createWorkflowCanvasRuntime(deps = {}) {
   const {
     extractInputFieldsFromSections,
@@ -31,6 +38,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     updateEdges,
     syncScoreNodeProgressFromUpstreamRun,
     setRunNodeProgress,
+    setReviewNodeProgress,
     registerPendingRun,
     pendingRuns,
     resolveRunCredentialId,
@@ -53,12 +61,34 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     findUniqueReviewName,
     prepareSampledDatasetFromSampler,
     escapeRegex,
+    markNodeAsAgentCreated,
     emitCanvasChanged,
     emitRunResultsUpdated,
+    emitSaveReviewResult,
+    setNodeCanvasPosition,
   } = deps;
 
   function getConnectionsList() {
     return Array.isArray(getConnections?.()) ? getConnections() : [];
+  }
+
+  function ensureConnection(fromId, toId, type) {
+    const normalizedFromId = String(fromId || '').trim();
+    const normalizedToId = String(toId || '').trim();
+    const normalizedType = String(type || '').trim();
+    if (!normalizedFromId || !normalizedToId || !normalizedType) return false;
+    const exists = getConnectionsList().some(
+      (connection) => connection.fromId === normalizedFromId
+        && connection.toId === normalizedToId
+        && connection.type === normalizedType,
+    );
+    if (exists) return false;
+    getConnectionsList().push({
+      fromId: normalizedFromId,
+      toId: normalizedToId,
+      type: normalizedType,
+    });
+    return true;
   }
 
   function addPromptNode({
@@ -82,6 +112,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       left,
       top,
     });
+    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     updateContentSize();
     updateEdges();
     emitCanvasChanged();
@@ -101,6 +132,186 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       },
       nameWasAdjusted: finalName !== requestedName,
       requestedName,
+    };
+  }
+
+  function addPromptVersion({
+    promptNodeId = '',
+    name = '',
+    note,
+    sections,
+    outputFormat,
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedPromptNodeId = String(promptNodeId || '').trim();
+    if (!normalizedPromptNodeId) {
+      throw new Error('Prompt node id is required.');
+    }
+    const promptNode = getNodeById(normalizedPromptNodeId);
+    if (!promptNode || !promptNode.classList.contains('workflow-node--prompt')) {
+      throw new Error('Prompt node was not found.');
+    }
+
+    const sourcePromptData = getPromptDataFromNode(promptNode) || {};
+    const requestedName = String(name || '').trim()
+      || String(sourcePromptData?.name || '').trim()
+      || 'Prompt';
+    const finalName = ensureUniqueName
+      ? findUniquePromptName(requestedName, true)
+      : requestedName;
+    const resolvedLeft = typeof left === 'number'
+      ? left
+      : (parseFloat(promptNode.style.left) || 0) + (promptNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+    const resolvedTop = typeof top === 'number' ? top : (parseFloat(promptNode.style.top) || 0);
+
+    const created = addPromptNode({
+      name: finalName,
+      note: note != null ? String(note) : String(sourcePromptData?.note || ''),
+      sections: Array.isArray(sections) ? sections : (Array.isArray(sourcePromptData?.sections) ? sourcePromptData.sections : []),
+      outputFormat: outputFormat && typeof outputFormat === 'object'
+        ? outputFormat
+        : (sourcePromptData?.outputFormat && typeof sourcePromptData.outputFormat === 'object'
+          ? sourcePromptData.outputFormat
+          : undefined),
+      left: resolvedLeft,
+      top: resolvedTop,
+      ensureUniqueName: false,
+    });
+
+    if (created?.nodeId && ensureConnection(normalizedPromptNodeId, created.nodeId, 'prompt-to-prompt')) {
+      updateEdges();
+      emitCanvasChanged();
+    }
+
+    return {
+      ...created,
+      sourcePromptNodeId: normalizedPromptNodeId,
+      promptNodeId: created?.nodeId || '',
+      requestedName,
+      nameWasAdjusted: finalName !== requestedName,
+      createdAsVersion: true,
+    };
+  }
+
+  async function applyReviewSuggestions({
+    reviewNodeId = '',
+    scoreNodeId = '',
+    sections,
+    name = '',
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedReviewNodeId = String(reviewNodeId || '').trim();
+    const normalizedScoreNodeId = String(scoreNodeId || '').trim();
+    let refNode = normalizedReviewNodeId ? getNodeById(normalizedReviewNodeId) : null;
+    if (!refNode && normalizedScoreNodeId) {
+      const reviewEdge = getConnectionsList().find(
+        (connection) => connection.fromId === normalizedScoreNodeId && connection.type === 'score-to-prompt-review',
+      );
+      refNode = reviewEdge ? getNodeById(reviewEdge.toId) : null;
+    }
+
+    let scoreNode = null;
+    if (refNode) {
+      const scoreEdge = getConnectionsList().find(
+        (connection) => connection.toId === refNode.dataset.nodeId && connection.type === 'score-to-prompt-review',
+      );
+      scoreNode = scoreEdge ? getNodeById(scoreEdge.fromId) : null;
+    } else if (normalizedScoreNodeId) {
+      scoreNode = getNodeById(normalizedScoreNodeId);
+    }
+
+    let sourcePromptNode = null;
+    let sourcePromptData = null;
+    if (scoreNode) {
+      const runEdge = getConnectionsList().find(
+        (connection) => connection.toId === scoreNode.dataset.nodeId && connection.type === 'run-to-score',
+      );
+      const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+      const promptEdge = runNode
+        ? getConnectionsList().find(
+          (connection) => connection.toId === runNode.dataset.nodeId && connection.type === 'prompt-to-run',
+        )
+        : null;
+      sourcePromptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+      if (sourcePromptNode?.classList?.contains('workflow-node--prompt')) {
+        sourcePromptData = getPromptDataFromNode(sourcePromptNode);
+      }
+    }
+
+    let resolvedSections = Array.isArray(sections)
+      ? sections.map((section) => ({ name: section?.name || '', content: section?.content || '' }))
+      : [];
+    if (resolvedSections.length === 0 && normalizedReviewNodeId) {
+      const reviewNode = getReviewNodeById(normalizedReviewNodeId);
+      const reviewResult = parseReviewResult(reviewNode) || parseReviewResult(scoreNode) || {};
+      resolvedSections = Array.isArray(reviewResult?.workingSections) && reviewResult.workingSections.length > 0
+        ? reviewResult.workingSections.map((section) => ({ name: section?.name || '', content: section?.content || '' }))
+        : (Array.isArray(reviewResult?.promptSections) ? reviewResult.promptSections : [])
+          .map((section) => ({ name: section?.name || '', content: section?.content || '' }));
+    }
+    if (resolvedSections.length === 0) {
+      throw new Error('Review has no prompt sections to apply.');
+    }
+
+    const requestedName = String(name || '').trim()
+      || String(sourcePromptData?.name || '').trim()
+      || 'Prompt (from Review)';
+    const finalName = ensureUniqueName
+      ? findUniquePromptName(requestedName, true)
+      : requestedName;
+
+    const refLeft = refNode ? (parseFloat(refNode.style.left) || 0) : 0;
+    const refWidth = refNode ? (refNode.offsetWidth || 280) : 280;
+    const refTop = refNode ? (parseFloat(refNode.style.top) || 0) : 0;
+    const resolvedLeft = typeof left === 'number' ? left : (refNode ? refLeft + refWidth + NEW_NODE_OFFSET : undefined);
+    const resolvedTop = typeof top === 'number' ? top : (refNode ? refTop : undefined);
+
+    const created = addPromptNode({
+      name: finalName,
+      note: 'Exported from Review.',
+      sections: resolvedSections,
+      outputFormat: sourcePromptData?.outputFormat || undefined,
+      left: resolvedLeft,
+      top: resolvedTop,
+      ensureUniqueName: false,
+    });
+    const newNode = created?.nodeId ? getNodeById(created.nodeId) : null;
+
+    let connectionChanged = false;
+    if (sourcePromptNode?.dataset?.nodeId && newNode?.dataset?.nodeId) {
+      connectionChanged = ensureConnection(sourcePromptNode.dataset.nodeId, newNode.dataset.nodeId, 'prompt-to-prompt') || connectionChanged;
+    }
+
+    if (refNode && newNode?.dataset?.nodeId) {
+      const refHeight = refNode.offsetHeight || 80;
+      const newHeight = newNode.offsetHeight || 80;
+      if (typeof setNodeCanvasPosition === 'function') {
+        setNodeCanvasPosition(
+          newNode,
+          parseFloat(newNode.style.left) || 0,
+          refTop + refHeight / 2 - newHeight / 2,
+        );
+      }
+      connectionChanged = ensureConnection(refNode.dataset.nodeId, newNode.dataset.nodeId, 'prompt-review-to-prompt') || connectionChanged;
+    }
+
+    if (connectionChanged) {
+      updateEdges();
+      updateContentSize();
+      emitCanvasChanged();
+    }
+
+    return {
+      ...created,
+      reviewNodeId: normalizedReviewNodeId,
+      scoreNodeId: String(scoreNode?.dataset?.nodeId || normalizedScoreNodeId).trim(),
+      sourcePromptNodeId: String(sourcePromptNode?.dataset?.nodeId || '').trim(),
+      sections: resolvedSections,
+      applied: true,
     };
   }
 
@@ -174,6 +385,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       top: resolvedTop,
       title: finalName,
     });
+    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     if (node?.dataset) {
       node.dataset.runName = finalName;
       node.dataset.runWorkingSetId = normalizedWorkingSetId;
@@ -740,6 +952,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       top: resolvedTop,
       title: requestedName,
     });
+    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(scoreNode);
     if (scoreNode?.dataset) {
       scoreNode.dataset.scoreGroundTruthId = normalizedGroundTruthNodeId;
       scoreNode.dataset.scoreMapping = serializeScoreMappingBundle(inputRoot, outputRoot);
@@ -900,6 +1113,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       top: resolvedTop,
       title: finalName,
     });
+    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(promptReviewNode);
     if (promptReviewNode?.dataset?.nodeId) {
       promptReviewNode.dataset.promptReviewName = finalName;
       getConnectionsList().push({
@@ -986,6 +1200,304 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     };
   }
 
+  function getReviewNodeById(reviewNodeId) {
+    const normalizedReviewNodeId = String(reviewNodeId || '').trim();
+    if (!normalizedReviewNodeId) {
+      throw new Error('Review node id is required.');
+    }
+    const reviewNode = getNodeById(normalizedReviewNodeId);
+    if (!reviewNode || !reviewNode.classList.contains('workflow-node--prompt-review')) {
+      throw new Error('Review node was not found.');
+    }
+    return reviewNode;
+  }
+
+  function getReviewContext(reviewNodeId) {
+    const reviewNode = getReviewNodeById(reviewNodeId);
+    const connections = getConnectionsList();
+    const scoreEdge = connections.find((connection) => connection.toId === reviewNode.dataset.nodeId && connection.type === 'score-to-prompt-review');
+    const scoreNode = scoreEdge ? getNodeById(scoreEdge.fromId) : null;
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
+      throw new Error('Review node is not connected to an upstream score node.');
+    }
+    const runEdge = connections.find((connection) => connection.toId === scoreNode.dataset.nodeId && connection.type === 'run-to-score');
+    const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+    if (!runNode || !runNode.classList.contains('workflow-node--run')) {
+      throw new Error('Score node is not connected to an upstream run.');
+    }
+    const promptEdge = connections.find((connection) => connection.toId === runNode.dataset.nodeId && connection.type === 'prompt-to-run');
+    const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+    if (!promptNode || !promptNode.classList.contains('workflow-node--prompt')) {
+      throw new Error('Run node is not connected to an upstream prompt.');
+    }
+    return { reviewNode, scoreNode, runNode, promptNode };
+  }
+
+  function parseReviewResult(node) {
+    if (!node) return null;
+    try {
+      const raw = String(node.dataset.reviewResult || '').trim();
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function persistReviewResult({ reviewNode, scoreNode, reviewResult }) {
+    if (!reviewNode || !reviewResult || typeof reviewResult !== 'object') return;
+    const reviewNodeId = String(reviewNode?.dataset?.nodeId || '').trim();
+    if (reviewNodeId && typeof emitSaveReviewResult === 'function') {
+      emitSaveReviewResult({
+        reviewNodeId,
+        data: reviewResult,
+      });
+      return;
+    }
+    const serialized = JSON.stringify(reviewResult);
+    reviewNode.dataset.reviewResult = serialized;
+    if (scoreNode?.dataset) {
+      scoreNode.dataset.reviewResult = serialized;
+    }
+    if (reviewResult.reviewProgress != null) {
+      setReviewNodeProgress(reviewNode, reviewResult.reviewProgress);
+    }
+    emitCanvasChanged();
+  }
+
+  async function buildReviewVerificationPayload(reviewNodeId) {
+    const { reviewNode, scoreNode, runNode, promptNode } = getReviewContext(reviewNodeId);
+    let promptSections = [];
+    try {
+      promptSections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+    } catch (_) {}
+    if (!Array.isArray(promptSections) || promptSections.length === 0) {
+      throw new Error('Upstream prompt must include at least one section.');
+    }
+
+    let outputFields = [];
+    try {
+      outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
+      if (!Array.isArray(outputFields)) outputFields = [];
+    } catch (_) {}
+    if (outputFields.length === 0) {
+      let runResults = [];
+      let schemaFields = [];
+      try {
+        runResults = JSON.parse(runNode.dataset.runResults || '[]');
+        if (!Array.isArray(runResults)) runResults = [];
+      } catch (_) {}
+      try {
+        schemaFields = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
+        if (!Array.isArray(schemaFields)) schemaFields = [];
+      } catch (_) {}
+      outputFields = deriveOutputFields(runResults, schemaFields);
+    }
+
+    let outputSchema = null;
+    try {
+      const raw = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
+      const fields = (Array.isArray(raw) ? raw : []).map((field) => ({
+        key: field.key || '',
+        type: field.type || 'str',
+        description: field.description,
+        allow_none: field.allowNone === true || field.allow_none === true,
+      })).filter((field) => (field.key || '').trim());
+      if (fields.length > 0) {
+        outputSchema = {
+          return_shape: promptNode.dataset.promptOutputReturnShape || 'single',
+          fields,
+        };
+      }
+    } catch (_) {}
+
+    const runCredentialId = await resolveRunCredentialId(runNode);
+    const runWorkingSetId = String(runNode.dataset.runWorkingSetId || '').trim();
+    const groundTruthNodeId = String(scoreNode.dataset.scoreGroundTruthId || '').trim();
+    const runWs = runWorkingSetId ? (datasetContentByNodeId.get(runWorkingSetId) || { headers: [], rows: [] }) : { headers: [], rows: [] };
+    const gtContent = groundTruthNodeId ? (datasetContentByNodeId.get(groundTruthNodeId) || { headers: [], rows: [] }) : { headers: [], rows: [] };
+
+    const saved = parseReviewResult(reviewNode) || parseReviewResult(scoreNode) || {};
+    const comparisonRows = Array.isArray(saved?.comparison_rows) && saved.comparison_rows.length > 0
+      ? saved.comparison_rows
+      : await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections);
+
+    return {
+      reviewNode,
+      scoreNode,
+      runNode,
+      promptNode,
+      originals: Array.isArray(saved?.promptSections) && saved.promptSections.length > 0
+        ? saved.promptSections.map((section) => ({ name: section?.name || '', content: section?.content || '' }))
+        : promptSections.map((section) => ({ name: section?.name || '', content: section?.content || '' })),
+      reviewResult: {
+        ...saved,
+        promptSections: Array.isArray(saved?.promptSections) && saved.promptSections.length > 0
+          ? saved.promptSections
+          : promptSections.map((section) => ({ name: section?.name || '', content: section?.content || '' })),
+        workingSections: Array.isArray(saved?.workingSections) && saved.workingSections.length > 0
+          ? saved.workingSections.map((section) => ({ name: section?.name || '', content: section?.content || '' }))
+          : promptSections.map((section) => ({ name: section?.name || '', content: section?.content || '' })),
+        suggestions: Array.isArray(saved?.suggestions) ? saved.suggestions.map((suggestion) => ({ ...suggestion })) : [],
+        verify_states: saved?.verify_states && typeof saved.verify_states === 'object' ? { ...saved.verify_states } : {},
+        verify_results: saved?.verify_results && typeof saved.verify_results === 'object' ? { ...saved.verify_results } : {},
+        comparison_rows: comparisonRows,
+      },
+      verificationPayload: {
+        run_credential_id: runCredentialId,
+        output_schema: outputSchema,
+        score_mapping: scoreNode.dataset.scoreMapping || '{}',
+        output_fields: outputFields,
+        runWs,
+        gtContent,
+      },
+    };
+  }
+
+  async function verifyReviewSuggestions({
+    reviewNodeId = '',
+    suggestionIds = [],
+  } = {}) {
+    const {
+      reviewNode,
+      scoreNode,
+      reviewResult,
+      originals,
+      verificationPayload,
+    } = await buildReviewVerificationPayload(reviewNodeId);
+    const normalizedSuggestionIds = Array.isArray(suggestionIds)
+      ? suggestionIds.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const limitToIds = normalizedSuggestionIds.length > 0 ? new Set(normalizedSuggestionIds) : null;
+    const suggestions = Array.isArray(reviewResult.suggestions) ? reviewResult.suggestions : [];
+    if (suggestions.length === 0) {
+      throw new Error('Review node has no suggestions to verify.');
+    }
+
+    const verifiedSuggestions = [];
+    const skippedSuggestions = [];
+    for (const suggestion of suggestions) {
+      const suggestionId = String(suggestion?.suggestion_id ?? '').trim();
+      if (!suggestionId) continue;
+      if (limitToIds && !limitToIds.has(suggestionId)) continue;
+      if (String(suggestion?.source || '').toLowerCase() === 'assistant') {
+        skippedSuggestions.push({
+          suggestionId,
+          reason: 'Assistant-authored suggestions are skipped by verification.',
+        });
+        continue;
+      }
+      const existingVerifyState = String(reviewResult.verify_states?.[suggestionId] || '').trim();
+      const existingVerifyResult = reviewResult.verify_results?.[suggestionId] || null;
+      const hasReusableVerifyResult =
+        existingVerifyState
+        && existingVerifyState !== 'idle'
+        && existingVerifyState !== 'verifying'
+        && existingVerifyState !== 'optimizing'
+        && existingVerifyResult
+        && typeof existingVerifyResult === 'object';
+      if (hasReusableVerifyResult) {
+        skippedSuggestions.push({
+          suggestionId,
+          reason: `Suggestion already has verify state "${existingVerifyState}".`,
+          status: existingVerifyState,
+          verifyResult: existingVerifyResult,
+        });
+        continue;
+      }
+      const verifyResult = await verifyReviewSuggestion({
+        suggestion,
+        originals,
+        comparisonRows: reviewResult.comparison_rows,
+        reviewPayload: verificationPayload,
+        apiBase: RUN_API_BASE,
+      });
+      reviewResult.verify_states[suggestionId] = reviewVerifyStateFromResult(verifyResult);
+      reviewResult.verify_results[suggestionId] = verifyResult;
+      verifiedSuggestions.push({
+        suggestionId,
+        status: reviewResult.verify_states[suggestionId],
+        verifyResult,
+      });
+    }
+
+    persistReviewResult({ reviewNode, scoreNode, reviewResult });
+
+    const fullyVerifiedCount = verifiedSuggestions.reduce(
+      (sum, item) => sum + (item.status === 'verified' ? 1 : 0),
+      0,
+    );
+    return {
+      reviewNodeId: String(reviewNode.dataset.nodeId || '').trim(),
+      verifiedCount: verifiedSuggestions.length,
+      fullyVerifiedCount,
+      partialOrFailedCount: Math.max(0, verifiedSuggestions.length - fullyVerifiedCount),
+      skippedCount: skippedSuggestions.length,
+      verifiedSuggestions,
+      skippedSuggestions,
+    };
+  }
+
+  async function acceptReviewSuggestions({
+    reviewNodeId = '',
+    suggestionIds = [],
+  } = {}) {
+    const {
+      reviewNode,
+      scoreNode,
+      reviewResult,
+      originals,
+    } = await buildReviewVerificationPayload(reviewNodeId);
+    const normalizedSuggestionIds = Array.isArray(suggestionIds)
+      ? suggestionIds.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const limitToIds = normalizedSuggestionIds.length > 0 ? new Set(normalizedSuggestionIds) : null;
+    const suggestions = Array.isArray(reviewResult.suggestions) ? reviewResult.suggestions : [];
+    if (suggestions.length === 0) {
+      throw new Error('Review node has no suggestions to accept.');
+    }
+
+    const decisions = [];
+    for (const suggestion of suggestions) {
+      const suggestionId = String(suggestion?.suggestion_id ?? '').trim();
+      if (!suggestionId) continue;
+      if (limitToIds && !limitToIds.has(suggestionId)) continue;
+      const verifyResult = reviewResult.verify_results?.[suggestionId] || null;
+      const decision = decideSuggestionAcceptance({
+        suggestion,
+        verifyResult,
+        originals,
+      });
+      suggestion.applied = decision.accept === true;
+      decisions.push({
+        ...decision,
+        status: reviewResult.verify_states?.[suggestionId] || 'idle',
+      });
+    }
+
+    const nextWorkingSections = rebuildWorkingFromApplied(originals, suggestions);
+    if (nextWorkingSections && nextWorkingSections.length > 0) {
+      reviewResult.workingSections = nextWorkingSections.map((section) => ({
+        name: section?.name || '',
+        content: section?.content || '',
+      }));
+    }
+    reviewResult.suggestions = suggestions.map((suggestion) => ({
+      ...suggestion,
+      applied: suggestion?.applied === true,
+    }));
+    persistReviewResult({ reviewNode, scoreNode, reviewResult });
+
+    return {
+      reviewNodeId: String(reviewNode.dataset.nodeId || '').trim(),
+      acceptedCount: decisions.reduce((sum, decision) => sum + (decision.accept ? 1 : 0), 0),
+      rejectedCount: decisions.reduce((sum, decision) => sum + (!decision.accept ? 1 : 0), 0),
+      acceptedSuggestionIds: decisions.filter((decision) => decision.accept).map((decision) => decision.suggestionId),
+      rejectedSuggestionIds: decisions.filter((decision) => !decision.accept).map((decision) => decision.suggestionId),
+      decisions,
+      workingSections: Array.isArray(reviewResult.workingSections) ? reviewResult.workingSections.slice() : [],
+    };
+  }
+
   function addDatasetNode({
     name = '',
     notes = '',
@@ -1011,6 +1523,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       headers: Array.isArray(headers) ? headers.map((header) => String(header == null ? '' : header)) : [],
       rows: Array.isArray(rows) ? rows.map((row) => (Array.isArray(row) ? row.map((cell) => String(cell == null ? '' : cell)) : [])) : [],
     });
+    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     updateContentSize();
     updateEdges();
     emitCanvasChanged();
@@ -1072,6 +1585,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       sampleSize,
       rowSpec,
     });
+    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     if (node?.dataset?.nodeId) {
       getConnectionsList().push({
         fromId: normalizedSourceNodeId,
@@ -1148,6 +1662,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
   return {
     addPromptNode,
+    addPromptVersion,
     addRunNode,
     startRunNode,
     saveRunResultsToWorkspace,
@@ -1155,6 +1670,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     addScoreNode,
     addPromptReviewNode,
     createAndRunReviewNode,
+    verifyReviewSuggestions,
+    acceptReviewSuggestions,
+    applyReviewSuggestions,
     addDatasetNode,
     addSamplerNode,
     addSampledDatasetNode,
