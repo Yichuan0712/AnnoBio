@@ -222,6 +222,30 @@
   overflow-wrap: anywhere;
 }
 
+.agent-window__reasoning {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.agent-window__reasoning summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-window__reasoning-body {
+  margin: 8px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .agent-window__message-editor {
   width: 100%;
   min-height: 74px;
