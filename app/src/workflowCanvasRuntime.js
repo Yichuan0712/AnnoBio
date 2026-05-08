@@ -1110,21 +1110,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
   }
 
-  function clearReviewResultOnNode(node) {
-    if (!node || !node.dataset) return false;
-    let cleared = false;
-    if (node.dataset.reviewResult) {
-      delete node.dataset.reviewResult;
-      cleared = true;
-    }
-    if (node.classList && node.classList.contains('workflow-node--prompt-review')) {
-      if (typeof setReviewNodeProgress === 'function') {
-        try { setReviewNodeProgress(node, 0); } catch (_) { /* ignore */ }
-      }
-    }
-    return cleared;
-  }
-
   function updateScoreNode({
     scoreNodeId = '',
     edits,
@@ -1184,25 +1169,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
     scoreNode.dataset.scoreMapping = serializeScoreMappingBundle(nextInputRoot, nextOutputRoot);
 
-    let invalidatedScoreReviewMirror = false;
-    if (scoreNode.dataset.reviewResult) {
-      delete scoreNode.dataset.reviewResult;
-      invalidatedScoreReviewMirror = true;
-    }
-
-    const connections = getConnectionsList();
-    const downstreamReviewIds = connections
-      .filter((c) => c.fromId === normalizedScoreNodeId && c.type === 'score-to-prompt-review')
-      .map((c) => String(c.toId || '').trim())
-      .filter(Boolean);
-    const invalidatedReviewNodeIds = [];
-    for (const reviewNodeId of downstreamReviewIds) {
-      const reviewNode = getNodeById(reviewNodeId);
-      if (!reviewNode) continue;
-      const cleared = clearReviewResultOnNode(reviewNode);
-      if (cleared) invalidatedReviewNodeIds.push(reviewNodeId);
-    }
-
     updateEdges();
     emitCanvasChanged();
 
@@ -1215,10 +1181,158 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       outputRuleCount: flattenScoreRules(nextOutputRoot).length,
       scoreMapping: JSON.parse(serializeScoreMappingBundle(nextInputRoot, nextOutputRoot)),
       invalidated: {
-        scoreComparisonRows: invalidatedScoreReviewMirror,
-        downstreamReviewNodeIds: invalidatedReviewNodeIds,
+        scoreComparisonRows: false,
+        downstreamReviewNodeIds: [],
       },
       editWarnings,
+    };
+  }
+
+  function getScoreComparisonContext(scoreNode) {
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return null;
+    const connections = getConnectionsList();
+    const runEdge = connections.find(
+      (c) => c.toId === scoreNode.dataset.nodeId && c.type === 'run-to-score',
+    );
+    const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+    if (!runNode || !runNode.classList.contains('workflow-node--run')) return null;
+    const promptEdge = connections.find(
+      (c) => c.toId === runNode.dataset.nodeId && c.type === 'prompt-to-run',
+    );
+    const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+    if (!promptNode || !promptNode.classList.contains('workflow-node--prompt')) return null;
+    let sections = [];
+    try {
+      sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+    } catch (_) {}
+    if (!Array.isArray(sections) || sections.length === 0) return null;
+    return { runNode, sections };
+  }
+
+  function normalizeScoreRowSelectionKey(key) {
+    return String(key ?? '').trim();
+  }
+
+  function isLikelyScoreRowSelectionKey(key) {
+    const k = normalizeScoreRowSelectionKey(key);
+    if (!k) return false;
+    if (/^\d+$/.test(k)) return true;
+    if (/^run:\d+$/.test(k)) return true;
+    return false;
+  }
+
+  /**
+   * Merge row inclusion/exclusion for Score Review + metrics (scoreRowExcludedFromScoring).
+   * Only agent-created score nodes are editable here.
+   */
+  async function updateScoreRowSelection(options = {}) {
+    const {
+      scoreNodeId = '',
+      exclude_row_keys,
+      excludeRowKeys,
+      include_row_keys,
+      includeRowKeys,
+    } = options || {};
+    const idArg = String(scoreNodeId || '').trim();
+    if (!idArg) {
+      throw new Error('Score node id is required.');
+    }
+    const scoreNode = getNodeById(idArg);
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
+      throw new Error('Score node was not found.');
+    }
+    if (scoreNode.dataset.nodeOrigin !== 'agent') {
+      throw buildEditError(
+        `update_score_row_selection refused: score node ${idArg} was not created by the agent. Ask the user to change row selection in the Score detail UI.`,
+        { reason: 'not_agent_created', score_node_id: idArg },
+      );
+    }
+
+    const excludeList = Array.isArray(exclude_row_keys)
+      ? exclude_row_keys
+      : (Array.isArray(excludeRowKeys) ? excludeRowKeys : []);
+    const includeList = Array.isArray(include_row_keys)
+      ? include_row_keys
+      : (Array.isArray(includeRowKeys) ? includeRowKeys : []);
+
+    if (excludeList.length === 0 && includeList.length === 0) {
+      throw buildEditError(
+        'update_score_row_selection requires at least one key in exclude_row_keys or include_row_keys.',
+        { reason: 'no_row_keys' },
+      );
+    }
+
+    let excluded = {};
+    try {
+      const raw = String(scoreNode.dataset.scoreRowExcludedFromScoring || '').trim();
+      excluded = raw ? JSON.parse(raw) : {};
+      if (!excluded || typeof excluded !== 'object' || Array.isArray(excluded)) excluded = {};
+    } catch (_) {
+      excluded = {};
+    }
+
+    const invalidKeys = [];
+    let validOps = 0;
+
+    for (const k of includeList) {
+      const key = normalizeScoreRowSelectionKey(k);
+      if (!key) continue;
+      if (!isLikelyScoreRowSelectionKey(key)) {
+        invalidKeys.push(key);
+        continue;
+      }
+      delete excluded[key];
+      validOps += 1;
+    }
+    for (const k of excludeList) {
+      const key = normalizeScoreRowSelectionKey(k);
+      if (!key) continue;
+      if (!isLikelyScoreRowSelectionKey(key)) {
+        invalidKeys.push(key);
+        continue;
+      }
+      excluded[key] = true;
+      validOps += 1;
+    }
+
+    const hadNonEmptyKey = [...excludeList, ...includeList].some((k) => normalizeScoreRowSelectionKey(k));
+    if (hadNonEmptyKey && validOps === 0) {
+      throw buildEditError(
+        'update_score_row_selection: no valid row keys (use "0","1",… for GT rows or "run:3" for run-only).',
+        { reason: 'all_row_keys_invalid', invalid_row_keys: [...new Set(invalidKeys)] },
+      );
+    }
+
+    scoreNode.dataset.scoreRowExcludedFromScoring = JSON.stringify(excluded);
+    updateEdges();
+    emitCanvasChanged();
+
+    let comparisonRowCountIncluded = null;
+    const ctx = getScoreComparisonContext(scoreNode);
+    if (ctx) {
+      try {
+        const rows = await buildReviewComparisonRows(
+          scoreNode,
+          ctx.runNode,
+          datasetContentByNodeId,
+          ctx.sections,
+        );
+        comparisonRowCountIncluded = Array.isArray(rows) ? rows.length : 0;
+      } catch (_) {
+        comparisonRowCountIncluded = null;
+      }
+    }
+
+    return {
+      updated: true,
+      scoreNodeId: idArg,
+      scoreRowExcludedFromScoring: excluded,
+      excludedRowKeyCount: Object.keys(excluded).filter((k) => excluded[k]).length,
+      comparison_row_count_included: comparisonRowCountIncluded,
+      invalid_row_keys: [...new Set(invalidKeys)],
+      hint: invalidKeys.length > 0
+        ? 'Some keys were skipped as invalid; valid keys were applied. Confirm with the user if needed. Then inspect_node for refreshed metrics.'
+        : 'Call inspect_node on this score for refreshed metrics; Review uses only included rows.',
     };
   }
 
@@ -1896,6 +2010,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     saveScoreResultsToWorkspace,
     addScoreNode,
     updateScoreNode,
+    updateScoreRowSelection,
     addPromptReviewNode,
     createAndRunReviewNode,
     verifyReviewSuggestions,

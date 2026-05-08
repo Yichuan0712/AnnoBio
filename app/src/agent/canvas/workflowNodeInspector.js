@@ -1,3 +1,5 @@
+import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
+
 function normalizeNodeId(value) {
   return String(value || '').trim();
 }
@@ -335,13 +337,14 @@ function buildScoreMetrics(comparisonRows) {
     if (row?.matched === true) matched += 1;
     else unmatched += 1;
   }
-  return {
+  const base = {
     totalRows: total,
     matchedRows: matched,
     unmatchedRows: unmatched,
     gtOnlyRows: gtOnly,
     passRate: total > 0 ? Number((matched / total).toFixed(4)) : 0,
   };
+  return mergeScoreMetricsWithPrf(base, rows);
 }
 
 function summarizeVerifyRows(verifyRows, maxRows = 8) {
@@ -530,6 +533,27 @@ function inspectPromptReviewNode(rawNode, canvasState, options = {}) {
     addDiagnostic(result.diagnostics, 'info', 'review.no_result', 'This review node has no saved review result.');
   }
   return result;
+}
+
+/**
+ * Merge live or precomputed comparison_rows into an existing score inspect result (same shape as inspectScoreNode).
+ */
+export function enrichInspectScoreResultWithComparisonRows(inspectResult, comparisonRows, options = {}) {
+  if (!inspectResult || inspectResult.found === false || !inspectResult.details) return inspectResult;
+  const rows = safeArray(comparisonRows);
+  if (rows.length === 0) return inspectResult;
+  const comparisonWindow = buildRowWindow(rows, {
+    startRow: options?.startRow ?? options?.start_row,
+    maxRows: options?.maxRows ?? options?.max_rows,
+  }, 5);
+  inspectResult.details.metrics = buildFullScoreMetricsFromComparisonRows(rows);
+  inspectResult.details.comparisonRowCount = rows.length;
+  inspectResult.details.comparisonRowWindow = comparisonWindow.window;
+  inspectResult.details.comparisonRows = comparisonWindow.items.map((row) => summarizeComparisonRow(row)).filter(Boolean);
+  inspectResult.details.comparisonRowsLive = true;
+  const idx = inspectResult.diagnostics.findIndex((d) => d.code === 'score.no_comparison_rows');
+  if (idx >= 0) inspectResult.diagnostics.splice(idx, 1);
+  return inspectResult;
 }
 
 export function inspectWorkflowNode(canvasState, nodeId, options = {}) {

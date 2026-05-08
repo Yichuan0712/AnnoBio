@@ -1,4 +1,5 @@
 import { DATASET_BORDER_COLORS } from '../../workflowNodeColors.js';
+import { mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 
 function normalizeNodeId(value) {
   return String(value || '').trim();
@@ -149,13 +150,14 @@ function buildScoreMetricsFromComparisonRows(comparisonRows) {
     if (row?.matched === true) matched += 1;
     else unmatched += 1;
   }
-  return {
+  const base = {
     totalRows: total,
     matchedRows: matched,
     unmatchedRows: unmatched,
     gtOnlyRows: gtOnly,
     passRate: total > 0 ? Number((matched / total).toFixed(4)) : 0,
   };
+  return mergeScoreMetricsWithPrf(base, rows);
 }
 
 function getScorePreview(node) {
@@ -383,6 +385,10 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
         scoreGroundTruthId: preview.scoreGroundTruthId,
         reviewCredentialId: preview.reviewCredentialId,
         scoreMapping: preview.scoreMapping,
+        scoreRowExcludedFromScoring:
+          rawNode?.scoreRowExcludedFromScoring && typeof rawNode.scoreRowExcludedFromScoring === 'object'
+            ? rawNode.scoreRowExcludedFromScoring
+            : undefined,
       },
       status: {
         hasGroundTruth: Boolean(preview.scoreGroundTruthId),

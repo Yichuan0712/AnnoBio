@@ -4,7 +4,7 @@ export const updateScoreNodeMeta = Object.freeze({
     'Surgically update the matching rules of an EXISTING score node that the agent created.',
     'Use this when an agent-created score node has a wrong rule (e.g. missing match flag, wrong gtColumns, redundant input rule). Do NOT use this on score nodes the user created — those are not editable by the agent and you must ask the user to fix them in the score detail UI.',
     'Changes are expressed as a list of small ops in `edits`; you cannot replace the whole mapping.',
-    'Side effects: after a successful update, the score node\'s comparison_rows and any directly-connected promptReview node\'s reviewResult are wiped. You must rerun the score / review (e.g. via create_and_run_review_node) to regenerate evaluation data — the previous review suggestions and verifyResults no longer reflect the new mapping.',
+    'Side effects: this skill only updates scoreMapping. It does not clear reviewResult on the score node or on any prompt-review node. Rerun score/review in the UI when you need evaluation data that strictly reflects the new mapping.',
     'Strict locator: each rule is identified by (tree, outputKey, gtColumns) and must match exactly one rule. If you get old_text_ambiguous-style errors with match_count >= 2, refine gtColumns until the rule is unique.',
   ].join('\n'),
   input_schema: {
