@@ -1,6 +1,25 @@
 import { DATASET_BORDER_COLORS } from '../../workflowNodeColors.js';
 import { mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 
+/** Nodes that participate in agent workflow layout metrics (excluding dataset/sampler). */
+export const WORKFLOW_LAYOUT_NODE_TYPES = Object.freeze([
+  'prompt',
+  'run',
+  'score',
+  'promptReview',
+]);
+const WORKFLOW_LAYOUT_NODE_TYPE_SET = new Set(WORKFLOW_LAYOUT_NODE_TYPES);
+
+/** Edge types used only for workflow layout metrics (topology depth + components). */
+export const WORKFLOW_LAYOUT_EDGE_TYPES = Object.freeze([
+  'prompt-to-prompt',
+  'prompt-to-run',
+  'run-to-score',
+  'score-to-prompt-review',
+  'prompt-review-to-prompt',
+]);
+const WORKFLOW_LAYOUT_EDGE_TYPE_SET = new Set(WORKFLOW_LAYOUT_EDGE_TYPES);
+
 function normalizeNodeId(value) {
   return String(value || '').trim();
 }
@@ -441,7 +460,133 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
   };
 }
 
-function buildSummary(nodes, connections) {
+/**
+ * Subgraph workflow metrics:
+ * - workflowComponentIndex: 1-based undirected weakly-connected component among layout nodes & edges only.
+ * - workflowTopologyDepth: longest directed path ending at node (DAG assumed; isolated nodes depth 0).
+ */
+export function computeWorkflowLayoutMetrics(nodes, connections = []) {
+  const typeById = new Map(
+    safeArray(nodes).map((n) => [normalizeNodeId(n?.id), String(n?.type || '').trim()]),
+  );
+
+  const layoutVertices = [...typeById.entries()]
+    .filter(([, ty]) => WORKFLOW_LAYOUT_NODE_TYPE_SET.has(ty))
+    .map(([id]) => id)
+    .sort((a, b) => String(a).localeCompare(String(b)));
+
+  const layoutVertexSet = new Set(layoutVertices);
+
+  /** @type {{ fromId: string, toId: string }[]} */
+  const layoutEdges = [];
+  for (const connection of safeArray(connections)) {
+    const edgeType = String(connection?.type || '').trim();
+    if (!WORKFLOW_LAYOUT_EDGE_TYPE_SET.has(edgeType)) continue;
+    const fromId = normalizeNodeId(connection?.fromId);
+    const toId = normalizeNodeId(connection?.toId);
+    if (!fromId || !toId) continue;
+    if (!layoutVertexSet.has(fromId)) continue;
+    if (!layoutVertexSet.has(toId)) continue;
+    layoutEdges.push({ fromId, toId });
+  }
+
+  /** @type Map<string, Set<string>> */
+  const undirected = new Map();
+  for (const id of layoutVertices) undirected.set(id, new Set());
+  for (const { fromId, toId } of layoutEdges) {
+    undirected.get(fromId).add(toId);
+    undirected.get(toId).add(fromId);
+  }
+
+  /** @type string[][] */
+  const componentsSorted = [];
+  const visitedCc = new Set();
+  for (const startId of layoutVertices) {
+    if (visitedCc.has(startId)) continue;
+    const stack = [startId];
+    visitedCc.add(startId);
+    const comp = [];
+    while (stack.length) {
+      const x = stack.pop();
+      comp.push(x);
+      for (const nei of [...(undirected.get(x) ?? new Set())]) {
+        if (!visitedCc.has(nei)) {
+          visitedCc.add(nei);
+          stack.push(nei);
+        }
+      }
+    }
+    comp.sort((a, b) => String(a).localeCompare(String(b)));
+    componentsSorted.push(comp);
+  }
+  componentsSorted.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+
+  /** @type Map<string, number> */
+  const componentIndexById = new Map();
+  componentsSorted.forEach((comp, i) => {
+    const idx = i + 1;
+    comp.forEach((id) => componentIndexById.set(id, idx));
+  });
+
+  /** @type Map<string, string[]> predecessors for directed depth */
+  const predecessors = new Map();
+  layoutVertices.forEach((id) => predecessors.set(id, []));
+
+  for (const { fromId, toId } of layoutEdges) {
+    predecessors.get(toId)?.push(fromId);
+  }
+
+  const depthMemo = new Map();
+  const depthVisiting = new Set();
+
+  function longestPathInto(vertexId) {
+    if (depthMemo.has(vertexId)) return depthMemo.get(vertexId);
+    if (depthVisiting.has(vertexId)) {
+      return 0;
+    }
+    depthVisiting.add(vertexId);
+    let mx = 0;
+    const preds = predecessors.get(vertexId) || [];
+    for (const pred of preds) {
+      if (!layoutVertexSet.has(pred)) continue;
+      mx = Math.max(mx, longestPathInto(pred) + 1);
+    }
+    depthVisiting.delete(vertexId);
+    depthMemo.set(vertexId, mx);
+    return mx;
+  }
+
+  /** @type Map<string, number> */
+  const topologyDepthById = new Map();
+  for (const id of layoutVertices) {
+    topologyDepthById.set(id, longestPathInto(id));
+  }
+
+  return {
+    componentIndexById,
+    topologyDepthById,
+    workflowComponentCount: componentsSorted.length,
+    layoutVertices,
+    layoutEdgeCount: layoutEdges.length,
+  };
+}
+
+function applyWorkflowLayoutFields(nodes, metrics) {
+  const { componentIndexById, topologyDepthById } = metrics || {};
+  for (const node of safeArray(nodes)) {
+    const t = String(node?.type || '').trim();
+    if (!WORKFLOW_LAYOUT_NODE_TYPE_SET.has(t)) {
+      node.workflowComponentIndex = null;
+      node.workflowTopologyDepth = null;
+      continue;
+    }
+    const nid = normalizeNodeId(node?.id);
+    node.workflowComponentIndex = componentIndexById?.has(nid) ? componentIndexById.get(nid) : null;
+    node.workflowTopologyDepth = topologyDepthById?.has(nid) ? topologyDepthById.get(nid) : null;
+  }
+}
+
+function buildSummary(nodes, connections, layoutExtras = {}) {
   const countsByType = {};
   for (const node of safeArray(nodes)) {
     const type = String(node?.type || 'unknown');
@@ -465,6 +610,7 @@ function buildSummary(nodes, connections) {
     runnableRunNodeIds,
     reviewableScoreNodeIds,
     chains: buildChains(nodes, connections),
+    ...layoutExtras,
   };
 }
 
@@ -486,6 +632,13 @@ export function buildWorkflowSnapshot(canvasState, options = {}) {
 
   const adjacency = buildAdjacency(connections);
   const nodes = nodesRaw.map((node) => buildNodeSnapshot(node, adjacency, normalizedOptions, rawNodeById));
+  const layoutMetrics = computeWorkflowLayoutMetrics(nodes, connections);
+  applyWorkflowLayoutFields(nodes, layoutMetrics);
+
+  const summary = buildSummary(nodes, connections, {
+    workflowComponentCount: layoutMetrics.workflowComponentCount,
+    workflowLayoutEdgeCount: layoutMetrics.layoutEdgeCount,
+  });
 
   return {
     version: 1,
@@ -494,6 +647,6 @@ export function buildWorkflowSnapshot(canvasState, options = {}) {
     nodes,
     connections,
     adjacency,
-    summary: buildSummary(nodes, connections),
+    summary,
   };
 }

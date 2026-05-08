@@ -29,6 +29,7 @@ export const applyReviewSuggestionsSkill = Object.freeze({
       left: Number.isFinite(Number(args?.left)) ? Number(args.left) : undefined,
       top: Number.isFinite(Number(args?.top)) ? Number(args.top) : undefined,
       ensureUniqueName: typeof args?.ensure_unique_name === 'boolean' ? args.ensure_unique_name : true,
+      agentCreated: true,
     });
   },
 });
