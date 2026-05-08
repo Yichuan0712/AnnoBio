@@ -3,12 +3,14 @@ import { buildAgentChatPayload, serializeAgentObservations } from '../payload/bu
 
 const API_BASE = BACKEND_API_BASE;
 
-async function postJson(endpoint, body) {
-  const res = await fetch(`${API_BASE}${endpoint}`, {
+async function postJson(endpoint, body, { signal } = {}) {
+  const init = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
+  };
+  if (signal) init.signal = signal;
+  const res = await fetch(`${API_BASE}${endpoint}`, init);
   const payload = await res.json().catch(() => ({}));
   return {
     ok: res.ok,
@@ -19,11 +21,11 @@ async function postJson(endpoint, body) {
   };
 }
 
-export function requestSimpleChat({ credentialId, messages }) {
+export function requestSimpleChat({ credentialId, messages, signal } = {}) {
   return postJson('/api/chat', {
     credential_id: String(credentialId || '').trim(),
     messages: Array.isArray(messages) ? messages : [],
-  });
+  }, { signal });
 }
 
 export function requestAgentChat({
@@ -33,6 +35,7 @@ export function requestAgentChat({
   observations = [],
   nodeInspection = null,
   agentTrace = [],
+  signal,
 } = {}) {
   return postJson(
     '/api/agent/chat',
@@ -44,6 +47,7 @@ export function requestAgentChat({
       nodeInspection,
       agentTrace,
     }),
+    { signal },
   );
 }
 
@@ -55,6 +59,7 @@ export async function requestAgentPlan({
   availableSkills = [],
   loopSignals = [],
   roundIndex = 1,
+  signal,
 } = {}) {
   const result = await postJson('/api/agent/plan', {
     credential_id: String(credentialId || '').trim(),
@@ -64,7 +69,7 @@ export async function requestAgentPlan({
     available_skills: Array.isArray(availableSkills) ? availableSkills : [],
     loop_signals: Array.isArray(loopSignals) ? loopSignals : [],
     round_index: Number.isFinite(Number(roundIndex)) ? Math.max(1, Math.floor(Number(roundIndex))) : 1,
-  });
+  }, { signal });
   return {
     ...result,
     plan: result.ok && result.payload && typeof result.payload === 'object'
