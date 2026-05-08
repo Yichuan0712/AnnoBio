@@ -274,6 +274,7 @@ export function mountAgentChatSession({
   addRunNode,
   addScoreNode,
   updateScoreNode,
+  updateScoreRowSelection,
   createAndRunReviewNode,
   verifyReviewSuggestions,
   acceptReviewSuggestions,
@@ -443,10 +444,10 @@ export function mountAgentChatSession({
     cancelEditingMessage();
   }
 
-  function readWorkflowSnapshot() {
+  async function readWorkflowSnapshot() {
     if (typeof getWorkflowSnapshot !== 'function') return null;
     try {
-      const snapshot = getWorkflowSnapshot();
+      const snapshot = await getWorkflowSnapshot();
       return snapshot && typeof snapshot === 'object' ? snapshot : null;
     } catch (error) {
       console.error('Read workflow snapshot:', error);
@@ -577,6 +578,7 @@ function shouldPreventRepeatedExecution(skillName) {
           addRunNode,
           addScoreNode,
           updateScoreNode,
+          updateScoreRowSelection,
           createAndRunReviewNode,
           verifyReviewSuggestions,
           acceptReviewSuggestions,
@@ -619,7 +621,7 @@ function shouldPreventRepeatedExecution(skillName) {
     let warnedForStall = false;
 
     while (true) {
-      const latestSnapshot = readWorkflowSnapshot();
+      const latestSnapshot = await readWorkflowSnapshot();
       if (latestSnapshot) workflowSnapshot = latestSnapshot;
       const runNode = findNodeInSnapshot(workflowSnapshot, waitState?.runNodeId);
       if (!runNode || String(runNode?.type || '').trim() !== 'run') {
@@ -741,7 +743,7 @@ function shouldPreventRepeatedExecution(skillName) {
     let warnedForStall = false;
 
     while (true) {
-      const latestSnapshot = readWorkflowSnapshot();
+      const latestSnapshot = await readWorkflowSnapshot();
       if (latestSnapshot) workflowSnapshot = latestSnapshot;
       const reviewNode = findNodeInSnapshot(workflowSnapshot, waitState?.reviewNodeId);
       if (!reviewNode || String(reviewNode?.type || '').trim() !== 'promptReview') {
@@ -928,7 +930,7 @@ function shouldPreventRepeatedExecution(skillName) {
     };
     if (useWorkflowContext) {
       const agentTrace = [`LOOP START: evaluating ${AGENT_SKILL_REGISTRY.length} available skills`];
-      let workflowSnapshot = readWorkflowSnapshot();
+      let workflowSnapshot = await readWorkflowSnapshot();
       if (!workflowSnapshot) {
         if (onProgress) onProgress('No workflow snapshot; answering without agent tools.');
         return withAgentTrace(requestSimpleChat({ credentialId, messages }), null);
@@ -1066,7 +1068,7 @@ function shouldPreventRepeatedExecution(skillName) {
                 );
               }
             }
-            const refreshedSnapshot = readWorkflowSnapshot();
+            const refreshedSnapshot = await readWorkflowSnapshot();
             if (refreshedSnapshot) workflowSnapshot = refreshedSnapshot;
             const observationFingerprint = buildObservationFingerprint(observation);
             const isNewObservation = !seenObservationFingerprints.has(observationFingerprint);

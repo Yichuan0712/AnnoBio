@@ -41,7 +41,7 @@ export const inspectNodeSkill = Object.freeze({
       ? `Inspected ${nodeLabel}${buildWindowLabel(args)}`
       : `Node ${nodeLabel} was not found`;
   },
-  execute({ args = {}, runtime = {} } = {}) {
+  async execute({ args = {}, runtime = {} } = {}) {
     const nodeId = String(args?.node_id || '').trim();
     if (!nodeId || typeof runtime.inspectNode !== 'function') return null;
     const startRow = parsePositiveInteger(args?.start_row);
@@ -49,7 +49,8 @@ export const inspectNodeSkill = Object.freeze({
     const inspectOptions = {};
     if (startRow) inspectOptions.startRow = startRow;
     if (maxRows) inspectOptions.maxRows = maxRows;
-    const result = runtime.inspectNode(nodeId, inspectOptions);
+    const raw = runtime.inspectNode(nodeId, inspectOptions);
+    const result = await Promise.resolve(raw);
     return result && typeof result === 'object' ? result : null;
   },
 });

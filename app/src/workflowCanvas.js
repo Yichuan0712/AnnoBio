@@ -55,7 +55,7 @@ import {
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { buildWorkflowSnapshot } from './agent/canvas/workflowSnapshot.js';
-import { inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
+import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
 import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
@@ -738,6 +738,91 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   }
 
   return rows;
+}
+
+function canvasNormalizeNodeId(value) {
+  return String(value || '').trim();
+}
+
+function buildDatasetContentMapFromCanvasNodes(nodes) {
+  const map = new Map();
+  for (const n of nodes || []) {
+    if (!n || n.type !== 'dataset') continue;
+    const id = canvasNormalizeNodeId(n.nodeId);
+    const c = n.subsetContent || n.datasetContent;
+    if (!id || !c || !Array.isArray(c.headers)) continue;
+    map.set(id, { headers: c.headers, rows: Array.isArray(c.rows) ? c.rows : [] });
+  }
+  return map;
+}
+
+function scoreRawToFakeScoreNode(scoreRaw) {
+  const sm = scoreRaw?.scoreMapping;
+  const mappingStr = sm && typeof sm === 'object' ? JSON.stringify(sm) : (typeof sm === 'string' ? sm : '{}');
+  const ex = scoreRaw?.scoreRowExcludedFromScoring;
+  const exStr = ex == null ? '' : (typeof ex === 'string' ? ex : JSON.stringify(ex));
+  return {
+    dataset: {
+      scoreMapping: mappingStr,
+      scoreGroundTruthId: canvasNormalizeNodeId(scoreRaw?.scoreGroundTruthId),
+      scoreRowExcludedFromScoring: exStr,
+    },
+  };
+}
+
+function runRawToFakeRunNode(runRaw) {
+  const ric = runRaw?.runInputToColumn;
+  const ricStr = typeof ric === 'string' ? ric : JSON.stringify(ric && typeof ric === 'object' ? ric : {});
+  return {
+    dataset: {
+      runResults: runRaw?.runResults || '[]',
+      runOutputFields: runRaw?.runOutputFields || '[]',
+      runWorkingSetId: canvasNormalizeNodeId(runRaw?.runWorkingSetId),
+      runInputToColumn: ricStr,
+    },
+  };
+}
+
+function resolveLiveScoreComparisonContext(canvasState, scoreRaw) {
+  const nodes = Array.isArray(canvasState?.nodes) ? canvasState.nodes : [];
+  const connections = Array.isArray(canvasState?.connections) ? canvasState.connections : [];
+  const scoreId = canvasNormalizeNodeId(scoreRaw?.nodeId);
+  if (!scoreId) return null;
+
+  const runEdge = connections.find(
+    (c) => String(c?.type || '').trim() === 'run-to-score' && canvasNormalizeNodeId(c?.toId) === scoreId,
+  );
+  if (!runEdge) return null;
+
+  const nodeById = new Map(nodes.map((n) => [canvasNormalizeNodeId(n?.nodeId), n]));
+  const runRaw = nodeById.get(canvasNormalizeNodeId(runEdge.fromId));
+  if (!runRaw || runRaw.type !== 'run') return null;
+
+  const runId = canvasNormalizeNodeId(runRaw.nodeId);
+  const promptEdge = connections.find(
+    (c) => String(c?.type || '').trim() === 'prompt-to-run' && canvasNormalizeNodeId(c?.toId) === runId,
+  );
+  if (!promptEdge) return null;
+
+  const promptRaw = nodeById.get(canvasNormalizeNodeId(promptEdge.fromId));
+  if (!promptRaw || promptRaw.type !== 'prompt') return null;
+
+  const gtId = canvasNormalizeNodeId(scoreRaw.scoreGroundTruthId);
+  const wsId = canvasNormalizeNodeId(runRaw.runWorkingSetId);
+  if (!gtId || !wsId) return null;
+
+  const datasetMap = buildDatasetContentMapFromCanvasNodes(nodes);
+  if (!datasetMap.has(gtId) || !datasetMap.has(wsId)) return null;
+
+  const promptSections = Array.isArray(promptRaw.sections) ? promptRaw.sections : [];
+  if (promptSections.length === 0) return null;
+
+  return {
+    scoreEl: scoreRawToFakeScoreNode(scoreRaw),
+    runEl: runRawToFakeRunNode(runRaw),
+    datasetMap,
+    promptSections,
+  };
 }
 
 /** Invisible stroke width for edge hit area (px). */
@@ -2333,6 +2418,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     saveScoreResultsToWorkspace,
     addScoreNode,
     updateScoreNode,
+    updateScoreRowSelection,
     addPromptReviewNode,
     createAndRunReviewNode,
     verifyReviewSuggestions,
@@ -2422,6 +2508,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       addRunNode,
       addScoreNode,
       updateScoreNode,
+      updateScoreRowSelection,
       createAndRunReviewNode,
       verifyReviewSuggestions,
       acceptReviewSuggestions,
@@ -2491,6 +2578,31 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function removeConnectionsInvolvingNodeId(id) {
     connections = connections.filter((c) => c.fromId !== id && c.toId !== id);
+  }
+
+  async function copyTextToClipboard(text) {
+    const s = String(text ?? '');
+    if (!s) return false;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(s);
+        return true;
+      }
+    } catch (_) {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch (_) {
+      return false;
+    }
   }
 
   function showNodeContextMenu(clientX, clientY, node) {
@@ -2577,6 +2689,10 @@ export function buildWorkflowCanvas(root, options = {}) {
         <button type="button" class="workflow-node-context-item" data-action="edit-name-description" role="menuitem">Edit name & description</button>
       `;
     }
+
+    menu.insertAdjacentHTML('beforeend', `
+      <button type="button" class="workflow-node-context-item" data-action="copy-name-and-id" role="menuitem">Copy name and ID</button>
+    `);
 
     function duplicateNode(isNewVersion = false) {
       const left = parseFloat(node.style.left) || 0;
@@ -3045,6 +3161,17 @@ export function buildWorkflowCanvas(root, options = {}) {
         }
         updateContentSize();
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      },
+      'copy-name-and-id': async () => {
+        const id = String(node.dataset.nodeId || '').trim();
+        const titleEl = node.querySelector('.workflow-node__title');
+        const rawName = (titleEl?.textContent || '').trim();
+        const name = (rawName.replace(/\s+/g, ' ') || id || 'Node').trim();
+        const text = id ? `${name} | ${id}` : name;
+        const ok = await copyTextToClipboard(text);
+        if (!ok) {
+          showAlert('Could not copy to clipboard.', { title: 'Copy' });
+        }
       },
     };
 
@@ -3699,6 +3826,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           runCredentialId: (node.dataset.runCredentialId || '').trim() || undefined,
           runInputToColumn: node.dataset.runInputToColumn || undefined,
           runResults,
+          runOutputFields: node.dataset.runOutputFields || undefined,
           runCompleted: node.dataset.runCompleted || undefined,
           runInputContent: node.dataset.runInputContent || undefined,
           runPending: pendingRuns.has(nodeId),
@@ -4023,18 +4151,78 @@ export function buildWorkflowCanvas(root, options = {}) {
     document.addEventListener('workflow:canvas-changed', fn);
   }
 
-  function getWorkflowSnapshot() {
-    return buildWorkflowSnapshot(getCanvasState(), {
-      extractInputFields: extractInputFieldsFromSections,
-      datasetPreviewRows: 3,
-    });
+  async function getWorkflowSnapshot() {
+    const base = getCanvasState();
+    const nodes = await Promise.all(
+      base.nodes.map(async (n) => {
+        if (n.type !== 'score') return n;
+        let hasPersisted = false;
+        try {
+          const rr = n.reviewResult ? JSON.parse(n.reviewResult) : null;
+          hasPersisted = Array.isArray(rr?.comparison_rows) && rr.comparison_rows.length > 0;
+        } catch (_) {
+          hasPersisted = false;
+        }
+        if (hasPersisted) return n;
+
+        const ctx = resolveLiveScoreComparisonContext(base, n);
+        if (!ctx) return n;
+
+        try {
+          const rows = await buildReviewComparisonRows(
+            ctx.scoreEl,
+            ctx.runEl,
+            ctx.datasetMap,
+            ctx.promptSections,
+          );
+          if (!Array.isArray(rows) || rows.length === 0) return n;
+          let rr = {};
+          try {
+            rr = n.reviewResult ? JSON.parse(n.reviewResult) : {};
+            if (!rr || typeof rr !== 'object') rr = {};
+          } catch (_) {
+            rr = {};
+          }
+          const nextRr = { ...rr, comparison_rows: rows };
+          return { ...n, reviewResult: JSON.stringify(nextRr) };
+        } catch (_) {
+          return n;
+        }
+      }),
+    );
+    return buildWorkflowSnapshot(
+      { ...base, nodes },
+      { extractInputFields: extractInputFieldsFromSections, datasetPreviewRows: 3 },
+    );
   }
 
-  function inspectNode(nodeId, options = {}) {
-    return inspectWorkflowNode(getCanvasState(), nodeId, {
+  async function inspectNode(nodeId, options = {}) {
+    const canvasState = getCanvasState();
+    let result = inspectWorkflowNode(canvasState, nodeId, {
       ...options,
       extractInputFields: extractInputFieldsFromSections,
     });
+    if (!result || result.found === false) return result;
+
+    const nid = canvasNormalizeNodeId(nodeId);
+    const raw = canvasState.nodes.find((n) => canvasNormalizeNodeId(n?.nodeId) === nid);
+    if (!raw || raw.type !== 'score') return result;
+
+    const ctx = resolveLiveScoreComparisonContext(canvasState, raw);
+    if (!ctx) return result;
+
+    try {
+      const rows = await buildReviewComparisonRows(
+        ctx.scoreEl,
+        ctx.runEl,
+        ctx.datasetMap,
+        ctx.promptSections,
+      );
+      if (!Array.isArray(rows) || rows.length === 0) return result;
+      return enrichInspectScoreResultWithComparisonRows(result, rows, options);
+    } catch (_) {
+      return result;
+    }
   }
 
   root.appendChild(canvas);
@@ -4046,6 +4234,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     addRunNode,
     addScoreNode,
     updateScoreNode,
+    updateScoreRowSelection,
     createAndRunReviewNode,
     verifyReviewSuggestions,
     acceptReviewSuggestions,
