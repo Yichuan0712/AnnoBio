@@ -4,6 +4,13 @@ import {
   verifyReviewSuggestion,
 } from './reviewSuggestionActions.js';
 import { rebuildWorkingFromApplied } from './reviewWorkingSections.js';
+import {
+  DEFAULT_LIMITS as PROMPT_EDIT_LIMITS,
+  applyPromptNodeEdits,
+  computeGlobalChangeRatio,
+} from './promptNodeEdits.js';
+import { applyScoreMappingEdits } from './scoreMappingEdits.js';
+import { isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {
   const {
@@ -139,8 +146,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     promptNodeId = '',
     name = '',
     note,
-    sections,
-    outputFormat,
+    edits,
     left,
     top,
     ensureUniqueName = true,
@@ -155,6 +161,35 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
 
     const sourcePromptData = getPromptDataFromNode(promptNode) || {};
+    const baseData = {
+      sections: Array.isArray(sourcePromptData?.sections) ? sourcePromptData.sections : [],
+      outputFormat: sourcePromptData?.outputFormat && typeof sourcePromptData.outputFormat === 'object'
+        ? sourcePromptData.outputFormat
+        : { returnShape: 'single', fields: [] },
+    };
+
+    const editsRequested = edits != null;
+    const editList = Array.isArray(edits) ? edits : (editsRequested ? edits : []);
+    const editResult = applyPromptNodeEdits(baseData, editList);
+    const nextData = editResult.state;
+    const editWarnings = Array.isArray(editResult.warnings) ? editResult.warnings.slice() : [];
+
+    if (editsRequested && Array.isArray(edits) && edits.length > 0) {
+      const globalDiff = computeGlobalChangeRatio(baseData, nextData);
+      if (globalDiff.ratio > PROMPT_EDIT_LIMITS.globalChangeRatio) {
+        const error = new Error(
+          `add_prompt_version refused: cumulative change ratio ${(globalDiff.ratio * 100).toFixed(0)}% across all edits exceeds the ${(PROMPT_EDIT_LIMITS.globalChangeRatio * 100).toFixed(0)}% limit. Reduce the number or scope of edits, split into multiple smaller versions, or use create_prompt_node for a from-scratch rewrite.`,
+        );
+        error.name = 'PromptEditError';
+        error.reason = 'global_change_ratio_exceeded';
+        error.changeRatio = Number(globalDiff.ratio.toFixed(4));
+        error.limit = Number(PROMPT_EDIT_LIMITS.globalChangeRatio.toFixed(4));
+        error.beforeChars = globalDiff.beforeChars;
+        error.afterChars = globalDiff.afterChars;
+        throw error;
+      }
+    }
+
     const requestedName = String(name || '').trim()
       || String(sourcePromptData?.name || '').trim()
       || 'Prompt';
@@ -169,12 +204,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const created = addPromptNode({
       name: finalName,
       note: note != null ? String(note) : String(sourcePromptData?.note || ''),
-      sections: Array.isArray(sections) ? sections : (Array.isArray(sourcePromptData?.sections) ? sourcePromptData.sections : []),
-      outputFormat: outputFormat && typeof outputFormat === 'object'
-        ? outputFormat
-        : (sourcePromptData?.outputFormat && typeof sourcePromptData.outputFormat === 'object'
-          ? sourcePromptData.outputFormat
-          : undefined),
+      sections: nextData.sections,
+      outputFormat: nextData.outputFormat,
       left: resolvedLeft,
       top: resolvedTop,
       ensureUniqueName: false,
@@ -192,6 +223,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       requestedName,
       nameWasAdjusted: finalName !== requestedName,
       createdAsVersion: true,
+      editsApplied: editsRequested ? editList.length : 0,
+      editWarnings,
     };
   }
 
@@ -282,10 +315,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const newNode = created?.nodeId ? getNodeById(created.nodeId) : null;
 
     let connectionChanged = false;
-    if (sourcePromptNode?.dataset?.nodeId && newNode?.dataset?.nodeId) {
-      connectionChanged = ensureConnection(sourcePromptNode.dataset.nodeId, newNode.dataset.nodeId, 'prompt-to-prompt') || connectionChanged;
-    }
-
     if (refNode && newNode?.dataset?.nodeId) {
       const refHeight = refNode.offsetHeight || 80;
       const newHeight = newNode.offsetHeight || 80;
@@ -995,6 +1024,318 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     };
   }
 
+  function buildEditError(message, extra = {}) {
+    const error = new Error(message);
+    error.name = 'ScoreMappingEditError';
+    Object.assign(error, extra);
+    return error;
+  }
+
+  function readDatasetHeaders(datasetNodeId) {
+    const id = String(datasetNodeId || '').trim();
+    if (!id) return [];
+    const content = datasetContentByNodeId.get(id);
+    if (!content || !Array.isArray(content.headers)) return [];
+    return content.headers.map((h) => String(h ?? '').trim()).filter(Boolean);
+  }
+
+  function getScoreUpstreamHeaders(scoreNode) {
+    const connections = getConnectionsList();
+    const runEdge = connections.find(
+      (c) => c.toId === scoreNode.dataset.nodeId && c.type === 'run-to-score',
+    );
+    const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+    let runInputHeaders = [];
+    if (runNode) {
+      const workingSetId = String(runNode.dataset.runWorkingSetId || '').trim();
+      runInputHeaders = readDatasetHeaders(workingSetId);
+    }
+
+    const groundTruthNodeId = String(scoreNode.dataset.scoreGroundTruthId || '').trim();
+    const groundTruthHeaders = readDatasetHeaders(groundTruthNodeId);
+    return { runInputHeaders, groundTruthHeaders };
+  }
+
+  function validateMappingAgainstHeaders(inputRoot, outputRoot, runInputHeaders, groundTruthHeaders) {
+    const inputRules = flattenScoreRules(inputRoot);
+    const outputRules = flattenScoreRules(outputRoot);
+    const allRules = [...inputRules, ...outputRules];
+
+    if (groundTruthHeaders.length > 0) {
+      const headerSet = new Set(groundTruthHeaders);
+      const unknown = [...new Set(
+        allRules
+          .flatMap((rule) => (Array.isArray(rule?.gtColumns) ? rule.gtColumns : []))
+          .map((column) => String(column || '').trim())
+          .filter((column) => column && column !== '__score_gt_row_index__' && !headerSet.has(column)),
+      )];
+      if (unknown.length > 0) {
+        throw buildEditError(
+          `Score mapping references ground-truth columns not in the upstream dataset: ${unknown.join(', ')}.`,
+          {
+            reason: 'unknown_gt_columns',
+            unknown_gt_columns: unknown,
+            available_gt_headers: groundTruthHeaders,
+          },
+        );
+      }
+    }
+
+    if (runInputHeaders.length > 0) {
+      const headerSet = new Set(runInputHeaders);
+      const unknown = [...new Set(
+        inputRules
+          .map((rule) => String(rule?.outputKey || '').trim())
+          .filter(Boolean)
+          .filter((outputKey) => isScoreInputSideRuleKey(outputKey))
+          .map((outputKey) => {
+            if (outputKey === '#' || outputKey === '[#]') return '#';
+            if (outputKey.startsWith('[') && outputKey.endsWith(']')) {
+              return outputKey.slice(1, -1).trim();
+            }
+            return '';
+          })
+          .filter((header) => header && header !== '#' && !headerSet.has(header)),
+      )];
+      if (unknown.length > 0) {
+        throw buildEditError(
+          `Input-side rules reference run input columns not in the upstream dataset: ${unknown.join(', ')}.`,
+          {
+            reason: 'unknown_run_input_columns',
+            unknown_input_columns: unknown,
+            available_input_headers: runInputHeaders,
+          },
+        );
+      }
+    }
+  }
+
+  function updateScoreNode({
+    scoreNodeId = '',
+    edits,
+  } = {}) {
+    const normalizedScoreNodeId = String(scoreNodeId || '').trim();
+    if (!normalizedScoreNodeId) {
+      throw new Error('Score node id is required.');
+    }
+    const scoreNode = getNodeById(normalizedScoreNodeId);
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
+      throw new Error('Score node was not found.');
+    }
+    if (scoreNode.dataset.nodeOrigin !== 'agent') {
+      throw buildEditError(
+        `update_score_node refused: score node ${normalizedScoreNodeId} was not created by the agent. The agent can only update its own score nodes; tell the user to edit this one manually in the score detail UI.`,
+        { reason: 'not_agent_created', score_node_id: normalizedScoreNodeId },
+      );
+    }
+    if (!Array.isArray(edits)) {
+      throw buildEditError(
+        `update_score_node requires an "edits" array.`,
+        { reason: 'edits_not_array' },
+      );
+    }
+    if (edits.length === 0) {
+      throw buildEditError(
+        `update_score_node requires at least one edit op (add_rule | remove_rule | modify_rule).`,
+        { reason: 'edits_empty' },
+      );
+    }
+
+    const mappingRaw = String(scoreNode.dataset.scoreMapping || '');
+    const { inputRoot: beforeInputRoot, outputRoot: beforeOutputRoot } = parseScoreMappingBundle(mappingRaw);
+
+    const editResult = applyScoreMappingEdits(
+      { inputRoot: beforeInputRoot, outputRoot: beforeOutputRoot },
+      edits,
+    );
+    const { inputRoot: nextInputRoot, outputRoot: nextOutputRoot } = editResult.state;
+    const editWarnings = Array.isArray(editResult.warnings) ? editResult.warnings.slice() : [];
+
+    const { runInputHeaders, groundTruthHeaders } = getScoreUpstreamHeaders(scoreNode);
+    validateMappingAgainstHeaders(nextInputRoot, nextOutputRoot, runInputHeaders, groundTruthHeaders);
+
+    const allRules = [...flattenScoreRules(nextInputRoot), ...flattenScoreRules(nextOutputRoot)];
+    const hasNonEmptyRule = allRules.some((rule) => (
+      String(rule?.outputKey || '').trim()
+      && Array.isArray(rule?.gtColumns)
+      && rule.gtColumns.some((column) => String(column || '').trim())
+    ));
+    if (!hasNonEmptyRule) {
+      throw buildEditError(
+        `update_score_node refused: after edits the score mapping has no usable rules (every rule needs a non-empty outputKey and at least one gtColumn).`,
+        { reason: 'no_usable_rule' },
+      );
+    }
+
+    scoreNode.dataset.scoreMapping = serializeScoreMappingBundle(nextInputRoot, nextOutputRoot);
+
+    updateEdges();
+    emitCanvasChanged();
+
+    return {
+      updated: true,
+      scoreNodeId: normalizedScoreNodeId,
+      editsApplied: edits.length,
+      ruleCount: allRules.length,
+      inputRuleCount: flattenScoreRules(nextInputRoot).length,
+      outputRuleCount: flattenScoreRules(nextOutputRoot).length,
+      scoreMapping: JSON.parse(serializeScoreMappingBundle(nextInputRoot, nextOutputRoot)),
+      invalidated: {
+        scoreComparisonRows: false,
+        downstreamReviewNodeIds: [],
+      },
+      editWarnings,
+    };
+  }
+
+  function getScoreComparisonContext(scoreNode) {
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return null;
+    const connections = getConnectionsList();
+    const runEdge = connections.find(
+      (c) => c.toId === scoreNode.dataset.nodeId && c.type === 'run-to-score',
+    );
+    const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
+    if (!runNode || !runNode.classList.contains('workflow-node--run')) return null;
+    const promptEdge = connections.find(
+      (c) => c.toId === runNode.dataset.nodeId && c.type === 'prompt-to-run',
+    );
+    const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
+    if (!promptNode || !promptNode.classList.contains('workflow-node--prompt')) return null;
+    let sections = [];
+    try {
+      sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
+    } catch (_) {}
+    if (!Array.isArray(sections) || sections.length === 0) return null;
+    return { runNode, sections };
+  }
+
+  function normalizeScoreRowSelectionKey(key) {
+    return String(key ?? '').trim();
+  }
+
+  function isLikelyScoreRowSelectionKey(key) {
+    const k = normalizeScoreRowSelectionKey(key);
+    if (!k) return false;
+    if (/^\d+$/.test(k)) return true;
+    if (/^run:\d+$/.test(k)) return true;
+    return false;
+  }
+
+  /**
+   * Merge row inclusion/exclusion for Score Review + metrics (scoreRowExcludedFromScoring).
+   * Only agent-created score nodes are editable here.
+   */
+  async function updateScoreRowSelection(options = {}) {
+    const {
+      scoreNodeId = '',
+      exclude_row_keys,
+      excludeRowKeys,
+      include_row_keys,
+      includeRowKeys,
+    } = options || {};
+    const idArg = String(scoreNodeId || '').trim();
+    if (!idArg) {
+      throw new Error('Score node id is required.');
+    }
+    const scoreNode = getNodeById(idArg);
+    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
+      throw new Error('Score node was not found.');
+    }
+    if (scoreNode.dataset.nodeOrigin !== 'agent') {
+      throw buildEditError(
+        `update_score_row_selection refused: score node ${idArg} was not created by the agent. Ask the user to change row selection in the Score detail UI.`,
+        { reason: 'not_agent_created', score_node_id: idArg },
+      );
+    }
+
+    const excludeList = Array.isArray(exclude_row_keys)
+      ? exclude_row_keys
+      : (Array.isArray(excludeRowKeys) ? excludeRowKeys : []);
+    const includeList = Array.isArray(include_row_keys)
+      ? include_row_keys
+      : (Array.isArray(includeRowKeys) ? includeRowKeys : []);
+
+    if (excludeList.length === 0 && includeList.length === 0) {
+      throw buildEditError(
+        'update_score_row_selection requires at least one key in exclude_row_keys or include_row_keys.',
+        { reason: 'no_row_keys' },
+      );
+    }
+
+    let excluded = {};
+    try {
+      const raw = String(scoreNode.dataset.scoreRowExcludedFromScoring || '').trim();
+      excluded = raw ? JSON.parse(raw) : {};
+      if (!excluded || typeof excluded !== 'object' || Array.isArray(excluded)) excluded = {};
+    } catch (_) {
+      excluded = {};
+    }
+
+    const invalidKeys = [];
+    let validOps = 0;
+
+    for (const k of includeList) {
+      const key = normalizeScoreRowSelectionKey(k);
+      if (!key) continue;
+      if (!isLikelyScoreRowSelectionKey(key)) {
+        invalidKeys.push(key);
+        continue;
+      }
+      delete excluded[key];
+      validOps += 1;
+    }
+    for (const k of excludeList) {
+      const key = normalizeScoreRowSelectionKey(k);
+      if (!key) continue;
+      if (!isLikelyScoreRowSelectionKey(key)) {
+        invalidKeys.push(key);
+        continue;
+      }
+      excluded[key] = true;
+      validOps += 1;
+    }
+
+    const hadNonEmptyKey = [...excludeList, ...includeList].some((k) => normalizeScoreRowSelectionKey(k));
+    if (hadNonEmptyKey && validOps === 0) {
+      throw buildEditError(
+        'update_score_row_selection: no valid row keys (use "0","1",… for GT rows or "run:3" for run-only).',
+        { reason: 'all_row_keys_invalid', invalid_row_keys: [...new Set(invalidKeys)] },
+      );
+    }
+
+    scoreNode.dataset.scoreRowExcludedFromScoring = JSON.stringify(excluded);
+    updateEdges();
+    emitCanvasChanged();
+
+    let comparisonRowCountIncluded = null;
+    const ctx = getScoreComparisonContext(scoreNode);
+    if (ctx) {
+      try {
+        const rows = await buildReviewComparisonRows(
+          scoreNode,
+          ctx.runNode,
+          datasetContentByNodeId,
+          ctx.sections,
+        );
+        comparisonRowCountIncluded = Array.isArray(rows) ? rows.length : 0;
+      } catch (_) {
+        comparisonRowCountIncluded = null;
+      }
+    }
+
+    return {
+      updated: true,
+      scoreNodeId: idArg,
+      scoreRowExcludedFromScoring: excluded,
+      excludedRowKeyCount: Object.keys(excluded).filter((k) => excluded[k]).length,
+      comparison_row_count_included: comparisonRowCountIncluded,
+      invalid_row_keys: [...new Set(invalidKeys)],
+      hint: invalidKeys.length > 0
+        ? 'Some keys were skipped as invalid; valid keys were applied. Confirm with the user if needed. Then inspect_node for refreshed metrics.'
+        : 'Call inspect_node on this score for refreshed metrics; Review uses only included rows.',
+    };
+  }
+
   async function buildReviewPayloadForScoreNode(scoreNode) {
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
       throw new Error('Score node was not found.');
@@ -1668,6 +2009,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     saveRunResultsToWorkspace,
     saveScoreResultsToWorkspace,
     addScoreNode,
+    updateScoreNode,
+    updateScoreRowSelection,
     addPromptReviewNode,
     createAndRunReviewNode,
     verifyReviewSuggestions,

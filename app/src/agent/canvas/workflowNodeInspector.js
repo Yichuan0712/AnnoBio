@@ -1,3 +1,5 @@
+import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
+
 function normalizeNodeId(value) {
   return String(value || '').trim();
 }
@@ -127,11 +129,16 @@ function buildBaseInspection(rawNode, canvasState) {
   const upstreamEdges = findConnections(connections, nodeId, 'upstream');
   const downstreamEdges = findConnections(connections, nodeId, 'downstream');
 
+  const nodeOriginRaw = String(rawNode?.nodeOrigin || '').trim();
+  const nodeOrigin = nodeOriginRaw || 'user';
+
   return {
     found: true,
     nodeId,
     nodeType: String(rawNode?.type || 'unknown'),
     title: deriveNodeTitle(rawNode),
+    nodeOrigin,
+    agentMutable: nodeOrigin === 'agent',
     node: rawNode,
     upstream: upstreamEdges.map((edge) => summarizeEdgeNeighbor(edge, nodeLookup, 'upstream')),
     downstream: downstreamEdges.map((edge) => summarizeEdgeNeighbor(edge, nodeLookup, 'downstream')),
@@ -304,12 +311,148 @@ function countScoreRules(scoreMapping) {
   return walk(scoreMapping);
 }
 
-function inspectScoreNode(rawNode, canvasState) {
+function summarizeComparisonRow(row) {
+  if (!row || typeof row !== 'object') return null;
+  return {
+    row_index: row.row_index ?? null,
+    input_row_index: row.input_row_index ?? null,
+    matched: row.matched === true,
+    run_output: row.run_output ?? null,
+    expected: row.expected ?? null,
+    ground_truth_output: row.ground_truth_output ?? null,
+    source_gt_row_index: row.source_gt_row_index ?? null,
+    gt_only: row.gt_only === true,
+  };
+}
+
+function buildScoreMetrics(comparisonRows) {
+  const rows = safeArray(comparisonRows);
+  const total = rows.length;
+  if (total === 0) return null;
+  let matched = 0;
+  let unmatched = 0;
+  let gtOnly = 0;
+  for (const row of rows) {
+    if (row?.gt_only === true) gtOnly += 1;
+    if (row?.matched === true) matched += 1;
+    else unmatched += 1;
+  }
+  const base = {
+    totalRows: total,
+    matchedRows: matched,
+    unmatchedRows: unmatched,
+    gtOnlyRows: gtOnly,
+    passRate: total > 0 ? Number((matched / total).toFixed(4)) : 0,
+  };
+  return mergeScoreMetricsWithPrf(base, rows);
+}
+
+function summarizeVerifyRows(verifyRows, maxRows = 8) {
+  const rows = safeArray(verifyRows);
+  if (rows.length === 0) return [];
+  return rows.slice(0, maxRows).map((row) => ({
+    matched: row?.matched === true,
+    error: row?.error ? String(row.error) : null,
+    output: row?.output ?? null,
+    gt: row?.gt ?? null,
+    gtNum: Number.isFinite(Number(row?.gtNum)) ? Number(row.gtNum) : null,
+  }));
+}
+
+function summarizeVerifyResult(verifyResult) {
+  if (!verifyResult || typeof verifyResult !== 'object') return null;
+  const status = String(verifyResult.status || '').trim();
+  if (status === 'error') {
+    return {
+      status: 'error',
+      message: String(verifyResult.message || '').trim() || 'Verification did not complete.',
+      targetRowCount: Number.isFinite(Number(verifyResult.targetRowCount)) ? Number(verifyResult.targetRowCount) : null,
+    };
+  }
+  if (status !== 'complete') {
+    return {
+      status: status || 'unknown',
+      message: String(verifyResult.message || '').trim() || null,
+    };
+  }
+  const verifyRows = safeArray(verifyResult.verifyRows);
+  const matchedCount = Number.isFinite(Number(verifyResult.matchedCount))
+    ? Number(verifyResult.matchedCount)
+    : verifyRows.reduce((sum, row) => sum + (row?.matched === true && !row?.error ? 1 : 0), 0);
+  const total = Number.isFinite(Number(verifyResult.total)) ? Number(verifyResult.total) : verifyRows.length;
+  const errorRowCount = verifyRows.reduce((sum, row) => sum + (row?.error ? 1 : 0), 0);
+  return {
+    status: 'complete',
+    matchedCount,
+    total,
+    passRate: total > 0 ? Number((matchedCount / total).toFixed(4)) : 0,
+    errorRowCount,
+    targetRowCount: Number.isFinite(Number(verifyResult.targetRowCount)) ? Number(verifyResult.targetRowCount) : null,
+    verifyRowCount: verifyRows.length,
+    verifyRowsPreview: summarizeVerifyRows(verifyRows, 8),
+  };
+}
+
+function summarizeReviewSuggestion(rawSuggestion, reviewResult) {
+  if (!rawSuggestion || typeof rawSuggestion !== 'object') return null;
+  const suggestionId = String(rawSuggestion.suggestion_id ?? '').trim();
+  const verifyState = suggestionId
+    ? String(reviewResult?.verify_states?.[suggestionId] || '').trim()
+    : '';
+  const verifyResult = suggestionId
+    ? (reviewResult?.verify_results?.[suggestionId] || null)
+    : null;
+  return {
+    suggestion_id: suggestionId,
+    name: String(rawSuggestion.name || '').trim(),
+    source: String(rawSuggestion.source || '').trim(),
+    target_section: String(rawSuggestion.target_section || '').trim(),
+    old_sentence: String(rawSuggestion.old_sentence || ''),
+    new_sentence: String(rawSuggestion.new_sentence || ''),
+    reason: String(rawSuggestion.reason || ''),
+    applied: rawSuggestion.applied === true,
+    verify_state: verifyState || 'idle',
+    verify_result: summarizeVerifyResult(verifyResult),
+  };
+}
+
+function buildSuggestionStateCounts(reviewResult) {
+  const counts = { idle: 0, verifying: 0, verified: 0, optimization: 0, optimized: 0, optimizedPass: 0, error: 0, other: 0 };
+  const suggestions = safeArray(reviewResult?.suggestions);
+  for (const suggestion of suggestions) {
+    const id = String(suggestion?.suggestion_id ?? '').trim();
+    const state = String(reviewResult?.verify_states?.[id] || 'idle').trim();
+    switch (state) {
+      case 'idle': counts.idle += 1; break;
+      case 'verifying': counts.verifying += 1; break;
+      case 'verified': counts.verified += 1; break;
+      case 'optimization': counts.optimization += 1; break;
+      case 'optimized': counts.optimized += 1; break;
+      case 'optimized-pass': counts.optimizedPass += 1; break;
+      case 'error': counts.error += 1; break;
+      default: counts.other += 1; break;
+    }
+  }
+  return counts;
+}
+
+function inspectScoreNode(rawNode, canvasState, options = {}) {
   const result = buildBaseInspection(rawNode, canvasState);
   const scoreMapping = rawNode?.scoreMapping ?? null;
   const reviewResult = parseReviewResult(rawNode?.reviewResult);
   const ruleCount = countScoreRules(scoreMapping);
   const runUpstream = result.upstream.find((item) => item.nodeType === 'run');
+  const comparisonRows = safeArray(reviewResult?.comparison_rows);
+  const metrics = buildScoreMetrics(comparisonRows);
+
+  const comparisonWindow = buildRowWindow(
+    comparisonRows,
+    {
+      startRow: options?.startRow ?? options?.start_row,
+      maxRows: options?.maxRows ?? options?.max_rows,
+    },
+    5,
+  );
 
   result.details = {
     scoreGroundTruthId: normalizeNodeId(rawNode?.scoreGroundTruthId),
@@ -319,6 +462,10 @@ function inspectScoreNode(rawNode, canvasState) {
     ruleCount,
     reviewSummary: reviewResult?.summary ? String(reviewResult.summary) : '',
     reviewSuggestionCount: safeArray(reviewResult?.suggestions).length,
+    metrics,
+    comparisonRowCount: comparisonRows.length,
+    comparisonRowWindow: comparisonWindow.window,
+    comparisonRows: comparisonWindow.items.map((row) => summarizeComparisonRow(row)).filter(Boolean),
   };
 
   if (!runUpstream) {
@@ -330,23 +477,53 @@ function inspectScoreNode(rawNode, canvasState) {
   if (ruleCount === 0) {
     addDiagnostic(result.diagnostics, 'warning', 'score.no_rules', 'This score node has no scoring rules.');
   }
+  if (comparisonRows.length === 0) {
+    addDiagnostic(result.diagnostics, 'info', 'score.no_comparison_rows', 'This score node has no comparison rows yet (run a review to populate them).');
+  }
   return result;
 }
 
-function inspectPromptReviewNode(rawNode, canvasState) {
+function inspectPromptReviewNode(rawNode, canvasState, options = {}) {
   const result = buildBaseInspection(rawNode, canvasState);
   const reviewResult = parseReviewResult(rawNode?.reviewResult);
   const scoreUpstream = result.upstream.find((item) => item.nodeType === 'score');
+  const rawSuggestions = safeArray(reviewResult?.suggestions);
+  const promptSections = safeArray(reviewResult?.promptSections).map((section) => ({
+    name: String(section?.name || ''),
+    content: String(section?.content || ''),
+  }));
+  const workingSections = safeArray(reviewResult?.workingSections).map((section) => ({
+    name: String(section?.name || ''),
+    content: String(section?.content || ''),
+  }));
+  const comparisonRows = safeArray(reviewResult?.comparison_rows);
+  const metrics = buildScoreMetrics(comparisonRows);
+
+  const suggestionWindow = buildRowWindow(
+    rawSuggestions,
+    {
+      startRow: options?.startRow ?? options?.start_row,
+      maxRows: options?.maxRows ?? options?.max_rows,
+    },
+    20,
+  );
+
+  const suggestions = suggestionWindow.items
+    .map((suggestion) => summarizeReviewSuggestion(suggestion, reviewResult))
+    .filter(Boolean);
 
   result.details = {
     reviewPending: rawNode?.reviewPending === true,
     reviewProgress: Number.isFinite(Number(rawNode?.reviewProgress)) ? Number(rawNode.reviewProgress) : 0,
     reviewSummary: reviewResult?.summary ? String(reviewResult.summary) : '',
-    suggestionCount: safeArray(reviewResult?.suggestions).length,
-    suggestionNames: safeArray(reviewResult?.suggestions)
-      .slice(0, 5)
-      .map((item) => String(item?.name || '').trim())
-      .filter(Boolean),
+    suggestionCount: rawSuggestions.length,
+    suggestionStateCounts: buildSuggestionStateCounts(reviewResult),
+    suggestionWindow: suggestionWindow.window,
+    suggestions,
+    promptSections,
+    workingSections,
+    metrics,
+    comparisonRowCount: comparisonRows.length,
   };
 
   if (!scoreUpstream) {
@@ -356,6 +533,27 @@ function inspectPromptReviewNode(rawNode, canvasState) {
     addDiagnostic(result.diagnostics, 'info', 'review.no_result', 'This review node has no saved review result.');
   }
   return result;
+}
+
+/**
+ * Merge live or precomputed comparison_rows into an existing score inspect result (same shape as inspectScoreNode).
+ */
+export function enrichInspectScoreResultWithComparisonRows(inspectResult, comparisonRows, options = {}) {
+  if (!inspectResult || inspectResult.found === false || !inspectResult.details) return inspectResult;
+  const rows = safeArray(comparisonRows);
+  if (rows.length === 0) return inspectResult;
+  const comparisonWindow = buildRowWindow(rows, {
+    startRow: options?.startRow ?? options?.start_row,
+    maxRows: options?.maxRows ?? options?.max_rows,
+  }, 5);
+  inspectResult.details.metrics = buildFullScoreMetricsFromComparisonRows(rows);
+  inspectResult.details.comparisonRowCount = rows.length;
+  inspectResult.details.comparisonRowWindow = comparisonWindow.window;
+  inspectResult.details.comparisonRows = comparisonWindow.items.map((row) => summarizeComparisonRow(row)).filter(Boolean);
+  inspectResult.details.comparisonRowsLive = true;
+  const idx = inspectResult.diagnostics.findIndex((d) => d.code === 'score.no_comparison_rows');
+  if (idx >= 0) inspectResult.diagnostics.splice(idx, 1);
+  return inspectResult;
 }
 
 export function inspectWorkflowNode(canvasState, nodeId, options = {}) {

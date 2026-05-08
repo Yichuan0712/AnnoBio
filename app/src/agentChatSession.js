@@ -2,6 +2,7 @@ import { AGENT_TITLE_MAX_CHARS, clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { requestAgentChat, requestAgentPlan, requestSimpleChat } from './agent/api/agentChatClient.js';
 import { AGENT_SKILL_REGISTRY, getAgentSkillByName } from './agent/skills/registry.js';
+import { compactObservationsForPlanner } from './agent/payload/compactObservations.js';
 const API_BASE = BACKEND_API_BASE;
 const CHAT_MAX_MESSAGES = 40;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
@@ -29,10 +30,14 @@ const AGENT_SINGLE_EXECUTION_SKILLS = new Set([
 ]);
 
 function sliceChatHistoryForApi(messages) {
-  if (!Array.isArray(messages) || messages.length <= CHAT_MAX_MESSAGES) {
-    return Array.isArray(messages) ? messages.slice() : [];
+  const slim = (Array.isArray(messages) ? messages : []).map((m) => ({
+    role: String(m?.role || 'user'),
+    content: String(m?.content ?? ''),
+  }));
+  if (slim.length <= CHAT_MAX_MESSAGES) {
+    return slim;
   }
-  let sliced = messages.slice(-CHAT_MAX_MESSAGES);
+  let sliced = slim.slice(-CHAT_MAX_MESSAGES);
   while (sliced.length > 1 && sliced[0].role !== 'user') {
     sliced = sliced.slice(1);
   }
@@ -116,14 +121,21 @@ function getSendIconSvg() {
 }
 
 function createMessageNode(role, content, options = {}) {
-  const { loading = false, loadingText = 'Thinking...', editable = false, actionDisabled = false, onEdit = null } = options;
+  const {
+    loading = false,
+    loadingText = 'Thinking...',
+    editable = false,
+    actionDisabled = false,
+    onEdit = null,
+    reasoningSteps = null,
+  } = options;
   const wrapper = document.createElement('div');
   wrapper.className = `agent-window__message agent-window__message--${role}`;
   if (loading) wrapper.classList.add('agent-window__message--loading');
 
   const roleEl = document.createElement('div');
   roleEl.className = 'agent-window__message-role';
-  roleEl.textContent = role === 'assistant' ? 'Assistant' : 'You';
+  roleEl.textContent = role === 'assistant' ? 'Agent' : 'You';
 
   const bubbleEl = document.createElement('div');
   bubbleEl.className = 'agent-window__message-bubble';
@@ -134,6 +146,22 @@ function createMessageNode(role, content, options = {}) {
       <span class="agent-window__loading-text">${String(loadingText || 'Thinking...')}</span>
     `;
   } else {
+    if (
+      role === 'assistant'
+      && Array.isArray(reasoningSteps)
+      && reasoningSteps.length > 0
+    ) {
+      const detailsEl = document.createElement('details');
+      detailsEl.className = 'agent-window__reasoning';
+      const summaryEl = document.createElement('summary');
+      summaryEl.textContent = 'Trace';
+      detailsEl.appendChild(summaryEl);
+      const bodyEl = document.createElement('pre');
+      bodyEl.className = 'agent-window__reasoning-body';
+      bodyEl.textContent = reasoningSteps.map((s) => String(s || '').trim()).filter(Boolean).join('\n');
+      detailsEl.appendChild(bodyEl);
+      bubbleEl.appendChild(detailsEl);
+    }
     const contentEl = document.createElement('div');
     contentEl.className = 'agent-window__message-content';
     contentEl.textContent = content;
@@ -245,6 +273,8 @@ export function mountAgentChatSession({
   inspectNode,
   addRunNode,
   addScoreNode,
+  updateScoreNode,
+  updateScoreRowSelection,
   createAndRunReviewNode,
   verifyReviewSuggestions,
   acceptReviewSuggestions,
@@ -339,6 +369,7 @@ export function mountAgentChatSession({
         editable: message.role === 'user',
         actionDisabled: activeConversation?.pending || sendInFlight || editingMessageIndex !== -1,
         onEdit: () => startEditingMessage(index),
+        reasoningSteps: message.role === 'assistant' ? message.reasoningSteps : null,
       });
     });
     if (activeConversation?.pending) {
@@ -413,10 +444,10 @@ export function mountAgentChatSession({
     cancelEditingMessage();
   }
 
-  function readWorkflowSnapshot() {
+  async function readWorkflowSnapshot() {
     if (typeof getWorkflowSnapshot !== 'function') return null;
     try {
-      const snapshot = getWorkflowSnapshot();
+      const snapshot = await getWorkflowSnapshot();
       return snapshot && typeof snapshot === 'object' ? snapshot : null;
     } catch (error) {
       console.error('Read workflow snapshot:', error);
@@ -546,6 +577,8 @@ function shouldPreventRepeatedExecution(skillName) {
           inspectNode,
           addRunNode,
           addScoreNode,
+          updateScoreNode,
+          updateScoreRowSelection,
           createAndRunReviewNode,
           verifyReviewSuggestions,
           acceptReviewSuggestions,
@@ -588,7 +621,7 @@ function shouldPreventRepeatedExecution(skillName) {
     let warnedForStall = false;
 
     while (true) {
-      const latestSnapshot = readWorkflowSnapshot();
+      const latestSnapshot = await readWorkflowSnapshot();
       if (latestSnapshot) workflowSnapshot = latestSnapshot;
       const runNode = findNodeInSnapshot(workflowSnapshot, waitState?.runNodeId);
       if (!runNode || String(runNode?.type || '').trim() !== 'run') {
@@ -710,7 +743,7 @@ function shouldPreventRepeatedExecution(skillName) {
     let warnedForStall = false;
 
     while (true) {
-      const latestSnapshot = readWorkflowSnapshot();
+      const latestSnapshot = await readWorkflowSnapshot();
       if (latestSnapshot) workflowSnapshot = latestSnapshot;
       const reviewNode = findNodeInSnapshot(workflowSnapshot, waitState?.reviewNodeId);
       if (!reviewNode || String(reviewNode?.type || '').trim() !== 'promptReview') {
@@ -888,11 +921,19 @@ function shouldPreventRepeatedExecution(skillName) {
   async function requestChatCompletion(messages, options = {}) {
     const useWorkflowContext = options.useWorkflowContext === true;
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const withAgentTrace = async (resultPromise, trace) => {
+      const r = await resultPromise;
+      return {
+        ...r,
+        agentTrace: Array.isArray(trace) && trace.length ? trace.slice() : null,
+      };
+    };
     if (useWorkflowContext) {
       const agentTrace = [`LOOP START: evaluating ${AGENT_SKILL_REGISTRY.length} available skills`];
-      let workflowSnapshot = readWorkflowSnapshot();
+      let workflowSnapshot = await readWorkflowSnapshot();
       if (!workflowSnapshot) {
-        return requestSimpleChat({ credentialId, messages });
+        if (onProgress) onProgress('No workflow snapshot; answering without agent tools.');
+        return withAgentTrace(requestSimpleChat({ credentialId, messages }), null);
       }
       const observations = [];
       const loopSignals = [];
@@ -934,7 +975,15 @@ function shouldPreventRepeatedExecution(skillName) {
           }
 
           if (onProgress) onProgress(`Planning round ${roundIndex}...`);
-          const { ok, plan } = await planAgentSkills(messages, workflowSnapshot, observations, loopSignals, roundIndex);
+          const { observations: compactedObservations, stats: compactionStats } = compactObservationsForPlanner(observations);
+          if (compactionStats.superseded > 0 || compactionStats.agedOut > 0) {
+            agentTrace.push(
+              `ROUND ${roundIndex} COMPACT: total=${compactionStats.total} `
+              + `keptFull=${compactionStats.keptFull} superseded=${compactionStats.superseded} `
+              + `agedOut=${compactionStats.agedOut} skipped=${compactionStats.skipped}`
+            );
+          }
+          const { ok, plan } = await planAgentSkills(messages, workflowSnapshot, compactedObservations, loopSignals, roundIndex);
           if (!ok) {
             addLoopSignal(loopSignals, 'Planner request failed');
             agentTrace.push(`ROUND ${roundIndex} PLAN ERROR: planner request failed, answering with current evidence`);
@@ -947,6 +996,13 @@ function shouldPreventRepeatedExecution(skillName) {
             + (plan.planSummary ? ` | summary=${plan.planSummary}` : '')
             + (plan.expectedProgress ? ` | expect=${plan.expectedProgress}` : '')
           );
+
+          if (onProgress) {
+            const ps = String(plan.planSummary || '').trim();
+            const ep = String(plan.expectedProgress || '').trim();
+            if (ps) onProgress(`Plan summary: ${ps}`);
+            if (ep) onProgress(`Expected progress: ${ep}`);
+          }
 
           if (plan.done) {
             agentTrace.push(`ROUND ${roundIndex} STOP: planner marked evidence sufficient`);
@@ -1012,7 +1068,7 @@ function shouldPreventRepeatedExecution(skillName) {
                 );
               }
             }
-            const refreshedSnapshot = readWorkflowSnapshot();
+            const refreshedSnapshot = await readWorkflowSnapshot();
             if (refreshedSnapshot) workflowSnapshot = refreshedSnapshot;
             const observationFingerprint = buildObservationFingerprint(observation);
             const isNewObservation = !seenObservationFingerprints.has(observationFingerprint);
@@ -1085,14 +1141,17 @@ function shouldPreventRepeatedExecution(skillName) {
 
         agentTrace.push(`FINAL ANSWER: workflow_snapshot=yes, observations=${observations.length}`);
         if (onProgress) onProgress('Drafting final answer...');
-        return requestAgentChat({
-          credentialId,
-          messages,
-          workflowSnapshot,
-          observations,
-          nodeInspection: latestNodeInspection?.result || null,
+        return withAgentTrace(
+          requestAgentChat({
+            credentialId,
+            messages,
+            workflowSnapshot,
+            observations,
+            nodeInspection: latestNodeInspection?.result || null,
+            agentTrace,
+          }),
           agentTrace,
-        });
+        );
       } catch (error) {
         console.error('Run agent loop:', error);
         agentTrace.push(`LOOP ERROR: ${error instanceof Error ? error.message : 'unknown error'}`);
@@ -1102,16 +1161,19 @@ function shouldPreventRepeatedExecution(skillName) {
       const latestNodeInspection = [...observations]
         .reverse()
         .find((observation) => observation.skillName === 'inspect_node' && observation.ok && observation.result && typeof observation.result === 'object');
-      return requestAgentChat({
-        credentialId,
-        messages,
-        workflowSnapshot,
-        observations,
-        nodeInspection: latestNodeInspection?.result || null,
+      return withAgentTrace(
+        requestAgentChat({
+          credentialId,
+          messages,
+          workflowSnapshot,
+          observations,
+          nodeInspection: latestNodeInspection?.result || null,
+          agentTrace,
+        }),
         agentTrace,
-      });
+      );
     }
-    return requestSimpleChat({ credentialId, messages });
+    return withAgentTrace(requestSimpleChat({ credentialId, messages }), null);
   }
 
   async function refreshConversationTitle(targetConversation) {
@@ -1142,16 +1204,28 @@ function shouldPreventRepeatedExecution(skillName) {
   }
 
   async function requestAssistantReply(targetConversation, targetMessages) {
+    const reasoningSteps = [];
     try {
       setPendingStatus(targetConversation, 'Planning next steps...');
-      const { ok, content: reply } = await requestChatCompletion(sliceChatHistoryForApi(targetMessages), {
+      const { ok, content: reply, agentTrace: replyTrace } = await requestChatCompletion(sliceChatHistoryForApi(targetMessages), {
         useWorkflowContext: true,
-        onProgress: (status) => setPendingStatus(targetConversation, status),
+        onProgress: (status) => {
+          const s = String(status || '').trim();
+          if (s && reasoningSteps[reasoningSteps.length - 1] !== s) reasoningSteps.push(s);
+          setPendingStatus(targetConversation, status);
+        },
       });
 
       targetConversation.pending = false;
       targetConversation.pendingStatus = '';
-      targetMessages.push({ role: 'assistant', content: reply });
+      const assistantMsg = { role: 'assistant', content: reply };
+      if (Array.isArray(replyTrace) && replyTrace.length) {
+        const rs = replyTrace.map((s) => String(s || '').trim()).filter(Boolean);
+        if (rs.length) assistantMsg.reasoningSteps = rs;
+      } else if (reasoningSteps.length) {
+        assistantMsg.reasoningSteps = reasoningSteps.slice();
+      }
+      targetMessages.push(assistantMsg);
       targetConversation.updatedAt = Date.now();
       notifyConversationUpdated(targetConversation);
       if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
@@ -1160,7 +1234,9 @@ function shouldPreventRepeatedExecution(skillName) {
       const reply = `Error: ${error instanceof Error ? error.message : 'Request failed'}`;
       targetConversation.pending = false;
       targetConversation.pendingStatus = '';
-      targetMessages.push({ role: 'assistant', content: reply });
+      const assistantMsg = { role: 'assistant', content: reply };
+      if (reasoningSteps.length) assistantMsg.reasoningSteps = reasoningSteps.slice();
+      targetMessages.push(assistantMsg);
       targetConversation.updatedAt = Date.now();
       notifyConversationUpdated(targetConversation);
       if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();

@@ -13,6 +13,12 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+/** Sanitize node name for use as default filename (remove/replace invalid path chars). */
+function sanitizeFilename(name) {
+  const s = String(name ?? '').replace(/[\r\n/:*?"<>|\\]/g, '_').trim();
+  return s || 'prompt';
+}
+
 /** Extract unique input field names from prompt sections: single-brace placeholders {text} only; {{text}} does not count. */
 export function extractInputFieldsFromSections(sectionsList) {
   if (!sectionsList || sectionsList.length === 0) return [];
@@ -186,6 +192,128 @@ function schemaToViewHtml(fields, returnShape) {
 </div>`;
 }
 
+function readSavedPromptSnapshotFromNode(node) {
+  if (!node) return null;
+  let name = (node.dataset.promptName || '').trim();
+  if (!name) {
+    name = (node.querySelector('.workflow-node__title')?.textContent || '').trim();
+  }
+  if (!name) name = 'Prompt';
+  const note = (node.dataset.promptNote || '').trim();
+  let sections = [];
+  try {
+    const raw = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
+    sections = Array.isArray(raw) ? raw.map((s) => ({ name: s?.name || '', content: s?.content || '' })) : [];
+  } catch (_) {
+    sections = [];
+  }
+  let fields = [];
+  let returnShape = 'single';
+  try {
+    const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
+    fields = Array.isArray(raw)
+      ? raw.map((o) => ({
+          key: o.key || '',
+          type: o.type || 'str',
+          description: o.description ?? '',
+          examples: o.examples || [],
+          allowNone: o.allowNone === true,
+        }))
+      : [];
+    returnShape = node.dataset.promptOutputReturnShape || 'single';
+  } catch (_) {
+    fields = [];
+    returnShape = node.dataset.promptOutputReturnShape || 'single';
+  }
+  return { name, note, sections, returnShape, fields };
+}
+
+/** Run row template: non-empty trimmed section contents, \\n\\n joined (same as runDetailModal). */
+function buildRunTemplateTextForExport(sections) {
+  return (Array.isArray(sections) ? sections : [])
+    .map((s) => String(s?.content ?? '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/**
+ * Save to local: run template + suffix matching backend/llm.py::_run_structured_fallback (approx. JSON Schema).
+ */
+function buildPromptExportText(snapshot) {
+  const runTemplate = buildRunTemplateTextForExport(snapshot.sections);
+  const shape = String(snapshot.returnShape || 'single').trim().toLowerCase() === 'table' ? 'table' : 'single';
+  const typeMap = {
+    str: { type: 'string' },
+    float: { type: 'number' },
+    list_str: { type: 'array', items: { type: 'string' } },
+    list_float: { type: 'array', items: { type: 'number' } },
+  };
+  const seen = new Set();
+  const prepared = [];
+  for (const f of snapshot.fields || []) {
+    const dk = (f.key || '').trim() || 'field';
+    let name = dk.replace(/[^\w]/g, '_') || 'field';
+    if (seen.has(name)) {
+      let n = 1;
+      while (seen.has(`${name}_${n}`)) n += 1;
+      name = `${name}_${n}`;
+    }
+    seen.add(name);
+    let t = String(f.type || 'str').trim().toLowerCase();
+    if (!typeMap[t]) t = 'str';
+    const desc = String(f.description ?? '').trim() || dk;
+    const opt = f.allowNone === true || f.allow_none === true;
+    prepared.push({ name, t, desc, opt });
+  }
+
+  let instruction;
+  if (prepared.length === 0) {
+    instruction = '\n\n(No output_schema.fields — Run API would reject before LLM.)';
+  } else {
+    const properties = {};
+    const required = [];
+    for (const p of prepared) {
+      const base = { ...typeMap[p.t] };
+      if (p.opt) {
+        properties[p.name] = { anyOf: [base, { type: 'null' }], default: null, description: p.desc };
+      } else {
+        properties[p.name] = { ...base, description: p.desc };
+        required.push(p.name);
+      }
+    }
+    const rowSchema = {
+      title: 'StructuredOutput',
+      type: 'object',
+      properties,
+      ...(required.length ? { required } : {}),
+    };
+    if (shape === 'table') {
+      instruction =
+        '\n\nRespond with a single valid JSON array of objects. Each object must conform to the following schema. ' +
+        'Return only the JSON array, no other text or markdown.\nSchema for each item:\n' +
+        JSON.stringify(rowSchema, null, 2);
+    } else {
+      instruction =
+        '\n\nRespond with a single valid JSON object that conforms to the following schema. ' +
+        'Return only the JSON, no other text or markdown.\nSchema:\n' +
+        JSON.stringify(rowSchema, null, 2);
+    }
+  }
+
+  const fullUser = runTemplate + instruction;
+  return fullUser.replace(/\n/g, '\r\n');
+}
+
+function hasPromptExportBlockingOverlayOpen() {
+  if (document.querySelector('.modal-overlay--edit-sections, .modal-overlay--edit-schema')) return true;
+  if (document.querySelector('.modal-overlay--field-editor')) return true;
+  for (const el of document.querySelectorAll('.modal-overlay--section-editor')) {
+    if (el.classList.contains('modal-overlay--rule-editor')) continue;
+    return true;
+  }
+  return false;
+}
+
 export function openPromptDetailModal({ name = '', note = '', sections = [], node: sourceNode = null, isPromptNameAlreadyUsed, onRunPrompt }) {
   const displayName = (name && name.trim()) ? name.trim() : 'Prompt';
   const noteTrimmed = (note || '').trim();
@@ -237,8 +365,11 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
               </div>
               <div class="prompt-form-error prompt-modal-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
               <div class="prompt-actions">
-                <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
-                <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Run</button>
+                <button type="button" class="btn btn-secondary prompt-detail-export-local">Save to local</button>
+                <div class="prompt-actions__trailing">
+                  <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
+                  <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Run</button>
+                </div>
               </div>
             </div>
           </div>
@@ -280,14 +411,35 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     }
   }
 
+  const exportLocalBtn = overlay.querySelector('.prompt-detail-export-local');
+
+  function syncPromptExportLocalEnabled() {
+    if (!exportLocalBtn) return;
+    const noNode = !sourceNode;
+    const nameNoteEditing = panel.getAttribute('data-prompt-detail-mode') === 'edit';
+    const childBlocking = hasPromptExportBlockingOverlayOpen();
+    exportLocalBtn.disabled = noNode || nameNoteEditing || childBlocking;
+  }
+
+  const exportOverlayObserver = new MutationObserver(() => syncPromptExportLocalEnabled());
+  exportOverlayObserver.observe(document.body, { childList: true });
+
+  function teardownPromptDetailModal() {
+    exportOverlayObserver.disconnect();
+    overlay.remove();
+    document.body.style.overflow = '';
+  }
+
   function showView() {
     panel.setAttribute('data-prompt-detail-mode', 'view');
+    syncPromptExportLocalEnabled();
   }
 
   function showEdit() {
     nameInp.value = nameValueEl.textContent.trim() || '';
     notesInp.value = notesValueEl.querySelector('.prompt-detail-placeholder') ? '' : (notesValueEl.textContent || '').trim();
     panel.setAttribute('data-prompt-detail-mode', 'edit');
+    syncPromptExportLocalEnabled();
   }
 
   const nameErrorEl = overlay.querySelector('#prompt-detail-name-error');
@@ -326,6 +478,39 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       notesValueEl.innerHTML = newNote ? escapeHtml(newNote) : '<span class="prompt-detail-placeholder">No description.</span>';
       showView();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    });
+  }
+
+  if (exportLocalBtn) {
+    exportLocalBtn.addEventListener('click', async () => {
+      const snapshot = readSavedPromptSnapshotFromNode(sourceNode);
+      if (!snapshot) return;
+      const defaultBase = sanitizeFilename(snapshot.name);
+      const payload = buildPromptExportText(snapshot);
+      const api = window.electronAPI;
+      let path;
+      if (api?.showSaveFileDialog && api?.writeFile) {
+        path = await api.showSaveFileDialog({
+          title: 'Save prompt',
+          defaultPath: `${defaultBase}.txt`,
+          filters: [{ name: 'Text file', extensions: ['txt'] }],
+        });
+      }
+      if (!path && !api?.showSaveFileDialog) {
+        path = `${defaultBase}.txt`;
+      }
+      if (path) {
+        if (api?.writeFile) {
+          await api.writeFile(path, payload, 'utf8');
+        } else {
+          const blob = new Blob([payload], { type: 'text/plain;charset=utf-8' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = path.split(/[/\\]/).pop() || `${defaultBase}.txt`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        }
+      }
     });
   }
 
@@ -384,6 +569,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
 
     function close() {
       editOverlay.remove();
+      syncPromptExportLocalEnabled();
     }
 
     function showError(msg) {
@@ -439,6 +625,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
 
     renderSectionsList();
     document.body.appendChild(editOverlay);
+    syncPromptExportLocalEnabled();
   }
 
   if (sectionsBtnEdit) {
@@ -449,8 +636,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
   if (sectionsBtnRun && onRunPrompt) {
     sectionsBtnRun.addEventListener('click', () => {
       onRunPrompt();
-      overlay.remove();
-      document.body.style.overflow = '';
+      teardownPromptDetailModal();
     });
   } else if (sectionsBtnRun) {
     sectionsBtnRun.style.display = 'none';
@@ -660,6 +846,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
 
     function close() {
       schemaOverlay.remove();
+      syncPromptExportLocalEnabled();
     }
 
     function showError(msg) {
@@ -722,6 +909,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
 
     renderSchemaCards();
     document.body.appendChild(schemaOverlay);
+    syncPromptExportLocalEnabled();
   }
 
   if (schemaBtnEdit) {
@@ -740,9 +928,9 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
   });
 
   overlay.querySelector('.modal-close').addEventListener('click', () => {
-    overlay.remove();
-    document.body.style.overflow = '';
+    teardownPromptDetailModal();
   });
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
+  syncPromptExportLocalEnabled();
 }
