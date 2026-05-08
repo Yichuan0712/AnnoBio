@@ -9,6 +9,8 @@ import { acceptReviewSuggestionsSkill } from './accept_review_suggestions/execut
 import { applyReviewSuggestionsSkill } from './apply_review_suggestions/execute.js';
 import { createRunNodeSkill } from './create_run_node/execute.js';
 import { createScoreNodeSkill } from './create_score_node/execute.js';
+import { updateScoreNodeSkill } from './update_score_node/execute.js';
+import { updateScoreRowSelectionSkill } from './update_score_row_selection/execute.js';
 import { runExistingNodeSkill } from './run_existing_node/execute.js';
 import { saveRunResultsToWorkspaceSkill } from './save_run_results_to_workspace/execute.js';
 import { saveScoreResultsToWorkspaceSkill } from './save_score_results_to_workspace/execute.js';
@@ -38,6 +40,8 @@ export const AGENT_SKILLS = Object.freeze([
   applyReviewSuggestionsSkill,
   createRunNodeSkill,
   createScoreNodeSkill,
+  updateScoreNodeSkill,
+  updateScoreRowSelectionSkill,
   runExistingNodeSkill,
   saveRunResultsToWorkspaceSkill,
   saveScoreResultsToWorkspaceSkill,

@@ -317,7 +317,9 @@ export function openRunDetailModal({
       runBtn.classList.add('btn-secondary');
       llmSelectEl.disabled = true;
       pickerEl.classList.add('run-detail-ws-picker--locked');
+      pickerEl.setAttribute('aria-disabled', 'true');
       inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
+      overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
       return;
     }
     if (isRunning()) {

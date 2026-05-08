@@ -65,6 +65,21 @@ function sortChatsByRecent(chats) {
     });
 }
 
+function mapMessageForStorage(message) {
+  if (!message || typeof message !== 'object') {
+    return { role: 'assistant', content: '' };
+  }
+  const out = {
+    role: String(message.role || 'assistant'),
+    content: String(message.content || ''),
+  };
+  if (Array.isArray(message.reasoningSteps) && message.reasoningSteps.length > 0) {
+    const rs = message.reasoningSteps.map((s) => String(s || '').trim()).filter(Boolean);
+    if (rs.length) out.reasoningSteps = rs;
+  }
+  return out;
+}
+
 function normalizeStoredChats(data) {
   const conversations = Array.isArray(data?.conversations)
     ? data.conversations
@@ -80,10 +95,7 @@ function normalizeStoredChats(data) {
           messages: Array.isArray(chat.messages)
             ? chat.messages
                 .filter((message) => message && typeof message === 'object')
-                .map((message) => ({
-                  role: String(message.role || 'assistant'),
-                  content: String(message.content || ''),
-                }))
+                .map((message) => mapMessageForStorage(message))
             : [],
         }))
     : [];
@@ -112,10 +124,21 @@ function mergeRemoteConversationIntoLocal(local, remote) {
   local.pendingStatus = String(remote.pendingStatus || '').trim();
   local.unsentDraft = String(remote.unsentDraft || '');
   local.updatedAt = Math.max(lt, rt);
-  local.messages = remote.messages.map((m) => ({
-    role: String(m.role || 'assistant'),
-    content: String(m.content || ''),
-  }));
+  const prevMessages = local.messages;
+  local.messages = remote.messages.map((m, i) => {
+    const mapped = mapMessageForStorage(m);
+    const prev = prevMessages[i];
+    if (
+      prev
+      && prev.role === mapped.role
+      && String(prev.content || '') === String(mapped.content || '')
+      && Array.isArray(prev.reasoningSteps) && prev.reasoningSteps.length > 0
+      && !mapped.reasoningSteps
+    ) {
+      return { ...mapped, reasoningSteps: prev.reasoningSteps.slice() };
+    }
+    return mapped;
+  });
   return true;
 }
 
@@ -145,6 +168,8 @@ export async function openAgentWindowModal(options = {}) {
   const addSampledDatasetNode = typeof options?.addSampledDatasetNode === 'function' ? options.addSampledDatasetNode : null;
   const addPromptNode = typeof options?.addPromptNode === 'function' ? options.addPromptNode : null;
   const addPromptVersion = typeof options?.addPromptVersion === 'function' ? options.addPromptVersion : null;
+  const updateScoreNode = typeof options?.updateScoreNode === 'function' ? options.updateScoreNode : null;
+  const updateScoreRowSelection = typeof options?.updateScoreRowSelection === 'function' ? options.updateScoreRowSelection : null;
   const addDatasetNode = typeof options?.addDatasetNode === 'function' ? options.addDatasetNode : null;
   const storageApi = window.electronAPI;
   let storedState = { conversations: [], activeChatId: '' };
@@ -222,10 +247,7 @@ export async function openAgentWindowModal(options = {}) {
         pendingStatus: String(chat.pendingStatus || '').trim(),
         unsentDraft: String(chat.unsentDraft || ''),
         messages: Array.isArray(chat.messages)
-          ? chat.messages.map((message) => ({
-              role: String(message.role || 'assistant'),
-              content: String(message.content || ''),
-            }))
+          ? chat.messages.map((message) => mapMessageForStorage(message))
           : [],
       })),
     };
@@ -439,6 +461,8 @@ export async function openAgentWindowModal(options = {}) {
     inspectNode,
     addRunNode,
     addScoreNode,
+    updateScoreNode,
+    updateScoreRowSelection,
     createAndRunReviewNode,
     verifyReviewSuggestions,
     acceptReviewSuggestions,

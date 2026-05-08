@@ -68,6 +68,18 @@ function getAgentSessionFile(projectPath) {
   return path.join(getAgentSessionsDir(), `${hash}.json`);
 }
 
+function mapAgentMessageForStorage(msg) {
+  const out = {
+    role: String(msg.role || 'assistant'),
+    content: String(msg.content || ''),
+  };
+  if (Array.isArray(msg.reasoningSteps) && msg.reasoningSteps.length > 0) {
+    const rs = msg.reasoningSteps.map((s) => String(s ?? '').trim()).filter(Boolean);
+    if (rs.length) out.reasoningSteps = rs;
+  }
+  return out;
+}
+
 function normalizeAgentConversationPayload(payload) {
   const data = payload && typeof payload === 'object' ? payload : {};
   const conversations = Array.isArray(data.conversations)
@@ -85,10 +97,7 @@ function normalizeAgentConversationPayload(payload) {
           messages: Array.isArray(item.messages)
             ? item.messages
                 .filter((msg) => msg && typeof msg === 'object')
-                .map((msg) => ({
-                  role: String(msg.role || 'assistant'),
-                  content: String(msg.content || ''),
-                }))
+                .map((msg) => mapAgentMessageForStorage(msg))
             : [],
         }))
     : [];
