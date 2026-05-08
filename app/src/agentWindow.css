@@ -247,7 +247,7 @@
   font-family: inherit;
   font-size: 12px;
   line-height: 1.45;
-  color: var(--text);
+  color: inherit;
 }
 
 .agent-window__message-editor {
@@ -274,6 +274,13 @@
   margin-top: 10px;
 }
 
+.agent-window__button-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: currentColor;
+}
+
 .agent-window__composer-send {
   width: 28px;
   height: 28px;
@@ -291,13 +298,6 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-}
-
-.agent-window__button-icon {
-  width: 14px;
-  height: 14px;
-  display: block;
-  fill: currentColor;
 }
 
 .agent-window__composer-send:hover:not(:disabled) {
@@ -342,6 +342,50 @@
 
 .agent-window__loading-text {
   color: var(--text-muted);
+}
+
+.agent-window__loading-stop {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: baseline;
+  margin: 0;
+  padding: 1px 6px;
+  white-space: nowrap;
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  box-shadow: none;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s, color 0.12s;
+}
+
+.agent-window__loading-stop:hover {
+  background: color-mix(in srgb, var(--text-muted) 32%, transparent);
+  color: var(--text);
+}
+
+.agent-window__loading-stop:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
+  outline-offset: 2px;
+}
+
+html.dark .agent-window__loading-stop {
+  background: color-mix(in srgb, var(--text-muted) 28%, transparent);
+}
+
+html.dark .agent-window__loading-stop:hover {
+  background: color-mix(in srgb, var(--text-muted) 42%, transparent);
 }
 
 .agent-window__composer {
