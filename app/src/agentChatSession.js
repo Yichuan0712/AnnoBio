@@ -29,6 +29,12 @@ const AGENT_SINGLE_EXECUTION_SKILLS = new Set([
   'apply_review_suggestions',
 ]);
 
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+}
+
 function sliceChatHistoryForApi(messages) {
   const slim = (Array.isArray(messages) ? messages : []).map((m) => ({
     role: String(m?.role || 'user'),
@@ -128,6 +134,7 @@ function createMessageNode(role, content, options = {}) {
     actionDisabled = false,
     onEdit = null,
     reasoningSteps = null,
+    onStopLoading = null,
   } = options;
   const wrapper = document.createElement('div');
   wrapper.className = `agent-window__message agent-window__message--${role}`;
@@ -141,10 +148,26 @@ function createMessageNode(role, content, options = {}) {
   bubbleEl.className = 'agent-window__message-bubble';
 
   if (loading) {
-    bubbleEl.innerHTML = `
-      <span class="agent-window__spinner" aria-hidden="true"></span>
-      <span class="agent-window__loading-text">${String(loadingText || 'Thinking...')}</span>
-    `;
+    const spinnerEl = document.createElement('span');
+    spinnerEl.className = 'agent-window__spinner';
+    spinnerEl.setAttribute('aria-hidden', 'true');
+    const loadingTextEl = document.createElement('span');
+    loadingTextEl.className = 'agent-window__loading-text';
+    loadingTextEl.textContent = String(loadingText || 'Thinking...');
+    bubbleEl.appendChild(spinnerEl);
+    bubbleEl.appendChild(loadingTextEl);
+    if (typeof onStopLoading === 'function') {
+      const stopBtn = document.createElement('button');
+      stopBtn.type = 'button';
+      stopBtn.className = 'agent-window__loading-stop';
+      stopBtn.textContent = 'Click to Stop';
+      stopBtn.setAttribute('aria-label', 'Click to stop generating');
+      stopBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        onStopLoading();
+      });
+      bubbleEl.appendChild(stopBtn);
+    }
   } else {
     if (
       role === 'assistant'
@@ -292,11 +315,14 @@ export function mountAgentChatSession({
     return {
       setConversation() {},
       destroy() {},
+      stopAssistant() {},
     };
   }
 
   let credentialId = '';
   let sendInFlight = false;
+  let activeAssistantAbortController = null;
+  let restoreComposerAfterAbortText = '';
   let activeConversationId = '';
   let editingMessageIndex = -1;
   let editingDraft = '';
@@ -345,6 +371,10 @@ export function mountAgentChatSession({
     if (isMounted() && activeConversationId === conversation.id) renderActiveConversation();
   }
 
+  function stopAssistant() {
+    activeAssistantAbortController?.abort();
+  }
+
   function renderActiveConversation() {
     const activeConversation = getActiveConversation();
     messagesEl.innerHTML = '';
@@ -376,6 +406,7 @@ export function mountAgentChatSession({
       appendMessage('assistant', '', {
         loading: true,
         loadingText: String(activeConversation?.pendingStatus || 'Thinking...'),
+        onStopLoading: stopAssistant,
       });
     }
   }
@@ -613,7 +644,7 @@ function shouldPreventRepeatedExecution(skillName) {
     }
   }
 
-  async function waitForRunCompletion(waitState, workflowSnapshot, loopSignals, agentTrace, onProgress) {
+  async function waitForRunCompletion(waitState, workflowSnapshot, loopSignals, agentTrace, onProgress, signal) {
     const startedAt = waitState?.startedAt || Date.now();
     let lastProgress = Number(waitState?.lastObservedProgress) || 0;
     let lastResultsCount = Number(waitState?.lastObservedResultsCount) || 0;
@@ -621,6 +652,7 @@ function shouldPreventRepeatedExecution(skillName) {
     let warnedForStall = false;
 
     while (true) {
+      throwIfAborted(signal);
       const latestSnapshot = await readWorkflowSnapshot();
       if (latestSnapshot) workflowSnapshot = latestSnapshot;
       const runNode = findNodeInSnapshot(workflowSnapshot, waitState?.runNodeId);
@@ -735,7 +767,7 @@ function shouldPreventRepeatedExecution(skillName) {
     }
   }
 
-  async function waitForReviewCompletion(waitState, workflowSnapshot, loopSignals, agentTrace, onProgress) {
+  async function waitForReviewCompletion(waitState, workflowSnapshot, loopSignals, agentTrace, onProgress, signal) {
     const startedAt = waitState?.startedAt || Date.now();
     let lastProgress = Number(waitState?.lastObservedProgress) || 0;
     let lastSuggestionCount = Number(waitState?.lastObservedSuggestionCount) || 0;
@@ -743,6 +775,7 @@ function shouldPreventRepeatedExecution(skillName) {
     let warnedForStall = false;
 
     while (true) {
+      throwIfAborted(signal);
       const latestSnapshot = await readWorkflowSnapshot();
       if (latestSnapshot) workflowSnapshot = latestSnapshot;
       const reviewNode = findNodeInSnapshot(workflowSnapshot, waitState?.reviewNodeId);
@@ -891,7 +924,7 @@ function shouldPreventRepeatedExecution(skillName) {
     };
   }
 
-  async function planAgentSkills(messages, workflowSnapshot, observations, loopSignals, roundIndex) {
+  async function planAgentSkills(messages, workflowSnapshot, observations, loopSignals, roundIndex, signal) {
     if (!workflowSnapshot) {
       return {
         ok: true,
@@ -911,6 +944,7 @@ function shouldPreventRepeatedExecution(skillName) {
       availableSkills: AGENT_SKILL_REGISTRY,
       loopSignals,
       roundIndex,
+      signal,
     });
     return {
       ok,
@@ -921,6 +955,7 @@ function shouldPreventRepeatedExecution(skillName) {
   async function requestChatCompletion(messages, options = {}) {
     const useWorkflowContext = options.useWorkflowContext === true;
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const signal = options.signal;
     const withAgentTrace = async (resultPromise, trace) => {
       const r = await resultPromise;
       return {
@@ -933,7 +968,7 @@ function shouldPreventRepeatedExecution(skillName) {
       let workflowSnapshot = await readWorkflowSnapshot();
       if (!workflowSnapshot) {
         if (onProgress) onProgress('No workflow snapshot; answering without agent tools.');
-        return withAgentTrace(requestSimpleChat({ credentialId, messages }), null);
+        return withAgentTrace(requestSimpleChat({ credentialId, messages, signal }), null);
       }
       const observations = [];
       const loopSignals = [];
@@ -946,6 +981,7 @@ function shouldPreventRepeatedExecution(skillName) {
       let waitingState = null;
       try {
         while (true) {
+          throwIfAborted(signal);
           roundIndex += 1;
           const elapsedMs = Date.now() - loopStartedAt;
           if (elapsedMs >= AGENT_LOOP_MAX_RUNTIME_MS) {
@@ -956,8 +992,8 @@ function shouldPreventRepeatedExecution(skillName) {
 
           if (waitingState) {
             const waitResult = waitingState.kind === 'review'
-              ? await waitForReviewCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress)
-              : await waitForRunCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress);
+              ? await waitForReviewCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress, signal)
+              : await waitForRunCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress, signal);
             workflowSnapshot = waitResult.workflowSnapshot || workflowSnapshot;
             if (waitResult.observation) {
               observations.push(waitResult.observation);
@@ -983,7 +1019,7 @@ function shouldPreventRepeatedExecution(skillName) {
               + `agedOut=${compactionStats.agedOut} skipped=${compactionStats.skipped}`
             );
           }
-          const { ok, plan } = await planAgentSkills(messages, workflowSnapshot, compactedObservations, loopSignals, roundIndex);
+          const { ok, plan } = await planAgentSkills(messages, workflowSnapshot, compactedObservations, loopSignals, roundIndex, signal);
           if (!ok) {
             addLoopSignal(loopSignals, 'Planner request failed');
             agentTrace.push(`ROUND ${roundIndex} PLAN ERROR: planner request failed, answering with current evidence`);
@@ -1017,6 +1053,7 @@ function shouldPreventRepeatedExecution(skillName) {
 
           let roundMadeProgress = false;
           for (const skillCall of plan.skillCalls) {
+            throwIfAborted(signal);
             const skill = getAgentSkillByName(skillCall.skillName);
             if (onProgress) onProgress(getSkillProgressLabel(skill, skillCall, workflowSnapshot));
 
@@ -1149,10 +1186,14 @@ function shouldPreventRepeatedExecution(skillName) {
             observations,
             nodeInspection: latestNodeInspection?.result || null,
             agentTrace,
+            signal,
           }),
           agentTrace,
         );
       } catch (error) {
+        if (signal?.aborted || error?.name === 'AbortError') {
+          throw error;
+        }
         console.error('Run agent loop:', error);
         agentTrace.push(`LOOP ERROR: ${error instanceof Error ? error.message : 'unknown error'}`);
         addLoopSignal(loopSignals, `Agent loop error: ${error instanceof Error ? error.message : 'unknown error'}`);
@@ -1169,6 +1210,7 @@ function shouldPreventRepeatedExecution(skillName) {
           observations,
           nodeInspection: latestNodeInspection?.result || null,
           agentTrace,
+          signal,
         }),
         agentTrace,
       );
@@ -1203,7 +1245,8 @@ function shouldPreventRepeatedExecution(skillName) {
     }
   }
 
-  async function requestAssistantReply(targetConversation, targetMessages) {
+  async function requestAssistantReply(targetConversation, targetMessages, options = {}) {
+    const { signal, popLastUserOnAbort = false } = options;
     const reasoningSteps = [];
     try {
       setPendingStatus(targetConversation, 'Planning next steps...');
@@ -1214,6 +1257,7 @@ function shouldPreventRepeatedExecution(skillName) {
           if (s && reasoningSteps[reasoningSteps.length - 1] !== s) reasoningSteps.push(s);
           setPendingStatus(targetConversation, status);
         },
+        signal,
       });
 
       targetConversation.pending = false;
@@ -1231,6 +1275,32 @@ function shouldPreventRepeatedExecution(skillName) {
       if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
       if (ok) void refreshConversationTitle(targetConversation);
     } catch (error) {
+      const aborted = Boolean(signal?.aborted || error?.name === 'AbortError');
+      if (aborted) {
+        targetConversation.pending = false;
+        targetConversation.pendingStatus = '';
+        const restore = String(restoreComposerAfterAbortText || '');
+        if (popLastUserOnAbort) {
+          const last = targetMessages[targetMessages.length - 1];
+          if (last?.role === 'user' && String(last.content || '') === restore) {
+            targetMessages.pop();
+            if (targetMessages.length === 0) {
+              targetConversation.title = 'New Agent';
+              targetConversation.generatedTitle = true;
+            }
+          }
+        }
+        targetConversation.unsentDraft = restore;
+        notifyConversationDraftChanged(targetConversation);
+        if (isMounted() && activeConversationId === targetConversation.id) {
+          inputEl.value = restore;
+          if (typeof autoResizeComposer === 'function') autoResizeComposer();
+        }
+        targetConversation.updatedAt = Date.now();
+        notifyConversationUpdated(targetConversation);
+        if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
+        return;
+      }
       const reply = `Error: ${error instanceof Error ? error.message : 'Request failed'}`;
       targetConversation.pending = false;
       targetConversation.pendingStatus = '';
@@ -1242,6 +1312,8 @@ function shouldPreventRepeatedExecution(skillName) {
       if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
     } finally {
       sendInFlight = false;
+      activeAssistantAbortController = null;
+      restoreComposerAfterAbortText = '';
       if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
       if (isMounted()) updateComposerState();
     }
@@ -1259,6 +1331,8 @@ function shouldPreventRepeatedExecution(skillName) {
     if (!targetMessage || targetMessage.role !== 'user') return;
 
     sendInFlight = true;
+    restoreComposerAfterAbortText = '';
+    activeAssistantAbortController = new AbortController();
     editingMessageIndex = -1;
     editingDraft = '';
     targetMessage.content = text;
@@ -1274,7 +1348,10 @@ function shouldPreventRepeatedExecution(skillName) {
     if (activeConversationId === targetConversation.id) renderActiveConversation();
     updateComposerState();
 
-    await requestAssistantReply(targetConversation, targetMessages);
+    await requestAssistantReply(targetConversation, targetMessages, {
+      signal: activeAssistantAbortController.signal,
+      popLastUserOnAbort: false,
+    });
   }
 
   async function initializeCredential() {
@@ -1300,6 +1377,8 @@ function shouldPreventRepeatedExecution(skillName) {
 
     const targetConversation = activeConversation;
     const targetMessages = ensureConversationMessages(targetConversation);
+    restoreComposerAfterAbortText = text;
+    activeAssistantAbortController = new AbortController();
     sendInFlight = true;
     targetConversation.unsentDraft = '';
     notifyConversationDraftChanged(targetConversation);
@@ -1319,7 +1398,10 @@ function shouldPreventRepeatedExecution(skillName) {
     if (activeConversationId === targetConversation.id) renderActiveConversation();
     updateComposerState();
 
-    await requestAssistantReply(targetConversation, targetMessages);
+    await requestAssistantReply(targetConversation, targetMessages, {
+      signal: activeAssistantAbortController.signal,
+      popLastUserOnAbort: true,
+    });
   }
 
   function handleInput() {
@@ -1362,7 +1444,10 @@ function shouldPreventRepeatedExecution(skillName) {
 
   return {
     setConversation,
+    stopAssistant,
     destroy() {
+      // Do not abort in-flight agent requests: closing the window should mirror pre-Stop
+      // behavior (run continues; state is saved). Abort is only for explicit stopAssistant().
       inputEl.removeEventListener('input', handleInput);
       inputEl.removeEventListener('keydown', handleKeyDown);
       sendButtonEl.removeEventListener('click', handleSendClick);
