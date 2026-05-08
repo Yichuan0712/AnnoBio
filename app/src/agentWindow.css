@@ -223,11 +223,13 @@
 }
 
 .agent-window__reasoning {
-  margin-bottom: 10px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  margin: 0 0 10px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   font-size: 12px;
+  color: var(--text-muted);
 }
 
 .agent-window__reasoning summary {
@@ -236,7 +238,8 @@
 }
 
 .agent-window__reasoning-body {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
+  padding: 0;
   max-height: 220px;
   overflow: auto;
   white-space: pre-wrap;
@@ -244,6 +247,7 @@
   font-family: inherit;
   font-size: 12px;
   line-height: 1.45;
+  color: var(--text);
 }
 
 .agent-window__message-editor {
