@@ -106,6 +106,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     left,
     top,
     ensureUniqueName = true,
+    agentCreated = false,
   } = {}) {
     const requestedName = (name || '').trim() || 'Prompt';
     const finalName = ensureUniqueName && isPromptNameAlreadyUsed(requestedName)
@@ -119,7 +120,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       left,
       top,
     });
-    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
+    if (agentCreated && typeof markNodeAsAgentCreated === 'function') {
+      markNodeAsAgentCreated(node);
+    }
     updateContentSize();
     updateEdges();
     emitCanvasChanged();
@@ -209,6 +212,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       left: resolvedLeft,
       top: resolvedTop,
       ensureUniqueName: false,
+      agentCreated: true,
     });
 
     if (created?.nodeId && ensureConnection(normalizedPromptNodeId, created.nodeId, 'prompt-to-prompt')) {
@@ -236,6 +240,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     left,
     top,
     ensureUniqueName = true,
+    agentCreated = false,
   } = {}) {
     const normalizedReviewNodeId = String(reviewNodeId || '').trim();
     const normalizedScoreNodeId = String(scoreNodeId || '').trim();
@@ -311,6 +316,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       left: resolvedLeft,
       top: resolvedTop,
       ensureUniqueName: false,
+      agentCreated,
     });
     const newNode = created?.nodeId ? getNodeById(created.nodeId) : null;
 
@@ -1454,7 +1460,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       top: resolvedTop,
       title: finalName,
     });
-    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(promptReviewNode);
     if (promptReviewNode?.dataset?.nodeId) {
       promptReviewNode.dataset.promptReviewName = finalName;
       getConnectionsList().push({
@@ -1513,6 +1518,10 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       ensureUniqueName,
     });
     const reviewNodeId = String(created?.reviewNodeId || created?.nodeId || '').trim();
+    const createdReviewEl = reviewNodeId ? getNodeById(reviewNodeId) : null;
+    if (createdReviewEl && typeof markNodeAsAgentCreated === 'function') {
+      markNodeAsAgentCreated(createdReviewEl);
+    }
     if (!reviewNodeId) {
       throw new Error('Review node could not be created.');
     }
