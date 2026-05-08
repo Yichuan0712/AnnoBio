@@ -21,7 +21,7 @@ export const createPromptNodeSkill = Object.freeze({
       throw new Error('Prompt node creation runtime is unavailable.');
     }
     const promptNode = buildPromptNodeSpec(args);
-    const created = runtime.addPromptNode(promptNode);
+    const created = runtime.addPromptNode({ ...promptNode, agentCreated: true });
     return {
       ...created,
       promptNode,
