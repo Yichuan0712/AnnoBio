@@ -363,9 +363,6 @@ export function openSettingsModal() {
                       <div class="defaults-page-scroll">
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
-                              <p class="dataset-meta-label" style="margin-bottom:0.35rem;font-weight:600;">Models &amp; limits</p>
-                            </div>
-                            <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-review-credential">Default model</label>
                               <select id="settings-default-review-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Review">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
@@ -378,9 +375,6 @@ export function openSettingsModal() {
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-review-max-failed-rows">Max failed inputs per Review (1–200)</label>
                               <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max inputs with failures analyzed per Review" />
-                            </div>
-                            <div class="defaults-field defaults-field--full">
-                              <p class="dataset-meta-label" style="margin-bottom:0.35rem;font-weight:600;">Optimization</p>
                             </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-optimization-max-trials">Max trials per optimization run (4–200)</label>
