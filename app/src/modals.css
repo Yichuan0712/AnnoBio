@@ -7803,3 +7803,54 @@ button.btn.btn-danger:hover:not(:disabled) {
   border-color: var(--diff-removed-text);
   color: var(--diff-removed-text);
 }
+
+/* ——— "Create a new dataset" Step 2: choose upload vs. PubMed import ———
+   Matches the existing step-2 rhythm: .dataset-import-title (13px/600/muted) for headings,
+   .dataset-meta-label for field labels, 6-12px gaps, .dataset-file-info-style info cards. */
+.dataset-source-panel {
+  display: none;
+}
+
+.dataset-source-panel--active {
+  display: block;
+}
+
+/* Data-source tabs: same "row of .btn.btn-secondary buttons, one highlighted" language as
+   Review's "Issue analysis / Suggested changes" switch (.review-detail-output-toolbar +
+   .review-detail-view-switch), not a bespoke pill bar. */
+.dataset-source-tabs-row {
+  display: flex;
+  flex-shrink: 0;
+  padding: 2px 0 10px;
+}
+
+.dataset-source-switch {
+  flex: 0 1 auto;
+}
+
+.pubmed-import-ids {
+  min-height: 100px;
+}
+
+.pubmed-import-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.pubmed-import-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.pubmed-import-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+

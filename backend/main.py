@@ -87,6 +87,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 RUN_JOBS_FILE = DATA_DIR / "run_jobs.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
+PUBMED_JOBS_FILE = DATA_DIR / "pubmed_jobs.json"
 
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
@@ -100,6 +101,10 @@ DEFAULT_SETTINGS = {
     "optimization_max_trials": 40,
     # Show Reset & Debug buttons on suggestion cards.
     "debug_mode": False,
+    # Optional: raises PubMed E-utilities rate limit from 3/sec to 10/sec when set.
+    "ncbi_api_key": "",
+    # Optional: NCBI asks every E-utilities caller to identify a contact; falls back to a generic address when blank.
+    "ncbi_email": "",
 }
 
 
@@ -157,6 +162,8 @@ class SettingsPatch(BaseModel):
         description="Maximum Thompson-sampling trials per compositional optimization run (4–200).",
     )
     debug_mode: bool | None = None
+    ncbi_api_key: str | None = None
+    ncbi_email: str | None = None
 
 
 class CredentialResponse(BaseModel):
@@ -1441,6 +1448,176 @@ def get_run_result_by_node(run_node_id: str):
     if job_error:
         return {"run_id": run_id, "status": "done", "error": job_error, "results": None, "output_fields": None}
     return {"run_id": run_id, "status": "done", "results": results, "output_fields": output_fields}
+
+
+# ---------- PubMed import (bulk-fetch articles into a Dataset) ----------
+# Same shape as the Run job block above: background thread + job_id + polling, persisted to
+# disk so a large import survives a backend restart. job: { status, completed, total, headers,
+# rows, error? }. Cancellation/abandonment reuse the same timeout as Run (RUN_ABANDON_TIMEOUT_SEC).
+PUBMED_MAX_IDS_CAP = 5000  # sane ceiling regardless of what the client requests
+
+_pubmed_jobs: dict[str, dict] = {}
+_pubmed_jobs_lock = threading.Lock()
+_pubmed_cancelled: set[str] = set()
+_pubmed_last_activity: dict[str, float] = {}
+
+
+class PubmedImportRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, description="PMIDs to fetch")
+    fields: list[str] = Field(..., min_length=1, description="Keys from pubmed_client.PUBMED_FIELDS to import as columns")
+
+
+class _PubmedStopSignal(Exception):
+    """Raised from the on_batch callback to unwind fetch_articles when cancelled/abandoned."""
+
+
+def _touch_pubmed_activity(job_id: str) -> None:
+    _pubmed_last_activity[job_id] = time.time()
+
+
+def _persist_pubmed_jobs() -> None:
+    with _pubmed_jobs_lock:
+        snapshot = dict(_pubmed_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        PUBMED_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[PubMed] persist failed: {e}", file=sys.stderr)
+
+
+def _load_pubmed_jobs() -> None:
+    if not PUBMED_JOBS_FILE.exists():
+        return
+    try:
+        raw = PUBMED_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _pubmed_jobs_lock:
+            _pubmed_jobs.clear()
+            _pubmed_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[PubMed] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_pubmed_jobs()
+
+
+def _do_pubmed_import_work(job_id: str, req: PubmedImportRequest) -> None:
+    from pubmed_client import PUBMED_FIELDS, fetch_articles
+
+    try:
+        settings = _load_settings()
+        api_key = (settings.get("ncbi_api_key") or "").strip()
+        email = (settings.get("ncbi_email") or "").strip()
+        fields = [f for f in req.fields if f in PUBMED_FIELDS]
+        if not fields:
+            with _pubmed_jobs_lock:
+                _pubmed_jobs[job_id] = {"status": "done", "error": "No valid fields selected"}
+            _persist_pubmed_jobs()
+            return
+
+        pmids = [p.strip() for p in req.ids if p.strip()]
+        # de-dupe, keep order
+        seen = set()
+        pmids = [p for p in pmids if not (p in seen or seen.add(p))][:PUBMED_MAX_IDS_CAP]
+
+        total = len(pmids)
+        with _pubmed_jobs_lock:
+            _pubmed_jobs[job_id]["total"] = total
+            _pubmed_jobs[job_id]["completed"] = 0
+            _pubmed_jobs[job_id]["headers"] = [PUBMED_FIELDS[f] for f in fields]
+            _pubmed_jobs[job_id]["rows"] = []
+            _pubmed_jobs[job_id]["not_found"] = []
+        _persist_pubmed_jobs()
+
+        if total == 0:
+            with _pubmed_jobs_lock:
+                _pubmed_jobs[job_id]["status"] = "done"
+            _persist_pubmed_jobs()
+            return
+
+        def on_batch(batch_articles: list[dict], not_found: list[str], completed: int, batch_total: int) -> None:
+            is_cancelled = job_id in _pubmed_cancelled
+            is_abandoned = (time.time() - _pubmed_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
+            with _pubmed_jobs_lock:
+                # Append incrementally (not just at the end) so a cancelled/abandoned job still
+                # keeps whatever was already fetched, instead of throwing away completed work.
+                _pubmed_jobs[job_id]["rows"].extend([a.get(f, "") for f in fields] for a in batch_articles)
+                _pubmed_jobs[job_id]["completed"] = completed
+                _pubmed_jobs[job_id]["not_found"].extend(not_found)
+            _persist_pubmed_jobs()
+            if is_cancelled or is_abandoned:
+                raise _PubmedStopSignal()
+
+        try:
+            fetch_articles(pmids, fields=fields, api_key=api_key, email=email, on_batch=on_batch)
+        except _PubmedStopSignal:
+            with _pubmed_jobs_lock:
+                job = _pubmed_jobs.get(job_id, {})
+                job["status"] = "cancelled" if job_id in _pubmed_cancelled else "done"
+            _persist_pubmed_jobs()
+            return
+
+        with _pubmed_jobs_lock:
+            _pubmed_jobs[job_id]["status"] = "done"
+        _persist_pubmed_jobs()
+    except Exception as e:
+        with _pubmed_jobs_lock:
+            _pubmed_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_pubmed_jobs()
+
+
+@app.post("/api/pubmed/import")
+def start_pubmed_import(body: PubmedImportRequest):
+    """Start a PubMed import (fetch by PMID) in the background; returns 202 with job_id. Poll GET .../result/{job_id}."""
+    job_id = str(uuid.uuid4())
+    with _pubmed_jobs_lock:
+        _pubmed_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "headers": [], "rows": []}
+        _touch_pubmed_activity(job_id)
+    _persist_pubmed_jobs()
+    thread = threading.Thread(target=_do_pubmed_import_work, args=(job_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/pubmed/import/result/{job_id}")
+def get_pubmed_import_result(job_id: str):
+    """Return 202 while running (with partial rows), 200 when done/cancelled. Polling refreshes the abandonment timer."""
+    with _pubmed_jobs_lock:
+        job = _pubmed_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if job.get("status") == "running":
+            _touch_pubmed_activity(job_id)
+        status = job.get("status")
+        completed = job.get("completed", 0)
+        total = job.get("total", 0)
+        headers = job.get("headers") or []
+        rows = (job.get("rows") or [])[:]
+        not_found = (job.get("not_found") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "completed": completed, "total": total, "headers": headers, "rows": rows},
+        )
+    if error:
+        return {"status": "done", "error": error, "headers": [], "rows": []}
+    return {"status": status, "completed": completed, "total": total, "headers": headers, "rows": rows, "not_found": not_found}
+
+
+@app.post("/api/pubmed/import/cancel/{job_id}")
+def cancel_pubmed_import(job_id: str):
+    """Mark import as cancelled; worker stops after the current batch."""
+    with _pubmed_jobs_lock:
+        if job_id not in _pubmed_jobs:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if _pubmed_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _pubmed_jobs[job_id].get("status")}
+        _pubmed_cancelled.add(job_id)
+        _touch_pubmed_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
 
 
 # ---------- Review analyze worker (delegates to review_pipeline.py) ----------
