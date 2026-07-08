@@ -40,6 +40,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 from agent.chat.agent_chat import build_agent_messages, format_agent_messages_for_log
 from agent.prompt.agent_plan_prompt import build_agent_plan_instruction_prefix
 from llm import chat as llm_chat, run_structured as llm_run_structured
+from provider_detect import detect_provider, verify_credential
 
 app = FastAPI()
 
@@ -163,6 +164,9 @@ class CredentialResponse(BaseModel):
     model: str
     llm: str
     base_url: str = ""
+    provider: str = ""
+    last_check_ok: bool | None = None
+    last_check_error: str | None = None
     api_key_masked: str
 
 
@@ -173,6 +177,9 @@ class CredentialDetailResponse(BaseModel):
     model: str
     llm: str
     base_url: str = ""
+    provider: str = ""
+    last_check_ok: bool | None = None
+    last_check_error: str | None = None
     api_key: str
 
 
@@ -432,10 +439,30 @@ def list_credentials():
             model=_credential_model(item),
             llm=_credential_model(item),
             base_url=_credential_base_url(item),
+            provider=_credential_provider(item),
+            last_check_ok=item.get("last_check_ok"),
+            last_check_error=item.get("last_check_error"),
             api_key_masked=_mask_key(item["api_key"]),
         )
         for item in items
     ]
+
+
+@app.post("/api/credentials/detect")
+async def detect_credential_provider(request: Request):
+    """
+    Best-effort identify which provider a model id / base_url / api_key belongs to, and
+    return that provider's own live model list (for autocomplete). Never raises on a failed
+    detection -- callers should treat provider="" as "let the user type it manually".
+    """
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+    model = (body.get("model") or "").strip()
+    base_url = (body.get("base_url") or "").strip()
+    api_key = (body.get("api_key") or "").strip()
+    return await detect_provider(model=model, base_url=base_url, api_key=api_key)
 
 
 @app.post("/api/credentials", response_model=CredentialResponse)
@@ -448,6 +475,7 @@ async def add_credential(request: Request):
     model = (body.get("model") or body.get("llm") or "").strip()
     api_key = (body.get("api_key") or "").strip()
     base_url = (body.get("base_url") or "").strip()
+    provider = (body.get("provider") or "").strip()
     if not model:
         raise HTTPException(status_code=400, detail="model is required")
     if not api_key:
@@ -459,6 +487,7 @@ async def add_credential(request: Request):
         "model": model,
         "api_key": api_key,
         "base_url": base_url,
+        "provider": provider,
     }
     items.append(new_item)
     _save_credentials(items)
@@ -467,6 +496,7 @@ async def add_credential(request: Request):
         model=new_item["model"],
         llm=new_item["model"],
         base_url=new_item["base_url"],
+        provider=new_item["provider"],
         api_key_masked=_mask_key(new_item["api_key"]),
     )
 
@@ -482,14 +512,24 @@ def get_credential(credential_id: str):
                 model=_credential_model(item),
                 llm=_credential_model(item),
                 base_url=_credential_base_url(item),
+                provider=_credential_provider(item),
+                last_check_ok=item.get("last_check_ok"),
+                last_check_error=item.get("last_check_error"),
                 api_key=item["api_key"],
             )
     raise HTTPException(status_code=404, detail="Credential not found")
 
 
 @app.post("/api/credentials/{credential_id}/test")
-def test_credential(credential_id: str):
-    """Verify API key by sending a minimal prompt to the LLM."""
+async def test_credential(credential_id: str):
+    """
+    Confirm -- for real -- which provider this credential actually talks to, by sending a
+    minimal chat completion under each candidate interpretation (see verify_credential), and
+    correct the stored `provider` if it's wrong or was never set. Not just an "is the key
+    valid" ping: string guessing alone can't tell that an OpenRouter id like
+    "openai/gpt-oss-20b" needs the openrouter/ wrapper rather than a literal call to OpenAI's
+    own API, so this is also what runs (in the background, non-blocking) right after Add.
+    """
     items = _load_credentials()
     cred = None
     for item in items:
@@ -500,22 +540,23 @@ def test_credential(credential_id: str):
         raise HTTPException(status_code=404, detail="Credential not found")
     model = _credential_model(cred)
     api_key = cred.get("api_key", "")
+    base_url = _credential_base_url(cred)
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
-    provider = _credential_provider(cred)
-    base_url = _credential_base_url(cred)
-    try:
-        llm_chat(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            messages=[{"role": "user", "content": "Reply with exactly: OK"}],
-            max_tokens=50,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"ok": True}
+
+    result = await verify_credential(
+        model=model, base_url=base_url, api_key=api_key, current_provider=_credential_provider(cred)
+    )
+    # Persist the outcome either way -- a failed check must stick after reopening the app,
+    # not silently revert to whatever provider/checkmark was last known good.
+    cred["last_check_ok"] = result["ok"]
+    cred["last_check_error"] = result["error"]
+    if result["ok"] and result["provider"] != _credential_provider(cred):
+        cred["provider"] = result["provider"]
+    _save_credentials(items)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["error"] or "Verification failed")
+    return result
 
 
 # ---------- Chat (Review Assistant) ----------
