@@ -146,7 +146,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     </div>
                     <div class="dataset-import-actions">
                       <button type="button" class="btn btn-secondary pubmed-import-fetch-btn">Fetch from PubMed</button>
-                      <button type="button" class="btn btn-secondary pubmed-import-cancel-btn" hidden>Cancel</button>
+                      <span class="dataset-filename pubmed-import-fetch-status" aria-live="polite"></span>
                     </div>
                   </div>
                 </div>
@@ -186,7 +186,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
   const sourceSwitchBtns = overlay.querySelectorAll('.dataset-source-switch .review-detail-tab');
   const pmIdsInput = overlay.querySelector('#pm-ids');
   const pubmedFetchBtn = overlay.querySelector('.pubmed-import-fetch-btn');
-  const pubmedCancelBtn = overlay.querySelector('.pubmed-import-cancel-btn');
+  const pubmedFetchStatusEl = overlay.querySelector('.pubmed-import-fetch-status');
   let dataSource = 'upload';
   let pubmedJobId = null;
   let pubmedPollTimer = null;
@@ -351,14 +351,12 @@ export function openAddDatasetModal(workflowCanvasApi) {
 
   function setPubmedRunningUi(running) {
     pubmedFetchBtn.disabled = running;
-    pubmedCancelBtn.hidden = !running;
     addBtn.disabled = running;
   }
 
-  /** Preview area doubles as the PubMed status line, same as it shows file-parse state for uploads. */
-  function setPubmedPreviewStatus(text) {
-    previewEl.textContent = text;
-    previewEl.classList.add('prompt-preview--empty');
+  /** Mirrors .dataset-filename next to "Choose CSV / TSV / XLSX file": a short result, not a full status line. */
+  function setPubmedFetchStatus(text) {
+    if (pubmedFetchStatusEl) pubmedFetchStatusEl.textContent = text || '';
   }
 
   /** Switching source panels always drops whatever was staged for submission (see comment above). */
@@ -368,6 +366,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
     xlsxWorkbook = null;
     previewEl.textContent = 'No file selected yet.';
     previewEl.classList.add('prompt-preview--empty');
+    setPubmedFetchStatus('');
   }
 
   function switchDataSource(target) {
@@ -402,7 +401,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       const res = await fetch(`${API_BASE}/api/pubmed/import/result/${jobId}`);
       const data = await res.json().catch(() => ({}));
       if (data.status === 'running') {
-        setPubmedPreviewStatus(`Fetching from PubMed… ${data.completed ?? 0}/${data.total ?? '?'}`);
+        setPubmedFetchStatus(`Fetching… ${data.completed ?? 0}/${data.total ?? '?'}`);
         pubmedPollTimer = setTimeout(() => pollPubmedJob(jobId), PUBMED_POLL_INTERVAL_MS);
         return;
       }
@@ -410,36 +409,33 @@ export function openAddDatasetModal(workflowCanvasApi) {
       pubmedJobId = null;
       if (data.error) {
         showError(`PubMed import failed: ${data.error}`);
-        setPubmedPreviewStatus('No file selected yet.');
+        setPubmedFetchStatus('');
         return;
       }
       const headers = data.headers || [];
       const rows = data.rows || [];
       const notFound = data.not_found || [];
+      const total = data.total ?? rows.length;
       if (rows.length === 0) {
-        setPubmedPreviewStatus(
-          data.status === 'cancelled'
-            ? 'Cancelled — no articles were fetched yet.'
-            : notFound.length > 0
-              ? `None of the ${notFound.length} PMID${notFound.length === 1 ? '' : 's'} were found on PubMed.`
-              : 'No articles found.',
-        );
+        setPubmedFetchStatus(data.status === 'cancelled' ? 'Cancelled.' : `0/${total} PMID${total === 1 ? '' : 's'} fetched`);
+        if (data.status !== 'cancelled' && notFound.length > 0) {
+          showError(`None of the ${notFound.length} PMID${notFound.length === 1 ? '' : 's'} were found on PubMed.`);
+        }
         return;
       }
       fileImported = true;
       parsedDatasetContent = { headers, rows };
       const previewRows = rows.slice(0, MAX_PREVIEW_ROWS);
       renderPreviewTable(headers, previewRows, rows.length);
-      if (data.status === 'cancelled') {
-        showError('Cancelled — the dataset will only include the articles fetched so far.');
-      } else if (notFound.length > 0) {
+      setPubmedFetchStatus(`${rows.length}/${total} PMID${total === 1 ? '' : 's'} fetched${data.status === 'cancelled' ? ' (cancelled early)' : ''}`);
+      if (notFound.length > 0) {
         showError(`${notFound.length} PMID${notFound.length === 1 ? '' : 's'} not found on PubMed and skipped: ${notFound.join(', ')}`);
       }
     } catch (e) {
       setPubmedRunningUi(false);
       pubmedJobId = null;
       showError(`Could not reach backend: ${(e && e.message) || e}`);
-      setPubmedPreviewStatus('No file selected yet.');
+      setPubmedFetchStatus('');
     }
   }
 
@@ -458,7 +454,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
     const body = { fields, ids };
 
     setPubmedRunningUi(true);
-    setPubmedPreviewStatus('Starting…');
+    setPubmedFetchStatus('Starting…');
     try {
       const res = await fetch(`${API_BASE}/api/pubmed/import`, {
         method: 'POST',
@@ -469,7 +465,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       if (!res.ok) {
         setPubmedRunningUi(false);
         showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
-        setPubmedPreviewStatus('No file selected yet.');
+        setPubmedFetchStatus('');
         return;
       }
       pubmedJobId = data.job_id;
@@ -477,13 +473,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
     } catch (e) {
       setPubmedRunningUi(false);
       showError(`Could not reach backend: ${(e && e.message) || e}`);
-      setPubmedPreviewStatus('No file selected yet.');
+      setPubmedFetchStatus('');
     }
-  });
-
-  pubmedCancelBtn.addEventListener('click', () => {
-    if (!pubmedJobId) return;
-    fetch(`${API_BASE}/api/pubmed/import/cancel/${pubmedJobId}`, { method: 'POST' }).catch(() => {});
   });
 
   fileInput.addEventListener('change', () => {
