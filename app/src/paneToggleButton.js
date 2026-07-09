@@ -40,6 +40,56 @@ function createPaneToggleIcon(singlePane) {
   return svg;
 }
 
+/**
+ * 3-state icon: outer frame with a vertical divider; content lines are drawn only on the
+ * visible half(s), so 'left' and 'right' are visually distinguishable, unlike the 2-state
+ * {@link createPaneToggleIcon} which only knows "split" vs "single". No fill — outline only,
+ * matching the rest of the icon set.
+ */
+function createPaneCycleIcon(state) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.4');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+
+  const outer = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  outer.setAttribute('x', '2');
+  outer.setAttribute('y', '3');
+  outer.setAttribute('width', '12');
+  outer.setAttribute('height', '10');
+  outer.setAttribute('rx', '0.6');
+  svg.appendChild(outer);
+
+  const divider = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  divider.setAttribute('d', 'M8 3.75v8.5');
+  svg.appendChild(divider);
+
+  if (state !== 'right') {
+    const line1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    line1.setAttribute('d', 'M4.25 6.25h2.5');
+    svg.appendChild(line1);
+    const line2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    line2.setAttribute('d', 'M4.25 9.75h2.5');
+    svg.appendChild(line2);
+  }
+  if (state !== 'left') {
+    const line3 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    line3.setAttribute('d', 'M9.25 6.25h2.5');
+    svg.appendChild(line3);
+    const line4 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    line4.setAttribute('d', 'M9.25 9.75h2.5');
+    svg.appendChild(line4);
+  }
+
+  return svg;
+}
+
 function ensureHeaderActions(header, closeBtn) {
   let actions = header.querySelector('.modal-header-actions');
   if (!actions) {
@@ -133,7 +183,7 @@ export function attachModalPaneCycle({
   function update() {
     const state = getState();
     button.innerHTML = '';
-    button.appendChild(createPaneToggleIcon(state !== 'both'));
+    button.appendChild(createPaneCycleIcon(state));
     const label = state === 'both' ? bothLabel : (state === 'left' ? leftOnlyLabel : rightOnlyLabel);
     button.setAttribute('aria-label', label);
     button.title = label;
