@@ -1588,6 +1588,16 @@
   flex: 1 1 0;
 }
 
+/* Process detail modal: mirror image of the toggle above -- hides Results (right) instead of
+   the settings/left panel, so the button shows only the Code column. */
+.modal-overlay--process-results-collapsed .modal-panel--process .run-detail-preview-wrap {
+  display: none;
+}
+
+.modal-overlay--process-results-collapsed .modal-panel--process .run-detail-main {
+  flex: 1 1 0;
+}
+
 /* Main column (sections): 右侧 70%，与左侧预览栏 3:7 比例 */
 .prompt-detail-main {
   display: flex;
@@ -3729,8 +3739,6 @@
 .review-suggestion-verified-pill,
 .review-suggestion-optimization-pill,
 .review-suggestion-optimizing-pill,
-.review-suggestion-optimized-pill,
-.review-suggestion-optimized-pass-pill,
 .review-suggestion-proposal-pill {
   display: inline-flex;
   align-items: center;
@@ -3755,15 +3763,13 @@
 /* Dark mode: brighter text + stronger background for all pill variants */
 html.dark .review-suggestion-verify-pill,
 html.dark .review-suggestion-verifying-pill,
-html.dark .review-suggestion-optimized-pill,
 html.dark .review-suggestion-optimization-pill,
 html.dark .review-suggestion-optimizing-pill {
   color: #fbbf24;
   background: color-mix(in srgb, #f59e0b 28%, transparent);
 }
 
-html.dark .review-suggestion-verified-pill,
-html.dark .review-suggestion-optimized-pass-pill {
+html.dark .review-suggestion-verified-pill {
   color: #4ade80;
   background: color-mix(in srgb, #22c55e 28%, transparent);
 }
@@ -3811,25 +3817,20 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   pointer-events: none;
 }
 
-.review-suggestion-optimized-pill {
-  color: #b45309;
-  background: color-mix(in srgb, #f59e0b 18%, transparent);
-  cursor: default;
-  pointer-events: none;
-}
-
-.review-suggestion-optimized-pass-pill {
-  color: #166534;
-  background: color-mix(in srgb, #22c55e 22%, transparent);
-  cursor: default;
-  pointer-events: none;
-}
-
 .review-suggestion-proposal-pill {
   color: #1d4ed8;
   background: color-mix(in srgb, #3b82f6 18%, transparent);
   cursor: default;
   pointer-events: none;
+}
+
+/* "Optimized from #N" lineage note on a card created by Click to Optimize */
+.review-suggestion-lineage-note {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 /* Click to Optimize – same amber as Click to Verify */
