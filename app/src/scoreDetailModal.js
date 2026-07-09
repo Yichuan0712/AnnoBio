@@ -1671,7 +1671,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               </div>
             </div>
             <div class="dataset-meta-field score-detail-rules-section" id="score-detail-rules-section" hidden>
-              <span class="dataset-meta-label run-detail-section-label score-detail-rules-label">Set matching method</span>
               <div class="review-detail-view-switch score-detail-rules-view-switch" role="tablist" aria-label="Set rules: matching rules or custom code">
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active score-detail-rules-tab" role="tab" aria-selected="true" data-rules-tab="rules">Match by rules</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab score-detail-rules-tab" role="tab" aria-selected="false" data-rules-tab="code">Match by code</button>
