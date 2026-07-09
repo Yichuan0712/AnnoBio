@@ -3,9 +3,11 @@
  * @param {{ node: HTMLElement, getWorkingSets?: () => Array<...>, getRunResultColumns?: () => Array<...>, getGroundTruthHeaders?: (wsNodeId: string) => string[], getReviewPayload?: () => { prompt_sections, run_results, output_fields, comparison_rows } | null }} options
  */
 
+import { EditorView, basicSetup } from 'codemirror';
+import { python } from '@codemirror/lang-python';
 import { showAlert } from './alertModal.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
-import { attachModalPaneToggle } from './paneToggleButton.js';
+import { attachModalPaneCycle } from './paneToggleButton.js';
 import { extractInputFieldsFromSections } from './promptDetailModal.js';
 import { computeGreedyRunToGtPairing, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import {
@@ -18,6 +20,103 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 
 const API_BASE = BACKEND_API_BASE;
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
+
+const MATCH_CODE_MAX_COMMENT_LINE_CHARS = 70;
+const MATCH_CODE_POLL_INTERVAL_MS = 1200;
+
+const MATCH_CODE_FALLBACK = `def match(input_row, output_row, gt_row):
+    # input_row: this run row's input columns, keyed by column name.
+    # output_row: this run row's model output fields, keyed by field name.
+    # gt_row: a candidate ground-truth row's columns, keyed by column name.
+    # Return a truthy value if this run row and ground-truth row should be paired
+    # and counted as a match; falsy otherwise.
+    return True
+`;
+
+/** Wraps a comma-separated list into comment-prefixed lines no longer than MATCH_CODE_MAX_COMMENT_LINE_CHARS. */
+function wrapMatchCommentList(prefix, continuationPrefix, items) {
+  const lines = [];
+  let current = prefix;
+  items.forEach((item, i) => {
+    const piece = (i === 0 ? '' : ', ') + item;
+    if (current !== prefix && current.length + piece.length > MATCH_CODE_MAX_COMMENT_LINE_CHARS) {
+      lines.push(current);
+      current = continuationPrefix + item;
+    } else {
+      current += piece;
+    }
+  });
+  lines.push(current);
+  return lines.join('\n');
+}
+
+/** Builds sample code listing the run/ground-truth's actual columns, so the user can edit in place. */
+function buildMatchDefaultCode(inputHeaders, outputKeys, gtHeaders) {
+  const inCols = (Array.isArray(inputHeaders) ? inputHeaders : []).map((h) => String(h ?? ''));
+  const outCols = (Array.isArray(outputKeys) ? outputKeys : []).map((h) => String(h ?? ''));
+  const gtCols = (Array.isArray(gtHeaders) ? gtHeaders : []).map((h) => String(h ?? ''));
+  if (inCols.length === 0 && outCols.length === 0 && gtCols.length === 0) return MATCH_CODE_FALLBACK;
+  const commentLines = [];
+  if (inCols.length) commentLines.push(wrapMatchCommentList('    # input_row columns: ', '    #   ', inCols));
+  if (outCols.length) commentLines.push(wrapMatchCommentList('    # output_row fields: ', '    #   ', outCols));
+  if (gtCols.length) commentLines.push(wrapMatchCommentList('    # gt_row columns: ', '    #   ', gtCols));
+  return `def match(input_row, output_row, gt_row):
+${commentLines.join('\n')}
+    # Return a truthy value if this run row and ground-truth row should be paired
+    # and counted as a match; falsy otherwise -- edit the comparison below to fit your task.
+    # return output_row.get("col name") == gt_row.get("col name")
+    return True
+`;
+}
+
+/** input_row for the "Match by code" run: this run row's input dataset columns, keyed by column name. */
+function buildMatchRunRowInputDict(runResult, runWs) {
+  const headers = runWs?.headers || [];
+  const rows = runWs?.rows || [];
+  const inputRowIdx = runResult?.input_row_index;
+  const rowValues = (typeof inputRowIdx === 'number' && rows[inputRowIdx]) ? rows[inputRowIdx] : [];
+  const dict = {};
+  headers.forEach((h, i) => { dict[String(h ?? '')] = rowValues[i] != null ? String(rowValues[i]) : ''; });
+  return dict;
+}
+
+/** output_row for the "Match by code" run: this run row's model output fields, keyed by field name. */
+function buildMatchRunRowOutputDict(runResult) {
+  const out = runResult && runResult.output && typeof runResult.output === 'object' ? runResult.output : {};
+  const dict = {};
+  Object.keys(out).forEach((k) => { dict[k] = out[k] != null ? String(out[k]) : ''; });
+  return dict;
+}
+
+/** gt_row for the "Match by code" run: one candidate ground-truth row's columns, keyed by column name. */
+function buildMatchGtRowDict(gtContent, rowIndex) {
+  const headers = gtContent?.headers || [];
+  const rows = gtContent?.rows || [];
+  const rowValues = rows[rowIndex] || [];
+  const dict = {};
+  headers.forEach((h, i) => { dict[String(h ?? '')] = rowValues[i] != null ? String(rowValues[i]) : ''; });
+  return dict;
+}
+
+/**
+ * Builds a `runToGt` array (run row_index -> matched GT row index, or -1) from a completed "Match by
+ * code" run (the shape persisted at `node.dataset.scoreMatchResult`), in the same shape
+ * `computeGreedyRunToGtPairing` returns -- lets code mode feed the same results-table/metrics pipeline
+ * as rule mode in {@link renderResults}, and lets Review's comparison-row builder (workflowCanvas.js)
+ * number rows the same way the modal does.
+ */
+export function buildCodeMatchRunToGt(result, gtRowsLength) {
+  const { runRowIndices, outcomes } = result;
+  const maxRunRow = runRowIndices.length ? Math.max(...runRowIndices) : -1;
+  const dim = Math.max(maxRunRow + 1, gtRowsLength);
+  const runToGt = new Array(dim).fill(-1);
+  outcomes.forEach((outcome, k) => {
+    const i = runRowIndices[k];
+    if (typeof i !== 'number' || i < 0) return;
+    if (outcome.ok && typeof outcome.matched_gt_index === 'number') runToGt[i] = outcome.matched_gt_index;
+  });
+  return runToGt;
+}
 
 /** Stored in rule.gtColumns; UI label {@link SCORE_GT_ROW_INDEX_LABEL}. Value is 0-based GT row index (aligned with run `#` in getRunValue). */
 export const SCORE_GT_ROW_INDEX_COLUMN = '__score_gt_row_index__';
@@ -1084,40 +1183,6 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
   }
 }
 
-function mergeScoreGroupOpsAfterChildRemove(ops, idx, n) {
-  if (n <= 1) return [];
-  const o = (ops || []).slice();
-  if (idx === 0) return o.slice(1);
-  if (idx === n - 1) return o.slice(0, -1);
-  o.splice(idx - 1, 2, o[idx - 1]);
-  return o;
-}
-
-function insertScoreGroupOpsAfterChildInsert(ops, idx, nChildrenAfterInsert) {
-  if (nChildrenAfterInsert <= 1) return [];
-  const o = (ops || []).slice();
-  if (idx === 0) return ['AND', ...o];
-  if (idx === nChildrenAfterInsert - 1) return [...o, 'AND'];
-  return [...o.slice(0, idx - 1), 'AND', o[idx - 1], ...o.slice(idx)];
-}
-
-/** Reorder one level of a score group (top-level root or nested group). Keeps AND/OR ops with sensible merge/split defaults. */
-function moveScoreGroupChildren(group, fromIndex, toIndex) {
-  if (!group || group.type !== 'group' || !Array.isArray(group.children)) return group;
-  const ch = group.children.slice();
-  const n = ch.length;
-  const ops =
-    Array.isArray(group.ops) && group.ops.length === n - 1
-      ? group.ops.slice()
-      : Array(Math.max(0, n - 1)).fill('AND');
-  if (fromIndex === toIndex || fromIndex < 0 || fromIndex >= n || toIndex < 0 || toIndex >= n) return group;
-  const [el] = ch.splice(fromIndex, 1);
-  const opsAfterRemove = mergeScoreGroupOpsAfterChildRemove(ops, fromIndex, n);
-  ch.splice(toIndex, 0, el);
-  const newOps = insertScoreGroupOpsAfterChildInsert(opsAfterRemove, toIndex, ch.length);
-  return { ...group, children: ch, ops: newOps };
-}
-
 export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas, getRunInputColsCollapsed, setRunInputColsCollapsed, getScoreOutputColsCollapsed, setScoreOutputColsCollapsed, getScoreGtColsCollapsed, setScoreGtColsCollapsed }) {
   getWorkingSets = getWorkingSets || (() => []);
   getRunResultColumns = getRunResultColumns || (() => []);
@@ -1233,8 +1298,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return normalizeGroupChild(c);
   }
 
-  /** Which rule sub-panel is active: 'input' | 'output'. */
-  let activeRulesTab = 'input';
+  /**
+   * Which top-level rules panel is active: 'rules' (Input/Output → Ground truth) | 'code' (custom code).
+   * Persisted on `node.dataset.scoreActiveMatchMode` so Review (built outside this modal, in
+   * workflowCanvas.js's buildReviewComparisonRows) knows which results to send.
+   */
+  let activePanelMode = (node?.dataset?.scoreActiveMatchMode === 'code') ? 'code' : 'rules';
 
   function loadBundle() {
     return parseScoreMappingBundle(node?.dataset?.scoreMapping || '{}');
@@ -1268,14 +1337,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return flattenScoreRules(inputRoot || emptyScoreRuleGroup()).length > 0;
   }
 
-  function getActiveRoot() {
+  /** @param {'input'|'output'} side */
+  function getRootForSide(side) {
     const { inputRoot, outputRoot } = loadBundle();
-    return activeRulesTab === 'input' ? inputRoot : outputRoot;
+    return side === 'input' ? inputRoot : outputRoot;
   }
 
-  function setActiveRoot(newRoot) {
+  /** @param {'input'|'output'} side */
+  function setRootForSide(side, newRoot) {
     const { inputRoot, outputRoot } = loadBundle();
-    if (activeRulesTab === 'input') {
+    if (side === 'input') {
       persistBundle(newRoot, outputRoot, { clearOutputOnInputShrink: true });
     } else {
       persistBundle(inputRoot, newRoot);
@@ -1600,13 +1671,29 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               </div>
             </div>
             <div class="dataset-meta-field score-detail-rules-section" id="score-detail-rules-section" hidden>
-              <span class="dataset-meta-label run-detail-section-label score-detail-rules-label">Set rules</span>
-              <div class="review-detail-view-switch score-detail-rules-view-switch" role="tablist" aria-label="Set rules: input or output versus ground truth">
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active score-detail-rules-tab" role="tab" aria-selected="true" data-rules-tab="input">Input → Ground truth</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab score-detail-rules-tab" role="tab" aria-selected="false" data-rules-tab="output">Output → Ground truth</button>
+              <span class="dataset-meta-label run-detail-section-label score-detail-rules-label">Set matching method</span>
+              <div class="review-detail-view-switch score-detail-rules-view-switch" role="tablist" aria-label="Set rules: matching rules or custom code">
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active score-detail-rules-tab" role="tab" aria-selected="true" data-rules-tab="rules">Match by rules</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab score-detail-rules-tab" role="tab" aria-selected="false" data-rules-tab="code">Match by code</button>
               </div>
-              <div class="score-detail-rules-scroll">
+              <div class="score-detail-rules-scroll" id="score-detail-rules-panel-rules">
+                <p class="score-detail-rules-hint">A row counts as a match only if every rule below is satisfied.</p>
                 <div id="score-detail-rules-list" class="score-detail-rules-list"></div>
+              </div>
+              <div class="score-detail-rules-scroll score-detail-rules-code-panel" id="score-detail-rules-panel-code" hidden>
+                <div class="process-editor-mid">
+                  <div class="process-editor-host" id="score-detail-code-host"></div>
+                  <p class="process-editor-hint">Runs once per candidate (run row, ground-truth row) pair, using the Python interpreter set in Settings → Python, until each run row finds a match (in order; matched ground-truth rows aren't reused). <code>input_row</code>, <code>output_row</code>, and <code>gt_row</code> are dicts keyed by column name. Return a truthy value to count the pair as a match.</p>
+                  <div class="score-detail-code-results" id="score-detail-code-results"></div>
+                </div>
+                <div class="dataset-meta-field run-detail-model-actions-field">
+                  <div class="run-detail-llm-actions-row">
+                    <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
+                    <div class="run-detail-llm-actions-right">
+                      <button type="button" class="btn btn-secondary run-detail-run-btn score-detail-code-run-btn">Run</button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1642,6 +1729,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const rulesListEl = overlay.querySelector('#score-detail-rules-list');
   const rulesSectionEl = overlay.querySelector('#score-detail-rules-section');
   const rulesTabBar = overlay.querySelector('.score-detail-rules-view-switch');
+  const rulesPanelRulesEl = overlay.querySelector('#score-detail-rules-panel-rules');
+  const rulesPanelCodeEl = overlay.querySelector('#score-detail-rules-panel-code');
+  const codeHostEl = overlay.querySelector('#score-detail-code-host');
+  const codeResultsEl = overlay.querySelector('#score-detail-code-results');
+  const codeRunBtn = overlay.querySelector('.score-detail-code-run-btn');
   const llmSelect = overlay.querySelector('#score-detail-llm-select');
   const saveToWorkspaceBtn = overlay.querySelector('#score-detail-save-to-workspace');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
@@ -1649,6 +1741,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const resultsBody = overlay.querySelector('#score-detail-results-body');
   const resultsToolbar = overlay.querySelector('#score-detail-results-toolbar');
   const resultsFooterRowEl = overlay.querySelector('#score-detail-results-footer-row');
+  const resultsFooterRightEl = overlay.querySelector('.score-detail-results-footer-right');
 
   const scoreDetailPagination = {
     rowsPerPage: 25,
@@ -1664,45 +1757,250 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   function syncScoreResultsFooterVisibility() {
+    if (resultsFooterRightEl) resultsFooterRightEl.hidden = false;
     if (!resultsFooterRowEl) return;
-    const show = !!(selectedNodeId && hasScoreInputRules());
+    const show = activePanelMode === 'code'
+      ? !!(selectedNodeId && lastCodeMatchResult)
+      : !!(selectedNodeId && hasScoreInputRules());
     if (show) resultsFooterRowEl.removeAttribute('hidden');
     else resultsFooterRowEl.setAttribute('hidden', '');
   }
 
   function syncRulesTabUi() {
     if (rulesTabBar) {
-      const inputOk = hasScoreInputRules();
-      const outBtn = rulesTabBar.querySelector('[data-rules-tab="output"]');
-      if (outBtn) {
-        outBtn.disabled = !inputOk;
-        outBtn.title = inputOk
-          ? ''
-          : '请先添加至少一条 Input → Ground truth 规则，再编辑 Output → Ground truth。';
-      }
-      if (!inputOk && activeRulesTab === 'output') {
-        activeRulesTab = 'input';
-      }
       rulesTabBar.querySelectorAll('[data-rules-tab]').forEach((btn) => {
-        const on = btn.getAttribute('data-rules-tab') === activeRulesTab;
+        const on = btn.getAttribute('data-rules-tab') === activePanelMode;
         btn.classList.toggle('review-detail-tab--active', on);
         btn.setAttribute('aria-selected', on ? 'true' : 'false');
       });
     }
+    if (rulesPanelRulesEl) rulesPanelRulesEl.hidden = activePanelMode !== 'rules';
+    if (rulesPanelCodeEl) rulesPanelCodeEl.hidden = activePanelMode !== 'code';
   }
 
   rulesTabBar?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-rules-tab]');
-    if (!btn || btn.disabled) return;
+    if (!btn) return;
     const tab = btn.getAttribute('data-rules-tab');
-    if (tab !== 'input' && tab !== 'output') return;
-    if (tab === 'output' && !hasScoreInputRules()) {
-      showAlert('请先添加至少一条 Input → Ground truth 规则，再设置 Output → Ground truth。', { title: 'Score rules' });
+    if (tab !== 'rules' && tab !== 'code') return;
+    activePanelMode = tab;
+    if (node?.dataset) node.dataset.scoreActiveMatchMode = tab;
+    syncRulesTabUi();
+    void renderResults();
+  });
+
+  const matchCodeSaved = node?.dataset?.scoreMatchCode;
+  const matchCodeInitial = (() => {
+    if (matchCodeSaved != null && matchCodeSaved !== '') return matchCodeSaved;
+    try {
+      const runWs0 = getRunWorkingSetContent();
+      const { outputFields: outputFields0 } = getRunResults();
+      const gtHeaders0 = selectedNodeId ? getGroundTruthHeaders(selectedNodeId) : [];
+      const outKeys0 = (outputFields0 || []).map((f) => f?.key || f?.display || '').filter(Boolean);
+      return buildMatchDefaultCode(runWs0.headers, outKeys0, gtHeaders0);
+    } catch (_) {
+      return MATCH_CODE_FALLBACK;
+    }
+  })();
+
+  const codeEditorView = codeHostEl ? new EditorView({
+    doc: matchCodeInitial,
+    extensions: [basicSetup, python()],
+    parent: codeHostEl,
+  }) : null;
+
+  function getMatchCode() {
+    return codeEditorView ? codeEditorView.state.doc.toString() : '';
+  }
+
+  let codeRunning = false;
+  let codeCancelled = false;
+  let codeCurrentJobId = null;
+
+  function setCodeRunningUi(isRunning) {
+    codeRunning = isRunning;
+    if (!codeRunBtn) return;
+    codeRunBtn.textContent = isRunning ? 'Running, click to stop' : 'Run';
+    codeRunBtn.classList.toggle('btn-danger', isRunning);
+  }
+
+  const codeMatchProgressBar = node?.querySelector?.('.workflow-node__score-progress') || null;
+  function setCodeMatchNodeProgress(completed, total) {
+    if (!codeMatchProgressBar) return;
+    const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+    codeMatchProgressBar.style.width = pct + '%';
+  }
+
+  function showCodeResultsPlaceholder(text) {
+    if (!codeResultsEl) return;
+    codeResultsEl.innerHTML = text ? `<p class="run-detail-placeholder">${escapeHtml(text)}</p>` : '';
+  }
+
+  /** Last completed "Match by code" run; consumed by {@link renderResults} (via {@link buildCodeMatchRunToGt}) and the "Save to workspace" export. */
+  let lastCodeMatchResult = (() => {
+    try {
+      const raw = node?.dataset?.scoreMatchResult;
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+
+  function persistLastCodeMatchResult() {
+    if (!node?.dataset) return;
+    if (lastCodeMatchResult) node.dataset.scoreMatchResult = JSON.stringify(lastCodeMatchResult);
+    else delete node.dataset.scoreMatchResult;
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  }
+
+  /** Raw {headers, rows} for a code-match run -- shared by the results table and the "Save to workspace" export. */
+  function buildCodeMatchTableData(result) {
+    const { runRowIndices, outcomes, runRows, gtRows } = result;
+    const inputCols = [];
+    const outputCols = [];
+    runRows.forEach((r) => {
+      Object.keys(r.input_row || {}).forEach((k) => { if (!inputCols.includes(k)) inputCols.push(k); });
+      Object.keys(r.output_row || {}).forEach((k) => { if (!outputCols.includes(k)) outputCols.push(k); });
+    });
+    const gtCols = [];
+    gtRows.forEach((r) => Object.keys(r.gt_row || {}).forEach((k) => { if (!gtCols.includes(k)) gtCols.push(k); }));
+
+    const headers = [
+      'Run row',
+      ...inputCols.map((c) => `Input: ${c}`),
+      ...outputCols.map((c) => `Output: ${c}`),
+      'Matched GT row',
+      ...gtCols.map((c) => `GT: ${c}`),
+      'Status',
+    ];
+    const rows = outcomes.map((outcome, i) => {
+      const runRowLabel = String((runRowIndices[i] ?? i) + 1);
+      const runRow = runRows[i] || { input_row: {}, output_row: {} };
+      const inputVals = inputCols.map((c) => runRow.input_row?.[c] ?? '');
+      const outputVals = outputCols.map((c) => runRow.output_row?.[c] ?? '');
+      if (!outcome.ok) {
+        return [runRowLabel, ...inputVals, ...outputVals, '', ...gtCols.map(() => ''), `Error: ${outcome.error || 'Unknown error'}`];
+      }
+      const matched = typeof outcome.matched_gt_index === 'number';
+      const gtRowDict = matched ? (gtRows[outcome.matched_gt_index]?.gt_row || {}) : null;
+      const gtVals = gtCols.map((c) => (matched ? (gtRowDict?.[c] ?? '') : ''));
+      return [runRowLabel, ...inputVals, ...outputVals, matched ? String(outcome.matched_gt_index + 1) : '', ...gtVals, matched ? 'Matched' : 'No match'];
+    });
+    return { headers, rows, inputColsCount: inputCols.length, outputColsCount: outputCols.length };
+  }
+
+
+  async function pollCodeMatchJob(jobId, total, runRowIndices, runRows, gtRows) {
+    if (codeCurrentJobId !== jobId) return;
+    let data;
+    try {
+      const res = await fetch(`${API_BASE}/api/score/match/run/result/${jobId}`);
+      data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 202) throw new Error(data.detail || 'Failed to fetch results');
+    } catch (e) {
+      if (codeCurrentJobId !== jobId) return;
+      setCodeRunningUi(false);
+      showCodeResultsPlaceholder((e && e.message) || 'Network error while checking progress.');
       return;
     }
-    activeRulesTab = tab;
-    syncRulesTabUi();
-    renderRules();
+    if (codeCurrentJobId !== jobId) return;
+    const total2 = data.total || total;
+    if (data.status === 'running') {
+      setCodeMatchNodeProgress(data.completed || 0, total2);
+      setTimeout(() => pollCodeMatchJob(jobId, total, runRowIndices, runRows, gtRows), MATCH_CODE_POLL_INTERVAL_MS);
+      return;
+    }
+    setCodeMatchNodeProgress((data.results || []).length, total2);
+    setCodeRunningUi(false);
+    if (data.error) {
+      showCodeResultsPlaceholder(data.error);
+      return;
+    }
+    showCodeResultsPlaceholder('');
+    lastCodeMatchResult = {
+      runRowIndices,
+      outcomes: data.results || [],
+      gtRowCount: gtRows.length,
+      runRows,
+      gtRows,
+      wasCancelled: data.status === 'cancelled' || codeCancelled,
+    };
+    persistLastCodeMatchResult();
+    void renderResults();
+  }
+
+  async function startCodeMatchRun() {
+    if (!selectedNodeId) {
+      showCodeResultsPlaceholder('Select a ground truth dataset first.');
+      return;
+    }
+    const runWs = getRunWorkingSetContent();
+    const { results: rawResults, outputFields } = getRunResults();
+    const gtContent = getGroundTruthContent(selectedNodeId);
+    const results = (rawResults || []).filter((r) => isValidRunOutputForScoreRow(r, outputFields));
+    if (results.length === 0) {
+      showCodeResultsPlaceholder('No run results to match.');
+      return;
+    }
+    if ((gtContent.rows || []).length === 0) {
+      showCodeResultsPlaceholder('Ground truth dataset has no rows.');
+      return;
+    }
+
+    let pythonPath = '';
+    try {
+      const res = await fetch(`${API_BASE}/api/settings`);
+      const settings = res.ok ? await res.json() : null;
+      pythonPath = (settings?.python_path || '').trim();
+    } catch (_) { /* handled by the empty-path check below */ }
+    if (!pythonPath) {
+      showCodeResultsPlaceholder('Set a Python interpreter path in Settings → Python first.');
+      return;
+    }
+
+    const runRowIndices = results.map((r) => r.row_index);
+    const runRowsPayload = results.map((r) => ({
+      input_row: buildMatchRunRowInputDict(r, runWs),
+      output_row: buildMatchRunRowOutputDict(r),
+    }));
+    const gtRowsPayload = (gtContent.rows || []).map((_, j) => ({ gt_row: buildMatchGtRowDict(gtContent, j) }));
+
+    codeCancelled = false;
+    setCodeRunningUi(true);
+    setCodeMatchNodeProgress(0, runRowsPayload.length);
+    showCodeResultsPlaceholder('');
+
+    try {
+      const res = await fetch(`${API_BASE}/api/score/match/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ python_path: pythonPath, code: getMatchCode(), run_rows: runRowsPayload, gt_rows: gtRowsPayload }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCodeRunningUi(false);
+        showCodeResultsPlaceholder(typeof data.detail === 'string' ? data.detail : 'Failed to start.');
+        return;
+      }
+      codeCurrentJobId = data.job_id;
+    } catch (e) {
+      setCodeRunningUi(false);
+      showCodeResultsPlaceholder((e && e.message) || 'Network error.');
+      return;
+    }
+
+    pollCodeMatchJob(codeCurrentJobId, runRowsPayload.length, runRowIndices, runRowsPayload, gtRowsPayload);
+  }
+
+  codeRunBtn?.addEventListener('click', () => {
+    if (codeRunning) {
+      codeCancelled = true;
+      if (codeCurrentJobId) {
+        fetch(`${API_BASE}/api/score/match/run/cancel/${codeCurrentJobId}`, { method: 'POST' }).catch(() => {});
+      }
+      return;
+    }
+    startCodeMatchRun();
   });
 
   function getSelectedWorkingSet() {
@@ -1741,28 +2039,44 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     pickerEl.setAttribute('aria-expanded', 'true');
   }
 
-  /** Open Add rule / Edit rule modal. editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. */
-   function openRuleEditor(editPath, parentPath, indexInParent, onDone) {
+  /** Open Add rule / Edit rule modal. side = 'input' | 'output': the rule's current tree (or the nominal side for a fresh top-level add). editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. Top-level rules (editPath.length === 1, or parentPath is empty) may pick a column from either side — the actual tree is derived from the column chosen. */
+   function openRuleEditor(side, editPath, parentPath, indexInParent, onDone) {
     const isEdit = Array.isArray(editPath) && editPath.length > 0;
-    const root = getActiveRoot();
+    const isTopLevel = isEdit ? editPath.length === 1 : (!parentPath || parentPath.length === 0);
+    const root = getRootForSide(side);
     const defaultRule = { type: 'rule', outputKey: '', gtColumns: [], matchType: 'exact', matchFlags: { ...DEFAULT_MATCH_FLAGS } };
     const rule = isEdit ? getNodeAtPath(root, editPath) : defaultRule;
     let ruleData = rule && rule.type === 'rule' ? rule : defaultRule;
-    let runColumns = getRunResultColumns();
     const runWsEd = getRunWorkingSetContent();
-    if (activeRulesTab === 'input') {
+    /** Input row-index uses '[#]' here (distinct from output's bare '#') so a merged top-level list has no key collision. */
+    function buildInputColumns() {
       const headers = runWsEd.headers || [];
-      runColumns = [
-        { key: '#', label: 'Input: #' },
-        ...headers.map((h) => ({ key: `[${String(h).trim()}]`, label: `Input: ${String(h ?? '').trim() || ' '}` })),
-      ];
-    } else {
-      runColumns = (runColumns || []).filter((c) => !isScoreInputSideRuleKey(c.key));
-      runColumns = [
-        { key: '#', label: formatResultOutputColumnLabel('#') },
-        ...runColumns,
+      return [
+        { key: '[#]', label: 'Input: #', side: 'input' },
+        ...headers.map((h) => ({ key: `[${String(h).trim()}]`, label: `Input: ${String(h ?? '').trim() || ' '}`, side: 'input' })),
       ];
     }
+    function buildOutputColumns() {
+      const raw = (getRunResultColumns() || []).filter((c) => !isScoreInputSideRuleKey(c.key));
+      return [
+        { key: '#', label: formatResultOutputColumnLabel('#'), side: 'output' },
+        ...raw.map((c) => ({ ...c, side: 'output' })),
+      ];
+    }
+    let runColumns;
+    if (isTopLevel) {
+      runColumns = [...buildInputColumns(), ...buildOutputColumns()];
+    } else if (side === 'input') {
+      const headers = runWsEd.headers || [];
+      runColumns = [
+        { key: '#', label: 'Input: #', side: 'input' },
+        ...headers.map((h) => ({ key: `[${String(h).trim()}]`, label: `Input: ${String(h ?? '').trim() || ' '}`, side: 'input' })),
+      ];
+    } else {
+      runColumns = buildOutputColumns();
+    }
+    /** Column key → side, used to route a saved rule to the right tree (isScoreInputSideRuleKey('#') is ambiguous by itself). */
+    const columnSideByKey = new Map((runColumns || []).map((c) => [c.key, c.side || side]));
     const gtHeaders = getGroundTruthHeaders(selectedNodeId);
     if (!isEdit && (!(ruleData.outputKey || '').trim() || !(ruleData.gtColumns || []).length)) {
       const runKeys = new Set((runColumns || []).map((c) => (c.key || '').trim()).filter(Boolean));
@@ -1772,8 +2086,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         if (idx <= 0) continue;
         const outputKey = key.slice(0, idx);
         const gtColumn = key.slice(idx + 1);
-        if (activeRulesTab === 'input' && !isScoreInputSideRuleKey(outputKey)) continue;
-        if (activeRulesTab === 'output' && isScoreInputSideRuleKey(outputKey) && outputKey !== '#') continue;
+        if (!isTopLevel) {
+          if (side === 'input' && !isScoreInputSideRuleKey(outputKey)) continue;
+          if (side === 'output' && isScoreInputSideRuleKey(outputKey) && outputKey !== '#') continue;
+        }
         if (runKeys.has(outputKey) && gtSet.has(gtColumn)) {
           const mem = ruleEditorMemory[key];
           const memMt = (mem && mem.matchType) || 'exact';
@@ -1791,9 +2107,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       }
     }
     const flags = getMatchFlags(ruleData);
-    const resultColumnKeyForSelect = (activeRulesTab === 'input' && String(ruleData.outputKey || '').trim() === '[#]')
-      ? '#'
-      : String(ruleData.outputKey || '').trim();
+    let resultColumnKeyForSelect = String(ruleData.outputKey || '').trim();
+    if (isTopLevel) {
+      if (side === 'input' && resultColumnKeyForSelect === '#') resultColumnKeyForSelect = '[#]';
+    } else if (side === 'input' && resultColumnKeyForSelect === '[#]') {
+      resultColumnKeyForSelect = '#';
+    }
     const resultSelectOpts = runColumns.map((c) => {
       const label = (c.label || '').trim() || c.key || '—';
       const key = c.key || '';
@@ -1820,16 +2139,22 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }).join('');
     const gtSelectEmptyOpt = '';
 
-    const runFieldLabel = activeRulesTab === 'input' ? 'Input column' : 'Model output column';
-    const runFieldAria = activeRulesTab === 'input'
-      ? 'Run input column: row index or a dataset input column'
-      : 'Model output column';
-    const epsGapLabel = activeRulesTab === 'input'
-      ? 'ε: max absolute gap (run side vs ground truth)'
-      : 'ε: max absolute gap (output vs ground truth)';
-    const epsHintInequality = activeRulesTab === 'input'
-      ? '|run side value − ground truth| ≤ ε'
-      : '|output − ground truth| ≤ ε';
+    const runFieldLabel = isTopLevel ? 'Column' : (side === 'input' ? 'Input column' : 'Model output column');
+    const runFieldAria = isTopLevel
+      ? 'Column: an input column/row index, or a model output field/row index'
+      : (side === 'input'
+        ? 'Run input column: row index or a dataset input column'
+        : 'Model output column');
+    const epsGapLabel = isTopLevel
+      ? 'ε: max absolute gap (selected column vs ground truth)'
+      : (side === 'input'
+        ? 'ε: max absolute gap (run side vs ground truth)'
+        : 'ε: max absolute gap (output vs ground truth)');
+    const epsHintInequality = isTopLevel
+      ? '|selected value − ground truth| ≤ ε'
+      : (side === 'input'
+        ? '|run side value − ground truth| ≤ ε'
+        : '|output − ground truth| ≤ ε');
 
     const editorOverlay = document.createElement('div');
     editorOverlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
@@ -1882,23 +2207,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <input type="number" id="rule-editor-numeric-dec" class="dataset-meta-input" min="0" max="20" step="1" value="${escapeAttr(String(flags.numericDecimalPlaces))}" aria-label="Decimal places" />
               </div>
             </div>
-            ${isEdit && editPath.length <= 1 ? `
-            <div class="dataset-meta-field rule-editor-field-group">
-              <label class="dataset-meta-label rule-editor-checkbox-label">
-                <input type="checkbox" id="rule-editor-make-group" class="rule-editor-checkbox" aria-label="Make this a rule group">
-                Make this a rule group
-              </label>
-              <p class="rule-editor-hint">Turning this on replaces this rule with a group that contains it (this dialog closes). Open the group to add more rules and choose <strong>AND</strong> or <strong>OR</strong> between them—the same as on the Score panel.</p>
-            </div>
-            ` : (!isEdit && (!parentPath || parentPath.length === 0) ? `
-            <div class="dataset-meta-field rule-editor-field-group">
-              <label class="dataset-meta-label rule-editor-checkbox-label">
-                <input type="checkbox" id="rule-editor-add-as-group" class="rule-editor-checkbox" aria-label="Add as a new group (starts with this rule)">
-                Add as a new group (starts with this rule)
-              </label>
-              <p class="rule-editor-hint">Adds a group that contains only this rule at first. Open the group afterward to add more rules and set <strong>AND</strong> or <strong>OR</strong>.</p>
-            </div>
-            ` : '')}
           </div>
           <div class="prompt-form-error section-editor-error rule-editor-error" role="alert" aria-live="polite" hidden></div>
           ${!isEdit ? `
@@ -2015,9 +2323,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     function buildNewRuleFromForm() {
       const outputKey = (resultSelectEl?.value ?? '').trim();
       if (!outputKey) {
-        showError(activeRulesTab === 'input'
-          ? 'Please select an input column.'
-          : 'Please select a model output column.');
+        showError(isTopLevel
+          ? 'Please select a column.'
+          : (side === 'input' ? 'Please select an input column.' : 'Please select a model output column.'));
         return null;
       }
       const gtColumn = (gtSelectEl?.value ?? '').trim();
@@ -2073,16 +2381,19 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const newRule = buildNewRuleFromForm();
       if (!newRule) return;
       clearError();
-      let nextRoot = getActiveRoot();
-      const makeGroupEl = editorOverlay.querySelector('#rule-editor-make-group');
-      const makeGroup = !!(makeGroupEl && makeGroupEl.checked);
-      if (makeGroup) {
-        setActiveRoot(setNodeAtPath(nextRoot, editPath, { type: 'group', ops: [], children: [newRule] }));
-        closeEditor();
-        onDone();
-        return;
+      const actualSide = columnSideByKey.get(newRule.outputKey) || side;
+      if (!isTopLevel || actualSide === side) {
+        setRootForSide(side, setNodeAtPath(getRootForSide(side), editPath, newRule));
+      } else {
+        // Top-level rule's column moved to the other tree: pull it out of `side`'s tree, append to `actualSide`'s.
+        const oldRoot = removeNodeAtPath(getRootForSide(side), editPath);
+        const newRootTarget = getRootForSide(actualSide);
+        const appended = insertChildAtPath(newRootTarget, [], newRule, (newRootTarget.children || []).length);
+        if (side === 'input') persistBundle(oldRoot, appended);
+        else persistBundle(appended, oldRoot);
+        side = actualSide;
+        editPath = [(getRootForSide(actualSide).children || []).length - 1];
       }
-      setActiveRoot(setNodeAtPath(nextRoot, editPath, newRule));
       onDone();
     }
 
@@ -2091,14 +2402,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const newRule = buildNewRuleFromForm();
       if (!newRule) return;
       clearError();
-      let nextRoot = getActiveRoot();
-      const addAsGroupEl = editorOverlay.querySelector('#rule-editor-add-as-group');
-      const addAsGroup = !!(addAsGroupEl && addAsGroupEl.checked);
-      if (addAsGroup) {
-        setActiveRoot(insertChildAtPath(nextRoot, parentPath, { type: 'group', ops: [], children: [newRule] }, indexInParent));
-      } else {
-        setActiveRoot(insertChildAtPath(nextRoot, parentPath, newRule, indexInParent));
-      }
+      const actualSide = columnSideByKey.get(newRule.outputKey) || side;
+      const nextRoot = getRootForSide(actualSide);
+      const targetIndex = isTopLevel ? (nextRoot.children || []).length : indexInParent;
+      setRootForSide(actualSide, insertChildAtPath(nextRoot, parentPath, newRule, targetIndex));
       closeEditor();
       onDone();
     }
@@ -2122,10 +2429,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (isEdit) persistEdit();
     });
 
-    editorOverlay.querySelector('#rule-editor-make-group')?.addEventListener('change', () => {
-      if (isEdit) persistEdit();
-    });
-
     numericAbsEl?.addEventListener('input', () => { if (isEdit) schedulePersistEdit(); });
     numericRelEl?.addEventListener('input', () => { if (isEdit) schedulePersistEdit(); });
     numericDecEl?.addEventListener('input', () => { if (isEdit) schedulePersistEdit(); });
@@ -2141,11 +2444,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /** Run-side label for rule summary: input rules must not match `getRunResultColumns()`’s first `#` (run row #). */
-  function formatScoreRuleRunSideLabel(rule) {
+  function formatScoreRuleRunSideLabel(side, rule) {
     const key = String(rule?.outputKey ?? '').trim();
     if (!key) return '—';
     if (key === '#') {
-      return activeRulesTab === 'input' ? 'Input: #' : formatResultOutputColumnLabel('#');
+      return side === 'input' ? 'Input: #' : formatResultOutputColumnLabel('#');
     }
     if (isScoreInputSideRuleKey(key)) {
       if (key === '[#]') return 'Input: #';
@@ -2157,9 +2460,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return (col && col.label) ? String(col.label).trim() || key : (formatResultOutputColumnLabel(key) || key);
   }
 
-  /** Rule card: optional AND/OR on left (opValue/opIndex), then click to edit, × to delete. */
-  function createRuleCard(rule, path, opts = {}) {
-    const runLabel = formatScoreRuleRunSideLabel(rule);
+  /** Rule card: optional static "AND" connector on left (opValue/opIndex), then click to edit, × to delete. */
+  function createRuleCard(side, rule, path, opts = {}) {
+    const runLabel = formatScoreRuleRunSideLabel(side, rule);
     const gtLabel = (rule.gtColumns || []).length === 0 ? '—' : (rule.gtColumns || []).map((c) => formatScoreGroundTruthColumnLabel(c)).join(', ');
     const mt = migrateLegacyMatchType(rule.matchType);
     const typeLabel = MATCH_TYPES.find((m) => m.value === mt)?.label || 'String match';
@@ -2182,33 +2485,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const card = document.createElement('div');
     card.className = 'score-rule-card';
     const onRuleSaved = opts.onRuleSaved || (() => renderRules());
-    const openEditor = () => openRuleEditor(path, [], 0, onRuleSaved);
+    const openEditor = () => openRuleEditor(side, path, [], 0, onRuleSaved);
     card.innerHTML = `
       <div class="score-rule-card-inner" tabindex="0" role="button" title="${escapeAttr(summary)}">
         <span class="score-rule-card-summary" title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
       </div>
       <button type="button" class="score-rule-card-remove" aria-label="Remove rule">×</button>
     `;
-    const parentPathForOp = opts.parentPath !== undefined ? opts.parentPath : (path.length > 0 ? path.slice(0, -1) : []);
-    if (opts.opValue != null && opts.opIndex != null) {
-      const opBtn = document.createElement('button');
-      opBtn.type = 'button';
-      opBtn.className = 'score-rule-card-op';
-      opBtn.setAttribute('aria-label', 'Toggle AND/OR');
-      opBtn.textContent = opts.opValue || 'AND';
-      opBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const r = getActiveRoot();
-        const parent = parentPathForOp.length > 0 ? getNodeAtPath(r, parentPathForOp) : r;
-        if (!parent || parent.type !== 'group') return;
-        const nextOps = (parent.ops || []).slice();
-        nextOps[opts.opIndex] = nextOps[opts.opIndex] === 'OR' ? 'AND' : 'OR';
-        setActiveRoot(setNodeAtPath(r, parentPathForOp, { ...parent, ops: nextOps }));
-        renderRules();
-        if (opts.onAfterChange) opts.onAfterChange();
-      });
-      card.insertBefore(opBtn, card.firstChild);
-    }
     const inner = card.querySelector('.score-rule-card-inner');
     const removeBtn = card.querySelector('.score-rule-card-remove');
     inner.addEventListener('click', openEditor);
@@ -2220,7 +2503,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     });
     removeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      setActiveRoot(removeNodeAtPath(getActiveRoot(), path));
+      setRootForSide(side, removeNodeAtPath(getRootForSide(side), path));
       renderRules();
       if (opts.onAfterChange) opts.onAfterChange();
     });
@@ -2228,36 +2511,20 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   /** Group card: label uses stable persisted {@link groupId} (order-independent). */
-  function createGroupCard(path, groupNode, opts = {}) {
+  function createGroupCard(side, path, groupNode, opts = {}) {
     const gid = typeof groupNode.groupId === 'number' && Number.isInteger(groupNode.groupId) && groupNode.groupId > 0
       ? groupNode.groupId
       : '?';
     const label = `Rule group ${gid}`;
     const card = document.createElement('div');
     card.className = 'score-rule-card score-rule-card--group';
-    const openGroupEditor = () => openGroupEditorModal(path, () => renderRules());
+    const openGroupEditor = () => openGroupEditorModal(side, path, () => renderRules());
     card.innerHTML = `
       <div class="score-rule-card-inner" tabindex="0" role="button">
         <span class="score-rule-card-summary">${escapeHtml(label)}</span>
       </div>
       <button type="button" class="score-rule-card-remove" aria-label="Remove group">×</button>
     `;
-    if (opts.opValue != null && opts.opIndex != null) {
-      const opBtn = document.createElement('button');
-      opBtn.type = 'button';
-      opBtn.className = 'score-rule-card-op';
-      opBtn.setAttribute('aria-label', 'Toggle AND/OR');
-      opBtn.textContent = opts.opValue || 'AND';
-      opBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const r = getActiveRoot();
-        const nextOps = (r.ops || []).slice();
-        nextOps[opts.opIndex] = nextOps[opts.opIndex] === 'OR' ? 'AND' : 'OR';
-        setActiveRoot({ ...r, ops: nextOps });
-        renderRules();
-      });
-      card.insertBefore(opBtn, card.firstChild);
-    }
     const inner = card.querySelector('.score-rule-card-inner');
     const removeBtn = card.querySelector('.score-rule-card-remove');
     inner.addEventListener('click', openGroupEditor);
@@ -2269,15 +2536,15 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     });
     removeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      setActiveRoot(removeNodeAtPath(getActiveRoot(), path));
+      setRootForSide(side, removeNodeAtPath(getRootForSide(side), path));
       renderRules();
     });
     return card;
   }
 
   /** Modal to edit a group's rules (same UI as score rules list). */
-  function openGroupEditorModal(groupPath, onDone) {
-    const root = getActiveRoot();
+  function openGroupEditorModal(side, groupPath, onDone) {
+    const root = getRootForSide(side);
     const group = getNodeAtPath(root, groupPath);
     if (!group || group.type !== 'group') return;
     const gid = typeof group.groupId === 'number' && Number.isInteger(group.groupId) && group.groupId > 0
@@ -2305,11 +2572,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const addBtn = overlay.querySelector('#score-group-editor-add-rule');
 
     function getGroup() {
-      return getNodeAtPath(getActiveRoot(), groupPath) || { type: 'group', ops: [], children: [] };
+      return getNodeAtPath(getRootForSide(side), groupPath) || { type: 'group', ops: [], children: [] };
     }
 
     function setGroup(newGroup) {
-      setActiveRoot(setNodeAtPath(getActiveRoot(), groupPath, newGroup));
+      setRootForSide(side, setNodeAtPath(getRootForSide(side), groupPath, newGroup));
       renderGroupEditorList();
     }
 
@@ -2317,11 +2584,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       listEl.innerHTML = '';
       const g = getGroup();
       const children = (g.children || []).slice();
-      const ops = (g.ops || []).slice();
-      const onAfterChange = () => {
-        renderGroupEditorList();
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      };
       children.forEach((node, i) => {
         if (node.type === 'rule') {
           const row = document.createElement('div');
@@ -2329,29 +2591,26 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           const cardWrap = document.createElement('div');
           cardWrap.className = 'score-tree-row-card';
           const pathI = groupPath.concat(i);
-          const cardOpts = i > 0 ? { opValue: ops[i - 1] || 'AND', opIndex: i - 1 } : {};
-          cardOpts.onAfterChange = onAfterChange;
-          cardOpts.parentPath = groupPath;
-          cardOpts.onRuleSaved = () => {
-            renderGroupEditorList();
-            renderRules();
-            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          const cardOpts = {
+            onAfterChange: () => {
+              renderGroupEditorList();
+              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+            },
+            onRuleSaved: () => {
+              renderGroupEditorList();
+              renderRules();
+              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+            },
           };
-          cardWrap.appendChild(createRuleCard(node, pathI, cardOpts));
+          cardWrap.appendChild(createRuleCard(side, node, pathI, cardOpts));
           row.appendChild(cardWrap);
-          wireScoreRuleRowDrag(row, cardWrap, i, (from, to) => {
-            setGroup(moveScoreGroupChildren(getGroup(), from, to));
-            renderGroupEditorList();
-            renderRules();
-            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-          });
           listEl.appendChild(row);
         }
       });
     }
 
     addBtn.addEventListener('click', () => {
-      openRuleEditor(null, groupPath, (getGroup().children || []).length, () => {
+      openRuleEditor(side, null, groupPath, (getGroup().children || []).length, () => {
         renderGroupEditorList();
         renderRules();
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -2364,44 +2623,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     });
     renderGroupEditorList();
     document.body.appendChild(overlay);
-  }
-
-  /** Reorder by dragging the rule/group card (not buttons). Greedy run-vs-GT pairing breaks ties by rule tree order. */
-  function wireScoreRuleRowDrag(row, cardWrap, rowIndex, applyMove) {
-    cardWrap.draggable = true;
-    cardWrap.classList.add('score-tree-row-card--draggable');
-    cardWrap.title = 'Drag to reorder. When two run-vs-ground-truth pairs tie on how many rules match, earlier rules in this list win.';
-    cardWrap.addEventListener('dragstart', (e) => {
-      if (e.target.closest('button')) {
-        e.preventDefault();
-        return;
-      }
-      e.stopPropagation();
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', String(rowIndex));
-      row.classList.add('score-tree-row--drag-source');
-    });
-    cardWrap.addEventListener('dragend', () => {
-      row.classList.remove('score-tree-row--drag-source');
-      document.querySelectorAll('.score-tree-row--drop-target').forEach((el) => el.classList.remove('score-tree-row--drop-target'));
-    });
-
-    row.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      row.classList.add('score-tree-row--drop-target');
-    });
-    row.addEventListener('dragleave', (e) => {
-      if (!row.contains(e.relatedTarget)) row.classList.remove('score-tree-row--drop-target');
-    });
-    row.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      row.classList.remove('score-tree-row--drop-target');
-      const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
-      if (Number.isNaN(from) || from === rowIndex) return;
-      applyMove(from, rowIndex);
-    });
   }
 
   function renderRules() {
@@ -2420,37 +2641,26 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       return;
     }
 
-    const root = getActiveRoot();
-    if (root.type !== 'group' || !Array.isArray(root.children)) {
-      void renderResults();
-      return;
-    }
-    const children = root.children || [];
-    const ops = root.ops || Array(Math.max(0, children.length - 1)).fill('AND');
-
     const treeWrap = document.createElement('div');
     treeWrap.className = 'score-rules-tree score-rules-tree--flat';
-    children.forEach((node, i) => {
-      const row = document.createElement('div');
-      row.className = 'score-tree-row score-tree-row--flat';
-      const cardWrap = document.createElement('div');
-      cardWrap.className = 'score-tree-row-card';
-      const cardOpts = i > 0 ? { opValue: ops[i - 1] || 'AND', opIndex: i - 1 } : {};
-      if (node.type === 'group') {
-        cardWrap.appendChild(createGroupCard([i], node, cardOpts));
-      } else {
-        cardWrap.appendChild(createRuleCard(node, [i], cardOpts));
-      }
-      row.appendChild(cardWrap);
-      wireScoreRuleRowDrag(row, cardWrap, i, (from, to) => {
-        const r = getActiveRoot();
-        if (r.type !== 'group') return;
-        setActiveRoot(moveScoreGroupChildren(r, from, to));
-        renderRules();
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+
+    ['input', 'output'].forEach((side) => {
+      const root = getRootForSide(side);
+      const children = (root.type === 'group' && Array.isArray(root.children)) ? root.children : [];
+      children.forEach((childNode, i) => {
+        const row = document.createElement('div');
+        row.className = 'score-tree-row score-tree-row--flat';
+        const cardWrap = document.createElement('div');
+        cardWrap.className = 'score-tree-row-card';
+        const card = childNode.type === 'group'
+          ? createGroupCard(side, [i], childNode)
+          : createRuleCard(side, childNode, [i]);
+        cardWrap.appendChild(card);
+        row.appendChild(cardWrap);
+        treeWrap.appendChild(row);
       });
-      treeWrap.appendChild(row);
     });
+
     const addRow = document.createElement('div');
     addRow.className = 'score-tree-add-row score-tree-row--flat';
     const addBox = document.createElement('button');
@@ -2459,34 +2669,41 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     addBox.setAttribute('aria-label', 'Add rule');
     addBox.textContent = '+ Add rule';
     addBox.addEventListener('click', () => {
-      const r = getActiveRoot();
-      const len = (r.children || []).length;
-      openRuleEditor(null, [], len, () => renderRules());
+      const r = getRootForSide('input');
+      openRuleEditor('input', null, [], (r.children || []).length, () => renderRules());
     });
-    const cardWrap = document.createElement('div');
-    cardWrap.className = 'score-tree-row-card';
-    cardWrap.appendChild(addBox);
-    addRow.appendChild(cardWrap);
+    const addCardWrap = document.createElement('div');
+    addCardWrap.className = 'score-tree-row-card';
+    addCardWrap.appendChild(addBox);
+    addRow.appendChild(addCardWrap);
     treeWrap.appendChild(addRow);
+
     rulesListEl.appendChild(treeWrap);
     void renderResults();
   }
 
   async function renderResults() {
     if (!resultsBody) return;
+    const isCodeMode = activePanelMode === 'code';
     syncScoreResultsFooterVisibility();
     const prevScrollEl = resultsBody.querySelector('.score-detail-results-table-scroll');
     const savedScrollTop = prevScrollEl?.scrollTop ?? 0;
     const savedScrollLeft = prevScrollEl?.scrollLeft ?? 0;
     resultsBody.innerHTML = '';
     const { inputRoot, outputRoot } = loadBundle();
-    const rulesFlat = getRulesFlat();
+    const rulesFlat = isCodeMode ? [] : getRulesFlat();
     if (!selectedNodeId) {
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Select ground truth and add rules to see comparison results.</p>';
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
-    if (rulesFlat.length === 0) {
+    if (isCodeMode) {
+      if (!lastCodeMatchResult) {
+        resultsBody.innerHTML = '<p class="score-detail-placeholder">Write match(input_row, output_row, gt_row) code and click Run to see results here.</p>';
+        if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
+        return;
+      }
+    } else if (rulesFlat.length === 0) {
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Add at least one rule to compare.</p>';
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
@@ -2495,7 +2712,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const runWs = getRunWorkingSetContent();
     const rawGtContent = getGroundTruthContent(selectedNodeId);
 
-    const gtColsUsed = buildScoreTableGtColumns(rulesFlat, rawGtContent);
+    const gtColsUsed = isCodeMode ? (rawGtContent.headers || []).slice() : buildScoreTableGtColumns(rulesFlat, rawGtContent);
 
     const resultsForScore = (rawResults || []).filter((r) => r);
     const gtContent = rawGtContent;
@@ -2517,7 +2734,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
     scoreEmbeddingCosineMap = new Map();
     const embeddingWalkRoot = scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot);
-    if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
+    if (!isCodeMode && rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
       try {
         scoreEmbeddingCosineMap = await prefetchEmbeddingCosineMap(API_BASE, {
           root: embeddingWalkRoot,
@@ -2533,19 +2750,28 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         scoreEmbeddingCosineMap = new Map();
       }
     }
-    const { runToGt, total: runCount, matchedCount } = computeMatchPerRow(inputRoot, outputRoot, results, outputFields, runWs, gtContent);
+    let runToGt, runCount;
+    if (isCodeMode) {
+      runToGt = buildCodeMatchRunToGt(lastCodeMatchResult, gtRows.length);
+      runCount = results.length;
+    } else {
+      ({ runToGt, total: runCount } = computeMatchPerRow(inputRoot, outputRoot, results, outputFields, runWs, gtContent));
+    }
     const gtToRun = new Array(gtRows.length).fill(-1);
     for (let i = 0; i < (runToGt || []).length; i++) {
       if (runToGt[i] >= 0) gtToRun[runToGt[i]] = i;
     }
 
+    /** Code mode: pairing IS the match decision (match() already decided), so any assigned pair counts as matched. */
     function treeMatchesPairForRow(rootTree, iRun, jGt) {
+      if (isCodeMode) return iRun >= 0 && jGt >= 0 && runToGt[iRun] === jGt;
       const leaves = flattenScoreRules(rootTree || emptyScoreRuleGroup());
       if (leaves.length === 0) return true;
       return evaluateNode(rootTree, iRun, jGt, resultsByIndex, runWs, outputFields, gtContent);
     }
     function isPairMatchForRow(iRun, jGt) {
       if (iRun < 0 || jGt < 0) return false;
+      if (isCodeMode) return runToGt[iRun] === jGt;
       if (!treeMatchesPairForRow(inputRoot, iRun, jGt)) return false;
       const outLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
       if (outLeaves.length === 0) return true;
@@ -2575,7 +2801,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
     const q = (scoreDetailPagination.searchQuery || '').trim().toLowerCase();
     const inputHeaders = runWs.headers || [];
-    const rulesColumnFilter = !!scoreDetailPagination.rulesColumnFilter;
+    const rulesColumnFilter = !isCodeMode && !!scoreDetailPagination.rulesColumnFilter;
     const inputHeadersForTable = rulesColumnFilter ? filterScoreInputHeadersByRules(rulesFlat, inputHeaders) : inputHeaders;
     const outputFieldsForTable = rulesColumnFilter ? filterScoreOutputFieldsByRules(rulesFlat, outputFields) : outputFields;
     const gtColsDisplayed = rulesColumnFilter ? buildScoreTableGtColumnsRulesOnly(rulesFlat, rawGtContent) : gtColsUsed;
@@ -2758,10 +2984,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         <span class="score-detail-results-metrics" aria-label="Precision, Recall, F1">${escapeHtml(metricsText)}</span>
       </div>
       <div class="score-detail-results-search-inline">
+        ${isCodeMode ? '' : `
         <label class="score-detail-rules-column-filter" title="Hide columns not used in any rule (input, model output, GT). Export still has all columns.">
           Rule columns only
           <input type="checkbox" id="score-detail-rules-column-only" ${scoreDetailPagination.rulesColumnFilter ? 'checked' : ''} aria-label="Table shows only columns referenced in rules" />
         </label>
+        `}
         <label class="dataset-detail-search-label" for="score-detail-results-search">Search</label>
         <input type="text" id="score-detail-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" value="${escapeAttr(scoreDetailPagination.searchQuery)}" />
       </div>
@@ -3307,6 +3535,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   async function updateSaveToWorkspaceButton() {
     if (!saveToWorkspaceBtn) return;
+    if (activePanelMode === 'code') {
+      saveToWorkspaceBtn.disabled = !lastCodeMatchResult || (lastCodeMatchResult.outcomes || []).length === 0;
+      return;
+    }
     try {
       const payload = await getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns });
       saveToWorkspaceBtn.disabled = !payload || !payload.headers || !payload.rows.length;
@@ -3325,9 +3557,18 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   if (saveToWorkspaceBtn) {
     saveToWorkspaceBtn.addEventListener('click', async () => {
+      const scoreName = (node?.querySelector?.('.workflow-node__title')?.textContent || '').trim() || 'Score';
+      if (activePanelMode === 'code') {
+        if (!lastCodeMatchResult) return;
+        const { headers, rows } = buildCodeMatchTableData(lastCodeMatchResult);
+        if (!headers || !rows.length) return;
+        document.dispatchEvent(new CustomEvent('workflow:score-export-to-workspace', {
+          detail: { scoreNodeId: node?.dataset?.nodeId || '', scoreName, headers, rows },
+        }));
+        return;
+      }
       const payload = await getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns });
       if (!payload || !payload.headers || !payload.rows) return;
-      const scoreName = (node?.querySelector?.('.workflow-node__title')?.textContent || '').trim() || 'Score';
       document.dispatchEvent(new CustomEvent('workflow:score-export-to-workspace', {
         detail: { scoreNodeId: node?.dataset?.nodeId || '', scoreName, headers: payload.headers, rows: payload.rows },
       }));
@@ -3409,7 +3650,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (item.type === 'group') {
         const filtered = filterGroupForApply(item, runKeys, gtSet, existingSet);
         if (!filtered) continue;
-        const memSide = item.scoreMemorySide || (activeRulesTab === 'input' ? 'input' : 'output');
+        const memSide = item.scoreMemorySide || 'input';
         if (memSide === 'output' && flattenScoreRules(inputRoot || emptyScoreRuleGroup()).length === 0) {
           continue;
         }
@@ -3522,20 +3763,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   });
 
   function close() {
+    if (node && node.dataset) node.dataset.scoreMatchCode = getMatchCode();
     overlay.remove();
     document.body.style.overflow = '';
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
-  const scorePaneToggle = attachModalPaneToggle({
+  attachModalPaneCycle({
     overlay,
-    isCollapsed: () => overlay.classList.contains('modal-overlay--left-pane-collapsed'),
-    onToggle: () => {
-      overlay.classList.toggle('modal-overlay--left-pane-collapsed');
-      scorePaneToggle.update();
-    },
-    expandedLabel: 'Hide scoring setup panel',
-    collapsedLabel: 'Show scoring setup panel',
+    bothLabel: 'Show both panels',
+    leftOnlyLabel: 'Show scoring setup panel only',
+    rightOnlyLabel: 'Show results panel only',
   });
 
   updateTriggerDisplay();

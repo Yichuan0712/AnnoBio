@@ -52,6 +52,7 @@ import {
   buildScoreResultDescriptorsInRunOrder,
   attachInputMatchedUnpairedGtDescriptors,
   buildScoreTableGtColumns,
+  buildCodeMatchRunToGt,
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
@@ -283,6 +284,9 @@ function evaluateScoreNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
 
 /** Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow). */
 async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections = []) {
+  if ((scoreNode?.dataset?.scoreActiveMatchMode || 'rules') === 'code') {
+    return buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections);
+  }
   const toCompareStr = (v) => {
     if (v === null || v === undefined) return '';
     if (typeof v === 'string') return v.trim();
@@ -745,6 +749,146 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   return rows;
 }
 
+/**
+ * Review payload for "Match by code" runs: sources from the persisted `node.dataset.scoreMatchResult`
+ * (input_row/output_row/gt_row dicts already built when the run completed in scoreDetailModal.js)
+ * instead of re-deriving pairing from rule trees. Row numbering matches the modal's own Results table
+ * via buildCodeMatchRunToGt + the same descriptor helpers rule mode uses.
+ */
+async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections = []) {
+  let lastResult = null;
+  try {
+    lastResult = JSON.parse(scoreNode.dataset.scoreMatchResult || 'null');
+  } catch (_) {}
+  if (!lastResult || !Array.isArray(lastResult.runRowIndices)) return [];
+  const { runRowIndices, outcomes, runRows, gtRows } = lastResult;
+
+  let results = [];
+  try { results = JSON.parse(runNode.dataset.runResults || '[]'); } catch (_) {}
+  const resultsByIndex = new Map();
+  (results || []).forEach((r) => { if (r) resultsByIndex.set(r.row_index, r); });
+
+  const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
+  const runWs = runWsId ? datasetContentByNodeId.get(runWsId) : null;
+  const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
+
+  let runInputToColumn = {};
+  try {
+    const parsed = JSON.parse(runNode.dataset.runInputToColumn || '{}');
+    if (parsed && typeof parsed === 'object') runInputToColumn = parsed;
+  } catch (_) {}
+  const promptPlaceholderNames = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
+  const hdrsForPrompt = runWsSafe.headers || [];
+  function rowInputAsPromptPlaceholders(inpIdx) {
+    const wsRow = runWsSafe.rows && runWsSafe.rows[inpIdx] ? runWsSafe.rows[inpIdx] : [];
+    const out = {};
+    for (const name of promptPlaceholderNames) {
+      const col = String(runInputToColumn[name] || '').trim();
+      if (!col) { out[name] = ''; continue; }
+      const colIdx = hdrsForPrompt.findIndex((h) => String(h).trim() === col);
+      const val = colIdx >= 0 ? (wsRow[colIdx] ?? '') : '';
+      out[name] = val === null || val === undefined ? '' : String(val);
+    }
+    return out;
+  }
+
+  let excludedFromScoring = {};
+  try { excludedFromScoring = JSON.parse(scoreNode.dataset.scoreRowExcludedFromScoring || '{}'); } catch (_) {}
+
+  const matchCode = (scoreNode.dataset.scoreMatchCode || '').trim();
+  const gtCount = gtRows.length;
+  const runToGt = buildCodeMatchRunToGt(lastResult, gtCount);
+  const gtToRun = new Array(gtCount).fill(-1);
+  for (let i = 0; i < runToGt.length; i++) {
+    if (runToGt[i] >= 0) gtToRun[runToGt[i]] = i;
+  }
+
+  const scoreDetailDescriptors = attachInputMatchedUnpairedGtDescriptors(
+    buildScoreResultDescriptorsInRunOrder({
+      runRowIndices,
+      runToGt,
+      gtToRun,
+      gtRowsLength: gtCount,
+      evaluateRunMatchesAnyGt: (i) => runToGt[i] >= 0,
+    }),
+    {
+      runRowIndices,
+      runToGt,
+      gtToRun,
+      inputMatchesPairForRow: (i, jj) => runToGt[i] === jj,
+    },
+  );
+  const scoreTableRowByKey = new Map();
+  scoreDetailDescriptors.forEach((d, idx) => {
+    const n = idx + 1;
+    if (d.type === 'gt') scoreTableRowByKey.set(`gt:${d.j}`, n);
+    else scoreTableRowByKey.set(`runOnly:${d.i}`, n);
+  });
+
+  const rows = [];
+  outcomes.forEach((outcome, k) => {
+    const runR = runRowIndices[k];
+    if (typeof runR !== 'number') return;
+    const r = resultsByIndex.get(runR) || null;
+    const inpIdx = r?.input_row_index ?? runR;
+    const jPaired = outcome.ok && typeof outcome.matched_gt_index === 'number' ? outcome.matched_gt_index : -1;
+    const modalKey = jPaired >= 0 ? String(jPaired) : `run:${runR}`;
+    if (excludedFromScoring[modalKey]) return;
+
+    const runOutput = (runRows[k] && runRows[k].output_row) || {};
+    const matched = jPaired >= 0;
+    const groundTruthOutput = matched ? ((gtRows[jPaired] && gtRows[jPaired].gt_row) || {}) : {};
+    const expected = !outcome.ok
+      ? `Error running match(): ${outcome.error || 'unknown error'}`
+      : (matched
+        ? 'Matched via custom code (see comparison_types for the match() function).'
+        : 'No match (custom code) — see comparison_types for the match() function.');
+    const comparison_types = matchCode ? [`Custom code:\n${matchCode}`] : null;
+    const row_input = rowInputAsPromptPlaceholders(inpIdx);
+    const score_table_row = jPaired >= 0
+      ? (scoreTableRowByKey.get(`gt:${jPaired}`) ?? null)
+      : (scoreTableRowByKey.get(`runOnly:${runR}`) ?? null);
+    rows.push({
+      row_index: r?.row_index ?? runR,
+      input_row_index: inpIdx,
+      matched,
+      run_output: runOutput,
+      expected,
+      comparison_types,
+      ground_truth_output: groundTruthOutput,
+      row_input,
+      gt_only: false,
+      source_gt_row_index: jPaired >= 0 ? jPaired : null,
+      score_table_row,
+    });
+  });
+
+  // Ground-truth rows no run row matched: synthetic rows, same convention as rule mode -- but code
+  // mode has no rule columns to infer a "same input row" grouping hint from, so row_input is unknown.
+  let synthRow = (runRowIndices.length ? Math.max(...runRowIndices) : -1) + 1;
+  for (let j = 0; j < gtCount; j++) {
+    if (gtToRun[j] >= 0) continue;
+    if (excludedFromScoring[String(j)]) continue;
+    const score_table_row = scoreTableRowByKey.get(`gt:${j}`) ?? null;
+    rows.push({
+      row_index: synthRow,
+      input_row_index: null,
+      matched: false,
+      run_output: {},
+      expected: 'No matching run row (custom code).',
+      comparison_types: matchCode ? [`Custom code:\n${matchCode}`] : null,
+      ground_truth_output: (gtRows[j] && gtRows[j].gt_row) || {},
+      row_input: null,
+      gt_only: true,
+      source_gt_row_index: j,
+      score_table_row,
+    });
+    synthRow += 1;
+  }
+
+  return rows;
+}
+
 function canvasNormalizeNodeId(value) {
   return String(value || '').trim();
 }
@@ -1041,9 +1185,13 @@ export function buildWorkflowCanvas(root, options = {}) {
       return false;
     }
   }
+  /** "Match by code" has no rule tree -- a completed run (persisted by scoreDetailModal.js) is its own readiness signal. */
+  function scoreNodeHasCodeMatchResult(scoreNode) {
+    return !!(scoreNode && scoreNode.dataset && scoreNode.dataset.scoreMatchResult);
+  }
   function scoreNodeIsReadyForScoring(scoreNode) {
     const gtId = (scoreNode?.dataset?.scoreGroundTruthId || '').trim();
-    return !!gtId && scoreNodeHasCompleteRules(scoreNode);
+    return !!gtId && (scoreNodeHasCompleteRules(scoreNode) || scoreNodeHasCodeMatchResult(scoreNode));
   }
   function syncScoreNodeProgressFromUpstreamRun(scoreNode) {
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return;
