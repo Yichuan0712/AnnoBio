@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -90,6 +91,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 PUBMED_JOBS_FILE = DATA_DIR / "pubmed_jobs.json"
 PROCESS_JOBS_FILE = DATA_DIR / "process_jobs.json"
 MATCH_JOBS_FILE = DATA_DIR / "match_jobs.json"
+PROCESS_DF_JOBS_FILE = DATA_DIR / "process_df_jobs.json"
 
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
@@ -1904,6 +1906,132 @@ def cancel_match_run(job_id: str):
             return {"ok": True, "status": _match_jobs[job_id].get("status")}
         _match_cancelled.add(job_id)
         _touch_match_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+# ---------- Process "Process as df" (runs a user Python process(df) function once on the whole
+#             dataset, delegates to process_df_exec.py) ----------
+_process_df_jobs: dict[str, dict] = {}
+_process_df_jobs_lock = threading.Lock()
+_process_df_cancelled: set[str] = set()
+_process_df_last_activity: dict[str, float] = {}
+_process_df_procs: dict[str, subprocess.Popen] = {}
+
+
+class ProcessDfRunRequest(BaseModel):
+    python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
+    code: str = Field(..., min_length=1, description="User code defining process(df) -> DataFrame")
+    headers: list[str] = Field(..., description="Column names; each row dict passed into the DataFrame is keyed by these")
+    rows: list[list[str]] = Field(default_factory=list, description="Input rows, same order as headers")
+
+
+def _touch_process_df_activity(job_id: str) -> None:
+    _process_df_last_activity[job_id] = time.time()
+
+
+def _persist_process_df_jobs() -> None:
+    with _process_df_jobs_lock:
+        snapshot = dict(_process_df_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        PROCESS_DF_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[ProcessDf] persist failed: {e}", file=sys.stderr)
+
+
+def _load_process_df_jobs() -> None:
+    if not PROCESS_DF_JOBS_FILE.exists():
+        return
+    try:
+        raw = PROCESS_DF_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _process_df_jobs_lock:
+            _process_df_jobs.clear()
+            _process_df_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[ProcessDf] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_process_df_jobs()
+
+
+def _do_process_df_work(job_id: str, req: ProcessDfRunRequest) -> None:
+    from process_df_exec import run_process_df_code
+
+    try:
+        _touch_process_df_activity(job_id)
+
+        def register_proc(proc: subprocess.Popen) -> None:
+            _process_df_procs[job_id] = proc
+
+        outcome = run_process_df_code(req.python_path, req.code, req.headers, req.rows, register_proc=register_proc)
+
+        with _process_df_jobs_lock:
+            was_cancelled = job_id in _process_df_cancelled
+            if was_cancelled:
+                _process_df_jobs[job_id] = {"status": "cancelled"}
+            elif outcome.get("ok"):
+                _process_df_jobs[job_id] = {"status": "done", "rows": outcome.get("rows") or []}
+            else:
+                _process_df_jobs[job_id] = {"status": "done", "error": outcome.get("error") or "Unknown error"}
+        _persist_process_df_jobs()
+    except Exception as e:
+        with _process_df_jobs_lock:
+            _process_df_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_process_df_jobs()
+    finally:
+        _process_df_procs.pop(job_id, None)
+
+
+@app.post("/api/process/df/run")
+def start_process_df_run(body: ProcessDfRunRequest):
+    """Start a Process-as-df run (Python `process(df)` over the whole dataset) in the background; returns 202 with job_id."""
+    job_id = str(uuid.uuid4())
+    with _process_df_jobs_lock:
+        _process_df_jobs[job_id] = {"status": "running"}
+    _persist_process_df_jobs()
+    thread = threading.Thread(target=_do_process_df_work, args=(job_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/process/df/run/result/{job_id}")
+def get_process_df_run_result(job_id: str):
+    """Return 202 while running, 200 when done/cancelled. Polling refreshes the abandonment timer."""
+    with _process_df_jobs_lock:
+        job = _process_df_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Process-df job not found")
+        if job.get("status") == "running":
+            _touch_process_df_activity(job_id)
+        status = job.get("status")
+        rows = job.get("rows") or []
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={"status": "running"})
+    if error:
+        return {"status": "done", "error": error, "rows": []}
+    return {"status": status, "rows": rows}
+
+
+@app.post("/api/process/df/run/cancel/{job_id}")
+def cancel_process_df_run(job_id: str):
+    """Cancel a running Process-as-df job by killing its subprocess (there's no per-row loop to flag between iterations)."""
+    with _process_df_jobs_lock:
+        if job_id not in _process_df_jobs:
+            raise HTTPException(status_code=404, detail="Process-df job not found")
+        if _process_df_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _process_df_jobs[job_id].get("status")}
+        _process_df_cancelled.add(job_id)
+        _touch_process_df_activity(job_id)
+    proc = _process_df_procs.get(job_id)
+    if proc is not None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
     return {"ok": True, "status": "cancelling"}
 
 

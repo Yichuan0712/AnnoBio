@@ -2804,7 +2804,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (isProcess) {
       try {
         const pr = JSON.parse(node.dataset.processResults || 'null');
-        processHasResults = !!pr && Array.isArray(pr.rows) && pr.rows.length > 0;
+        const pdf = JSON.parse(node.dataset.processDfResults || 'null');
+        processHasResults = (!!pr && Array.isArray(pr.rows) && pr.rows.length > 0)
+          || (!!pdf && Array.isArray(pdf.rows) && pdf.rows.length > 0);
       } catch (_) {}
     }
     let scoreHasResults = false;
@@ -3328,9 +3330,10 @@ export function buildWorkflowCanvas(root, options = {}) {
       },
       'process-save-to-workspace': () => {
         if (node.dataset.nodeType !== 'process') return;
+        const activeMode = node.dataset.processActiveMode === 'df' ? 'df' : 'row';
         let results = null;
         try {
-          results = JSON.parse(node.dataset.processResults || 'null');
+          results = JSON.parse(node.dataset[activeMode === 'df' ? 'processDfResults' : 'processResults'] || 'null');
         } catch (_) {}
         if (!results || !Array.isArray(results.rows) || results.rows.length === 0) return;
         const processName = (node.dataset.processName || node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Process';
@@ -4065,7 +4068,10 @@ export function buildWorkflowCanvas(root, options = {}) {
           top,
           name: node.dataset.processName || 'Process',
           code: node.dataset.processCode || undefined,
+          dfCode: node.dataset.processDfCode || undefined,
+          activeMode: node.dataset.processActiveMode || undefined,
           results: node.dataset.processResults || undefined,
+          dfResults: node.dataset.processDfResults || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         return out;
@@ -4247,10 +4253,13 @@ export function buildWorkflowCanvas(root, options = {}) {
           nodeId: n.nodeId || n.id,
           title: n.name || 'Process',
           code: n.code,
+          dfCode: n.dfCode,
+          activeMode: n.activeMode,
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
-        if (n.results) {
-          node.dataset.processResults = n.results;
+        if (n.results) node.dataset.processResults = n.results;
+        if (n.dfResults) node.dataset.processDfResults = n.dfResults;
+        if (n.results || n.dfResults) {
           const bar = node.querySelector('.workflow-node__process-progress');
           if (bar) { bar.style.width = '100%'; bar.setAttribute('aria-valuenow', '100'); }
         }
