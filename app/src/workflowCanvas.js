@@ -2139,9 +2139,16 @@ export function buildWorkflowCanvas(root, options = {}) {
     } else if (edgeType === EDGE_TYPE_PROCESS_TO_DATASET) {
       e.preventDefault();
       e.stopPropagation();
-      const inputEdge = connections.find((c) => c.toId === edge.fromId && c.type === EDGE_TYPE_DATASET_TO_PROCESS);
-      if (inputEdge) {
-        openDatasetEdgeDetailModal({ fromId: inputEdge.fromId, toId: edge.toId });
+      const dsNode = getNodeById(edge.toId);
+      if (dsNode && dsNode.classList.contains('workflow-node--dataset')) {
+        openDatasetDetailModal({
+          node: dsNode,
+          getContent: () => datasetContentByNodeId.get(dsNode.dataset.nodeId) || { headers: [], rows: [] },
+          saveContent: (content) => {
+            datasetContentByNodeId.set(dsNode.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          },
+        });
       }
     } else if (edgeType === EDGE_TYPE_DATASET_TO_SAMPLER) {
       e.preventDefault();
