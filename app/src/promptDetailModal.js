@@ -1,4 +1,4 @@
-import { attachModalPaneToggle } from './paneToggleButton.js';
+import { attachModalPaneCycle } from './paneToggleButton.js';
 import { openPromptSectionEditor, renderPromptSectionCards } from './promptSectionUi.js';
 import { openPromptFieldEditor, renderPromptFieldCards } from './promptSchemaUi.js';
 
@@ -916,15 +916,11 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     schemaBtnEdit.addEventListener('click', () => openEditSchemaOverlay());
   }
 
-  const promptPaneToggle = attachModalPaneToggle({
+  attachModalPaneCycle({
     overlay,
-    isCollapsed: () => overlay.classList.contains('modal-overlay--left-pane-collapsed'),
-    onToggle: () => {
-      overlay.classList.toggle('modal-overlay--left-pane-collapsed');
-      promptPaneToggle.update();
-    },
-    expandedLabel: 'Hide prompt inputs panel',
-    collapsedLabel: 'Show prompt inputs panel',
+    bothLabel: 'Show both panels',
+    leftOnlyLabel: 'Show prompt inputs panel only',
+    rightOnlyLabel: 'Show prompt sections panel only',
   });
 
   overlay.querySelector('.modal-close').addEventListener('click', () => {

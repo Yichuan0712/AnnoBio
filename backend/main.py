@@ -89,6 +89,7 @@ RUN_JOBS_FILE = DATA_DIR / "run_jobs.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 PUBMED_JOBS_FILE = DATA_DIR / "pubmed_jobs.json"
 PROCESS_JOBS_FILE = DATA_DIR / "process_jobs.json"
+MATCH_JOBS_FILE = DATA_DIR / "match_jobs.json"
 
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
@@ -1767,6 +1768,143 @@ def check_process_python(body: dict = Body(...)):
 
     python_path = str(body.get("python_path") or "").strip()
     return check_python(python_path)
+
+
+# ---------- Score "Match by code" (runs a user Python match(input_row, output_row, gt_row) predicate,
+#             delegates to match_exec.py) ----------
+_match_jobs: dict[str, dict] = {}
+_match_jobs_lock = threading.Lock()
+_match_cancelled: set[str] = set()
+_match_last_activity: dict[str, float] = {}
+
+
+class MatchRunRequest(BaseModel):
+    python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
+    code: str = Field(..., min_length=1, description="User code defining match(input_row, output_row, gt_row) -> bool")
+    run_rows: list[dict] = Field(default_factory=list, description="Each: {input_row: dict, output_row: dict}")
+    gt_rows: list[dict] = Field(default_factory=list, description="Each: {gt_row: dict}")
+
+
+def _touch_match_activity(job_id: str) -> None:
+    _match_last_activity[job_id] = time.time()
+
+
+def _persist_match_jobs() -> None:
+    with _match_jobs_lock:
+        snapshot = dict(_match_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        MATCH_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[Match] persist failed: {e}", file=sys.stderr)
+
+
+def _load_match_jobs() -> None:
+    if not MATCH_JOBS_FILE.exists():
+        return
+    try:
+        raw = MATCH_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _match_jobs_lock:
+            _match_jobs.clear()
+            _match_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[Match] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_match_jobs()
+
+
+def _do_match_work(job_id: str, req: MatchRunRequest) -> None:
+    from match_exec import run_match_pairs
+
+    try:
+        total = len(req.run_rows)
+        with _match_jobs_lock:
+            _match_jobs[job_id]["total"] = total
+            _match_jobs[job_id]["completed"] = 0
+            _match_jobs[job_id]["results"] = []
+        _persist_match_jobs()
+
+        if total == 0:
+            with _match_jobs_lock:
+                _match_jobs[job_id]["status"] = "done"
+            _persist_match_jobs()
+            return
+
+        def on_row(index: int, outcome: dict) -> None:
+            with _match_jobs_lock:
+                _match_jobs[job_id]["results"].append(outcome)
+                _match_jobs[job_id]["completed"] = index + 1
+            _persist_match_jobs()
+            _touch_match_activity(job_id)
+
+        def is_cancelled() -> bool:
+            is_stopped = job_id in _match_cancelled
+            is_abandoned = (time.time() - _match_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
+            return is_stopped or is_abandoned
+
+        run_match_pairs(req.python_path, req.code, req.run_rows, req.gt_rows, on_row, is_cancelled)
+
+        with _match_jobs_lock:
+            _match_jobs[job_id]["status"] = "cancelled" if job_id in _match_cancelled else "done"
+        _persist_match_jobs()
+    except Exception as e:
+        with _match_jobs_lock:
+            _match_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_match_jobs()
+
+
+@app.post("/api/score/match/run")
+def start_match_run(body: MatchRunRequest):
+    """Start a Match-by-code run (Python `match(input_row, output_row, gt_row)` pairing) in the background; returns 202 with job_id."""
+    job_id = str(uuid.uuid4())
+    with _match_jobs_lock:
+        _match_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "results": []}
+        _touch_match_activity(job_id)
+    _persist_match_jobs()
+    thread = threading.Thread(target=_do_match_work, args=(job_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/score/match/run/result/{job_id}")
+def get_match_run_result(job_id: str):
+    """Return 202 while running (with partial results), 200 when done/cancelled. Polling refreshes the abandonment timer."""
+    with _match_jobs_lock:
+        job = _match_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Match job not found")
+        if job.get("status") == "running":
+            _touch_match_activity(job_id)
+        status = job.get("status")
+        completed = job.get("completed", 0)
+        total = job.get("total", 0)
+        results = (job.get("results") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "completed": completed, "total": total, "results": results},
+        )
+    if error:
+        return {"status": "done", "error": error, "results": []}
+    return {"status": status, "completed": completed, "total": total, "results": results}
+
+
+@app.post("/api/score/match/run/cancel/{job_id}")
+def cancel_match_run(job_id: str):
+    """Mark a Match-by-code run as cancelled; worker stops after the current row."""
+    with _match_jobs_lock:
+        if job_id not in _match_jobs:
+            raise HTTPException(status_code=404, detail="Match job not found")
+        if _match_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _match_jobs[job_id].get("status")}
+        _match_cancelled.add(job_id)
+        _touch_match_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
 
 
 # ---------- Review analyze worker (delegates to review_pipeline.py) ----------

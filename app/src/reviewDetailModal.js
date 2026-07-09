@@ -20,7 +20,7 @@ import {
   suggestionTargetScoreRowIndices,
 } from './reviewWorkingSections.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
-import { attachModalPaneToggle } from './paneToggleButton.js';
+import { attachModalPaneCycle } from './paneToggleButton.js';
 import {
   ensureReviewResultIds,
   ensureSuggestionObjectId,
@@ -2261,15 +2261,11 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
-  const reviewPaneToggle = attachModalPaneToggle({
+  attachModalPaneCycle({
     overlay,
-    isCollapsed: () => overlay.classList.contains('modal-overlay--left-pane-collapsed'),
-    onToggle: () => {
-      overlay.classList.toggle('modal-overlay--left-pane-collapsed');
-      reviewPaneToggle.update();
-    },
-    expandedLabel: 'Hide findings panel',
-    collapsedLabel: 'Show findings panel',
+    bothLabel: 'Show both panels',
+    leftOnlyLabel: 'Show findings panel only',
+    rightOnlyLabel: 'Show results panel only',
   });
 
   function close() {
