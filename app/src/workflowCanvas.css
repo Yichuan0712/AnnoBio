@@ -67,9 +67,9 @@
 }
 
 .workflow-canvas__autopilot-icon {
-  font-size: 11px;
+  font-size: 16px;
   line-height: 1;
-  transform: translateY(-0.5px);
+  transform: translateY(-1px);
   display: inline-block;
   color: var(--text-muted);
 }
