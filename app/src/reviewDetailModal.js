@@ -1223,6 +1223,12 @@ function buildReviewResultUI(overlay, options) {
     addOneSuggestionCard(optimizedSug, newIdx);
     persistWorking();
     const newCardEl = editContainer.querySelector(`.review-detail-suggestion-card[data-suggestion-index="${newIdx}"]`);
+    // The new card is appended at the end of a possibly long, scrolled suggestion list -- without
+    // this, it's created successfully but invisible off-screen, so the only thing the user sees
+    // is the source card's pill reverting, which looks like optimization silently did nothing.
+    if (newCardEl && typeof newCardEl.scrollIntoView === 'function') {
+      newCardEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
     if (newCardEl && typeof newCardEl._reviewAutoVerify === 'function') newCardEl._reviewAutoVerify();
     previewSelectedSuggestionIndex = newIdx;
     updateSuggestionPreviewSelectionVisual();
@@ -1707,10 +1713,14 @@ function buildReviewResultUI(overlay, options) {
         _verifyPromises.delete(verifyKey(sugIdx));
         // Persist state + result so they survive app restart
         try { persistVerifyState(sugIdx, postState, postState !== 'idle' ? finalResult : null); } catch (_) {}
-        // Only update the DOM if this card is still mounted; if the modal was
-        // closed and reopened, the new card's .finally() hook handles the update.
-        if (card.isConnected) {
-          updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+        // Re-query the live card by its stable data-suggestion-index rather than trusting this
+        // closure's own `card` reference -- if anything else re-rendered the list in the
+        // meantime, that reference could be a detached node even though the real card (same
+        // index) is still on screen, which would otherwise silently skip the pill update here
+        // and only show the right state after closing and reopening the modal.
+        const liveCard = editContainer.querySelector(`.review-detail-suggestion-card[data-suggestion-index="${sugIdx}"]`);
+        if (liveCard) {
+          updateSuggestionTitleAndPassPill(liveCard, sug, suggestionActionsFullForCard(sug), originals, promptSections);
           applyPinnedPreviewIfAny();
         }
       }
@@ -1878,7 +1888,8 @@ function buildReviewResultUI(overlay, options) {
               cardVerifyStates.set(sugIdx, 'optimization');
               _verifyPromises.delete(verifyKey(sugIdx));
               try { persistVerifyState(sugIdx, 'optimization', cardVerifyResults.get(sugIdx)); } catch (_) {}
-              if (card.isConnected) updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+              const liveCard = editContainer.querySelector(`.review-detail-suggestion-card[data-suggestion-index="${sugIdx}"]`);
+              if (liveCard) updateSuggestionTitleAndPassPill(liveCard, sug, actionsFull, originals, promptSections);
             }
           })();
           _verifyPromises.set(verifyKey(sugIdx), fp);
