@@ -3827,6 +3827,7 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 /* "Optimized from #N" lineage note on a card created by Click to Optimize */
 .review-suggestion-lineage-note {
   margin-left: 6px;
+  margin-right: 6px;
   font-size: 10px;
   font-weight: 500;
   color: var(--text-muted);
