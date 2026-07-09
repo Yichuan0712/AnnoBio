@@ -40,6 +40,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 from agent.chat.agent_chat import build_agent_messages, format_agent_messages_for_log
 from agent.prompt.agent_plan_prompt import build_agent_plan_instruction_prefix
 from llm import chat as llm_chat, run_structured as llm_run_structured
+from provider_detect import detect_provider, verify_credential
 
 app = FastAPI()
 
@@ -86,6 +87,8 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 RUN_JOBS_FILE = DATA_DIR / "run_jobs.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
+PUBMED_JOBS_FILE = DATA_DIR / "pubmed_jobs.json"
+PROCESS_JOBS_FILE = DATA_DIR / "process_jobs.json"
 
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
@@ -99,6 +102,12 @@ DEFAULT_SETTINGS = {
     "optimization_max_trials": 40,
     # Show Reset & Debug buttons on suggestion cards.
     "debug_mode": False,
+    # Optional: raises PubMed E-utilities rate limit from 3/sec to 10/sec when set.
+    "ncbi_api_key": "",
+    # Optional: NCBI asks every E-utilities caller to identify a contact; falls back to a generic address when blank.
+    "ncbi_email": "",
+    # Python interpreter (system install or a venv) used by Process nodes to run user code.
+    "python_path": "",
 }
 
 
@@ -156,6 +165,9 @@ class SettingsPatch(BaseModel):
         description="Maximum Thompson-sampling trials per compositional optimization run (4–200).",
     )
     debug_mode: bool | None = None
+    ncbi_api_key: str | None = None
+    ncbi_email: str | None = None
+    python_path: str | None = None
 
 
 class CredentialResponse(BaseModel):
@@ -163,6 +175,9 @@ class CredentialResponse(BaseModel):
     model: str
     llm: str
     base_url: str = ""
+    provider: str = ""
+    last_check_ok: bool | None = None
+    last_check_error: str | None = None
     api_key_masked: str
 
 
@@ -173,6 +188,9 @@ class CredentialDetailResponse(BaseModel):
     model: str
     llm: str
     base_url: str = ""
+    provider: str = ""
+    last_check_ok: bool | None = None
+    last_check_error: str | None = None
     api_key: str
 
 
@@ -432,10 +450,30 @@ def list_credentials():
             model=_credential_model(item),
             llm=_credential_model(item),
             base_url=_credential_base_url(item),
+            provider=_credential_provider(item),
+            last_check_ok=item.get("last_check_ok"),
+            last_check_error=item.get("last_check_error"),
             api_key_masked=_mask_key(item["api_key"]),
         )
         for item in items
     ]
+
+
+@app.post("/api/credentials/detect")
+async def detect_credential_provider(request: Request):
+    """
+    Best-effort identify which provider a model id / base_url / api_key belongs to, and
+    return that provider's own live model list (for autocomplete). Never raises on a failed
+    detection -- callers should treat provider="" as "let the user type it manually".
+    """
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+    model = (body.get("model") or "").strip()
+    base_url = (body.get("base_url") or "").strip()
+    api_key = (body.get("api_key") or "").strip()
+    return await detect_provider(model=model, base_url=base_url, api_key=api_key)
 
 
 @app.post("/api/credentials", response_model=CredentialResponse)
@@ -448,6 +486,7 @@ async def add_credential(request: Request):
     model = (body.get("model") or body.get("llm") or "").strip()
     api_key = (body.get("api_key") or "").strip()
     base_url = (body.get("base_url") or "").strip()
+    provider = (body.get("provider") or "").strip()
     if not model:
         raise HTTPException(status_code=400, detail="model is required")
     if not api_key:
@@ -459,6 +498,7 @@ async def add_credential(request: Request):
         "model": model,
         "api_key": api_key,
         "base_url": base_url,
+        "provider": provider,
     }
     items.append(new_item)
     _save_credentials(items)
@@ -467,6 +507,7 @@ async def add_credential(request: Request):
         model=new_item["model"],
         llm=new_item["model"],
         base_url=new_item["base_url"],
+        provider=new_item["provider"],
         api_key_masked=_mask_key(new_item["api_key"]),
     )
 
@@ -482,14 +523,24 @@ def get_credential(credential_id: str):
                 model=_credential_model(item),
                 llm=_credential_model(item),
                 base_url=_credential_base_url(item),
+                provider=_credential_provider(item),
+                last_check_ok=item.get("last_check_ok"),
+                last_check_error=item.get("last_check_error"),
                 api_key=item["api_key"],
             )
     raise HTTPException(status_code=404, detail="Credential not found")
 
 
 @app.post("/api/credentials/{credential_id}/test")
-def test_credential(credential_id: str):
-    """Verify API key by sending a minimal prompt to the LLM."""
+async def test_credential(credential_id: str):
+    """
+    Confirm -- for real -- which provider this credential actually talks to, by sending a
+    minimal chat completion under each candidate interpretation (see verify_credential), and
+    correct the stored `provider` if it's wrong or was never set. Not just an "is the key
+    valid" ping: string guessing alone can't tell that an OpenRouter id like
+    "openai/gpt-oss-20b" needs the openrouter/ wrapper rather than a literal call to OpenAI's
+    own API, so this is also what runs (in the background, non-blocking) right after Add.
+    """
     items = _load_credentials()
     cred = None
     for item in items:
@@ -500,22 +551,23 @@ def test_credential(credential_id: str):
         raise HTTPException(status_code=404, detail="Credential not found")
     model = _credential_model(cred)
     api_key = cred.get("api_key", "")
+    base_url = _credential_base_url(cred)
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
-    provider = _credential_provider(cred)
-    base_url = _credential_base_url(cred)
-    try:
-        llm_chat(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            messages=[{"role": "user", "content": "Reply with exactly: OK"}],
-            max_tokens=50,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"ok": True}
+
+    result = await verify_credential(
+        model=model, base_url=base_url, api_key=api_key, current_provider=_credential_provider(cred)
+    )
+    # Persist the outcome either way -- a failed check must stick after reopening the app,
+    # not silently revert to whatever provider/checkmark was last known good.
+    cred["last_check_ok"] = result["ok"]
+    cred["last_check_error"] = result["error"]
+    if result["ok"] and result["provider"] != _credential_provider(cred):
+        cred["provider"] = result["provider"]
+    _save_credentials(items)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["error"] or "Verification failed")
+    return result
 
 
 # ---------- Chat (Review Assistant) ----------
@@ -1400,6 +1452,321 @@ def get_run_result_by_node(run_node_id: str):
     if job_error:
         return {"run_id": run_id, "status": "done", "error": job_error, "results": None, "output_fields": None}
     return {"run_id": run_id, "status": "done", "results": results, "output_fields": output_fields}
+
+
+# ---------- PubMed import (bulk-fetch articles into a Dataset) ----------
+# Same shape as the Run job block above: background thread + job_id + polling, persisted to
+# disk so a large import survives a backend restart. job: { status, completed, total, headers,
+# rows, error? }. Cancellation/abandonment reuse the same timeout as Run (RUN_ABANDON_TIMEOUT_SEC).
+PUBMED_MAX_IDS_CAP = 5000  # sane ceiling regardless of what the client requests
+
+_pubmed_jobs: dict[str, dict] = {}
+_pubmed_jobs_lock = threading.Lock()
+_pubmed_cancelled: set[str] = set()
+_pubmed_last_activity: dict[str, float] = {}
+
+
+class PubmedImportRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, description="PMIDs to fetch")
+    fields: list[str] = Field(..., min_length=1, description="Keys from pubmed_client.PUBMED_FIELDS to import as columns")
+
+
+class _PubmedStopSignal(Exception):
+    """Raised from the on_batch callback to unwind fetch_articles when cancelled/abandoned."""
+
+
+def _touch_pubmed_activity(job_id: str) -> None:
+    _pubmed_last_activity[job_id] = time.time()
+
+
+def _persist_pubmed_jobs() -> None:
+    with _pubmed_jobs_lock:
+        snapshot = dict(_pubmed_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        PUBMED_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[PubMed] persist failed: {e}", file=sys.stderr)
+
+
+def _load_pubmed_jobs() -> None:
+    if not PUBMED_JOBS_FILE.exists():
+        return
+    try:
+        raw = PUBMED_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _pubmed_jobs_lock:
+            _pubmed_jobs.clear()
+            _pubmed_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[PubMed] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_pubmed_jobs()
+
+
+def _do_pubmed_import_work(job_id: str, req: PubmedImportRequest) -> None:
+    from pubmed_client import PUBMED_FIELDS, fetch_articles
+
+    try:
+        settings = _load_settings()
+        api_key = (settings.get("ncbi_api_key") or "").strip()
+        email = (settings.get("ncbi_email") or "").strip()
+        fields = [f for f in req.fields if f in PUBMED_FIELDS]
+        if not fields:
+            with _pubmed_jobs_lock:
+                _pubmed_jobs[job_id] = {"status": "done", "error": "No valid fields selected"}
+            _persist_pubmed_jobs()
+            return
+
+        pmids = [p.strip() for p in req.ids if p.strip()]
+        # de-dupe, keep order
+        seen = set()
+        pmids = [p for p in pmids if not (p in seen or seen.add(p))][:PUBMED_MAX_IDS_CAP]
+
+        total = len(pmids)
+        with _pubmed_jobs_lock:
+            _pubmed_jobs[job_id]["total"] = total
+            _pubmed_jobs[job_id]["completed"] = 0
+            _pubmed_jobs[job_id]["headers"] = [PUBMED_FIELDS[f] for f in fields]
+            _pubmed_jobs[job_id]["rows"] = []
+            _pubmed_jobs[job_id]["not_found"] = []
+        _persist_pubmed_jobs()
+
+        if total == 0:
+            with _pubmed_jobs_lock:
+                _pubmed_jobs[job_id]["status"] = "done"
+            _persist_pubmed_jobs()
+            return
+
+        def on_batch(batch_articles: list[dict], not_found: list[str], completed: int, batch_total: int) -> None:
+            is_cancelled = job_id in _pubmed_cancelled
+            is_abandoned = (time.time() - _pubmed_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
+            with _pubmed_jobs_lock:
+                # Append incrementally (not just at the end) so a cancelled/abandoned job still
+                # keeps whatever was already fetched, instead of throwing away completed work.
+                _pubmed_jobs[job_id]["rows"].extend([a.get(f, "") for f in fields] for a in batch_articles)
+                _pubmed_jobs[job_id]["completed"] = completed
+                _pubmed_jobs[job_id]["not_found"].extend(not_found)
+            _persist_pubmed_jobs()
+            if is_cancelled or is_abandoned:
+                raise _PubmedStopSignal()
+
+        try:
+            fetch_articles(pmids, fields=fields, api_key=api_key, email=email, on_batch=on_batch)
+        except _PubmedStopSignal:
+            with _pubmed_jobs_lock:
+                job = _pubmed_jobs.get(job_id, {})
+                job["status"] = "cancelled" if job_id in _pubmed_cancelled else "done"
+            _persist_pubmed_jobs()
+            return
+
+        with _pubmed_jobs_lock:
+            _pubmed_jobs[job_id]["status"] = "done"
+        _persist_pubmed_jobs()
+    except Exception as e:
+        with _pubmed_jobs_lock:
+            _pubmed_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_pubmed_jobs()
+
+
+@app.post("/api/pubmed/import")
+def start_pubmed_import(body: PubmedImportRequest):
+    """Start a PubMed import (fetch by PMID) in the background; returns 202 with job_id. Poll GET .../result/{job_id}."""
+    job_id = str(uuid.uuid4())
+    with _pubmed_jobs_lock:
+        _pubmed_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "headers": [], "rows": []}
+        _touch_pubmed_activity(job_id)
+    _persist_pubmed_jobs()
+    thread = threading.Thread(target=_do_pubmed_import_work, args=(job_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/pubmed/import/result/{job_id}")
+def get_pubmed_import_result(job_id: str):
+    """Return 202 while running (with partial rows), 200 when done/cancelled. Polling refreshes the abandonment timer."""
+    with _pubmed_jobs_lock:
+        job = _pubmed_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if job.get("status") == "running":
+            _touch_pubmed_activity(job_id)
+        status = job.get("status")
+        completed = job.get("completed", 0)
+        total = job.get("total", 0)
+        headers = job.get("headers") or []
+        rows = (job.get("rows") or [])[:]
+        not_found = (job.get("not_found") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "completed": completed, "total": total, "headers": headers, "rows": rows},
+        )
+    if error:
+        return {"status": "done", "error": error, "headers": [], "rows": []}
+    return {"status": status, "completed": completed, "total": total, "headers": headers, "rows": rows, "not_found": not_found}
+
+
+@app.post("/api/pubmed/import/cancel/{job_id}")
+def cancel_pubmed_import(job_id: str):
+    """Mark import as cancelled; worker stops after the current batch."""
+    with _pubmed_jobs_lock:
+        if job_id not in _pubmed_jobs:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if _pubmed_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _pubmed_jobs[job_id].get("status")}
+        _pubmed_cancelled.add(job_id)
+        _touch_pubmed_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+# ---------- Process node (runs a user Python function per dataset row, delegates to process_exec.py) ----------
+_process_jobs: dict[str, dict] = {}
+_process_jobs_lock = threading.Lock()
+_process_cancelled: set[str] = set()
+_process_last_activity: dict[str, float] = {}
+
+
+class ProcessRunRequest(BaseModel):
+    python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
+    code: str = Field(..., min_length=1, description="User code defining process(row) -> dict | None")
+    headers: list[str] = Field(..., description="Column names; row dict passed to process() is keyed by these")
+    rows: list[list[str]] = Field(default_factory=list, description="Input rows, same order as headers")
+
+
+def _touch_process_activity(job_id: str) -> None:
+    _process_last_activity[job_id] = time.time()
+
+
+def _persist_process_jobs() -> None:
+    with _process_jobs_lock:
+        snapshot = dict(_process_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        PROCESS_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[Process] persist failed: {e}", file=sys.stderr)
+
+
+def _load_process_jobs() -> None:
+    if not PROCESS_JOBS_FILE.exists():
+        return
+    try:
+        raw = PROCESS_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _process_jobs_lock:
+            _process_jobs.clear()
+            _process_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[Process] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_process_jobs()
+
+
+def _do_process_work(job_id: str, req: ProcessRunRequest) -> None:
+    from process_exec import run_process_rows
+
+    try:
+        total = len(req.rows)
+        with _process_jobs_lock:
+            _process_jobs[job_id]["total"] = total
+            _process_jobs[job_id]["completed"] = 0
+            _process_jobs[job_id]["results"] = []
+        _persist_process_jobs()
+
+        if total == 0:
+            with _process_jobs_lock:
+                _process_jobs[job_id]["status"] = "done"
+            _persist_process_jobs()
+            return
+
+        def on_row(index: int, outcome: dict) -> None:
+            with _process_jobs_lock:
+                _process_jobs[job_id]["results"].append(outcome)
+                _process_jobs[job_id]["completed"] = index + 1
+            _persist_process_jobs()
+            _touch_process_activity(job_id)
+
+        def is_cancelled() -> bool:
+            is_stopped = job_id in _process_cancelled
+            is_abandoned = (time.time() - _process_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
+            return is_stopped or is_abandoned
+
+        run_process_rows(req.python_path, req.code, req.headers, req.rows, on_row, is_cancelled)
+
+        with _process_jobs_lock:
+            _process_jobs[job_id]["status"] = "cancelled" if job_id in _process_cancelled else "done"
+        _persist_process_jobs()
+    except Exception as e:
+        with _process_jobs_lock:
+            _process_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_process_jobs()
+
+
+@app.post("/api/process/run")
+def start_process_run(body: ProcessRunRequest):
+    """Start a Process run (Python `process(row)` per dataset row) in the background; returns 202 with job_id."""
+    job_id = str(uuid.uuid4())
+    with _process_jobs_lock:
+        _process_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "results": []}
+        _touch_process_activity(job_id)
+    _persist_process_jobs()
+    thread = threading.Thread(target=_do_process_work, args=(job_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/process/run/result/{job_id}")
+def get_process_run_result(job_id: str):
+    """Return 202 while running (with partial results), 200 when done/cancelled. Polling refreshes the abandonment timer."""
+    with _process_jobs_lock:
+        job = _process_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Process job not found")
+        if job.get("status") == "running":
+            _touch_process_activity(job_id)
+        status = job.get("status")
+        completed = job.get("completed", 0)
+        total = job.get("total", 0)
+        results = (job.get("results") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "completed": completed, "total": total, "results": results},
+        )
+    if error:
+        return {"status": "done", "error": error, "results": []}
+    return {"status": status, "completed": completed, "total": total, "results": results}
+
+
+@app.post("/api/process/run/cancel/{job_id}")
+def cancel_process_run(job_id: str):
+    """Mark a Process run as cancelled; worker stops after the current row."""
+    with _process_jobs_lock:
+        if job_id not in _process_jobs:
+            raise HTTPException(status_code=404, detail="Process job not found")
+        if _process_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _process_jobs[job_id].get("status")}
+        _process_cancelled.add(job_id)
+        _touch_process_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+@app.post("/api/process/check-python")
+def check_process_python(body: dict = Body(...)):
+    """Runs `<python_path> --version` to validate a Settings-page Python interpreter path."""
+    from process_exec import check_python
+
+    python_path = str(body.get("python_path") or "").strip()
+    return check_python(python_path)
 
 
 # ---------- Review analyze worker (delegates to review_pipeline.py) ----------

@@ -573,7 +573,7 @@
 /* Percentages sum to 100% so the table always fills the scroll area (no empty strip on the right) */
 .credentials-panel-host .credentials-table th:nth-child(1),
 .credentials-panel-host .credentials-table td:nth-child(1) {
-  width: 34%;
+  width: 44%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -600,10 +600,10 @@
 
 .credentials-panel-host .credentials-table th:nth-child(4),
 .credentials-panel-host .credentials-table td:nth-child(4) {
-  width: 28%;
+  width: 18%;
   min-width: 0;
   white-space: nowrap;
-  text-align: right;
+  text-align: left;
 }
 
 /* Keep <td> as table-cell; global .credentials-actions-cell { display:flex } breaks row height + wraps buttons */
@@ -619,7 +619,7 @@
   flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
-  justify-content: flex-end;
+  justify-content: flex-start;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
@@ -1312,6 +1312,27 @@
   flex-shrink: 0;
 }
 
+.credential-status-icon {
+  display: inline-block;
+  min-width: 0.9em;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+}
+
+.credential-status-icon--ok {
+  color: #2ea043;
+}
+
+.credential-status-icon--error {
+  color: #e05252;
+  cursor: help;
+}
+
+.credential-status-icon--pending {
+  color: var(--text-secondary, #888);
+}
+
 /* 与 Create and add to table 按钮同高 */
 .credentials-add-row .credentials-select,
 .credentials-add-row .credentials-api-key-wrap,
@@ -1564,6 +1585,16 @@
 .modal-overlay--left-pane-collapsed .review-detail-preview-wrap,
 .modal-overlay--left-pane-collapsed .score-detail-preview-wrap,
 .modal-overlay--left-pane-collapsed .run-detail-preview-wrap {
+  flex: 1 1 0;
+}
+
+/* Process detail modal: mirror image of the toggle above -- hides Results (right) instead of
+   the settings/left panel, so the button shows only the Code column. */
+.modal-overlay--process-results-collapsed .modal-panel--process .run-detail-preview-wrap {
+  display: none;
+}
+
+.modal-overlay--process-results-collapsed .modal-panel--process .run-detail-main {
   flex: 1 1 0;
 }
 
@@ -3127,7 +3158,7 @@
 .score-detail-results-footer-row {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: var(--detail-llm-inline-gap);
   margin-top: 8px;
   margin-bottom: 16px;
@@ -3141,7 +3172,6 @@
 }
 
 .score-detail-results-footer-right {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: var(--detail-llm-inline-gap);
@@ -3508,6 +3538,7 @@
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
+  overflow-anchor: none;
   display: flex;
   flex-direction: column;
 }
@@ -3527,6 +3558,7 @@
   min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overflow-anchor: none;
 }
 
 .review-detail-suggestions-footer,
@@ -3707,8 +3739,6 @@
 .review-suggestion-verified-pill,
 .review-suggestion-optimization-pill,
 .review-suggestion-optimizing-pill,
-.review-suggestion-optimized-pill,
-.review-suggestion-optimized-pass-pill,
 .review-suggestion-proposal-pill {
   display: inline-flex;
   align-items: center;
@@ -3733,15 +3763,13 @@
 /* Dark mode: brighter text + stronger background for all pill variants */
 html.dark .review-suggestion-verify-pill,
 html.dark .review-suggestion-verifying-pill,
-html.dark .review-suggestion-optimized-pill,
 html.dark .review-suggestion-optimization-pill,
 html.dark .review-suggestion-optimizing-pill {
   color: #fbbf24;
   background: color-mix(in srgb, #f59e0b 28%, transparent);
 }
 
-html.dark .review-suggestion-verified-pill,
-html.dark .review-suggestion-optimized-pass-pill {
+html.dark .review-suggestion-verified-pill {
   color: #4ade80;
   background: color-mix(in srgb, #22c55e 28%, transparent);
 }
@@ -3789,25 +3817,20 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   pointer-events: none;
 }
 
-.review-suggestion-optimized-pill {
-  color: #b45309;
-  background: color-mix(in srgb, #f59e0b 18%, transparent);
-  cursor: default;
-  pointer-events: none;
-}
-
-.review-suggestion-optimized-pass-pill {
-  color: #166534;
-  background: color-mix(in srgb, #22c55e 22%, transparent);
-  cursor: default;
-  pointer-events: none;
-}
-
 .review-suggestion-proposal-pill {
   color: #1d4ed8;
   background: color-mix(in srgb, #3b82f6 18%, transparent);
   cursor: default;
   pointer-events: none;
+}
+
+/* "Optimized from #N" lineage note on a card created by Click to Optimize */
+.review-suggestion-lineage-note {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 /* Click to Optimize – same amber as Click to Verify */
@@ -5363,13 +5386,9 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   padding-top: 8px;
   border-top: 1px solid var(--border);
   display: flex;
-  justify-content: flex-start;
+  justify-content: flex-end;
   align-items: center;
   gap: 10px;
-}
-
-.run-detail-results-footer-actions .run-detail-save-to-workspace-score-btn {
-  margin-left: auto;
 }
 
 .run-detail-results-note {
@@ -7782,3 +7801,148 @@ button.btn.btn-danger:hover:not(:disabled) {
   border-color: var(--diff-removed-text);
   color: var(--diff-removed-text);
 }
+
+/* ——— "Create a new dataset" Step 2: choose upload vs. PubMed import ———
+   Matches the existing step-2 rhythm: .dataset-import-title (13px/600/muted) for headings,
+   .dataset-meta-label for field labels, 6-12px gaps, .dataset-file-info-style info cards. */
+.dataset-source-panel {
+  display: none;
+}
+
+.dataset-source-panel--active {
+  display: block;
+}
+
+/* Data-source tabs: same "row of .btn.btn-secondary buttons, one highlighted" language as
+   Review's "Issue analysis / Suggested changes" switch (.review-detail-output-toolbar +
+   .review-detail-view-switch), not a bespoke pill bar. */
+.dataset-source-tabs-row {
+  display: flex;
+  flex-shrink: 0;
+  padding: 2px 0 10px;
+}
+
+.dataset-source-switch {
+  flex: 0 1 auto;
+}
+
+.pubmed-import-ids {
+  min-height: 100px;
+}
+
+.pubmed-import-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.pubmed-import-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.pubmed-import-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* ——— Process node detail modal（尺寸与 Run detail 一致） ——— */
+.modal-panel--process {
+  width: 88%;
+  min-width: min(960px, 85%);
+  max-width: 92vw;
+  max-height: 98vh;
+  height: min(85vh, 98vh);
+  min-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+/* Process 左右栏比例 4:6（Run detail 是 30:70，这里单独覆盖，不影响 Run） */
+.modal-panel--process .run-detail-main {
+  flex: 40 1 0;
+}
+
+.modal-panel--process .run-detail-preview-wrap {
+  flex: 60 1 0;
+}
+
+/* 左栏：复用 run-detail-main 的外框/标题栏/底部按钮位（margin-top: auto），
+   中间可编辑区用 process-editor-mid 撑满剩余高度 */
+.process-editor-mid {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  overflow: hidden;
+}
+
+.process-editor-host {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  overflow: auto;
+  font-size: 13px;
+}
+
+.process-editor-host .cm-editor {
+  height: 100%;
+}
+
+.process-editor-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.process-editor-hint code {
+  background: var(--hover);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* Python settings modal: interpreter path + Browse/Test row */
+.modal-panel--python-settings {
+  min-width: min(620px, 92vw);
+}
+
+.settings-python-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-python-path-row .dataset-meta-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-python-status {
+  display: block;
+  min-height: 1.4em;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-python-status--ok {
+  color: #2ea043;
+}
+
+.settings-python-status--error {
+  color: #e05252;
+}
+
+/* 右栏：结果表格 + 搜索 + 分页 + Save to workspace，全部复用 run-detail-results-* 系列
+   （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */
+

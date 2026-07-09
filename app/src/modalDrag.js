@@ -91,6 +91,13 @@ export function initModalDrag() {
     const headerRect = header.getBoundingClientRect();
     const clampedStart = clampModalPosition(rect.left, rect.top, rect, headerRect);
     let x = e.clientX, y = e.clientY, left = clampedStart.left, top = clampedStart.top;
+    /* Freeze the panel's current on-screen size BEFORE switching to fixed positioning.
+       Without an explicit width/height, a `position:fixed` box with only `left`/`top` set
+       falls back to shrink-to-fit sizing against its new (out-of-flow) containing block,
+       which for wide multi-column layouts (e.g. Model Settings) can resolve to a narrower
+       width than the original flex-centered layout -- looking like the whole panel shrank. */
+    panel.style.width = rect.width + 'px';
+    panel.style.height = rect.height + 'px';
     panel.style.position = 'fixed';
     panel.style.left = left + 'px';
     panel.style.top = top + 'px';

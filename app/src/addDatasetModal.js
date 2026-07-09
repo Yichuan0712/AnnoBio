@@ -1,10 +1,41 @@
 /**
  * "Add a new dataset" modal: two steps.
  * Step 1: Name & description.
- * Step 2: Left = upload CSV/TSV/XLSX, Right = preview.
+ * Step 2: choose a data source -- upload CSV/TSV/XLSX, or import from PubMed -- then preview.
  */
 
 import * as XLSX from 'xlsx';
+import { BACKEND_API_BASE } from './backendConfig.js';
+import { showConfirm } from './alertModal.js';
+
+const API_BASE = BACKEND_API_BASE;
+const PUBMED_POLL_INTERVAL_MS = 1200;
+
+/** Keep in sync with backend/pubmed_client.py PUBMED_FIELDS. */
+const PUBMED_FIELD_OPTIONS = [
+  { key: 'pmid', label: 'PMID', defaultOn: true },
+  { key: 'title', label: 'Title', defaultOn: true },
+  { key: 'abstract', label: 'Abstract', defaultOn: true },
+  { key: 'authors', label: 'Authors', defaultOn: true },
+  { key: 'year', label: 'Year', defaultOn: true },
+  { key: 'journal', label: 'Journal', defaultOn: false },
+  { key: 'doi', label: 'DOI', defaultOn: false },
+  { key: 'mesh_terms', label: 'MeSH Terms', defaultOn: false },
+  { key: 'publication_type', label: 'Publication Type', defaultOn: false },
+];
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str ?? '';
+  return div.innerHTML;
+}
+
+function parsePubmedIdsInput(text) {
+  return (text || '')
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 function parseCsvLine(line) {
   line = String(line ?? '').trim();
@@ -71,23 +102,53 @@ export function openAddDatasetModal(workflowCanvasApi) {
             </div>
           </div>
           <div class="dataset-add-step dataset-add-step-2">
-            <p class="prompt-step-label">Step 2 of 2 — Upload file</p>
+            <p class="prompt-step-label">Step 2 of 2 — Add data</p>
+            <div class="dataset-source-tabs-row">
+              <div class="review-detail-view-switch dataset-source-switch" role="tablist" aria-label="Data source">
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" data-source="upload">Upload file</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pubmed">Import from PubMed</button>
+              </div>
+            </div>
             <div class="dataset-add-step2-scroll">
               <div class="dataset-add-step2-left">
-                <div class="dataset-import">
-                  <h3 class="dataset-import-title">Select file</h3>
-                  <div class="dataset-import-actions">
-                    <input type="file" id="dataset-file-input" accept=".csv,.tsv,.xlsx,.xls,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden />
-                    <button type="button" class="btn btn-secondary dataset-import-btn">Choose CSV / TSV / XLSX file</button>
-                    <span class="dataset-filename" aria-live="polite"></span>
+                <div class="dataset-source-panel dataset-source-panel--active" data-source-panel="upload">
+                  <div class="dataset-import">
+                    <h3 class="dataset-import-title">Select file</h3>
+                    <div class="dataset-import-actions">
+                      <input type="file" id="dataset-file-input" accept=".csv,.tsv,.xlsx,.xls,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden />
+                      <button type="button" class="btn btn-secondary dataset-import-btn">Choose CSV / TSV / XLSX file</button>
+                      <span class="dataset-filename" aria-live="polite"></span>
+                    </div>
+                    <div class="dataset-sheet-wrap" id="dataset-sheet-wrap" style="display:none">
+                      <label class="dataset-meta-label" for="dataset-sheet-select">Sheet</label>
+                      <p class="dataset-sheet-hint" id="dataset-sheet-hint">This file has multiple sheets. Select which sheet to import.</p>
+                      <select id="dataset-sheet-select" class="dataset-meta-input" aria-label="Select sheet"></select>
+                    </div>
+                    <div class="dataset-file-info" id="dataset-file-info" aria-live="polite">
+                      <span class="dataset-file-info-placeholder">No file selected.</span>
+                    </div>
                   </div>
-                  <div class="dataset-sheet-wrap" id="dataset-sheet-wrap" style="display:none">
-                    <label class="dataset-meta-label" for="dataset-sheet-select">Sheet</label>
-                    <p class="dataset-sheet-hint" id="dataset-sheet-hint">This file has multiple sheets. Select which sheet to import.</p>
-                    <select id="dataset-sheet-select" class="dataset-meta-input" aria-label="Select sheet"></select>
-                  </div>
-                  <div class="dataset-file-info" id="dataset-file-info" aria-live="polite">
-                    <span class="dataset-file-info-placeholder">No file selected.</span>
+                </div>
+                <div class="dataset-source-panel" data-source-panel="pubmed" hidden>
+                  <div class="dataset-import">
+                    <label class="dataset-meta-label" for="pm-ids">PMIDs (one per line, or comma/space separated)</label>
+                    <textarea id="pm-ids" class="dataset-meta-input dataset-meta-textarea pubmed-import-ids" rows="6" placeholder="13252012&#10;7834742&#10;11988757"></textarea>
+                    <div class="pubmed-import-fields">
+                      <div class="dataset-meta-label">Columns to import</div>
+                      <div class="pubmed-import-checkboxes">
+                        ${PUBMED_FIELD_OPTIONS.map(
+                          (f) => `
+                          <label class="pubmed-import-checkbox-label">
+                            <input type="checkbox" class="pm-field-checkbox" value="${f.key}" ${f.defaultOn ? 'checked' : ''} />
+                            ${escapeHtml(f.label)}
+                          </label>`,
+                        ).join('')}
+                      </div>
+                    </div>
+                    <div class="dataset-import-actions">
+                      <button type="button" class="btn btn-secondary pubmed-import-fetch-btn">Fetch from PubMed</button>
+                      <span class="dataset-filename pubmed-import-fetch-status" aria-live="polite"></span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -121,6 +182,15 @@ export function openAddDatasetModal(workflowCanvasApi) {
   const backBtn = overlay.querySelector('.dataset-add-btn-back');
   const addBtn = overlay.querySelector('.dataset-add-btn');
   const formErrorEls = overlay.querySelectorAll('.dataset-add-error');
+
+  const sourcePanels = overlay.querySelectorAll('.dataset-source-panel');
+  const sourceSwitchBtns = overlay.querySelectorAll('.dataset-source-switch .review-detail-tab');
+  const pmIdsInput = overlay.querySelector('#pm-ids');
+  const pubmedFetchBtn = overlay.querySelector('.pubmed-import-fetch-btn');
+  const pubmedFetchStatusEl = overlay.querySelector('.pubmed-import-fetch-status');
+  let dataSource = 'upload';
+  let pubmedJobId = null;
+  let pubmedPollTimer = null;
 
   let fileImported = false;
   /** @type {{ headers: string[], rows: string[][] } | null} */
@@ -275,11 +345,145 @@ export function openAddDatasetModal(workflowCanvasApi) {
 
   importBtn.addEventListener('click', () => fileInput.click());
 
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+  function stopPubmedPolling() {
+    if (pubmedPollTimer) clearTimeout(pubmedPollTimer);
+    pubmedPollTimer = null;
   }
+
+  function setPubmedRunningUi(running) {
+    pubmedFetchBtn.disabled = running;
+    addBtn.disabled = running;
+  }
+
+  /** Mirrors .dataset-filename next to "Choose CSV / TSV / XLSX file": a short result, not a full status line. */
+  function setPubmedFetchStatus(text) {
+    if (pubmedFetchStatusEl) pubmedFetchStatusEl.textContent = text || '';
+  }
+
+  /** Switching source panels always drops whatever was staged for submission (see comment above). */
+  function resetStagedContent() {
+    fileImported = false;
+    parsedDatasetContent = null;
+    xlsxWorkbook = null;
+    previewEl.textContent = 'No file selected yet.';
+    previewEl.classList.add('prompt-preview--empty');
+    setPubmedFetchStatus('');
+  }
+
+  async function switchDataSource(target) {
+    if (target === dataSource) return;
+    if (fileImported) {
+      const ok = await showConfirm('Switching will clear the current preview data. Continue?', {
+        title: 'Switch data source',
+        confirmText: 'Switch',
+      });
+      if (!ok) return;
+    }
+    if (dataSource === 'pubmed') {
+      stopPubmedPolling();
+      if (pubmedJobId) fetch(`${API_BASE}/api/pubmed/import/cancel/${pubmedJobId}`, { method: 'POST' }).catch(() => {});
+      pubmedJobId = null;
+      setPubmedRunningUi(false);
+    }
+    dataSource = target;
+    sourceSwitchBtns.forEach((b) => {
+      const on = b.dataset.source === target;
+      b.classList.toggle('review-detail-tab--active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    sourcePanels.forEach((p) => {
+      const on = p.dataset.sourcePanel === target;
+      p.classList.toggle('dataset-source-panel--active', on);
+      p.hidden = !on;
+    });
+    hideError();
+    resetStagedContent();
+  }
+
+  sourceSwitchBtns.forEach((btn) => {
+    btn.addEventListener('click', () => switchDataSource(btn.dataset.source));
+  });
+
+  async function pollPubmedJob(jobId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/pubmed/import/result/${jobId}`);
+      const data = await res.json().catch(() => ({}));
+      if (data.status === 'running') {
+        setPubmedFetchStatus(`Fetching… ${data.completed ?? 0}/${data.total ?? '?'}`);
+        pubmedPollTimer = setTimeout(() => pollPubmedJob(jobId), PUBMED_POLL_INTERVAL_MS);
+        return;
+      }
+      setPubmedRunningUi(false);
+      pubmedJobId = null;
+      if (data.error) {
+        showError(`PubMed import failed: ${data.error}`);
+        setPubmedFetchStatus('');
+        return;
+      }
+      const headers = data.headers || [];
+      const rows = data.rows || [];
+      const notFound = data.not_found || [];
+      const total = data.total ?? rows.length;
+      if (rows.length === 0) {
+        setPubmedFetchStatus(data.status === 'cancelled' ? 'Cancelled.' : `0/${total} PMID${total === 1 ? '' : 's'} fetched`);
+        if (data.status !== 'cancelled' && notFound.length > 0) {
+          showError(`None of the ${notFound.length} PMID${notFound.length === 1 ? '' : 's'} were found on PubMed.`);
+        }
+        return;
+      }
+      fileImported = true;
+      parsedDatasetContent = { headers, rows };
+      const previewRows = rows.slice(0, MAX_PREVIEW_ROWS);
+      renderPreviewTable(headers, previewRows, rows.length);
+      setPubmedFetchStatus(`${rows.length}/${total} PMID${total === 1 ? '' : 's'} fetched${data.status === 'cancelled' ? ' (cancelled early)' : ''}`);
+      if (notFound.length > 0) {
+        showError(`${notFound.length} PMID${notFound.length === 1 ? '' : 's'} not found on PubMed and skipped: ${notFound.join(', ')}`);
+      }
+    } catch (e) {
+      setPubmedRunningUi(false);
+      pubmedJobId = null;
+      showError(`Could not reach backend: ${(e && e.message) || e}`);
+      setPubmedFetchStatus('');
+    }
+  }
+
+  pubmedFetchBtn.addEventListener('click', async () => {
+    hideError();
+    const fields = Array.from(overlay.querySelectorAll('.pm-field-checkbox:checked')).map((el) => el.value);
+    if (fields.length === 0) {
+      showError('Pick at least one column to import from PubMed.');
+      return;
+    }
+    const ids = parsePubmedIdsInput(pmIdsInput.value);
+    if (ids.length === 0) {
+      showError('Paste at least one PMID.');
+      return;
+    }
+    const body = { fields, ids };
+
+    setPubmedRunningUi(true);
+    setPubmedFetchStatus('Starting…');
+    try {
+      const res = await fetch(`${API_BASE}/api/pubmed/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPubmedRunningUi(false);
+        showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
+        setPubmedFetchStatus('');
+        return;
+      }
+      pubmedJobId = data.job_id;
+      pollPubmedJob(pubmedJobId);
+    } catch (e) {
+      setPubmedRunningUi(false);
+      showError(`Could not reach backend: ${(e && e.message) || e}`);
+      setPubmedFetchStatus('');
+    }
+  });
 
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
@@ -404,8 +608,12 @@ export function openAddDatasetModal(workflowCanvasApi) {
       showError('This dataset name is already used on the canvas. Please choose another.');
       return;
     }
-    const headers = fileImported && parsedDatasetContent?.headers ? parsedDatasetContent.headers : [];
-    const rows = fileImported && parsedDatasetContent?.rows ? parsedDatasetContent.rows : [];
+    if (!fileImported || !parsedDatasetContent?.rows?.length) {
+      showError(dataSource === 'pubmed' ? 'Fetch at least one article from PubMed first.' : 'Choose a file to import first.');
+      return;
+    }
+    const headers = parsedDatasetContent.headers;
+    const rows = parsedDatasetContent.rows;
     document.dispatchEvent(
       new CustomEvent('workflow:add-dataset-node', {
         detail: {
@@ -420,6 +628,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
   });
 
   const close = () => {
+    stopPubmedPolling();
+    if (pubmedJobId) fetch(`${API_BASE}/api/pubmed/import/cancel/${pubmedJobId}`, { method: 'POST' }).catch(() => {});
     overlay.remove();
     document.body.style.overflow = '';
   };

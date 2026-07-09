@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadAgentConversations: (projectPath) => ipcRenderer.invoke('agent-conversations:load', projectPath),
   saveAgentConversations: (projectPath, data) => ipcRenderer.invoke('agent-conversations:save', projectPath, data),
   showSaveFileDialog: (opts) => ipcRenderer.invoke('dialog:show-save', opts),
+  showPickPythonDialog: () => ipcRenderer.invoke('dialog:pick-python'),
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('fs:write-file', filePath, data, encoding),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),

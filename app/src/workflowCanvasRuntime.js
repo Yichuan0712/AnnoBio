@@ -800,6 +800,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       left: startLeft,
       top: startTop,
       ensureUniqueName: requestedName ? ensureUniqueName : false,
+      agentCreated: true,
     });
     return {
       ...created,
@@ -932,6 +933,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       left: startLeft,
       top: startTop,
       ensureUniqueName: requestedName ? ensureUniqueName : false,
+      agentCreated: true,
     });
     return {
       ...created,
@@ -1858,6 +1860,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     samplerNodeId = '',
     colorIndex,
     ensureUniqueName = true,
+    agentCreated = false,
   } = {}) {
     const requestedName = (name || '').trim() || 'Dataset';
     const finalName = ensureUniqueName && isDatasetNameAlreadyUsed(requestedName)
@@ -1873,7 +1876,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       headers: Array.isArray(headers) ? headers.map((header) => String(header == null ? '' : header)) : [],
       rows: Array.isArray(rows) ? rows.map((row) => (Array.isArray(row) ? row.map((cell) => String(cell == null ? '' : cell)) : [])) : [],
     });
-    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
+    if (agentCreated && typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     updateContentSize();
     updateEdges();
     emitCanvasChanged();
@@ -1991,6 +1994,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       headers: prepared.datasetHeaders,
       rows: prepared.datasetRows,
       ensureUniqueName,
+      agentCreated: true,
     });
     if (newNode?.nodeId) {
       getConnectionsList().push({
