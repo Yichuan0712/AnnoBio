@@ -7,7 +7,7 @@
 
 import { getNextRowIndex, mergeResumeResults, embedInputRow, processApiResults, markEmptyOutputAsError } from './runResumeUtils.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
-import { attachModalPaneToggle } from './paneToggleButton.js';
+import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 
 const API_BASE = BACKEND_API_BASE;
@@ -798,15 +798,11 @@ export function openRunDetailModal({
 
   document.addEventListener('workflow:run-results-updated', onRunResultsUpdated);
   overlay.querySelector('.modal-close').addEventListener('click', closeModal);
-  const runPaneToggle = attachModalPaneToggle({
+  attachModalPaneCycle({
     overlay,
-    isCollapsed: () => overlay.classList.contains('modal-overlay--left-pane-collapsed'),
-    onToggle: () => {
-      overlay.classList.toggle('modal-overlay--left-pane-collapsed');
-      runPaneToggle.update();
-    },
-    expandedLabel: 'Hide run settings panel',
-    collapsedLabel: 'Show run settings panel',
+    bothLabel: 'Show both panels',
+    leftOnlyLabel: 'Show run settings panel only',
+    rightOnlyLabel: 'Show results panel only',
   });
 
   function isDatasetMappingLocked() {

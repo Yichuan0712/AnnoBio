@@ -1588,13 +1588,18 @@
   flex: 1 1 0;
 }
 
-/* Process detail modal: mirror image of the toggle above -- hides Results (right) instead of
-   the settings/left panel, so the button shows only the Code column. */
-.modal-overlay--process-results-collapsed .modal-panel--process .run-detail-preview-wrap {
+/* Mirror image of the above: hide the right pane, show only the left. */
+.modal-overlay--right-pane-collapsed .prompt-detail-main,
+.modal-overlay--right-pane-collapsed .review-detail-preview-wrap,
+.modal-overlay--right-pane-collapsed .score-detail-preview-wrap,
+.modal-overlay--right-pane-collapsed .run-detail-preview-wrap {
   display: none;
 }
 
-.modal-overlay--process-results-collapsed .modal-panel--process .run-detail-main {
+.modal-overlay--right-pane-collapsed .prompt-detail-side.prompt-preview-wrap,
+.modal-overlay--right-pane-collapsed .review-detail-main,
+.modal-overlay--right-pane-collapsed .score-detail-main,
+.modal-overlay--right-pane-collapsed .run-detail-main {
   flex: 1 1 0;
 }
 
@@ -2656,7 +2661,9 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 0 20px 20px 20px;
+  /* 16px bottom, matching .run-detail-main and .score-detail-results-footer-row's own margin-bottom:
+     both sides then reserve the same space, so a margin-top:auto row lands at the same height. */
+  padding: 0 20px 16px 20px;
   border-right: 1px solid var(--border);
   overflow: hidden;
   background: var(--bg);
@@ -2719,11 +2726,52 @@
   margin-top: 10px;
 }
 
+/* [hidden] must win over display:flex above, or the rules/code panel stays visible when its tab is inactive */
+.score-detail-rules-scroll[hidden] {
+  display: none !important;
+}
+
 .score-detail-rules-list {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.score-detail-rules-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.score-tree-add-rule-box:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.score-detail-rules-code-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.score-detail-rules-code-panel .process-editor-mid {
+  flex: 1 1 auto;
+  min-height: 160px;
+  padding-top: 0;
+}
+
+.score-detail-code-results {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.score-detail-results-td.score-detail-code-results-error {
+  color: var(--danger, #e5484d);
+  white-space: normal;
 }
 
 .score-detail-add-rule-wrap {
@@ -2785,23 +2833,6 @@
   min-height: 40px;
 }
 
-.score-tree-row-card--draggable {
-  cursor: grab;
-}
-
-.score-tree-row-card--draggable:active {
-  cursor: grabbing;
-}
-
-.score-tree-row--drag-source {
-  opacity: 0.65;
-}
-
-.score-tree-row--drop-target {
-  outline: 2px dashed var(--accent, #3b82f6);
-  outline-offset: 2px;
-  border-radius: 8px;
-}
 
 .score-tree-row--flat .score-tree-op-toggle {
   flex-shrink: 0;
@@ -3016,24 +3047,6 @@
 }
 
 /* AND/OR 与卡片合并：在卡片最左侧 */
-.score-rule-card-op {
-  flex-shrink: 0;
-  min-width: 48px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-muted);
-  background: var(--bg);
-  border: none;
-  border-right: 1px solid var(--border);
-  cursor: pointer;
-}
-
-.score-rule-card-op:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-
 .score-rule-card-promote {
   flex-shrink: 0;
   padding: 4px 8px;
