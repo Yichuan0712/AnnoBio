@@ -389,7 +389,7 @@ export function openSettingsModal() {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--defaults modal-panel--model-settings-combined">
       <div class="modal-header">
-        <h2 id="model-settings-title" class="modal-title">Model settings</h2>
+        <h2 id="model-settings-title" class="modal-title">LLM settings</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body modal-body--defaults modal-body--model-settings-combined">

@@ -58,6 +58,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     findUniqueDatasetExportName,
     isPromptNameAlreadyUsed,
     isRunNameAlreadyUsedForPrompt,
+    openProcessDetailModal,
   } = deps;
 
   function getConnectionsList() {
@@ -535,6 +536,75 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
+  /** Process node: runs a user-written function over each row of a connected Dataset (no LLM, no backend). */
+  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code }) {
+    const nodeId = givenNodeId || generateNodeId();
+    const node = document.createElement('div');
+    node.className = 'workflow-node workflow-node--process workflow-node--no-body';
+    node.setAttribute('role', 'article');
+    node.setAttribute('aria-label', 'Process node');
+    node.dataset.nodeId = nodeId;
+    node.dataset.nodeType = 'process';
+    const processTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Process';
+    node.dataset.processName = processTitle;
+    if (code != null) node.dataset.processCode = String(code);
+    const position = allocateNodePosition(left, top);
+    setNodeCanvasPosition(node, position.left, position.top);
+    node.innerHTML = `
+      <div class="workflow-node__header">
+        <span class="workflow-node__icon workflow-node__icon--process" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3L1 7l3 4M10 3l3 4-3 4"/></svg></span>
+        <span class="workflow-node__title">${escapeHtml(processTitle)}</span>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+      </div>
+      <div class="workflow-node__process-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    `;
+    nodesLayer.appendChild(node);
+
+    const deleteBtn = node.querySelector('.workflow-node__delete');
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      void handleWorkflowNodeDeleteClick(nodeId, 'process', () => {
+        removeConnectionsInvolvingNodeId(nodeId);
+        node.remove();
+        updateContentSize();
+        updateEdges();
+        emitCanvasChanged();
+      });
+    });
+
+    const dragState = attachDrag(node);
+
+    node.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showNodeContextMenu(e.clientX, e.clientY, node);
+    });
+
+    node.addEventListener('click', (e) => {
+      if (e.target.closest('.workflow-node__delete')) return;
+      if (dragState.wasDrag()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const processNodeId = node.dataset.nodeId;
+      const datasetEdge = getConnectionsList().find((c) => c.toId === processNodeId && c.type === 'dataset-to-process');
+      const datasetNode = datasetEdge ? getNodeById(datasetEdge.fromId) : null;
+      function getSourceDatasetContent() {
+        if (!datasetNode) return { headers: [], rows: [] };
+        const c = datasetContentByNodeId.get(datasetNode.dataset.nodeId);
+        return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+      }
+      openProcessDetailModal({
+        node,
+        getSourceDatasetContent,
+        getUniqueDatasetExportName: findUniqueDatasetExportName,
+      });
+    });
+
+    return node;
+  }
+
   function createScoreNode({ left, top, nodeId: givenNodeId, title: givenTitle }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
@@ -903,5 +973,6 @@ export function createWorkflowNodeFactories(deps = {}) {
     createRunNode,
     createScoreNode,
     createPromptReviewNode,
+    createProcessNode,
   };
 }

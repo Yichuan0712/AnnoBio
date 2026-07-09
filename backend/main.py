@@ -88,6 +88,7 @@ CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 RUN_JOBS_FILE = DATA_DIR / "run_jobs.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 PUBMED_JOBS_FILE = DATA_DIR / "pubmed_jobs.json"
+PROCESS_JOBS_FILE = DATA_DIR / "process_jobs.json"
 
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
@@ -105,6 +106,8 @@ DEFAULT_SETTINGS = {
     "ncbi_api_key": "",
     # Optional: NCBI asks every E-utilities caller to identify a contact; falls back to a generic address when blank.
     "ncbi_email": "",
+    # Python interpreter (system install or a venv) used by Process nodes to run user code.
+    "python_path": "",
 }
 
 
@@ -164,6 +167,7 @@ class SettingsPatch(BaseModel):
     debug_mode: bool | None = None
     ncbi_api_key: str | None = None
     ncbi_email: str | None = None
+    python_path: str | None = None
 
 
 class CredentialResponse(BaseModel):
@@ -1618,6 +1622,151 @@ def cancel_pubmed_import(job_id: str):
         _pubmed_cancelled.add(job_id)
         _touch_pubmed_activity(job_id)
     return {"ok": True, "status": "cancelling"}
+
+
+# ---------- Process node (runs a user Python function per dataset row, delegates to process_exec.py) ----------
+_process_jobs: dict[str, dict] = {}
+_process_jobs_lock = threading.Lock()
+_process_cancelled: set[str] = set()
+_process_last_activity: dict[str, float] = {}
+
+
+class ProcessRunRequest(BaseModel):
+    python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
+    code: str = Field(..., min_length=1, description="User code defining process(row) -> dict | None")
+    headers: list[str] = Field(..., description="Column names; row dict passed to process() is keyed by these")
+    rows: list[list[str]] = Field(default_factory=list, description="Input rows, same order as headers")
+
+
+def _touch_process_activity(job_id: str) -> None:
+    _process_last_activity[job_id] = time.time()
+
+
+def _persist_process_jobs() -> None:
+    with _process_jobs_lock:
+        snapshot = dict(_process_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        PROCESS_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[Process] persist failed: {e}", file=sys.stderr)
+
+
+def _load_process_jobs() -> None:
+    if not PROCESS_JOBS_FILE.exists():
+        return
+    try:
+        raw = PROCESS_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _process_jobs_lock:
+            _process_jobs.clear()
+            _process_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[Process] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_process_jobs()
+
+
+def _do_process_work(job_id: str, req: ProcessRunRequest) -> None:
+    from process_exec import run_process_rows
+
+    try:
+        total = len(req.rows)
+        with _process_jobs_lock:
+            _process_jobs[job_id]["total"] = total
+            _process_jobs[job_id]["completed"] = 0
+            _process_jobs[job_id]["results"] = []
+        _persist_process_jobs()
+
+        if total == 0:
+            with _process_jobs_lock:
+                _process_jobs[job_id]["status"] = "done"
+            _persist_process_jobs()
+            return
+
+        def on_row(index: int, outcome: dict) -> None:
+            with _process_jobs_lock:
+                _process_jobs[job_id]["results"].append(outcome)
+                _process_jobs[job_id]["completed"] = index + 1
+            _persist_process_jobs()
+            _touch_process_activity(job_id)
+
+        def is_cancelled() -> bool:
+            is_stopped = job_id in _process_cancelled
+            is_abandoned = (time.time() - _process_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
+            return is_stopped or is_abandoned
+
+        run_process_rows(req.python_path, req.code, req.headers, req.rows, on_row, is_cancelled)
+
+        with _process_jobs_lock:
+            _process_jobs[job_id]["status"] = "cancelled" if job_id in _process_cancelled else "done"
+        _persist_process_jobs()
+    except Exception as e:
+        with _process_jobs_lock:
+            _process_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_process_jobs()
+
+
+@app.post("/api/process/run")
+def start_process_run(body: ProcessRunRequest):
+    """Start a Process run (Python `process(row)` per dataset row) in the background; returns 202 with job_id."""
+    job_id = str(uuid.uuid4())
+    with _process_jobs_lock:
+        _process_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "results": []}
+        _touch_process_activity(job_id)
+    _persist_process_jobs()
+    thread = threading.Thread(target=_do_process_work, args=(job_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/process/run/result/{job_id}")
+def get_process_run_result(job_id: str):
+    """Return 202 while running (with partial results), 200 when done/cancelled. Polling refreshes the abandonment timer."""
+    with _process_jobs_lock:
+        job = _process_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Process job not found")
+        if job.get("status") == "running":
+            _touch_process_activity(job_id)
+        status = job.get("status")
+        completed = job.get("completed", 0)
+        total = job.get("total", 0)
+        results = (job.get("results") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "completed": completed, "total": total, "results": results},
+        )
+    if error:
+        return {"status": "done", "error": error, "results": []}
+    return {"status": status, "completed": completed, "total": total, "results": results}
+
+
+@app.post("/api/process/run/cancel/{job_id}")
+def cancel_process_run(job_id: str):
+    """Mark a Process run as cancelled; worker stops after the current row."""
+    with _process_jobs_lock:
+        if job_id not in _process_jobs:
+            raise HTTPException(status_code=404, detail="Process job not found")
+        if _process_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _process_jobs[job_id].get("status")}
+        _process_cancelled.add(job_id)
+        _touch_process_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+@app.post("/api/process/check-python")
+def check_process_python(body: dict = Body(...)):
+    """Runs `<python_path> --version` to validate a Settings-page Python interpreter path."""
+    from process_exec import check_python
+
+    python_path = str(body.get("python_path") or "").strip()
+    return check_python(python_path)
 
 
 # ---------- Review analyze worker (delegates to review_pipeline.py) ----------

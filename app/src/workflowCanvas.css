@@ -292,6 +292,17 @@
   border-radius: 2px 2px 0 0;
 }
 
+/* Process node: runs a user function per dataset row (no LLM) — same footprint as Run/Sampler.
+   Header radius for the no-body case is handled by the shared "Run/Sampler/Score/Review/Process"
+   rule below (higher specificity needed to win over the generic .workflow-node--no-body default). */
+.workflow-node--process {
+  min-width: 110px;
+  max-width: 160px;
+  width: 160px;
+  overflow: hidden;
+  border-radius: 2px;
+}
+
 /* Run progress: bar at bottom fills left-to-right with working set color；右侧直角，不设圆角 */
 .workflow-node__run-progress {
   position: absolute;
@@ -328,6 +339,18 @@
   background: var(--text-muted);
 }
 
+/* Process progress: 与 Run/Review/Score 一致，逐行处理时填充，结果会保存 */
+.workflow-node__process-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 5px;
+  width: 0;
+  border-radius: 0;
+  transition: width 0.3s ease-out;
+  background: var(--text-muted);
+}
+
 .workflow-node__header {
   padding: 8px 12px;
   background: var(--hover);
@@ -344,11 +367,12 @@
   border-radius: 8px;
 }
 
-/* Run/Sampler/Score/Review 无 body 时内部也小圆角 */
+/* Run/Sampler/Score/Review/Process 无 body 时内部也小圆角 */
 .workflow-node--run.workflow-node--no-body .workflow-node__header,
 .workflow-node--sampler.workflow-node--no-body .workflow-node__header,
 .workflow-node--score.workflow-node--no-body .workflow-node__header,
-.workflow-node--prompt-review.workflow-node--no-body .workflow-node__header {
+.workflow-node--prompt-review.workflow-node--no-body .workflow-node__header,
+.workflow-node--process.workflow-node--no-body .workflow-node__header {
   border-radius: 2px;
 }
 
