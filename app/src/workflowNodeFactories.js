@@ -536,8 +536,8 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  /** Process node: runs a user-written function over each row of a connected Dataset (no LLM, no backend). */
-  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code }) {
+  /** Process node: runs a user-written function over a connected Dataset, either per-row or as a whole pandas DataFrame (no LLM, no backend LLM calls). */
+  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, activeMode }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--process workflow-node--no-body';
@@ -548,6 +548,8 @@ export function createWorkflowNodeFactories(deps = {}) {
     const processTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Process';
     node.dataset.processName = processTitle;
     if (code != null) node.dataset.processCode = String(code);
+    if (dfCode != null) node.dataset.processDfCode = String(dfCode);
+    if (activeMode === 'df' || activeMode === 'row') node.dataset.processActiveMode = activeMode;
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
