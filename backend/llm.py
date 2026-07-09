@@ -38,6 +38,7 @@ LITELLM_PROVIDER_PREFIX = {
     "gemini": "gemini",
     "bedrock": "bedrock",
     "amazon-bedrock": "bedrock",
+    "openrouter": "openrouter",
 }
 
 
@@ -81,9 +82,19 @@ def _normalize_messages(messages: list[dict]) -> list[dict]:
 
 def _resolve_model_name(provider: str, model: str) -> str:
     model_name = (model or "").strip()
+    provider_id = (provider or "").strip().lower()
+    if provider_id == "openrouter":
+        # OpenRouter model ids are themselves "vendor/model" (e.g. anthropic/claude-3.5-sonnet),
+        # which collides with LiteLLM's own provider-prefix sniffing (it would try native
+        # Anthropic routing instead of OpenRouter). Always wrap with LiteLLM's own openrouter/
+        # prefix so it routes through OpenRouter's endpoint, regardless of what the user typed.
+        inner = model_name
+        if inner.lower().startswith("openrouter/"):
+            inner = inner[len("openrouter/"):]
+        return f"openrouter/{inner}"
     if "/" in model_name:
         return model_name
-    prefix = LITELLM_PROVIDER_PREFIX.get((provider or "").strip().lower())
+    prefix = LITELLM_PROVIDER_PREFIX.get(provider_id)
     if prefix:
         return f"{prefix}/{model_name}"
     return model_name
@@ -214,6 +225,7 @@ def _call_completion(
     messages: list[dict],
     max_tokens: int,
     response_format: Any | None = None,
+    max_retries: int = 3,
 ) -> Any:
     _prepare_provider_env(provider, api_key)
     kwargs = _make_completion_kwargs(
@@ -225,7 +237,7 @@ def _call_completion(
         response_format=response_format,
     )
     kwargs["messages"] = _normalize_messages(messages)
-    return _retry_invoke(lambda: completion(**kwargs))
+    return _retry_invoke(lambda: completion(**kwargs), max_retries=max_retries)
 
 
 def chat(
@@ -235,6 +247,7 @@ def chat(
     base_url: str,
     messages: list[dict],
     max_tokens: int = 1024,
+    max_retries: int = 3,
 ) -> str:
     """
     Call LLM via LiteLLM. Raises on error.
@@ -248,6 +261,7 @@ def chat(
         base_url=base_url,
         messages=messages,
         max_tokens=max_tokens,
+        max_retries=max_retries,
     )
     return _extract_completion_text(response)
 

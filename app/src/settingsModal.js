@@ -9,6 +9,13 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 
 const API_BASE = BACKEND_API_BASE;
 
+const PROVIDER_LABELS = {
+  openrouter: 'OpenRouter',
+  openai: 'OpenAI-compatible',
+  anthropic: 'Anthropic',
+  gemini: 'Google Gemini',
+};
+
 /** Must stay aligned with backend DEFAULT_SETTINGS in main.py */
 const MODEL_SETTINGS_DEFAULTS = {
   default_run_credential_id: '',
@@ -40,6 +47,18 @@ function credentialModelLabel(credential) {
   return credential?.model || credential?.llm || '—';
 }
 
+function credentialStatusIcon(c) {
+  if (c.last_check_ok === true) {
+    const label = PROVIDER_LABELS[c.provider] || c.provider || 'Verified';
+    return `<span class="credential-status-icon credential-status-icon--ok" data-status-icon="${c.id}" title="Verified: ${escapeHtml(label)}">✓</span>`;
+  }
+  if (c.last_check_ok === false) {
+    const msg = c.last_check_error || 'Verification failed';
+    return `<span class="credential-status-icon credential-status-icon--error" data-status-icon="${c.id}" title="${escapeHtml(msg)}">✗</span>`;
+  }
+  return `<span class="credential-status-icon" data-status-icon="${c.id}" title="Not verified yet — click Test"></span>`;
+}
+
 function renderCredentialsTable(scope, list) {
   const tbody = getCredTbody(scope);
   if (!tbody) return;
@@ -50,7 +69,7 @@ function renderCredentialsTable(scope, list) {
   const maskedPlaceholder = '••••••••';
   tbody.innerHTML = list.map((c) => `
     <tr data-credential-id="${c.id}">
-      <td>${escapeHtml(credentialModelLabel(c))}</td>
+      <td>${escapeHtml(credentialModelLabel(c))} ${credentialStatusIcon(c)}</td>
       <td class="credentials-provider-cell">${escapeHtml(c.base_url || 'Default')}</td>
       <td class="credentials-key-cell">
         <code class="credentials-key-value">${maskedPlaceholder}</code>
@@ -142,6 +161,40 @@ function bindCredKeyCellClick(scope) {
   });
 }
 
+function setCredentialStatusIcon(scope, id, { symbol, title, kind }) {
+  const icon = scope.querySelector(`[data-status-icon="${id}"]`);
+  if (!icon) return;
+  icon.textContent = symbol;
+  icon.title = title || '';
+  icon.classList.toggle('credential-status-icon--ok', kind === 'ok');
+  icon.classList.toggle('credential-status-icon--error', kind === 'error');
+  icon.classList.toggle('credential-status-icon--pending', kind === 'pending');
+}
+
+/**
+ * The one real check: sends a minimal chat completion under candidate provider
+ * interpretations (see backend verify_credential) and, if one succeeds, corrects the
+ * credential's stored provider. Used by both the table's Test button and the
+ * fire-and-forget check that runs right after Add -- same endpoint, same result rendering
+ * (a green check or red cross right after the model name).
+ */
+async function runCredentialCheck(scope, id) {
+  setCredentialStatusIcon(scope, id, { symbol: '', title: 'Checking…', kind: 'pending' });
+  try {
+    const res = await fetch(`${API_BASE}/api/credentials/${id}/test`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      const label = PROVIDER_LABELS[data.provider] || data.provider || 'Verified';
+      setCredentialStatusIcon(scope, id, { symbol: '✓', title: `Verified: ${label}`, kind: 'ok' });
+    } else {
+      const msg = typeof data.detail === 'string' ? data.detail : (data.error || 'Failed');
+      setCredentialStatusIcon(scope, id, { symbol: '✗', title: msg, kind: 'error' });
+    }
+  } catch (e) {
+    setCredentialStatusIcon(scope, id, { symbol: '✗', title: (e && e.message) || 'Network error', kind: 'error' });
+  }
+}
+
 function bindCredTestButtons(scope) {
   scope.querySelectorAll('.credentials-test-btn').forEach((btn) => {
     btn.replaceWith(btn.cloneNode(true));
@@ -150,23 +203,10 @@ function bindCredTestButtons(scope) {
     btn.addEventListener('click', async () => {
       const id = btn.getAttribute('data-id');
       if (!id) return;
-      const origText = btn.textContent;
-      btn.textContent = 'Testing';
       btn.disabled = true;
       try {
-        const res = await fetch(`${API_BASE}/api/credentials/${id}/test`, { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          showAlert('API key valid.', { title: 'Test result' });
-        } else {
-          showAlert(typeof data.detail === 'string' ? data.detail : 'Test failed', { title: 'Test failed' });
-          console.warn('Test failed:', data.detail || res.statusText);
-        }
-      } catch (e) {
-        showAlert((e && e.message) || 'Test failed', { title: 'Test failed' });
-        console.error('Test credential:', e);
+        await runCredentialCheck(scope, id);
       } finally {
-        btn.textContent = origText;
         btn.disabled = false;
       }
     });
@@ -236,14 +276,68 @@ function mountCredentialsTableHost(tableHost, options = {}) {
 
 /**
  * Add-credential form in Settings tab; submit via #settings-footer-add in the modal footer.
+ *
+ * Saving is always instant -- it never waits on a network call to some LLM provider.
+ * Figuring out which provider a model id/key actually belongs to happens in two places,
+ * neither of which blocks Add:
+ * - On blur: a free, unauthoritative probe (/api/credentials/detect) that only lists models
+ *   for the Model ID autocomplete dropdown. It can't prove anything (some list endpoints,
+ *   like OpenRouter's, don't even require a valid key), so it never decides what gets saved.
+ * - Right after a successful save: the same real check as the table's Test button
+ *   (runCredentialCheck, POST /api/credentials/{id}/test), fired in the background so it
+ *   never blocks Add, with its result rendered in the credentials table's Status column --
+ *   not here in the add form -- so there is exactly one place that shows "is this really
+ *   OpenRouter/OpenAI/...".
  * @param {HTMLElement} addFormRoot
  * @param {HTMLElement} tableHost
  */
 function wireCredentialsAddForm(addFormRoot, tableHost) {
+  const modelInput = addFormRoot.querySelector('#credentials-model');
+  const baseUrlInput = addFormRoot.querySelector('#credentials-base-url');
+  const apiKeyInput = addFormRoot.querySelector('#credentials-api-key');
+  const suggestionsList = addFormRoot.querySelector('#credentials-model-suggestions');
+  const footerAdd = addFormRoot.closest('.model-settings-col-right')?.querySelector('#settings-footer-add');
+
+  let lastDetectKey = '';
+
+  function resetForm() {
+    lastDetectKey = '';
+    if (suggestionsList) suggestionsList.innerHTML = '';
+  }
+
+  // Cosmetic only: populates the Model ID suggestion dropdown. Never sets what gets saved.
+  async function runDetect() {
+    const model = (modelInput?.value || '').trim();
+    const base_url = (baseUrlInput?.value || '').trim();
+    const api_key = (apiKeyInput?.value || '').trim();
+    if (!base_url && !api_key && !model) return;
+    const detectKey = JSON.stringify([model, base_url, api_key]);
+    if (detectKey === lastDetectKey) return;
+    lastDetectKey = detectKey;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/credentials/detect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, base_url, api_key }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (lastDetectKey !== detectKey) return; // superseded by a newer probe
+      if (suggestionsList) {
+        suggestionsList.innerHTML = (data.models || [])
+          .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label || m.id)}</option>`)
+          .join('');
+      }
+    } catch (e) {
+      // Suggestions are a nicety; silently skip on failure.
+    }
+  }
+
+  modelInput?.addEventListener('blur', runDetect);
+  baseUrlInput?.addEventListener('blur', runDetect);
+  apiKeyInput?.addEventListener('blur', runDetect);
+
   async function onAddCredentialSubmit() {
-    const modelInput = addFormRoot.querySelector('#credentials-model');
-    const baseUrlInput = addFormRoot.querySelector('#credentials-base-url');
-    const apiKeyInput = addFormRoot.querySelector('#credentials-api-key');
     const llm = (modelInput?.value || '').trim();
     const base_url = (baseUrlInput?.value || '').trim();
     const api_key = (apiKeyInput?.value || '').trim();
@@ -259,11 +353,7 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
       const res = await fetch(`${API_BASE}/api/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: llm,
-          base_url,
-          api_key,
-        }),
+        body: JSON.stringify({ model: llm, base_url, api_key }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -271,11 +361,14 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
         showAlert(msg, { title: 'Add credential failed' });
         return;
       }
+      const saved = await res.json().catch(() => ({}));
       apiKeyInput.value = '';
       if (modelInput) modelInput.value = '';
       if (baseUrlInput) baseUrlInput.value = '';
+      resetForm();
       await loadAndRenderCredentials(tableHost);
       tableHost._onCredentialsChange?.();
+      if (saved.id) runCredentialCheck(tableHost, saved.id); // background; result shows in the table's Status column
     } catch (e) {
       const msg = (e && e.message) || String(e);
       showAlert(msg, { title: 'Add credential failed' });
@@ -283,7 +376,6 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
     }
   }
 
-  const footerAdd = addFormRoot.closest('.model-settings-col-right')?.querySelector('#settings-footer-add');
   footerAdd?.addEventListener('click', onAddCredentialSubmit);
 }
 
@@ -297,7 +389,7 @@ export function openSettingsModal() {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--defaults modal-panel--model-settings-combined">
       <div class="modal-header">
-        <h2 id="model-settings-title" class="modal-title">Model settings</h2>
+        <h2 id="model-settings-title" class="modal-title">LLM settings</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body modal-body--defaults modal-body--model-settings-combined">
@@ -325,15 +417,16 @@ export function openSettingsModal() {
                           <div class="credentials-add-row">
                             <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
                               <label class="dataset-meta-label" for="credentials-model">Model ID</label>
-                              <input type="text" id="credentials-model" class="dataset-meta-input" placeholder="e.g. gpt-5, anthropic/claude-sonnet-4-6" autocomplete="off" aria-label="Model ID" />
-                            </div>
-                            <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
-                              <label class="dataset-meta-label" for="credentials-base-url">Base URL (optional)</label>
-                              <input type="text" id="credentials-base-url" class="dataset-meta-input" placeholder="OpenAI-compatible endpoint" autocomplete="off" aria-label="Base URL" />
+                              <input type="text" id="credentials-model" class="dataset-meta-input" placeholder="e.g. gpt-5, anthropic/claude-sonnet-4-6" autocomplete="off" aria-label="Model ID" list="credentials-model-suggestions" />
+                              <datalist id="credentials-model-suggestions"></datalist>
                             </div>
                             <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
                               <label class="dataset-meta-label" for="credentials-api-key">API key</label>
                               <input type="text" id="credentials-api-key" class="dataset-meta-input credentials-api-key-input" placeholder="Paste your API key" autocomplete="off" />
+                            </div>
+                            <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
+                              <label class="dataset-meta-label" for="credentials-base-url">Base URL (optional)</label>
+                              <input type="text" id="credentials-base-url" class="dataset-meta-input" placeholder="e.g. http://localhost:11434/v1" autocomplete="off" aria-label="Base URL" />
                             </div>
                           </div>
                         </div>
