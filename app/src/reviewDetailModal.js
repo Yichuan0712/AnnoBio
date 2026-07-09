@@ -638,6 +638,41 @@ function sentenceDiff(oldStr, newStr) {
   return segments;
 }
 
+/**
+ * Line-level LCS alignment. Returns a sequence of { type: 'unchanged'|'remove'|'add', oldLine?, newLine? }
+ * so that a line inserted/deleted/reordered (e.g. a numbered rule list gaining an item) doesn't
+ * shift every following line out of position -- without this, positional (index-based) pairing
+ * treats every line after the shift as "changed" even though its text is identical, just moved.
+ */
+function alignLines(oldLines, newLines) {
+  const a = oldLines;
+  const b = newLines;
+  const n = a.length;
+  const m = b.length;
+  const dp = Array(n + 1).fill(null).map(() => Array(m + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const result = [];
+  let i = n, j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      result.unshift({ type: 'unchanged', oldLine: a[i - 1], newLine: b[j - 1] });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.unshift({ type: 'add', newLine: b[j - 1] });
+      j--;
+    } else {
+      result.unshift({ type: 'remove', oldLine: a[i - 1] });
+      i--;
+    }
+  }
+  return result;
+}
+
 /** Render a single line with sentence-level diff (red/green only, no structure change).
  * @param {boolean} revertPreview — true when hovering Revert: show green strikethrough for text being removed (new) and red for restored (old). */
 function renderLineDiff(oldLine, newLine, revertPreview = false) {
@@ -727,12 +762,35 @@ function renderSectionContent(content, newContent, withDiff, removeSpan, highlig
     const delCls = revertPreview ? 'review-revert-remove' : 'review-removed';
     return oldLines.map((line) => `<div class="preview-field-content-line"><span class="${delCls}">${escapeHtml(line)}</span></div>`).join('');
   }
-  const numLines = Math.max(oldLines.length, newLines.length);
+  // Align lines by content first (LCS), then only sentence-diff within actually-changed
+  // hunks -- pairing consecutive removed/added lines 1:1 inside each hunk. This keeps
+  // unmoved lines rendered plainly even when earlier lines were inserted/deleted/reordered.
+  const aligned = alignLines(oldLines, newLines);
+  const delCls = revertPreview ? 'review-revert-remove' : 'review-removed';
+  const addCls = revertPreview ? 'review-revert-restore' : 'review-added';
   const lineHtmls = [];
-  for (let i = 0; i < numLines; i++) {
-    const oldLine = oldLines[i] || '';
-    const newLine = newLines[i] || '';
-    lineHtmls.push(renderLineDiff(oldLine, newLine, revertPreview));
+  let k = 0;
+  while (k < aligned.length) {
+    const entry = aligned[k];
+    if (entry.type === 'unchanged') {
+      lineHtmls.push(escapeHtml(entry.oldLine));
+      k++;
+      continue;
+    }
+    const removedLines = [];
+    while (k < aligned.length && aligned[k].type === 'remove') { removedLines.push(aligned[k].oldLine); k++; }
+    const addedLines = [];
+    while (k < aligned.length && aligned[k].type === 'add') { addedLines.push(aligned[k].newLine); k++; }
+    const pairCount = Math.min(removedLines.length, addedLines.length);
+    for (let p = 0; p < pairCount; p++) {
+      lineHtmls.push(renderLineDiff(removedLines[p], addedLines[p], revertPreview));
+    }
+    for (let p = pairCount; p < removedLines.length; p++) {
+      lineHtmls.push(`<span class="${delCls}">${escapeHtml(removedLines[p])}</span>`);
+    }
+    for (let p = pairCount; p < addedLines.length; p++) {
+      lineHtmls.push(`<span class="${addCls}">${escapeHtml(addedLines[p])}</span>`);
+    }
   }
   return lineHtmls.map((html) => `<div class="preview-field-content-line">${html}</div>`).join('');
 }
