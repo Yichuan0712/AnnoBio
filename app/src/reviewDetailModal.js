@@ -44,9 +44,10 @@ const _verifyPromises = new Map(); // → in-flight Promise | undefined
 const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
 const REVIEW_SUGGESTION_VERIFIED_LABEL = 'Verified';
-const REVIEW_SUGGESTION_OPTIMIZATION_LABEL = 'Click to Optimize';
+const REVIEW_SUGGESTION_OPTIMIZATION_LABEL = 'Verification not pass, Click to Optimize';
 const REVIEW_SUGGESTION_OPTIMIZING_LABEL = 'Optimizing\u2026';
-const REVIEW_SUGGESTION_OPTIMIZED_LABEL = 'Optimized';
+const REVIEW_SUGGESTION_OPTIMIZED_NOT_PASS_LABEL = 'Optimized, Verification not pass';
+const REVIEW_SUGGESTION_OPTIMIZED_PASS_LABEL = 'Optimized, Verification pass';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
@@ -77,10 +78,10 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
     return [{ cls: 'review-suggestion-optimizing-pill', text: REVIEW_SUGGESTION_OPTIMIZING_LABEL, ariaLabel: 'Optimization in progress…' }];
   }
   if (verifyState === 'optimized') {
-    return [{ cls: 'review-suggestion-optimized-pill', text: REVIEW_SUGGESTION_OPTIMIZED_LABEL, ariaLabel: 'Optimization complete — some outputs still differ from ground truth' }];
+    return [{ cls: 'review-suggestion-optimized-pill', text: REVIEW_SUGGESTION_OPTIMIZED_NOT_PASS_LABEL, ariaLabel: 'Optimization complete — some outputs still differ from ground truth' }];
   }
   if (verifyState === 'optimized-pass') {
-    return [{ cls: 'review-suggestion-optimized-pass-pill', text: REVIEW_SUGGESTION_OPTIMIZED_LABEL, ariaLabel: 'Optimization complete — all outputs matched ground truth' }];
+    return [{ cls: 'review-suggestion-optimized-pass-pill', text: REVIEW_SUGGESTION_OPTIMIZED_PASS_LABEL, ariaLabel: 'Optimization complete — all outputs matched ground truth' }];
   }
   return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
@@ -843,9 +844,10 @@ function scrollNestedToReveal(el, boundary) {
     while (parent && parent !== boundary) {
       const st = getComputedStyle(parent);
       const oy = st.overflowY;
-      const canY =
-        (oy === 'auto' || oy === 'scroll') &&
-        parent.scrollHeight > parent.clientHeight + 1;
+      // Don't gate on scrollHeight > clientHeight here -- right after the innerHTML swap that
+      // triggered this call, a container's measured scrollHeight can still be momentarily stale;
+      // the margin checks below are already no-ops when nothing actually needs to move.
+      const canY = oy === 'auto' || oy === 'scroll';
       if (canY) {
         const er = el.getBoundingClientRect();
         const pr = parent.getBoundingClientRect();
@@ -1206,9 +1208,16 @@ function buildReviewResultUI(overlay, options) {
     persistReviewProgressToNode(100);
   }
 
+  // Hovering quickly across suggestion cards fires renderLeft() + scrollRightToSection()
+  // repeatedly before the previous call's deferred (double-rAF) scroll adjustment runs; without
+  // a sequence guard, a stale call can win the race and scroll to whatever section it captured,
+  // which looks like "sometimes it scrolls to the wrong place / doesn't seem to move at all".
+  let scrollRightRequestSeq = 0;
   function scrollRightToSection(sectionIndex) {
+    const seq = ++scrollRightRequestSeq;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
+        if (seq !== scrollRightRequestSeq) return; // superseded by a newer hover
         const blocks = promptSectionsEl.querySelectorAll('.preview-field-block');
         const block = blocks[sectionIndex];
         if (!block) return;
