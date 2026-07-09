@@ -7888,6 +7888,33 @@ button.btn.btn-danger:hover:not(:disabled) {
   flex: 60 1 0;
 }
 
+/* No extra margin/padding here -- .run-detail-main already applies a 12px gap between all its
+   children (label / tabs / panels / Run button row), so adding our own spacing double-counts it
+   (that's what made the gap look too large above and below). */
+.process-detail-view-switch {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
+.process-detail-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Scrollable region between the tabs and the pinned Run button; holds whichever tab panel is visible.
+   No extra margin/padding here either -- .run-detail-main's own gap:12px already spaces it. */
+.process-detail-panels {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.process-detail-panel[hidden] {
+  display: none;
+}
+
 /* 左栏：复用 run-detail-main 的外框/标题栏/底部按钮位（margin-top: auto），
    中间可编辑区用 process-editor-mid 撑满剩余高度 */
 .process-editor-mid {
