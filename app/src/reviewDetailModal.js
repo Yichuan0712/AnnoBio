@@ -26,6 +26,7 @@ import {
   ensureSuggestionObjectId,
   formatSuggestionIdDisplay,
   parseNumericSuggestionId,
+  allocNextReviewSuggestionId,
 } from './reviewSuggestionIds.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { evaluateScoreOutputGt } from './scoreOutputGtMatcher.js';
@@ -40,14 +41,14 @@ const _verifyPromises = new Map(); // → in-flight Promise | undefined
 
 /** Review node progress reaches 100% when the stream ends (workflowCanvas). */
 
-/** Placeholder pill only; verify/optimization flows removed pending redesign. */
+/** Suggestion title pill: 5 states. Optimizing a suggestion creates a new, separate suggestion
+ *  card (see addOptimizedSuggestionCard) instead of overwriting this one in place, so there's
+ *  no "optimized" terminal state here -- the new card just goes through this same state list. */
 const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
 const REVIEW_SUGGESTION_VERIFIED_LABEL = 'Verified';
 const REVIEW_SUGGESTION_OPTIMIZATION_LABEL = 'Verification not pass, Click to Optimize';
 const REVIEW_SUGGESTION_OPTIMIZING_LABEL = 'Optimizing\u2026';
-const REVIEW_SUGGESTION_OPTIMIZED_NOT_PASS_LABEL = 'Optimized, Verification not pass';
-const REVIEW_SUGGESTION_OPTIMIZED_PASS_LABEL = 'Optimized, Verification pass';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
 
@@ -61,7 +62,7 @@ function isVerifyFullPass(result) {
 
 /**
  * Returns pill specs for the suggestion title line.
- * @param {string} [verifyState] - 'idle' | 'verifying' | 'verified' | 'optimization'
+ * @param {string} [verifyState] - 'idle' | 'verifying' | 'verified' | 'optimization' | 'optimizing'
  */
 function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState) {
   if (streamComplete !== true) return [];
@@ -76,12 +77,6 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
   }
   if (verifyState === 'optimizing') {
     return [{ cls: 'review-suggestion-optimizing-pill', text: REVIEW_SUGGESTION_OPTIMIZING_LABEL, ariaLabel: 'Optimization in progress…' }];
-  }
-  if (verifyState === 'optimized') {
-    return [{ cls: 'review-suggestion-optimized-pill', text: REVIEW_SUGGESTION_OPTIMIZED_NOT_PASS_LABEL, ariaLabel: 'Optimization complete — some outputs still differ from ground truth' }];
-  }
-  if (verifyState === 'optimized-pass') {
-    return [{ cls: 'review-suggestion-optimized-pass-pill', text: REVIEW_SUGGESTION_OPTIMIZED_PASS_LABEL, ariaLabel: 'Optimization complete — all outputs matched ground truth' }];
   }
   return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
@@ -964,7 +959,7 @@ function buildReviewResultUI(overlay, options) {
     if (!sid) return;
     // Don't overwrite an in-flight state that's already tracked in memory.
     const currentSt = _verifyStates.get(verifyKey(si));
-    const isInFlight = currentSt === 'verifying' || currentSt === 'finetuning';
+    const isInFlight = currentSt === 'verifying' || currentSt === 'optimizing';
     if (!isInFlight) {
       const st = _savedVerifyStates[sid];
       if (st && st !== 'idle') _verifyStates.set(verifyKey(si), st);
@@ -1193,6 +1188,46 @@ function buildReviewResultUI(overlay, options) {
     } else {
       updateSuggestionPreviewSelectionVisual();
     }
+  }
+
+  /**
+   * Optimizing a suggestion never rewrites it in place -- it appends a brand-new suggestion
+   * card (own suggestion_id, own verify state) built from the optimization result, so both the
+   * pre- and post-optimization wording stay independently usable. Always appended at the end
+   * so no existing card's sugIdx (and therefore its verify-state key) ever shifts.
+   */
+  function addOptimizedSuggestionCard(sourceSug, result) {
+    const sourceId = sourceSug && sourceSug.suggestion_id != null ? sourceSug.suggestion_id : null;
+    const newId = allocNextReviewSuggestionId({ suggestions: allSuggestions, data_refinement: dataRefinement });
+    const optimizedSug = {
+      ...sourceSug,
+      suggestion_id: newId,
+      new_sentence: result.bestText,
+      review_optimization_completed: true,
+      review_optimization_meta: {
+        bestRate: result.bestObservedRate,
+        trials: result.trialLog.length,
+        optimizationInputNums: result.optimizationInputNums,
+        optimizationExtraInputNums: result.optimizationExtraInputNums,
+        optimizationGtNums: result.optimizationGtNums,
+      },
+      applied: false,
+      optimized_from_suggestion_id: sourceId,
+    };
+    allSuggestions.push(optimizedSug);
+    const newIdx = allSuggestions.length - 1;
+    // Append just the one new card -- NOT a full renderEditSuggestionCards() rebuild, which
+    // would replace every existing card's DOM node (including the one whose click handler is
+    // still running right now) and leave that handler's own `card` reference detached, so its
+    // later `card.isConnected` check would silently skip restoring its own pill.
+    addOneSuggestionCard(optimizedSug, newIdx);
+    persistWorking();
+    const newCardEl = editContainer.querySelector(`.review-detail-suggestion-card[data-suggestion-index="${newIdx}"]`);
+    if (newCardEl && typeof newCardEl._reviewAutoVerify === 'function') newCardEl._reviewAutoVerify();
+    previewSelectedSuggestionIndex = newIdx;
+    updateSuggestionPreviewSelectionVisual();
+    applyPinnedPreviewIfAny();
+    return newIdx;
   }
 
   /** After stream: show suggestion cards and complete review progress. */
@@ -1459,6 +1494,10 @@ function buildReviewResultUI(overlay, options) {
       '<button type="button" class="review-detail-debug-reset-btn" title="Debug: reset card to Click-to-verify state">Reset</button>' +
       '<button type="button" class="review-detail-debug-info-btn" title="Debug: open run info panel">Debug</button>';
     const actionsHtml = `${detailsBtnHtml}${acceptBtnHtml ? ` ${acceptBtnHtml}` : ''} <span class="review-detail-debug-btn-group">${debugActionsHtml}</span>`;
+    const lineageFromId = sug && sug.optimized_from_suggestion_id != null ? sug.optimized_from_suggestion_id : null;
+    const lineageHtml = lineageFromId != null
+      ? `<span class="review-suggestion-lineage-note">Optimized from #${escapeHtml(formatSuggestionIdDisplay(lineageFromId))}</span>`
+      : '';
 
     const card = document.createElement('div');
     card.className =
@@ -1471,7 +1510,7 @@ function buildReviewResultUI(overlay, options) {
     card.dataset.reviewTitlePlain = titleLine;
     card.innerHTML = `
       <div class="review-detail-suggestion-card__main">
-        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span><span class="review-detail-suggestion-title-wrap"><strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong>${titlePillsHtml}</span></span>
+        <span class="review-detail-suggestion-header"><span class="review-detail-suggestion-num" aria-label="Suggestion id" title="ID ${escapeHtml(String(sid))}">#${escapeHtml(shortLabel)}</span>${lineageHtml}<span class="review-detail-suggestion-title-wrap"><strong class="review-detail-suggestion-section-name">${escapeHtml(previewTitle)}</strong>${titlePillsHtml}</span></span>
         <p class="review-detail-suggestion-reason">${escapeHtml(previewReason || '—')}</p>
       </div>
       <div class="review-detail-suggestion-card__actions">
@@ -1557,10 +1596,6 @@ function buildReviewResultUI(overlay, options) {
         if (verifySection) verifySection.innerHTML = buildVerifySectionHtml(verifyResult);
       }
     }
-
-    /** Set to true before calling runVerification() after an optimization run so the finally
-     *  block can distinguish "optimized but not fully passing" from "plain verify failed". */
-    let _isPostOptimizationVerify = false;
 
     /** Run the modified prompt against the suggestion's target inputs and store results. */
     async function runVerification() {
@@ -1667,11 +1702,7 @@ function buildReviewResultUI(overlay, options) {
       } finally {
         // Determine final pill state from stored result
         const finalResult = cardVerifyResults.get(sugIdx);
-        const wasPostOptimization = _isPostOptimizationVerify;
-        _isPostOptimizationVerify = false;
-        const postState = wasPostOptimization
-          ? (isVerifyFullPass(finalResult) ? 'optimized-pass' : (finalResult?.status === 'complete' ? 'optimized' : 'idle'))
-          : (isVerifyFullPass(finalResult) ? 'verified' : (finalResult?.status === 'complete' ? 'optimization' : 'idle'));
+        const postState = isVerifyFullPass(finalResult) ? 'verified' : (finalResult?.status === 'complete' ? 'optimization' : 'idle');
         cardVerifyStates.set(sugIdx, postState);
         _verifyPromises.delete(verifyKey(sugIdx));
         // Persist state + result so they survive app restart
@@ -1680,8 +1711,6 @@ function buildReviewResultUI(overlay, options) {
         // closed and reopened, the new card's .finally() hook handles the update.
         if (card.isConnected) {
           updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
-          // If this card's diff is currently pinned on the right, refresh it so
-          // it shows the updated new_sentence (e.g. after optimization rewrites it).
           applyPinnedPreviewIfAny();
         }
       }
@@ -1791,35 +1820,16 @@ function buildReviewResultUI(overlay, options) {
           },
         });
 
-        // Build human-readable input/GT # strings for the debug overlay
+        // Build human-readable input/GT # strings, bundled onto the result for the caller to
+        // use when building the new, separate suggestion card (see addOptimizedSuggestionCard) --
+        // this suggestion itself is left untouched; optimizing never overwrites it in place.
         const optimizationInputNums = expandedInputEntries.map(([idx]) => `#${idx + 1}`).join(', ');
         const optimizationExtraInputNums = extraEntries.length > 0 ? extraEntries.map(([idx]) => `#${idx + 1}`).join(', ') : null;
         const optimizationGtNums = [...new Set(
           expandedInputEntries.flatMap(([, { gtRows }]) => gtRows.map((g) => `#${g.gtNum}`)),
         )].sort((a, b) => parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10)).join(', ');
 
-        // Update suggestion's new_sentence with the best found text
-        sug.new_sentence = result.bestText;
-        sug.review_optimization_completed = true;
-        sug.review_optimization_meta = {
-          bestRate: result.bestObservedRate,
-          trials: result.trialLog.length,
-          optimizationInputNums,
-          optimizationExtraInputNums,
-          optimizationGtNums,
-        };
-        // Persist updated suggestion so new_sentence survives app restart
-        try {
-          if (typeof onReviewResultChange === 'function') {
-            const live = typeof getReviewResult === 'function' ? getReviewResult() : null;
-            const base = live && typeof live === 'object' ? { ...live } : { ...saved };
-            const suggs = Array.isArray(base.suggestions) ? [...base.suggestions] : allSuggestions.map((s) => ({ ...s }));
-            suggs[sugIdx] = { ...suggs[sugIdx], new_sentence: result.bestText, review_optimization_completed: true, review_optimization_meta: sug.review_optimization_meta };
-            onReviewResultChange({ ...base, suggestions: suggs });
-          }
-        } catch (_) {}
-
-        return result;
+        return { ...result, optimizationInputNums, optimizationExtraInputNums, optimizationGtNums };
       } finally {
         unregisterOptimizationSession(ac);
       }
@@ -1845,39 +1855,30 @@ function buildReviewResultUI(overlay, options) {
         });
       });
 
-      // "Click to Optimize" pill
+      // "Click to Optimize" pill -- optimizing never rewrites this suggestion; it produces a
+      // new, separate suggestion card (see addOptimizedSuggestionCard) and this card's own
+      // pill just reverts to 'optimization' once the background work finishes.
       titleWrap.querySelectorAll('.review-suggestion-optimization-pill--clickable').forEach((pill) => {
         pill.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
           if (_verifyPromises.has(verifyKey(sugIdx))) return;
-          // If the suggestion was already accepted, revert it first so the prompt
-          // reflects the optimized new_sentence once optimization completes.
-          if (sug.applied === true) {
-            sug.applied = false;
-            syncWorkingFromApplied();
-            updateAcceptButtonLabels();
-            renderLeft(-1);
-            persistWorking();
-            if (previewSelectedSuggestionIndex === sugIdx) showPreview();
-          }
           cardVerifyStates.set(sugIdx, 'optimizing');
           updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
           const fp = (async () => {
             try {
-              await runOptimization();
+              const result = await runOptimization();
+              addOptimizedSuggestionCard(sug, result);
             } catch (err) {
               if (err?.name !== 'AbortError') {
                 try { storeVerifyResult({ status: 'error', message: String(err?.message || err) }); } catch (_) {}
               }
             } finally {
-              // After optimization, auto-verify the new sentence to set the correct pill state.
-              // Set the flag so runVerification's finally block uses 'optimized' (not 'optimization')
-              // when verify completes but doesn't achieve full pass.
-              _isPostOptimizationVerify = true;
-              const vp2 = runVerification();
-              _verifyPromises.set(verifyKey(sugIdx), vp2);
-              await vp2;
+              // This suggestion's own verify outcome didn't change -- just restore its pill.
+              cardVerifyStates.set(sugIdx, 'optimization');
+              _verifyPromises.delete(verifyKey(sugIdx));
+              try { persistVerifyState(sugIdx, 'optimization', cardVerifyResults.get(sugIdx)); } catch (_) {}
+              if (card.isConnected) updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
             }
           })();
           _verifyPromises.set(verifyKey(sugIdx), fp);
@@ -1886,6 +1887,17 @@ function buildReviewResultUI(overlay, options) {
     }
     card._bindVerifyPillClick = bindVerifyPillClick;
     bindVerifyPillClick();
+
+    /** Programmatically run this card's own verify flow (used to auto-verify a freshly
+     *  created optimized-suggestion card right after it's added to the list). */
+    card._reviewAutoVerify = () => {
+      if (_verifyPromises.has(verifyKey(sugIdx))) return _verifyPromises.get(verifyKey(sugIdx));
+      cardVerifyStates.set(sugIdx, 'verifying');
+      updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+      const vp = runVerification();
+      _verifyPromises.set(verifyKey(sugIdx), vp);
+      return vp;
+    };
 
     // If a verification/optimization was in-flight when the modal was closed, hook the
     // existing promise so this (newly mounted) card's pill resets when it finishes.

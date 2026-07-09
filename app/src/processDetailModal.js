@@ -10,6 +10,7 @@
 
 import { EditorView, basicSetup } from 'codemirror';
 import { python } from '@codemirror/lang-python';
+import { attachModalPaneToggle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 
 const API_BASE = BACKEND_API_BASE;
@@ -464,6 +465,17 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
     document.body.style.overflow = '';
   }
   overlay.querySelector('.modal-close').addEventListener('click', close);
+
+  const processPaneToggle = attachModalPaneToggle({
+    overlay,
+    isCollapsed: () => overlay.classList.contains('modal-overlay--process-results-collapsed'),
+    onToggle: () => {
+      overlay.classList.toggle('modal-overlay--process-results-collapsed');
+      processPaneToggle.update();
+    },
+    expandedLabel: 'Hide results panel',
+    collapsedLabel: 'Show results panel',
+  });
 
   let restored = null;
   try {
