@@ -6,6 +6,7 @@
 
 import * as XLSX from 'xlsx';
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { showConfirm } from './alertModal.js';
 
 const API_BASE = BACKEND_API_BASE;
 const PUBMED_POLL_INTERVAL_MS = 1200;
@@ -369,8 +370,15 @@ export function openAddDatasetModal(workflowCanvasApi) {
     setPubmedFetchStatus('');
   }
 
-  function switchDataSource(target) {
+  async function switchDataSource(target) {
     if (target === dataSource) return;
+    if (fileImported) {
+      const ok = await showConfirm('Switching will clear the current preview data. Continue?', {
+        title: 'Switch data source',
+        confirmText: 'Switch',
+      });
+      if (!ok) return;
+    }
     if (dataSource === 'pubmed') {
       stopPubmedPolling();
       if (pubmedJobId) fetch(`${API_BASE}/api/pubmed/import/cancel/${pubmedJobId}`, { method: 'POST' }).catch(() => {});
