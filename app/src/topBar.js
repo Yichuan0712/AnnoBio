@@ -4,6 +4,7 @@
 
 import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 import { openSettingsModal } from './settingsModal.js';
+import { openPythonSettingsModal } from './pythonSettingsModal.js';
 import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaximize.js';
 
 /**
@@ -78,9 +79,16 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
   runReviewDefaultsOpt.type = 'button';
   runReviewDefaultsOpt.className = 'menu-option';
   runReviewDefaultsOpt.setAttribute('data-action', 'model-settings');
-  runReviewDefaultsOpt.textContent = 'Model settings...';
+  runReviewDefaultsOpt.textContent = 'LLM settings...';
   runReviewDefaultsOpt.addEventListener('click', openSettingsModal);
   settingsDrop.appendChild(runReviewDefaultsOpt);
+  const pythonSettingsOpt = document.createElement('button');
+  pythonSettingsOpt.type = 'button';
+  pythonSettingsOpt.className = 'menu-option';
+  pythonSettingsOpt.setAttribute('data-action', 'python-settings');
+  pythonSettingsOpt.textContent = 'Python settings...';
+  pythonSettingsOpt.addEventListener('click', openPythonSettingsModal);
+  settingsDrop.appendChild(pythonSettingsOpt);
   const displayModeOpt = document.createElement('button');
   displayModeOpt.type = 'button';
   displayModeOpt.className = 'menu-option has-submenu';

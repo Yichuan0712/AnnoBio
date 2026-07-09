@@ -306,6 +306,19 @@ ipcMain.handle('dialog:show-save', async (_e, opts) => {
   return canceled ? null : filePath;
 });
 
+// Process node settings: let the user browse to a Python interpreter (system install or a venv).
+ipcMain.handle('dialog:pick-python', async () => {
+  const filters = process.platform === 'win32'
+    ? [{ name: 'Python interpreter', extensions: ['exe'] }, { name: 'All files', extensions: ['*'] }]
+    : [{ name: 'All files', extensions: ['*'] }];
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Select Python interpreter',
+    filters,
+    properties: ['openFile'],
+  });
+  return canceled || !filePaths?.length ? null : filePaths[0];
+});
+
 ipcMain.handle('fs:write-file', async (_e, filePath, data, encoding) => {
   const enc = encoding === 'base64' ? 'base64' : 'utf8';
   const buf = enc === 'base64' ? Buffer.from(data, 'base64') : data;
