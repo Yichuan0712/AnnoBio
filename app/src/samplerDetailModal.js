@@ -42,7 +42,11 @@ export function openSamplerDetailModal({ node, hasSampledDatasets }) {
   const sampleSize = node?.dataset?.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
   const rowSpec = (node?.dataset?.samplerRowSpec ?? '').trim();
   const rowSpecItems = parseRowSpecToItems(rowSpec);
-  const readOnly = !!(typeof hasSampledDatasets === 'function' && hasSampledDatasets(nodeId));
+  // Only without-replacement needs to lock once a dataset has been created: its "remaining rows"
+  // bookkeeping breaks if the settings change afterward. With-replacement and specify-rows have no
+  // such shared state -- each pull is independent, so there's nothing to protect by locking them.
+  const readOnly = samplingType === 'without-replacement'
+    && !!(typeof hasSampledDatasets === 'function' && hasSampledDatasets(nodeId));
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-overlay--no-maximize';
