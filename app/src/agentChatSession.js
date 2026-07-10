@@ -27,6 +27,8 @@ const AGENT_SINGLE_EXECUTION_SKILLS = new Set([
   'create_synthetic_dataset_node',
   'create_and_run_review_node',
   'apply_review_suggestions',
+  'create_process_node',
+  'import_pubmed_dataset',
 ]);
 
 function throwIfAborted(signal) {
@@ -310,6 +312,8 @@ export function mountAgentChatSession({
   addPromptNode,
   addPromptVersion,
   addDatasetNode,
+  addProcessNode,
+  importPubmedDataset,
 }) {
   if (!overlay || !messagesEl || !inputEl || !sendButtonEl) {
     return {
@@ -553,6 +557,8 @@ function shouldPreventRepeatedExecution(skillName) {
             addSampledDatasetNode,
             addPromptNode,
             addDatasetNode,
+            addProcessNode,
+            importPubmedDataset,
             workflowSnapshot,
           },
         }) || ''
@@ -580,6 +586,8 @@ function shouldPreventRepeatedExecution(skillName) {
             addSampledDatasetNode,
             addPromptNode,
             addDatasetNode,
+            addProcessNode,
+            importPubmedDataset,
             workflowSnapshot,
           },
         }) || ''
@@ -622,6 +630,8 @@ function shouldPreventRepeatedExecution(skillName) {
           addPromptNode,
           addPromptVersion,
           addDatasetNode,
+          addProcessNode,
+          importPubmedDataset,
           workflowSnapshot,
         },
       });

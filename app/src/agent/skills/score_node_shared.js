@@ -16,6 +16,13 @@ function normalizeNodeId(value, label) {
   return normalized;
 }
 
+function normalizeActiveMatchMode(value) {
+  const normalized = toCleanString(value);
+  if (!normalized) return null;
+  if (normalized === 'rules' || normalized === 'code') return normalized;
+  throw new Error('active_match_mode must be "rules" or "code".');
+}
+
 function parseScoreMappingInput(value) {
   if (value == null || value === '') {
     throw new Error('Score mapping is required.');
@@ -122,13 +129,32 @@ export function buildScoreNodeSpec(args = {}, context = {}) {
   const name = toCleanString(args?.name) || 'Score';
   const left = Number.isFinite(Number(args?.left)) ? Number(args.left) : null;
   const top = Number.isFinite(Number(args?.top)) ? Number(args.top) : null;
-  const scoreMapping = parseScoreMappingInput(args?.score_mapping ?? args?.scoreMapping);
-  const mappingSummary = validateScoreMapping(scoreMapping, context);
+  const matchCode = toCleanString(args?.match_code || args?.matchCode) || null;
+
+  const hasMappingInput = (args?.score_mapping ?? args?.scoreMapping) != null && (args?.score_mapping ?? args?.scoreMapping) !== '';
+  let scoreMapping;
+  let mappingSummary;
+  if (hasMappingInput) {
+    scoreMapping = parseScoreMappingInput(args?.score_mapping ?? args?.scoreMapping);
+    mappingSummary = validateScoreMapping(scoreMapping, context);
+  } else {
+    scoreMapping = { v: 2, input: emptyScoreRuleGroup(), output: emptyScoreRuleGroup() };
+    mappingSummary = { ruleCount: 0, inputRuleCount: 0, outputRuleCount: 0 };
+  }
+
+  if (!matchCode && mappingSummary.ruleCount === 0) {
+    throw new Error('Provide either "score_mapping" with at least one rule, or "match_code" for a Match by code score node.');
+  }
+
+  const requestedActiveMatchMode = normalizeActiveMatchMode(args?.active_match_mode || args?.activeMatchMode);
+  const activeMatchMode = requestedActiveMatchMode || (matchCode ? 'code' : 'rules');
 
   return {
     runNodeId,
     groundTruthNodeId,
     scoreMapping,
+    matchCode,
+    activeMatchMode,
     ...(reviewCredentialId ? { reviewCredentialId } : {}),
     name,
     ...(left != null ? { left } : {}),
@@ -145,6 +171,8 @@ export function summarizeScoreNodeSpec(spec = {}) {
       spec?.groundTruthNodeId || spec?.ground_truth_node_id || spec?.scoreGroundTruthId || spec?.score_ground_truth_id
     ),
     reviewCredentialId: toCleanString(spec?.reviewCredentialId || spec?.review_credential_id),
+    activeMatchMode: spec?.activeMatchMode === 'code' ? 'code' : 'rules',
+    hasMatchCode: Boolean(spec?.matchCode),
     ruleCount: Number(spec?.ruleCount) || 0,
     inputRuleCount: Number(spec?.inputRuleCount) || 0,
     outputRuleCount: Number(spec?.outputRuleCount) || 0,

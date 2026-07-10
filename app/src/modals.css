@@ -3334,7 +3334,7 @@
   flex-wrap: nowrap;
   align-items: center;
   flex-shrink: 0;
-  padding: 10px 20px 12px;
+  padding: 10px 20px 6px;
   box-sizing: border-box;
   gap: 8px;
   background: var(--bg);
@@ -7902,13 +7902,22 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 
 /* Scrollable region between the tabs and the pinned Run button; holds whichever tab panel is visible.
-   No extra margin/padding here either -- .run-detail-main's own gap:12px already spaces it. */
+   .run-detail-main's gap:12px is pulled up a bit here so the tabs sit closer to their panel below
+   (matches Review's Issue analysis / Suggested changes spacing). */
 .process-detail-panels {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* margin-top: -0px; */
   overflow: hidden;
+}
+
+/* .process-editor-mid's padding-top:12px exists for when it sits directly under the "Code" label
+   with no tab bar in between (mirrors Score's .score-detail-rules-code-panel override below);
+   here the tab bar + .run-detail-main's gap already provide that separation, so it'd double up. */
+.process-detail-panel.process-editor-mid {
+  padding-top: 0;
 }
 
 .process-detail-panel[hidden] {

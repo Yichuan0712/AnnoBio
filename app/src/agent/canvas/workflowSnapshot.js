@@ -186,6 +186,7 @@ function getScorePreview(node) {
   const reviewResult = parseReviewResult(node?.reviewResult);
   const ruleCount = countRules(scoreMapping);
   const comparisonRows = safeArray(reviewResult?.comparison_rows);
+  const matchResult = parseJsonObject(node?.scoreMatchResult, null);
   return {
     scoreGroundTruthId: normalizeNodeId(node?.scoreGroundTruthId),
     reviewCredentialId: normalizeNodeId(node?.reviewCredentialId),
@@ -194,6 +195,21 @@ function getScorePreview(node) {
     reviewSuggestionCount: safeArray(reviewResult?.suggestions).length,
     metrics: buildScoreMetricsFromComparisonRows(comparisonRows),
     comparisonRowCount: comparisonRows.length,
+    activeMatchMode: node?.scoreActiveMatchMode === 'code' ? 'code' : 'rules',
+    hasMatchCode: Boolean(String(node?.scoreMatchCode || '').trim()),
+    matchResultRowCount: matchResult ? safeArray(matchResult?.outcomes).length : 0,
+  };
+}
+
+function getProcessPreview(node) {
+  const rowResults = parseJsonObject(node?.results, {});
+  const dfResults = parseJsonObject(node?.dfResults, {});
+  return {
+    hasRowCode: Boolean(String(node?.code || '').trim()),
+    hasDfCode: Boolean(String(node?.dfCode || '').trim()),
+    activeMode: node?.activeMode === 'df' ? 'df' : 'row',
+    rowResultCount: safeArray(rowResults?.rows).length,
+    dfResultCount: safeArray(dfResults?.rows).length,
   };
 }
 
@@ -357,6 +373,33 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
     };
   }
 
+  if (type === 'process') {
+    const preview = getProcessPreview(rawNode);
+    const nodeOrigin = String(rawNode?.nodeOrigin || '').trim() || 'user';
+    return {
+      id,
+      type,
+      title: String(rawNode?.name || 'Process'),
+      position,
+      upstream,
+      downstream,
+      nodeOrigin,
+      config: {
+        activeMode: preview.activeMode,
+      },
+      status: {
+        hasRowCode: preview.hasRowCode,
+        hasDfCode: preview.hasDfCode,
+        hasRowResults: preview.rowResultCount > 0,
+        hasDfResults: preview.dfResultCount > 0,
+      },
+      preview: {
+        rowResultCount: preview.rowResultCount,
+        dfResultCount: preview.dfResultCount,
+      },
+    };
+  }
+
   if (type === 'run') {
     const preview = getRunPreview(rawNode);
     const color = resolveLinkedDatasetColor(rawNodeById, preview.runWorkingSetId);
@@ -408,10 +451,13 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
           rawNode?.scoreRowExcludedFromScoring && typeof rawNode.scoreRowExcludedFromScoring === 'object'
             ? rawNode.scoreRowExcludedFromScoring
             : undefined,
+        activeMatchMode: preview.activeMatchMode,
       },
       status: {
         hasGroundTruth: Boolean(preview.scoreGroundTruthId),
         hasScoreMapping: preview.ruleCount > 0,
+        hasMatchCode: preview.hasMatchCode,
+        hasMatchCodeResult: preview.matchResultRowCount > 0,
         hasReviewResult: preview.reviewSuggestionCount > 0,
         hasMetrics: preview.metrics !== null,
       },
@@ -420,6 +466,7 @@ function buildNodeSnapshot(rawNode, adjacency, options, rawNodeById) {
         reviewSuggestionCount: preview.reviewSuggestionCount,
         metrics: preview.metrics,
         comparisonRowCount: preview.comparisonRowCount,
+        matchResultRowCount: preview.matchResultRowCount,
       },
     };
   }
@@ -600,7 +647,13 @@ function buildSummary(nodes, connections, layoutExtras = {}) {
 
   const reviewableScoreNodeIds = safeArray(nodes)
     .filter((node) => node?.type === 'score')
-    .filter((node) => Boolean(normalizeNodeId(node?.config?.scoreGroundTruthId)) && node?.preview?.ruleCount > 0)
+    .filter((node) => {
+      if (!normalizeNodeId(node?.config?.scoreGroundTruthId)) return false;
+      // "Match by code" has no rule tree; a completed code-match run is its own readiness signal.
+      return node?.config?.activeMatchMode === 'code'
+        ? node?.status?.hasMatchCodeResult === true
+        : node?.preview?.ruleCount > 0;
+    })
     .map((node) => node.id);
 
   return {
