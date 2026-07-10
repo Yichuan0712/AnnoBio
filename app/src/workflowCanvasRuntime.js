@@ -40,6 +40,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     createScoreNode,
     createDatasetNode,
     createSamplerNode,
+    createProcessNode,
     createPromptReviewNode,
     updateContentSize,
     updateEdges,
@@ -947,6 +948,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     runNodeId = '',
     groundTruthNodeId = '',
     scoreMapping = null,
+    matchCode = null,
+    activeMatchMode = null,
     reviewCredentialId = '',
     name = '',
     left,
@@ -975,9 +978,13 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const { inputRoot, outputRoot } = parseScoreMappingBundle(mappingRaw);
     const rules = [...flattenScoreRules(inputRoot), ...flattenScoreRules(outputRoot)];
     const hasRules = rules.some((rule) => (rule.outputKey || '').trim() && Array.isArray(rule.gtColumns) && rule.gtColumns.some((column) => String(column || '').trim()));
-    if (!hasRules) {
-      throw new Error('Score mapping must include at least one rule.');
+    const normalizedMatchCode = matchCode != null ? String(matchCode).trim() : '';
+    if (!hasRules && !normalizedMatchCode) {
+      throw new Error('Score mapping must include at least one rule, or provide match code for a Match by code score node.');
     }
+    const resolvedActiveMatchMode = (activeMatchMode === 'rules' || activeMatchMode === 'code')
+      ? activeMatchMode
+      : (normalizedMatchCode ? 'code' : 'rules');
 
     const requestedName = (name || '').trim() || 'Score';
     const resolvedLeft = typeof left === 'number'
@@ -993,6 +1000,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (scoreNode?.dataset) {
       scoreNode.dataset.scoreGroundTruthId = normalizedGroundTruthNodeId;
       scoreNode.dataset.scoreMapping = serializeScoreMappingBundle(inputRoot, outputRoot);
+      if (normalizedMatchCode) {
+        scoreNode.dataset.scoreMatchCode = normalizedMatchCode;
+      }
+      if (resolvedActiveMatchMode === 'code') {
+        scoreNode.dataset.scoreActiveMatchMode = 'code';
+      }
       if (reviewCredentialId) {
         scoreNode.dataset.reviewCredentialId = String(reviewCredentialId).trim();
       } else {
@@ -1024,6 +1037,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       reviewCredentialId: String(scoreNode?.dataset?.reviewCredentialId || '').trim(),
       scoreMapping: JSON.parse(serializeScoreMappingBundle(inputRoot, outputRoot)),
       ruleCount: rules.length,
+      matchCode: normalizedMatchCode || null,
+      activeMatchMode: scoreNode?.dataset?.scoreActiveMatchMode === 'code' ? 'code' : 'rules',
       position: {
         left: Number.parseFloat(scoreNode?.style?.left || '') || 0,
         top: Number.parseFloat(scoreNode?.style?.top || '') || 0,
@@ -1144,23 +1159,60 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
     if (edits.length === 0) {
       throw buildEditError(
-        `update_score_node requires at least one edit op (add_rule | remove_rule | modify_rule).`,
+        `update_score_node requires at least one edit op (add_rule | remove_rule | modify_rule | set_match_code | set_match_mode).`,
         { reason: 'edits_empty' },
       );
     }
+
+    const matchCodeOps = edits.filter((edit) => edit && (edit.op === 'set_match_code' || edit.op === 'set_match_mode'));
+    const ruleEdits = edits.filter((edit) => !(edit && (edit.op === 'set_match_code' || edit.op === 'set_match_mode')));
 
     const mappingRaw = String(scoreNode.dataset.scoreMapping || '');
     const { inputRoot: beforeInputRoot, outputRoot: beforeOutputRoot } = parseScoreMappingBundle(mappingRaw);
 
     const editResult = applyScoreMappingEdits(
       { inputRoot: beforeInputRoot, outputRoot: beforeOutputRoot },
-      edits,
+      ruleEdits,
     );
     const { inputRoot: nextInputRoot, outputRoot: nextOutputRoot } = editResult.state;
     const editWarnings = Array.isArray(editResult.warnings) ? editResult.warnings.slice() : [];
 
-    const { runInputHeaders, groundTruthHeaders } = getScoreUpstreamHeaders(scoreNode);
-    validateMappingAgainstHeaders(nextInputRoot, nextOutputRoot, runInputHeaders, groundTruthHeaders);
+    if (ruleEdits.length > 0) {
+      const { runInputHeaders, groundTruthHeaders } = getScoreUpstreamHeaders(scoreNode);
+      validateMappingAgainstHeaders(nextInputRoot, nextOutputRoot, runInputHeaders, groundTruthHeaders);
+    }
+
+    let nextActiveMatchMode = scoreNode.dataset.scoreActiveMatchMode === 'code' ? 'code' : 'rules';
+    let nextMatchCode = String(scoreNode.dataset.scoreMatchCode || '');
+    let matchCodeChanged = false;
+    for (const op of matchCodeOps) {
+      if (op.op === 'set_match_code') {
+        const code = String(op?.code ?? '').trim();
+        if (!code) {
+          throw buildEditError(
+            `set_match_code requires a non-empty "code" string.`,
+            { reason: 'empty_match_code' },
+          );
+        }
+        nextMatchCode = code;
+        nextActiveMatchMode = 'code';
+        matchCodeChanged = true;
+      } else if (op.op === 'set_match_mode') {
+        const mode = String(op?.mode ?? '').trim();
+        if (mode !== 'rules' && mode !== 'code') {
+          throw buildEditError(
+            `set_match_mode requires "mode" to be "rules" or "code".`,
+            { reason: 'invalid_match_mode' },
+          );
+        }
+        nextActiveMatchMode = mode;
+      } else {
+        throw buildEditError(
+          `Unknown op "${String(op?.op || 'unset')}". Supported match-mode ops: set_match_code, set_match_mode.`,
+          { reason: 'unknown_op' },
+        );
+      }
+    }
 
     const allRules = [...flattenScoreRules(nextInputRoot), ...flattenScoreRules(nextOutputRoot)];
     const hasNonEmptyRule = allRules.some((rule) => (
@@ -1168,14 +1220,20 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       && Array.isArray(rule?.gtColumns)
       && rule.gtColumns.some((column) => String(column || '').trim())
     ));
-    if (!hasNonEmptyRule) {
+    if (nextActiveMatchMode !== 'code' && !hasNonEmptyRule) {
       throw buildEditError(
-        `update_score_node refused: after edits the score mapping has no usable rules (every rule needs a non-empty outputKey and at least one gtColumn).`,
+        `update_score_node refused: the score mapping has no usable rules while active mode is "rules" (every rule needs a non-empty outputKey and at least one gtColumn). Add rules first, or switch active mode to "code" if match code is set.`,
         { reason: 'no_usable_rule' },
       );
     }
 
     scoreNode.dataset.scoreMapping = serializeScoreMappingBundle(nextInputRoot, nextOutputRoot);
+    if (matchCodeChanged) {
+      scoreNode.dataset.scoreMatchCode = nextMatchCode;
+    }
+    if (matchCodeOps.length > 0) {
+      scoreNode.dataset.scoreActiveMatchMode = nextActiveMatchMode;
+    }
 
     updateEdges();
     emitCanvasChanged();
@@ -1188,6 +1246,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       inputRuleCount: flattenScoreRules(nextInputRoot).length,
       outputRuleCount: flattenScoreRules(nextOutputRoot).length,
       scoreMapping: JSON.parse(serializeScoreMappingBundle(nextInputRoot, nextOutputRoot)),
+      activeMatchMode: nextActiveMatchMode,
+      matchCodeChanged,
       invalidated: {
         scoreComparisonRows: false,
         downstreamReviewNodeIds: [],
@@ -1406,11 +1466,23 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       }
     } catch (_) {}
 
-    const scoreMappingRaw = String(scoreNode.dataset.scoreMapping || '').trim();
-    const { inputRoot, outputRoot } = parseScoreMappingBundle(scoreMappingRaw || '{}');
-    const ruleCount = [...flattenScoreRules(inputRoot), ...flattenScoreRules(outputRoot)].length;
-    if (ruleCount <= 0) {
-      throw new Error('Score node must include at least one scoring rule.');
+    const isCodeMatchMode = (scoreNode.dataset.scoreActiveMatchMode || 'rules') === 'code';
+    if (isCodeMatchMode) {
+      let hasMatchCodeResult = false;
+      try {
+        const parsed = JSON.parse(scoreNode.dataset.scoreMatchResult || 'null');
+        hasMatchCodeResult = Boolean(parsed && Array.isArray(parsed.outcomes) && parsed.outcomes.length > 0);
+      } catch (_) {}
+      if (!hasMatchCodeResult) {
+        throw new Error('Score node uses Match by code but has no completed code-match run yet; run it from the score detail UI first.');
+      }
+    } else {
+      const scoreMappingRaw = String(scoreNode.dataset.scoreMapping || '').trim();
+      const { inputRoot, outputRoot } = parseScoreMappingBundle(scoreMappingRaw || '{}');
+      const ruleCount = [...flattenScoreRules(inputRoot), ...flattenScoreRules(outputRoot)].length;
+      if (ruleCount <= 0) {
+        throw new Error('Score node must include at least one scoring rule.');
+      }
     }
 
     const groundTruthNodeId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
@@ -2014,6 +2086,165 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     };
   }
 
+  function addProcessNode({
+    sourceNodeId = '',
+    name = '',
+    code = null,
+    dfCode = null,
+    activeMode = null,
+    left,
+    top,
+  } = {}) {
+    const normalizedSourceNodeId = String(sourceNodeId || '').trim();
+    if (!normalizedSourceNodeId) {
+      throw new Error('Process source dataset node id is required.');
+    }
+    const sourceNode = getNodeById(normalizedSourceNodeId);
+    if (!sourceNode || !sourceNode.classList.contains('workflow-node--dataset')) {
+      throw new Error('Process source dataset node was not found.');
+    }
+
+    const finalName = String(name || '').trim() || 'Process';
+    const resolvedLeft = typeof left === 'number'
+      ? left
+      : (parseFloat(sourceNode.style.left) || 0) + (sourceNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+    const resolvedTop = typeof top === 'number' ? top : (parseFloat(sourceNode.style.top) || 0);
+    const normalizedCode = code != null ? String(code) : null;
+    const normalizedDfCode = dfCode != null ? String(dfCode) : null;
+    const resolvedActiveMode = (activeMode === 'df' || activeMode === 'row')
+      ? activeMode
+      : (normalizedDfCode && !normalizedCode ? 'df' : 'row');
+
+    const node = createProcessNode({
+      left: resolvedLeft,
+      top: resolvedTop,
+      title: finalName,
+      code: normalizedCode,
+      dfCode: normalizedDfCode,
+      activeMode: resolvedActiveMode,
+    });
+    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
+    if (node?.dataset?.nodeId) {
+      getConnectionsList().push({
+        fromId: normalizedSourceNodeId,
+        toId: node.dataset.nodeId,
+        type: 'dataset-to-process',
+      });
+      updateEdges();
+    }
+    updateContentSize();
+    emitCanvasChanged();
+    return {
+      created: true,
+      nodeId: String(node?.dataset?.nodeId || '').trim(),
+      sourceNodeId: normalizedSourceNodeId,
+      name: String(node?.dataset?.processName || finalName).trim() || finalName,
+      activeMode: node?.dataset?.processActiveMode || resolvedActiveMode,
+      hasRowCode: Boolean(normalizedCode),
+      hasDfCode: Boolean(normalizedDfCode),
+      position: {
+        left: Number.parseFloat(node?.style?.left || '') || 0,
+        top: Number.parseFloat(node?.style?.top || '') || 0,
+      },
+    };
+  }
+
+  const PUBMED_IMPORT_POLL_INTERVAL_MS = 1200;
+  const PUBMED_IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
+
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function importPubmedDataset({
+    pmids = [],
+    fields = [],
+    name = '',
+    notes = '',
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedIds = (Array.isArray(pmids) ? pmids : [])
+      .map((id) => String(id == null ? '' : id).trim())
+      .filter(Boolean);
+    if (normalizedIds.length === 0) {
+      throw new Error('At least one PubMed id is required.');
+    }
+    const normalizedFields = (Array.isArray(fields) ? fields : [])
+      .map((field) => String(field == null ? '' : field).trim())
+      .filter(Boolean);
+    if (normalizedFields.length === 0) {
+      throw new Error('At least one PubMed field is required.');
+    }
+
+    const startResponse = await fetch(`${RUN_API_BASE}/api/pubmed/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: normalizedIds, fields: normalizedFields }),
+    });
+    const startData = await startResponse.json().catch(() => ({}));
+    if (!startResponse.ok) {
+      throw new Error(String(startData?.detail || startResponse.statusText || 'Failed to start PubMed import.'));
+    }
+    const jobId = String(startData?.job_id || '').trim();
+    if (!jobId) {
+      throw new Error('PubMed import started but no job id was returned by the backend.');
+    }
+
+    const startedAt = Date.now();
+    let result = null;
+    while (true) {
+      if (Date.now() - startedAt > PUBMED_IMPORT_MAX_WAIT_MS) {
+        throw new Error('PubMed import timed out.');
+      }
+      const pollResponse = await fetch(`${RUN_API_BASE}/api/pubmed/import/result/${jobId}`);
+      const pollData = await pollResponse.json().catch(() => ({}));
+      if (!pollResponse.ok && pollResponse.status !== 202) {
+        throw new Error(String(pollData?.detail || pollResponse.statusText || 'Failed to fetch PubMed import result.'));
+      }
+      if (pollData?.status === 'running') {
+        await delay(PUBMED_IMPORT_POLL_INTERVAL_MS);
+        continue;
+      }
+      result = pollData;
+      break;
+    }
+
+    if (result?.error) {
+      throw new Error(String(result.error));
+    }
+
+    const headers = Array.isArray(result?.headers) ? result.headers : [];
+    const rows = Array.isArray(result?.rows) ? result.rows : [];
+    const notFound = Array.isArray(result?.not_found) ? result.not_found : [];
+    if (rows.length === 0) {
+      throw new Error(notFound.length > 0
+        ? `None of the ${notFound.length} PMID${notFound.length === 1 ? '' : 's'} were found on PubMed.`
+        : 'PubMed import returned no rows.');
+    }
+
+    const finalName = String(name || '').trim() || 'PubMed Import';
+    const finalNotes = String(notes || '').trim() || `Imported ${rows.length} article${rows.length === 1 ? '' : 's'} from PubMed.`;
+    const created = addDatasetNode({
+      name: finalName,
+      notes: finalNotes,
+      headers,
+      rows,
+      left,
+      top,
+      ensureUniqueName,
+      agentCreated: true,
+    });
+
+    return {
+      ...created,
+      requestedIds: normalizedIds,
+      notFoundIds: notFound,
+      wasCancelled: result?.status === 'cancelled',
+    };
+  }
+
   return {
     addPromptNode,
     addPromptVersion,
@@ -2032,5 +2263,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     addDatasetNode,
     addSamplerNode,
     addSampledDatasetNode,
+    addProcessNode,
+    importPubmedDataset,
   };
 }
