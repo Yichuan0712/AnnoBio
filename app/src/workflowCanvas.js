@@ -2612,6 +2612,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     addDatasetNode,
     addSamplerNode,
     addSampledDatasetNode,
+    addProcessNode,
+    importPubmedDataset,
   } = createWorkflowCanvasRuntime({
     extractInputFieldsFromSections,
     deriveOutputFields,
@@ -2639,6 +2641,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     createScoreNode,
     createDatasetNode,
     createSamplerNode,
+    createProcessNode,
     createPromptReviewNode,
     updateContentSize,
     updateEdges,
@@ -2706,6 +2709,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       addPromptNode,
       addPromptVersion,
       addDatasetNode,
+      addProcessNode,
+      importPubmedDataset,
       onOpen: () => setAgentWindowVisible(false),
       onClose: () => setAgentWindowVisible(true),
     });
@@ -4166,6 +4171,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (node.dataset.scoreOutputBracketCollapsed === '1') out.scoreOutputBracketCollapsed = true;
         if (node.dataset.scoreGtBracketCollapsed === '1') out.scoreGtBracketCollapsed = true;
         if (node.dataset.scoreTableRulesColumnFilter === '1') out.scoreTableRulesColumnFilter = true;
+        if ((node.dataset.scoreMatchCode || '').trim()) out.scoreMatchCode = node.dataset.scoreMatchCode;
+        if (node.dataset.scoreActiveMatchMode === 'code') out.scoreActiveMatchMode = 'code';
+        if ((node.dataset.scoreMatchResult || '').trim()) out.scoreMatchResult = node.dataset.scoreMatchResult;
         return out;
       }
       if (node.classList.contains('workflow-node--prompt-review')) {
@@ -4348,6 +4356,13 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.scoreOutputBracketCollapsed === true) scoreNode.dataset.scoreOutputBracketCollapsed = '1';
         if (n.scoreGtBracketCollapsed === true) scoreNode.dataset.scoreGtBracketCollapsed = '1';
         if (n.scoreTableRulesColumnFilter === true) scoreNode.dataset.scoreTableRulesColumnFilter = '1';
+        if (n.scoreMatchCode && typeof n.scoreMatchCode === 'string') {
+          scoreNode.dataset.scoreMatchCode = n.scoreMatchCode;
+        }
+        if (n.scoreActiveMatchMode === 'code') scoreNode.dataset.scoreActiveMatchMode = 'code';
+        if (n.scoreMatchResult && typeof n.scoreMatchResult === 'string') {
+          scoreNode.dataset.scoreMatchResult = n.scoreMatchResult;
+        }
         createdNodes.push(scoreNode);
       } else if (n.type === 'promptReview') {
         const promptReviewNode = createPromptReviewNode({
@@ -4549,6 +4564,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     addSampledDatasetNode,
     addPromptNode,
     addDatasetNode,
+    addProcessNode,
+    importPubmedDataset,
     loadCanvasState,
     setOnCanvasChange,
     setAgentWindowVisible,

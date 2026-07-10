@@ -85,7 +85,12 @@ export function buildReviewNodeSpec(args = {}, context = {}) {
   }
 
   const scoreRuleCount = Number(context?.scoreRuleCount) || 0;
-  if (scoreRuleCount <= 0) {
+  const scoreActiveMatchMode = context?.scoreActiveMatchMode === 'code' ? 'code' : 'rules';
+  if (scoreActiveMatchMode === 'code') {
+    if (!context?.scoreHasMatchCodeResult) {
+      throw new Error('Score node uses Match by code but has no completed code-match run yet; run it from the score detail UI first.');
+    }
+  } else if (scoreRuleCount <= 0) {
     throw new Error('Score node must include at least one scoring rule.');
   }
 
@@ -131,6 +136,8 @@ export function buildReviewNodeContext(workflowSnapshot, scoreNodeId) {
   const { scoreNode, runNode, promptNode } = getReviewSourceChainFromSnapshot(workflowSnapshot, scoreNodeId);
   const promptSections = Array.isArray(promptNode?.config?.sections) ? promptNode.config.sections : [];
   const scoreRuleCount = countScoreRules(scoreNode?.config?.scoreMapping);
+  const scoreActiveMatchMode = scoreNode?.config?.activeMatchMode === 'code' ? 'code' : 'rules';
+  const scoreHasMatchCodeResult = scoreNode?.status?.hasMatchCodeResult === true;
   const existingReviewNodeId = Array.isArray(scoreNode?.downstream)
     ? scoreNode.downstream
       .map((nodeId) => toCleanString(nodeId))
@@ -153,6 +160,8 @@ export function buildReviewNodeContext(workflowSnapshot, scoreNodeId) {
     promptSectionCount: promptSections.length,
     runResultsCount: Number(runNode?.status?.resultsCount) || 0,
     scoreRuleCount,
+    scoreActiveMatchMode,
+    scoreHasMatchCodeResult,
     existingReviewCount,
     existingReviewNodeId,
     reviewCredentialId: toCleanString(scoreNode?.config?.reviewCredentialId),

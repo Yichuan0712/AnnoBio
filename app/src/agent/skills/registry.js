@@ -21,6 +21,8 @@ import { designSyntheticDatasetSkill } from './design_synthetic_dataset/execute.
 import { designPromptNodeSkill } from './design_prompt_node/execute.js';
 import { designRunNodeSkill } from './design_run_node/execute.js';
 import { inspectNodeSkill } from './inspect_node/execute.js';
+import { createProcessNodeSkill } from './create_process_node/execute.js';
+import { importPubmedDatasetSkill } from './import_pubmed_dataset/execute.js';
 
 export const AGENT_SKILLS = Object.freeze([
   designSamplerNodeSkill,
@@ -46,6 +48,8 @@ export const AGENT_SKILLS = Object.freeze([
   saveRunResultsToWorkspaceSkill,
   saveScoreResultsToWorkspaceSkill,
   inspectNodeSkill,
+  createProcessNodeSkill,
+  importPubmedDatasetSkill,
 ]);
 
 export const AGENT_SKILL_REGISTRY = Object.freeze(

@@ -171,6 +171,8 @@ export async function openAgentWindowModal(options = {}) {
   const updateScoreNode = typeof options?.updateScoreNode === 'function' ? options.updateScoreNode : null;
   const updateScoreRowSelection = typeof options?.updateScoreRowSelection === 'function' ? options.updateScoreRowSelection : null;
   const addDatasetNode = typeof options?.addDatasetNode === 'function' ? options.addDatasetNode : null;
+  const addProcessNode = typeof options?.addProcessNode === 'function' ? options.addProcessNode : null;
+  const importPubmedDataset = typeof options?.importPubmedDataset === 'function' ? options.importPubmedDataset : null;
   const storageApi = window.electronAPI;
   let storedState = { conversations: [], activeChatId: '' };
   if (projectPath && storageApi?.loadAgentConversations) {
@@ -475,6 +477,8 @@ export async function openAgentWindowModal(options = {}) {
     addPromptNode,
     addPromptVersion,
     addDatasetNode,
+    addProcessNode,
+    importPubmedDataset,
     onConversationDraftChanged: () => {
       saveConversations();
     },
