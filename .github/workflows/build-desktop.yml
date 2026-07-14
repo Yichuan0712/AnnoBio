@@ -46,6 +46,11 @@ jobs:
           Add-MpPreference -ExclusionPath $env:TEMP -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath $env:ELECTRON_BUILDER_CACHE -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\electron-builder\Cache" -ErrorAction SilentlyContinue
+          # None of the paths above cover the checked-out workspace, so npm-installed
+          # binaries like 7zip-bin's win/x64/7za.exe (used by the NSIS target itself,
+          # unlike the skippable elevate.exe) still get quarantined mid-build - exclude
+          # the whole workspace too.
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction SilentlyContinue
 
       - name: Install app dependencies
         working-directory: app
@@ -107,6 +112,21 @@ jobs:
       - name: Package app (electron-forge)
         working-directory: app
         run: npm run package
+
+      # `hdiutil create` has been failing with a bare "Exit code: 1" and no usable
+      # stderr (electron-builder passes -quiet) even after fixing the known
+      # title-with-spaces and duplicate-arch bugs. Capture disk space and scan for
+      # dangling symlinks in the packaged output (the bundled python-embed dir is a
+      # prime suspect) before the build, so a failure has diagnostics to act on.
+      - name: Diagnose packaged output before dmg build
+        working-directory: app
+        run: |
+          echo "--- df -h ---"
+          df -h
+          echo "--- du -sh out/app-darwin-${{ matrix.arch }} ---"
+          du -sh "out/app-darwin-${{ matrix.arch }}" || true
+          echo "--- dangling symlinks under out/app-darwin-${{ matrix.arch }} ---"
+          find "out/app-darwin-${{ matrix.arch }}" -type l ! -exec test -e {} \; -print || true
 
       - name: Build dmg (electron-builder)
         working-directory: app
