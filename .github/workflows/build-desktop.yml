@@ -17,18 +17,15 @@ env:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      # electron-builder's NSIS helper download/extraction (elevate.exe etc.) is flaky
+      # under the default C:\Users\...\AppData\Local\Temp path on GH-hosted Windows
+      # runners (ENOENT copying elevate.exe from cache) - relocating TEMP/TMP and the
+      # electron-builder cache onto the workspace drive avoids it.
+      TEMP: ${{ github.workspace }}\_temp
+      TMP: ${{ github.workspace }}\_temp
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}\_eb-cache
     steps:
-      # Windows Defender's real-time scanner sometimes quarantines/deletes executables
-      # dropped by npm installs or electron-builder's downloads (e.g. 7zip-bin's 7za.exe,
-      # NSIS helper binaries like elevate.exe), which then shows up as a confusing ENOENT
-      # mid-build. Exclude the whole workspace (covers node_modules) and the
-      # electron-builder cache before anything gets written to disk.
-      - name: Exclude workspace + electron-builder cache from Windows Defender
-        shell: pwsh
-        run: |
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
-          Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\electron-builder\Cache"
-
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -40,6 +37,15 @@ jobs:
       - name: Fetch embeddable Python for Windows + install backend deps
         shell: pwsh
         run: ./scripts/prepare-python-embed-windows.ps1 -PythonVersion $env:PYTHON_VERSION
+
+      - name: Prepare relocated temp/cache dirs + Defender exclusions
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:ELECTRON_BUILDER_CACHE | Out-Null
+          Add-MpPreference -ExclusionPath $env:TEMP -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath $env:ELECTRON_BUILDER_CACHE -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\electron-builder\Cache" -ErrorAction SilentlyContinue
 
       - name: Install app dependencies
         working-directory: app
