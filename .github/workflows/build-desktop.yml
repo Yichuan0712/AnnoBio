@@ -30,6 +30,13 @@ jobs:
         shell: pwsh
         run: ./scripts/prepare-python-embed-windows.ps1 -PythonVersion $env:PYTHON_VERSION
 
+      # Windows Defender's real-time scanner sometimes quarantines electron-builder's
+      # freshly-extracted NSIS helper binaries (e.g. elevate.exe) mid-build, which then
+      # shows up as a confusing ENOENT during packaging. Exclude the cache up front.
+      - name: Exclude electron-builder cache from Windows Defender
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\electron-builder\Cache"
+
       - name: Install app dependencies
         working-directory: app
         run: npm ci
@@ -72,8 +79,8 @@ jobs:
           echo "Downloading $url"
           curl -fL "$url" -o /tmp/cpython.tar.gz
           rm -rf backend/python-embed
-          tar -xzf /tmp/cpython.tar.gz -C backend
-          mv backend/python -- backend/python-embed
+          mkdir -p backend/python-embed
+          tar -xzf /tmp/cpython.tar.gz -C backend/python-embed --strip-components=1
           # Some install_only builds don't ship a plain `python` symlink; main.js expects one.
           if [ ! -e backend/python-embed/bin/python ]; then
             ln -sf python3 backend/python-embed/bin/python
