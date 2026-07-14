@@ -45,17 +45,13 @@ jobs:
           if-no-files-found: error
 
   build-mac:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            arch: arm64
-            pbs_target: aarch64-apple-darwin
-          - os: macos-13
-            arch: x64
-            pbs_target: x86_64-apple-darwin
+    # Apple Silicon only: GitHub retired the free Intel (x64) macOS runners (macos-13 is
+    # gone, macos-14 is deprecated); Intel now requires paid/large-labeled runners. Modern
+    # Macs are arm64, and arm64 can run x64 apps under Rosetta if ever needed, so building
+    # just arm64 keeps this simple instead of paying for an x64 runner.
+    runs-on: macos-15
+    env:
+      PBS_TARGET: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
 
@@ -65,10 +61,10 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
 
-      - name: Fetch relocatable CPython for macOS (${{ matrix.arch }})
+      - name: Fetch relocatable CPython for macOS (arm64)
         run: |
           set -euo pipefail
-          url="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE_TAG}/cpython-${PYTHON_VERSION}+${PBS_RELEASE_TAG}-${{ matrix.pbs_target }}-install_only.tar.gz"
+          url="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE_TAG}/cpython-${PYTHON_VERSION}+${PBS_RELEASE_TAG}-${PBS_TARGET}-install_only.tar.gz"
           echo "Downloading $url"
           curl -fL "$url" -o /tmp/cpython.tar.gz
           rm -rf backend/python-embed
@@ -93,11 +89,11 @@ jobs:
 
       - name: Build dmg (electron-builder)
         working-directory: app
-        run: npx electron-builder --mac --${{ matrix.arch }} --pd out/app-darwin-${{ matrix.arch }}
+        run: npx electron-builder --mac --arm64 --pd out/app-darwin-arm64
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mac-installer-${{ matrix.arch }}
+          name: mac-installer-arm64
           path: app/dist/*.dmg
           if-no-files-found: error
 
@@ -119,4 +115,3 @@ jobs:
           files: |
             artifacts/windows-installer/*.exe
             artifacts/mac-installer-arm64/*.dmg
-            artifacts/mac-installer-x64/*.dmg
