@@ -20,12 +20,24 @@ nsis:
   installerLanguages:
     - zh_CN
     - en_US
+  # Skip bundling elevate.exe (only needed by electron-updater for per-machine
+  # relaunch-as-admin, which this app doesn't use). Its download/copy step is
+  # flaky on GitHub Actions Windows runners (ENOENT copying elevate.exe) - not
+  # needed here since we don't set perMachine and don't ship electron-updater.
+  packElevateHelper: false
 mac:
+  # arch intentionally omitted: CI builds one arch per job (see
+  # .github/workflows/build-desktop.yml) and passes --x64/--arm64 on the CLI;
+  # listing both archs here made electron-builder try to build both from a
+  # single single-arch --pd folder every run.
   target:
     - target: dmg
-      arch:
-        - x64
-        - arm64
   category: public.app-category.developer-tools
   identity: null
   hardenedRuntime: false
+dmg:
+  # Default title (`${productName} ${version}`) contains spaces, which trips
+  # a known electron-builder/hdiutil bug on GitHub Actions macOS runners
+  # (hdiutil create exits 1 with no usable error - see electron-builder#9246).
+  title: PromptWorkflowDemo
+  format: UDZO
