@@ -18,6 +18,17 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
+      # Windows Defender's real-time scanner sometimes quarantines/deletes executables
+      # dropped by npm installs or electron-builder's downloads (e.g. 7zip-bin's 7za.exe,
+      # NSIS helper binaries like elevate.exe), which then shows up as a confusing ENOENT
+      # mid-build. Exclude the whole workspace (covers node_modules) and the
+      # electron-builder cache before anything gets written to disk.
+      - name: Exclude workspace + electron-builder cache from Windows Defender
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\electron-builder\Cache"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -29,13 +40,6 @@ jobs:
       - name: Fetch embeddable Python for Windows + install backend deps
         shell: pwsh
         run: ./scripts/prepare-python-embed-windows.ps1 -PythonVersion $env:PYTHON_VERSION
-
-      # Windows Defender's real-time scanner sometimes quarantines electron-builder's
-      # freshly-extracted NSIS helper binaries (e.g. elevate.exe) mid-build, which then
-      # shows up as a confusing ENOENT during packaging. Exclude the cache up front.
-      - name: Exclude electron-builder cache from Windows Defender
-        shell: pwsh
-        run: Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\electron-builder\Cache"
 
       - name: Install app dependencies
         working-directory: app

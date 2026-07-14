@@ -21,11 +21,12 @@ nsis:
     - zh_CN
     - en_US
 mac:
+  # arch intentionally omitted: the CI workflow builds one arch per job (via the
+  # electron-builder --x64 / --arm64 CLI flag) from a matching prepackaged directory.
+  # Declaring both archs here made electron-builder try to build both in every job,
+  # racing two concurrent `hdiutil create` calls against the same (wrong-arch) --pd dir.
   target:
     - target: dmg
-      arch:
-        - x64
-        - arm64
   category: public.app-category.developer-tools
   identity: null
   hardenedRuntime: false
