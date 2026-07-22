@@ -340,7 +340,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
     const samplerDesc = formatSamplerDescription(samplerNode);
     const notesTrimmed = (notes !== undefined && notes !== null) ? String(notes).trim() : '';
-    const bodyText = samplerDesc || notesTrimmed || '';
+    const bodyText = notesTrimmed || samplerDesc || '';
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--dataset';
     node.setAttribute('role', 'article');

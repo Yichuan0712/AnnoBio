@@ -3635,9 +3635,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       close();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     });
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
-    });
 
     nameInput?.addEventListener('input', clearError);
     noteInput?.addEventListener('input', clearError);
@@ -3734,14 +3731,11 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (node.getAttribute('aria-label') != null) node.setAttribute('aria-label', `Dataset node: ${name}`);
       const samplerNodeId = node.dataset.samplerNodeId;
       const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
-      const bodyText = formatSamplerDescription(samplerNode) || (notes || '').trim() || '';
+      const bodyText = (notes || '').trim() || formatSamplerDescription(samplerNode) || '';
       const bodyEl = node.querySelector('.workflow-node__dataset-desc');
       if (bodyEl) bodyEl.innerHTML = bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>';
       close();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    });
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
     });
 
     nameInput?.addEventListener('input', clearError);
@@ -4425,7 +4419,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
       const samplerDesc = formatSamplerDescription(samplerNode);
       const notesTrimmed = (dsNode.dataset.datasetNote || dsNode.dataset.subsetNote || '').trim();
-      const bodyText = samplerDesc || notesTrimmed || '';
+      const bodyText = notesTrimmed || samplerDesc || '';
       let bodyEl = dsNode.querySelector('.workflow-node__dataset-desc');
       if (!bodyEl) {
         bodyEl = document.createElement('div');
