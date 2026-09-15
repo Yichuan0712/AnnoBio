@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage, shell } from 'electron';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -233,7 +233,9 @@ function killProcessOnPort(port) {
       }
       for (const pid of pids) {
         try {
-          execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
+          // /T kills the whole process tree — uvicorn --reload spawns a child worker
+          // process that a plain /PID /F would otherwise leave orphaned on the port.
+          execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
         } catch (_) {}
       }
     } else {
@@ -300,7 +302,18 @@ function startPythonBackendInner() {
 
 function stopPythonBackend() {
   if (pyProc) {
-    pyProc.kill();
+    const pid = pyProc.pid;
+    // Plain .kill() only signals the uvicorn supervisor; with --reload it has a child
+    // worker process that would otherwise survive and keep holding BACKEND_PORT.
+    if (process.platform === 'win32' && pid) {
+      try {
+        execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+      } catch (_) {
+        pyProc.kill();
+      }
+    } else {
+      pyProc.kill();
+    }
     pyProc = null;
   }
 }
@@ -455,6 +468,11 @@ ipcMain.handle('fs:write-file', async (_e, filePath, data, encoding) => {
   const enc = encoding === 'base64' ? 'base64' : 'utf8';
   const buf = enc === 'base64' ? Buffer.from(data, 'base64') : data;
   await fs.writeFile(filePath, buf, enc === 'base64' ? undefined : enc);
+});
+
+ipcMain.handle('shell:open-external', (_e, url) => {
+  if (typeof url !== 'string' || !url.startsWith('https://openrouter.ai/')) return;
+  shell.openExternal(url);
 });
 
 ipcMain.handle('window:minimize', (event) => {
