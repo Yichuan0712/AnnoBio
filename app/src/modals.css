@@ -1445,9 +1445,9 @@
 }
 
 .credential-source-badge--litellm {
-  color: #2f7a3d;
-  border-color: #2f7a3d;
-  background: rgba(47, 122, 61, 0.1);
+  color: #3b6ea5;
+  border-color: #3b6ea5;
+  background: rgba(59, 110, 165, 0.1);
 }
 
 .credential-status-icon {
