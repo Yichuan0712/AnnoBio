@@ -1,4 +1,5 @@
 from pathlib import Path
+import concurrent.futures
 import json
 import os
 import re
@@ -102,6 +103,8 @@ DEFAULT_SETTINGS = {
     "run_max_tokens": 8192,
     "review_max_tokens": 32768,
     "run_max_retries": 2,
+    # Rows within a single Run job processed concurrently (1-10).
+    "run_concurrency": 4,
     # Cap: distinct worksheet inputs that have at least one unmatched Score comparison row (not raw row count).
     "review_max_failed_rows": 30,
     # Thompson-sampling trials per optimization run (4–200).
@@ -158,6 +161,7 @@ class SettingsPatch(BaseModel):
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
+    run_concurrency: int | None = Field(default=None, ge=1, le=10)
     review_max_failed_rows: int | None = Field(
         default=None,
         ge=1,
@@ -1018,6 +1022,7 @@ _run_jobs_by_node: dict[str, str] = {}
 _run_last_activity: dict[str, float] = {}  # run_id -> time.time(); updated on every poll or cancel
 _run_jobs_lock = threading.Lock()
 _run_cancelled: set[str] = set()  # run_ids client asked to cancel; worker checks each row
+_run_print_lock = threading.Lock()  # keeps one row's multi-line debug log block from interleaving with another's
 
 _review_jobs: dict[str, dict] = {}  # review_id -> { status, events, review_node_id, error? }
 _review_jobs_by_node: dict[str, str] = {}  # review_node_id -> review_id
@@ -1174,6 +1179,7 @@ def _do_run_work(
         results_by_input: dict[int, list[dict]] = {}
 
         run_max_retries = min(5, max(0, int(run_settings.get("run_max_retries", 0))))
+        run_concurrency = min(10, max(1, int(run_settings.get("run_concurrency", 4) or 4)))
 
         def process_one(row_index: int, prompt) -> tuple[int, list[dict]]:
             with _run_jobs_lock:
@@ -1188,17 +1194,17 @@ def _do_run_work(
                 items = []
                 err_msg = None
                 try:
-                    _safe_print("\n" + _HL + _SEP + _R)
-                    _safe_print(_HL + f"[Run] Row {row_index} PROMPT SENT TO LLM:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(prompt if isinstance(prompt, str) else json.dumps(prompt, ensure_ascii=False, indent=2, default=str))
+                    with _run_print_lock:
+                        _safe_print("\n" + _HL + _SEP + _R)
+                        _safe_print(_HL + f"[Run] Row {row_index} PROMPT SENT TO LLM:" + _R)
+                        _safe_print(_HL + _SEP + _R)
+                        _safe_print(prompt if isinstance(prompt, str) else json.dumps(prompt, ensure_ascii=False, indent=2, default=str))
                     if isinstance(prompt, dict):
                         if prompt.get("error"):
                             raise ValueError(prompt["error"])
                         model_prompt = resolve_content(prompt["content"], project_session_id)
                     else:
                         model_prompt = prompt
-                    _safe_print(_HL + _SEP + _R + "\n")
                     out, used_fallback, debug = llm_run_structured(
                         provider=provider,
                         model=model,
@@ -1210,27 +1216,28 @@ def _do_run_work(
                         return_shape=return_shape,
                         return_debug=True,
                     )
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(
-                        _HL
-                        + f"[Run] Row {row_index} LLM RAW OUTPUT"
-                        + (f" ({debug.get('path')})" if isinstance(debug, dict) and debug.get("path") else "")
-                        + (", fallback" if used_fallback else "")
-                        + ":"
-                        + _R
-                    )
-                    _safe_print(_HL + _SEP + _R)
-                    if isinstance(debug, dict) and debug.get("raw_response") is not None:
-                        _safe_print(json.dumps(debug.get("raw_response"), ensure_ascii=False, indent=2, default=str))
-                    elif isinstance(debug, dict) and debug.get("raw_text"):
-                        _safe_print(str(debug.get("raw_text")))
-                    else:
-                        _safe_print("(raw output unavailable)")
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(_HL + f"[Run] Row {row_index} LLM PARSED OUTPUT:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
-                    _safe_print(_HL + _SEP + _R + "\n")
+                    with _run_print_lock:
+                        _safe_print(_HL + _SEP + _R)
+                        _safe_print(
+                            _HL
+                            + f"[Run] Row {row_index} LLM RAW OUTPUT"
+                            + (f" ({debug.get('path')})" if isinstance(debug, dict) and debug.get("path") else "")
+                            + (", fallback" if used_fallback else "")
+                            + ":"
+                            + _R
+                        )
+                        _safe_print(_HL + _SEP + _R)
+                        if isinstance(debug, dict) and debug.get("raw_response") is not None:
+                            _safe_print(json.dumps(debug.get("raw_response"), ensure_ascii=False, indent=2, default=str))
+                        elif isinstance(debug, dict) and debug.get("raw_text"):
+                            _safe_print(str(debug.get("raw_text")))
+                        else:
+                            _safe_print("(raw output unavailable)")
+                        _safe_print(_HL + _SEP + _R)
+                        _safe_print(_HL + f"[Run] Row {row_index} LLM PARSED OUTPUT:" + _R)
+                        _safe_print(_HL + _SEP + _R)
+                        _safe_print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+                        _safe_print(_HL + _SEP + _R + "\n")
                     if return_shape == "table" and isinstance(out, dict) and "rows" in out:
                         out = out["rows"]
                     if _run_structured_output_is_empty(out, return_shape, output_fields):
@@ -1239,6 +1246,7 @@ def _do_run_work(
                             _safe_print(
                                 _HL + f"[Run] Row {row_index} empty output, retry {attempt + 1}/{run_max_retries}" + _R + "\n"
                             )
+                            time.sleep(min(2 ** attempt, 8))
                             continue
                         items = []
                         items.append({"input_row_index": row_index, "output": None, "error": err_msg})
@@ -1253,6 +1261,7 @@ def _do_run_work(
                     err_msg = str(e)
                 if attempt < run_max_retries:
                     _safe_print(_HL + f"[Run] Row {row_index} error, retry {attempt + 1}/{run_max_retries}: {err_msg}" + _R + "\n")
+                    time.sleep(min(2 ** attempt, 8))
                 else:
                     items.append({"input_row_index": row_index, "output": None, "error": err_msg or "Error"})
             return (row_index, items)
@@ -1289,12 +1298,17 @@ def _do_run_work(
                 _run_jobs[run_id]["completed"] = completed
             _persist_run_jobs()
 
-        # One LLM in-flight per run job (rows processed in order). Separate run jobs (e.g. different nodes) may still run at once.
-        for i, prompt in enumerate(prompts):
-            row_index, items = process_one(i, prompt)
-            _row_done_write_progress(row_index, items)
-            if cancelled_early:
-                break
+        # Up to run_concurrency rows in flight per run job. Separate run jobs (e.g. different nodes) may still run at once.
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=run_concurrency)
+        try:
+            futures = [executor.submit(process_one, i, prompt) for i, prompt in enumerate(prompts)]
+            for fut in concurrent.futures.as_completed(futures):
+                row_index, items = fut.result()
+                _row_done_write_progress(row_index, items)
+                if cancelled_early:
+                    break
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
 
         with _run_jobs_lock:
             if run_id in _run_cancelled:

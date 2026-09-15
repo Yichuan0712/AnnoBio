@@ -25,6 +25,8 @@ const MODEL_SETTINGS_DEFAULTS = {
   run_max_tokens: 8192,
   review_max_tokens: 32768,
   run_max_retries: 2,
+  /** Rows within a single Run job processed concurrently (1-10). */
+  run_concurrency: 4,
   /** Distinct inputs with ≥1 unmatched comparison row; Phase 1 analyzes at most this many. */
   review_max_failed_rows: 30,
   /** Thompson-sampling trials per compositional optimization run (4–200). */
@@ -770,6 +772,10 @@ export function openSettingsModal() {
                               <label class="dataset-meta-label" for="settings-run-max-retries">Max retries on error (0–5)</label>
                               <input type="number" id="settings-run-max-retries" class="dataset-meta-input" min="0" max="5" value="2" aria-label="Run max retries" />
                             </div>
+                            <div class="defaults-field">
+                              <label class="dataset-meta-label" for="settings-run-concurrency">Concurrency (1–10)</label>
+                              <input type="number" id="settings-run-concurrency" class="dataset-meta-input" min="1" max="10" value="4" aria-label="Run concurrency" />
+                            </div>
                           </div>
                       </div>
                     </div>
@@ -826,6 +832,7 @@ export function openSettingsModal() {
   const reviewMaxTokensInp = overlay.querySelector('#settings-review-max-tokens');
   const reviewMaxFailedRowsInp = overlay.querySelector('#settings-review-max-failed-rows');
   const runMaxRetriesInp = overlay.querySelector('#settings-run-max-retries');
+  const runConcurrencyInp = overlay.querySelector('#settings-run-concurrency');
   const optimizationMaxTrialsInp = overlay.querySelector('#settings-optimization-max-trials');
   const debugModeChk = overlay.querySelector('#settings-debug-mode');
   const tabBar = overlay.querySelector('.model-settings-view-switch');
@@ -892,6 +899,7 @@ export function openSettingsModal() {
     reviewMaxTokensInp.value = String(settings.review_max_tokens ?? MODEL_SETTINGS_DEFAULTS.review_max_tokens);
     reviewMaxFailedRowsInp.value = String(settings.review_max_failed_rows ?? MODEL_SETTINGS_DEFAULTS.review_max_failed_rows);
     runMaxRetriesInp.value = String(settings.run_max_retries ?? MODEL_SETTINGS_DEFAULTS.run_max_retries);
+    runConcurrencyInp.value = String(settings.run_concurrency ?? MODEL_SETTINGS_DEFAULTS.run_concurrency);
     optimizationMaxTrialsInp.value = String(settings.optimization_max_trials ?? MODEL_SETTINGS_DEFAULTS.optimization_max_trials);
     debugModeChk.checked = settings.debug_mode ?? MODEL_SETTINGS_DEFAULTS.debug_mode;
   }
@@ -935,6 +943,11 @@ export function openSettingsModal() {
       5,
       Math.max(0, Number.isNaN(runMaxRetriesParsed) ? MODEL_SETTINGS_DEFAULTS.run_max_retries : runMaxRetriesParsed),
     );
+    const runConcurrencyParsed = parseInt(runConcurrencyInp.value, 10);
+    const runConcurrency = Math.min(
+      10,
+      Math.max(1, Number.isNaN(runConcurrencyParsed) ? MODEL_SETTINGS_DEFAULTS.run_concurrency : runConcurrencyParsed),
+    );
     const optimizationMaxTrialsParsed = parseInt(optimizationMaxTrialsInp.value, 10);
     const optimizationMaxTrials = Math.min(200, Math.max(4, Number.isNaN(optimizationMaxTrialsParsed) ? MODEL_SETTINGS_DEFAULTS.optimization_max_trials : optimizationMaxTrialsParsed));
     return {
@@ -944,6 +957,7 @@ export function openSettingsModal() {
       review_max_tokens: reviewMaxTokens,
       review_max_failed_rows: reviewMaxFailedRows,
       run_max_retries: runMaxRetries,
+      run_concurrency: runConcurrency,
       optimization_max_trials: optimizationMaxTrials,
       debug_mode: debugModeChk.checked,
     };
