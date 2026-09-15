@@ -94,18 +94,18 @@ function getInputsWithSentence(sectionsList) {
   });
 }
 
-function inputsToViewHtml(sectionsList, inputTypes = {}) {
+function inputsToViewHtml(sectionsList) {
   const rows = getInputsWithSentence(sectionsList);
   if (rows.length === 0) return '<p class="prompt-detail-placeholder">No inputs.</p>';
   const tbody = rows
     .map(
       (r) =>
-        `<tr data-input-name="${escapeAttr(r.key)}" data-section-names="${escapeAttr(JSON.stringify(r.sectionNames))}" data-sentences="${escapeAttr(JSON.stringify(r.sentences))}"><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell"><select class="prompt-input-type" aria-label="Type for ${escapeAttr(r.key)}"><option value="auto">Auto</option><option value="text" ${inputTypes[r.key] === 'text' ? 'selected' : ''}>Text</option><option value="image" ${inputTypes[r.key] === 'image' ? 'selected' : ''}>Image</option></select></td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences.join('\n'))}</td></tr>`
+        `<tr data-input-name="${escapeAttr(r.key)}" data-section-names="${escapeAttr(JSON.stringify(r.sectionNames))}" data-sentences="${escapeAttr(JSON.stringify(r.sentences))}"><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences.join('\n'))}</td></tr>`
     )
     .join('');
   return `<div class="prompt-detail-inputs-table-wrap">
   <table class="prompt-detail-inputs-table">
-    <thead><tr><th>Input</th><th>Type</th><th>Sentence</th></tr></thead>
+    <thead><tr><th>Input</th><th>Sentence</th></tr></thead>
     <tbody>${tbody}</tbody>
   </table>
 </div>`;
@@ -329,7 +329,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     } catch (_) {}
     try { inputTypes = JSON.parse(sourceNode.dataset.promptInputTypes || '{}'); } catch (_) {}
   }
-  const inputsViewHtml = inputsToViewHtml(sections, inputTypes);
+  const inputsViewHtml = inputsToViewHtml(sections);
   const schemaViewHtml = schemaToViewHtml(outputFormat.fields, outputFormat.returnShape);
 
   const overlay = document.createElement('div');
@@ -380,19 +380,6 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     `;
 
   const panel = overlay.querySelector('.modal-panel--prompt-detail');
-  function bindInputTypeControls() {
-    overlay.querySelectorAll('.prompt-input-type').forEach((select) => {
-      select.addEventListener('change', () => {
-        const key = select.closest('tr')?.dataset?.inputName;
-        if (!key) return;
-        if (select.value === 'auto') delete inputTypes[key];
-        else inputTypes[key] = select.value;
-        if (sourceNode) sourceNode.dataset.promptInputTypes = JSON.stringify(inputTypes);
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      });
-    });
-  }
-  bindInputTypeControls();
   const nameValueEl = overlay.querySelector('.prompt-detail-name-value');
   const notesValueEl = overlay.querySelector('.prompt-detail-notes-value');
   const nameInp = overlay.querySelector('#prompt-detail-name-inp');
@@ -628,8 +615,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
         const currentNames = new Set(extractInputFieldsFromSections(currentSections));
         Object.keys(inputTypes).forEach((key) => { if (!currentNames.has(key)) delete inputTypes[key]; });
         if (sourceNode) sourceNode.dataset.promptInputTypes = JSON.stringify(inputTypes);
-        inputsContentEl.innerHTML = inputsToViewHtml(currentSections, inputTypes);
-        bindInputTypeControls();
+        inputsContentEl.innerHTML = inputsToViewHtml(currentSections);
       }
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       return true;
