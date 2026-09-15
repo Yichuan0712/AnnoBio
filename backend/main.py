@@ -1191,7 +1191,7 @@ def _do_run_work(
                     _safe_print("\n" + _HL + _SEP + _R)
                     _safe_print(_HL + f"[Run] Row {row_index} PROMPT SENT TO LLM:" + _R)
                     _safe_print(_HL + _SEP + _R)
-                    _safe_print(prompt)
+                    _safe_print(prompt if isinstance(prompt, str) else json.dumps(prompt, ensure_ascii=False, indent=2, default=str))
                     if isinstance(prompt, dict):
                         if prompt.get("error"):
                             raise ValueError(prompt["error"])
