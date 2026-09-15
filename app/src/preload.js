@@ -1,6 +1,15 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  importImages: (paths) => ipcRenderer.invoke('assets:import', paths),
+  pickImageFiles: () => ipcRenderer.invoke('assets:pick-files'),
+  pickImageDirectory: () => ipcRenderer.invoke('assets:pick-directory'),
+  imagePreview: (id, thumbnail = true) => ipcRenderer.invoke('assets:preview', id, thumbnail),
+  prepareAssets: () => ipcRenderer.invoke('assets:prepare'),
+  resolveImageCandidates: (rows, baseDir) => ipcRenderer.invoke('assets:resolve-candidates', rows, baseDir),
+  resolveImagePaths: (rows) => ipcRenderer.invoke('assets:resolve-paths', rows),
+  exportImageDataset: (file, content) => ipcRenderer.invoke('assets:export-dataset', file, content),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   onSetTheme: (callback) => {
     ipcRenderer.on('set-theme', (_event, mode) => callback(mode));
   },

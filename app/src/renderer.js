@@ -65,7 +65,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const APP_TITLE = 'Prompt Studio';
   function updateWindowTitle(projectPath) {
     let name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
-    if (name && name.endsWith('.json')) name = name.slice(0, -5);
+    if (name && /\.(json|yc)$/i.test(name)) name = name.replace(/\.(json|yc)$/i, '');
     document.title = name ? `${name} - ${APP_TITLE}` : APP_TITLE;
     topBarAPI?.setProjectTitle?.(name || APP_TITLE);
   }
@@ -89,10 +89,12 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!api?.showOpenProjectDialog || !api?.loadProject) return;
     const path = await api.showOpenProjectDialog();
     if (!path) return;
-    const state = await api.loadProject(path);
+    const loaded = await api.loadProject(path);
+    const state = loaded?.state || loaded;
+    const resolvedPath = loaded?.resolvedPath || path;
     canvasAPI.loadCanvasState(state);
-    currentProjectPath = path;
-    updateWindowTitle(path);
+    currentProjectPath = resolvedPath;
+    updateWindowTitle(resolvedPath);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
     canvasAPI.setAgentWindowVisible?.(true);

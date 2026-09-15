@@ -411,7 +411,7 @@ def _run_structured_via_litellm(
     model: str,
     api_key: str,
     base_url: str,
-    prompt: str,
+    prompt: Any,
     response_model: type,
     max_tokens: int,
     return_shape: str,
@@ -460,7 +460,7 @@ def _run_structured_via_langchain(
     model: str,
     api_key: str,
     base_url: str,
-    prompt: str,
+    prompt: Any,
     response_model: type,
     max_tokens: int,
     return_debug: bool = False,
@@ -479,7 +479,7 @@ def _run_structured_via_langchain(
         base_url=base_url,
         include_raw=return_debug,
     )
-    obj = _retry_invoke(lambda: structured_model.invoke(prompt))
+    obj = _retry_invoke(lambda: structured_model.invoke([{"role": "user", "content": prompt}] if isinstance(prompt, list) else prompt))
     debug = {"path": "langchain_structured", "raw_response": None, "raw_text": None}
     if return_debug:
         parsing_error = obj.get("parsing_error") if isinstance(obj, dict) else None
@@ -537,7 +537,7 @@ def _run_structured_fallback(
     model: str,
     api_key: str,
     base_url: str,
-    prompt: str,
+    prompt: Any,
     response_model: type,
     max_tokens: int,
     return_shape: str = "single",
@@ -556,7 +556,7 @@ def _run_structured_fallback(
             "Return only the JSON array, no other text or markdown.\nSchema for each item:\n"
             + json.dumps(item_schema, ensure_ascii=False, indent=2)
         )
-        full_prompt = prompt + instruction
+        full_prompt = prompt + [{"type": "text", "text": instruction}] if isinstance(prompt, list) else prompt + instruction
         safe_print("\n" + _HL + _SEP + _R)
         safe_print(_HL + "[Run] Fallback: prompt + JSON array schema (structured output not supported)" + _R)
         safe_print(_HL + _SEP + _R)
@@ -591,7 +591,7 @@ def _run_structured_fallback(
         "Return only the JSON, no other text or markdown.\nSchema:\n"
         + json.dumps(schema, ensure_ascii=False, indent=2)
     )
-    full_prompt = prompt + instruction
+    full_prompt = prompt + [{"type": "text", "text": instruction}] if isinstance(prompt, list) else prompt + instruction
     safe_print("\n" + _HL + _SEP + _R)
     safe_print(_HL + "[Run] Fallback: prompt + JSON schema (structured output not supported)" + _R)
     safe_print(_HL + _SEP + _R)
@@ -621,7 +621,7 @@ def run_structured(
     model: str,
     api_key: str,
     base_url: str,
-    prompt: str,
+    prompt: Any,
     response_model: type,
     max_tokens: int = 8192,
     return_shape: str = "single",

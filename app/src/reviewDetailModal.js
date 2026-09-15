@@ -21,6 +21,9 @@ import {
 } from './reviewWorkingSections.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
+import { compileReviewInputs } from './runInputBuilder.js';
+import { postRun } from './runClient.js';
+import { displayCell, isImageCell } from './datasetContent.js';
 import {
   ensureReviewResultIds,
   ensureSuggestionObjectId,
@@ -460,7 +463,7 @@ function debugKvHtml(obj) {
   const MAX = 480;
   const cellHtml = (raw) => {
     if (raw == null || raw === '') return '<span class="review-diagnosis-detail-empty">—</span>';
-    let s = typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+    let s = isImageCell(raw) ? displayCell(raw) : (typeof raw === 'object' ? JSON.stringify(raw) : String(raw));
     s = s.replace(/\s+/g, ' ').trim();
     if (!s) return '<span class="review-diagnosis-detail-empty">—</span>';
     if (s.length > MAX) return `<span title="${escapeHtml(s)}">${escapeHtml(s.slice(0, MAX))}\u2026</span>`;
@@ -1655,20 +1658,10 @@ function buildReviewResultUI(overlay, options) {
         if (inputEntries.length === 0) throw new Error('No inputs found for this suggestion.');
 
         // 5. Fill template with row_input values (single-brace placeholder substitution)
-        const prompts = inputEntries.map(([, { row }]) => {
-          let text = templateText;
-          for (const [key, val] of Object.entries(row.row_input || {})) {
-            text = text.replace(new RegExp(`\\{${escapeRegex(key)}\\}`, 'g'), String(val ?? ''));
-          }
-          return text;
-        });
+        const samples = compileReviewInputs(templateText, inputEntries);
 
         // 6. Submit run job
-        const runRes = await fetch(`${API_BASE}/api/run`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ credential_id: credentialId, prompts, output_schema: outputSchema }),
-        });
+        const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema });
         if (!runRes.ok) {
           const errText = await runRes.text().catch(() => String(runRes.status));
           throw new Error(`Run API error ${runRes.status}: ${errText}`);

@@ -107,6 +107,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
               <div class="review-detail-view-switch dataset-source-switch" role="tablist" aria-label="Data source">
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" data-source="upload">Upload file</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pubmed">Import from PubMed</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="empty">Empty table</button>
               </div>
             </div>
             <div class="dataset-add-step2-scroll">
@@ -127,6 +128,12 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     <div class="dataset-file-info" id="dataset-file-info" aria-live="polite">
                       <span class="dataset-file-info-placeholder">No file selected.</span>
                     </div>
+                  </div>
+                </div>
+                <div class="dataset-source-panel" data-source-panel="empty" hidden>
+                  <div class="dataset-import">
+                    <h3 class="dataset-import-title">Create an empty dataset</h3>
+                    <p class="dataset-sheet-hint">Start with a regular empty table, then add text columns, image columns and rows in the dataset editor.</p>
                   </div>
                 </div>
                 <div class="dataset-source-panel" data-source-panel="pubmed" hidden>
@@ -370,6 +377,19 @@ export function openAddDatasetModal(workflowCanvasApi) {
     setPubmedFetchStatus('');
   }
 
+  function stageEmptyDataset() {
+    fileImported = true;
+    parsedDatasetContent = {
+      schemaVersion: 2,
+      headers: ['Column 1'],
+      columnTypes: ['text'],
+      rowIds: [],
+      rows: [],
+    };
+    previewEl.innerHTML = '<p class="dataset-preview-cap">Empty dataset. Add rows and text/image columns after creating it.</p>';
+    previewEl.classList.remove('prompt-preview--empty');
+  }
+
   async function switchDataSource(target) {
     if (target === dataSource) return;
     if (fileImported) {
@@ -398,6 +418,9 @@ export function openAddDatasetModal(workflowCanvasApi) {
     });
     hideError();
     resetStagedContent();
+    if (target === 'empty') {
+      stageEmptyDataset();
+    }
   }
 
   sourceSwitchBtns.forEach((btn) => {
@@ -608,8 +631,12 @@ export function openAddDatasetModal(workflowCanvasApi) {
       showError('This dataset name is already used on the canvas. Please choose another.');
       return;
     }
-    if (!fileImported || !parsedDatasetContent?.rows?.length) {
-      showError(dataSource === 'pubmed' ? 'Fetch at least one article from PubMed first.' : 'Choose a file to import first.');
+    if (!fileImported || (!parsedDatasetContent?.rows?.length && dataSource !== 'empty')) {
+      showError(dataSource === 'pubmed'
+        ? 'Fetch at least one article from PubMed first.'
+        : dataSource === 'empty'
+          ? 'Empty dataset is not ready yet.'
+          : 'Choose a file to import first.');
       return;
     }
     const headers = parsedDatasetContent.headers;
@@ -621,6 +648,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
           notes,
           headers,
           rows,
+          columnTypes: parsedDatasetContent.columnTypes,
+          rowIds: parsedDatasetContent.rowIds,
         },
       })
     );

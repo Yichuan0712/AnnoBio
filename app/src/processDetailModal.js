@@ -14,6 +14,7 @@ import { python } from '@codemirror/lang-python';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { createRowResultsPanel } from './rowResultsTable.js';
+import { cloneCell, normalizeDatasetContent } from './datasetContent.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -88,8 +89,8 @@ function rowsFromDicts(rowDicts) {
     if (!r || typeof r !== 'object') return;
     Object.keys(r).forEach((k) => { if (!outputKeys.includes(k)) outputKeys.push(k); });
   });
-  const rows = (rowDicts || []).map((r) => outputKeys.map((k) => ((r && typeof r === 'object') ? String(r[k] ?? '') : '')));
-  return { headers: outputKeys, rows };
+  const rows = (rowDicts || []).map((r) => outputKeys.map((k) => ((r && typeof r === 'object') ? cloneCell(r[k]) : '')));
+  return normalizeDatasetContent({ headers: outputKeys, rows });
 }
 
 const PROCESS_POLL_INTERVAL_MS = 1200;

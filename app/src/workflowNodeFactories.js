@@ -112,7 +112,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     };
   }
 
-  function createPromptNode({ name = '', note = '', sections = [], outputFormat, left, top, nodeId: givenNodeId }) {
+  function createPromptNode({ name = '', note = '', sections = [], outputFormat, inputTypes, left, top, nodeId: givenNodeId }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Prompt';
     const node = document.createElement('div');
@@ -123,6 +123,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     node.dataset.promptSections = JSON.stringify(sections);
     node.dataset.promptName = name;
     node.dataset.promptNote = note;
+    node.dataset.promptInputTypes = JSON.stringify(inputTypes && typeof inputTypes === 'object' ? inputTypes : {});
     let ofList = outputFormat?.fields ?? (Array.isArray(outputFormat) ? outputFormat : []);
     if (!ofList.length && outputFormat?.columns?.length) {
       ofList = outputFormat.columns.map((key) => ({
@@ -218,7 +219,7 @@ export function createWorkflowNodeFactories(deps = {}) {
             });
             function getSubsetContent(nodeId) {
               const c = datasetContentByNodeId.get(nodeId);
-              return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+              return c || { headers: [], columnTypes: [], rowIds: [], rows: [] };
             }
             function getPromptTemplate() {
               let sec = [];
@@ -230,7 +231,9 @@ export function createWorkflowNodeFactories(deps = {}) {
                 fields = JSON.parse(node.dataset.promptOutputFormat || '[]');
               } catch (_) {}
               const returnShape = node.dataset.promptOutputReturnShape || 'single';
-              return { sections: sec, outputSchema: { return_shape: returnShape, fields } };
+              let inputTypes = {};
+              try { inputTypes = JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) {}
+              return { sections: sec, inputTypes, outputSchema: { return_shape: returnShape, fields } };
             }
             openRunDetailModal({
               node: runNode,
@@ -334,7 +337,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', colorIndex: givenColorIndex, headers, rows }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -353,7 +356,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticDatasetColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = DATASET_BORDER_COLORS[colorIndex];
-    if (Array.isArray(headers) && Array.isArray(rows)) datasetContentByNodeId.set(nodeId, { headers: headers.slice(), rows: rows.map((r) => r.slice()) });
+    if (Array.isArray(headers) && Array.isArray(rows)) datasetContentByNodeId.set(nodeId, { headers, rows, columnTypes, rowIds });
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
@@ -391,7 +394,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         node,
         getContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
         saveContent: (content) => {
-          datasetContentByNodeId.set(node.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
+          datasetContentByNodeId.set(node.dataset.nodeId, content);
           emitCanvasChanged();
         },
       });
@@ -492,7 +495,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
       function getSubsetContent(nodeId) {
         const c = datasetContentByNodeId.get(nodeId);
-        return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+        return c || { headers: [], columnTypes: [], rowIds: [], rows: [] };
       }
       function getPromptTemplate() {
         if (!promptNode) return { sections: [], outputSchema: { return_shape: 'single', fields: [] } };
@@ -505,7 +508,9 @@ export function createWorkflowNodeFactories(deps = {}) {
           fields = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
         } catch (_) {}
         const returnShape = promptNode.dataset.promptOutputReturnShape || 'single';
-        return { sections: sec, outputSchema: { return_shape: returnShape, fields } };
+        let inputTypes = {};
+        try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
+        return { sections: sec, inputTypes, outputSchema: { return_shape: returnShape, fields } };
       }
       openRunDetailModal({
         node,

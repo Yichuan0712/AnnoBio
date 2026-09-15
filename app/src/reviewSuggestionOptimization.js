@@ -19,6 +19,8 @@
 import { rebuildWorkingFromApplied } from './reviewWorkingSections.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { evaluateScoreOutputGt } from './scoreOutputGtMatcher.js';
+import { compileReviewInputs } from './runInputBuilder.js';
+import { postRun } from './runClient.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -110,21 +112,10 @@ export async function runVerifyPassRate({
   throwIfAborted(signal);
 
   // Fill prompts
-  const prompts = inputEntries.map(([, { row }]) => {
-    let text = templateText;
-    for (const [key, val] of Object.entries(row.row_input || {})) {
-      text = text.replace(new RegExp(`\\{${escapeRegex(key)}\\}`, 'g'), String(val ?? ''));
-    }
-    return text;
-  });
+  const samples = compileReviewInputs(templateText, inputEntries);
 
   // Submit run
-  const runRes = await fetch(`${API_BASE}/api/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ credential_id: credentialId, prompts, output_schema: outputSchema }),
-    signal,
-  });
+  const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema }, signal);
   if (!runRes.ok) {
     const t = await runRes.text().catch(() => String(runRes.status));
     throw new Error(`Run API error ${runRes.status}: ${t}`);

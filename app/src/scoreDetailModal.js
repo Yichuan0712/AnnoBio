@@ -17,6 +17,8 @@ import {
   scoreBundleRootsForEmbeddingWalk,
 } from './scoreMappingBundle.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { prepareReviewBody } from './runClient.js';
+import { displayCell } from './datasetContent.js';
 
 const API_BASE = BACKEND_API_BASE;
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -1162,10 +1164,11 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
   }));
   document.dispatchEvent(new CustomEvent('workflow:review-stream-started', { detail: { reviewNodeId } }));
   try {
+    const requestBody = await prepareReviewBody(body);
     const res = await fetch(`${API_BASE}/api/review/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestBody),
     });
     if (!res.ok) {
       document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
@@ -1430,7 +1433,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (v === null || v === undefined) return '';
     if (typeof v === 'string') return v.trim();
     if (Array.isArray(v)) return v.map((x) => toCompareStr(x)).join(', ').trim();
-    return String(v).trim();
+    return displayCell(v).trim();
   }
 
   /**
@@ -2819,7 +2822,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const inputRow = runResult && Array.isArray(runResult.input_row) ? runResult.input_row : [];
         inputHeadersForTable.forEach((h) => {
           const ci = inputHeaders.findIndex((x) => String(x ?? '').trim() === String(h ?? '').trim());
-          parts.push(ci >= 0 && inputRow[ci] != null ? String(inputRow[ci]) : '');
+          parts.push(ci >= 0 && inputRow[ci] != null ? displayCell(inputRow[ci]) : '');
         });
       }
       if (!hasOutputBlock) return;
@@ -3015,7 +3018,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     resultsBody.appendChild(topRow);
 
     function cellText(val, maxLen = 32) {
-      const s = val === null || val === undefined ? '—' : (typeof val === 'string' ? val : String(val));
+      const s = val === null || val === undefined ? '—' : displayCell(val);
       return s.length > maxLen ? s.slice(0, maxLen) + '…' : s;
     }
 
@@ -3037,7 +3040,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
             const ci = inputHeaders.findIndex((x) => String(x ?? '').trim() === String(h ?? '').trim());
             const v = ci >= 0 ? inputRow[ci] : null;
             const disp = v == null ? '—' : cellText(v);
-            html += `<td class="score-detail-results-td run-detail-td run-detail-td--dataset-row-col" title="${escapeAttr(v == null ? '' : String(v))}">${v == null ? '—' : escapeHtml(disp)}</td>`;
+            html += `<td class="score-detail-results-td run-detail-td run-detail-td--dataset-row-col" title="${escapeAttr(v == null ? '' : displayCell(v))}">${v == null ? '—' : escapeHtml(disp)}</td>`;
           });
         }
       }
@@ -3833,7 +3836,7 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     if (v === null || v === undefined) return '';
     if (typeof v === 'string') return v.trim();
     if (Array.isArray(v)) return v.map((x) => toCompareStr(x)).join(', ').trim();
-    return String(v).trim();
+    return displayCell(v).trim();
   };
   const getRunValue = (runResult, outputKey, rowIndex, runWs, outputFields) => {
     if (outputKey === '#' || outputKey === '[#]') return toCompareStr(rowIndex);
@@ -4016,7 +4019,7 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     parts.push(runResult ? String((runResult.input_row_index ?? 0) + 1) : '—');
     const inputRow = runResult && Array.isArray(runResult.input_row) ? runResult.input_row : [];
     inputHeadersExport.forEach((_, ci) => {
-      parts.push(inputRow[ci] != null ? String(inputRow[ci]) : '');
+      parts.push(inputRow[ci] != null ? displayCell(inputRow[ci]) : '');
     });
     parts.push(runResult ? String((runResult.row_index ?? rowIndex) + 1) : '—');
     if (blankOutputsOnly) {
