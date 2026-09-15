@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from review_direct_rewrite import run_direct_rewrite
 from review_pipeline import run_review_pipeline
 
 ReviewMethodRunFn = Callable[..., None]
@@ -56,6 +57,15 @@ REGISTRY: dict[str, ReviewMethodSpec] = {
             ReviewMethodStage(id="suggestions", label="Suggested changes"),
         ],
         run=run_review_pipeline,
+    ),
+    "direct_rewrite": ReviewMethodSpec(
+        id="direct_rewrite",
+        label="Direct rewrite (single-pass)",
+        stages=[
+            ReviewMethodStage(id="gather", label="Gather failing inputs"),
+            ReviewMethodStage(id="rewrite", label="Propose edits"),
+        ],
+        run=run_direct_rewrite,
     ),
 }
 
