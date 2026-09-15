@@ -271,6 +271,7 @@ class ReviewRequest(BaseModel):
     output_return_shape: str = Field(default="single", description="Fallback when output_schema not provided")
     comparison_rows: list[ReviewComparisonRow] = Field(default_factory=list, description="Per-row match result and context")
     all_rows_matched: bool | None = Field(default=None, description="If True, frontend reports every comparison row matched")
+    review_method: str | None = Field(default=None, description="Registered review method id (backend/review_methods.py); defaults to the legacy issue-analysis + suggested-changes pipeline")
 
     @model_validator(mode="after")
     def image_inputs_require_session(self):
@@ -1347,11 +1348,22 @@ def get_run_result(run_id: str):
     }
 
 
+@app.get("/api/review/methods")
+def list_review_methods_endpoint():
+    """List registered review methods (id, label, stages) for the frontend method picker."""
+    from review_methods import list_review_methods
+
+    return {"methods": list_review_methods()}
+
+
 @app.post("/api/review/analyze")
 def review_analyze(body: ReviewRequest):
     """Start review job in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Pipeline: review_pipeline.py (per-row analysis → localized prompt edits)."""
+    from review_methods import get_review_method
+
     review_id = str(uuid.uuid4())
     review_node_id = body.review_session_id or ""
+    review_method = get_review_method(body.review_method)
     with _review_jobs_lock:
         # At most one active worker per Review node (same idea as POST /api/run + run_node_id).
         if review_node_id:
@@ -1366,7 +1378,15 @@ def review_analyze(body: ReviewRequest):
     thread = threading.Thread(target=_do_review_work, args=(review_id, body), daemon=True)
     thread.start()
     from fastapi.responses import JSONResponse
-    return JSONResponse(status_code=202, content={"review_id": review_id, "review_node_id": review_node_id})
+    return JSONResponse(
+        status_code=202,
+        content={
+            "review_id": review_id,
+            "review_node_id": review_node_id,
+            "review_method_id": review_method.id,
+            "review_stages": review_method.to_dict()["stages"],
+        },
+    )
 
 
 @app.get("/api/review/result/{review_id}")
@@ -2121,7 +2141,9 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
         if _review_is_cancelled(review_id):
             return
 
-        from review_pipeline import run_review_pipeline
+        from review_methods import get_review_method
+
+        review_method = get_review_method(body.review_method)
 
         provider = _credential_provider(cred)
         model = _credential_model(cred) or ""
@@ -2134,7 +2156,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             max_failed = DEFAULT_SETTINGS["review_max_failed_rows"]
         max_failed = max(1, min(200, max_failed))
 
-        run_review_pipeline(
+        review_method.run(
             provider=provider,
             model=model,
             api_key=api_key,
