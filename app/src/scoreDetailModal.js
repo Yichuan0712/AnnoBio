@@ -1119,6 +1119,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
   const body = {
     credential_id: credentialId,
     review_session_id: reviewNodeId,
+    review_method: payload.review_method || undefined,
     prompt_sections: payload.prompt_sections,
     run_results: payload.run_results || [],
     output_fields: payload.output_fields || [],

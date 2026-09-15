@@ -1479,6 +1479,15 @@ export function buildWorkflowCanvas(root, options = {}) {
         );
         setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_DATA_PCT);
         streamSaved.reviewProgress = REVIEW_STREAM_DATA_PCT;
+      } else if (ev.type === 'stage' && ev.stage_id) {
+        /* Generic step event for review methods other than the built-in one (backend/review_methods.py). */
+        const stageLog = Array.isArray(streamSaved.stage_log) ? streamSaved.stage_log.slice() : [];
+        stageLog.push({
+          stage_id: String(ev.stage_id),
+          kind: String(ev.kind || 'note'),
+          payload: ev.payload && typeof ev.payload === 'object' ? ev.payload : {},
+        });
+        streamSaved.stage_log = stageLog;
       } else if (ev.type === 'done') {
         const finalizePct = 100;
         setReviewNodeProgress(getNodeById(reviewNodeId), finalizePct);
