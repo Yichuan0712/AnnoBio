@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showSaveFileDialog: (opts) => ipcRenderer.invoke('dialog:show-save', opts),
   showPickPythonDialog: () => ipcRenderer.invoke('dialog:pick-python'),
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('fs:write-file', filePath, data, encoding),
+  openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),

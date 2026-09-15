@@ -1312,6 +1312,144 @@
   flex-shrink: 0;
 }
 
+.credentials-add-method-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  max-width: 220px;
+}
+
+.credentials-model-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.credentials-model-input-row .dataset-meta-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.credentials-model-input-row .btn {
+  flex-shrink: 0;
+}
+
+.credentials-add-tab-panel {
+  display: none;
+}
+
+.credentials-add-tab-panel--active {
+  display: block;
+}
+
+.credentials-openrouter-connect-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.credentials-openrouter-connect-row .btn {
+  flex-shrink: 0;
+}
+
+.credentials-add-openrouter-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  min-height: 1.2em;
+}
+
+.modal-panel--openrouter-models {
+  min-width: min(480px, 92vw);
+  max-width: min(560px, 92vw);
+  height: min(560px, 80vh);
+  display: flex;
+  flex-direction: column;
+}
+
+.openrouter-model-picker-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+.openrouter-model-picker-filter {
+  flex-shrink: 0;
+}
+
+.openrouter-model-picker-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.openrouter-model-picker-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius, 3px);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.openrouter-model-picker-row:hover {
+  background: var(--hover);
+  border-color: var(--border);
+}
+
+.openrouter-model-picker-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.openrouter-model-picker-row-meta {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+}
+
+.openrouter-model-picker-empty {
+  margin: 20px 0;
+  text-align: center;
+  color: var(--text-secondary, #888);
+  font-size: 13px;
+}
+
+.credential-source-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  border: 1px solid var(--border);
+  color: var(--text-secondary, #888);
+}
+
+.credential-source-badge--openrouter {
+  color: #6b4fbb;
+  border-color: #6b4fbb;
+  background: rgba(107, 79, 187, 0.1);
+}
+
+.credential-source-badge--litellm {
+  color: #2f7a3d;
+  border-color: #2f7a3d;
+  background: rgba(47, 122, 61, 0.1);
+}
+
 .credential-status-icon {
   display: inline-block;
   min-width: 0.9em;
@@ -8172,8 +8310,10 @@ button.btn.btn-danger:hover:not(:disabled) {
 
 .wd-column-type { display: block; width: calc(100% - 12px); margin: 3px 6px 5px; font-size: 11px; }
 .wd-image-cell { position: relative; min-width: 150px; min-height: 66px; padding: 30px 6px 6px; }
+.wd-image-cell--empty { min-height: 0; padding: 4px 6px; }
 .wd-image-strip { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .wd-image-overlay-actions { position: absolute; top: 6px; right: 6px; z-index: 1; display: flex; align-items: center; gap: 6px; }
+.wd-image-cell--empty .wd-image-overlay-actions { position: static; justify-content: flex-end; }
 .wd-image-overlay-actions .btn { padding: 2px 6px; font-size: 11px; }
 .wd-image-thumb { width: 54px; height: 54px; padding: 0; overflow: hidden; border: 1px solid var(--border-color); background: var(--surface-secondary); color: var(--text-muted); font-size: 10px; cursor: zoom-in; }
 .wd-image-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }

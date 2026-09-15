@@ -569,6 +569,48 @@ def get_credential(credential_id: str):
     raise HTTPException(status_code=404, detail="Credential not found")
 
 
+@app.get("/api/credentials/openrouter/catalog")
+def openrouter_catalog():
+    """Public OpenRouter model catalog (no key needed) for the 'choose a model' picker."""
+    from oauth_openrouter import get_catalog
+
+    try:
+        return {"models": get_catalog()}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not load OpenRouter model catalog: {e}")
+
+
+_LITELLM_CATALOG_PROVIDERS = {"openai", "anthropic", "gemini", "deepseek", "bedrock"}
+
+
+@app.get("/api/credentials/litellm/catalog")
+def litellm_catalog():
+    """LiteLLM's built-in static model list (no key/network needed) for the 'choose a model' picker."""
+    import litellm
+
+    models = []
+    for model_id, info in litellm.model_cost.items():
+        if not isinstance(info, dict):
+            continue
+        if info.get("mode") != "chat":
+            continue
+        provider = info.get("litellm_provider")
+        if provider not in _LITELLM_CATALOG_PROVIDERS:
+            continue
+        models.append(
+            {
+                "id": model_id,
+                "name": model_id,
+                "provider": provider,
+                "vision": info.get("supports_vision") is True,
+                "prompt_price": info.get("input_cost_per_token"),
+                "completion_price": info.get("output_cost_per_token"),
+            }
+        )
+    models.sort(key=lambda m: m["id"])
+    return {"models": models}
+
+
 @app.post("/api/credentials/{credential_id}/test")
 async def test_credential(credential_id: str):
     """
@@ -918,6 +960,30 @@ def delete_credential(credential_id: str):
         raise HTTPException(status_code=404, detail="Credential not found!")
     _save_credentials(new_items)
     return {"ok": True}
+
+
+@app.post("/api/credentials/openrouter/start")
+def start_openrouter_oauth():
+    """Begin OpenRouter OAuth PKCE login; returns the URL to open in the system browser."""
+    from oauth_openrouter import start_oauth
+
+    return start_oauth(BACKEND_HOST, BACKEND_PORT)
+
+
+@app.get("/api/credentials/openrouter/callback")
+def openrouter_oauth_callback(state: str = "", code: str = ""):
+    """Redirect target hit by the user's browser after they approve on openrouter.ai."""
+    from oauth_openrouter import handle_callback
+
+    return handle_callback(state, code)
+
+
+@app.get("/api/credentials/openrouter/status/{state}")
+def openrouter_oauth_status(state: str):
+    """Poll target for the frontend while the browser-side OAuth flow is in progress."""
+    from oauth_openrouter import get_status
+
+    return get_status(state)
 
 
 # ---------- Settings ----------

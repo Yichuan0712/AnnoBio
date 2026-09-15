@@ -14,6 +14,8 @@ const PROVIDER_LABELS = {
   openai: 'OpenAI-compatible',
   anthropic: 'Anthropic',
   gemini: 'Google Gemini',
+  deepseek: 'DeepSeek',
+  bedrock: 'Bedrock',
 };
 
 /** Must stay aligned with backend DEFAULT_SETTINGS in main.py */
@@ -47,6 +49,13 @@ function credentialModelLabel(credential) {
   return credential?.model || credential?.llm || '—';
 }
 
+function credentialSourceBadge(c) {
+  const isOpenRouter = c.provider === 'openrouter';
+  const label = isOpenRouter ? 'OpenRouter' : 'LiteLLM';
+  const kind = isOpenRouter ? 'openrouter' : 'litellm';
+  return `<span class="credential-source-badge credential-source-badge--${kind}">${label}</span>`;
+}
+
 function credentialStatusIcon(c) {
   if (c.last_check_ok === true) {
     const label = PROVIDER_LABELS[c.provider] || c.provider || 'Verified';
@@ -69,7 +78,7 @@ function renderCredentialsTable(scope, list) {
   const maskedPlaceholder = '••••••••';
   tbody.innerHTML = list.map((c) => `
     <tr data-credential-id="${c.id}">
-      <td>${escapeHtml(credentialModelLabel(c))} ${credentialStatusIcon(c)}</td>
+      <td>${escapeHtml(credentialModelLabel(c))} ${credentialSourceBadge(c)} ${credentialStatusIcon(c)}</td>
       <td class="credentials-provider-cell">${escapeHtml(c.base_url || 'Default')}</td>
       <td class="credentials-key-cell">
         <code class="credentials-key-value">${maskedPlaceholder}</code>
@@ -186,12 +195,15 @@ async function runCredentialCheck(scope, id) {
     if (res.ok && data.ok) {
       const label = PROVIDER_LABELS[data.provider] || data.provider || 'Verified';
       setCredentialStatusIcon(scope, id, { symbol: '✓', title: `Verified: ${label}`, kind: 'ok' });
+      return true;
     } else {
       const msg = typeof data.detail === 'string' ? data.detail : (data.error || 'Failed');
       setCredentialStatusIcon(scope, id, { symbol: '✗', title: msg, kind: 'error' });
+      return false;
     }
   } catch (e) {
     setCredentialStatusIcon(scope, id, { symbol: '✗', title: (e && e.message) || 'Network error', kind: 'error' });
+    return false;
   }
 }
 
@@ -211,6 +223,103 @@ function bindCredTestButtons(scope) {
       }
     });
   });
+}
+
+function makeCachedCatalogLoader(path) {
+  let promise = null;
+  return () => {
+    if (!promise) {
+      promise = fetch(`${API_BASE}${path}`)
+        .then((res) => {
+          if (!res.ok) throw new Error('Failed to load model catalog');
+          return res.json();
+        })
+        .then((data) => (Array.isArray(data.models) ? data.models : []))
+        .catch((e) => {
+          promise = null; // allow retry on next open
+          throw e;
+        });
+    }
+    return promise;
+  };
+}
+
+const loadOpenRouterCatalog = makeCachedCatalogLoader('/api/credentials/openrouter/catalog');
+const loadLiteLlmCatalog = makeCachedCatalogLoader('/api/credentials/litellm/catalog');
+
+function formatModelPrice(perToken) {
+  const n = Number(perToken);
+  if (!Number.isFinite(n) || n <= 0) return 'free';
+  return `$${(n * 1_000_000).toFixed(2)}/M`;
+}
+
+function defaultModelPickerMeta(m) {
+  const priceBit = (m.prompt_price != null || m.completion_price != null)
+    ? ` · ${formatModelPrice(m.prompt_price)} in / ${formatModelPrice(m.completion_price)} out`
+    : '';
+  return `${escapeHtml(m.id)}${priceBit}`;
+}
+
+/**
+ * Generic "pick a model from a list" overlay, shared by the OpenRouter "Add model" flow and
+ * the LiteLLM "Choose model" flow. `loadModels()` resolves to [{id, name, vision?, ...}].
+ * `onPick(modelId, close)` decides what happens with the choice and closes on success.
+ */
+async function openModelPicker({ loadModels, onPick, renderMeta = defaultModelPickerMeta, renderTitle = (m) => m.name || m.id, title = 'Choose a model' }) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--openrouter-models">
+      <div class="modal-header">
+        <h2 class="modal-title">${escapeHtml(title)}</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body openrouter-model-picker-body">
+        <input type="text" class="dataset-meta-input openrouter-model-picker-filter" placeholder="Search models…" aria-label="Search models" autocomplete="off" />
+        <div class="openrouter-model-picker-list" aria-busy="true">Loading models…</div>
+      </div>
+    </div>
+  `;
+  const close = () => { overlay.remove(); document.body.style.overflow = ''; };
+  overlay.querySelector('.modal-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.body.style.overflow = 'hidden';
+  document.body.appendChild(overlay);
+
+  const filterInput = overlay.querySelector('.openrouter-model-picker-filter');
+  const listEl = overlay.querySelector('.openrouter-model-picker-list');
+
+  let models = [];
+  try {
+    models = await loadModels();
+  } catch (e) {
+    listEl.textContent = (e && e.message) || 'Could not load models.';
+    return;
+  }
+
+  function renderList(filterText) {
+    const q = filterText.trim().toLowerCase();
+    const matches = q ? models.filter((m) => m.id.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q)) : models;
+    if (matches.length === 0) {
+      listEl.innerHTML = '<p class="openrouter-model-picker-empty">No matching models.</p>';
+      return;
+    }
+    listEl.innerHTML = matches.slice(0, 200).map((m) => `
+      <button type="button" class="openrouter-model-picker-row" data-model-id="${escapeHtml(m.id)}">
+        <span class="openrouter-model-picker-row-name">${escapeHtml(renderTitle(m))}${m.vision ? ' 🖼' : ''}</span>
+        <span class="openrouter-model-picker-row-meta">${renderMeta(m)}</span>
+      </button>
+    `).join('');
+    listEl.querySelectorAll('.openrouter-model-picker-row').forEach((row) => {
+      row.addEventListener('click', () => onPick(row.getAttribute('data-model-id'), close));
+    });
+  }
+
+  listEl.setAttribute('aria-busy', 'false');
+  renderList('');
+  filterInput.addEventListener('input', () => renderList(filterInput.value));
+  filterInput.focus();
 }
 
 function bindCredDeleteButtons(scope) {
@@ -291,12 +400,21 @@ function mountCredentialsTableHost(tableHost, options = {}) {
  * @param {HTMLElement} addFormRoot
  * @param {HTMLElement} tableHost
  */
+async function fetchDetect(model, base_url, api_key) {
+  const res = await fetch(`${API_BASE}/api/credentials/detect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, base_url, api_key }),
+  });
+  return res.json().catch(() => ({}));
+}
+
 function wireCredentialsAddForm(addFormRoot, tableHost) {
   const modelInput = addFormRoot.querySelector('#credentials-model');
   const baseUrlInput = addFormRoot.querySelector('#credentials-base-url');
   const apiKeyInput = addFormRoot.querySelector('#credentials-api-key');
   const suggestionsList = addFormRoot.querySelector('#credentials-model-suggestions');
-  const footerAdd = addFormRoot.closest('.model-settings-col-right')?.querySelector('#settings-footer-add');
+  const chooseModelBtn = addFormRoot.querySelector('#credentials-choose-model-btn');
 
   let lastDetectKey = '';
 
@@ -316,12 +434,7 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
     lastDetectKey = detectKey;
 
     try {
-      const res = await fetch(`${API_BASE}/api/credentials/detect`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, base_url, api_key }),
-      });
-      const data = await res.json().catch(() => ({}));
+      const data = await fetchDetect(model, base_url, api_key);
       if (lastDetectKey !== detectKey) return; // superseded by a newer probe
       if (suggestionsList) {
         suggestionsList.innerHTML = (data.models || [])
@@ -336,6 +449,22 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
   modelInput?.addEventListener('blur', runDetect);
   baseUrlInput?.addEventListener('blur', runDetect);
   apiKeyInput?.addEventListener('blur', runDetect);
+
+  function onChooseModelClick() {
+    // Browsing doesn't need a key yet: litellm.model_cost is a static, offline catalog of
+    // known model ids across providers. The key is still required at Add time, same as today.
+    openModelPicker({
+      loadModels: loadLiteLlmCatalog,
+      renderTitle: (m) => PROVIDER_LABELS[m.provider] || m.provider || m.id,
+      renderMeta: defaultModelPickerMeta,
+      onPick: (modelId, close) => {
+        if (modelInput) modelInput.value = modelId;
+        close();
+      },
+    });
+  }
+
+  chooseModelBtn?.addEventListener('click', onChooseModelClick);
 
   async function onAddCredentialSubmit() {
     const llm = (modelInput?.value || '').trim();
@@ -376,7 +505,167 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
     }
   }
 
-  footerAdd?.addEventListener('click', onAddCredentialSubmit);
+  return { submit: onAddCredentialSubmit };
+}
+
+function wireCredentialsAddTabs(addFormRoot, { onSwitchTo } = {}) {
+  const select = addFormRoot.querySelector('#credentials-add-method-select');
+  if (!select) return;
+  const panels = addFormRoot.querySelectorAll('.credentials-add-tab-panel[data-panel]');
+  select.addEventListener('change', () => {
+    const name = select.value;
+    panels.forEach((p) => p.classList.toggle('credentials-add-tab-panel--active', p.dataset.panel === name));
+    onSwitchTo?.(name);
+  });
+}
+
+const OPENROUTER_POLL_MS = 1500;
+const OPENROUTER_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+
+function wireOpenRouterConnect(addFormRoot, tableHost) {
+  const connectBtn = addFormRoot.querySelector('#credentials-openrouter-connect-btn');
+  const statusEl = addFormRoot.querySelector('#credentials-openrouter-status');
+  const modelField = addFormRoot.querySelector('#credentials-openrouter-model-field');
+  const modelInput = addFormRoot.querySelector('#credentials-openrouter-model');
+  const chooseModelBtn = addFormRoot.querySelector('#credentials-openrouter-choose-model-btn');
+  if (!connectBtn) return;
+  let pollTimer = null;
+  let connectedCredentialId = null;
+
+  // Reconnecting isn't required just to add another model: if an OpenRouter credential
+  // already exists and its key still actually works, reveal the Model ID field for it right
+  // away. Re-run whenever the dropdown switches back to this tab, not just once at modal-open.
+  // A cached last_check_ok isn't good enough here -- it can go stale as soon as the key is
+  // revoked/expires on OpenRouter's side, so this does a real (small) test call, most-recently
+  // -added credential first, stopping at the first one that actually still works.
+  async function checkExistingConnection() {
+    if (pollTimer) return; // a connect is actively in progress; don't stomp its status text
+    connectedCredentialId = null;
+    if (modelField) modelField.hidden = true;
+    let list;
+    try {
+      list = await fetchCredentialsStrict();
+    } catch (e) {
+      statusEl.textContent = '';
+      return;
+    }
+    const openRouterCreds = list.filter((c) => c.provider === 'openrouter');
+    if (openRouterCreds.length === 0) {
+      statusEl.textContent = '';
+      return;
+    }
+    statusEl.textContent = 'Checking OpenRouter connection…';
+    for (const cred of openRouterCreds.slice().reverse()) { // most recently added first
+      const ok = await runCredentialCheck(tableHost, cred.id);
+      if (ok) {
+        connectedCredentialId = cred.id;
+        if (modelField) modelField.hidden = false;
+        statusEl.textContent = 'Connected to OpenRouter.';
+        return;
+      }
+    }
+    statusEl.textContent = 'No working OpenRouter connection found — click Connect.';
+  }
+  checkExistingConnection();
+
+  function stopPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+    connectBtn.disabled = false;
+  }
+
+  async function onConnectClick() {
+    statusEl.textContent = '';
+    connectBtn.disabled = true;
+    if (modelField) modelField.hidden = true;
+    connectedCredentialId = null;
+    let started;
+    try {
+      const res = await fetch(`${API_BASE}/api/credentials/openrouter/start`, { method: 'POST' });
+      started = await res.json().catch(() => ({}));
+      if (!res.ok || !started.auth_url || !started.state) throw new Error('Could not start OpenRouter login.');
+    } catch (e) {
+      statusEl.textContent = (e && e.message) || 'Could not start OpenRouter login.';
+      connectBtn.disabled = false;
+      return;
+    }
+    if (window.electronAPI?.openExternal) window.electronAPI.openExternal(started.auth_url);
+    statusEl.textContent = 'Waiting for approval in your browser…';
+    const deadline = Date.now() + OPENROUTER_POLL_TIMEOUT_MS;
+    pollTimer = setInterval(async () => {
+      if (Date.now() > deadline) {
+        stopPolling();
+        statusEl.textContent = 'Timed out waiting for OpenRouter. Please try again.';
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/api/credentials/openrouter/status/${started.state}`);
+        const data = await res.json().catch(() => ({}));
+        if (data.status === 'done') {
+          stopPolling();
+          statusEl.textContent = 'Connected.';
+          connectedCredentialId = data.credential_id || null;
+          if (modelField) modelField.hidden = !connectedCredentialId;
+          await loadAndRenderCredentials(tableHost);
+          tableHost._onCredentialsChange?.();
+          if (data.credential_id) runCredentialCheck(tableHost, data.credential_id);
+        } else if (data.status === 'error' || data.status === 'not_found') {
+          stopPolling();
+          statusEl.textContent = data.error || 'Could not complete the OpenRouter connection.';
+        }
+      } catch (e) {
+        // Transient network hiccup while polling; keep trying until the timeout.
+      }
+    }, OPENROUTER_POLL_MS);
+  }
+
+  function onChooseModelClick() {
+    // OpenRouter's own live catalog (no key needed to browse it, same as before) --
+    // picking here only fills the Model ID field, same as the LiteLLM picker does.
+    openModelPicker({
+      loadModels: loadOpenRouterCatalog,
+      onPick: (modelId, close) => {
+        if (modelInput) modelInput.value = modelId;
+        close();
+      },
+    });
+  }
+
+  async function submitOpenRouterModel() {
+    if (!connectedCredentialId) {
+      showAlert('Connect to OpenRouter first.', { title: 'Add credential failed' });
+      return;
+    }
+    const model = (modelInput?.value || '').trim();
+    if (!model) {
+      showAlert('Choose or type a model ID first.', { title: 'Add credential failed' });
+      return;
+    }
+    try {
+      const keyRes = await fetch(`${API_BASE}/api/credentials/${connectedCredentialId}`);
+      if (!keyRes.ok) throw new Error('Could not read the connected OpenRouter key.');
+      const apiKey = (await keyRes.json()).api_key;
+      if (!apiKey) throw new Error('Could not read the connected OpenRouter key.');
+      const res = await fetch(`${API_BASE}/api/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, api_key: apiKey, provider: 'openrouter' }),
+      });
+      if (!res.ok) throw new Error('Could not add that model.');
+      const saved = await res.json().catch(() => ({}));
+      if (modelInput) modelInput.value = '';
+      await loadAndRenderCredentials(tableHost);
+      tableHost._onCredentialsChange?.();
+      if (saved.id) runCredentialCheck(tableHost, saved.id);
+    } catch (e) {
+      showAlert((e && e.message) || 'Could not add that model.', { title: 'Add credential failed' });
+    }
+  }
+
+  connectBtn.addEventListener('click', onConnectClick);
+  chooseModelBtn?.addEventListener('click', onChooseModelClick);
+
+  return { checkExistingConnection, submit: submitOpenRouterModel };
 }
 
 /* ——— Modal ——— */
@@ -406,27 +695,59 @@ export function openSettingsModal() {
                   <div class="model-settings-tab-row">
                     <div class="review-detail-view-switch model-settings-view-switch" role="tablist" aria-label="Settings options">
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="settings-panel-credentials" id="settings-tab-credentials" data-tab="credentials">New credential</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Run</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Review</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Run defaults</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Review defaults</button>
                     </div>
                   </div>
                   <div class="review-detail-tab-panels model-settings-tab-panels">
                     <div class="review-detail-tab-panel review-detail-tab-panel--active" id="settings-panel-credentials" role="tabpanel" aria-labelledby="settings-tab-credentials" data-panel="credentials">
                       <div class="defaults-page-scroll settings-credentials-tab-body">
                         <div id="model-settings-credentials-add" class="model-settings-credentials-add">
-                          <div class="credentials-add-row">
-                            <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
-                              <label class="dataset-meta-label" for="credentials-model">Model ID</label>
-                              <input type="text" id="credentials-model" class="dataset-meta-input" placeholder="e.g. gpt-5, anthropic/claude-sonnet-4-6" autocomplete="off" aria-label="Model ID" list="credentials-model-suggestions" />
-                              <datalist id="credentials-model-suggestions"></datalist>
+                          <div class="credentials-add-method-row">
+                            <label class="dataset-meta-label" for="credentials-add-method-select">Add credential</label>
+                            <select id="credentials-add-method-select" class="dataset-meta-input credentials-add-method-select" aria-label="Add credential method">
+                              <option value="litellm" selected>Via LiteLLM</option>
+                              <option value="openrouter">Via OpenRouter</option>
+                            </select>
+                          </div>
+                          <div class="credentials-add-tab-panels">
+                            <div class="credentials-add-tab-panel credentials-add-tab-panel--active" id="credentials-add-panel-litellm" data-panel="litellm">
+                              <div class="credentials-add-row">
+                                <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
+                                  <label class="dataset-meta-label" for="credentials-model">Model ID</label>
+                                  <div class="credentials-model-input-row">
+                                    <input type="text" id="credentials-model" class="dataset-meta-input" placeholder="e.g. gpt-5, anthropic/claude-sonnet-4-6" autocomplete="off" aria-label="Model ID" list="credentials-model-suggestions" />
+                                    <button type="button" class="btn btn-secondary" id="credentials-choose-model-btn">Choose model</button>
+                                  </div>
+                                  <datalist id="credentials-model-suggestions"></datalist>
+                                </div>
+                                <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
+                                  <label class="dataset-meta-label" for="credentials-api-key">API key</label>
+                                  <input type="text" id="credentials-api-key" class="dataset-meta-input credentials-api-key-input" placeholder="Paste your API key" autocomplete="off" />
+                                </div>
+                                <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
+                                  <label class="dataset-meta-label" for="credentials-base-url">Base URL (optional)</label>
+                                  <input type="text" id="credentials-base-url" class="dataset-meta-input" placeholder="e.g. http://localhost:11434/v1" autocomplete="off" aria-label="Base URL" />
+                                </div>
+                              </div>
                             </div>
-                            <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
-                              <label class="dataset-meta-label" for="credentials-api-key">API key</label>
-                              <input type="text" id="credentials-api-key" class="dataset-meta-input credentials-api-key-input" placeholder="Paste your API key" autocomplete="off" />
-                            </div>
-                            <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
-                              <label class="dataset-meta-label" for="credentials-base-url">Base URL (optional)</label>
-                              <input type="text" id="credentials-base-url" class="dataset-meta-input" placeholder="e.g. http://localhost:11434/v1" autocomplete="off" aria-label="Base URL" />
+                            <div class="credentials-add-tab-panel" id="credentials-add-panel-openrouter" data-panel="openrouter">
+                              <div class="credentials-add-row">
+                                <div class="credentials-add-field credentials-add-field--full-row">
+                                  <label class="dataset-meta-label" for="credentials-openrouter-connect-btn">OpenRouter account</label>
+                                  <div class="credentials-openrouter-connect-row">
+                                    <button type="button" class="btn btn-secondary" id="credentials-openrouter-connect-btn">Connect</button>
+                                    <p class="credentials-add-openrouter-status" id="credentials-openrouter-status" aria-live="polite"></p>
+                                  </div>
+                                </div>
+                                <div class="credentials-add-field credentials-add-field--full-row" id="credentials-openrouter-model-field" hidden>
+                                  <label class="dataset-meta-label" for="credentials-openrouter-model">Model ID</label>
+                                  <div class="credentials-model-input-row">
+                                    <input type="text" id="credentials-openrouter-model" class="dataset-meta-input" placeholder="e.g. anthropic/claude-sonnet-4.6" autocomplete="off" aria-label="Model ID" />
+                                    <button type="button" class="btn btn-secondary" id="credentials-openrouter-choose-model-btn">Choose model</button>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -590,7 +911,16 @@ export function openSettingsModal() {
         reviewCredSelect.value = ids.review;
       },
     });
-    wireCredentialsAddForm(addRoot, credRoot);
+    const liteLlmAdd = wireCredentialsAddForm(addRoot, credRoot);
+    const openRouterConnect = wireOpenRouterConnect(addRoot, credRoot);
+    const addMethodSelect = addRoot.querySelector('#credentials-add-method-select');
+    wireCredentialsAddTabs(addRoot, {
+      onSwitchTo: (name) => { if (name === 'openrouter') openRouterConnect?.checkExistingConnection(); },
+    });
+    footerAdd?.addEventListener('click', () => {
+      if (addMethodSelect?.value === 'openrouter') openRouterConnect?.submit();
+      else liteLlmAdd?.submit();
+    });
     const [credentials, settings] = await Promise.all([loadCredentials(), loadSettings()]);
     populateCredentialSelects(credentials);
     applySettings(settings || MODEL_SETTINGS_DEFAULTS);
