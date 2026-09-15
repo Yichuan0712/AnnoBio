@@ -4,10 +4,8 @@ import {
   rebuildWorkingFromApplied,
   suggestionTargetScoreRowIndices,
 } from './reviewWorkingSections.js';
-
-function escapeRegex(str) {
-  return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { compileReviewInputs } from './runInputBuilder.js';
+import { postRun } from './runClient.js';
 
 function normalizeSections(sections) {
   return Array.isArray(sections)
@@ -59,31 +57,17 @@ function buildInputEntriesForSuggestion(suggestion, comparisonRows) {
   return [...inputMap.entries()].sort(([a], [b]) => a - b);
 }
 
-function buildPromptsFromTemplate(templateText, inputEntries) {
-  return inputEntries.map(([, { row }]) => {
-    let text = String(templateText || '');
-    for (const [key, value] of Object.entries(row?.row_input || {})) {
-      text = text.replace(new RegExp(`\\{${escapeRegex(key)}\\}`, 'g'), String(value ?? ''));
-    }
-    return text;
-  });
-}
-
 async function runPromptsAndWaitForResults({
   apiBase = BACKEND_API_BASE,
   credentialId,
-  prompts,
+  samples,
   outputSchema,
 }) {
-  const runResponse = await fetch(`${apiBase}/api/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      credential_id: credentialId,
-      prompts,
-      output_schema: outputSchema,
-    }),
-  });
+  const runResponse = await postRun({
+    credential_id: credentialId,
+    samples,
+    output_schema: outputSchema,
+  }, undefined, apiBase);
   if (!runResponse.ok) {
     const errorText = await runResponse.text().catch(() => String(runResponse.status));
     throw new Error(`Run API error ${runResponse.status}: ${errorText}`);
@@ -153,11 +137,11 @@ export async function verifyReviewSuggestion({
       throw new Error('No inputs found for this suggestion.');
     }
 
-    const prompts = buildPromptsFromTemplate(templateText, inputEntries);
+    const samples = compileReviewInputs(templateText, inputEntries);
     const finalData = await runPromptsAndWaitForResults({
       apiBase,
       credentialId,
-      prompts,
+      samples,
       outputSchema,
     });
     if (finalData?.error) {

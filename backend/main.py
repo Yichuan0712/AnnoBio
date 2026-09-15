@@ -36,14 +36,17 @@ _SEP = "=" * 60      # unified separator for LLM prompt/output logs
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model, model_validator
 
 from agent.chat.agent_chat import build_agent_messages, format_agent_messages_for_log
 from agent.prompt.agent_plan_prompt import build_agent_plan_instruction_prefix
 from llm import chat as llm_chat, run_structured as llm_run_structured
 from provider_detect import detect_provider, verify_credential
 
+from asset_store import router as asset_router, resolve_content
+
 app = FastAPI()
+app.include_router(asset_router)
 
 BACKEND_HOST = os.environ.get("PROMPT_STUDIO_BACKEND_HOST", "127.0.0.1")
 BACKEND_PORT = int(os.environ.get("PROMPT_STUDIO_BACKEND_PORT", "8000"))
@@ -199,7 +202,24 @@ class CredentialDetailResponse(BaseModel):
 
 class RunRequest(BaseModel):
     credential_id: str
-    prompts: list[str] = Field(..., min_length=1, description="One prompt per row (placeholders already substituted)")
+    prompts: list[str] | None = Field(default=None, min_length=1)
+    samples: list[dict] | None = Field(default=None, min_length=1)
+    project_session_id: str | None = None
+
+    @model_validator(mode="after")
+    def one_input_format(self):
+        if (self.prompts is None) == (self.samples is None):
+            raise ValueError("Provide exactly one of prompts or samples.")
+        if self.samples is not None:
+            for sample in self.samples:
+                if not isinstance(sample.get("content"), list):
+                    raise ValueError("Each sample requires a content array.")
+                for block in sample["content"]:
+                    if not isinstance(block, dict) or block.get("type") not in ("text", "image_ref"):
+                        raise ValueError("Unsupported sample content block.")
+                    if block["type"] == "image_ref" and (not self.project_session_id or not isinstance(block.get("asset_id"), str)):
+                        raise ValueError("Image blocks require an asset ID and a project session.")
+        return self
     output_schema: dict = Field(..., description="return_shape + fields: [{ key, type, description?, allow_none? }]")
     run_node_id: str | None = Field(default=None, description="Frontend Run node id for correlation when polling")
 
@@ -241,6 +261,7 @@ class ReviewComparisonRow(BaseModel):
 
 
 class ReviewRequest(BaseModel):
+    project_session_id: str | None = None
     credential_id: str
     review_session_id: str | None = Field(default=None, description="Frontend session id for cancellation; pass reviewNodeId")
     prompt_sections: list[dict] = Field(..., description="List of {name, content} for each section")
@@ -250,6 +271,19 @@ class ReviewRequest(BaseModel):
     output_return_shape: str = Field(default="single", description="Fallback when output_schema not provided")
     comparison_rows: list[ReviewComparisonRow] = Field(default_factory=list, description="Per-row match result and context")
     all_rows_matched: bool | None = Field(default=None, description="If True, frontend reports every comparison row matched")
+
+    @model_validator(mode="after")
+    def image_inputs_require_session(self):
+        has_images = any(
+            isinstance(value, dict)
+            and value.get("kind") == "images"
+            and bool(value.get("assetIds"))
+            for row in self.comparison_rows
+            for value in (row.row_input or {}).values()
+        )
+        if has_images and not self.project_session_id:
+            raise ValueError("Review image inputs require a project session.")
+        return self
 
 
 class ReviewSuggestion(BaseModel):
@@ -1005,8 +1039,9 @@ def _run_structured_output_is_empty(out: object, return_shape: str, output_field
 def _do_run_work(
     run_id: str,
     credential_id: str,
-    prompts: list[str],
+    prompts: list,
     output_schema: dict,
+    project_session_id: str | None = None,
 ) -> None:
     """Background worker: run prompts row by row. Stops when cancelled or when client has not polled for RUN_ABANDON_TIMEOUT_SEC."""
     try:
@@ -1073,7 +1108,7 @@ def _do_run_work(
 
         run_max_retries = min(5, max(0, int(run_settings.get("run_max_retries", 0))))
 
-        def process_one(row_index: int, prompt: str) -> tuple[int, list[dict]]:
+        def process_one(row_index: int, prompt) -> tuple[int, list[dict]]:
             with _run_jobs_lock:
                 if run_id in _run_cancelled:
                     return (row_index, [{"input_row_index": row_index, "output": None, "error": "Cancelled"}])
@@ -1090,13 +1125,19 @@ def _do_run_work(
                     _safe_print(_HL + f"[Run] Row {row_index} PROMPT SENT TO LLM:" + _R)
                     _safe_print(_HL + _SEP + _R)
                     _safe_print(prompt)
+                    if isinstance(prompt, dict):
+                        if prompt.get("error"):
+                            raise ValueError(prompt["error"])
+                        model_prompt = resolve_content(prompt["content"], project_session_id)
+                    else:
+                        model_prompt = prompt
                     _safe_print(_HL + _SEP + _R + "\n")
                     out, used_fallback, debug = llm_run_structured(
                         provider=provider,
                         model=model,
                         api_key=api_key,
                         base_url=base_url,
-                        prompt=prompt,
+                        prompt=model_prompt,
                         response_model=ResponseModel,
                         max_tokens=run_max_tokens,
                         return_shape=return_shape,
@@ -1246,7 +1287,7 @@ def run_prompts(body: RunRequest):
     _persist_run_jobs()
     thread = threading.Thread(
         target=_do_run_work,
-        args=(run_id, body.credential_id, body.prompts, body.output_schema),
+        args=(run_id, body.credential_id, body.prompts if body.prompts is not None else body.samples, body.output_schema, body.project_session_id),
         daemon=True,
     )
     thread.start()
@@ -1638,7 +1679,7 @@ class ProcessRunRequest(BaseModel):
     python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
     code: str = Field(..., min_length=1, description="User code defining process(row) -> dict | None")
     headers: list[str] = Field(..., description="Column names; row dict passed to process() is keyed by these")
-    rows: list[list[str]] = Field(default_factory=list, description="Input rows, same order as headers")
+    rows: list[list[Any]] = Field(default_factory=list, description="Input rows, same order as headers")
 
 
 def _touch_process_activity(job_id: str) -> None:
@@ -1922,7 +1963,7 @@ class ProcessDfRunRequest(BaseModel):
     python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
     code: str = Field(..., min_length=1, description="User code defining process(df) -> DataFrame")
     headers: list[str] = Field(..., description="Column names; each row dict passed into the DataFrame is keyed by these")
-    rows: list[list[str]] = Field(default_factory=list, description="Input rows, same order as headers")
+    rows: list[list[Any]] = Field(default_factory=list, description="Input rows, same order as headers")
 
 
 def _touch_process_df_activity(job_id: str) -> None:

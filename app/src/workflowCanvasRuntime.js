@@ -11,6 +11,9 @@ import {
 } from './promptNodeEdits.js';
 import { applyScoreMappingEdits } from './scoreMappingEdits.js';
 import { isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
+import { compileRows } from './runInputBuilder.js';
+import { postRun } from './runClient.js';
+import { cloneCell } from './datasetContent.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {
   const {
@@ -104,6 +107,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     note = '',
     sections = [],
     outputFormat,
+    inputTypes,
     left,
     top,
     ensureUniqueName = true,
@@ -118,6 +122,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       note: String(note || ''),
       sections: Array.isArray(sections) ? sections : [],
       outputFormat,
+      inputTypes,
       left,
       top,
     });
@@ -314,6 +319,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       note: 'Exported from Review.',
       sections: resolvedSections,
       outputFormat: sourcePromptData?.outputFormat || undefined,
+      inputTypes: sourcePromptData?.inputTypes || {},
       left: resolvedLeft,
       top: resolvedTop,
       ensureUniqueName: false,
@@ -503,7 +509,17 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (!workingSetId) {
       throw new Error('This run node has no selected input dataset.');
     }
-    const content = datasetContentByNodeId.get(workingSetId);
+    let existingResults = [];
+    try {
+      existingResults = JSON.parse(node.dataset.runResults || '[]');
+      if (!Array.isArray(existingResults)) existingResults = [];
+    } catch (_) {
+      existingResults = [];
+    }
+    let content = datasetContentByNodeId.get(workingSetId);
+    if (existingResults.length > 0 && node.dataset.runInputContent) {
+      try { content = JSON.parse(node.dataset.runInputContent); } catch (_) {}
+    }
     const headers = Array.isArray(content?.headers) ? content.headers.slice() : [];
     const rows = Array.isArray(content?.rows) ? content.rows.map((row) => (Array.isArray(row) ? row.slice() : [])) : [];
     if (rows.length === 0) {
@@ -557,13 +573,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       throw new Error('This run node has no selected credential.');
     }
 
-    let existingResults = [];
-    try {
-      existingResults = JSON.parse(node.dataset.runResults || '[]');
-      if (!Array.isArray(existingResults)) existingResults = [];
-    } catch (_) {
-      existingResults = [];
-    }
     const nextRowIndex = getNextRowIndex(existingResults, rows.length);
     const rowsToRun = rows.slice(nextRowIndex);
     if (rowsToRun.length === 0) {
@@ -587,18 +596,11 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       };
     }
 
-    const prompts = rowsToRun.map((row) => {
-      let text = templateText;
-      inputFields.forEach((inputName) => {
-        const columnName = String(runInputToColumn[inputName] || '').trim();
-        const headerIndex = headers.indexOf(columnName);
-        const value = headerIndex >= 0 ? row[headerIndex] ?? '' : '';
-        text = text.replace(new RegExp(`\\{${escapeRegex(inputName)}\\}`, 'g'), String(value));
-      });
-      return text;
-    });
+    let inputTypes = {};
+    try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
+    const samples = compileRows(templateText, headers, rowsToRun, runInputToColumn, inputTypes);
 
-    node.dataset.runInputContent = JSON.stringify({ headers, rows });
+    node.dataset.runInputContent = JSON.stringify({ headers, columnTypes: content?.columnTypes || [], rowIds: content?.rowIds || [], rows });
     if (nextRowIndex === 0) {
       if (existingResults.length === 0) {
         node.dataset.runResults = JSON.stringify([]);
@@ -615,15 +617,11 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
     emitCanvasChanged();
 
-    const response = await fetch(`${RUN_API_BASE}/api/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const response = await postRun({
         credential_id: credentialId,
-        prompts,
+        samples,
         output_schema: outputSchema,
         run_node_id: normalizedRunNodeId,
-      }),
     });
     const data = await response.json().catch(() => ({}));
 
@@ -731,6 +729,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       if (workingSetContent) {
         runContent = {
           headers: Array.isArray(workingSetContent.headers) ? workingSetContent.headers.slice() : [],
+          columnTypes: Array.isArray(workingSetContent.columnTypes) ? workingSetContent.columnTypes.slice() : [],
+          rowIds: Array.isArray(workingSetContent.rowIds) ? workingSetContent.rowIds.slice() : [],
           rows: Array.isArray(workingSetContent.rows) ? workingSetContent.rows.map((row) => (Array.isArray(row) ? row.slice() : [])) : [],
         };
       }
@@ -781,7 +781,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
           return String(value);
         });
       const inputRow = Array.isArray(result?.input_row) ? result.input_row : [];
-      const inputPart = inputHeaders.map((_, index) => (inputRow[index] == null ? '—' : String(inputRow[index])));
+      const inputPart = inputHeaders.map((_, index) => (inputRow[index] == null ? '—' : cloneCell(inputRow[index])));
       const inputNum = String((result?.input_row_index ?? 0) + 1);
       const outputNum = String((result?.row_index ?? 0) + 1);
       return [inputNum, ...inputPart, outputNum, ...outputPart];
@@ -793,11 +793,14 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const visiblePadding = 40;
     const startLeft = typeof left === 'number' ? left : (scrollWrapper.scrollLeft + visiblePadding);
     const startTop = typeof top === 'number' ? top : (scrollWrapper.scrollTop + visiblePadding);
+    const sourceTypes = Array.isArray(runContent?.columnTypes) ? runContent.columnTypes : [];
+    const columnTypes = ['text', ...inputHeaders.map((_, index) => sourceTypes[index] === 'image' ? 'image' : 'text'), 'text', ...outputFields.map(() => 'text')];
     const created = addDatasetNode({
       name: datasetName,
       notes: String(notes || '').trim() || defaultNotes,
       headers: exportHeaders,
       rows: exportRows,
+      columnTypes,
       left: startLeft,
       top: startTop,
       ensureUniqueName: requestedName ? ensureUniqueName : false,
@@ -1927,6 +1930,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     notes = '',
     headers = [],
     rows = [],
+    columnTypes,
+    rowIds,
     left,
     top,
     samplerNodeId = '',
@@ -1945,8 +1950,10 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       top,
       samplerNodeId: String(samplerNodeId || '').trim(),
       colorIndex,
-      headers: Array.isArray(headers) ? headers.map((header) => String(header == null ? '' : header)) : [],
-      rows: Array.isArray(rows) ? rows.map((row) => (Array.isArray(row) ? row.map((cell) => String(cell == null ? '' : cell)) : [])) : [],
+      headers,
+      rows,
+      columnTypes,
+      rowIds,
     });
     if (agentCreated && typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     updateContentSize();

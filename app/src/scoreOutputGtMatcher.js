@@ -11,12 +11,13 @@ import {
 } from './scoreDetailModal.js';
 import { computeGreedyRunToGtPairing, flattenScoreRules } from './scoreRunGtPairing.js';
 import { emptyScoreRuleGroup, parseScoreMappingBundle } from './scoreMappingBundle.js';
+import { displayCell } from './datasetContent.js';
 
 function toCompareStr(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim();
   if (Array.isArray(value)) return value.map((item) => toCompareStr(item)).join(', ').trim();
-  return String(value).trim();
+  return displayCell(value).trim();
 }
 
 function normalizeForMatch(value, flags, isNumeric) {

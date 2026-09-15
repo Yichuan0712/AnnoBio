@@ -1,4 +1,5 @@
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
+import { displayCell } from '../../datasetContent.js';
 
 function normalizeNodeId(value) {
   return String(value || '').trim();
@@ -180,7 +181,7 @@ function inspectDatasetNode(rawNode, canvasState, options = {}) {
   const result = buildBaseInspection(rawNode, canvasState);
   const content = rawNode?.subsetContent || rawNode?.datasetContent || { headers: [], rows: [] };
   const headers = safeArray(content?.headers).map((header) => String(header ?? ''));
-  const rows = safeArray(content?.rows).map((row) => safeArray(row).map((cell) => String(cell ?? '')));
+  const rows = safeArray(content?.rows).map((row) => safeArray(row).map(displayCell));
   const rowWindow = buildRowWindow(
     rows,
     {
@@ -196,6 +197,7 @@ function inspectDatasetNode(rawNode, canvasState, options = {}) {
     headers,
     rowCount: rows.length,
     columnCount: headers.length,
+    columnTypes: safeArray(content?.columnTypes),
     rowWindow: rowWindow.window,
     sampleRows: rowWindow.items,
   };
