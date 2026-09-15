@@ -1131,6 +1131,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
           const cell = isImageCell(rowData[colIdx]) ? rowData[colIdx] : imageCell();
           const imageBox = document.createElement('div');
           imageBox.className = 'wd-image-cell';
+          if (!cell.assetIds.length) imageBox.classList.add('wd-image-cell--empty');
           const overlayActions = document.createElement('div');
           overlayActions.className = 'wd-image-overlay-actions';
           const add = document.createElement('button');
