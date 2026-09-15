@@ -1181,6 +1181,13 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     if (reviewId && typeof registerPendingReview === 'function') {
       registerPendingReview(reviewNodeId, reviewId);
     }
+    document.dispatchEvent(new CustomEvent('workflow:review-method-info', {
+      detail: {
+        reviewNodeId,
+        reviewMethodId: data.review_method_id || '',
+        reviewStages: Array.isArray(data.review_stages) ? data.review_stages : [],
+      },
+    }));
   } catch (e) {
     document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
     alert(e?.message || 'Review request failed.');
@@ -1711,6 +1718,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
                   <div class="score-detail-llm-row">
+                    <select id="score-detail-review-method-select" class="credentials-select score-detail-review-method-select" aria-label="Select review method" title="Review method: how suggestions are generated"></select>
                     <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model"></select>
                   </div>
                   <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create a Review node and run analysis with the selected model">Review</button>
@@ -1738,6 +1746,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const codeResultsEl = overlay.querySelector('#score-detail-code-results');
   const codeRunBtn = overlay.querySelector('.score-detail-code-run-btn');
   const llmSelect = overlay.querySelector('#score-detail-llm-select');
+  const reviewMethodSelect = overlay.querySelector('#score-detail-review-method-select');
   const saveToWorkspaceBtn = overlay.querySelector('#score-detail-save-to-workspace');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
   const reviewPayloadPreviewBtn = overlay.querySelector('#score-detail-review-payload-preview');
@@ -3536,6 +3545,36 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     void updateReviewButtonState();
   }
 
+  async function loadReviewMethods() {
+    if (!reviewMethodSelect) return;
+    try {
+      const [methodsRes, settingsRes] = await Promise.all([
+        fetch(`${API_BASE}/api/review/methods`),
+        fetch(`${API_BASE}/api/settings`),
+      ]);
+      const data = methodsRes.ok ? await methodsRes.json() : null;
+      const settings = settingsRes.ok ? await settingsRes.json() : null;
+      const methods = Array.isArray(data?.methods) ? data.methods : [];
+      if (methods.length <= 1) {
+        /* Nothing to choose between — don't show a picker with one option. */
+        reviewMethodSelect.hidden = true;
+        if (node && methods.length === 1) node.dataset.reviewMethod = methods[0].id;
+        return;
+      }
+      reviewMethodSelect.hidden = false;
+      reviewMethodSelect.innerHTML = methods
+        .map((m) => `<option value="${escapeAttr(m.id)}">${escapeHtml(m.label || m.id)}</option>`)
+        .join('');
+      let methodId = (node?.dataset?.reviewMethod || '').trim();
+      if (!methodId || !methods.some((m) => m.id === methodId)) {
+        const defaultId = (settings?.default_review_method || '').trim();
+        methodId = defaultId && methods.some((m) => m.id === defaultId) ? defaultId : methods[0].id;
+      }
+      reviewMethodSelect.value = methodId;
+      if (node) node.dataset.reviewMethod = methodId;
+    } catch (_) {}
+  }
+
   async function updateSaveToWorkspaceButton() {
     if (!saveToWorkspaceBtn) return;
     if (activePanelMode === 'code') {
@@ -3557,6 +3596,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
   });
+
+  if (reviewMethodSelect) {
+    reviewMethodSelect.addEventListener('change', () => {
+      const v = (reviewMethodSelect.value || '').trim();
+      if (node) {
+        node.dataset.reviewMethod = v;
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      }
+    });
+  }
 
   if (saveToWorkspaceBtn) {
     saveToWorkspaceBtn.addEventListener('click', async () => {
@@ -3785,6 +3834,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   syncRulesTabUi();
   renderRules();
   loadReviewCredentials();
+  loadReviewMethods();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
   if (selectedNodeId) {

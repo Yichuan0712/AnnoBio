@@ -1301,21 +1301,32 @@ function buildReviewResultUI(overlay, options) {
 
   function updateAnalysisFooter() {
     if (!analysisFooterEl) return;
-    const issueAnalysisComplete =
-      saved.streamComplete === true || saved.diagnosisComplete === true;
+    /* Methods other than the built-in one may have no per-row diagnosis concept at all
+     * (diagnosis_total stays 0), so `diagnosisComplete` flips true at job start — use
+     * overall job completion instead when the stage log is standing in for this tab. */
+    const stageLog = Array.isArray(saved.stage_log) ? saved.stage_log : [];
+    const usingStageLog = rowDiagnostics.length === 0 && stageLog.length > 0;
+    const issueAnalysisComplete = usingStageLog
+      ? saved.streamComplete === true
+      : (saved.streamComplete === true || saved.diagnosisComplete === true);
     const inProgress = !issueAnalysisComplete && isReviewStreamingNow();
     let statusClass = 'review-detail-status-note--incomplete';
     let statusText = REVIEW_INCOMPLETE_USER_MSG;
     if (issueAnalysisComplete) {
       statusClass = 'review-detail-status-note--complete';
-      const n = rowDiagnostics.length;
-      statusText =
-        n > 0
-          ? `Issue analysis complete. ${n} issue${n === 1 ? '' : 's'} listed.`
-          : 'Issue analysis complete. No failed rows.';
+      if (usingStageLog) {
+        const n = stageLog.length;
+        statusText = `Analysis complete. ${n} step${n === 1 ? '' : 's'} logged.`;
+      } else {
+        const n = rowDiagnostics.length;
+        statusText =
+          n > 0
+            ? `Issue analysis complete. ${n} issue${n === 1 ? '' : 's'} listed.`
+            : 'Issue analysis complete. No failed rows.';
+      }
     } else if (inProgress) {
       statusClass = 'review-detail-status-note--generating';
-      statusText = 'Issue analysis in progress…';
+      statusText = usingStageLog ? 'Analyzing…' : 'Issue analysis in progress…';
     }
     analysisFooterEl.innerHTML = '';
     const statusNote = document.createElement('p');
@@ -1357,10 +1368,49 @@ function buildReviewResultUI(overlay, options) {
     suggestionsFooterEl.appendChild(stack);
   }
 
+  /**
+   * Fallback for review methods other than the built-in one (backend/review_methods.py):
+   * they have no per-row diagnosis, only whatever `stage` events they chose to emit
+   * (workflowCanvas.js stashes these as `saved.stage_log`). Render those as a flat step
+   * log instead of the "no row-level analysis" placeholder, so the method's own process
+   * still has somewhere to show up.
+   */
+  function renderStageLog(stageLog) {
+    const stages = Array.isArray(saved.review_stages) ? saved.review_stages : [];
+    const stageLabel = (stageId) => stages.find((s) => String(s.id) === String(stageId))?.label || String(stageId);
+    stageLog.forEach((entry, idx) => {
+      const card = document.createElement('div');
+      card.className = 'review-detail-suggestion-card review-detail-diagnosis-card';
+      const kindNote = entry.kind && entry.kind !== 'note' ? ` — ${escapeHtml(entry.kind)}` : '';
+      let payloadPreview = '';
+      try {
+        const keys = Object.keys(entry.payload || {});
+        if (keys.length) {
+          payloadPreview = keys.map((k) => `${k}: ${JSON.stringify(entry.payload[k])}`).join(', ');
+        }
+      } catch (_) {}
+      card.innerHTML = `
+        <div class="review-detail-suggestion-card__main review-detail-diagnosis-card__main">
+          <span class="review-detail-suggestion-header">
+            <span class="review-detail-suggestion-num" aria-label="Step" title="Step ${idx + 1}">#${idx + 1}</span>
+            <strong class="review-detail-suggestion-section-name">${escapeHtml(stageLabel(entry.stage_id))}${kindNote}</strong>
+          </span>
+          <p class="review-detail-suggestion-reason review-detail-diagnosis-preview">${escapeHtml(payloadPreview || '—')}</p>
+        </div>
+      `;
+      diagnosisEl.appendChild(card);
+    });
+  }
+
   function renderRowDiagnostics() {
     if (!diagnosisEl) return;
     diagnosisEl.innerHTML = '';
     if (!rowDiagnostics.length) {
+      const stageLog = Array.isArray(saved.stage_log) ? saved.stage_log : [];
+      if (stageLog.length > 0) {
+        renderStageLog(stageLog);
+        return;
+      }
       const p = document.createElement('p');
       p.className = 'review-detail-placeholder';
       const streaming = isReviewStreamingNow();

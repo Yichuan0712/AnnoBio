@@ -781,6 +781,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           output_fields: outputFields,
           output_schema,
           comparison_rows,
+          review_method: (node.dataset.reviewMethod || '').trim() || undefined,
         };
       }
       openScoreDetailModal({

@@ -27,6 +27,8 @@ const MODEL_SETTINGS_DEFAULTS = {
   run_max_retries: 2,
   /** Rows within a single Run job processed concurrently (1-10). */
   run_concurrency: 4,
+  /** Registered review method id (backend/review_methods.py); blank = registry default. */
+  default_review_method: '',
   /** Distinct inputs with ≥1 unmatched comparison row; Phase 1 analyzes at most this many. */
   review_max_failed_rows: 30,
   /** Thompson-sampling trials per compositional optimization run (4–200). */
@@ -788,6 +790,10 @@ export function openSettingsModal() {
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
                             </div>
+                            <div class="defaults-field defaults-field--full">
+                              <label class="dataset-meta-label" for="settings-default-review-method">Default review method</label>
+                              <select id="settings-default-review-method" class="credentials-select dataset-meta-input" aria-label="Default review method"></select>
+                            </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-review-max-tokens">Max tokens (256–131072)</label>
                               <input type="number" id="settings-review-max-tokens" class="dataset-meta-input" min="256" max="131072" value="32768" aria-label="Review max tokens" />
@@ -828,6 +834,7 @@ export function openSettingsModal() {
 
   const runCredSelect = overlay.querySelector('#settings-default-run-credential');
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
+  const reviewMethodDefaultSelect = overlay.querySelector('#settings-default-review-method');
   const runMaxTokensInp = overlay.querySelector('#settings-run-max-tokens');
   const reviewMaxTokensInp = overlay.querySelector('#settings-review-max-tokens');
   const reviewMaxFailedRowsInp = overlay.querySelector('#settings-review-max-failed-rows');
@@ -882,6 +889,31 @@ export function openSettingsModal() {
     }
   }
 
+  async function loadReviewMethodOptions() {
+    try {
+      const res = await fetch(`${API_BASE}/api/review/methods`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data?.methods) ? data.methods : [];
+    } catch (e) {
+      console.error('Load review methods:', e);
+      return [];
+    }
+  }
+
+  function populateReviewMethodSelect(methods) {
+    if (!reviewMethodDefaultSelect) return;
+    const wrap = reviewMethodDefaultSelect.closest('.defaults-field');
+    /* Nothing to choose between — don't show a picker with one option (matches the per-node picker in
+     * scoreDetailModal.js, which hides the same way when the registry has ≤1 method). */
+    if (wrap) wrap.hidden = methods.length <= 1;
+    /* No blank "registry default" placeholder — the first method (the registry's own default, listed
+     * first by backend/review_methods.py) is always a real, visible selection. */
+    reviewMethodDefaultSelect.innerHTML = methods
+      .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label || m.id)}</option>`)
+      .join('');
+  }
+
   function populateCredentialSelects(credentials) {
     const optHtml = credentials.map((c) =>
       `<option value="${escapeHtml(c.id)}">${escapeHtml(c.model || c.llm || c.id)}</option>`
@@ -895,6 +927,15 @@ export function openSettingsModal() {
     if (!settings) return;
     runCredSelect.value = settings.default_run_credential_id || '';
     reviewCredSelect.value = settings.default_review_credential_id || '';
+    if (reviewMethodDefaultSelect) {
+      if (settings.default_review_method) {
+        reviewMethodDefaultSelect.value = settings.default_review_method;
+      } else if (reviewMethodDefaultSelect.options.length > 0) {
+        /* No explicit default — show the registry's own default (first option) rather than leaving
+         * whatever was previously selected, so "Restore defaults" visibly resets this field too. */
+        reviewMethodDefaultSelect.selectedIndex = 0;
+      }
+    }
     runMaxTokensInp.value = String(settings.run_max_tokens ?? MODEL_SETTINGS_DEFAULTS.run_max_tokens);
     reviewMaxTokensInp.value = String(settings.review_max_tokens ?? MODEL_SETTINGS_DEFAULTS.review_max_tokens);
     reviewMaxFailedRowsInp.value = String(settings.review_max_failed_rows ?? MODEL_SETTINGS_DEFAULTS.review_max_failed_rows);
@@ -929,8 +970,13 @@ export function openSettingsModal() {
       if (addMethodSelect?.value === 'openrouter') openRouterConnect?.submit();
       else liteLlmAdd?.submit();
     });
-    const [credentials, settings] = await Promise.all([loadCredentials(), loadSettings()]);
+    const [credentials, settings, reviewMethods] = await Promise.all([
+      loadCredentials(),
+      loadSettings(),
+      loadReviewMethodOptions(),
+    ]);
     populateCredentialSelects(credentials);
+    populateReviewMethodSelect(reviewMethods);
     applySettings(settings || MODEL_SETTINGS_DEFAULTS);
   }
 
@@ -953,6 +999,7 @@ export function openSettingsModal() {
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
+      default_review_method: (reviewMethodDefaultSelect?.value || '').trim() || '',
       run_max_tokens: runMaxTokens,
       review_max_tokens: reviewMaxTokens,
       review_max_failed_rows: reviewMaxFailedRows,

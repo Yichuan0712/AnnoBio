@@ -1412,15 +1412,23 @@ export function buildWorkflowCanvas(root, options = {}) {
         const dt = ev.diagnosis_total != null ? Math.max(0, parseInt(ev.diagnosis_total, 10)) : 0;
         diagnosisTotal = dt;
         diagnosisDone = 0;
+        const planReviewNode = getNodeById(reviewNodeId);
+        let planStages = [];
+        try {
+          planStages = JSON.parse(planReviewNode?.dataset.reviewStages || '[]');
+        } catch (_) {}
         streamSaved = {
           ...streamSaved,
           summary: ev.summary || '',
           suggestions: [],
           data_refinement: [],
           row_diagnostics: [],
+          stage_log: [],
           streamComplete: false,
           diagnosisComplete: dt === 0,
           reviewProgress: REVIEW_STREAM_PLAN_PCT,
+          review_method_id: planReviewNode?.dataset.reviewMethodId || '',
+          review_stages: Array.isArray(planStages) ? planStages : [],
         };
         /* Poll replays all events from `plan` each tick; clearing lists without resetting the id cursor made
          * `allocNextReviewSuggestionId` continue from disk — # on cards crept up every poll. */
@@ -1488,6 +1496,25 @@ export function buildWorkflowCanvas(root, options = {}) {
           payload: ev.payload && typeof ev.payload === 'object' ? ev.payload : {},
         });
         streamSaved.stage_log = stageLog;
+        /* Generic progress: place the latest-seen declared stage at an even fraction of the bar (no per-stage
+         * item counts to weight by, unlike diagnosis_row above), reserving the tail for `done`. Never regresses
+         * a percent already reached (e.g. by `plan`/`suggestions`), since events can arrive out of stage order. */
+        const stages = Array.isArray(streamSaved.review_stages) ? streamSaved.review_stages : [];
+        if (stages.length > 0) {
+          const seenIds = new Set(stageLog.map((s) => s.stage_id));
+          let lastSeenIdx = -1;
+          stages.forEach((s, i) => {
+            if (seenIds.has(String(s.id))) lastSeenIdx = Math.max(lastSeenIdx, i);
+          });
+          if (lastSeenIdx >= 0) {
+            const pct = Math.min(95, Math.round(((lastSeenIdx + 1) / stages.length) * 90));
+            const prevPct = Number.isFinite(streamSaved.reviewProgress) ? streamSaved.reviewProgress : 0;
+            if (pct > prevPct) {
+              setReviewNodeProgress(getNodeById(reviewNodeId), pct);
+              streamSaved.reviewProgress = pct;
+            }
+          }
+        }
       } else if (ev.type === 'done') {
         const finalizePct = 100;
         setReviewNodeProgress(getNodeById(reviewNodeId), finalizePct);
@@ -4033,6 +4060,19 @@ export function buildWorkflowCanvas(root, options = {}) {
     } catch (_) {}
   });
 
+  /** Non-default review methods report their id + declared stages once at job start (backend/review_methods.py); stashed on the node dataset for generic stage-progress calc (see the `stage` branch in the review event loop). */
+  document.addEventListener('workflow:review-method-info', (e) => {
+    const { reviewNodeId, reviewMethodId, reviewStages } = e.detail || {};
+    const reviewNode = getNodeById(reviewNodeId);
+    if (!reviewNode) return;
+    reviewNode.dataset.reviewMethodId = reviewMethodId || '';
+    try {
+      reviewNode.dataset.reviewStages = JSON.stringify(Array.isArray(reviewStages) ? reviewStages : []);
+    } catch (_) {
+      reviewNode.dataset.reviewStages = '[]';
+    }
+  });
+
   document.addEventListener('workflow:add-prompt-from-review', (e) => {
     const { sections = [], afterReviewNodeId, afterScoreNodeId } = e.detail || {};
     if (!Array.isArray(sections) || sections.length === 0) return;
@@ -4165,6 +4205,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         } catch (_) {}
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const reviewCredentialId = (node.dataset.reviewCredentialId || '').trim() || undefined;
+        const reviewMethod = (node.dataset.reviewMethod || '').trim() || undefined;
         const scoreRowExcludedFromScoring = (node.dataset.scoreRowExcludedFromScoring || '').trim();
         let scoreRowExcludedFromScoringObj;
         try {
@@ -4181,6 +4222,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           scoreRowExcludedFromScoring: scoreRowExcludedFromScoringObj,
           reviewResult: reviewResult || undefined,
           reviewCredentialId,
+          reviewMethod,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (node.dataset.scoreOutputBracketCollapsed === '1') out.scoreOutputBracketCollapsed = true;
@@ -4370,6 +4412,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         }
         if (n.reviewCredentialId && typeof n.reviewCredentialId === 'string') {
           scoreNode.dataset.reviewCredentialId = n.reviewCredentialId;
+        }
+        if (n.reviewMethod && typeof n.reviewMethod === 'string') {
+          scoreNode.dataset.reviewMethod = n.reviewMethod;
         }
         if (n.scoreOutputBracketCollapsed === true) scoreNode.dataset.scoreOutputBracketCollapsed = '1';
         if (n.scoreGtBracketCollapsed === true) scoreNode.dataset.scoreGtBracketCollapsed = '1';

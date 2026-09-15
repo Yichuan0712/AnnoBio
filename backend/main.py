@@ -100,6 +100,9 @@ PROCESS_DF_JOBS_FILE = DATA_DIR / "process_df_jobs.json"
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
     "default_review_credential_id": "",
+    # Registered review method id (backend/review_methods.py); blank = registry default. Per-node choice on a
+    # Review-capable Score node (dataset.reviewMethod) overrides this.
+    "default_review_method": "",
     "run_max_tokens": 8192,
     "review_max_tokens": 32768,
     "run_max_retries": 2,
@@ -158,6 +161,7 @@ class SettingsPatch(BaseModel):
     """Partial settings update; only provided fields are updated."""
     default_run_credential_id: str | None = None
     default_review_credential_id: str | None = None
+    default_review_method: str | None = None
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
@@ -387,6 +391,15 @@ def _save_settings(data: dict) -> None:
         if k in data:
             out[k] = data[k]
     SETTINGS_FILE.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _resolve_review_method_id(explicit: str | None, settings: dict | None = None) -> str:
+    """Explicit per-request id wins; else the configured default_review_method; else registry picks its own default."""
+    explicit = (explicit or "").strip()
+    if explicit:
+        return explicit
+    st = settings if settings is not None else _load_settings()
+    return str(st.get("default_review_method") or "").strip()
 
 
 def _load_credentials() -> list[dict]:
@@ -1443,7 +1456,7 @@ def review_analyze(body: ReviewRequest):
 
     review_id = str(uuid.uuid4())
     review_node_id = body.review_session_id or ""
-    review_method = get_review_method(body.review_method)
+    review_method = get_review_method(_resolve_review_method_id(body.review_method))
     with _review_jobs_lock:
         # At most one active worker per Review node (same idea as POST /api/run + run_node_id).
         if review_node_id:
@@ -2223,12 +2236,12 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
 
         from review_methods import get_review_method
 
-        review_method = get_review_method(body.review_method)
+        st = _load_settings()
+        review_method = get_review_method(_resolve_review_method_id(body.review_method, st))
 
         provider = _credential_provider(cred)
         model = _credential_model(cred) or ""
         base_url = _credential_base_url(cred)
-        st = _load_settings()
         max_tokens = int(st.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"])
         try:
             max_failed = int(st.get("review_max_failed_rows") or DEFAULT_SETTINGS["review_max_failed_rows"])
