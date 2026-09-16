@@ -36,7 +36,18 @@ from review_gepa import run_gepa
 from review_miprov2 import run_miprov2
 from review_pipeline import run_review_pipeline
 from review_simba import run_simba
-from review_textgrad import run_textgrad
+from safe_stdio import safe_print as _print
+
+try:
+    # Deliberately not in requirements.txt's normal install path (see the comment there) — a plain
+    # `pip install -r requirements.txt` environment (including the packaged desktop build) won't have
+    # it. Every other method must keep working when that's the case, so this is the one import in this
+    # file allowed to fail — everything above is a hard dependency (in requirements.txt) and should
+    # crash loudly like normal if missing.
+    from review_textgrad import run_textgrad
+except ImportError as e:
+    run_textgrad = None
+    _print(f"[review_methods] textgrad not importable ({e}) — 'textgrad' review method will not be registered. See requirements.txt for its separate install command.")
 
 ReviewMethodRunFn = Callable[..., None]
 
@@ -71,8 +82,8 @@ class ReviewMethodSpec:
 
 DEFAULT_REVIEW_METHOD_ID = "issue_analysis_suggestions"
 
-REGISTRY: dict[str, ReviewMethodSpec] = {
-    DEFAULT_REVIEW_METHOD_ID: ReviewMethodSpec(
+_ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
+    (DEFAULT_REVIEW_METHOD_ID, ReviewMethodSpec(
         id=DEFAULT_REVIEW_METHOD_ID,
         label="Thompson Prompt Search (issue-guided local search)",
         stages=[
@@ -81,8 +92,8 @@ REGISTRY: dict[str, ReviewMethodSpec] = {
         ],
         run=run_review_pipeline,
         supports_segment_optimization=True,
-    ),
-    "gepa": ReviewMethodSpec(
+    )),
+    ("gepa", ReviewMethodSpec(
         id="gepa",
         label="GEPA (reflective evolution)",
         stages=[
@@ -91,8 +102,8 @@ REGISTRY: dict[str, ReviewMethodSpec] = {
             ReviewMethodStage(id="select", label="Select"),
         ],
         run=run_gepa,
-    ),
-    "miprov2": ReviewMethodSpec(
+    )),
+    ("miprov2", ReviewMethodSpec(
         id="miprov2",
         label="MIPROv2 (instructions + few-shot)",
         stages=[
@@ -101,8 +112,8 @@ REGISTRY: dict[str, ReviewMethodSpec] = {
             ReviewMethodStage(id="select", label="Select"),
         ],
         run=run_miprov2,
-    ),
-    "bootstrap_fewshot": ReviewMethodSpec(
+    )),
+    ("bootstrap_fewshot", ReviewMethodSpec(
         id="bootstrap_fewshot",
         label="BootstrapFewShotWithRandomSearch (few-shot only)",
         stages=[
@@ -111,8 +122,8 @@ REGISTRY: dict[str, ReviewMethodSpec] = {
             ReviewMethodStage(id="select", label="Select"),
         ],
         run=run_bootstrap_fewshot,
-    ),
-    "textgrad": ReviewMethodSpec(
+    )),
+    ("textgrad", None if run_textgrad is None else ReviewMethodSpec(
         id="textgrad",
         label="TextGrad (textual gradient descent)",
         stages=[
@@ -121,8 +132,8 @@ REGISTRY: dict[str, ReviewMethodSpec] = {
             ReviewMethodStage(id="select", label="Select"),
         ],
         run=run_textgrad,
-    ),
-    "copro": ReviewMethodSpec(
+    )),
+    ("copro", ReviewMethodSpec(
         id="copro",
         label="COPRO (coordinate ascent, instructions only)",
         stages=[
@@ -131,8 +142,8 @@ REGISTRY: dict[str, ReviewMethodSpec] = {
             ReviewMethodStage(id="select", label="Select"),
         ],
         run=run_copro,
-    ),
-    "simba": ReviewMethodSpec(
+    )),
+    ("simba", ReviewMethodSpec(
         id="simba",
         label="SIMBA (self-reflective rules + few-shot)",
         stages=[
@@ -141,8 +152,10 @@ REGISTRY: dict[str, ReviewMethodSpec] = {
             ReviewMethodStage(id="select", label="Select"),
         ],
         run=run_simba,
-    ),
-}
+    )),
+]
+
+REGISTRY: dict[str, ReviewMethodSpec] = {method_id: spec for method_id, spec in _ALL_METHODS if spec is not None}
 
 
 def get_review_method(method_id: str | None) -> ReviewMethodSpec:
