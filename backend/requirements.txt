@@ -11,3 +11,15 @@ langchain-anthropic>=0.2.0
 langchain-google-genai>=2.0.0
 langchain-core>=0.3.0
 rapidfuzz>=3.0.0
+gepa==0.1.4
+dspy==3.3.1
+
+# textgrad's normal `pip install textgrad` pulls in ~100MB of dependencies its own benchmark-dataset
+# example scripts need (datasets, pyarrow, gdown, pandas, pillow) but review_textgrad.py's actual usage
+# never touches. `pip install -r requirements.txt` intentionally does NOT install textgrad (a normal
+# install here would defeat the point) — install it separately with:
+#   pip install --no-deps textgrad==0.1.8
+#   pip install platformdirs diskcache
+# (diskcache is already pulled in transitively by gepa above; platformdirs is listed explicitly so this
+# install doesn't depend on incidental transitive install order.) See review_textgrad.py's module
+# docstring for what was verified to work without the heavy packages.

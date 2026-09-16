@@ -65,6 +65,7 @@ import { DATASET_BORDER_COLORS } from './workflowNodeColors.js';
 import { showAlert, showConfirm } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell } from './datasetContent.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -291,7 +292,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     if (v === null || v === undefined) return '';
     if (typeof v === 'string') return v.trim();
     if (Array.isArray(v)) return v.map((x) => toCompareStr(x)).join(', ').trim();
-    return String(v).trim();
+    return displayCell(v).trim();
   };
   const getRunValue = (runResult, outputKey, runWs, outputFields) => {
     const displayIdx = runResult?.row_index ?? 0;
@@ -402,7 +403,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
       }
       const colIdx = hdrsForPrompt.findIndex((h) => String(h).trim() === col);
       const val = colIdx >= 0 ? (wsRow[colIdx] ?? '') : '';
-      out[name] = val === null || val === undefined ? '' : String(val);
+      out[name] = cloneCell(val);
     }
     return out;
   }
@@ -787,7 +788,7 @@ async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datase
       if (!col) { out[name] = ''; continue; }
       const colIdx = hdrsForPrompt.findIndex((h) => String(h).trim() === col);
       const val = colIdx >= 0 ? (wsRow[colIdx] ?? '') : '';
-      out[name] = val === null || val === undefined ? '' : String(val);
+      out[name] = cloneCell(val);
     }
     return out;
   }
@@ -1096,7 +1097,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   let connections = [];
 
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content (imported or sampled) */
-  const datasetContentByNodeId = new Map();
+  const datasetContentByNodeId = new DatasetContentMap();
 
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
@@ -1411,15 +1412,24 @@ export function buildWorkflowCanvas(root, options = {}) {
         const dt = ev.diagnosis_total != null ? Math.max(0, parseInt(ev.diagnosis_total, 10)) : 0;
         diagnosisTotal = dt;
         diagnosisDone = 0;
+        const planReviewNode = getNodeById(reviewNodeId);
+        let planStages = [];
+        try {
+          planStages = JSON.parse(planReviewNode?.dataset.reviewStages || '[]');
+        } catch (_) {}
         streamSaved = {
           ...streamSaved,
           summary: ev.summary || '',
           suggestions: [],
           data_refinement: [],
           row_diagnostics: [],
+          stage_log: [],
           streamComplete: false,
           diagnosisComplete: dt === 0,
           reviewProgress: REVIEW_STREAM_PLAN_PCT,
+          review_method_id: planReviewNode?.dataset.reviewMethodId || '',
+          review_stages: Array.isArray(planStages) ? planStages : [],
+          supports_segment_optimization: planReviewNode?.dataset.supportsSegmentOptimization !== '0',
         };
         /* Poll replays all events from `plan` each tick; clearing lists without resetting the id cursor made
          * `allocNextReviewSuggestionId` continue from disk — # on cards crept up every poll. */
@@ -1478,6 +1488,34 @@ export function buildWorkflowCanvas(root, options = {}) {
         );
         setReviewNodeProgress(getNodeById(reviewNodeId), REVIEW_STREAM_DATA_PCT);
         streamSaved.reviewProgress = REVIEW_STREAM_DATA_PCT;
+      } else if (ev.type === 'stage' && ev.stage_id) {
+        /* Generic step event for review methods other than the built-in one (backend/review_methods.py). */
+        const stageLog = Array.isArray(streamSaved.stage_log) ? streamSaved.stage_log.slice() : [];
+        stageLog.push({
+          stage_id: String(ev.stage_id),
+          kind: String(ev.kind || 'note'),
+          payload: ev.payload && typeof ev.payload === 'object' ? ev.payload : {},
+        });
+        streamSaved.stage_log = stageLog;
+        /* Generic progress: place the latest-seen declared stage at an even fraction of the bar (no per-stage
+         * item counts to weight by, unlike diagnosis_row above), reserving the tail for `done`. Never regresses
+         * a percent already reached (e.g. by `plan`/`suggestions`), since events can arrive out of stage order. */
+        const stages = Array.isArray(streamSaved.review_stages) ? streamSaved.review_stages : [];
+        if (stages.length > 0) {
+          const seenIds = new Set(stageLog.map((s) => s.stage_id));
+          let lastSeenIdx = -1;
+          stages.forEach((s, i) => {
+            if (seenIds.has(String(s.id))) lastSeenIdx = Math.max(lastSeenIdx, i);
+          });
+          if (lastSeenIdx >= 0) {
+            const pct = Math.min(95, Math.round(((lastSeenIdx + 1) / stages.length) * 90));
+            const prevPct = Number.isFinite(streamSaved.reviewProgress) ? streamSaved.reviewProgress : 0;
+            if (pct > prevPct) {
+              setReviewNodeProgress(getNodeById(reviewNodeId), pct);
+              streamSaved.reviewProgress = pct;
+            }
+          }
+        }
       } else if (ev.type === 'done') {
         const finalizePct = 100;
         setReviewNodeProgress(getNodeById(reviewNodeId), finalizePct);
@@ -1774,6 +1812,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       existingCount,
       datasetHeaders,
       datasetRows,
+      datasetColumnTypes: sourceContent.columnTypes?.slice(),
+      datasetRowIds: datasetRows.map(() => crypto.randomUUID()),
       datasetName: (name && name.trim()) ? name.trim() : findNextWorkingDatasetName(normalizedSamplerNodeId),
       datasetNotes: notes || formatSamplerDescription(samplerNode),
       startLeft: typeof left === 'number'
@@ -1898,6 +1938,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       note: node.dataset.promptNote || '',
       sections: Array.isArray(sections) ? sections : [],
       outputFormat,
+      inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
     };
   }
 
@@ -2131,7 +2172,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           node: dsNode,
           getContent: () => datasetContentByNodeId.get(dsNode.dataset.nodeId) || { headers: [], rows: [] },
           saveContent: (content) => {
-            datasetContentByNodeId.set(dsNode.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
+            datasetContentByNodeId.set(dsNode.dataset.nodeId, content);
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           },
         });
@@ -2145,7 +2186,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           node: dsNode,
           getContent: () => datasetContentByNodeId.get(dsNode.dataset.nodeId) || { headers: [], rows: [] },
           saveContent: (content) => {
-            datasetContentByNodeId.set(dsNode.dataset.nodeId, { headers: content.headers.slice(), rows: content.rows.map((r) => r.slice()) });
+            datasetContentByNodeId.set(dsNode.dataset.nodeId, content);
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           },
         });
@@ -2313,7 +2354,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
       function getSubsetContent(nodeId) {
         const c = datasetContentByNodeId.get(nodeId);
-        return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+        return c || { headers: [], columnTypes: [], rowIds: [], rows: [] };
       }
       function getPromptTemplate() {
         if (!promptNode) return { sections: [], outputSchema: { return_shape: 'single', fields: [] } };
@@ -2326,7 +2367,9 @@ export function buildWorkflowCanvas(root, options = {}) {
           fields = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
         } catch (_) {}
         const returnShape = promptNode.dataset.promptOutputReturnShape || 'single';
-        return { sections: sec, outputSchema: { return_shape: returnShape, fields } };
+        let inputTypes = {};
+        try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
+        return { sections: sec, inputTypes, outputSchema: { return_shape: returnShape, fields } };
       }
       openRunDetailModal({
         node: runNode,
@@ -2921,6 +2964,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         note: node.dataset.promptNote || '',
         sections: Array.isArray(sections) ? sections : [],
         outputFormat,
+        inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
         left: isNewVersion ? left + width + NEW_NODE_OFFSET : left,
         top: isNewVersion ? top : top + height + NEW_NODE_OFFSET,
       });
@@ -3789,12 +3833,14 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:add-dataset-node', (e) => {
-    const { name = '', notes = '', headers, rows, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', colorIndex: detailColorIndex } = e.detail || {};
+    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', colorIndex: detailColorIndex } = e.detail || {};
     const VISIBLE_PADDING = 40;
     let startLeft = typeof detailLeft === 'number' ? detailLeft : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
     let startTop = typeof detailTop === 'number' ? detailTop : (scrollWrapper.scrollTop + VISIBLE_PADDING);
     let datasetHeaders = Array.isArray(headers) ? headers.slice() : [];
     let datasetRows = Array.isArray(rows) ? rows.map((r) => r.slice()) : [];
+    let datasetColumnTypes = Array.isArray(columnTypes) ? columnTypes.slice() : undefined;
+    let datasetRowIds = Array.isArray(rowIds) ? rowIds.slice() : undefined;
     let datasetName = (name && name.trim()) ? name.trim() : '';
     let datasetNotes = notes || '';
 
@@ -3817,6 +3863,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         startTop = prepared.startTop;
         datasetHeaders = prepared.datasetHeaders;
         datasetRows = prepared.datasetRows;
+        datasetColumnTypes = prepared.datasetColumnTypes;
+        datasetRowIds = prepared.datasetRowIds;
         datasetName = prepared.datasetName;
         datasetNotes = prepared.datasetNotes;
       } catch (error) {
@@ -3839,6 +3887,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       colorIndex: detailColorIndex,
       headers: datasetHeaders,
       rows: datasetRows,
+      columnTypes: datasetColumnTypes,
+      rowIds: datasetRowIds,
       ensureUniqueName: false,
     });
     if (samplerNodeId && newNode?.nodeId) {
@@ -4011,6 +4061,20 @@ export function buildWorkflowCanvas(root, options = {}) {
     } catch (_) {}
   });
 
+  /** Non-default review methods report their id + declared stages once at job start (backend/review_methods.py); stashed on the node dataset for generic stage-progress calc (see the `stage` branch in the review event loop). */
+  document.addEventListener('workflow:review-method-info', (e) => {
+    const { reviewNodeId, reviewMethodId, reviewStages, supportsSegmentOptimization } = e.detail || {};
+    const reviewNode = getNodeById(reviewNodeId);
+    if (!reviewNode) return;
+    reviewNode.dataset.reviewMethodId = reviewMethodId || '';
+    reviewNode.dataset.supportsSegmentOptimization = supportsSegmentOptimization === false ? '0' : '1';
+    try {
+      reviewNode.dataset.reviewStages = JSON.stringify(Array.isArray(reviewStages) ? reviewStages : []);
+    } catch (_) {
+      reviewNode.dataset.reviewStages = '[]';
+    }
+  });
+
   document.addEventListener('workflow:add-prompt-from-review', (e) => {
     const { sections = [], afterReviewNodeId, afterScoreNodeId } = e.detail || {};
     if (!Array.isArray(sections) || sections.length === 0) return;
@@ -4039,8 +4103,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           note: node.dataset.datasetNote ?? node.dataset.subsetNote ?? '',
           samplerNodeId: node.dataset.samplerNodeId || '',
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
-          subsetContent: content ? { headers: content.headers, rows: content.rows } : undefined,
-          datasetContent: content ? { headers: content.headers, rows: content.rows } : undefined,
+          datasetContent: content ? cloneDatasetContent(content) : undefined,
           nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
         };
       }
@@ -4144,6 +4207,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         } catch (_) {}
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const reviewCredentialId = (node.dataset.reviewCredentialId || '').trim() || undefined;
+        const reviewMethod = (node.dataset.reviewMethod || '').trim() || undefined;
+        const gepaTargetSectionIndexRaw = parseInt(node.dataset.gepaTargetSectionIndex, 10);
+        const gepaTargetSectionIndex = Number.isInteger(gepaTargetSectionIndexRaw) ? gepaTargetSectionIndexRaw : undefined;
         const scoreRowExcludedFromScoring = (node.dataset.scoreRowExcludedFromScoring || '').trim();
         let scoreRowExcludedFromScoringObj;
         try {
@@ -4160,6 +4226,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           scoreRowExcludedFromScoring: scoreRowExcludedFromScoringObj,
           reviewResult: reviewResult || undefined,
           reviewCredentialId,
+          reviewMethod,
+          gepaTargetSectionIndex,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (node.dataset.scoreOutputBracketCollapsed === '1') out.scoreOutputBracketCollapsed = true;
@@ -4210,6 +4278,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         note: node.dataset.promptNote || '',
         sections: Array.isArray(sections) ? sections : [],
         outputFormat,
+        inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
         nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
       };
     });
@@ -4224,7 +4293,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const createdNodes = [];
     list.forEach((n) => {
       if (n.type === 'dataset' || n.type === 'subset') {
-        const content = n.subsetContent || n.datasetContent;
+        const content = n.datasetContent || n.subsetContent;
         const node = createDatasetNode({
           name: n.name || '',
           notes: n.note || '',
@@ -4235,6 +4304,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           colorIndex: n.colorIndex,
           headers: content?.headers,
           rows: content?.rows,
+          columnTypes: content?.columnTypes,
+          rowIds: content?.rowIds,
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         createdNodes.push(node);
@@ -4347,6 +4418,12 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.reviewCredentialId && typeof n.reviewCredentialId === 'string') {
           scoreNode.dataset.reviewCredentialId = n.reviewCredentialId;
         }
+        if (n.reviewMethod && typeof n.reviewMethod === 'string') {
+          scoreNode.dataset.reviewMethod = n.reviewMethod;
+        }
+        if (Number.isInteger(n.gepaTargetSectionIndex)) {
+          scoreNode.dataset.gepaTargetSectionIndex = String(n.gepaTargetSectionIndex);
+        }
         if (n.scoreOutputBracketCollapsed === true) scoreNode.dataset.scoreOutputBracketCollapsed = '1';
         if (n.scoreGtBracketCollapsed === true) scoreNode.dataset.scoreGtBracketCollapsed = '1';
         if (n.scoreTableRulesColumnFilter === true) scoreNode.dataset.scoreTableRulesColumnFilter = '1';
@@ -4379,6 +4456,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           note: n.note || '',
           sections: n.sections || n.fields || [],
           outputFormat: n.outputFormat,
+          inputTypes: n.inputTypes,
           left: n.left,
           top: n.top,
           nodeId: n.nodeId || n.id,

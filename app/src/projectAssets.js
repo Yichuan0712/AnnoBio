@@ -1,0 +1,288 @@
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
+import os from 'node:os';
+
+export const YC_EXTENSION = '.yc';
+const BUNDLE_VERSION = 1;
+
+export const assetRootFor = (file) => file.slice(0, file.length - path.extname(file).length) + '.assets';
+export const isBundledProjectFile = (file) => path.extname(String(file || '')).toLowerCase() === YC_EXTENSION;
+
+async function replaceFile(temp, file) {
+  try {
+    await fs.rename(temp, file);
+    return;
+  } catch (error) {
+    if (!['EEXIST', 'EPERM', 'ENOTEMPTY'].includes(error.code)) {
+      await fs.unlink(temp).catch(() => {});
+      throw error;
+    }
+  }
+
+  const backup = file + '.' + crypto.randomUUID() + '.old';
+  try {
+    await fs.rename(file, backup);
+    try {
+      await fs.rename(temp, file);
+    } catch (error) {
+      await fs.rename(backup, file).catch(() => {});
+      throw error;
+    }
+    await fs.unlink(backup).catch(() => {});
+  } catch (error) {
+    await fs.unlink(temp).catch(() => {});
+    throw error;
+  }
+}
+
+async function createTempAssetRoot() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prompt-studio-yc-'));
+  await fs.mkdir(path.join(root, 'originals'), { recursive: true });
+  return root;
+}
+
+export async function checkedAssetPath(root, relative) {
+  const base = await fs.realpath(root);
+  const file = await fs.realpath(path.resolve(base, relative));
+  const rel = path.relative(base, file);
+  if (rel.startsWith('..' + path.sep) || rel === '..' || path.isAbsolute(rel)) throw new Error('Image is outside the project resource folder.');
+  return file;
+}
+
+export class ProjectAssets {
+  constructor({ decodeImage, registerSession }) {
+    this.decodeImage = decodeImage;
+    this.registerSession = registerSession;
+    this.file = null;
+    this.assets = {};
+    this.assetRoot = null;
+    this.tempAssetRoot = null;
+    this.queue = Promise.resolve();
+  }
+
+  enqueue(operation) {
+    const result = this.queue.then(operation);
+    this.queue = result.catch(() => {});
+    return result;
+  }
+
+  async setAssetRoot(root, { temporary = false } = {}) {
+    const previousTemp = this.tempAssetRoot;
+    this.assetRoot = root;
+    this.tempAssetRoot = temporary ? root : null;
+    if (previousTemp && previousTemp !== root) {
+      await fs.rm(previousTemp, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  async ensureAssetRoot(file = this.file) {
+    if (!file) throw new Error('Create or open a project first.');
+    if (isBundledProjectFile(file)) {
+      if (!this.assetRoot) {
+        await this.setAssetRoot(await createTempAssetRoot(), { temporary: true });
+      }
+      await fs.mkdir(path.join(this.assetRoot, 'originals'), { recursive: true });
+      return this.assetRoot;
+    }
+    const root = assetRootFor(file);
+    await this.setAssetRoot(root, { temporary: false });
+    return root;
+  }
+
+  async readAssetData(id, asset) {
+    if (!this.file) throw new Error('Create or open a project first.');
+    const root = this.assetRoot || (isBundledProjectFile(this.file) ? await this.ensureAssetRoot(this.file) : assetRootFor(this.file));
+    const file = await checkedAssetPath(root, asset.path);
+    const data = await fs.readFile(file);
+    if ('sha256:' + crypto.createHash('sha256').update(data).digest('hex') !== id) throw new Error(`Image changed: ${asset.name}`);
+    return data;
+  }
+
+  async readBundlePayload(file) {
+    try {
+      const payload = JSON.parse(await fs.readFile(file, 'utf8'));
+      return payload && typeof payload === 'object' && payload.bundleVersion === BUNDLE_VERSION ? payload : null;
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  async load(file) {
+    return this.enqueue(async () => {
+      const resolved = path.resolve(file);
+      const payload = JSON.parse(await fs.readFile(resolved, 'utf8'));
+      const bundled = payload && typeof payload === 'object' && payload.bundleVersion === BUNDLE_VERSION && payload.project;
+      const state = bundled ? payload.project : payload;
+      if (state.schemaVersion > 2) throw new Error('This project requires a newer version of Prompt Studio.');
+      this.file = resolved;
+      this.assets = state.assets || {};
+      if (bundled) {
+        const root = await createTempAssetRoot();
+        for (const [id, asset] of Object.entries(this.assets)) {
+          const encoded = payload.assetBlobs?.[id];
+          if (!encoded) throw new Error(`Missing bundled image data: ${asset.name || id}`);
+          const target = path.join(root, asset.path);
+          await fs.mkdir(path.dirname(target), { recursive: true });
+          await fs.writeFile(target, Buffer.from(encoded, 'base64'));
+        }
+        await this.setAssetRoot(root, { temporary: true });
+      } else {
+        await this.setAssetRoot(assetRootFor(resolved), { temporary: false });
+      }
+      return state;
+    });
+  }
+
+  async save(file, state) {
+    return this.enqueue(async () => {
+      file = path.resolve(file);
+      const newProject = !state.nodes?.length;
+      const assets = newProject ? {} : this.assets;
+
+      if (isBundledProjectFile(file)) {
+        const existingBundle = await this.readBundlePayload(file);
+        const assetBlobs = {};
+        for (const [id, asset] of Object.entries(assets)) {
+          const data = await this.readAssetData(id, asset);
+          assetBlobs[id] = data.toString('base64');
+        }
+        const payload = {
+          bundleVersion: BUNDLE_VERSION,
+          project: { ...state, schemaVersion: 2, assets },
+          assetBlobs,
+          agentSession: existingBundle?.agentSession || null,
+        };
+        const temp = file + '.' + crypto.randomUUID() + '.tmp';
+        await fs.writeFile(temp, JSON.stringify(payload, null, 2), 'utf8');
+        await replaceFile(temp, file);
+        this.file = file;
+        this.assets = assets;
+        await this.ensureAssetRoot(file);
+        return;
+      }
+
+      const sourceRoot = this.assetRoot || (this.file ? assetRootFor(this.file) : null);
+      if (sourceRoot && Object.keys(assets).length) {
+        const root = assetRootFor(file);
+        await fs.mkdir(path.join(root, 'originals'), { recursive: true });
+        for (const [id, asset] of Object.entries(assets)) {
+          const source = await checkedAssetPath(sourceRoot, asset.path);
+          const data = await fs.readFile(source);
+          if ('sha256:' + crypto.createHash('sha256').update(data).digest('hex') !== id) throw new Error(`Image changed: ${asset.name}`);
+          const dest = path.join(root, 'originals', path.basename(asset.path));
+          await fs.writeFile(dest, data);
+        }
+      }
+
+      const payload = { ...state, schemaVersion: 2, assets };
+      try {
+        const old = JSON.parse(await fs.readFile(file, 'utf8'));
+        if (!old.schemaVersion) await fs.copyFile(file, file + '.v1.bak', 1).catch((e) => { if (e.code !== 'EEXIST') throw e; });
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const temp = file + '.' + crypto.randomUUID() + '.tmp';
+      await fs.writeFile(temp, JSON.stringify(payload, null, 2), 'utf8');
+      await replaceFile(temp, file);
+      this.file = file;
+      this.assets = assets;
+      await this.setAssetRoot(assetRootFor(file), { temporary: false });
+    });
+  }
+
+  async loadAgentSession(file) {
+    return this.enqueue(async () => {
+      const resolved = path.resolve(file);
+      if (!isBundledProjectFile(resolved)) return null;
+      const payload = await this.readBundlePayload(resolved);
+      return payload?.agentSession || null;
+    });
+  }
+
+  async saveAgentSession(file, agentSession) {
+    return this.enqueue(async () => {
+      const resolved = path.resolve(file);
+      if (!isBundledProjectFile(resolved)) return false;
+      const payload = await this.readBundlePayload(resolved);
+      if (!payload?.project) throw new Error('Project file is missing or invalid.');
+      const temp = resolved + '.' + crypto.randomUUID() + '.tmp';
+      await fs.writeFile(temp, JSON.stringify({
+        ...payload,
+        agentSession: agentSession || null,
+      }, null, 2), 'utf8');
+      await replaceFile(temp, resolved);
+      return true;
+    });
+  }
+
+  async importFiles(files) {
+    return this.enqueue(async () => {
+      if (!this.file) throw new Error('Create or open a project first.');
+      const root = await this.ensureAssetRoot(this.file);
+      await fs.mkdir(path.join(root, 'originals'), { recursive: true });
+      const result = [];
+      for (const file of files) {
+        const stat = await fs.stat(file);
+        if (!stat.isFile() || stat.size > 30 * 1024 * 1024) throw new Error(`Image must be a file under 30 MB: ${path.basename(file)}`);
+        const data = await fs.readFile(file);
+        const png = data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
+        const jpg = data[0] === 255 && data[1] === 216 && data[2] === 255;
+        const webp = data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP';
+        if (!png && !jpg && !webp) throw new Error(`Unsupported image: ${path.basename(file)}. Use PNG, JPEG or WebP.`);
+        if ((png && data.includes(Buffer.from('acTL'))) || (webp && data.includes(Buffer.from('ANIM')))) throw new Error('Animated images are not supported. Import a still image.');
+        const image = this.decodeImage(data);
+        if (!image || !image.width || !image.height) throw new Error(`Cannot decode image: ${path.basename(file)}`);
+        const hash = crypto.createHash('sha256').update(data).digest('hex');
+        const id = 'sha256:' + hash;
+        const ext = png ? 'png' : jpg ? 'jpg' : 'webp';
+        const relative = `originals/${hash}.${ext}`;
+        await fs.writeFile(path.join(root, relative), data, { flag: 'wx' }).catch((e) => { if (e.code !== 'EEXIST') throw e; });
+        this.assets[id] = { path: relative, name: path.basename(file), mime: `image/${jpg ? 'jpeg' : ext}`, bytes: data.length, width: image.width, height: image.height };
+        result.push({ id, ...this.assets[id] });
+      }
+      return result;
+    });
+  }
+
+  async preview(id, thumbnail = true) {
+    const asset = this.assets[id];
+    if (!asset || !this.file) throw new Error('Image is not in the current project.');
+    const data = await this.readAssetData(id, asset);
+    const image = this.decodeImage(data, thumbnail ? 160 : null);
+    return { ...asset, url: image.url || `data:${asset.mime};base64,${data.toString('base64')}` };
+  }
+
+  async prepare() {
+    await this.queue;
+    if (!this.file || !Object.keys(this.assets).length) return {};
+    const root = this.assetRoot || (isBundledProjectFile(this.file) ? await this.ensureAssetRoot(this.file) : assetRootFor(this.file));
+    return this.registerSession({ root, assets: this.assets });
+  }
+
+  async exportDataset(file, content) {
+    const imageDir = path.basename(file, path.extname(file)) + '.images';
+    const root = path.join(path.dirname(file), imageDir);
+    await fs.mkdir(root, { recursive: true });
+    const rows = [];
+    for (const row of content.rows) {
+      const out = [];
+      for (const cell of row) {
+        if (cell?.kind !== 'images') { out.push(String(cell ?? '')); continue; }
+        const names = [];
+        for (const id of cell.assetIds) {
+          const asset = this.assets[id];
+          if (!asset) throw new Error('Missing image: ' + id);
+          const data = await this.readAssetData(id, asset);
+          const name = path.basename(asset.path);
+          await fs.writeFile(path.join(root, name), data);
+          names.push(`${imageDir}/${name}`);
+        }
+        out.push(JSON.stringify(names));
+      }
+      rows.push(out);
+    }
+    const csv = (v) => '"' + String(v).replace(/"/g, '""') + '"';
+    await fs.writeFile(file, '\ufeff' + [content.headers, ...rows].map((row) => row.map(csv).join(',')).join('\r\n'));
+    await fs.writeFile(file + '.schema.json', JSON.stringify({ headers: content.headers, columnTypes: content.columnTypes }, null, 2));
+  }
+}

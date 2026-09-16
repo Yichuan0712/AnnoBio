@@ -1,4 +1,5 @@
 from pathlib import Path
+import concurrent.futures
 import json
 import os
 import re
@@ -36,14 +37,24 @@ _SEP = "=" * 60      # unified separator for LLM prompt/output logs
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from run_output_schema import (
+    sanitize_field_name as _sanitize_field_name,
+    build_output_model as _build_output_model,
+    build_table_output_model as _build_table_output_model,
+    run_field_value_non_empty as _run_field_value_non_empty,
+    run_structured_output_is_empty as _run_structured_output_is_empty,
+)
 
 from agent.chat.agent_chat import build_agent_messages, format_agent_messages_for_log
 from agent.prompt.agent_plan_prompt import build_agent_plan_instruction_prefix
 from llm import chat as llm_chat, run_structured as llm_run_structured
 from provider_detect import detect_provider, verify_credential
 
+from asset_store import router as asset_router, resolve_content
+
 app = FastAPI()
+app.include_router(asset_router)
 
 BACKEND_HOST = os.environ.get("PROMPT_STUDIO_BACKEND_HOST", "127.0.0.1")
 BACKEND_PORT = int(os.environ.get("PROMPT_STUDIO_BACKEND_PORT", "8000"))
@@ -96,13 +107,34 @@ PROCESS_DF_JOBS_FILE = DATA_DIR / "process_df_jobs.json"
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
     "default_review_credential_id": "",
+    # Registered review method id (backend/review_methods.py); blank = registry default. Per-node choice on a
+    # Review-capable Score node (dataset.reviewMethod) overrides this.
+    "default_review_method": "",
     "run_max_tokens": 8192,
     "review_max_tokens": 32768,
     "run_max_retries": 2,
+    # Rows within a single Run job processed concurrently (1-10).
+    "run_concurrency": 4,
     # Cap: distinct worksheet inputs that have at least one unmatched Score comparison row (not raw row count).
     "review_max_failed_rows": 30,
     # Thompson-sampling trials per optimization run (4–200).
     "optimization_max_trials": 40,
+    # GEPA reflective-evolution max iterations (4-200); kept separate from optimization_max_trials because
+    # each GEPA iteration runs the task model against every targeted input, not just a suggestion's rows.
+    "gepa_max_iterations": 15,
+    # MIPROv2 trials (4-200); its own setting for the same reason gepa_max_iterations is separate from
+    # optimization_max_trials — a different method, a different per-trial cost.
+    "miprov2_num_trials": 10,
+    # BootstrapFewShotWithRandomSearch candidate demo sets (2-100); own setting for the same reason.
+    "bootstrap_fewshot_num_candidates": 10,
+    # TextGrad textual-gradient-descent steps (2-50); own setting for the same reason.
+    "textgrad_num_steps": 6,
+    # COPRO breadth (instruction variants proposed per round, 2-30) and depth (rounds, 1-10); own
+    # settings for the same reason gepa_max_iterations is separate from optimization_max_trials.
+    "copro_breadth": 6,
+    "copro_depth": 3,
+    # SIMBA mini-batch introspection steps (2-40); own setting for the same reason.
+    "simba_max_steps": 8,
     # Show Reset & Debug buttons on suggestion cards.
     "debug_mode": False,
     # Optional: raises PubMed E-utilities rate limit from 3/sec to 10/sec when set.
@@ -152,9 +184,11 @@ class SettingsPatch(BaseModel):
     """Partial settings update; only provided fields are updated."""
     default_run_credential_id: str | None = None
     default_review_credential_id: str | None = None
+    default_review_method: str | None = None
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     run_max_retries: int | None = Field(default=None, ge=0, le=5)
+    run_concurrency: int | None = Field(default=None, ge=1, le=10)
     review_max_failed_rows: int | None = Field(
         default=None,
         ge=1,
@@ -166,6 +200,48 @@ class SettingsPatch(BaseModel):
         ge=4,
         le=200,
         description="Maximum Thompson-sampling trials per compositional optimization run (4–200).",
+    )
+    gepa_max_iterations: int | None = Field(
+        default=None,
+        ge=4,
+        le=200,
+        description="Maximum reflective-evolution iterations for the GEPA review method (4–200).",
+    )
+    miprov2_num_trials: int | None = Field(
+        default=None,
+        ge=4,
+        le=200,
+        description="Maximum trials for the MIPROv2 review method (4–200).",
+    )
+    bootstrap_fewshot_num_candidates: int | None = Field(
+        default=None,
+        ge=2,
+        le=100,
+        description="Candidate demo sets for the BootstrapFewShotWithRandomSearch review method (2–100).",
+    )
+    textgrad_num_steps: int | None = Field(
+        default=None,
+        ge=2,
+        le=50,
+        description="Textual-gradient-descent steps for the TextGrad review method (2–50).",
+    )
+    copro_breadth: int | None = Field(
+        default=None,
+        ge=2,
+        le=30,
+        description="Instruction variants proposed per round for the COPRO review method (2–30).",
+    )
+    copro_depth: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Coordinate-ascent rounds for the COPRO review method (1–10).",
+    )
+    simba_max_steps: int | None = Field(
+        default=None,
+        ge=2,
+        le=40,
+        description="Mini-batch introspection steps for the SIMBA review method (2–40).",
     )
     debug_mode: bool | None = None
     ncbi_api_key: str | None = None
@@ -199,7 +275,24 @@ class CredentialDetailResponse(BaseModel):
 
 class RunRequest(BaseModel):
     credential_id: str
-    prompts: list[str] = Field(..., min_length=1, description="One prompt per row (placeholders already substituted)")
+    prompts: list[str] | None = Field(default=None, min_length=1)
+    samples: list[dict] | None = Field(default=None, min_length=1)
+    project_session_id: str | None = None
+
+    @model_validator(mode="after")
+    def one_input_format(self):
+        if (self.prompts is None) == (self.samples is None):
+            raise ValueError("Provide exactly one of prompts or samples.")
+        if self.samples is not None:
+            for sample in self.samples:
+                if not isinstance(sample.get("content"), list):
+                    raise ValueError("Each sample requires a content array.")
+                for block in sample["content"]:
+                    if not isinstance(block, dict) or block.get("type") not in ("text", "image_ref"):
+                        raise ValueError("Unsupported sample content block.")
+                    if block["type"] == "image_ref" and (not self.project_session_id or not isinstance(block.get("asset_id"), str)):
+                        raise ValueError("Image blocks require an asset ID and a project session.")
+        return self
     output_schema: dict = Field(..., description="return_shape + fields: [{ key, type, description?, allow_none? }]")
     run_node_id: str | None = Field(default=None, description="Frontend Run node id for correlation when polling")
 
@@ -241,6 +334,7 @@ class ReviewComparisonRow(BaseModel):
 
 
 class ReviewRequest(BaseModel):
+    project_session_id: str | None = None
     credential_id: str
     review_session_id: str | None = Field(default=None, description="Frontend session id for cancellation; pass reviewNodeId")
     prompt_sections: list[dict] = Field(..., description="List of {name, content} for each section")
@@ -250,6 +344,22 @@ class ReviewRequest(BaseModel):
     output_return_shape: str = Field(default="single", description="Fallback when output_schema not provided")
     comparison_rows: list[ReviewComparisonRow] = Field(default_factory=list, description="Per-row match result and context")
     all_rows_matched: bool | None = Field(default=None, description="If True, frontend reports every comparison row matched")
+    review_method: str | None = Field(default=None, description="Registered review method id (backend/review_methods.py); defaults to the legacy issue-analysis + suggested-changes pipeline")
+    target_section_index: int | None = Field(default=None, description="0-based prompt_sections index a whole-section-rewrite method (e.g. gepa) should optimize; defaults to section 0 when omitted")
+    score_mapping: str | None = Field(default=None, description="Serialized Score rule-tree bundle (scoreMappingBundle.js) from the upstream Score node; only methods that self-score candidates (e.g. gepa) need this")
+
+    @model_validator(mode="after")
+    def image_inputs_require_session(self):
+        has_images = any(
+            isinstance(value, dict)
+            and value.get("kind") == "images"
+            and bool(value.get("assetIds"))
+            for row in self.comparison_rows
+            for value in (row.row_input or {}).values()
+        )
+        if has_images and not self.project_session_id:
+            raise ValueError("Review image inputs require a project session.")
+        return self
 
 
 class ReviewSuggestion(BaseModel):
@@ -275,48 +385,6 @@ class ReviewResult(BaseModel):
     summary: str = Field(..., description="Brief overall analysis")
     suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete edit suggestions")
     data_refinement: list[dict] = Field(default_factory=list, description="GT question summary: [{row_indices, reason}]")
-
-
-def _sanitize_field_name(key: str) -> str:
-    """Turn schema key into valid Pydantic field name (alphanumeric + underscore)."""
-    s = re.sub(r"[^\w]", "_", str(key).strip())
-    return s or "field"
-
-
-def _build_output_model(fields: list[dict]) -> type[BaseModel]:
-    """Build a Pydantic model from app output_schema.fields (key, type, description, allow_none)."""
-    type_map = {
-        "str": (str, ...),
-        "float": (float, ...),
-        "list_str": (list[str], ...),
-        "list_float": (list[float], ...),
-    }
-    field_defs: dict[str, Any] = {}
-    for f in fields:
-        key = f.get("key") or "field"
-        name = _sanitize_field_name(key)
-        if name in field_defs:
-            n = 1
-            while f"{name}_{n}" in field_defs:
-                n += 1
-            name = f"{name}_{n}"
-        raw_type = (f.get("type") or "str").strip().lower()
-        desc = (f.get("description") or "").strip() or None
-        allow_none = f.get("allow_none") or f.get("allowNone") is True
-        if raw_type not in type_map:
-            raw_type = "str"
-        typ, _ = type_map[raw_type]
-        if allow_none:
-            typ = Optional[typ]
-            field_defs[name] = (typ, Field(default=None, description=desc or key))
-        else:
-            field_defs[name] = (typ, Field(..., description=desc or key))
-    return create_model("StructuredOutput", **field_defs)
-
-
-def _build_table_output_model(row_model: type[BaseModel]) -> type[BaseModel]:
-    """Build a Pydantic model with one field 'rows': list[row_model] for return_shape=table."""
-    return create_model("TableOutput", rows=(List[row_model], Field(default_factory=list)))
 
 
 def _ensure_data_dir():
@@ -348,6 +416,15 @@ def _save_settings(data: dict) -> None:
         if k in data:
             out[k] = data[k]
     SETTINGS_FILE.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _resolve_review_method_id(explicit: str | None, settings: dict | None = None) -> str:
+    """Explicit per-request id wins; else the configured default_review_method; else registry picks its own default."""
+    explicit = (explicit or "").strip()
+    if explicit:
+        return explicit
+    st = settings if settings is not None else _load_settings()
+    return str(st.get("default_review_method") or "").strip()
 
 
 def _load_credentials() -> list[dict]:
@@ -532,6 +609,48 @@ def get_credential(credential_id: str):
                 api_key=item["api_key"],
             )
     raise HTTPException(status_code=404, detail="Credential not found")
+
+
+@app.get("/api/credentials/openrouter/catalog")
+def openrouter_catalog():
+    """Public OpenRouter model catalog (no key needed) for the 'choose a model' picker."""
+    from oauth_openrouter import get_catalog
+
+    try:
+        return {"models": get_catalog()}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not load OpenRouter model catalog: {e}")
+
+
+_LITELLM_CATALOG_PROVIDERS = {"openai", "anthropic", "gemini", "deepseek", "bedrock"}
+
+
+@app.get("/api/credentials/litellm/catalog")
+def litellm_catalog():
+    """LiteLLM's built-in static model list (no key/network needed) for the 'choose a model' picker."""
+    import litellm
+
+    models = []
+    for model_id, info in litellm.model_cost.items():
+        if not isinstance(info, dict):
+            continue
+        if info.get("mode") != "chat":
+            continue
+        provider = info.get("litellm_provider")
+        if provider not in _LITELLM_CATALOG_PROVIDERS:
+            continue
+        models.append(
+            {
+                "id": model_id,
+                "name": model_id,
+                "provider": provider,
+                "vision": info.get("supports_vision") is True,
+                "prompt_price": info.get("input_cost_per_token"),
+                "completion_price": info.get("output_cost_per_token"),
+            }
+        )
+    models.sort(key=lambda m: m["id"])
+    return {"models": models}
 
 
 @app.post("/api/credentials/{credential_id}/test")
@@ -885,6 +1004,30 @@ def delete_credential(credential_id: str):
     return {"ok": True}
 
 
+@app.post("/api/credentials/openrouter/start")
+def start_openrouter_oauth():
+    """Begin OpenRouter OAuth PKCE login; returns the URL to open in the system browser."""
+    from oauth_openrouter import start_oauth
+
+    return start_oauth(BACKEND_HOST, BACKEND_PORT)
+
+
+@app.get("/api/credentials/openrouter/callback")
+def openrouter_oauth_callback(state: str = "", code: str = ""):
+    """Redirect target hit by the user's browser after they approve on openrouter.ai."""
+    from oauth_openrouter import handle_callback
+
+    return handle_callback(state, code)
+
+
+@app.get("/api/credentials/openrouter/status/{state}")
+def openrouter_oauth_status(state: str):
+    """Poll target for the frontend while the browser-side OAuth flow is in progress."""
+    from oauth_openrouter import get_status
+
+    return get_status(state)
+
+
 # ---------- Settings ----------
 @app.get("/api/settings")
 def get_settings():
@@ -917,6 +1060,7 @@ _run_jobs_by_node: dict[str, str] = {}
 _run_last_activity: dict[str, float] = {}  # run_id -> time.time(); updated on every poll or cancel
 _run_jobs_lock = threading.Lock()
 _run_cancelled: set[str] = set()  # run_ids client asked to cancel; worker checks each row
+_run_print_lock = threading.Lock()  # keeps one row's multi-line debug log block from interleaving with another's
 
 _review_jobs: dict[str, dict] = {}  # review_id -> { status, events, review_node_id, error? }
 _review_jobs_by_node: dict[str, str] = {}  # review_node_id -> review_id
@@ -968,45 +1112,14 @@ def _load_run_jobs() -> None:
 _load_run_jobs()
 
 
-def _run_field_value_non_empty(v: object) -> bool:
-    if v is None:
-        return False
-    if isinstance(v, str):
-        return bool(v.strip())
-    if isinstance(v, list):
-        return any(_run_field_value_non_empty(x) for x in v)
-    if isinstance(v, dict):
-        return bool(v) and any(_run_field_value_non_empty(x) for x in v.values())
-    return True
-
-
-def _run_structured_output_is_empty(out: object, return_shape: str, output_fields: list[dict]) -> bool:
-    """True if model returned no substantive values for schema fields (used when persisting run rows, not Score filtering)."""
-    keys = [str(f.get("key") or "").strip() for f in (output_fields or []) if f.get("key")]
-    if return_shape == "table":
-        if not isinstance(out, list) or len(out) == 0:
-            return True
-        for row in out:
-            if not isinstance(row, dict):
-                continue
-            if keys:
-                if any(_run_field_value_non_empty(row.get(k)) for k in keys):
-                    return False
-            elif any(_run_field_value_non_empty(v) for v in row.values()):
-                return False
-        return True
-    if not isinstance(out, dict):
-        return True
-    if keys:
-        return not any(_run_field_value_non_empty(out.get(k)) for k in keys)
-    return not any(_run_field_value_non_empty(v) for v in out.values())
 
 
 def _do_run_work(
     run_id: str,
     credential_id: str,
-    prompts: list[str],
+    prompts: list,
     output_schema: dict,
+    project_session_id: str | None = None,
 ) -> None:
     """Background worker: run prompts row by row. Stops when cancelled or when client has not polled for RUN_ABANDON_TIMEOUT_SEC."""
     try:
@@ -1072,8 +1185,9 @@ def _do_run_work(
         results_by_input: dict[int, list[dict]] = {}
 
         run_max_retries = min(5, max(0, int(run_settings.get("run_max_retries", 0))))
+        run_concurrency = min(10, max(1, int(run_settings.get("run_concurrency", 4) or 4)))
 
-        def process_one(row_index: int, prompt: str) -> tuple[int, list[dict]]:
+        def process_one(row_index: int, prompt) -> tuple[int, list[dict]]:
             with _run_jobs_lock:
                 if run_id in _run_cancelled:
                     return (row_index, [{"input_row_index": row_index, "output": None, "error": "Cancelled"}])
@@ -1086,43 +1200,50 @@ def _do_run_work(
                 items = []
                 err_msg = None
                 try:
-                    _safe_print("\n" + _HL + _SEP + _R)
-                    _safe_print(_HL + f"[Run] Row {row_index} PROMPT SENT TO LLM:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(prompt)
-                    _safe_print(_HL + _SEP + _R + "\n")
+                    with _run_print_lock:
+                        _safe_print("\n" + _HL + _SEP + _R)
+                        _safe_print(_HL + f"[Run] Row {row_index} PROMPT SENT TO LLM:" + _R)
+                        _safe_print(_HL + _SEP + _R)
+                        _safe_print(prompt if isinstance(prompt, str) else json.dumps(prompt, ensure_ascii=False, indent=2, default=str))
+                    if isinstance(prompt, dict):
+                        if prompt.get("error"):
+                            raise ValueError(prompt["error"])
+                        model_prompt = resolve_content(prompt["content"], project_session_id)
+                    else:
+                        model_prompt = prompt
                     out, used_fallback, debug = llm_run_structured(
                         provider=provider,
                         model=model,
                         api_key=api_key,
                         base_url=base_url,
-                        prompt=prompt,
+                        prompt=model_prompt,
                         response_model=ResponseModel,
                         max_tokens=run_max_tokens,
                         return_shape=return_shape,
                         return_debug=True,
                     )
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(
-                        _HL
-                        + f"[Run] Row {row_index} LLM RAW OUTPUT"
-                        + (f" ({debug.get('path')})" if isinstance(debug, dict) and debug.get("path") else "")
-                        + (", fallback" if used_fallback else "")
-                        + ":"
-                        + _R
-                    )
-                    _safe_print(_HL + _SEP + _R)
-                    if isinstance(debug, dict) and debug.get("raw_response") is not None:
-                        _safe_print(json.dumps(debug.get("raw_response"), ensure_ascii=False, indent=2, default=str))
-                    elif isinstance(debug, dict) and debug.get("raw_text"):
-                        _safe_print(str(debug.get("raw_text")))
-                    else:
-                        _safe_print("(raw output unavailable)")
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(_HL + f"[Run] Row {row_index} LLM PARSED OUTPUT:" + _R)
-                    _safe_print(_HL + _SEP + _R)
-                    _safe_print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
-                    _safe_print(_HL + _SEP + _R + "\n")
+                    with _run_print_lock:
+                        _safe_print(_HL + _SEP + _R)
+                        _safe_print(
+                            _HL
+                            + f"[Run] Row {row_index} LLM RAW OUTPUT"
+                            + (f" ({debug.get('path')})" if isinstance(debug, dict) and debug.get("path") else "")
+                            + (", fallback" if used_fallback else "")
+                            + ":"
+                            + _R
+                        )
+                        _safe_print(_HL + _SEP + _R)
+                        if isinstance(debug, dict) and debug.get("raw_response") is not None:
+                            _safe_print(json.dumps(debug.get("raw_response"), ensure_ascii=False, indent=2, default=str))
+                        elif isinstance(debug, dict) and debug.get("raw_text"):
+                            _safe_print(str(debug.get("raw_text")))
+                        else:
+                            _safe_print("(raw output unavailable)")
+                        _safe_print(_HL + _SEP + _R)
+                        _safe_print(_HL + f"[Run] Row {row_index} LLM PARSED OUTPUT:" + _R)
+                        _safe_print(_HL + _SEP + _R)
+                        _safe_print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+                        _safe_print(_HL + _SEP + _R + "\n")
                     if return_shape == "table" and isinstance(out, dict) and "rows" in out:
                         out = out["rows"]
                     if _run_structured_output_is_empty(out, return_shape, output_fields):
@@ -1131,6 +1252,7 @@ def _do_run_work(
                             _safe_print(
                                 _HL + f"[Run] Row {row_index} empty output, retry {attempt + 1}/{run_max_retries}" + _R + "\n"
                             )
+                            time.sleep(min(2 ** attempt, 8))
                             continue
                         items = []
                         items.append({"input_row_index": row_index, "output": None, "error": err_msg})
@@ -1145,6 +1267,7 @@ def _do_run_work(
                     err_msg = str(e)
                 if attempt < run_max_retries:
                     _safe_print(_HL + f"[Run] Row {row_index} error, retry {attempt + 1}/{run_max_retries}: {err_msg}" + _R + "\n")
+                    time.sleep(min(2 ** attempt, 8))
                 else:
                     items.append({"input_row_index": row_index, "output": None, "error": err_msg or "Error"})
             return (row_index, items)
@@ -1181,12 +1304,17 @@ def _do_run_work(
                 _run_jobs[run_id]["completed"] = completed
             _persist_run_jobs()
 
-        # One LLM in-flight per run job (rows processed in order). Separate run jobs (e.g. different nodes) may still run at once.
-        for i, prompt in enumerate(prompts):
-            row_index, items = process_one(i, prompt)
-            _row_done_write_progress(row_index, items)
-            if cancelled_early:
-                break
+        # Up to run_concurrency rows in flight per run job. Separate run jobs (e.g. different nodes) may still run at once.
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=run_concurrency)
+        try:
+            futures = [executor.submit(process_one, i, prompt) for i, prompt in enumerate(prompts)]
+            for fut in concurrent.futures.as_completed(futures):
+                row_index, items = fut.result()
+                _row_done_write_progress(row_index, items)
+                if cancelled_early:
+                    break
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
 
         with _run_jobs_lock:
             if run_id in _run_cancelled:
@@ -1246,7 +1374,7 @@ def run_prompts(body: RunRequest):
     _persist_run_jobs()
     thread = threading.Thread(
         target=_do_run_work,
-        args=(run_id, body.credential_id, body.prompts, body.output_schema),
+        args=(run_id, body.credential_id, body.prompts if body.prompts is not None else body.samples, body.output_schema, body.project_session_id),
         daemon=True,
     )
     thread.start()
@@ -1306,11 +1434,22 @@ def get_run_result(run_id: str):
     }
 
 
+@app.get("/api/review/methods")
+def list_review_methods_endpoint():
+    """List registered review methods (id, label, stages) for the frontend method picker."""
+    from review_methods import list_review_methods
+
+    return {"methods": list_review_methods()}
+
+
 @app.post("/api/review/analyze")
 def review_analyze(body: ReviewRequest):
     """Start review job in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Pipeline: review_pipeline.py (per-row analysis → localized prompt edits)."""
+    from review_methods import get_review_method
+
     review_id = str(uuid.uuid4())
     review_node_id = body.review_session_id or ""
+    review_method = get_review_method(_resolve_review_method_id(body.review_method))
     with _review_jobs_lock:
         # At most one active worker per Review node (same idea as POST /api/run + run_node_id).
         if review_node_id:
@@ -1325,7 +1464,16 @@ def review_analyze(body: ReviewRequest):
     thread = threading.Thread(target=_do_review_work, args=(review_id, body), daemon=True)
     thread.start()
     from fastapi.responses import JSONResponse
-    return JSONResponse(status_code=202, content={"review_id": review_id, "review_node_id": review_node_id})
+    return JSONResponse(
+        status_code=202,
+        content={
+            "review_id": review_id,
+            "review_node_id": review_node_id,
+            "review_method_id": review_method.id,
+            "review_stages": review_method.to_dict()["stages"],
+            "supports_segment_optimization": review_method.supports_segment_optimization,
+        },
+    )
 
 
 @app.get("/api/review/result/{review_id}")
@@ -1638,7 +1786,7 @@ class ProcessRunRequest(BaseModel):
     python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
     code: str = Field(..., min_length=1, description="User code defining process(row) -> dict | None")
     headers: list[str] = Field(..., description="Column names; row dict passed to process() is keyed by these")
-    rows: list[list[str]] = Field(default_factory=list, description="Input rows, same order as headers")
+    rows: list[list[Any]] = Field(default_factory=list, description="Input rows, same order as headers")
 
 
 def _touch_process_activity(job_id: str) -> None:
@@ -1922,7 +2070,7 @@ class ProcessDfRunRequest(BaseModel):
     python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
     code: str = Field(..., min_length=1, description="User code defining process(df) -> DataFrame")
     headers: list[str] = Field(..., description="Column names; each row dict passed into the DataFrame is keyed by these")
-    rows: list[list[str]] = Field(default_factory=list, description="Input rows, same order as headers")
+    rows: list[list[Any]] = Field(default_factory=list, description="Input rows, same order as headers")
 
 
 def _touch_process_df_activity(job_id: str) -> None:
@@ -2080,12 +2228,14 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
         if _review_is_cancelled(review_id):
             return
 
-        from review_pipeline import run_review_pipeline
+        from review_methods import get_review_method
+
+        st = _load_settings()
+        review_method = get_review_method(_resolve_review_method_id(body.review_method, st))
 
         provider = _credential_provider(cred)
         model = _credential_model(cred) or ""
         base_url = _credential_base_url(cred)
-        st = _load_settings()
         max_tokens = int(st.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"])
         try:
             max_failed = int(st.get("review_max_failed_rows") or DEFAULT_SETTINGS["review_max_failed_rows"])
@@ -2093,7 +2243,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             max_failed = DEFAULT_SETTINGS["review_max_failed_rows"]
         max_failed = max(1, min(200, max_failed))
 
-        run_review_pipeline(
+        review_method.run(
             provider=provider,
             model=model,
             api_key=api_key,
@@ -2103,6 +2253,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             max_failed_inputs=max_failed,
             is_cancelled=lambda: _review_is_cancelled(review_id),
             append_event=append_event,
+            settings=st,
         )
 
         if _review_is_cancelled(review_id):

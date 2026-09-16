@@ -1179,6 +1179,7 @@ def _analyze_input_group(
     api_key: str,
     base_url: str,
     max_tokens: int,
+    project_session_id: str | None = None,
 ) -> tuple[PerRowOpinion, list[int]]:
     prompt = _build_phase1_prompt_for_input_group(prompt_text=prompt_text, group_rows=group_rows)
     idxs_all = sorted({int(_row_to_dict(r).get("row_index", -1)) for r in group_rows})
@@ -1202,12 +1203,17 @@ def _analyze_input_group(
         + "\n",
         flush=True,
     )
+    if project_session_id:
+        from asset_store import review_content
+        prompt_for_model = review_content(prompt, group_rows, project_session_id)
+    else:
+        prompt_for_model = prompt
     out, used_fallback, debug = llm_run_structured(
         provider=provider,
         model=model,
         api_key=api_key,
         base_url=base_url,
-        prompt=prompt,
+        prompt=prompt_for_model,
         response_model=Phase1LlmOutput,
         max_tokens=max_tokens,
         return_debug=True,
@@ -1244,11 +1250,13 @@ def run_review_pipeline(
     max_failed_inputs: int,
     is_cancelled: Callable[[], bool],
     append_event: Callable[[dict], None],
+    settings: dict | None = None,
 ) -> None:
     """
     Drive review. Emits: plan, diagnosis_row, suggestions, done.
     Caller handles credential errors and job status.
     """
+    del settings  # This method has no tunable settings of its own yet.
     sections = list(getattr(body, "prompt_sections", None) or [])
     prompt_text = _format_prompt_for_review(sections)
     comparison_rows = list(getattr(body, "comparison_rows", None) or [])
@@ -1308,6 +1316,7 @@ def run_review_pipeline(
             api_key=api_key,
             base_url=base_url,
             max_tokens=max_tokens,
+            project_session_id=getattr(body, "project_session_id", None),
         )
 
     done_n = 0

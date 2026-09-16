@@ -9,14 +9,15 @@ import {
   prefetchEmbeddingCosineMap,
   isValidRunOutputForScoreRow,
 } from './scoreDetailModal.js';
-import { computeGreedyRunToGtPairing, flattenScoreRules } from './scoreRunGtPairing.js';
+import { computeGreedyRunToGtPairing, evaluateScoreTree, flattenScoreRules } from './scoreRunGtPairing.js';
 import { emptyScoreRuleGroup, parseScoreMappingBundle } from './scoreMappingBundle.js';
+import { displayCell } from './datasetContent.js';
 
 function toCompareStr(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim();
   if (Array.isArray(value)) return value.map((item) => toCompareStr(item)).join(', ').trim();
-  return String(value).trim();
+  return displayCell(value).trim();
 }
 
 function normalizeForMatch(value, flags, isNumeric) {
@@ -261,25 +262,43 @@ export async function evaluateScoreOutputGt({
       getRunValue: (runResult, outputKey, rowIndex, ws, fields) =>
         getRunValue(runResult, outputKey, rowIndex, ws, fields, originalInputRowByPromptIndex),
     });
+    const resultsByIndex = new Map();
+    for (const r of outputs) {
+      if (r) resultsByIndex.set(r.row_index, r);
+    }
     const remainingLocalGtIndices = allowedLocalGtIndices.slice();
     const assignments = outputs.map((outputRow) => {
       const pairedLocalGt = outputRow?.row_index >= 0 ? runToGt[outputRow.row_index] : -1;
-      const matched = Number.isInteger(pairedLocalGt) && pairedLocalGt >= 0;
-      const globalLocalGtIndex = matched ? allowedLocalGtIndices[pairedLocalGt] : null;
-      if (matched) {
+      /* Greedy pairing only requires *some* output rule to hit (see computeGreedyRunToGtPairing's
+       * `score > 0` gate) — a pair being assigned here is not the same as the rule group's actual
+       * AND/OR structure holding. Re-check that structure for the real matched verdict, same as Score
+       * detail's `isPairMatchForRow`/`evaluateNode` does after its own greedy pairing. */
+      const paired = Number.isInteger(pairedLocalGt) && pairedLocalGt >= 0;
+      const matched = paired && evaluateScoreTree(
+        outputRoot,
+        outputRow.row_index,
+        pairedLocalGt,
+        resultsByIndex,
+        runWs,
+        outputFields,
+        localGtSubset,
+        ruleMatchesRow,
+      );
+      const globalLocalGtIndex = paired ? allowedLocalGtIndices[pairedLocalGt] : null;
+      if (paired) {
         const remainingIdx = remainingLocalGtIndices.indexOf(globalLocalGtIndex);
         if (remainingIdx >= 0) remainingLocalGtIndices.splice(remainingIdx, 1);
       }
       return {
         out: outputRow,
-        localGtIndex: matched ? globalLocalGtIndex : null,
+        localGtIndex: paired ? globalLocalGtIndex : null,
         matched,
       };
     });
 
     let unmatchedCursor = 0;
     for (const assignment of assignments) {
-      if (!assignment.matched && assignment.localGtIndex == null && unmatchedCursor < remainingLocalGtIndices.length) {
+      if (assignment.localGtIndex == null && unmatchedCursor < remainingLocalGtIndices.length) {
         assignment.localGtIndex = remainingLocalGtIndices[unmatchedCursor++];
       }
     }
