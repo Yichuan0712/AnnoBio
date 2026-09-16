@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage, shell } from 'electron';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -6,6 +6,93 @@ import fsSync from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
 import { clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_PORT } from './backendConfig.js';
+import { ProjectAssets, YC_EXTENSION, isBundledProjectFile } from './projectAssets.js';
+const assetToken = crypto.randomBytes(32).toString('hex');
+const projectAssets = new ProjectAssets({
+  decodeImage(data, width) {
+    let img = nativeImage.createFromBuffer(data);
+    if (img.isEmpty()) return null;
+    const size = img.getSize();
+    if (width) img = img.resize({ width: Math.min(width, size.width) });
+    return { ...size, url: width ? img.toDataURL() : null };
+  },
+  async registerSession(body) {
+    const res = await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/assets/register`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Asset-Token': assetToken }, body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('Could not register project images. Restart the app to update the backend.');
+    return res.json();
+  },
+});
+
+ipcMain.handle('assets:import', async (_event, paths) => {
+  if (!Array.isArray(paths)) {
+    const result = await dialog.showOpenDialog({ title: 'Import images', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
+    paths = result.canceled ? [] : result.filePaths;
+  }
+  return projectAssets.importFiles(paths);
+});
+ipcMain.handle('assets:pick-files', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose images to match',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+ipcMain.handle('assets:pick-directory', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose the folder for image paths',
+    properties: ['openDirectory'],
+  });
+  return result.canceled ? null : (result.filePaths[0] || null);
+});
+ipcMain.handle('assets:preview', (_event, id, thumbnail) => projectAssets.preview(id, thumbnail));
+ipcMain.handle('assets:prepare', () => projectAssets.prepare());
+ipcMain.handle('assets:export-dataset', (_event, file, content) => projectAssets.exportDataset(file, content));
+ipcMain.handle('assets:resolve-candidates', async (_event, rows, baseDir) => {
+  if (!baseDir) throw new Error('Base directory is required.');
+  return (Array.isArray(rows) ? rows : []).map((rawValue, rowIndex) => {
+    try {
+      const value = String(rawValue || '').trim();
+      const rawPaths = value.startsWith('[') ? JSON.parse(value) : (value ? [value] : []);
+      if (!Array.isArray(rawPaths) || rawPaths.some((item) => typeof item !== 'string')) {
+        throw new Error('Use a path or a JSON array of paths.');
+      }
+      const files = rawPaths.map((entry) => {
+        const resolved = path.isAbsolute(entry) ? entry : path.resolve(baseDir, entry);
+        let exists = false;
+        try {
+          exists = fsSync.existsSync(resolved) && fsSync.statSync(resolved).isFile();
+        } catch (_) {}
+        return {
+          path: resolved,
+          name: path.basename(resolved),
+          exists,
+          source: entry,
+        };
+      });
+      return { ok: true, files };
+    } catch (error) {
+      return { ok: false, files: [], error: `Row ${rowIndex + 1}: ${error.message}` };
+    }
+  });
+});
+ipcMain.handle('assets:resolve-paths', async (_event, rows) => {
+  const result = await dialog.showOpenDialog({ title: 'Choose the folder for relative image paths', properties: ['openDirectory'] });
+  if (result.canceled) return null;
+  const base = result.filePaths[0];
+  const output = [];
+  for (let i = 0; i < rows.length; i++) {
+    try {
+      let value = String(rows[i] || '').trim();
+      const paths = value.startsWith('[') ? JSON.parse(value) : (value ? [value] : []);
+      if (!Array.isArray(paths) || paths.some((p) => typeof p !== 'string')) throw new Error('Use a path or a JSON array of paths.');
+      output.push(await projectAssets.importFiles(paths.map((p) => path.resolve(base, p))));
+    } catch (error) { throw new Error(`Row ${i + 1}: ${error.message}`); }
+  }
+  return output;
+});
 
 /**
  * ===== Python backend =====
@@ -68,6 +155,11 @@ function getAgentSessionFile(projectPath) {
   return path.join(getAgentSessionsDir(), `${hash}.json`);
 }
 
+function ycPathFor(projectPath) {
+  const resolved = path.resolve(String(projectPath || '').trim());
+  return resolved.slice(0, resolved.length - path.extname(resolved).length) + YC_EXTENSION;
+}
+
 function mapAgentMessageForStorage(msg) {
   const out = {
     role: String(msg.role || 'assistant'),
@@ -116,6 +208,19 @@ async function atomicWriteJson(filePath, payload) {
   await fs.rename(tempPath, filePath);
 }
 
+async function loadLegacyAgentConversationPayload(projectPath) {
+  const filePath = getAgentSessionFile(projectPath);
+  if (!filePath || !fsSync.existsSync(filePath)) {
+    return { activeConversationId: '', conversations: [] };
+  }
+  try {
+    const raw = await fs.readFile(filePath, 'utf-8');
+    return normalizeAgentConversationPayload(JSON.parse(raw));
+  } catch (_) {
+    return { activeConversationId: '', conversations: [] };
+  }
+}
+
 function killProcessOnPort(port) {
   try {
     if (process.platform === 'win32') {
@@ -128,7 +233,9 @@ function killProcessOnPort(port) {
       }
       for (const pid of pids) {
         try {
-          execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
+          // /T kills the whole process tree — uvicorn --reload spawns a child worker
+          // process that a plain /PID /F would otherwise leave orphaned on the port.
+          execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
         } catch (_) {}
       }
     } else {
@@ -178,6 +285,7 @@ function startPythonBackendInner() {
     cwd,
     env: {
       ...process.env,
+      PROMPT_STUDIO_ASSET_TOKEN: assetToken,
       PYTHONUNBUFFERED: '1',
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',
@@ -194,7 +302,18 @@ function startPythonBackendInner() {
 
 function stopPythonBackend() {
   if (pyProc) {
-    pyProc.kill();
+    const pid = pyProc.pid;
+    // Plain .kill() only signals the uvicorn supervisor; with --reload it has a child
+    // worker process that would otherwise survive and keep holding BACKEND_PORT.
+    if (process.platform === 'win32' && pid) {
+      try {
+        execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+      } catch (_) {
+        pyProc.kill();
+      }
+    } else {
+      pyProc.kill();
+    }
     pyProc = null;
   }
 }
@@ -240,17 +359,24 @@ const createWindow = () => {
 // Project file IPC
 ipcMain.handle('project:new-dialog', async () => {
   const { canceled, filePath } = await dialog.showSaveDialog({
-    title: 'New project',
+    title: 'New Your Canvas',
     defaultPath: app.getPath('documents'),
-    filters: [{ name: 'JSON', extensions: ['json'] }],
+    filters: [
+      { name: 'Your Canvas File', extensions: [YC_EXTENSION.slice(1)] },
+      { name: 'Legacy JSON Project', extensions: ['json'] },
+    ],
   });
   return canceled ? null : filePath;
 });
 
 ipcMain.handle('project:open-dialog', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
-    title: 'Open project',
-    filters: [{ name: 'JSON', extensions: ['json'] }],
+    title: 'Open Your Canvas',
+    filters: [
+      { name: 'Your Canvas or Legacy JSON', extensions: [YC_EXTENSION.slice(1), 'json'] },
+      { name: 'Your Canvas File', extensions: [YC_EXTENSION.slice(1)] },
+      { name: 'Legacy JSON Project', extensions: ['json'] },
+    ],
     properties: ['openFile'],
   });
   return canceled || !filePaths?.length ? null : filePaths[0];
@@ -258,39 +384,58 @@ ipcMain.handle('project:open-dialog', async () => {
 
 ipcMain.handle('project:save-as-dialog', async (_e, defaultPath) => {
   const { canceled, filePath } = await dialog.showSaveDialog({
-    title: 'Save project as',
-    defaultPath: defaultPath || 'project.json',
-    filters: [{ name: 'JSON', extensions: ['json'] }],
+    title: 'Save Your Canvas As',
+    defaultPath: defaultPath || `project${YC_EXTENSION}`,
+    filters: [
+      { name: 'Your Canvas File', extensions: [YC_EXTENSION.slice(1)] },
+      { name: 'Legacy JSON Project', extensions: ['json'] },
+    ],
   });
   return canceled ? null : filePath;
 });
 
 ipcMain.handle('project:save', async (_e, filePath, state) => {
-  await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
+  await projectAssets.save(filePath, state);
 });
 
 ipcMain.handle('project:load', async (_e, filePath) => {
-  const raw = await fs.readFile(filePath, 'utf-8');
-  return JSON.parse(raw);
+  const resolved = path.resolve(filePath);
+  if (!isBundledProjectFile(resolved) && path.extname(resolved).toLowerCase() === '.json') {
+    const migratedPath = ycPathFor(resolved);
+    if (fsSync.existsSync(migratedPath)) {
+      const state = await projectAssets.load(migratedPath);
+      return { state, resolvedPath: migratedPath };
+    }
+    const state = await projectAssets.load(resolved);
+    await projectAssets.save(migratedPath, state);
+    const legacyAgentSession = await loadLegacyAgentConversationPayload(resolved);
+    await projectAssets.saveAgentSession(migratedPath, legacyAgentSession);
+    const migratedState = await projectAssets.load(migratedPath);
+    return { state: migratedState, resolvedPath: migratedPath };
+  }
+  const state = await projectAssets.load(resolved);
+  return { state, resolvedPath: resolved };
 });
 
 ipcMain.handle('agent-conversations:load', async (_e, projectPath) => {
-  const filePath = getAgentSessionFile(projectPath);
-  if (!filePath || !fsSync.existsSync(filePath)) {
-    return { activeConversationId: '', conversations: [] };
+  const resolved = String(projectPath || '').trim();
+  if (!resolved) return { activeConversationId: '', conversations: [] };
+  if (isBundledProjectFile(resolved)) {
+    return normalizeAgentConversationPayload(await projectAssets.loadAgentSession(resolved));
   }
-  try {
-    const raw = await fs.readFile(filePath, 'utf-8');
-    return normalizeAgentConversationPayload(JSON.parse(raw));
-  } catch (_) {
-    return { activeConversationId: '', conversations: [] };
-  }
+  return loadLegacyAgentConversationPayload(resolved);
 });
 
 ipcMain.handle('agent-conversations:save', async (_e, projectPath, payload) => {
-  const filePath = getAgentSessionFile(projectPath);
-  if (!filePath) return { ok: false };
+  const resolved = String(projectPath || '').trim();
+  if (!resolved) return { ok: false };
   const normalized = normalizeAgentConversationPayload(payload);
+  if (isBundledProjectFile(resolved)) {
+    await projectAssets.saveAgentSession(resolved, normalized);
+    return { ok: true };
+  }
+  const filePath = getAgentSessionFile(resolved);
+  if (!filePath) return { ok: false };
   await fs.mkdir(getAgentSessionsDir(), { recursive: true });
   await atomicWriteJson(filePath, normalized);
   return { ok: true };
@@ -323,6 +468,11 @@ ipcMain.handle('fs:write-file', async (_e, filePath, data, encoding) => {
   const enc = encoding === 'base64' ? 'base64' : 'utf8';
   const buf = enc === 'base64' ? Buffer.from(data, 'base64') : data;
   await fs.writeFile(filePath, buf, enc === 'base64' ? undefined : enc);
+});
+
+ipcMain.handle('shell:open-external', (_e, url) => {
+  if (typeof url !== 'string' || !url.startsWith('https://openrouter.ai/')) return;
+  shell.openExternal(url);
 });
 
 ipcMain.handle('window:minimize', (event) => {

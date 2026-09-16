@@ -10,6 +10,7 @@ export const createPromptNodeMeta = Object.freeze({
         content: 'string (required section content)',
       },
     ],
+    input_types: 'object (optional placeholder name -> "text" or "image")',
     outputFormat: {
       returnShape: 'string (optional, usually "single" or "table")',
       fields: [

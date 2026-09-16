@@ -34,6 +34,9 @@ export function buildPromptNodeSpec(args = {}) {
   const left = Number.isFinite(Number(args?.left)) ? Number(args.left) : null;
   const top = Number.isFinite(Number(args?.top)) ? Number(args.top) : null;
   const ensureUniqueName = normalizeBoolean(args?.ensure_unique_name, true);
+  const inputTypes = Object.fromEntries(Object.entries(args?.inputTypes || args?.input_types || {})
+    .map(([key, type]) => [toCleanString(key), toCleanString(type)])
+    .filter(([key, type]) => key && (type === 'text' || type === 'image')));
 
   if (!note) {
     throw new Error('Prompt note is required.');
@@ -53,6 +56,7 @@ export function buildPromptNodeSpec(args = {}) {
       returnShape,
       fields,
     },
+    inputTypes,
     ...(left != null ? { left } : {}),
     ...(top != null ? { top } : {}),
     ensureUniqueName,

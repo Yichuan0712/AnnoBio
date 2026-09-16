@@ -71,6 +71,31 @@ export function computeRunInputBandKey(runRowIndex, inputRoot, resultsByIndex, r
 }
 
 /**
+ * Real AND/OR fold of a rule tree for run row `runRowIndex` vs GT row `gtRowIndex` — unlike the greedy
+ * pairing's per-candidate `score` (any leaf matching is enough to be a pairing candidate), this requires
+ * the tree's actual boolean structure to hold. Used to decide the final matched/unmatched verdict for an
+ * already-paired (run, GT) pair — same logic as Score detail's `evaluateNode`, parameterized so callers can
+ * plug in their own `ruleMatchesRow` (e.g. with a different embedding-cosine cache).
+ */
+export function evaluateScoreTree(node, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, ruleMatchesRow) {
+  if (!node) return false;
+  if (node.type === 'rule') {
+    return ruleMatchesRow(node, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent);
+  }
+  if (node.type === 'group' && Array.isArray(node.children)) {
+    if (node.children.length === 0) return false;
+    const ops = node.ops || Array(Math.max(0, node.children.length - 1)).fill('AND');
+    let r = evaluateScoreTree(node.children[0], runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, ruleMatchesRow);
+    for (let i = 1; i < node.children.length; i++) {
+      const next = evaluateScoreTree(node.children[i], runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent, ruleMatchesRow);
+      r = (ops[i - 1] === 'OR') ? (r || next) : (r && next);
+    }
+    return r;
+  }
+  return false;
+}
+
+/**
  * @param {object} ctx
  * @param {object} ctx.inputRoot - Rules: input / [#] / [col] vs GT (candidate gate).
  * @param {object} ctx.outputRoot - Rules: model output fields vs GT (scoring).

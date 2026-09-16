@@ -1312,6 +1312,144 @@
   flex-shrink: 0;
 }
 
+.credentials-add-method-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  max-width: 220px;
+}
+
+.credentials-model-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.credentials-model-input-row .dataset-meta-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.credentials-model-input-row .btn {
+  flex-shrink: 0;
+}
+
+.credentials-add-tab-panel {
+  display: none;
+}
+
+.credentials-add-tab-panel--active {
+  display: block;
+}
+
+.credentials-openrouter-connect-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.credentials-openrouter-connect-row .btn {
+  flex-shrink: 0;
+}
+
+.credentials-add-openrouter-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  min-height: 1.2em;
+}
+
+.modal-panel--openrouter-models {
+  min-width: min(480px, 92vw);
+  max-width: min(560px, 92vw);
+  height: min(560px, 80vh);
+  display: flex;
+  flex-direction: column;
+}
+
+.openrouter-model-picker-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+.openrouter-model-picker-filter {
+  flex-shrink: 0;
+}
+
+.openrouter-model-picker-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.openrouter-model-picker-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius, 3px);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.openrouter-model-picker-row:hover {
+  background: var(--hover);
+  border-color: var(--border);
+}
+
+.openrouter-model-picker-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.openrouter-model-picker-row-meta {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+}
+
+.openrouter-model-picker-empty {
+  margin: 20px 0;
+  text-align: center;
+  color: var(--text-secondary, #888);
+  font-size: 13px;
+}
+
+.credential-source-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  border: 1px solid var(--border);
+  color: var(--text-secondary, #888);
+}
+
+.credential-source-badge--openrouter {
+  color: #6b4fbb;
+  border-color: #6b4fbb;
+  background: rgba(107, 79, 187, 0.1);
+}
+
+.credential-source-badge--litellm {
+  color: #3b6ea5;
+  border-color: #3b6ea5;
+  background: rgba(59, 110, 165, 0.1);
+}
+
 .credential-status-icon {
   display: inline-block;
   min-width: 0.9em;
@@ -3208,6 +3346,15 @@
   flex: 0 0 auto;
 }
 
+.score-detail-llm-row .score-detail-review-method-select,
+.score-detail-llm-row .score-detail-target-section-select {
+  width: calc(var(--detail-llm-select-width) * 0.85);
+  min-width: min(calc(var(--detail-llm-select-width) * 0.85), 100%);
+  max-width: 100%;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+}
+
 /* Review detail modal: 高度同 Prompt 详情；宽度与 Run 详情展开态一致 */
 .modal-panel--review-detail {
   width: 88%;
@@ -4271,7 +4418,9 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 }
 
 /* Score 页脚模型选择框与 Review 按钮同高 */
-.score-detail-llm-row .score-detail-llm-select {
+.score-detail-llm-row .score-detail-llm-select,
+.score-detail-llm-row .score-detail-review-method-select,
+.score-detail-llm-row .score-detail-target-section-select {
   height: 36px;
   min-height: 36px;
   padding: 0 14px;
@@ -5868,10 +6017,63 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   background: transparent;
 }
 
+.working-dataset-edit-table th .wd-header-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.working-dataset-edit-table th .wd-header-top .wd-header-inp {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.working-dataset-edit-table th .wd-header-batch-btn {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .working-dataset-edit-table th .wd-header-inp:hover,
 .working-dataset-edit-table td .wd-cell-inp:hover,
 .working-dataset-edit-table td .wd-cell-textarea:hover {
   border-color: var(--border);
+}
+
+.working-dataset-edit-table th .wd-header-import-btn {
+  margin-top: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.wd-add-column-menu {
+  position: fixed;
+  z-index: 16000;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-primary, var(--bg));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  transform: translateY(6px);
+}
+
+.wd-add-column-menu__item {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.wd-add-column-menu__item:hover {
+  background: var(--hover);
 }
 
 .working-dataset-edit-table th .wd-header-inp:focus,
@@ -5969,6 +6171,130 @@ body.wd-row-resizing {
 .working-dataset-edit-table tr.wd-row-selected td .wd-cell-textarea,
 .working-dataset-edit-table td.wd-col-selected .wd-cell-textarea {
   background: transparent;
+}
+
+.modal-panel--dataset-image-import {
+  width: min(700px, 92vw);
+  max-width: 92vw;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.dataset-image-import-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.dataset-image-import-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dataset-image-import-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dataset-image-import-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dataset-image-import-help {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.dataset-image-import-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dataset-image-import-source-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.dataset-image-import-static-value {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-primary, var(--bg));
+  color: var(--text);
+}
+
+.dataset-image-import-summary-card {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-primary, var(--bg));
+  color: var(--text);
+}
+
+.dataset-image-import-summary-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.dataset-image-import-summary-line {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.dataset-image-import-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.dataset-image-import-stats {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+}
+
+.dataset-image-import-preview {
+  min-height: 0;
+  overflow: auto;
+}
+
+.dataset-image-import-actions {
+  justify-content: flex-end;
+}
+
+.dataset-image-import-actions__trailing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.dataset-image-import-table th,
+.dataset-image-import-table td {
+  vertical-align: top;
+}
+
+@media (max-width: 760px) {
+  .dataset-image-import-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* # column: right-aligned，垂直居中避免偏高 */
@@ -7992,6 +8318,22 @@ button.btn.btn-danger:hover:not(:disabled) {
 .settings-python-status--error {
   color: #e05252;
 }
+
+.wd-column-type { display: block; width: calc(100% - 12px); margin: 3px 6px 5px; font-size: 11px; }
+.wd-image-cell { position: relative; min-width: 150px; min-height: 66px; padding: 30px 6px 6px; }
+.wd-image-cell--empty { min-height: 0; padding: 4px 6px; }
+.wd-image-strip { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.wd-image-overlay-actions { position: absolute; top: 6px; right: 6px; z-index: 1; display: flex; align-items: center; gap: 6px; }
+.wd-image-cell--empty .wd-image-overlay-actions { position: static; justify-content: flex-end; }
+.wd-image-overlay-actions .btn { padding: 2px 6px; font-size: 11px; }
+.wd-image-thumb { width: 54px; height: 54px; padding: 0; overflow: hidden; border: 1px solid var(--border-color); background: var(--surface-secondary); color: var(--text-muted); font-size: 10px; cursor: zoom-in; }
+.wd-image-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.wd-image-thumb--error { color: #e05252; }
+.wd-image-viewer { z-index: 15000; }
+.wd-image-viewer-panel { position: relative; max-width: 92vw; max-height: 92vh; padding: 36px 18px 12px; border-radius: 8px; background: var(--surface-primary); box-shadow: 0 16px 48px rgba(0,0,0,.45); text-align: center; }
+.wd-image-viewer-panel img { display: block; max-width: 86vw; max-height: 76vh; object-fit: contain; }
+.wd-image-viewer-panel p { margin: 8px 0 0; color: var(--text-muted); }
+.wd-image-viewer-panel .modal-close { position: absolute; right: 8px; top: 5px; }
 
 /* 右栏：结果表格 + 搜索 + 分页 + Save to workspace，全部复用 run-detail-results-* 系列
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */

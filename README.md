@@ -19,8 +19,8 @@ Desktop app for **prompt engineering** and **evaluation**: design prompts, run o
 | Feature | Description |
 |--------|-------------|
 | **Prompt nodes** | Multi-section prompts with placeholders and structured output schemas |
-| **Dataset nodes** | Import CSV/Excel or sample from larger datasets |
-| **Run nodes** | Execute prompts row-by-row with OpenAI, Anthropic, Google, DeepSeek, Mistral, Bedrock |
+| **Dataset nodes** | Import CSV/Excel/images or sample from larger datasets |
+| **Run nodes** | Execute text or image prompts row-by-row with OpenAI, Anthropic, Google, DeepSeek, Mistral, Bedrock |
 | **Score nodes** | Compare outputs with ground truth using flexible matching rules |
 | **Review nodes** | LLM analyzes results and suggests prompt improvements |
 | **Resume** | Continue interrupted runs from checkpoint |
@@ -52,7 +52,9 @@ Prompt Studio follows a **Design → Run → Score → Review** workflow. You bu
 
 ### 1. Add a Dataset
 
-Create a Dataset node and import your evaluation data (CSV or Excel). Typical columns: `question`, `answer` (ground truth), `context`, or any fields your prompts need. This dataset is your source of test cases.
+Create a Dataset node and import your evaluation data (CSV, Excel, or PNG/JPEG/WebP images). Typical columns include `question`, `answer` (ground truth), `context`, and `image`. Image files are copied into a project resource folder next to the project JSON, so projects remain portable.
+
+For an existing path column, change its column type from **Text** to **Image** and choose the folder that those paths are relative to. Image datasets can be exported as CSV together with an image folder and a schema sidecar.
 
 ### 2. (Optional) Add a Sampler
 
@@ -63,6 +65,8 @@ If your dataset is large, add a Sampler node to take a subset (e.g. 20 rows) for
 Create a Prompt node. Write your prompt in structured sections (System, User, Context). Use `{placeholders}` for inputs—e.g. `{question}` and `{context}`. Map these to dataset columns when you run. You can define an output schema (e.g. `answer: string`) for structured responses.
 
 ### 4. Run
+
+For multimodal prompts, add an `{image}` placeholder and set that input to **Image** in the Prompt detail view. Map it to an image column in Run and choose a vision-capable model.
 
 Add a Run node. Connect it to your Prompt and Dataset. Map dataset columns to prompt placeholders, choose an LLM (OpenAI, Anthropic, etc.), and click Run. The app executes your prompt row-by-row and shows results in a table. If interrupted, you can Resume from the last checkpoint.
 

@@ -21,6 +21,9 @@ import {
 } from './reviewWorkingSections.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
+import { compileReviewInputs } from './runInputBuilder.js';
+import { postRun } from './runClient.js';
+import { displayCell, isImageCell } from './datasetContent.js';
 import {
   ensureReviewResultIds,
   ensureSuggestionObjectId,
@@ -48,6 +51,11 @@ const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
 const REVIEW_SUGGESTION_VERIFIED_LABEL = 'Verified';
 const REVIEW_SUGGESTION_OPTIMIZATION_LABEL = 'Verification not pass, Click to Optimize';
+/** Shown instead of the clickable label above for methods that opt out of segment optimization
+ * (ReviewMethodSpec.supports_segment_optimization === false, e.g. GEPA) — its own suggestion is
+ * already the product of many real-data iterations, and the segment lattice search this button
+ * drives is tuned for a small localized sentence-level edit, not a whole evolved section. */
+const REVIEW_SUGGESTION_NOT_PASS_LABEL = 'Verification not pass';
 const REVIEW_SUGGESTION_OPTIMIZING_LABEL = 'Optimizing\u2026';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
@@ -63,8 +71,10 @@ function isVerifyFullPass(result) {
 /**
  * Returns pill specs for the suggestion title line.
  * @param {string} [verifyState] - 'idle' | 'verifying' | 'verified' | 'optimization' | 'optimizing'
+ * @param {boolean} [supportsOptimization] - ReviewMethodSpec.supports_segment_optimization for the
+ *   method that produced this suggestion; false shows a plain non-clickable "not pass" pill instead.
  */
-function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState) {
+function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState, supportsOptimization = true) {
   if (streamComplete !== true) return [];
   if (verifyState === 'verifying') {
     return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL, ariaLabel: 'Verifying…' }];
@@ -73,6 +83,9 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
     return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_VERIFIED_LABEL, ariaLabel: 'All outputs matched ground truth' }];
   }
   if (verifyState === 'optimization') {
+    if (!supportsOptimization) {
+      return [{ cls: 'review-suggestion-optimization-pill', text: REVIEW_SUGGESTION_NOT_PASS_LABEL, ariaLabel: 'Some outputs did not match ground truth' }];
+    }
     return [{ cls: 'review-suggestion-optimization-pill review-suggestion-optimization-pill--clickable', text: REVIEW_SUGGESTION_OPTIMIZATION_LABEL, ariaLabel: 'Some outputs did not match — click to optimize' }];
   }
   if (verifyState === 'optimizing') {
@@ -81,8 +94,8 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
   return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
 
-function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState) {
-  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState)
+function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState, supportsOptimization = true) {
+  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState, supportsOptimization)
     .map((spec) => {
       const aria =
         typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()
@@ -460,7 +473,7 @@ function debugKvHtml(obj) {
   const MAX = 480;
   const cellHtml = (raw) => {
     if (raw == null || raw === '') return '<span class="review-diagnosis-detail-empty">—</span>';
-    let s = typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+    let s = isImageCell(raw) ? displayCell(raw) : (typeof raw === 'object' ? JSON.stringify(raw) : String(raw));
     s = s.replace(/\s+/g, ' ').trim();
     if (!s) return '<span class="review-diagnosis-detail-empty">—</span>';
     if (s.length > MAX) return `<span title="${escapeHtml(s)}">${escapeHtml(s.slice(0, MAX))}\u2026</span>`;
@@ -880,6 +893,7 @@ function buildReviewResultUI(overlay, options) {
   const suggestionsFooterEl = overlay.querySelector('#review-detail-suggestions-footer');
   const diagnosisEl = overlay.querySelector('#review-detail-row-diagnostics');
   const analysisFooterEl = overlay.querySelector('#review-detail-analysis-footer');
+  const analysisTabBtn = overlay.querySelector('#review-detail-tab-analysis');
   if (!promptWrap || !suggestionsEl) return;
 
   if (saved && typeof saved === 'object') {
@@ -1144,6 +1158,7 @@ function buildReviewResultUI(overlay, options) {
         promptSections,
         saved.streamComplete === true,
         verifyState,
+        saved.supports_segment_optimization !== false,
       );
       for (const spec of specs) {
         const el = document.createElement('span');
@@ -1298,21 +1313,32 @@ function buildReviewResultUI(overlay, options) {
 
   function updateAnalysisFooter() {
     if (!analysisFooterEl) return;
-    const issueAnalysisComplete =
-      saved.streamComplete === true || saved.diagnosisComplete === true;
+    /* Methods other than the built-in one may have no per-row diagnosis concept at all
+     * (diagnosis_total stays 0), so `diagnosisComplete` flips true at job start — use
+     * overall job completion instead when the stage log is standing in for this tab. */
+    const stageLog = Array.isArray(saved.stage_log) ? saved.stage_log : [];
+    const usingStageLog = rowDiagnostics.length === 0 && stageLog.length > 0;
+    const issueAnalysisComplete = usingStageLog
+      ? saved.streamComplete === true
+      : (saved.streamComplete === true || saved.diagnosisComplete === true);
     const inProgress = !issueAnalysisComplete && isReviewStreamingNow();
     let statusClass = 'review-detail-status-note--incomplete';
     let statusText = REVIEW_INCOMPLETE_USER_MSG;
     if (issueAnalysisComplete) {
       statusClass = 'review-detail-status-note--complete';
-      const n = rowDiagnostics.length;
-      statusText =
-        n > 0
-          ? `Issue analysis complete. ${n} issue${n === 1 ? '' : 's'} listed.`
-          : 'Issue analysis complete. No failed rows.';
+      if (usingStageLog) {
+        const n = stageLog.length;
+        statusText = `Analysis complete. ${n} step${n === 1 ? '' : 's'} logged.`;
+      } else {
+        const n = rowDiagnostics.length;
+        statusText =
+          n > 0
+            ? `Issue analysis complete. ${n} issue${n === 1 ? '' : 's'} listed.`
+            : 'Issue analysis complete. No failed rows.';
+      }
     } else if (inProgress) {
       statusClass = 'review-detail-status-note--generating';
-      statusText = 'Issue analysis in progress…';
+      statusText = usingStageLog ? 'Analyzing…' : 'Issue analysis in progress…';
     }
     analysisFooterEl.innerHTML = '';
     const statusNote = document.createElement('p');
@@ -1354,10 +1380,67 @@ function buildReviewResultUI(overlay, options) {
     suggestionsFooterEl.appendChild(stack);
   }
 
+  /**
+   * Fallback for review methods other than the built-in one (backend/review_methods.py):
+   * they have no per-row diagnosis, only whatever `stage` events they chose to emit
+   * (workflowCanvas.js stashes these as `saved.stage_log`). Render those as a flat step
+   * log instead of the "no row-level analysis" placeholder, so the method's own process
+   * still has somewhere to show up.
+   */
+  function renderStageLog(stageLog) {
+    const stages = Array.isArray(saved.review_stages) ? saved.review_stages : [];
+    const stageLabel = (stageId) => stages.find((s) => String(s.id) === String(stageId))?.label || String(stageId);
+    stageLog.forEach((entry, idx) => {
+      const card = document.createElement('div');
+      card.className = 'review-detail-suggestion-card review-detail-diagnosis-card';
+      const kindNote = entry.kind && entry.kind !== 'note' ? ` — ${escapeHtml(entry.kind)}` : '';
+      let payloadPreview = '';
+      try {
+        const keys = Object.keys(entry.payload || {});
+        if (keys.length) {
+          payloadPreview = keys.map((k) => `${k}: ${JSON.stringify(entry.payload[k])}`).join(', ');
+        }
+      } catch (_) {}
+      card.innerHTML = `
+        <div class="review-detail-suggestion-card__main review-detail-diagnosis-card__main">
+          <span class="review-detail-suggestion-header">
+            <span class="review-detail-suggestion-num" aria-label="Step" title="Step ${idx + 1}">#${idx + 1}</span>
+            <strong class="review-detail-suggestion-section-name">${escapeHtml(stageLabel(entry.stage_id))}${kindNote}</strong>
+          </span>
+          <p class="review-detail-suggestion-reason review-detail-diagnosis-preview">${escapeHtml(payloadPreview || '—')}</p>
+        </div>
+      `;
+      diagnosisEl.appendChild(card);
+    });
+  }
+
+  /**
+   * First tab's title tracks the active method's own stage labels — "Issue analysis" for the built-in
+   * method stays exactly that (its own stages are literally named `analysis`/`suggestions`), but a method
+   * with a different shape (e.g. GEPA's seed/evolve/select) gets a title that actually describes what's
+   * in the tab. Heuristic: the stage right before the one that emits suggestions is the best single label
+   * for "everything leading up to the suggestion" — for a 2-stage method that's just the first stage.
+   * "Suggested changes" (the other tab) never changes, regardless of method.
+   */
+  function updateAnalysisTabLabel() {
+    if (!analysisTabBtn) return;
+    const stages = Array.isArray(saved.review_stages) ? saved.review_stages : [];
+    if (stages.length === 0) return;
+    const labelStage = stages.length >= 2 ? stages[stages.length - 2] : stages[0];
+    const label = (labelStage && labelStage.label) ? String(labelStage.label).trim() : '';
+    if (label) analysisTabBtn.textContent = label;
+  }
+
   function renderRowDiagnostics() {
     if (!diagnosisEl) return;
+    updateAnalysisTabLabel();
     diagnosisEl.innerHTML = '';
     if (!rowDiagnostics.length) {
+      const stageLog = Array.isArray(saved.stage_log) ? saved.stage_log : [];
+      if (stageLog.length > 0) {
+        renderStageLog(stageLog);
+        return;
+      }
       const p = document.createElement('p');
       p.className = 'review-detail-placeholder';
       const streaming = isReviewStreamingNow();
@@ -1495,6 +1578,7 @@ function buildReviewResultUI(overlay, options) {
       promptSections,
       saved.streamComplete === true,
       cardVerifyStates.get(sugIdx),
+      saved.supports_segment_optimization !== false,
     );
     const debugActionsHtml =
       '<button type="button" class="review-detail-debug-reset-btn" title="Debug: reset card to Click-to-verify state">Reset</button>' +
@@ -1655,20 +1739,10 @@ function buildReviewResultUI(overlay, options) {
         if (inputEntries.length === 0) throw new Error('No inputs found for this suggestion.');
 
         // 5. Fill template with row_input values (single-brace placeholder substitution)
-        const prompts = inputEntries.map(([, { row }]) => {
-          let text = templateText;
-          for (const [key, val] of Object.entries(row.row_input || {})) {
-            text = text.replace(new RegExp(`\\{${escapeRegex(key)}\\}`, 'g'), String(val ?? ''));
-          }
-          return text;
-        });
+        const samples = compileReviewInputs(templateText, inputEntries);
 
         // 6. Submit run job
-        const runRes = await fetch(`${API_BASE}/api/run`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ credential_id: credentialId, prompts, output_schema: outputSchema }),
-        });
+        const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema });
         if (!runRes.ok) {
           const errText = await runRes.text().catch(() => String(runRes.status));
           throw new Error(`Run API error ${runRes.status}: ${errText}`);

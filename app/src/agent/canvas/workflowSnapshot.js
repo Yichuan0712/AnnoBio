@@ -1,5 +1,6 @@
 import { DATASET_BORDER_COLORS } from '../../workflowNodeColors.js';
 import { mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
+import { displayCell } from '../../datasetContent.js';
 
 /** Nodes that participate in agent workflow layout metrics (excluding dataset/sampler). */
 export const WORKFLOW_LAYOUT_NODE_TYPES = Object.freeze([
@@ -80,11 +81,12 @@ function getDatasetContent(node) {
 function getDatasetPreview(node, previewRows) {
   const content = getDatasetContent(node);
   const headers = safeArray(content?.headers).map((header) => String(header ?? ''));
-  const rows = safeArray(content?.rows).map((row) => safeArray(row).map((cell) => String(cell ?? '')));
+  const rows = safeArray(content?.rows).map((row) => safeArray(row).map(displayCell));
   return {
     headers,
     rowCount: rows.length,
     columnCount: headers.length,
+    columnTypes: safeArray(content?.columnTypes),
     sampleRows: rows.slice(0, Math.max(0, previewRows)),
   };
 }
@@ -136,6 +138,7 @@ function getPromptPreview(node, extractInputFields) {
       fields,
     },
     inputFields,
+    inputTypes: node?.inputTypes || {},
     outputKeys: fields.map((field) => field.key).filter(Boolean),
   };
 }

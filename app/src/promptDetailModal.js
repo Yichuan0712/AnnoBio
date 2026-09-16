@@ -100,11 +100,11 @@ function inputsToViewHtml(sectionsList) {
   const tbody = rows
     .map(
       (r) =>
-        `<tr data-section-names="${escapeAttr(JSON.stringify(r.sectionNames))}" data-sentences="${escapeAttr(JSON.stringify(r.sentences))}"><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences.join('\n'))}</td></tr>`
+        `<tr data-input-name="${escapeAttr(r.key)}" data-section-names="${escapeAttr(JSON.stringify(r.sectionNames))}" data-sentences="${escapeAttr(JSON.stringify(r.sentences))}"><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences.join('\n'))}</td></tr>`
     )
     .join('');
   return `<div class="prompt-detail-inputs-table-wrap">
-  <table class="prompt-detail-inputs-table" aria-readonly="true">
+  <table class="prompt-detail-inputs-table">
     <thead><tr><th>Input</th><th>Sentence</th></tr></thead>
     <tbody>${tbody}</tbody>
   </table>
@@ -320,12 +320,14 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
   const sectionsViewHtml = sectionsToViewHtml(sections);
 
   let outputFormat = { returnShape: 'table', fields: [] };
+  let inputTypes = {};
   if (sourceNode) {
     try {
       const raw = JSON.parse(sourceNode.dataset.promptOutputFormat || '[]');
       const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
       outputFormat = { returnShape: sourceNode.dataset.promptOutputReturnShape || 'table', fields };
     } catch (_) {}
+    try { inputTypes = JSON.parse(sourceNode.dataset.promptInputTypes || '{}'); } catch (_) {}
   }
   const inputsViewHtml = inputsToViewHtml(sections);
   const schemaViewHtml = schemaToViewHtml(outputFormat.fields, outputFormat.returnShape);
@@ -609,7 +611,12 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       if (sourceNode) sourceNode.dataset.promptSections = JSON.stringify(currentSections);
       sectionsView.innerHTML = sectionsToViewHtml(currentSections.length ? currentSections : []);
       const inputsContentEl = overlay.querySelector('.prompt-detail-inputs-content');
-      if (inputsContentEl) inputsContentEl.innerHTML = inputsToViewHtml(currentSections);
+      if (inputsContentEl) {
+        const currentNames = new Set(extractInputFieldsFromSections(currentSections));
+        Object.keys(inputTypes).forEach((key) => { if (!currentNames.has(key)) delete inputTypes[key]; });
+        if (sourceNode) sourceNode.dataset.promptInputTypes = JSON.stringify(inputTypes);
+        inputsContentEl.innerHTML = inputsToViewHtml(currentSections);
+      }
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       return true;
     }

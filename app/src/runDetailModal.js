@@ -9,6 +9,9 @@ import { getNextRowIndex, mergeResumeResults, embedInputRow, processApiResults, 
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { compileRows } from './runInputBuilder.js';
+import { postRun } from './runClient.js';
+import { cloneCell, displayCell } from './datasetContent.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
@@ -73,7 +76,7 @@ function filterResults(results, outputFields, searchQuery, inputColsCollapsed = 
     if (String((r.row_index ?? 0) + 1).toLowerCase().includes(q)) return true;
     if (r.error && String(r.error).toLowerCase().includes(q)) return true;
     const inputRow = Array.isArray(r.input_row) ? r.input_row : [];
-    if (inputRow.some((v) => v != null && String(v).toLowerCase().includes(q))) return true;
+    if (inputRow.some((v) => v != null && displayCell(v).toLowerCase().includes(q))) return true;
     if (r.output && typeof r.output === 'object') {
       for (const f of outputFields || []) {
         const val = r.output[f.key];
@@ -503,8 +506,8 @@ export function openRunDetailModal({
           const td = document.createElement('td');
           td.className = 'run-detail-td run-detail-td--dataset-row-col';
           const v = inputRow[i];
-          td.textContent = v == null ? '—' : truncate(String(v));
-          if (v != null) td.title = String(v);
+          td.textContent = v == null ? '—' : truncate(displayCell(v));
+          if (v != null) td.title = displayCell(v);
           tr.appendChild(td);
         });
       }
@@ -651,12 +654,15 @@ export function openRunDetailModal({
       const rows = (resultsState.results || []).map((r) => {
         const outputPart = r.error ? (resultsState.outputFields || []).map(() => String(r.error)) : (resultsState.outputFields || []).map((f) => { const v = r.output?.[f.key]; return v == null ? '—' : Array.isArray(v) ? v.join(', ') : String(v); });
         const inputRow = Array.isArray(r.input_row) ? r.input_row : [];
-        const inputPart = ih.map((_, i) => (inputRow[i] == null ? '—' : String(inputRow[i])));
+        const inputPart = ih.map((_, i) => (inputRow[i] == null ? '—' : cloneCell(inputRow[i])));
         const inputNum = String((r.input_row_index ?? 0) + 1);
         const outputNum = String((r.row_index ?? 0) + 1);
         return [inputNum, ...inputPart, outputNum, ...outputPart];
       });
-      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: exportHeaders, rows } }));
+      let sourceTypes = [];
+      try { sourceTypes = JSON.parse(node?.dataset?.runInputContent || '{}').columnTypes || []; } catch (_) {}
+      const columnTypes = ['text', ...ih.map((_, i) => sourceTypes[i] === 'image' ? 'image' : 'text'), 'text', ...outputHeaders.map(() => 'text')];
+      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: exportHeaders, columnTypes, rows } }));
       closeModal();
     });
     const scoreBtn = document.createElement('button');
@@ -735,11 +741,16 @@ export function openRunDetailModal({
     const content = selectedNodeId ? getSubsetContent(selectedNodeId) : null;
     const ws = getSelectedWorkingSet();
     const headers = (content?.headers || ws?.headers || []).slice();
+    const columnTypes = headers.map((_, i) => content?.columnTypes?.[i] === 'image' ? 'image' : 'text');
+    const inputTypes = getPromptTemplate()?.inputTypes || {};
     const headerSet = new Set(headers);
     inputsListEl.innerHTML = '';
     if (inputFields.length === 0) { inputsListEl.innerHTML = '<p class="run-detail-placeholder">No prompt inputs.</p>'; refreshButton(); return; }
     inputFields.forEach((inputName) => {
       let col = inputToColumn[inputName] || '';
+      const expected = inputTypes[inputName];
+      const selectedIndex = headers.indexOf(col);
+      if (col && expected && columnTypes[selectedIndex] !== expected) { col = ''; inputToColumn[inputName] = ''; }
       if (col && !headerSet.has(col)) { col = ''; inputToColumn[inputName] = ''; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
       if (!col && inputNameToColumnMemory[inputName] && headerSet.has(inputNameToColumnMemory[inputName])) { col = inputNameToColumnMemory[inputName]; inputToColumn[inputName] = col; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
     });
@@ -752,7 +763,9 @@ export function openRunDetailModal({
       row.className = 'run-detail-mapping-row';
       row.setAttribute('role', 'row');
       const currentCol = inputToColumn[inputName] || '';
-      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Dataset column for ${escapeAttr(inputName)}"><option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>${headers.map((h) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}</span>`;
+      const requiredType = inputTypes[inputName];
+      const options = headers.map((h, i) => ({ h, type: columnTypes[i] })).filter((entry) => !requiredType || entry.type === requiredType);
+      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Dataset column for ${escapeAttr(inputName)}"><option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>${options.map(({ h, type }) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}${type === 'image' ? ' 🖼' : ''}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}${requiredType ? ` <small>(${requiredType})</small>` : ''}</span>`;
       row.querySelector('.run-detail-column-select').addEventListener('change', (e) => {
         inputToColumn[inputName] = (e.target.value || '').trim() || '';
         if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
@@ -864,7 +877,13 @@ export function openRunDetailModal({
     }
     if (!selectedNodeId || !selectedCredentialId) return;
 
-    const content = getSubsetContent(selectedNodeId);
+    let content = getSubsetContent(selectedNodeId);
+    try {
+      const savedResults = JSON.parse(node?.dataset?.runResults || '[]');
+      if (Array.isArray(savedResults) && savedResults.length > 0 && node?.dataset?.runInputContent) {
+        content = JSON.parse(node.dataset.runInputContent);
+      }
+    } catch (_) {}
     const template = getPromptTemplate();
     const headers = content?.headers || [];
     const rows = content?.rows || [];
@@ -901,21 +920,11 @@ export function openRunDetailModal({
       return;
     }
 
-    const buildPrompts = (rowList) => rowList.map((row) => {
-      let text = templateText;
-      inputFields.forEach((inputName) => {
-        const col = inputToColumn[inputName];
-        const idx = headers.indexOf(col);
-        const val = idx >= 0 ? (row[idx] ?? '') : '';
-        text = text.replace(new RegExp('\\{' + escapeRegex(inputName) + '\\}', 'g'), String(val));
-      });
-      return text;
-    });
-    const prompts = buildPrompts(rowsToRun);
+    const samples = compileRows(templateText, headers, rowsToRun, inputToColumn, template.inputTypes || {});
 
     const isResume = nextRowIndex > 0 && existingResults.length > 0;
     if (node) {
-      node.dataset.runInputContent = JSON.stringify({ headers, rows });
+      node.dataset.runInputContent = JSON.stringify({ headers, columnTypes: content?.columnTypes || [], rowIds: content?.rowIds || [], rows });
       if (nextRowIndex === 0) {
         if (existingResults.length === 0) writeNodeRunState({ results: [], completed: 0, total: rows.length, runCompleted: false });
         const bar = node.querySelector('.workflow-node__run-progress');
@@ -934,15 +943,11 @@ export function openRunDetailModal({
     applyRunningLock();
 
     try {
-      const res = await fetch(`${API_BASE}/api/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const res = await postRun({
           credential_id: selectedCredentialId,
-          prompts,
+          samples,
           output_schema: outputSchema,
           run_node_id: nodeId || null,
-        }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 202) {

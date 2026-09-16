@@ -6,6 +6,8 @@
  * (export a dataset, create a sample, ...) differs per caller.
  */
 
+import { displayCell } from './datasetContent.js';
+
 export const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 const MAX_PREVIEW_CELL_CHARS = 200;
 
@@ -23,7 +25,7 @@ function truncate(str) {
 export function filterTableRows(headers, rows, query) {
   const q = (query || '').trim().toLowerCase();
   if (!q) return rows;
-  return rows.filter((row) => row.some((v) => v != null && String(v).toLowerCase().includes(q)));
+  return rows.filter((row) => row.some((v) => v != null && displayCell(v).toLowerCase().includes(q)));
 }
 
 function buildResultsTable(headers, rows) {
@@ -44,8 +46,8 @@ function buildResultsTable(headers, rows) {
     const tr = document.createElement('tr');
     headers.forEach((_, i) => {
       const td = document.createElement('td');
-      td.textContent = truncate(row[i]);
-      td.title = row[i] ?? '';
+      td.textContent = truncate(displayCell(row[i]));
+      td.title = displayCell(row[i]);
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
