@@ -29,6 +29,20 @@ const MODEL_SETTINGS_DEFAULTS = {
   run_concurrency: 4,
   /** Registered review method id (backend/review_methods.py); blank = registry default. */
   default_review_method: '',
+  /** GEPA reflective-evolution max iterations (4-200); separate from optimization_max_trials because
+   * each GEPA iteration runs the task model against every targeted input, not just a suggestion's rows. */
+  gepa_max_iterations: 15,
+  /** MIPROv2 trials (4-200); its own setting for the same reason as gepa_max_iterations. */
+  miprov2_num_trials: 10,
+  /** BootstrapFewShotWithRandomSearch candidate demo sets (2-100); own setting, same reason. */
+  bootstrap_fewshot_num_candidates: 10,
+  /** TextGrad textual-gradient-descent steps (2-50); own setting, same reason. */
+  textgrad_num_steps: 6,
+  /** COPRO instruction variants per round (2-30) and coordinate-ascent rounds (1-10); own settings, same reason. */
+  copro_breadth: 6,
+  copro_depth: 3,
+  /** SIMBA mini-batch introspection steps (2-40); own setting, same reason. */
+  simba_max_steps: 8,
   /** Distinct inputs with ≥1 unmatched comparison row; Phase 1 analyzes at most this many. */
   review_max_failed_rows: 30,
   /** Thompson-sampling trials per compositional optimization run (4–200). */
@@ -794,6 +808,34 @@ export function openSettingsModal() {
                               <label class="dataset-meta-label" for="settings-default-review-method">Default review method</label>
                               <select id="settings-default-review-method" class="credentials-select dataset-meta-input" aria-label="Default review method"></select>
                             </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="gepa" hidden>
+                              <label class="dataset-meta-label" for="settings-gepa-max-iterations">GEPA max iterations (4–200)</label>
+                              <input type="number" id="settings-gepa-max-iterations" class="dataset-meta-input" min="4" max="200" value="15" aria-label="GEPA reflective-evolution max iterations" title="Each iteration runs the task model against every targeted input, then one reflection call — cost scales with iterations × inputs." />
+                            </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="miprov2" hidden>
+                              <label class="dataset-meta-label" for="settings-miprov2-num-trials">MIPROv2 trials (4–200)</label>
+                              <input type="number" id="settings-miprov2-num-trials" class="dataset-meta-input" min="4" max="200" value="10" aria-label="MIPROv2 optimization trials" title="Each trial evaluates one instructions+demos combination against every targeted input — cost scales with trials × inputs." />
+                            </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="bootstrap_fewshot" hidden>
+                              <label class="dataset-meta-label" for="settings-bootstrap-fewshot-num-candidates">BootstrapFewShot candidates (2–100)</label>
+                              <input type="number" id="settings-bootstrap-fewshot-num-candidates" class="dataset-meta-input" min="2" max="100" value="10" aria-label="BootstrapFewShotWithRandomSearch candidate demo sets" title="Each candidate bootstraps and evaluates a different demo set against every targeted input — cost scales with candidates × inputs." />
+                            </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="textgrad" hidden>
+                              <label class="dataset-meta-label" for="settings-textgrad-num-steps">TextGrad steps (2–50)</label>
+                              <input type="number" id="settings-textgrad-num-steps" class="dataset-meta-input" min="2" max="50" value="6" aria-label="TextGrad textual-gradient-descent steps" title="Each step runs a forward pass, a textual-gradient backward pass, and an optimizer rewrite call against every targeted input — cost scales with steps × inputs × ~3." />
+                            </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="copro" hidden>
+                              <label class="dataset-meta-label" for="settings-copro-breadth">COPRO breadth (2–30)</label>
+                              <input type="number" id="settings-copro-breadth" class="dataset-meta-input" min="2" max="30" value="6" aria-label="COPRO instruction variants per round" title="Each round proposes this many instruction variants and evaluates every one against every targeted input — cost scales with breadth × depth × inputs." />
+                            </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="copro" hidden>
+                              <label class="dataset-meta-label" for="settings-copro-depth">COPRO depth (1–10)</label>
+                              <input type="number" id="settings-copro-depth" class="dataset-meta-input" min="1" max="10" value="3" aria-label="COPRO coordinate-ascent rounds" title="Coordinate-ascent rounds — each round refines the previous round's best instruction. Cost scales with breadth × depth × inputs." />
+                            </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="simba" hidden>
+                              <label class="dataset-meta-label" for="settings-simba-max-steps">SIMBA steps (2–40)</label>
+                              <input type="number" id="settings-simba-max-steps" class="dataset-meta-input" min="2" max="40" value="8" aria-label="SIMBA mini-batch introspection steps" title="Each step samples a mini-batch, runs several stochastic rollouts, and has the model introspect on the results — cost scales with steps × mini-batch size × candidates." />
+                            </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-review-max-tokens">Max tokens (256–131072)</label>
                               <input type="number" id="settings-review-max-tokens" class="dataset-meta-input" min="256" max="131072" value="32768" aria-label="Review max tokens" />
@@ -802,9 +844,9 @@ export function openSettingsModal() {
                               <label class="dataset-meta-label" for="settings-review-max-failed-rows">Max failed inputs per Review (1–200)</label>
                               <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max inputs with failures analyzed per Review" />
                             </div>
-                            <div class="defaults-field">
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="issue_analysis_suggestions" hidden>
                               <label class="dataset-meta-label" for="settings-optimization-max-trials">Max trials per optimization run (4–200)</label>
-                              <input type="number" id="settings-optimization-max-trials" class="dataset-meta-input" min="4" max="200" value="40" aria-label="Optimization max Thompson-sampling trials" />
+                              <input type="number" id="settings-optimization-max-trials" class="dataset-meta-input" min="4" max="200" value="40" aria-label="Optimization max Thompson-sampling trials" title="Only used by the built-in method's suggestion-card 'Optimize' pill (Thompson-sampling segment search) — no other review method reads this." />
                             </div>
                             <div class="defaults-field defaults-field--full" style="margin-top:0.5rem;">
                               <label class="dataset-meta-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -835,6 +877,14 @@ export function openSettingsModal() {
   const runCredSelect = overlay.querySelector('#settings-default-run-credential');
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
   const reviewMethodDefaultSelect = overlay.querySelector('#settings-default-review-method');
+  const methodSpecificSettingsBlocks = overlay.querySelectorAll('.settings-review-method-specific[data-method-settings]');
+  const gepaMaxIterationsInp = overlay.querySelector('#settings-gepa-max-iterations');
+  const miprov2NumTrialsInp = overlay.querySelector('#settings-miprov2-num-trials');
+  const bootstrapFewshotNumCandidatesInp = overlay.querySelector('#settings-bootstrap-fewshot-num-candidates');
+  const textgradNumStepsInp = overlay.querySelector('#settings-textgrad-num-steps');
+  const coproBreadthInp = overlay.querySelector('#settings-copro-breadth');
+  const coproDepthInp = overlay.querySelector('#settings-copro-depth');
+  const simbaMaxStepsInp = overlay.querySelector('#settings-simba-max-steps');
   const runMaxTokensInp = overlay.querySelector('#settings-run-max-tokens');
   const reviewMaxTokensInp = overlay.querySelector('#settings-review-max-tokens');
   const reviewMaxFailedRowsInp = overlay.querySelector('#settings-review-max-failed-rows');
@@ -901,6 +951,20 @@ export function openSettingsModal() {
     }
   }
 
+  /**
+   * Each review method may own a block of method-specific settings (e.g. GEPA's max-iterations field);
+   * only the block matching the currently-selected "Default review method" is shown. A method used
+   * per-node without being the global default still shares this one global setting value — there's no
+   * per-node override for it — so switching the dropdown away from a method hides, but does not disable,
+   * whatever that method's setting was last saved as.
+   */
+  function updateMethodSpecificSettingsVisibility() {
+    const selected = reviewMethodDefaultSelect?.value || '';
+    methodSpecificSettingsBlocks.forEach((el) => {
+      el.hidden = el.dataset.methodSettings !== selected;
+    });
+  }
+
   function populateReviewMethodSelect(methods) {
     if (!reviewMethodDefaultSelect) return;
     const wrap = reviewMethodDefaultSelect.closest('.defaults-field');
@@ -912,7 +976,10 @@ export function openSettingsModal() {
     reviewMethodDefaultSelect.innerHTML = methods
       .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label || m.id)}</option>`)
       .join('');
+    updateMethodSpecificSettingsVisibility();
   }
+
+  reviewMethodDefaultSelect?.addEventListener('change', updateMethodSpecificSettingsVisibility);
 
   function populateCredentialSelects(credentials) {
     const optHtml = credentials.map((c) =>
@@ -936,6 +1003,28 @@ export function openSettingsModal() {
         reviewMethodDefaultSelect.selectedIndex = 0;
       }
     }
+    if (gepaMaxIterationsInp) {
+      gepaMaxIterationsInp.value = String(settings.gepa_max_iterations ?? MODEL_SETTINGS_DEFAULTS.gepa_max_iterations);
+    }
+    if (miprov2NumTrialsInp) {
+      miprov2NumTrialsInp.value = String(settings.miprov2_num_trials ?? MODEL_SETTINGS_DEFAULTS.miprov2_num_trials);
+    }
+    if (bootstrapFewshotNumCandidatesInp) {
+      bootstrapFewshotNumCandidatesInp.value = String(settings.bootstrap_fewshot_num_candidates ?? MODEL_SETTINGS_DEFAULTS.bootstrap_fewshot_num_candidates);
+    }
+    if (textgradNumStepsInp) {
+      textgradNumStepsInp.value = String(settings.textgrad_num_steps ?? MODEL_SETTINGS_DEFAULTS.textgrad_num_steps);
+    }
+    if (coproBreadthInp) {
+      coproBreadthInp.value = String(settings.copro_breadth ?? MODEL_SETTINGS_DEFAULTS.copro_breadth);
+    }
+    if (coproDepthInp) {
+      coproDepthInp.value = String(settings.copro_depth ?? MODEL_SETTINGS_DEFAULTS.copro_depth);
+    }
+    if (simbaMaxStepsInp) {
+      simbaMaxStepsInp.value = String(settings.simba_max_steps ?? MODEL_SETTINGS_DEFAULTS.simba_max_steps);
+    }
+    updateMethodSpecificSettingsVisibility();
     runMaxTokensInp.value = String(settings.run_max_tokens ?? MODEL_SETTINGS_DEFAULTS.run_max_tokens);
     reviewMaxTokensInp.value = String(settings.review_max_tokens ?? MODEL_SETTINGS_DEFAULTS.review_max_tokens);
     reviewMaxFailedRowsInp.value = String(settings.review_max_failed_rows ?? MODEL_SETTINGS_DEFAULTS.review_max_failed_rows);
@@ -996,10 +1085,31 @@ export function openSettingsModal() {
     );
     const optimizationMaxTrialsParsed = parseInt(optimizationMaxTrialsInp.value, 10);
     const optimizationMaxTrials = Math.min(200, Math.max(4, Number.isNaN(optimizationMaxTrialsParsed) ? MODEL_SETTINGS_DEFAULTS.optimization_max_trials : optimizationMaxTrialsParsed));
+    const gepaMaxIterationsParsed = parseInt(gepaMaxIterationsInp?.value, 10);
+    const gepaMaxIterations = Math.min(200, Math.max(4, Number.isNaN(gepaMaxIterationsParsed) ? MODEL_SETTINGS_DEFAULTS.gepa_max_iterations : gepaMaxIterationsParsed));
+    const miprov2NumTrialsParsed = parseInt(miprov2NumTrialsInp?.value, 10);
+    const miprov2NumTrials = Math.min(200, Math.max(4, Number.isNaN(miprov2NumTrialsParsed) ? MODEL_SETTINGS_DEFAULTS.miprov2_num_trials : miprov2NumTrialsParsed));
+    const bootstrapFewshotNumCandidatesParsed = parseInt(bootstrapFewshotNumCandidatesInp?.value, 10);
+    const bootstrapFewshotNumCandidates = Math.min(100, Math.max(2, Number.isNaN(bootstrapFewshotNumCandidatesParsed) ? MODEL_SETTINGS_DEFAULTS.bootstrap_fewshot_num_candidates : bootstrapFewshotNumCandidatesParsed));
+    const textgradNumStepsParsed = parseInt(textgradNumStepsInp?.value, 10);
+    const textgradNumSteps = Math.min(50, Math.max(2, Number.isNaN(textgradNumStepsParsed) ? MODEL_SETTINGS_DEFAULTS.textgrad_num_steps : textgradNumStepsParsed));
+    const coproBreadthParsed = parseInt(coproBreadthInp?.value, 10);
+    const coproBreadth = Math.min(30, Math.max(2, Number.isNaN(coproBreadthParsed) ? MODEL_SETTINGS_DEFAULTS.copro_breadth : coproBreadthParsed));
+    const coproDepthParsed = parseInt(coproDepthInp?.value, 10);
+    const coproDepth = Math.min(10, Math.max(1, Number.isNaN(coproDepthParsed) ? MODEL_SETTINGS_DEFAULTS.copro_depth : coproDepthParsed));
+    const simbaMaxStepsParsed = parseInt(simbaMaxStepsInp?.value, 10);
+    const simbaMaxSteps = Math.min(40, Math.max(2, Number.isNaN(simbaMaxStepsParsed) ? MODEL_SETTINGS_DEFAULTS.simba_max_steps : simbaMaxStepsParsed));
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
       default_review_method: (reviewMethodDefaultSelect?.value || '').trim() || '',
+      gepa_max_iterations: gepaMaxIterations,
+      miprov2_num_trials: miprov2NumTrials,
+      bootstrap_fewshot_num_candidates: bootstrapFewshotNumCandidates,
+      textgrad_num_steps: textgradNumSteps,
+      copro_breadth: coproBreadth,
+      copro_depth: coproDepth,
+      simba_max_steps: simbaMaxSteps,
       run_max_tokens: runMaxTokens,
       review_max_tokens: reviewMaxTokens,
       review_max_failed_rows: reviewMaxFailedRows,

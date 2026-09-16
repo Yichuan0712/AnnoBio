@@ -3346,7 +3346,8 @@
   flex: 0 0 auto;
 }
 
-.score-detail-llm-row .score-detail-review-method-select {
+.score-detail-llm-row .score-detail-review-method-select,
+.score-detail-llm-row .score-detail-target-section-select {
   width: calc(var(--detail-llm-select-width) * 0.85);
   min-width: min(calc(var(--detail-llm-select-width) * 0.85), 100%);
   max-width: 100%;
@@ -4418,7 +4419,8 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 
 /* Score 页脚模型选择框与 Review 按钮同高 */
 .score-detail-llm-row .score-detail-llm-select,
-.score-detail-llm-row .score-detail-review-method-select {
+.score-detail-llm-row .score-detail-review-method-select,
+.score-detail-llm-row .score-detail-target-section-select {
   height: 36px;
   min-height: 36px;
   padding: 0 14px;

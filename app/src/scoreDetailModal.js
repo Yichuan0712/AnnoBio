@@ -16,6 +16,39 @@ import {
   emptyScoreRuleGroup,
   scoreBundleRootsForEmbeddingWalk,
 } from './scoreMappingBundle.js';
+import {
+  SCORE_GT_ROW_INDEX_COLUMN,
+  isValidRunOutputForScoreRow,
+  DEFAULT_MATCH_FLAGS,
+  canonicalizeMatchFlags,
+  getMatchFlags,
+  numericPairMatches,
+  normalizeForMatch,
+  migrateLegacyMatchType,
+  legacyMatchTypeWasContains,
+  stringsMatchContains,
+  stringsMatchSemanticAlign,
+  EMBEDDING_COSINE_THRESHOLD,
+  embeddingPairMatches,
+  prefetchEmbeddingCosineMap,
+} from './scoreMatchPrimitives.js';
+/* Re-exported so existing `import { ... } from './scoreDetailModal.js'` call sites (workflowCanvas.js,
+ * scoreOutputGtMatcher.js) don't need to change after these moved to scoreMatchPrimitives.js. */
+export {
+  SCORE_GT_ROW_INDEX_COLUMN,
+  isValidRunOutputForScoreRow,
+  canonicalizeMatchFlags,
+  getMatchFlags,
+  numericPairMatches,
+  normalizeForMatch,
+  migrateLegacyMatchType,
+  legacyMatchTypeWasContains,
+  stringsMatchContains,
+  stringsMatchSemanticAlign,
+  EMBEDDING_COSINE_THRESHOLD,
+  embeddingPairMatches,
+  prefetchEmbeddingCosineMap,
+};
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { prepareReviewBody } from './runClient.js';
 import { displayCell } from './datasetContent.js';
@@ -121,7 +154,6 @@ export function buildCodeMatchRunToGt(result, gtRowsLength) {
 }
 
 /** Stored in rule.gtColumns; UI label {@link SCORE_GT_ROW_INDEX_LABEL}. Value is 0-based GT row index (aligned with run `#` in getRunValue). */
-export const SCORE_GT_ROW_INDEX_COLUMN = '__score_gt_row_index__';
 export const SCORE_GT_ROW_INDEX_LABEL = 'Ground truth: #';
 
 /** UI label for a stored GT column (sheet header or {@link SCORE_GT_ROW_INDEX_COLUMN}). Persistence keeps raw names. */
@@ -141,16 +173,6 @@ export function comparisonRowIsMatched(row) {
   if (m === true || m === 'true' || m === 1 || m === '1') return true;
   if (m === false || m === 'false' || m === 0 || m === '0') return false;
   return false;
-}
-
-/**
- * True when this run row should participate in Score / Review pairing and tables.
- * Includes API/runtime errors and empty model output (still comparable via input-column rules and shown in UI).
- */
-export function isValidRunOutputForScoreRow(r, outputFields) {
-  void outputFields;
-  if (!r) return false;
-  return typeof r.row_index === 'number' && !Number.isNaN(r.row_index);
 }
 
 /**
@@ -459,19 +481,6 @@ const MATCH_FLAGS = [
   { key: 'ignoreWhitespace', label: 'Ignore whitespace' },
 ];
 
-const DEFAULT_MATCH_FLAGS = {
-  semanticAlign: false,
-  embeddingSimilarity: false,
-  contains: false,
-  ignoreCase: false,
-  ignoreSymbols: false,
-  ignoreWhitespace: false,
-  numericMode: 'exact',
-  numericAbsEpsilon: 0,
-  numericRelEpsilon: 0,
-  numericDecimalPlaces: 2,
-};
-
 /** Numeric compare mode (only when matchType === 'numeric'); single choice in the rule editor. */
 const NUMERIC_COMPARE_MODES = [
   { value: 'exact', label: 'Exact: values must be numerically equal' },
@@ -484,236 +493,6 @@ const NUMERIC_COMPARE_MODES = [
 const ruleEditorMemory = {};
 /** Session-only: ordered list of top-level items { type: 'rule', ... } | { type: 'group', ops, children }. Preserves original order. */
 const ruleEditorMemoryOrdered = [];
-
-export function canonicalizeMatchFlags(f) {
-  const merged = { ...DEFAULT_MATCH_FLAGS, ...(f && typeof f === 'object' ? f : {}) };
-  const mode = ['exact', 'abs', 'rel', 'decimals'].includes(merged.numericMode) ? merged.numericMode : 'exact';
-  let absE = Number(merged.numericAbsEpsilon);
-  if (!Number.isFinite(absE) || absE < 0) absE = 0;
-  let relE = Number(merged.numericRelEpsilon);
-  if (!Number.isFinite(relE) || relE < 0) relE = 0;
-  let dec = Math.floor(Number(merged.numericDecimalPlaces));
-  if (!Number.isFinite(dec)) dec = 2;
-  dec = Math.max(0, Math.min(20, dec));
-  let embeddingSimilarity = !!merged.embeddingSimilarity;
-  let semanticAlign = !!merged.semanticAlign;
-  if (embeddingSimilarity && semanticAlign) semanticAlign = false;
-  const softString = embeddingSimilarity || semanticAlign;
-  return {
-    semanticAlign,
-    embeddingSimilarity,
-    contains: softString ? false : !!merged.contains,
-    ignoreCase: softString ? false : !!merged.ignoreCase,
-    ignoreSymbols: softString ? false : !!merged.ignoreSymbols,
-    ignoreWhitespace: softString ? false : !!merged.ignoreWhitespace,
-    numericMode: mode,
-    numericAbsEpsilon: absE,
-    numericRelEpsilon: relE,
-    numericDecimalPlaces: dec,
-  };
-}
-
-function getMatchFlags(rule) {
-  const f = rule && rule.matchFlags;
-  return canonicalizeMatchFlags(f);
-}
-
-/** Round half-up to `places` decimal places (0-20). */
-function roundToDecimals(n, places) {
-  const p = Math.max(0, Math.min(20, Math.floor(places)));
-  const m = 10 ** p;
-  return Math.round(n * m) / m;
-}
-
-/**
- * Compare two trimmed string forms of numbers per numericMode (and parameters) on flags.
- * If either side is not a finite number, falls back to string equality.
- */
-export function numericPairMatches(runTrimmedStr, gtTrimmedStr, flags) {
-  const runNorm = runTrimmedStr == null ? '' : String(runTrimmedStr).trim();
-  const gtNorm = gtTrimmedStr == null ? '' : String(gtTrimmedStr).trim();
-  const runNum = parseFloat(runNorm);
-  const gtNum = parseFloat(gtNorm);
-  if (!Number.isFinite(runNum) || !Number.isFinite(gtNum)) {
-    return runNorm === gtNorm;
-  }
-  const mode = flags.numericMode || 'exact';
-  if (mode === 'abs') {
-    const eps = Number(flags.numericAbsEpsilon);
-    const e = Number.isFinite(eps) && eps >= 0 ? eps : 0;
-    return Math.abs(runNum - gtNum) <= e;
-  }
-  if (mode === 'rel') {
-    const rel = Number(flags.numericRelEpsilon);
-    const r = Number.isFinite(rel) && rel >= 0 ? rel : 0;
-    const denom = Math.max(Math.abs(runNum), Math.abs(gtNum), 1e-15);
-    return Math.abs(runNum - gtNum) / denom <= r;
-  }
-  if (mode === 'decimals') {
-    let p = Math.floor(Number(flags.numericDecimalPlaces));
-    if (!Number.isFinite(p)) p = 2;
-    p = Math.max(0, Math.min(20, p));
-    return roundToDecimals(runNum, p) === roundToDecimals(gtNum, p);
-  }
-  return runNum === gtNum;
-}
-
-/** 对字符串应用规范化（用于比较前）；numeric 时不使用 flags，仅 trim 后按数值比较。 */
-function normalizeForMatch(str, flags, isNumeric) {
-  let s = str == null ? '' : String(str).trim();
-  if (isNumeric) return s;
-  if (flags.ignoreWhitespace) s = s.replace(/\s+/g, ' ').trim();
-  if (flags.ignoreCase) s = s.toLowerCase();
-  if (flags.ignoreSymbols) s = s.replace(/[^\w\s]/gu, '').replace(/\s+/g, ' ').trim();
-  return s;
-}
-
-/** Map deprecated comparison types to current values (`contains` / `gt-contains-run` → `exact` + flag). */
-export function migrateLegacyMatchType(matchType) {
-  if (matchType === 'contains' || matchType === 'gt-contains-run') return 'exact';
-  return matchType || 'exact';
-}
-
-/** True if legacy matchType used substring rules (now matchFlags.contains). */
-export function legacyMatchTypeWasContains(matchType) {
-  return matchType === 'contains' || matchType === 'gt-contains-run';
-}
-
-/**
- * Mutual substring match after normalization (replaces "result contains GT" OR "GT contains result").
- * Empty vs empty matches; one empty vs non-empty does not.
- */
-export function stringsMatchContains(runVal, gtVal) {
-  const r = runVal == null ? '' : String(runVal);
-  const g = gtVal == null ? '' : String(gtVal);
-  if (r.length === 0 && g.length === 0) return true;
-  if (r.length === 0 || g.length === 0) return false;
-  return r.includes(g) || g.includes(r);
-}
-
-/** Sørensen–Dice on character bigrams; internal normalize: trim, lower case, collapse whitespace. Not a true embedding model. */
-const SEMANTIC_ALIGN_DICE_THRESHOLD = 0.65;
-
-function normalizeSemanticAlignInput(v) {
-  return String(v == null ? '' : v).trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-function stringCharBigrams(s) {
-  if (s.length < 2) return [];
-  const out = [];
-  for (let i = 0; i < s.length - 1; i++) out.push(s.slice(i, i + 2));
-  return out;
-}
-
-export function stringsMatchSemanticAlign(runVal, gtVal) {
-  const a = normalizeSemanticAlignInput(runVal);
-  const b = normalizeSemanticAlignInput(gtVal);
-  if (a.length === 0 && b.length === 0) return true;
-  if (a.length === 0 || b.length === 0) return false;
-  if (a === b) return true;
-  if (a.length < 2 || b.length < 2) return a === b;
-  const ba = stringCharBigrams(a);
-  const bb = stringCharBigrams(b);
-  const counts = new Map();
-  for (const x of ba) counts.set(x, (counts.get(x) || 0) + 1);
-  let inter = 0;
-  for (const x of bb) {
-    const c = counts.get(x) || 0;
-    if (c > 0) {
-      inter++;
-      counts.set(x, c - 1);
-    }
-  }
-  const dice = (2 * inter) / (ba.length + bb.length);
-  return dice >= SEMANTIC_ALIGN_DICE_THRESHOLD;
-}
-
-/** Cosine threshold for backend FastEmbed (MiniLM) pair similarities; tuned for “close enough” paraphrases. */
-export const EMBEDDING_COSINE_THRESHOLD = 0.76;
-
-export function embeddingPairMatches(runValRaw, gtValRaw, embeddingCosineMap) {
-  const a = runValRaw == null ? '' : String(runValRaw);
-  const b = gtValRaw == null ? '' : String(gtValRaw);
-  if (a.length === 0 && b.length === 0) return true;
-  if (a.length === 0 || b.length === 0) return false;
-  const key = JSON.stringify([a, b]);
-  const c = embeddingCosineMap.get(key);
-  if (typeof c !== 'number' || !Number.isFinite(c)) return false;
-  return c >= EMBEDDING_COSINE_THRESHOLD;
-}
-
-/**
- * Collect unique (result, GT) string pairs for rules that use embedding similarity, then call the backend once per chunk.
- * @param {string} apiBase e.g. BACKEND_API_BASE
- */
-export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
-  const rootsToWalk = Array.isArray(roots) && roots.length > 0 ? roots.filter(Boolean) : (root != null ? [root] : []);
-  const leafRules = [];
-  for (const rt of rootsToWalk) {
-    (function walk(n) {
-      if (!n) return;
-      if (n.type === 'rule') leafRules.push(n);
-      if (n.type === 'group' && Array.isArray(n.children)) n.children.forEach(walk);
-    })(rt);
-  }
-  const embeddingRules = leafRules.filter((rule) => {
-    const f = getMatchFlags(rule);
-    return migrateLegacyMatchType(rule.matchType) === 'exact' && f.embeddingSimilarity;
-  });
-  if (embeddingRules.length === 0) return new Map();
-
-  const resultsByIndex = new Map();
-  (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
-  const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
-  const gtCount = (gtContent.rows || []).length;
-  const seen = new Set();
-  const pairs = [];
-  for (const i of runRowIndices) {
-    const runResult = resultsByIndex.get(i) || null;
-    for (let j = 0; j < gtCount; j++) {
-      for (const rule of embeddingRules) {
-        const runValRaw = getRunValue(runResult, rule.outputKey, i, runWs, outputFields);
-        const gtValsRaw = (rule.gtColumns || []).map((col) => getGtValue(gtContent, j, col));
-        for (const gt of gtValsRaw) {
-          const a = runValRaw == null ? '' : String(runValRaw);
-          const b = gt == null ? '' : String(gt);
-          const key = JSON.stringify([a, b]);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          pairs.push([a, b]);
-        }
-      }
-    }
-  }
-  if (pairs.length === 0) return new Map();
-
-  const map = new Map();
-  const base = String(apiBase || BACKEND_API_BASE).replace(/\/$/, '');
-  const CHUNK = 320;
-  for (let off = 0; off < pairs.length; off += CHUNK) {
-    const chunk = pairs.slice(off, off + CHUNK);
-    const res = await fetch(`${base}/api/embeddings/pair-similarities`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pairs: chunk }),
-    });
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      throw new Error(t || `Embedding API HTTP ${res.status}`);
-    }
-    const data = await res.json();
-    const cosines = data.cosines;
-    if (!Array.isArray(cosines) || cosines.length !== chunk.length) {
-      throw new Error('Invalid embedding API response');
-    }
-    chunk.forEach((p, idx) => {
-      map.set(JSON.stringify(p), cosines[idx]);
-    });
-  }
-  return map;
-}
-
-export { getMatchFlags, normalizeForMatch };
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -1120,6 +899,8 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     credential_id: credentialId,
     review_session_id: reviewNodeId,
     review_method: payload.review_method || undefined,
+    score_mapping: payload.score_mapping || undefined,
+    target_section_index: Number.isInteger(payload.target_section_index) ? payload.target_section_index : undefined,
     prompt_sections: payload.prompt_sections,
     run_results: payload.run_results || [],
     output_fields: payload.output_fields || [],
@@ -1186,6 +967,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
         reviewNodeId,
         reviewMethodId: data.review_method_id || '',
         reviewStages: Array.isArray(data.review_stages) ? data.review_stages : [],
+        supportsSegmentOptimization: data.supports_segment_optimization !== false,
       },
     }));
   } catch (e) {
@@ -1719,6 +1501,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 <div class="score-detail-results-footer-right">
                   <div class="score-detail-llm-row">
                     <select id="score-detail-review-method-select" class="credentials-select score-detail-review-method-select" aria-label="Select review method" title="Review method: how suggestions are generated"></select>
+                    <select id="score-detail-target-section-select" class="credentials-select score-detail-target-section-select" aria-label="Section for GEPA to optimize" title="Which prompt section GEPA should evolve" hidden></select>
                     <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model"></select>
                   </div>
                   <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create a Review node and run analysis with the selected model">Review</button>
@@ -1747,6 +1530,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const codeRunBtn = overlay.querySelector('.score-detail-code-run-btn');
   const llmSelect = overlay.querySelector('#score-detail-llm-select');
   const reviewMethodSelect = overlay.querySelector('#score-detail-review-method-select');
+  const targetSectionSelect = overlay.querySelector('#score-detail-target-section-select');
+  /** Review methods that optimize one whole prompt section rather than emitting localized edits; only
+   * these need the "which section" picker (mirrors the per-method settings visibility in settingsModal.js). */
+  const REVIEW_METHODS_WITH_TARGET_SECTION = new Set(['gepa', 'miprov2', 'bootstrap_fewshot', 'textgrad', 'copro', 'simba']);
   const saveToWorkspaceBtn = overlay.querySelector('#score-detail-save-to-workspace');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
   const reviewPayloadPreviewBtn = overlay.querySelector('#score-detail-review-payload-preview');
@@ -3521,6 +3308,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       !payload || !payload.prompt_sections || payload.prompt_sections.length === 0 || !selectedNodeId;
     if (addPromptReviewBtn) addPromptReviewBtn.disabled = reviewDisabled;
     if (reviewPayloadPreviewBtn) reviewPayloadPreviewBtn.disabled = reviewDisabled;
+    await updateTargetSectionVisibility();
     await updateSaveToWorkspaceButton();
   }
 
@@ -3573,6 +3361,34 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       reviewMethodSelect.value = methodId;
       if (node) node.dataset.reviewMethod = methodId;
     } catch (_) {}
+    await updateTargetSectionVisibility();
+  }
+
+  /** Only methods in REVIEW_METHODS_WITH_TARGET_SECTION show this — the built-in method and any other
+   * localized-edit method have no use for "which section", since their edits target spans wherever the
+   * LLM finds them, not one section chosen up front. */
+  async function updateTargetSectionVisibility() {
+    if (!targetSectionSelect) return;
+    const wantsSection = REVIEW_METHODS_WITH_TARGET_SECTION.has((reviewMethodSelect?.value || '').trim());
+    if (!wantsSection) {
+      targetSectionSelect.hidden = true;
+      return;
+    }
+    const payload = await Promise.resolve(getReviewPayload && getReviewPayload());
+    const sections = Array.isArray(payload?.prompt_sections) ? payload.prompt_sections : [];
+    if (sections.length <= 1) {
+      /* Nothing to choose between — don't show a picker with one option. */
+      targetSectionSelect.hidden = true;
+      return;
+    }
+    targetSectionSelect.hidden = false;
+    targetSectionSelect.innerHTML = sections
+      .map((s, i) => `<option value="${i}">${escapeHtml((s?.name || '').trim() || `Section ${i + 1}`)}</option>`)
+      .join('');
+    const saved = parseInt(node?.dataset?.gepaTargetSectionIndex, 10);
+    const idx = Number.isInteger(saved) && saved >= 0 && saved < sections.length ? saved : 0;
+    targetSectionSelect.value = String(idx);
+    if (node) node.dataset.gepaTargetSectionIndex = String(idx);
   }
 
   async function updateSaveToWorkspaceButton() {
@@ -3602,6 +3418,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const v = (reviewMethodSelect.value || '').trim();
       if (node) {
         node.dataset.reviewMethod = v;
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      }
+      void updateTargetSectionVisibility();
+    });
+  }
+
+  if (targetSectionSelect) {
+    targetSectionSelect.addEventListener('change', () => {
+      const v = (targetSectionSelect.value || '').trim();
+      if (node) {
+        node.dataset.gepaTargetSectionIndex = v;
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       }
     });

@@ -51,6 +51,11 @@ const REVIEW_SUGGESTION_CLICK_VERIFY_LABEL = 'Click to Verify';
 const REVIEW_SUGGESTION_VERIFYING_LABEL = 'Verifying\u2026';
 const REVIEW_SUGGESTION_VERIFIED_LABEL = 'Verified';
 const REVIEW_SUGGESTION_OPTIMIZATION_LABEL = 'Verification not pass, Click to Optimize';
+/** Shown instead of the clickable label above for methods that opt out of segment optimization
+ * (ReviewMethodSpec.supports_segment_optimization === false, e.g. GEPA) — its own suggestion is
+ * already the product of many real-data iterations, and the segment lattice search this button
+ * drives is tuned for a small localized sentence-level edit, not a whole evolved section. */
+const REVIEW_SUGGESTION_NOT_PASS_LABEL = 'Verification not pass';
 const REVIEW_SUGGESTION_OPTIMIZING_LABEL = 'Optimizing\u2026';
 
 const REVIEW_SUGGESTION_TITLE_PILL_CLASS = 'review-suggestion-title-pill';
@@ -66,8 +71,10 @@ function isVerifyFullPass(result) {
 /**
  * Returns pill specs for the suggestion title line.
  * @param {string} [verifyState] - 'idle' | 'verifying' | 'verified' | 'optimization' | 'optimizing'
+ * @param {boolean} [supportsOptimization] - ReviewMethodSpec.supports_segment_optimization for the
+ *   method that produced this suggestion; false shows a plain non-clickable "not pass" pill instead.
  */
-function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState) {
+function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState, supportsOptimization = true) {
   if (streamComplete !== true) return [];
   if (verifyState === 'verifying') {
     return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL, ariaLabel: 'Verifying…' }];
@@ -76,6 +83,9 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
     return [{ cls: 'review-suggestion-verified-pill', text: REVIEW_SUGGESTION_VERIFIED_LABEL, ariaLabel: 'All outputs matched ground truth' }];
   }
   if (verifyState === 'optimization') {
+    if (!supportsOptimization) {
+      return [{ cls: 'review-suggestion-optimization-pill', text: REVIEW_SUGGESTION_NOT_PASS_LABEL, ariaLabel: 'Some outputs did not match ground truth' }];
+    }
     return [{ cls: 'review-suggestion-optimization-pill review-suggestion-optimization-pill--clickable', text: REVIEW_SUGGESTION_OPTIMIZATION_LABEL, ariaLabel: 'Some outputs did not match — click to optimize' }];
   }
   if (verifyState === 'optimizing') {
@@ -84,8 +94,8 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
   return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
 
-function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState) {
-  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState)
+function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState, supportsOptimization = true) {
+  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState, supportsOptimization)
     .map((spec) => {
       const aria =
         typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()
@@ -883,6 +893,7 @@ function buildReviewResultUI(overlay, options) {
   const suggestionsFooterEl = overlay.querySelector('#review-detail-suggestions-footer');
   const diagnosisEl = overlay.querySelector('#review-detail-row-diagnostics');
   const analysisFooterEl = overlay.querySelector('#review-detail-analysis-footer');
+  const analysisTabBtn = overlay.querySelector('#review-detail-tab-analysis');
   if (!promptWrap || !suggestionsEl) return;
 
   if (saved && typeof saved === 'object') {
@@ -1147,6 +1158,7 @@ function buildReviewResultUI(overlay, options) {
         promptSections,
         saved.streamComplete === true,
         verifyState,
+        saved.supports_segment_optimization !== false,
       );
       for (const spec of specs) {
         const el = document.createElement('span');
@@ -1402,8 +1414,26 @@ function buildReviewResultUI(overlay, options) {
     });
   }
 
+  /**
+   * First tab's title tracks the active method's own stage labels — "Issue analysis" for the built-in
+   * method stays exactly that (its own stages are literally named `analysis`/`suggestions`), but a method
+   * with a different shape (e.g. GEPA's seed/evolve/select) gets a title that actually describes what's
+   * in the tab. Heuristic: the stage right before the one that emits suggestions is the best single label
+   * for "everything leading up to the suggestion" — for a 2-stage method that's just the first stage.
+   * "Suggested changes" (the other tab) never changes, regardless of method.
+   */
+  function updateAnalysisTabLabel() {
+    if (!analysisTabBtn) return;
+    const stages = Array.isArray(saved.review_stages) ? saved.review_stages : [];
+    if (stages.length === 0) return;
+    const labelStage = stages.length >= 2 ? stages[stages.length - 2] : stages[0];
+    const label = (labelStage && labelStage.label) ? String(labelStage.label).trim() : '';
+    if (label) analysisTabBtn.textContent = label;
+  }
+
   function renderRowDiagnostics() {
     if (!diagnosisEl) return;
+    updateAnalysisTabLabel();
     diagnosisEl.innerHTML = '';
     if (!rowDiagnostics.length) {
       const stageLog = Array.isArray(saved.stage_log) ? saved.stage_log : [];
@@ -1548,6 +1578,7 @@ function buildReviewResultUI(overlay, options) {
       promptSections,
       saved.streamComplete === true,
       cardVerifyStates.get(sugIdx),
+      saved.supports_segment_optimization !== false,
     );
     const debugActionsHtml =
       '<button type="button" class="review-detail-debug-reset-btn" title="Debug: reset card to Click-to-verify state">Reset</button>' +

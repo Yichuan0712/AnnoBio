@@ -1250,11 +1250,13 @@ def run_review_pipeline(
     max_failed_inputs: int,
     is_cancelled: Callable[[], bool],
     append_event: Callable[[dict], None],
+    settings: dict | None = None,
 ) -> None:
     """
     Drive review. Emits: plan, diagnosis_row, suggestions, done.
     Caller handles credential errors and job status.
     """
+    del settings  # This method has no tunable settings of its own yet.
     sections = list(getattr(body, "prompt_sections", None) or [])
     prompt_text = _format_prompt_for_review(sections)
     comparison_rows = list(getattr(body, "comparison_rows", None) or [])
