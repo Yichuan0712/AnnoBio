@@ -782,6 +782,10 @@ export function createWorkflowNodeFactories(deps = {}) {
           output_schema,
           comparison_rows,
           review_method: (node.dataset.reviewMethod || '').trim() || undefined,
+          score_mapping: node.dataset.scoreMapping || undefined,
+          target_section_index: Number.isInteger(parseInt(node.dataset.gepaTargetSectionIndex, 10))
+            ? parseInt(node.dataset.gepaTargetSectionIndex, 10)
+            : undefined,
         };
       }
       openScoreDetailModal({

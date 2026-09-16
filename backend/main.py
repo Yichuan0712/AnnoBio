@@ -37,7 +37,14 @@ _SEP = "=" * 60      # unified separator for LLM prompt/output logs
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from run_output_schema import (
+    sanitize_field_name as _sanitize_field_name,
+    build_output_model as _build_output_model,
+    build_table_output_model as _build_table_output_model,
+    run_field_value_non_empty as _run_field_value_non_empty,
+    run_structured_output_is_empty as _run_structured_output_is_empty,
+)
 
 from agent.chat.agent_chat import build_agent_messages, format_agent_messages_for_log
 from agent.prompt.agent_plan_prompt import build_agent_plan_instruction_prefix
@@ -112,6 +119,22 @@ DEFAULT_SETTINGS = {
     "review_max_failed_rows": 30,
     # Thompson-sampling trials per optimization run (4–200).
     "optimization_max_trials": 40,
+    # GEPA reflective-evolution max iterations (4-200); kept separate from optimization_max_trials because
+    # each GEPA iteration runs the task model against every targeted input, not just a suggestion's rows.
+    "gepa_max_iterations": 15,
+    # MIPROv2 trials (4-200); its own setting for the same reason gepa_max_iterations is separate from
+    # optimization_max_trials — a different method, a different per-trial cost.
+    "miprov2_num_trials": 10,
+    # BootstrapFewShotWithRandomSearch candidate demo sets (2-100); own setting for the same reason.
+    "bootstrap_fewshot_num_candidates": 10,
+    # TextGrad textual-gradient-descent steps (2-50); own setting for the same reason.
+    "textgrad_num_steps": 6,
+    # COPRO breadth (instruction variants proposed per round, 2-30) and depth (rounds, 1-10); own
+    # settings for the same reason gepa_max_iterations is separate from optimization_max_trials.
+    "copro_breadth": 6,
+    "copro_depth": 3,
+    # SIMBA mini-batch introspection steps (2-40); own setting for the same reason.
+    "simba_max_steps": 8,
     # Show Reset & Debug buttons on suggestion cards.
     "debug_mode": False,
     # Optional: raises PubMed E-utilities rate limit from 3/sec to 10/sec when set.
@@ -177,6 +200,48 @@ class SettingsPatch(BaseModel):
         ge=4,
         le=200,
         description="Maximum Thompson-sampling trials per compositional optimization run (4–200).",
+    )
+    gepa_max_iterations: int | None = Field(
+        default=None,
+        ge=4,
+        le=200,
+        description="Maximum reflective-evolution iterations for the GEPA review method (4–200).",
+    )
+    miprov2_num_trials: int | None = Field(
+        default=None,
+        ge=4,
+        le=200,
+        description="Maximum trials for the MIPROv2 review method (4–200).",
+    )
+    bootstrap_fewshot_num_candidates: int | None = Field(
+        default=None,
+        ge=2,
+        le=100,
+        description="Candidate demo sets for the BootstrapFewShotWithRandomSearch review method (2–100).",
+    )
+    textgrad_num_steps: int | None = Field(
+        default=None,
+        ge=2,
+        le=50,
+        description="Textual-gradient-descent steps for the TextGrad review method (2–50).",
+    )
+    copro_breadth: int | None = Field(
+        default=None,
+        ge=2,
+        le=30,
+        description="Instruction variants proposed per round for the COPRO review method (2–30).",
+    )
+    copro_depth: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Coordinate-ascent rounds for the COPRO review method (1–10).",
+    )
+    simba_max_steps: int | None = Field(
+        default=None,
+        ge=2,
+        le=40,
+        description="Mini-batch introspection steps for the SIMBA review method (2–40).",
     )
     debug_mode: bool | None = None
     ncbi_api_key: str | None = None
@@ -280,6 +345,8 @@ class ReviewRequest(BaseModel):
     comparison_rows: list[ReviewComparisonRow] = Field(default_factory=list, description="Per-row match result and context")
     all_rows_matched: bool | None = Field(default=None, description="If True, frontend reports every comparison row matched")
     review_method: str | None = Field(default=None, description="Registered review method id (backend/review_methods.py); defaults to the legacy issue-analysis + suggested-changes pipeline")
+    target_section_index: int | None = Field(default=None, description="0-based prompt_sections index a whole-section-rewrite method (e.g. gepa) should optimize; defaults to section 0 when omitted")
+    score_mapping: str | None = Field(default=None, description="Serialized Score rule-tree bundle (scoreMappingBundle.js) from the upstream Score node; only methods that self-score candidates (e.g. gepa) need this")
 
     @model_validator(mode="after")
     def image_inputs_require_session(self):
@@ -318,48 +385,6 @@ class ReviewResult(BaseModel):
     summary: str = Field(..., description="Brief overall analysis")
     suggestions: list[ReviewSuggestion] = Field(default_factory=list, description="Concrete edit suggestions")
     data_refinement: list[dict] = Field(default_factory=list, description="GT question summary: [{row_indices, reason}]")
-
-
-def _sanitize_field_name(key: str) -> str:
-    """Turn schema key into valid Pydantic field name (alphanumeric + underscore)."""
-    s = re.sub(r"[^\w]", "_", str(key).strip())
-    return s or "field"
-
-
-def _build_output_model(fields: list[dict]) -> type[BaseModel]:
-    """Build a Pydantic model from app output_schema.fields (key, type, description, allow_none)."""
-    type_map = {
-        "str": (str, ...),
-        "float": (float, ...),
-        "list_str": (list[str], ...),
-        "list_float": (list[float], ...),
-    }
-    field_defs: dict[str, Any] = {}
-    for f in fields:
-        key = f.get("key") or "field"
-        name = _sanitize_field_name(key)
-        if name in field_defs:
-            n = 1
-            while f"{name}_{n}" in field_defs:
-                n += 1
-            name = f"{name}_{n}"
-        raw_type = (f.get("type") or "str").strip().lower()
-        desc = (f.get("description") or "").strip() or None
-        allow_none = f.get("allow_none") or f.get("allowNone") is True
-        if raw_type not in type_map:
-            raw_type = "str"
-        typ, _ = type_map[raw_type]
-        if allow_none:
-            typ = Optional[typ]
-            field_defs[name] = (typ, Field(default=None, description=desc or key))
-        else:
-            field_defs[name] = (typ, Field(..., description=desc or key))
-    return create_model("StructuredOutput", **field_defs)
-
-
-def _build_table_output_model(row_model: type[BaseModel]) -> type[BaseModel]:
-    """Build a Pydantic model with one field 'rows': list[row_model] for return_shape=table."""
-    return create_model("TableOutput", rows=(List[row_model], Field(default_factory=list)))
 
 
 def _ensure_data_dir():
@@ -1087,38 +1112,6 @@ def _load_run_jobs() -> None:
 _load_run_jobs()
 
 
-def _run_field_value_non_empty(v: object) -> bool:
-    if v is None:
-        return False
-    if isinstance(v, str):
-        return bool(v.strip())
-    if isinstance(v, list):
-        return any(_run_field_value_non_empty(x) for x in v)
-    if isinstance(v, dict):
-        return bool(v) and any(_run_field_value_non_empty(x) for x in v.values())
-    return True
-
-
-def _run_structured_output_is_empty(out: object, return_shape: str, output_fields: list[dict]) -> bool:
-    """True if model returned no substantive values for schema fields (used when persisting run rows, not Score filtering)."""
-    keys = [str(f.get("key") or "").strip() for f in (output_fields or []) if f.get("key")]
-    if return_shape == "table":
-        if not isinstance(out, list) or len(out) == 0:
-            return True
-        for row in out:
-            if not isinstance(row, dict):
-                continue
-            if keys:
-                if any(_run_field_value_non_empty(row.get(k)) for k in keys):
-                    return False
-            elif any(_run_field_value_non_empty(v) for v in row.values()):
-                return False
-        return True
-    if not isinstance(out, dict):
-        return True
-    if keys:
-        return not any(_run_field_value_non_empty(out.get(k)) for k in keys)
-    return not any(_run_field_value_non_empty(v) for v in out.values())
 
 
 def _do_run_work(
@@ -1478,6 +1471,7 @@ def review_analyze(body: ReviewRequest):
             "review_node_id": review_node_id,
             "review_method_id": review_method.id,
             "review_stages": review_method.to_dict()["stages"],
+            "supports_segment_optimization": review_method.supports_segment_optimization,
         },
     )
 
@@ -2259,6 +2253,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             max_failed_inputs=max_failed,
             is_cancelled=lambda: _review_is_cancelled(review_id),
             append_event=append_event,
+            settings=st,
         )
 
         if _review_is_cancelled(review_id):

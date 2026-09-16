@@ -1429,6 +1429,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           reviewProgress: REVIEW_STREAM_PLAN_PCT,
           review_method_id: planReviewNode?.dataset.reviewMethodId || '',
           review_stages: Array.isArray(planStages) ? planStages : [],
+          supports_segment_optimization: planReviewNode?.dataset.supportsSegmentOptimization !== '0',
         };
         /* Poll replays all events from `plan` each tick; clearing lists without resetting the id cursor made
          * `allocNextReviewSuggestionId` continue from disk — # on cards crept up every poll. */
@@ -4062,10 +4063,11 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** Non-default review methods report their id + declared stages once at job start (backend/review_methods.py); stashed on the node dataset for generic stage-progress calc (see the `stage` branch in the review event loop). */
   document.addEventListener('workflow:review-method-info', (e) => {
-    const { reviewNodeId, reviewMethodId, reviewStages } = e.detail || {};
+    const { reviewNodeId, reviewMethodId, reviewStages, supportsSegmentOptimization } = e.detail || {};
     const reviewNode = getNodeById(reviewNodeId);
     if (!reviewNode) return;
     reviewNode.dataset.reviewMethodId = reviewMethodId || '';
+    reviewNode.dataset.supportsSegmentOptimization = supportsSegmentOptimization === false ? '0' : '1';
     try {
       reviewNode.dataset.reviewStages = JSON.stringify(Array.isArray(reviewStages) ? reviewStages : []);
     } catch (_) {
@@ -4206,6 +4208,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const reviewCredentialId = (node.dataset.reviewCredentialId || '').trim() || undefined;
         const reviewMethod = (node.dataset.reviewMethod || '').trim() || undefined;
+        const gepaTargetSectionIndexRaw = parseInt(node.dataset.gepaTargetSectionIndex, 10);
+        const gepaTargetSectionIndex = Number.isInteger(gepaTargetSectionIndexRaw) ? gepaTargetSectionIndexRaw : undefined;
         const scoreRowExcludedFromScoring = (node.dataset.scoreRowExcludedFromScoring || '').trim();
         let scoreRowExcludedFromScoringObj;
         try {
@@ -4223,6 +4227,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           reviewResult: reviewResult || undefined,
           reviewCredentialId,
           reviewMethod,
+          gepaTargetSectionIndex,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (node.dataset.scoreOutputBracketCollapsed === '1') out.scoreOutputBracketCollapsed = true;
@@ -4415,6 +4420,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         }
         if (n.reviewMethod && typeof n.reviewMethod === 'string') {
           scoreNode.dataset.reviewMethod = n.reviewMethod;
+        }
+        if (Number.isInteger(n.gepaTargetSectionIndex)) {
+          scoreNode.dataset.gepaTargetSectionIndex = String(n.gepaTargetSectionIndex);
         }
         if (n.scoreOutputBracketCollapsed === true) scoreNode.dataset.scoreOutputBracketCollapsed = '1';
         if (n.scoreGtBracketCollapsed === true) scoreNode.dataset.scoreGtBracketCollapsed = '1';
