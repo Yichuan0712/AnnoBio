@@ -100,6 +100,9 @@ CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 RUN_JOBS_FILE = DATA_DIR / "run_jobs.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 PUBMED_JOBS_FILE = DATA_DIR / "pubmed_jobs.json"
+CLINICALTRIALS_JOBS_FILE = DATA_DIR / "clinicaltrials_jobs.json"
+PREPRINT_JOBS_FILE = DATA_DIR / "preprint_jobs.json"
+CHEMBL_JOBS_FILE = DATA_DIR / "chembl_jobs.json"
 PROCESS_JOBS_FILE = DATA_DIR / "process_jobs.json"
 MATCH_JOBS_FILE = DATA_DIR / "match_jobs.json"
 PROCESS_DF_JOBS_FILE = DATA_DIR / "process_df_jobs.json"
@@ -1772,6 +1775,509 @@ def cancel_pubmed_import(job_id: str):
             return {"ok": True, "status": _pubmed_jobs[job_id].get("status")}
         _pubmed_cancelled.add(job_id)
         _touch_pubmed_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+# ---------- ClinicalTrials.gov import (bulk-fetch studies into a Dataset) ----------
+# Same shape as the PubMed job block above: background thread + job_id + polling, persisted to
+# disk so a large import survives a backend restart. job: { status, completed, total, headers,
+# rows, error? }. Cancellation/abandonment reuse the same timeout as Run (RUN_ABANDON_TIMEOUT_SEC).
+CLINICALTRIALS_MAX_IDS_CAP = 5000  # sane ceiling regardless of what the client requests
+
+_clinicaltrials_jobs: dict[str, dict] = {}
+_clinicaltrials_jobs_lock = threading.Lock()
+_clinicaltrials_cancelled: set[str] = set()
+_clinicaltrials_last_activity: dict[str, float] = {}
+
+
+class ClinicaltrialsImportRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, description="NCT ids to fetch")
+    fields: list[str] = Field(..., min_length=1, description="Keys from clinicaltrials_client.CT_FIELDS to import as columns")
+
+
+class _ClinicaltrialsStopSignal(Exception):
+    """Raised from the on_batch callback to unwind fetch_studies when cancelled/abandoned."""
+
+
+def _touch_clinicaltrials_activity(job_id: str) -> None:
+    _clinicaltrials_last_activity[job_id] = time.time()
+
+
+def _persist_clinicaltrials_jobs() -> None:
+    with _clinicaltrials_jobs_lock:
+        snapshot = dict(_clinicaltrials_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        CLINICALTRIALS_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[ClinicalTrials] persist failed: {e}", file=sys.stderr)
+
+
+def _load_clinicaltrials_jobs() -> None:
+    if not CLINICALTRIALS_JOBS_FILE.exists():
+        return
+    try:
+        raw = CLINICALTRIALS_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _clinicaltrials_jobs_lock:
+            _clinicaltrials_jobs.clear()
+            _clinicaltrials_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[ClinicalTrials] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_clinicaltrials_jobs()
+
+
+def _do_clinicaltrials_import_work(job_id: str, req: ClinicaltrialsImportRequest) -> None:
+    from clinicaltrials_client import CT_FIELDS, fetch_studies
+
+    try:
+        fields = [f for f in req.fields if f in CT_FIELDS]
+        if not fields:
+            with _clinicaltrials_jobs_lock:
+                _clinicaltrials_jobs[job_id] = {"status": "done", "error": "No valid fields selected"}
+            _persist_clinicaltrials_jobs()
+            return
+
+        nct_ids = [p.strip().upper() for p in req.ids if p.strip()]
+        # de-dupe, keep order
+        seen = set()
+        nct_ids = [p for p in nct_ids if not (p in seen or seen.add(p))][:CLINICALTRIALS_MAX_IDS_CAP]
+
+        total = len(nct_ids)
+        with _clinicaltrials_jobs_lock:
+            _clinicaltrials_jobs[job_id]["total"] = total
+            _clinicaltrials_jobs[job_id]["completed"] = 0
+            _clinicaltrials_jobs[job_id]["headers"] = [CT_FIELDS[f] for f in fields]
+            _clinicaltrials_jobs[job_id]["rows"] = []
+            _clinicaltrials_jobs[job_id]["not_found"] = []
+        _persist_clinicaltrials_jobs()
+
+        if total == 0:
+            with _clinicaltrials_jobs_lock:
+                _clinicaltrials_jobs[job_id]["status"] = "done"
+            _persist_clinicaltrials_jobs()
+            return
+
+        def on_batch(batch_studies: list[dict], not_found: list[str], completed: int, batch_total: int) -> None:
+            is_cancelled = job_id in _clinicaltrials_cancelled
+            is_abandoned = (time.time() - _clinicaltrials_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
+            with _clinicaltrials_jobs_lock:
+                # Append incrementally (not just at the end) so a cancelled/abandoned job still
+                # keeps whatever was already fetched, instead of throwing away completed work.
+                _clinicaltrials_jobs[job_id]["rows"].extend([s.get(f, "") for f in fields] for s in batch_studies)
+                _clinicaltrials_jobs[job_id]["completed"] = completed
+                _clinicaltrials_jobs[job_id]["not_found"].extend(not_found)
+            _persist_clinicaltrials_jobs()
+            if is_cancelled or is_abandoned:
+                raise _ClinicaltrialsStopSignal()
+
+        try:
+            fetch_studies(nct_ids, fields=fields, on_batch=on_batch)
+        except _ClinicaltrialsStopSignal:
+            with _clinicaltrials_jobs_lock:
+                job = _clinicaltrials_jobs.get(job_id, {})
+                job["status"] = "cancelled" if job_id in _clinicaltrials_cancelled else "done"
+            _persist_clinicaltrials_jobs()
+            return
+
+        with _clinicaltrials_jobs_lock:
+            _clinicaltrials_jobs[job_id]["status"] = "done"
+        _persist_clinicaltrials_jobs()
+    except Exception as e:
+        with _clinicaltrials_jobs_lock:
+            _clinicaltrials_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_clinicaltrials_jobs()
+
+
+@app.post("/api/clinicaltrials/import")
+def start_clinicaltrials_import(body: ClinicaltrialsImportRequest):
+    """Start a ClinicalTrials.gov import (fetch by NCT id) in the background; returns 202 with job_id. Poll GET .../result/{job_id}."""
+    job_id = str(uuid.uuid4())
+    with _clinicaltrials_jobs_lock:
+        _clinicaltrials_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "headers": [], "rows": []}
+        _touch_clinicaltrials_activity(job_id)
+    _persist_clinicaltrials_jobs()
+    thread = threading.Thread(target=_do_clinicaltrials_import_work, args=(job_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/clinicaltrials/import/result/{job_id}")
+def get_clinicaltrials_import_result(job_id: str):
+    """Return 202 while running (with partial rows), 200 when done/cancelled. Polling refreshes the abandonment timer."""
+    with _clinicaltrials_jobs_lock:
+        job = _clinicaltrials_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if job.get("status") == "running":
+            _touch_clinicaltrials_activity(job_id)
+        status = job.get("status")
+        completed = job.get("completed", 0)
+        total = job.get("total", 0)
+        headers = job.get("headers") or []
+        rows = (job.get("rows") or [])[:]
+        not_found = (job.get("not_found") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "completed": completed, "total": total, "headers": headers, "rows": rows},
+        )
+    if error:
+        return {"status": "done", "error": error, "headers": [], "rows": []}
+    return {"status": status, "completed": completed, "total": total, "headers": headers, "rows": rows, "not_found": not_found}
+
+
+@app.post("/api/clinicaltrials/import/cancel/{job_id}")
+def cancel_clinicaltrials_import(job_id: str):
+    """Mark import as cancelled; worker stops after the current batch."""
+    with _clinicaltrials_jobs_lock:
+        if job_id not in _clinicaltrials_jobs:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if _clinicaltrials_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _clinicaltrials_jobs[job_id].get("status")}
+        _clinicaltrials_cancelled.add(job_id)
+        _touch_clinicaltrials_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+# ---------- bioRxiv/medRxiv import (bulk-fetch preprints into a Dataset) ----------
+# Same shape as the ClinicalTrials.gov job block above: background thread + job_id + polling,
+# persisted to disk so a large import survives a backend restart. job: { status, completed,
+# total, headers, rows, error? }. Cancellation/abandonment reuse the same timeout as Run
+# (RUN_ABANDON_TIMEOUT_SEC).
+PREPRINT_MAX_IDS_CAP = 5000  # sane ceiling regardless of what the client requests
+
+_preprint_jobs: dict[str, dict] = {}
+_preprint_jobs_lock = threading.Lock()
+_preprint_cancelled: set[str] = set()
+_preprint_last_activity: dict[str, float] = {}
+
+
+class PreprintImportRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, description="DOIs to fetch")
+    fields: list[str] = Field(..., min_length=1, description="Keys from preprint_client.PREPRINT_FIELDS to import as columns")
+
+
+class _PreprintStopSignal(Exception):
+    """Raised from the on_batch callback to unwind fetch_preprints when cancelled/abandoned."""
+
+
+def _touch_preprint_activity(job_id: str) -> None:
+    _preprint_last_activity[job_id] = time.time()
+
+
+def _persist_preprint_jobs() -> None:
+    with _preprint_jobs_lock:
+        snapshot = dict(_preprint_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        PREPRINT_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[Preprint] persist failed: {e}", file=sys.stderr)
+
+
+def _load_preprint_jobs() -> None:
+    if not PREPRINT_JOBS_FILE.exists():
+        return
+    try:
+        raw = PREPRINT_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _preprint_jobs_lock:
+            _preprint_jobs.clear()
+            _preprint_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[Preprint] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_preprint_jobs()
+
+
+def _do_preprint_import_work(job_id: str, req: PreprintImportRequest) -> None:
+    from preprint_client import PREPRINT_FIELDS, fetch_preprints
+
+    try:
+        fields = [f for f in req.fields if f in PREPRINT_FIELDS]
+        if not fields:
+            with _preprint_jobs_lock:
+                _preprint_jobs[job_id] = {"status": "done", "error": "No valid fields selected"}
+            _persist_preprint_jobs()
+            return
+
+        dois = [p.strip() for p in req.ids if p.strip()]
+        # de-dupe, keep order
+        seen = set()
+        dois = [p for p in dois if not (p in seen or seen.add(p))][:PREPRINT_MAX_IDS_CAP]
+
+        total = len(dois)
+        with _preprint_jobs_lock:
+            _preprint_jobs[job_id]["total"] = total
+            _preprint_jobs[job_id]["completed"] = 0
+            _preprint_jobs[job_id]["headers"] = [PREPRINT_FIELDS[f] for f in fields]
+            _preprint_jobs[job_id]["rows"] = []
+            _preprint_jobs[job_id]["not_found"] = []
+        _persist_preprint_jobs()
+
+        if total == 0:
+            with _preprint_jobs_lock:
+                _preprint_jobs[job_id]["status"] = "done"
+            _persist_preprint_jobs()
+            return
+
+        def on_batch(batch_entries: list[dict], not_found: list[str], completed: int, batch_total: int) -> None:
+            is_cancelled = job_id in _preprint_cancelled
+            is_abandoned = (time.time() - _preprint_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
+            with _preprint_jobs_lock:
+                # Append incrementally (not just at the end) so a cancelled/abandoned job still
+                # keeps whatever was already fetched, instead of throwing away completed work.
+                _preprint_jobs[job_id]["rows"].extend([e.get(f, "") for f in fields] for e in batch_entries)
+                _preprint_jobs[job_id]["completed"] = completed
+                _preprint_jobs[job_id]["not_found"].extend(not_found)
+            _persist_preprint_jobs()
+            if is_cancelled or is_abandoned:
+                raise _PreprintStopSignal()
+
+        try:
+            fetch_preprints(dois, fields=fields, on_batch=on_batch)
+        except _PreprintStopSignal:
+            with _preprint_jobs_lock:
+                job = _preprint_jobs.get(job_id, {})
+                job["status"] = "cancelled" if job_id in _preprint_cancelled else "done"
+            _persist_preprint_jobs()
+            return
+
+        with _preprint_jobs_lock:
+            _preprint_jobs[job_id]["status"] = "done"
+        _persist_preprint_jobs()
+    except Exception as e:
+        with _preprint_jobs_lock:
+            _preprint_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_preprint_jobs()
+
+
+@app.post("/api/preprint/import")
+def start_preprint_import(body: PreprintImportRequest):
+    """Start a bioRxiv/medRxiv import (fetch by DOI) in the background; returns 202 with job_id. Poll GET .../result/{job_id}."""
+    job_id = str(uuid.uuid4())
+    with _preprint_jobs_lock:
+        _preprint_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "headers": [], "rows": []}
+        _touch_preprint_activity(job_id)
+    _persist_preprint_jobs()
+    thread = threading.Thread(target=_do_preprint_import_work, args=(job_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/preprint/import/result/{job_id}")
+def get_preprint_import_result(job_id: str):
+    """Return 202 while running (with partial rows), 200 when done/cancelled. Polling refreshes the abandonment timer."""
+    with _preprint_jobs_lock:
+        job = _preprint_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if job.get("status") == "running":
+            _touch_preprint_activity(job_id)
+        status = job.get("status")
+        completed = job.get("completed", 0)
+        total = job.get("total", 0)
+        headers = job.get("headers") or []
+        rows = (job.get("rows") or [])[:]
+        not_found = (job.get("not_found") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "completed": completed, "total": total, "headers": headers, "rows": rows},
+        )
+    if error:
+        return {"status": "done", "error": error, "headers": [], "rows": []}
+    return {"status": status, "completed": completed, "total": total, "headers": headers, "rows": rows, "not_found": not_found}
+
+
+@app.post("/api/preprint/import/cancel/{job_id}")
+def cancel_preprint_import(job_id: str):
+    """Mark import as cancelled; worker stops after the current batch."""
+    with _preprint_jobs_lock:
+        if job_id not in _preprint_jobs:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if _preprint_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _preprint_jobs[job_id].get("status")}
+        _preprint_cancelled.add(job_id)
+        _touch_preprint_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+# ---------- ChEMBL import (bulk-fetch molecules into a Dataset) ----------
+# Same shape as the ClinicalTrials.gov job block above: background thread + job_id + polling,
+# persisted to disk so a large import survives a backend restart. job: { status, completed,
+# total, headers, rows, error? }. Cancellation/abandonment reuse the same timeout as Run
+# (RUN_ABANDON_TIMEOUT_SEC).
+CHEMBL_MAX_IDS_CAP = 5000  # sane ceiling regardless of what the client requests
+
+_chembl_jobs: dict[str, dict] = {}
+_chembl_jobs_lock = threading.Lock()
+_chembl_cancelled: set[str] = set()
+_chembl_last_activity: dict[str, float] = {}
+
+
+class ChemblImportRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, description="ChEMBL ids to fetch")
+    fields: list[str] = Field(..., min_length=1, description="Keys from chembl_client.CHEMBL_FIELDS to import as columns")
+
+
+class _ChemblStopSignal(Exception):
+    """Raised from the on_batch callback to unwind fetch_molecules when cancelled/abandoned."""
+
+
+def _touch_chembl_activity(job_id: str) -> None:
+    _chembl_last_activity[job_id] = time.time()
+
+
+def _persist_chembl_jobs() -> None:
+    with _chembl_jobs_lock:
+        snapshot = dict(_chembl_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        CHEMBL_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[ChEMBL] persist failed: {e}", file=sys.stderr)
+
+
+def _load_chembl_jobs() -> None:
+    if not CHEMBL_JOBS_FILE.exists():
+        return
+    try:
+        raw = CHEMBL_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _chembl_jobs_lock:
+            _chembl_jobs.clear()
+            _chembl_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[ChEMBL] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_chembl_jobs()
+
+
+def _do_chembl_import_work(job_id: str, req: ChemblImportRequest) -> None:
+    from chembl_client import CHEMBL_FIELDS, fetch_molecules
+
+    try:
+        fields = [f for f in req.fields if f in CHEMBL_FIELDS]
+        if not fields:
+            with _chembl_jobs_lock:
+                _chembl_jobs[job_id] = {"status": "done", "error": "No valid fields selected"}
+            _persist_chembl_jobs()
+            return
+
+        chembl_ids = [p.strip().upper() for p in req.ids if p.strip()]
+        # de-dupe, keep order
+        seen = set()
+        chembl_ids = [p for p in chembl_ids if not (p in seen or seen.add(p))][:CHEMBL_MAX_IDS_CAP]
+
+        total = len(chembl_ids)
+        with _chembl_jobs_lock:
+            _chembl_jobs[job_id]["total"] = total
+            _chembl_jobs[job_id]["completed"] = 0
+            _chembl_jobs[job_id]["headers"] = [CHEMBL_FIELDS[f] for f in fields]
+            _chembl_jobs[job_id]["rows"] = []
+            _chembl_jobs[job_id]["not_found"] = []
+        _persist_chembl_jobs()
+
+        if total == 0:
+            with _chembl_jobs_lock:
+                _chembl_jobs[job_id]["status"] = "done"
+            _persist_chembl_jobs()
+            return
+
+        def on_batch(batch_molecules: list[dict], not_found: list[str], completed: int, batch_total: int) -> None:
+            is_cancelled = job_id in _chembl_cancelled
+            is_abandoned = (time.time() - _chembl_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
+            with _chembl_jobs_lock:
+                # Append incrementally (not just at the end) so a cancelled/abandoned job still
+                # keeps whatever was already fetched, instead of throwing away completed work.
+                _chembl_jobs[job_id]["rows"].extend([m.get(f, "") for f in fields] for m in batch_molecules)
+                _chembl_jobs[job_id]["completed"] = completed
+                _chembl_jobs[job_id]["not_found"].extend(not_found)
+            _persist_chembl_jobs()
+            if is_cancelled or is_abandoned:
+                raise _ChemblStopSignal()
+
+        try:
+            fetch_molecules(chembl_ids, fields=fields, on_batch=on_batch)
+        except _ChemblStopSignal:
+            with _chembl_jobs_lock:
+                job = _chembl_jobs.get(job_id, {})
+                job["status"] = "cancelled" if job_id in _chembl_cancelled else "done"
+            _persist_chembl_jobs()
+            return
+
+        with _chembl_jobs_lock:
+            _chembl_jobs[job_id]["status"] = "done"
+        _persist_chembl_jobs()
+    except Exception as e:
+        with _chembl_jobs_lock:
+            _chembl_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_chembl_jobs()
+
+
+@app.post("/api/chembl/import")
+def start_chembl_import(body: ChemblImportRequest):
+    """Start a ChEMBL import (fetch by ChEMBL id) in the background; returns 202 with job_id. Poll GET .../result/{job_id}."""
+    job_id = str(uuid.uuid4())
+    with _chembl_jobs_lock:
+        _chembl_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "headers": [], "rows": []}
+        _touch_chembl_activity(job_id)
+    _persist_chembl_jobs()
+    thread = threading.Thread(target=_do_chembl_import_work, args=(job_id, body), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/chembl/import/result/{job_id}")
+def get_chembl_import_result(job_id: str):
+    """Return 202 while running (with partial rows), 200 when done/cancelled. Polling refreshes the abandonment timer."""
+    with _chembl_jobs_lock:
+        job = _chembl_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if job.get("status") == "running":
+            _touch_chembl_activity(job_id)
+        status = job.get("status")
+        completed = job.get("completed", 0)
+        total = job.get("total", 0)
+        headers = job.get("headers") or []
+        rows = (job.get("rows") or [])[:]
+        not_found = (job.get("not_found") or [])[:]
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "completed": completed, "total": total, "headers": headers, "rows": rows},
+        )
+    if error:
+        return {"status": "done", "error": error, "headers": [], "rows": []}
+    return {"status": status, "completed": completed, "total": total, "headers": headers, "rows": rows, "not_found": not_found}
+
+
+@app.post("/api/chembl/import/cancel/{job_id}")
+def cancel_chembl_import(job_id: str):
+    """Mark import as cancelled; worker stops after the current batch."""
+    with _chembl_jobs_lock:
+        if job_id not in _chembl_jobs:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if _chembl_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _chembl_jobs[job_id].get("status")}
+        _chembl_cancelled.add(job_id)
+        _touch_chembl_activity(job_id)
     return {"ok": True, "status": "cancelling"}
 
 

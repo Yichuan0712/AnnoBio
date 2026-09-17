@@ -8142,7 +8142,7 @@ button.btn.btn-danger:hover:not(:disabled) {
   color: var(--diff-removed-text);
 }
 
-/* ——— "Create a new dataset" Step 2: choose upload vs. PubMed import ———
+/* ——— "Create a new dataset" Step 2: choose upload vs. PubMed vs. ClinicalTrials.gov import ———
    Matches the existing step-2 rhythm: .dataset-import-title (13px/600/muted) for headings,
    .dataset-meta-label for field labels, 6-12px gaps, .dataset-file-info-style info cards. */
 .dataset-source-panel {
@@ -8163,7 +8163,9 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 
 .dataset-source-switch {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  overflow-x: visible;
 }
 
 .pubmed-import-ids {
@@ -8184,6 +8186,84 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 
 .pubmed-import-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.clinicaltrials-import-ids {
+  min-height: 100px;
+}
+
+.clinicaltrials-import-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.clinicaltrials-import-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.clinicaltrials-import-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.preprint-import-ids {
+  min-height: 100px;
+}
+
+.preprint-import-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.preprint-import-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.preprint-import-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.chembl-import-ids {
+  min-height: 100px;
+}
+
+.chembl-import-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.chembl-import-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.chembl-import-checkbox-label {
   display: flex;
   align-items: center;
   gap: 6px;
