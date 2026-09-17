@@ -29,6 +29,9 @@ const AGENT_SINGLE_EXECUTION_SKILLS = new Set([
   'apply_review_suggestions',
   'create_process_node',
   'import_pubmed_dataset',
+  'import_clinicaltrials_dataset',
+  'import_preprint_dataset',
+  'import_chembl_dataset',
 ]);
 
 function throwIfAborted(signal) {
@@ -314,6 +317,9 @@ export function mountAgentChatSession({
   addDatasetNode,
   addProcessNode,
   importPubmedDataset,
+  importClinicaltrialsDataset,
+  importPreprintDataset,
+  importChemblDataset,
 }) {
   if (!overlay || !messagesEl || !inputEl || !sendButtonEl) {
     return {
@@ -559,6 +565,9 @@ function shouldPreventRepeatedExecution(skillName) {
             addDatasetNode,
             addProcessNode,
             importPubmedDataset,
+            importClinicaltrialsDataset,
+            importPreprintDataset,
+            importChemblDataset,
             workflowSnapshot,
           },
         }) || ''
@@ -588,6 +597,9 @@ function shouldPreventRepeatedExecution(skillName) {
             addDatasetNode,
             addProcessNode,
             importPubmedDataset,
+            importClinicaltrialsDataset,
+            importPreprintDataset,
+            importChemblDataset,
             workflowSnapshot,
           },
         }) || ''
@@ -632,6 +644,9 @@ function shouldPreventRepeatedExecution(skillName) {
           addDatasetNode,
           addProcessNode,
           importPubmedDataset,
+          importClinicaltrialsDataset,
+          importPreprintDataset,
+          importChemblDataset,
           workflowSnapshot,
         },
       });

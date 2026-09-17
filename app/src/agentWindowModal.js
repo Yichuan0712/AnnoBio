@@ -173,6 +173,9 @@ export async function openAgentWindowModal(options = {}) {
   const addDatasetNode = typeof options?.addDatasetNode === 'function' ? options.addDatasetNode : null;
   const addProcessNode = typeof options?.addProcessNode === 'function' ? options.addProcessNode : null;
   const importPubmedDataset = typeof options?.importPubmedDataset === 'function' ? options.importPubmedDataset : null;
+  const importClinicaltrialsDataset = typeof options?.importClinicaltrialsDataset === 'function' ? options.importClinicaltrialsDataset : null;
+  const importPreprintDataset = typeof options?.importPreprintDataset === 'function' ? options.importPreprintDataset : null;
+  const importChemblDataset = typeof options?.importChemblDataset === 'function' ? options.importChemblDataset : null;
   const storageApi = window.electronAPI;
   let storedState = { conversations: [], activeChatId: '' };
   if (projectPath && storageApi?.loadAgentConversations) {
@@ -479,6 +482,9 @@ export async function openAgentWindowModal(options = {}) {
     addDatasetNode,
     addProcessNode,
     importPubmedDataset,
+    importClinicaltrialsDataset,
+    importPreprintDataset,
+    importChemblDataset,
     onConversationDraftChanged: () => {
       saveConversations();
     },
