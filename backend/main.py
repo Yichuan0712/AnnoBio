@@ -523,6 +523,48 @@ def api_embeddings_pair_similarities(body: EmbeddingPairSimRequest):
         ) from e
 
 
+class TerminologyNormalizeRequest(BaseModel):
+    terms: list[str] = Field(default_factory=list)
+    source: str = Field(default="auto")  # 'auto' | 'rxnorm' | 'mesh'
+
+
+class TerminologyNormalizeResponse(BaseModel):
+    results: dict[str, dict | None]
+
+
+@app.post("/api/terminology/normalize", response_model=TerminologyNormalizeResponse)
+def api_terminology_normalize(body: TerminologyNormalizeRequest):
+    """
+    Batch-resolve free-text medical terms to a canonical concept id (RxNorm/MeSH), used by
+    the Score node's "Medical concept match" flags. Unlike embeddings, each of these is a
+    real external network call with no batch endpoint on either service, so this is backed
+    by an on-disk cache + a small thread pool (see terminology_client.py) rather than one
+    fast local model call -- capped lower than the embeddings endpoint accordingly.
+    """
+    from terminology_client import MEDICAL_CONCEPT_MATCH_SOURCES, resolve_concepts_bulk
+
+    terms = body.terms
+    source = (body.source or "auto").strip().lower()
+    if source not in MEDICAL_CONCEPT_MATCH_SOURCES:
+        raise HTTPException(status_code=400, detail=f"source must be one of {MEDICAL_CONCEPT_MATCH_SOURCES}")
+    if len(terms) > 500:
+        raise HTTPException(status_code=400, detail="Too many terms (max 500 per request)")
+    for i, t in enumerate(terms):
+        if not isinstance(t, str):
+            raise HTTPException(status_code=400, detail=f"terms[{i}] must be a string")
+        if len(t) > 2000:
+            raise HTTPException(status_code=400, detail="Each term must be at most 2000 characters")
+
+    settings = _load_settings()
+    results = resolve_concepts_bulk(
+        terms,
+        source=source,
+        ncbi_api_key=(settings.get("ncbi_api_key") or "").strip(),
+        ncbi_email=(settings.get("ncbi_email") or "").strip(),
+    )
+    return TerminologyNormalizeResponse(results=results)
+
+
 @app.get("/api/credentials", response_model=list[CredentialResponse])
 def list_credentials():
     """List all credentials; API key returned masked."""

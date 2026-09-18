@@ -7,6 +7,9 @@ import {
   stringsMatchSemanticAlign,
   embeddingPairMatches,
   prefetchEmbeddingCosineMap,
+  conceptPairMatches,
+  prefetchConceptIdMap,
+  medicalConceptSource,
   isValidRunOutputForScoreRow,
 } from './scoreDetailModal.js';
 import { computeGreedyRunToGtPairing, evaluateScoreTree, flattenScoreRules } from './scoreRunGtPairing.js';
@@ -150,7 +153,32 @@ async function buildEmbeddingCosineMap({
   });
 }
 
-function makeRuleMatchesRow({ embeddingCosineMap, originalInputRowByPromptIndex }) {
+async function buildConceptIdMap({
+  apiBase,
+  outputRoot,
+  results,
+  outputFields,
+  runWs,
+  gtSubset,
+  originalInputRowByPromptIndex,
+}) {
+  const outputLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
+  if (!outputLeaves.some((rule) => medicalConceptSource(getMatchFlags(rule)))) {
+    return new Map();
+  }
+  return prefetchConceptIdMap(apiBase || BACKEND_API_BASE, {
+    root: outputRoot,
+    results,
+    outputFields,
+    runWs,
+    gtContent: gtSubset,
+    getRunValue: (runResult, outputKey, rowIndex, ws, fields) =>
+      getRunValue(runResult, outputKey, rowIndex, ws, fields, originalInputRowByPromptIndex),
+    getGtValue,
+  });
+}
+
+function makeRuleMatchesRow({ embeddingCosineMap, conceptIdMap, originalInputRowByPromptIndex }) {
   return function ruleMatchesRow(rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtSubset) {
     const runResult = resultsByIndex.get(runRowIndex) || null;
     const runValRaw = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields, originalInputRowByPromptIndex);
@@ -171,6 +199,9 @@ function makeRuleMatchesRow({ embeddingCosineMap, originalInputRowByPromptIndex 
     }
     if (matchType === 'exact' && flags.semanticAlign) {
       return gtValsRaw.some((gtValue) => stringsMatchSemanticAlign(runValRaw, gtValue));
+    }
+    if (matchType === 'exact' && medicalConceptSource(flags)) {
+      return gtValsRaw.some((gtValue) => conceptPairMatches(runValRaw, gtValue, conceptIdMap));
     }
 
     const runVal = normalizeForMatch(runValRaw, flags, false);
@@ -228,7 +259,16 @@ export async function evaluateScoreOutputGt({
     gtSubset,
     originalInputRowByPromptIndex,
   });
-  const ruleMatchesRow = makeRuleMatchesRow({ embeddingCosineMap, originalInputRowByPromptIndex });
+  const conceptIdMap = await buildConceptIdMap({
+    apiBase,
+    outputRoot,
+    results: validResults,
+    outputFields,
+    runWs,
+    gtSubset,
+    originalInputRowByPromptIndex,
+  });
+  const ruleMatchesRow = makeRuleMatchesRow({ embeddingCosineMap, conceptIdMap, originalInputRowByPromptIndex });
 
   const outputsByPromptIdx = new Map();
   for (const result of validResults) {
