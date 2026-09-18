@@ -1,6 +1,28 @@
 import { attachModalPaneToggle } from './paneToggleButton.js';
 import { mountAgentChatSession } from './agentChatSession.js';
 import { clampAgentTitle } from './agentTitleLimits.js';
+import { BACKEND_API_BASE } from './backendConfig.js';
+
+// Web fallback for the electronAPI methods this module relies on: same two method names,
+// backed by backend/project_store.py's REST endpoints instead of local-file IPC, keyed by
+// project id instead of a file path. Every call site below only ever calls through
+// `storageApi`, so this is the only place that needs to branch on environment.
+const webAgentStorageApi = {
+  async loadAgentConversations(projectId) {
+    const res = await fetch(`${BACKEND_API_BASE}/api/projects/${projectId}/agent-conversations`);
+    if (!res.ok) return { activeConversationId: '', conversations: [] };
+    return res.json();
+  },
+  async saveAgentConversations(projectId, payload) {
+    const res = await fetch(`${BACKEND_API_BASE}/api/projects/${projectId}/agent-conversations`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('Could not save agent conversations.');
+    return { ok: true };
+  },
+};
 
 function createChatId() {
   return `chat-${Math.random().toString(36).slice(2, 10)}`;
@@ -176,7 +198,7 @@ export async function openAgentWindowModal(options = {}) {
   const importClinicaltrialsDataset = typeof options?.importClinicaltrialsDataset === 'function' ? options.importClinicaltrialsDataset : null;
   const importPreprintDataset = typeof options?.importPreprintDataset === 'function' ? options.importPreprintDataset : null;
   const importChemblDataset = typeof options?.importChemblDataset === 'function' ? options.importChemblDataset : null;
-  const storageApi = window.electronAPI;
+  const storageApi = window.electronAPI || webAgentStorageApi;
   let storedState = { conversations: [], activeChatId: '' };
   if (projectPath && storageApi?.loadAgentConversations) {
     try {

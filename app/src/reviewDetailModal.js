@@ -23,6 +23,7 @@ import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { compileReviewInputs } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
+import { getCurrentProjectId } from './currentProject.js';
 import { displayCell, isImageCell } from './datasetContent.js';
 import {
   ensureReviewResultIds,
@@ -1742,7 +1743,7 @@ function buildReviewResultUI(overlay, options) {
         const samples = compileReviewInputs(templateText, inputEntries);
 
         // 6. Submit run job
-        const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema });
+        const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema }, undefined, undefined, getCurrentProjectId());
         if (!runRes.ok) {
           const errText = await runRes.text().catch(() => String(runRes.status));
           throw new Error(`Run API error ${runRes.status}: ${errText}`);

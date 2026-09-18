@@ -608,6 +608,7 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
       return;
     }
     if (window.electronAPI?.openExternal) window.electronAPI.openExternal(started.auth_url);
+    else window.open(started.auth_url, '_blank', 'noopener');
     statusEl.textContent = 'Waiting for approval in your browser…';
     const deadline = Date.now() + OPENROUTER_POLL_TIMEOUT_MS;
     pollTimer = setInterval(async () => {

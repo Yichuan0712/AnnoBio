@@ -57,6 +57,7 @@ export {
 };
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { prepareReviewBody } from './runClient.js';
+import { getCurrentProjectId } from './currentProject.js';
 import { displayCell } from './datasetContent.js';
 
 const API_BASE = BACKEND_API_BASE;
@@ -958,7 +959,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
   }));
   document.dispatchEvent(new CustomEvent('workflow:review-stream-started', { detail: { reviewNodeId } }));
   try {
-    const requestBody = await prepareReviewBody(body);
+    const requestBody = await prepareReviewBody(body, getCurrentProjectId());
     const res = await fetch(`${API_BASE}/api/review/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

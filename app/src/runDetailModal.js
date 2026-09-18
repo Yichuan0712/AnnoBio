@@ -11,6 +11,7 @@ import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { compileRows } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
+import { getCurrentProjectId } from './currentProject.js';
 import { cloneCell, displayCell } from './datasetContent.js';
 
 const API_BASE = BACKEND_API_BASE;
@@ -948,7 +949,7 @@ export function openRunDetailModal({
           samples,
           output_schema: outputSchema,
           run_node_id: nodeId || null,
-      });
+      }, undefined, undefined, getCurrentProjectId());
       const data = await res.json().catch(() => ({}));
       if (res.status === 202) {
         runId = data.run_id || null;

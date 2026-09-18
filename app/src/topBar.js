@@ -157,10 +157,12 @@ export function buildTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
   windowControls.appendChild(minimizeBtn);
   windowControls.appendChild(maximizeBtn);
   windowControls.appendChild(closeBtn);
-  bar.appendChild(windowControls);
-
-  window.electronAPI?.isWindowMaximized?.().then(applyMaximizedState).catch(() => {});
-  window.electronAPI?.onWindowMaximizedChanged?.(applyMaximizedState);
+  // A browser tab has its own chrome; these only make sense inside Electron's frameless window.
+  if (window.electronAPI) {
+    bar.appendChild(windowControls);
+    window.electronAPI.isWindowMaximized?.().then(applyMaximizedState).catch(() => {});
+    window.electronAPI.onWindowMaximizedChanged?.(applyMaximizedState);
+  }
 
   root.insertBefore(bar, root.firstChild);
 
