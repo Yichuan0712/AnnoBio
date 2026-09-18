@@ -8,7 +8,6 @@ APIs directly.
 """
 
 import json
-import os
 import re
 import time
 from typing import Any
@@ -100,19 +99,6 @@ def _resolve_model_name(provider: str, model: str) -> str:
     return model_name
 
 
-def _prepare_provider_env(provider: str, api_key: str) -> None:
-    provider_id = (provider or "").strip().lower()
-    if provider_id in ("bedrock", "amazon-bedrock"):
-        raw = (api_key or "").strip()
-        if raw:
-            if "=" in raw:
-                raw = raw.split("=", 1)[-1]
-            raw = raw.strip()
-            if raw:
-                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = raw
-        os.environ.setdefault("AWS_REGION_NAME", "us-east-1")
-
-
 def _resolve_base_url(provider: str, base_url: str) -> str:
     provider_id = (provider or "").strip().lower()
     return (base_url or "").strip() or OPENAI_COMPATIBLE_BASE_URLS.get(provider_id, "")
@@ -129,11 +115,24 @@ def _make_completion_kwargs(
 ) -> dict[str, Any]:
     provider_id = (provider or "").strip().lower()
     resolved_base_url = _resolve_base_url(provider_id, base_url)
-    kwargs: dict[str, Any] = {
+    resolved_api_key = api_key
+    kwargs: dict[str, Any] = {}
+    if provider_id in ("bedrock", "amazon-bedrock"):
+        # litellm's bedrock client treats `api_key` as the AWS_BEARER_TOKEN_BEDROCK value
+        # directly (falling back to that env var only when api_key is None) — passed explicitly
+        # per-call here rather than as a process-wide env var, since a shared backend process
+        # would otherwise have one request's Bedrock call clobber another's concurrently
+        # in-flight credentials.
+        raw = (api_key or "").strip()
+        if "=" in raw:
+            raw = raw.split("=", 1)[-1].strip()
+        resolved_api_key = raw
+        kwargs["aws_region_name"] = "us-east-1"
+    kwargs.update({
         "model": _resolve_model_name(provider_id, model),
-        "api_key": api_key,
+        "api_key": resolved_api_key,
         "max_tokens": max_tokens,
-    }
+    })
     if resolved_base_url:
         kwargs["api_base"] = resolved_base_url
     if response_format is not None:
@@ -227,7 +226,6 @@ def _call_completion(
     response_format: Any | None = None,
     max_retries: int = 3,
 ) -> Any:
-    _prepare_provider_env(provider, api_key)
     kwargs = _make_completion_kwargs(
         provider=provider,
         model=model,
