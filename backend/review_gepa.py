@@ -60,9 +60,12 @@ from review_pipeline import (
 from run_output_schema import build_output_model, build_table_output_model, run_structured_output_is_empty
 from score_mapping_bundle import parse_score_mapping_bundle
 from score_match_primitives import (
+    build_concept_id_map,
     build_embedding_cosine_map_via_local_model,
+    concept_pair_matches,
     get_match_flags,
     embedding_pair_matches,
+    medical_concept_source,
     migrate_legacy_match_type,
     numeric_pair_matches,
     normalize_for_match,
@@ -138,7 +141,12 @@ def _resolve_gt_value(column: str, example: _GepaExample) -> str:
     return "" if v is None else str(v)
 
 
-def _make_rule_matches_row(batch: list[_GepaExample], outputs: list[dict | None], embedding_cosine_map: dict[str, float]):
+def _make_rule_matches_row(
+    batch: list[_GepaExample],
+    outputs: list[dict | None],
+    embedding_cosine_map: dict[str, float],
+    concept_id_map: dict[str, dict | None],
+):
     def rule_matches_row(rule: dict, i: int, _j: int, *_args) -> bool:
         example = batch[i]
         output = outputs[i]
@@ -154,6 +162,8 @@ def _make_rule_matches_row(batch: list[_GepaExample], outputs: list[dict | None]
             return any(embedding_pair_matches(run_val_raw, g, embedding_cosine_map) for g in gt_vals_raw)
         if match_type == "exact" and flags.get("semanticAlign"):
             return any(strings_match_semantic_align(run_val_raw, g) for g in gt_vals_raw)
+        if match_type == "exact" and medical_concept_source(flags):
+            return any(concept_pair_matches(run_val_raw, g, concept_id_map) for g in gt_vals_raw)
         run_val = normalize_for_match(run_val_raw, flags, False)
         for g in gt_vals_raw:
             gt_val = normalize_for_match(g, flags, False)
@@ -324,7 +334,24 @@ class _AppGepaAdapter:
                         pairs.append((run_val, _resolve_gt_value(col, ex)))
             embedding_cosine_map = build_embedding_cosine_map_via_local_model(pairs)
 
-        rule_matches_row = _make_rule_matches_row(batch, outputs, embedding_cosine_map)
+        concept_id_map: dict[str, dict | None] = {}
+        concept_rules = [r for r in output_leaves if medical_concept_source(get_match_flags(r))]
+        if concept_rules:
+            # Rules with different sources (RxNorm/MeSH) are grouped so each is queried once; if the
+            # same raw term appears under two different sources, whichever runs last wins the merge.
+            by_source: dict[str, list[str]] = {}
+            for i, ex in enumerate(batch):
+                for rule in concept_rules:
+                    src = medical_concept_source(get_match_flags(rule))
+                    by_source.setdefault(src, []).append(
+                        _resolve_output_key_value(str(rule.get("outputKey") or ""), outputs[i], ex.row_input)
+                    )
+                    for col in rule.get("gtColumns") or []:
+                        by_source[src].append(_resolve_gt_value(col, ex))
+            for src, src_terms in by_source.items():
+                concept_id_map.update(build_concept_id_map(src_terms, source=src))
+
+        rule_matches_row = _make_rule_matches_row(batch, outputs, embedding_cosine_map, concept_id_map)
         scores: list[float] = []
         for i in range(len(batch)):
             if errors[i] is not None:

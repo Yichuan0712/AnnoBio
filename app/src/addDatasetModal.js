@@ -1,7 +1,8 @@
 /**
  * "Add a new dataset" modal: two steps.
  * Step 1: Name & description.
- * Step 2: choose a data source -- upload CSV/TSV/XLSX, or import from PubMed -- then preview.
+ * Step 2: choose a data source -- upload CSV/TSV/XLSX, import from PubMed, ClinicalTrials.gov,
+ * bioRxiv/medRxiv or ChEMBL -- then preview.
  */
 
 import * as XLSX from 'xlsx';
@@ -10,6 +11,9 @@ import { showConfirm } from './alertModal.js';
 
 const API_BASE = BACKEND_API_BASE;
 const PUBMED_POLL_INTERVAL_MS = 1200;
+const CLINICALTRIALS_POLL_INTERVAL_MS = 1200;
+const PREPRINT_POLL_INTERVAL_MS = 1200;
+const CHEMBL_POLL_INTERVAL_MS = 1200;
 
 /** Keep in sync with backend/pubmed_client.py PUBMED_FIELDS. */
 const PUBMED_FIELD_OPTIONS = [
@@ -24,6 +28,64 @@ const PUBMED_FIELD_OPTIONS = [
   { key: 'publication_type', label: 'Publication Type', defaultOn: false },
 ];
 
+/** Keep in sync with backend/clinicaltrials_client.py CT_FIELDS. */
+const CLINICALTRIALS_FIELD_OPTIONS = [
+  { key: 'nct_id', label: 'NCT ID', defaultOn: true },
+  { key: 'brief_title', label: 'Brief Title', defaultOn: true },
+  { key: 'brief_summary', label: 'Brief Summary', defaultOn: true },
+  { key: 'conditions', label: 'Conditions', defaultOn: true },
+  { key: 'phase', label: 'Phase', defaultOn: true },
+  { key: 'overall_status', label: 'Overall Status', defaultOn: true },
+  { key: 'official_title', label: 'Official Title', defaultOn: false },
+  { key: 'detailed_description', label: 'Detailed Description', defaultOn: false },
+  { key: 'interventions', label: 'Interventions', defaultOn: false },
+  { key: 'study_type', label: 'Study Type', defaultOn: false },
+  { key: 'start_date', label: 'Start Date', defaultOn: false },
+  { key: 'completion_date', label: 'Completion Date', defaultOn: false },
+  { key: 'sponsor', label: 'Sponsor', defaultOn: false },
+  { key: 'eligibility_criteria', label: 'Eligibility Criteria', defaultOn: false },
+  { key: 'sex', label: 'Sex', defaultOn: false },
+  { key: 'minimum_age', label: 'Minimum Age', defaultOn: false },
+  { key: 'maximum_age', label: 'Maximum Age', defaultOn: false },
+];
+
+/** Keep in sync with backend/preprint_client.py PREPRINT_FIELDS. */
+const PREPRINT_FIELD_OPTIONS = [
+  { key: 'doi', label: 'DOI', defaultOn: true },
+  { key: 'title', label: 'Title', defaultOn: true },
+  { key: 'abstract', label: 'Abstract', defaultOn: true },
+  { key: 'authors', label: 'Authors', defaultOn: true },
+  { key: 'date', label: 'Date', defaultOn: true },
+  { key: 'server', label: 'Server', defaultOn: true },
+  { key: 'corresponding_author', label: 'Corresponding Author', defaultOn: false },
+  { key: 'corresponding_institution', label: 'Corresponding Institution', defaultOn: false },
+  { key: 'category', label: 'Category', defaultOn: false },
+  { key: 'version', label: 'Version', defaultOn: false },
+  { key: 'license', label: 'License', defaultOn: false },
+  { key: 'published', label: 'Published DOI', defaultOn: false },
+];
+
+/** Keep in sync with backend/chembl_client.py CHEMBL_FIELDS. */
+const CHEMBL_FIELD_OPTIONS = [
+  { key: 'chembl_id', label: 'ChEMBL ID', defaultOn: true },
+  { key: 'pref_name', label: 'Preferred Name', defaultOn: true },
+  { key: 'molecule_type', label: 'Molecule Type', defaultOn: true },
+  { key: 'max_phase', label: 'Max Phase', defaultOn: true },
+  { key: 'canonical_smiles', label: 'Canonical SMILES', defaultOn: true },
+  { key: 'molecular_formula', label: 'Molecular Formula', defaultOn: true },
+  { key: 'synonyms', label: 'Synonyms', defaultOn: false },
+  { key: 'first_approval', label: 'First Approval Year', defaultOn: false },
+  { key: 'therapeutic_flag', label: 'Therapeutic', defaultOn: false },
+  { key: 'oral', label: 'Oral', defaultOn: false },
+  { key: 'black_box_warning', label: 'Black Box Warning', defaultOn: false },
+  { key: 'natural_product', label: 'Natural Product', defaultOn: false },
+  { key: 'atc_classifications', label: 'ATC Classifications', defaultOn: false },
+  { key: 'standard_inchi', label: 'Standard InChI', defaultOn: false },
+  { key: 'standard_inchi_key', label: 'InChI Key', defaultOn: false },
+  { key: 'molecular_weight', label: 'Molecular Weight', defaultOn: false },
+  { key: 'alogp', label: 'AlogP', defaultOn: false },
+];
+
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str ?? '';
@@ -35,6 +97,18 @@ function parsePubmedIdsInput(text) {
     .split(/[\s,]+/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+function parseClinicaltrialsIdsInput(text) {
+  return parsePubmedIdsInput(text).map((s) => s.toUpperCase());
+}
+
+function parsePreprintIdsInput(text) {
+  return parsePubmedIdsInput(text);
+}
+
+function parseChemblIdsInput(text) {
+  return parsePubmedIdsInput(text).map((s) => s.toUpperCase());
 }
 
 function parseCsvLine(line) {
@@ -105,9 +179,12 @@ export function openAddDatasetModal(workflowCanvasApi) {
             <p class="prompt-step-label">Step 2 of 2 — Add data</p>
             <div class="dataset-source-tabs-row">
               <div class="review-detail-view-switch dataset-source-switch" role="tablist" aria-label="Data source">
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="empty">Empty table</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" data-source="upload">Upload file</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pubmed">Import from PubMed</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="empty">Empty table</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="clinicaltrials">Import from ClinicalTrials.gov</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="preprint">Import from bioRxiv / medRxiv</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="chembl">Import from ChEMBL</button>
               </div>
             </div>
             <div class="dataset-add-step2-scroll">
@@ -158,6 +235,72 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     </div>
                   </div>
                 </div>
+                <div class="dataset-source-panel" data-source-panel="clinicaltrials" hidden>
+                  <div class="dataset-import">
+                    <label class="dataset-meta-label" for="ct-ids">NCT IDs (one per line, or comma/space separated)</label>
+                    <textarea id="ct-ids" class="dataset-meta-input dataset-meta-textarea clinicaltrials-import-ids" rows="6" placeholder="NCT00001372&#10;NCT04280705"></textarea>
+                    <div class="clinicaltrials-import-fields">
+                      <div class="dataset-meta-label">Columns to import</div>
+                      <div class="clinicaltrials-import-checkboxes">
+                        ${CLINICALTRIALS_FIELD_OPTIONS.map(
+                          (f) => `
+                          <label class="clinicaltrials-import-checkbox-label">
+                            <input type="checkbox" class="ct-field-checkbox" value="${f.key}" ${f.defaultOn ? 'checked' : ''} />
+                            ${escapeHtml(f.label)}
+                          </label>`,
+                        ).join('')}
+                      </div>
+                    </div>
+                    <div class="dataset-import-actions">
+                      <button type="button" class="btn btn-secondary clinicaltrials-import-fetch-btn">Fetch from ClinicalTrials.gov</button>
+                      <span class="dataset-filename clinicaltrials-import-fetch-status" aria-live="polite"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="dataset-source-panel" data-source-panel="preprint" hidden>
+                  <div class="dataset-import">
+                    <label class="dataset-meta-label" for="pp-ids">DOIs (one per line, or comma/space separated)</label>
+                    <textarea id="pp-ids" class="dataset-meta-input dataset-meta-textarea preprint-import-ids" rows="6" placeholder="10.1101/2020.09.16.300343"></textarea>
+                    <div class="preprint-import-fields">
+                      <div class="dataset-meta-label">Columns to import</div>
+                      <div class="preprint-import-checkboxes">
+                        ${PREPRINT_FIELD_OPTIONS.map(
+                          (f) => `
+                          <label class="preprint-import-checkbox-label">
+                            <input type="checkbox" class="pp-field-checkbox" value="${f.key}" ${f.defaultOn ? 'checked' : ''} />
+                            ${escapeHtml(f.label)}
+                          </label>`,
+                        ).join('')}
+                      </div>
+                    </div>
+                    <div class="dataset-import-actions">
+                      <button type="button" class="btn btn-secondary preprint-import-fetch-btn">Fetch from bioRxiv / medRxiv</button>
+                      <span class="dataset-filename preprint-import-fetch-status" aria-live="polite"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="dataset-source-panel" data-source-panel="chembl" hidden>
+                  <div class="dataset-import">
+                    <label class="dataset-meta-label" for="chembl-ids">ChEMBL IDs (one per line, or comma/space separated)</label>
+                    <textarea id="chembl-ids" class="dataset-meta-input dataset-meta-textarea chembl-import-ids" rows="6" placeholder="CHEMBL25&#10;CHEMBL192"></textarea>
+                    <div class="chembl-import-fields">
+                      <div class="dataset-meta-label">Columns to import</div>
+                      <div class="chembl-import-checkboxes">
+                        ${CHEMBL_FIELD_OPTIONS.map(
+                          (f) => `
+                          <label class="chembl-import-checkbox-label">
+                            <input type="checkbox" class="chembl-field-checkbox" value="${f.key}" ${f.defaultOn ? 'checked' : ''} />
+                            ${escapeHtml(f.label)}
+                          </label>`,
+                        ).join('')}
+                      </div>
+                    </div>
+                    <div class="dataset-import-actions">
+                      <button type="button" class="btn btn-secondary chembl-import-fetch-btn">Fetch from ChEMBL</button>
+                      <span class="dataset-filename chembl-import-fetch-status" aria-live="polite"></span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="prompt-form-error prompt-modal-error dataset-add-error" role="alert" aria-live="polite" hidden></div>
@@ -195,9 +338,24 @@ export function openAddDatasetModal(workflowCanvasApi) {
   const pmIdsInput = overlay.querySelector('#pm-ids');
   const pubmedFetchBtn = overlay.querySelector('.pubmed-import-fetch-btn');
   const pubmedFetchStatusEl = overlay.querySelector('.pubmed-import-fetch-status');
+  const ctIdsInput = overlay.querySelector('#ct-ids');
+  const clinicaltrialsFetchBtn = overlay.querySelector('.clinicaltrials-import-fetch-btn');
+  const clinicaltrialsFetchStatusEl = overlay.querySelector('.clinicaltrials-import-fetch-status');
+  const ppIdsInput = overlay.querySelector('#pp-ids');
+  const preprintFetchBtn = overlay.querySelector('.preprint-import-fetch-btn');
+  const preprintFetchStatusEl = overlay.querySelector('.preprint-import-fetch-status');
+  const chemblIdsInput = overlay.querySelector('#chembl-ids');
+  const chemblFetchBtn = overlay.querySelector('.chembl-import-fetch-btn');
+  const chemblFetchStatusEl = overlay.querySelector('.chembl-import-fetch-status');
   let dataSource = 'upload';
   let pubmedJobId = null;
   let pubmedPollTimer = null;
+  let clinicaltrialsJobId = null;
+  let clinicaltrialsPollTimer = null;
+  let preprintJobId = null;
+  let preprintPollTimer = null;
+  let chemblJobId = null;
+  let chemblPollTimer = null;
 
   let fileImported = false;
   /** @type {{ headers: string[], rows: string[][] } | null} */
@@ -367,6 +525,51 @@ export function openAddDatasetModal(workflowCanvasApi) {
     if (pubmedFetchStatusEl) pubmedFetchStatusEl.textContent = text || '';
   }
 
+  function stopClinicaltrialsPolling() {
+    if (clinicaltrialsPollTimer) clearTimeout(clinicaltrialsPollTimer);
+    clinicaltrialsPollTimer = null;
+  }
+
+  function setClinicaltrialsRunningUi(running) {
+    clinicaltrialsFetchBtn.disabled = running;
+    addBtn.disabled = running;
+  }
+
+  /** Mirrors .dataset-filename next to "Choose CSV / TSV / XLSX file": a short result, not a full status line. */
+  function setClinicaltrialsFetchStatus(text) {
+    if (clinicaltrialsFetchStatusEl) clinicaltrialsFetchStatusEl.textContent = text || '';
+  }
+
+  function stopPreprintPolling() {
+    if (preprintPollTimer) clearTimeout(preprintPollTimer);
+    preprintPollTimer = null;
+  }
+
+  function setPreprintRunningUi(running) {
+    preprintFetchBtn.disabled = running;
+    addBtn.disabled = running;
+  }
+
+  /** Mirrors .dataset-filename next to "Choose CSV / TSV / XLSX file": a short result, not a full status line. */
+  function setPreprintFetchStatus(text) {
+    if (preprintFetchStatusEl) preprintFetchStatusEl.textContent = text || '';
+  }
+
+  function stopChemblPolling() {
+    if (chemblPollTimer) clearTimeout(chemblPollTimer);
+    chemblPollTimer = null;
+  }
+
+  function setChemblRunningUi(running) {
+    chemblFetchBtn.disabled = running;
+    addBtn.disabled = running;
+  }
+
+  /** Mirrors .dataset-filename next to "Choose CSV / TSV / XLSX file": a short result, not a full status line. */
+  function setChemblFetchStatus(text) {
+    if (chemblFetchStatusEl) chemblFetchStatusEl.textContent = text || '';
+  }
+
   /** Switching source panels always drops whatever was staged for submission (see comment above). */
   function resetStagedContent() {
     fileImported = false;
@@ -375,6 +578,9 @@ export function openAddDatasetModal(workflowCanvasApi) {
     previewEl.textContent = 'No file selected yet.';
     previewEl.classList.add('prompt-preview--empty');
     setPubmedFetchStatus('');
+    setClinicaltrialsFetchStatus('');
+    setPreprintFetchStatus('');
+    setChemblFetchStatus('');
   }
 
   function stageEmptyDataset() {
@@ -404,6 +610,24 @@ export function openAddDatasetModal(workflowCanvasApi) {
       if (pubmedJobId) fetch(`${API_BASE}/api/pubmed/import/cancel/${pubmedJobId}`, { method: 'POST' }).catch(() => {});
       pubmedJobId = null;
       setPubmedRunningUi(false);
+    }
+    if (dataSource === 'clinicaltrials') {
+      stopClinicaltrialsPolling();
+      if (clinicaltrialsJobId) fetch(`${API_BASE}/api/clinicaltrials/import/cancel/${clinicaltrialsJobId}`, { method: 'POST' }).catch(() => {});
+      clinicaltrialsJobId = null;
+      setClinicaltrialsRunningUi(false);
+    }
+    if (dataSource === 'preprint') {
+      stopPreprintPolling();
+      if (preprintJobId) fetch(`${API_BASE}/api/preprint/import/cancel/${preprintJobId}`, { method: 'POST' }).catch(() => {});
+      preprintJobId = null;
+      setPreprintRunningUi(false);
+    }
+    if (dataSource === 'chembl') {
+      stopChemblPolling();
+      if (chemblJobId) fetch(`${API_BASE}/api/chembl/import/cancel/${chemblJobId}`, { method: 'POST' }).catch(() => {});
+      chemblJobId = null;
+      setChemblRunningUi(false);
     }
     dataSource = target;
     sourceSwitchBtns.forEach((b) => {
@@ -505,6 +729,249 @@ export function openAddDatasetModal(workflowCanvasApi) {
       setPubmedRunningUi(false);
       showError(`Could not reach backend: ${(e && e.message) || e}`);
       setPubmedFetchStatus('');
+    }
+  });
+
+  async function pollClinicaltrialsJob(jobId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/clinicaltrials/import/result/${jobId}`);
+      const data = await res.json().catch(() => ({}));
+      if (data.status === 'running') {
+        setClinicaltrialsFetchStatus(`Fetching… ${data.completed ?? 0}/${data.total ?? '?'}`);
+        clinicaltrialsPollTimer = setTimeout(() => pollClinicaltrialsJob(jobId), CLINICALTRIALS_POLL_INTERVAL_MS);
+        return;
+      }
+      setClinicaltrialsRunningUi(false);
+      clinicaltrialsJobId = null;
+      if (data.error) {
+        showError(`ClinicalTrials.gov import failed: ${data.error}`);
+        setClinicaltrialsFetchStatus('');
+        return;
+      }
+      const headers = data.headers || [];
+      const rows = data.rows || [];
+      const notFound = data.not_found || [];
+      const total = data.total ?? rows.length;
+      if (rows.length === 0) {
+        setClinicaltrialsFetchStatus(data.status === 'cancelled' ? 'Cancelled.' : `0/${total} NCT ID${total === 1 ? '' : 's'} fetched`);
+        if (data.status !== 'cancelled' && notFound.length > 0) {
+          showError(`None of the ${notFound.length} NCT ID${notFound.length === 1 ? '' : 's'} were found on ClinicalTrials.gov.`);
+        }
+        return;
+      }
+      fileImported = true;
+      parsedDatasetContent = { headers, rows };
+      const previewRows = rows.slice(0, MAX_PREVIEW_ROWS);
+      renderPreviewTable(headers, previewRows, rows.length);
+      setClinicaltrialsFetchStatus(`${rows.length}/${total} stud${total === 1 ? 'y' : 'ies'} fetched${data.status === 'cancelled' ? ' (cancelled early)' : ''}`);
+      if (notFound.length > 0) {
+        showError(`${notFound.length} NCT ID${notFound.length === 1 ? '' : 's'} not found on ClinicalTrials.gov and skipped: ${notFound.join(', ')}`);
+      }
+    } catch (e) {
+      setClinicaltrialsRunningUi(false);
+      clinicaltrialsJobId = null;
+      showError(`Could not reach backend: ${(e && e.message) || e}`);
+      setClinicaltrialsFetchStatus('');
+    }
+  }
+
+  clinicaltrialsFetchBtn.addEventListener('click', async () => {
+    hideError();
+    const fields = Array.from(overlay.querySelectorAll('.ct-field-checkbox:checked')).map((el) => el.value);
+    if (fields.length === 0) {
+      showError('Pick at least one column to import from ClinicalTrials.gov.');
+      return;
+    }
+    const ids = parseClinicaltrialsIdsInput(ctIdsInput.value);
+    if (ids.length === 0) {
+      showError('Paste at least one NCT ID.');
+      return;
+    }
+    const body = { fields, ids };
+
+    setClinicaltrialsRunningUi(true);
+    setClinicaltrialsFetchStatus('Starting…');
+    try {
+      const res = await fetch(`${API_BASE}/api/clinicaltrials/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setClinicaltrialsRunningUi(false);
+        showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
+        setClinicaltrialsFetchStatus('');
+        return;
+      }
+      clinicaltrialsJobId = data.job_id;
+      pollClinicaltrialsJob(clinicaltrialsJobId);
+    } catch (e) {
+      setClinicaltrialsRunningUi(false);
+      showError(`Could not reach backend: ${(e && e.message) || e}`);
+      setClinicaltrialsFetchStatus('');
+    }
+  });
+
+  async function pollPreprintJob(jobId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/preprint/import/result/${jobId}`);
+      const data = await res.json().catch(() => ({}));
+      if (data.status === 'running') {
+        setPreprintFetchStatus(`Fetching… ${data.completed ?? 0}/${data.total ?? '?'}`);
+        preprintPollTimer = setTimeout(() => pollPreprintJob(jobId), PREPRINT_POLL_INTERVAL_MS);
+        return;
+      }
+      setPreprintRunningUi(false);
+      preprintJobId = null;
+      if (data.error) {
+        showError(`bioRxiv/medRxiv import failed: ${data.error}`);
+        setPreprintFetchStatus('');
+        return;
+      }
+      const headers = data.headers || [];
+      const rows = data.rows || [];
+      const notFound = data.not_found || [];
+      const total = data.total ?? rows.length;
+      if (rows.length === 0) {
+        setPreprintFetchStatus(data.status === 'cancelled' ? 'Cancelled.' : `0/${total} DOI${total === 1 ? '' : 's'} fetched`);
+        if (data.status !== 'cancelled' && notFound.length > 0) {
+          showError(`None of the ${notFound.length} DOI${notFound.length === 1 ? '' : 's'} were found on bioRxiv or medRxiv.`);
+        }
+        return;
+      }
+      fileImported = true;
+      parsedDatasetContent = { headers, rows };
+      const previewRows = rows.slice(0, MAX_PREVIEW_ROWS);
+      renderPreviewTable(headers, previewRows, rows.length);
+      setPreprintFetchStatus(`${rows.length}/${total} preprint${total === 1 ? '' : 's'} fetched${data.status === 'cancelled' ? ' (cancelled early)' : ''}`);
+      if (notFound.length > 0) {
+        showError(`${notFound.length} DOI${notFound.length === 1 ? '' : 's'} not found on bioRxiv or medRxiv and skipped: ${notFound.join(', ')}`);
+      }
+    } catch (e) {
+      setPreprintRunningUi(false);
+      preprintJobId = null;
+      showError(`Could not reach backend: ${(e && e.message) || e}`);
+      setPreprintFetchStatus('');
+    }
+  }
+
+  preprintFetchBtn.addEventListener('click', async () => {
+    hideError();
+    const fields = Array.from(overlay.querySelectorAll('.pp-field-checkbox:checked')).map((el) => el.value);
+    if (fields.length === 0) {
+      showError('Pick at least one column to import from bioRxiv / medRxiv.');
+      return;
+    }
+    const ids = parsePreprintIdsInput(ppIdsInput.value);
+    if (ids.length === 0) {
+      showError('Paste at least one DOI.');
+      return;
+    }
+    const body = { fields, ids };
+
+    setPreprintRunningUi(true);
+    setPreprintFetchStatus('Starting…');
+    try {
+      const res = await fetch(`${API_BASE}/api/preprint/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPreprintRunningUi(false);
+        showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
+        setPreprintFetchStatus('');
+        return;
+      }
+      preprintJobId = data.job_id;
+      pollPreprintJob(preprintJobId);
+    } catch (e) {
+      setPreprintRunningUi(false);
+      showError(`Could not reach backend: ${(e && e.message) || e}`);
+      setPreprintFetchStatus('');
+    }
+  });
+
+  async function pollChemblJob(jobId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/chembl/import/result/${jobId}`);
+      const data = await res.json().catch(() => ({}));
+      if (data.status === 'running') {
+        setChemblFetchStatus(`Fetching… ${data.completed ?? 0}/${data.total ?? '?'}`);
+        chemblPollTimer = setTimeout(() => pollChemblJob(jobId), CHEMBL_POLL_INTERVAL_MS);
+        return;
+      }
+      setChemblRunningUi(false);
+      chemblJobId = null;
+      if (data.error) {
+        showError(`ChEMBL import failed: ${data.error}`);
+        setChemblFetchStatus('');
+        return;
+      }
+      const headers = data.headers || [];
+      const rows = data.rows || [];
+      const notFound = data.not_found || [];
+      const total = data.total ?? rows.length;
+      if (rows.length === 0) {
+        setChemblFetchStatus(data.status === 'cancelled' ? 'Cancelled.' : `0/${total} ChEMBL ID${total === 1 ? '' : 's'} fetched`);
+        if (data.status !== 'cancelled' && notFound.length > 0) {
+          showError(`None of the ${notFound.length} ChEMBL ID${notFound.length === 1 ? '' : 's'} were found on ChEMBL.`);
+        }
+        return;
+      }
+      fileImported = true;
+      parsedDatasetContent = { headers, rows };
+      const previewRows = rows.slice(0, MAX_PREVIEW_ROWS);
+      renderPreviewTable(headers, previewRows, rows.length);
+      setChemblFetchStatus(`${rows.length}/${total} molecule${total === 1 ? '' : 's'} fetched${data.status === 'cancelled' ? ' (cancelled early)' : ''}`);
+      if (notFound.length > 0) {
+        showError(`${notFound.length} ChEMBL ID${notFound.length === 1 ? '' : 's'} not found on ChEMBL and skipped: ${notFound.join(', ')}`);
+      }
+    } catch (e) {
+      setChemblRunningUi(false);
+      chemblJobId = null;
+      showError(`Could not reach backend: ${(e && e.message) || e}`);
+      setChemblFetchStatus('');
+    }
+  }
+
+  chemblFetchBtn.addEventListener('click', async () => {
+    hideError();
+    const fields = Array.from(overlay.querySelectorAll('.chembl-field-checkbox:checked')).map((el) => el.value);
+    if (fields.length === 0) {
+      showError('Pick at least one column to import from ChEMBL.');
+      return;
+    }
+    const ids = parseChemblIdsInput(chemblIdsInput.value);
+    if (ids.length === 0) {
+      showError('Paste at least one ChEMBL ID.');
+      return;
+    }
+    const body = { fields, ids };
+
+    setChemblRunningUi(true);
+    setChemblFetchStatus('Starting…');
+    try {
+      const res = await fetch(`${API_BASE}/api/chembl/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setChemblRunningUi(false);
+        showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
+        setChemblFetchStatus('');
+        return;
+      }
+      chemblJobId = data.job_id;
+      pollChemblJob(chemblJobId);
+    } catch (e) {
+      setChemblRunningUi(false);
+      showError(`Could not reach backend: ${(e && e.message) || e}`);
+      setChemblFetchStatus('');
     }
   });
 
@@ -634,9 +1101,15 @@ export function openAddDatasetModal(workflowCanvasApi) {
     if (!fileImported || (!parsedDatasetContent?.rows?.length && dataSource !== 'empty')) {
       showError(dataSource === 'pubmed'
         ? 'Fetch at least one article from PubMed first.'
-        : dataSource === 'empty'
-          ? 'Empty dataset is not ready yet.'
-          : 'Choose a file to import first.');
+        : dataSource === 'clinicaltrials'
+          ? 'Fetch at least one study from ClinicalTrials.gov first.'
+          : dataSource === 'preprint'
+            ? 'Fetch at least one preprint from bioRxiv / medRxiv first.'
+            : dataSource === 'chembl'
+              ? 'Fetch at least one molecule from ChEMBL first.'
+              : dataSource === 'empty'
+                ? 'Empty dataset is not ready yet.'
+                : 'Choose a file to import first.');
       return;
     }
     const headers = parsedDatasetContent.headers;
@@ -659,6 +1132,12 @@ export function openAddDatasetModal(workflowCanvasApi) {
   const close = () => {
     stopPubmedPolling();
     if (pubmedJobId) fetch(`${API_BASE}/api/pubmed/import/cancel/${pubmedJobId}`, { method: 'POST' }).catch(() => {});
+    stopClinicaltrialsPolling();
+    if (clinicaltrialsJobId) fetch(`${API_BASE}/api/clinicaltrials/import/cancel/${clinicaltrialsJobId}`, { method: 'POST' }).catch(() => {});
+    stopPreprintPolling();
+    if (preprintJobId) fetch(`${API_BASE}/api/preprint/import/cancel/${preprintJobId}`, { method: 'POST' }).catch(() => {});
+    stopChemblPolling();
+    if (chemblJobId) fetch(`${API_BASE}/api/chembl/import/cancel/${chemblJobId}`, { method: 'POST' }).catch(() => {});
     overlay.remove();
     document.body.style.overflow = '';
   };

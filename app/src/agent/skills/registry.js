@@ -23,6 +23,9 @@ import { designRunNodeSkill } from './design_run_node/execute.js';
 import { inspectNodeSkill } from './inspect_node/execute.js';
 import { createProcessNodeSkill } from './create_process_node/execute.js';
 import { importPubmedDatasetSkill } from './import_pubmed_dataset/execute.js';
+import { importClinicaltrialsDatasetSkill } from './import_clinicaltrials_dataset/execute.js';
+import { importPreprintDatasetSkill } from './import_preprint_dataset/execute.js';
+import { importChemblDatasetSkill } from './import_chembl_dataset/execute.js';
 
 export const AGENT_SKILLS = Object.freeze([
   designSamplerNodeSkill,
@@ -50,6 +53,9 @@ export const AGENT_SKILLS = Object.freeze([
   inspectNodeSkill,
   createProcessNodeSkill,
   importPubmedDatasetSkill,
+  importClinicaltrialsDatasetSkill,
+  importPreprintDatasetSkill,
+  importChemblDatasetSkill,
 ]);
 
 export const AGENT_SKILL_REGISTRY = Object.freeze(

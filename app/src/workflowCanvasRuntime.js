@@ -2252,6 +2252,282 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     };
   }
 
+  const CLINICALTRIALS_IMPORT_POLL_INTERVAL_MS = 1200;
+  const CLINICALTRIALS_IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
+
+  async function importClinicaltrialsDataset({
+    nctIds = [],
+    fields = [],
+    name = '',
+    notes = '',
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedIds = (Array.isArray(nctIds) ? nctIds : [])
+      .map((id) => String(id == null ? '' : id).trim().toUpperCase())
+      .filter(Boolean);
+    if (normalizedIds.length === 0) {
+      throw new Error('At least one ClinicalTrials.gov id is required.');
+    }
+    const normalizedFields = (Array.isArray(fields) ? fields : [])
+      .map((field) => String(field == null ? '' : field).trim())
+      .filter(Boolean);
+    if (normalizedFields.length === 0) {
+      throw new Error('At least one ClinicalTrials.gov field is required.');
+    }
+
+    const startResponse = await fetch(`${RUN_API_BASE}/api/clinicaltrials/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: normalizedIds, fields: normalizedFields }),
+    });
+    const startData = await startResponse.json().catch(() => ({}));
+    if (!startResponse.ok) {
+      throw new Error(String(startData?.detail || startResponse.statusText || 'Failed to start ClinicalTrials.gov import.'));
+    }
+    const jobId = String(startData?.job_id || '').trim();
+    if (!jobId) {
+      throw new Error('ClinicalTrials.gov import started but no job id was returned by the backend.');
+    }
+
+    const startedAt = Date.now();
+    let result = null;
+    while (true) {
+      if (Date.now() - startedAt > CLINICALTRIALS_IMPORT_MAX_WAIT_MS) {
+        throw new Error('ClinicalTrials.gov import timed out.');
+      }
+      const pollResponse = await fetch(`${RUN_API_BASE}/api/clinicaltrials/import/result/${jobId}`);
+      const pollData = await pollResponse.json().catch(() => ({}));
+      if (!pollResponse.ok && pollResponse.status !== 202) {
+        throw new Error(String(pollData?.detail || pollResponse.statusText || 'Failed to fetch ClinicalTrials.gov import result.'));
+      }
+      if (pollData?.status === 'running') {
+        await delay(CLINICALTRIALS_IMPORT_POLL_INTERVAL_MS);
+        continue;
+      }
+      result = pollData;
+      break;
+    }
+
+    if (result?.error) {
+      throw new Error(String(result.error));
+    }
+
+    const headers = Array.isArray(result?.headers) ? result.headers : [];
+    const rows = Array.isArray(result?.rows) ? result.rows : [];
+    const notFound = Array.isArray(result?.not_found) ? result.not_found : [];
+    if (rows.length === 0) {
+      throw new Error(notFound.length > 0
+        ? `None of the ${notFound.length} NCT ID${notFound.length === 1 ? '' : 's'} were found on ClinicalTrials.gov.`
+        : 'ClinicalTrials.gov import returned no rows.');
+    }
+
+    const finalName = String(name || '').trim() || 'ClinicalTrials.gov Import';
+    const finalNotes = String(notes || '').trim() || `Imported ${rows.length} stud${rows.length === 1 ? 'y' : 'ies'} from ClinicalTrials.gov.`;
+    const created = addDatasetNode({
+      name: finalName,
+      notes: finalNotes,
+      headers,
+      rows,
+      left,
+      top,
+      ensureUniqueName,
+      agentCreated: true,
+    });
+
+    return {
+      ...created,
+      requestedIds: normalizedIds,
+      notFoundIds: notFound,
+      wasCancelled: result?.status === 'cancelled',
+    };
+  }
+
+  const PREPRINT_IMPORT_POLL_INTERVAL_MS = 1200;
+  const PREPRINT_IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
+
+  async function importPreprintDataset({
+    dois = [],
+    fields = [],
+    name = '',
+    notes = '',
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedIds = (Array.isArray(dois) ? dois : [])
+      .map((id) => String(id == null ? '' : id).trim())
+      .filter(Boolean);
+    if (normalizedIds.length === 0) {
+      throw new Error('At least one bioRxiv/medRxiv DOI is required.');
+    }
+    const normalizedFields = (Array.isArray(fields) ? fields : [])
+      .map((field) => String(field == null ? '' : field).trim())
+      .filter(Boolean);
+    if (normalizedFields.length === 0) {
+      throw new Error('At least one bioRxiv/medRxiv field is required.');
+    }
+
+    const startResponse = await fetch(`${RUN_API_BASE}/api/preprint/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: normalizedIds, fields: normalizedFields }),
+    });
+    const startData = await startResponse.json().catch(() => ({}));
+    if (!startResponse.ok) {
+      throw new Error(String(startData?.detail || startResponse.statusText || 'Failed to start bioRxiv/medRxiv import.'));
+    }
+    const jobId = String(startData?.job_id || '').trim();
+    if (!jobId) {
+      throw new Error('bioRxiv/medRxiv import started but no job id was returned by the backend.');
+    }
+
+    const startedAt = Date.now();
+    let result = null;
+    while (true) {
+      if (Date.now() - startedAt > PREPRINT_IMPORT_MAX_WAIT_MS) {
+        throw new Error('bioRxiv/medRxiv import timed out.');
+      }
+      const pollResponse = await fetch(`${RUN_API_BASE}/api/preprint/import/result/${jobId}`);
+      const pollData = await pollResponse.json().catch(() => ({}));
+      if (!pollResponse.ok && pollResponse.status !== 202) {
+        throw new Error(String(pollData?.detail || pollResponse.statusText || 'Failed to fetch bioRxiv/medRxiv import result.'));
+      }
+      if (pollData?.status === 'running') {
+        await delay(PREPRINT_IMPORT_POLL_INTERVAL_MS);
+        continue;
+      }
+      result = pollData;
+      break;
+    }
+
+    if (result?.error) {
+      throw new Error(String(result.error));
+    }
+
+    const headers = Array.isArray(result?.headers) ? result.headers : [];
+    const rows = Array.isArray(result?.rows) ? result.rows : [];
+    const notFound = Array.isArray(result?.not_found) ? result.not_found : [];
+    if (rows.length === 0) {
+      throw new Error(notFound.length > 0
+        ? `None of the ${notFound.length} DOI${notFound.length === 1 ? '' : 's'} were found on bioRxiv or medRxiv.`
+        : 'bioRxiv/medRxiv import returned no rows.');
+    }
+
+    const finalName = String(name || '').trim() || 'bioRxiv/medRxiv Import';
+    const finalNotes = String(notes || '').trim() || `Imported ${rows.length} preprint${rows.length === 1 ? '' : 's'} from bioRxiv/medRxiv.`;
+    const created = addDatasetNode({
+      name: finalName,
+      notes: finalNotes,
+      headers,
+      rows,
+      left,
+      top,
+      ensureUniqueName,
+      agentCreated: true,
+    });
+
+    return {
+      ...created,
+      requestedIds: normalizedIds,
+      notFoundIds: notFound,
+      wasCancelled: result?.status === 'cancelled',
+    };
+  }
+
+  const CHEMBL_IMPORT_POLL_INTERVAL_MS = 1200;
+  const CHEMBL_IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
+
+  async function importChemblDataset({
+    chemblIds = [],
+    fields = [],
+    name = '',
+    notes = '',
+    left,
+    top,
+    ensureUniqueName = true,
+  } = {}) {
+    const normalizedIds = (Array.isArray(chemblIds) ? chemblIds : [])
+      .map((id) => String(id == null ? '' : id).trim().toUpperCase())
+      .filter(Boolean);
+    if (normalizedIds.length === 0) {
+      throw new Error('At least one ChEMBL id is required.');
+    }
+    const normalizedFields = (Array.isArray(fields) ? fields : [])
+      .map((field) => String(field == null ? '' : field).trim())
+      .filter(Boolean);
+    if (normalizedFields.length === 0) {
+      throw new Error('At least one ChEMBL field is required.');
+    }
+
+    const startResponse = await fetch(`${RUN_API_BASE}/api/chembl/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: normalizedIds, fields: normalizedFields }),
+    });
+    const startData = await startResponse.json().catch(() => ({}));
+    if (!startResponse.ok) {
+      throw new Error(String(startData?.detail || startResponse.statusText || 'Failed to start ChEMBL import.'));
+    }
+    const jobId = String(startData?.job_id || '').trim();
+    if (!jobId) {
+      throw new Error('ChEMBL import started but no job id was returned by the backend.');
+    }
+
+    const startedAt = Date.now();
+    let result = null;
+    while (true) {
+      if (Date.now() - startedAt > CHEMBL_IMPORT_MAX_WAIT_MS) {
+        throw new Error('ChEMBL import timed out.');
+      }
+      const pollResponse = await fetch(`${RUN_API_BASE}/api/chembl/import/result/${jobId}`);
+      const pollData = await pollResponse.json().catch(() => ({}));
+      if (!pollResponse.ok && pollResponse.status !== 202) {
+        throw new Error(String(pollData?.detail || pollResponse.statusText || 'Failed to fetch ChEMBL import result.'));
+      }
+      if (pollData?.status === 'running') {
+        await delay(CHEMBL_IMPORT_POLL_INTERVAL_MS);
+        continue;
+      }
+      result = pollData;
+      break;
+    }
+
+    if (result?.error) {
+      throw new Error(String(result.error));
+    }
+
+    const headers = Array.isArray(result?.headers) ? result.headers : [];
+    const rows = Array.isArray(result?.rows) ? result.rows : [];
+    const notFound = Array.isArray(result?.not_found) ? result.not_found : [];
+    if (rows.length === 0) {
+      throw new Error(notFound.length > 0
+        ? `None of the ${notFound.length} ChEMBL ID${notFound.length === 1 ? '' : 's'} were found on ChEMBL.`
+        : 'ChEMBL import returned no rows.');
+    }
+
+    const finalName = String(name || '').trim() || 'ChEMBL Import';
+    const finalNotes = String(notes || '').trim() || `Imported ${rows.length} molecule${rows.length === 1 ? '' : 's'} from ChEMBL.`;
+    const created = addDatasetNode({
+      name: finalName,
+      notes: finalNotes,
+      headers,
+      rows,
+      left,
+      top,
+      ensureUniqueName,
+      agentCreated: true,
+    });
+
+    return {
+      ...created,
+      requestedIds: normalizedIds,
+      notFoundIds: notFound,
+      wasCancelled: result?.status === 'cancelled',
+    };
+  }
+
   return {
     addPromptNode,
     addPromptVersion,
@@ -2272,5 +2548,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     addSampledDatasetNode,
     addProcessNode,
     importPubmedDataset,
+    importClinicaltrialsDataset,
+    importPreprintDataset,
+    importChemblDataset,
   };
 }

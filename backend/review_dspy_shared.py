@@ -19,7 +19,7 @@ import dspy
 
 from llm import _prepare_provider_env, _resolve_base_url, _resolve_model_name
 from review_gepa import _make_rule_matches_row, _resolve_gt_value
-from score_match_primitives import build_embedding_cosine_map_via_local_model, get_match_flags
+from score_match_primitives import build_concept_id_map, build_embedding_cosine_map_via_local_model, get_match_flags, medical_concept_source
 from score_run_gt_pairing import evaluate_score_tree
 from safe_stdio import safe_print as _print
 
@@ -134,7 +134,19 @@ def make_metric(*, output_root: dict, output_leaves: list[dict], output_field_ke
                 for col in rule.get("gtColumns") or []:
                     pairs.append((run_val, _resolve_gt_value(col, app_example)))
             embedding_cosine_map = build_embedding_cosine_map_via_local_model(pairs)
-        rule_matches_row = _make_rule_matches_row([app_example], [output], embedding_cosine_map)
+        concept_id_map: dict[str, dict | None] = {}
+        concept_rules = [r for r in output_leaves if medical_concept_source(get_match_flags(r))]
+        if concept_rules:
+            by_source: dict[str, list[str]] = {}
+            for rule in concept_rules:
+                src = medical_concept_source(get_match_flags(rule))
+                run_val = str(output.get(str(rule.get("outputKey") or "").strip(), "") or "")
+                by_source.setdefault(src, []).append(run_val)
+                for col in rule.get("gtColumns") or []:
+                    by_source[src].append(_resolve_gt_value(col, app_example))
+            for src, src_terms in by_source.items():
+                concept_id_map.update(build_concept_id_map(src_terms, source=src))
+        rule_matches_row = _make_rule_matches_row([app_example], [output], embedding_cosine_map, concept_id_map)
         ok = evaluate_score_tree(output_root, 0, 0, {}, {}, [], {}, rule_matches_row)
         return 1.0 if ok else 0.0
 
