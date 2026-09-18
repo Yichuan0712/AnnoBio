@@ -1,0 +1,44 @@
+# Local dev stack for the Hub. The per-user backend image it spawns containers from isn't part
+# of this file — build it once (and again whenever backend/ changes) with:
+#   docker build -t prompt-studio-backend:latest backend/
+# and build the frontend it serves with:
+#   cd app && npx vite build --config vite.renderer.config.mjs
+# before `docker compose up`. The Hub only *runs* those two build outputs; it doesn't build them.
+#
+# Mounting the host's Docker socket into the Hub container gives it the same control over the
+# host as root would have — acceptable for a self-hosted, admin-run instance, not for a
+# public-facing one (see the plan's Phase 3+ note: a scoped Docker API proxy would replace this
+# before that).
+services:
+  hub:
+    build:
+      context: hub
+    ports:
+      - "8080:8080"
+    environment:
+      PROMPT_STUDIO_SESSION_SECRET: ${PROMPT_STUDIO_SESSION_SECRET:?set a random secret, e.g. in a .env file — see hub/main.py}
+      PROMPT_STUDIO_BACKEND_IMAGE: prompt-studio-backend:latest
+      PROMPT_STUDIO_NETWORK: prompt-studio-net
+      PROMPT_STUDIO_FRONTEND_DIST: /app/frontend-dist
+      # Public domain this Hub is reachable at, e.g. https://studio.example.org — required for
+      # OpenRouter OAuth login to work (see hub/containers.py); everything else works without it.
+      PROMPT_STUDIO_PUBLIC_BASE_URL: ${PROMPT_STUDIO_PUBLIC_BASE_URL:-}
+      PROMPT_STUDIO_IDLE_TIMEOUT_SEC: ${PROMPT_STUDIO_IDLE_TIMEOUT_SEC:-1800}
+      PROMPT_STUDIO_REAP_INTERVAL_SEC: ${PROMPT_STUDIO_REAP_INTERVAL_SEC:-300}
+    volumes:
+      - hub-data:/app/hub/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./app/dist:/app/frontend-dist:ro
+    networks:
+      - prompt-studio-net
+
+networks:
+  prompt-studio-net:
+    # External, not compose-managed: hub/containers.py also joins per-user backend containers to
+    # this network directly via the Docker SDK (outside compose's lifecycle), so it has to
+    # outlive `docker compose down`. Create it once with `docker network create prompt-studio-net`.
+    name: prompt-studio-net
+    external: true
+
+volumes:
+  hub-data:

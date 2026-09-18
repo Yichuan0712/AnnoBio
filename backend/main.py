@@ -52,9 +52,11 @@ from llm import chat as llm_chat, run_structured as llm_run_structured
 from provider_detect import detect_provider, verify_credential
 
 from asset_store import router as asset_router, resolve_content
+from project_store import router as project_router
 
 app = FastAPI()
 app.include_router(asset_router)
+app.include_router(project_router)
 
 BACKEND_HOST = os.environ.get("PROMPT_STUDIO_BACKEND_HOST", "127.0.0.1")
 BACKEND_PORT = int(os.environ.get("PROMPT_STUDIO_BACKEND_PORT", "8000"))
@@ -1054,7 +1056,8 @@ def start_openrouter_oauth():
     """Begin OpenRouter OAuth PKCE login; returns the URL to open in the system browser."""
     from oauth_openrouter import start_oauth
 
-    return start_oauth(BACKEND_HOST, BACKEND_PORT)
+    public_base_url = os.environ.get("PROMPT_STUDIO_PUBLIC_BASE_URL", "")
+    return start_oauth(BACKEND_HOST, BACKEND_PORT, public_base_url)
 
 
 @app.get("/api/credentials/openrouter/callback")
