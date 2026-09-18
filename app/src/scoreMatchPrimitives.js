@@ -26,6 +26,8 @@ export function isValidRunOutputForScoreRow(r, outputFields) {
 export const DEFAULT_MATCH_FLAGS = {
   semanticAlign: false,
   embeddingSimilarity: false,
+  rxnormMatch: false,
+  meshMatch: false,
   contains: false,
   ignoreCase: false,
   ignoreSymbols: false,
@@ -48,11 +50,18 @@ export function canonicalizeMatchFlags(f) {
   dec = Math.max(0, Math.min(20, dec));
   let embeddingSimilarity = !!merged.embeddingSimilarity;
   let semanticAlign = !!merged.semanticAlign;
+  let rxnormMatch = !!merged.rxnormMatch;
+  let meshMatch = !!merged.meshMatch;
+  // Only one "smart match" mode at a time: embedding > semantic > rxnorm > mesh.
   if (embeddingSimilarity && semanticAlign) semanticAlign = false;
-  const softString = embeddingSimilarity || semanticAlign;
+  if ((embeddingSimilarity || semanticAlign) && rxnormMatch) rxnormMatch = false;
+  if ((embeddingSimilarity || semanticAlign || rxnormMatch) && meshMatch) meshMatch = false;
+  const softString = embeddingSimilarity || semanticAlign || rxnormMatch || meshMatch;
   return {
     semanticAlign,
     embeddingSimilarity,
+    rxnormMatch,
+    meshMatch,
     contains: softString ? false : !!merged.contains,
     ignoreCase: softString ? false : !!merged.ignoreCase,
     ignoreSymbols: softString ? false : !!merged.ignoreSymbols,
@@ -62,6 +71,13 @@ export function canonicalizeMatchFlags(f) {
     numericRelEpsilon: relE,
     numericDecimalPlaces: dec,
   };
+}
+
+/** Which terminology vocabulary (if any) a canonicalized flags object selects for concept matching. */
+export function medicalConceptSource(flags) {
+  if (flags.rxnormMatch) return 'rxnorm';
+  if (flags.meshMatch) return 'mesh';
+  return null;
 }
 
 export function getMatchFlags(rule) {
@@ -260,6 +276,94 @@ export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results
     chunk.forEach((p, idx) => {
       map.set(JSON.stringify(p), cosines[idx]);
     });
+  }
+  return map;
+}
+
+/**
+ * Unlike embeddingPairMatches, this looks each side up *individually* (not by a pair key)
+ * since concept normalization is a per-value operation, not a pairwise one.
+ */
+export function conceptPairMatches(runValRaw, gtValRaw, conceptIdMap) {
+  const a = runValRaw == null ? '' : String(runValRaw);
+  const b = gtValRaw == null ? '' : String(gtValRaw);
+  if (a.length === 0 && b.length === 0) return true;
+  if (a.length === 0 || b.length === 0) return false;
+  const ra = conceptIdMap.get(a);
+  const rb = conceptIdMap.get(b);
+  if (!ra || !rb) return false;
+  return !!ra.concept_id && ra.concept_id === rb.concept_id;
+}
+
+/**
+ * Collect unique result/GT string values for rules that use medical concept matching, grouped by their
+ * chosen source (rxnorm/mesh), then call the backend once per source (batched, capped at 500
+ * terms/request to match the backend's cap).
+ * @param {string} apiBase e.g. BACKEND_API_BASE
+ */
+export async function prefetchConceptIdMap(apiBase, { root, roots, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
+  const rootsToWalk = Array.isArray(roots) && roots.length > 0 ? roots.filter(Boolean) : (root != null ? [root] : []);
+  const leafRules = [];
+  for (const rt of rootsToWalk) {
+    (function walk(n) {
+      if (!n) return;
+      if (n.type === 'rule') leafRules.push(n);
+      if (n.type === 'group' && Array.isArray(n.children)) n.children.forEach(walk);
+    })(rt);
+  }
+  const conceptRules = leafRules.filter((rule) => {
+    const f = getMatchFlags(rule);
+    return migrateLegacyMatchType(rule.matchType) === 'exact' && !!medicalConceptSource(f);
+  });
+  if (conceptRules.length === 0) return new Map();
+
+  const resultsByIndex = new Map();
+  (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
+  const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
+  const gtCount = (gtContent.rows || []).length;
+  const termsBySource = new Map();
+  for (const i of runRowIndices) {
+    const runResult = resultsByIndex.get(i) || null;
+    for (let j = 0; j < gtCount; j++) {
+      for (const rule of conceptRules) {
+        const source = medicalConceptSource(getMatchFlags(rule));
+        if (!termsBySource.has(source)) termsBySource.set(source, new Set());
+        const seen = termsBySource.get(source);
+        const runValRaw = getRunValue(runResult, rule.outputKey, i, runWs, outputFields);
+        seen.add(runValRaw == null ? '' : String(runValRaw));
+        for (const gt of (rule.gtColumns || []).map((col) => getGtValue(gtContent, j, col))) {
+          seen.add(gt == null ? '' : String(gt));
+        }
+      }
+    }
+  }
+
+  const map = new Map();
+  const base = String(apiBase || BACKEND_API_BASE).replace(/\/$/, '');
+  const CHUNK = 500;
+  for (const [source, termSet] of termsBySource) {
+    const terms = [...termSet].filter((t) => t.length > 0);
+    for (let off = 0; off < terms.length; off += CHUNK) {
+      const chunk = terms.slice(off, off + CHUNK);
+      if (chunk.length === 0) continue;
+      const res = await fetch(`${base}/api/terminology/normalize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ terms: chunk, source }),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        throw new Error(t || `Terminology API HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const results2 = data.results;
+      if (!results2 || typeof results2 !== 'object') {
+        throw new Error('Invalid terminology API response');
+      }
+      for (const term of chunk) {
+        map.set(term, results2[term] ?? null);
+      }
+    }
   }
   return map;
 }

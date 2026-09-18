@@ -31,6 +31,9 @@ import {
   EMBEDDING_COSINE_THRESHOLD,
   embeddingPairMatches,
   prefetchEmbeddingCosineMap,
+  conceptPairMatches,
+  prefetchConceptIdMap,
+  medicalConceptSource,
 } from './scoreMatchPrimitives.js';
 /* Re-exported so existing `import { ... } from './scoreDetailModal.js'` call sites (workflowCanvas.js,
  * scoreOutputGtMatcher.js) don't need to change after these moved to scoreMatchPrimitives.js. */
@@ -48,6 +51,9 @@ export {
   EMBEDDING_COSINE_THRESHOLD,
   embeddingPairMatches,
   prefetchEmbeddingCosineMap,
+  conceptPairMatches,
+  prefetchConceptIdMap,
+  medicalConceptSource,
 };
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { prepareReviewBody } from './runClient.js';
@@ -488,6 +494,12 @@ const NUMERIC_COMPARE_MODES = [
   { value: 'rel', label: 'Relative margin: proportional difference (r)' },
   { value: 'decimals', label: 'Decimal rounding: equal after rounding to N places' },
 ];
+
+/** Display labels for the two peer "medical concept match" checkboxes (rule editor + rule-card summary). */
+const MEDICAL_CONCEPT_SOURCE_LABELS = {
+  rxnorm: 'RxNorm (drug name)',
+  mesh: 'MeSH (diagnosis / condition)',
+};
 
 /** Session-only: (outputKey + '\t' + gtColumn) -> { matchType, matchFlags }. Not persisted. */
 const ruleEditorMemory = {};
@@ -993,6 +1005,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   /** Populated before pairing when any rule uses embedding similarity (local backend FastEmbed). */
   let scoreEmbeddingCosineMap = new Map();
+  /** Populated before pairing when any rule uses medical concept matching (RxNorm/MeSH). */
+  let scoreConceptIdMap = new Map();
 
   let selectedNodeId = (node?.dataset?.scoreGroundTruthId || '').trim();
 
@@ -1296,6 +1310,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
     if (matchType === 'exact' && flags.semanticAlign) {
       return gtValsRaw.some((g) => stringsMatchSemanticAlign(runValRaw, g));
+    }
+    if (matchType === 'exact' && medicalConceptSource(flags)) {
+      return gtValsRaw.some((g) => conceptPairMatches(runValRaw, g, scoreConceptIdMap));
     }
     const runVal = normalizeForMatch(runValRaw, flags, false);
     return gtValsRaw.some((g) => {
@@ -1986,6 +2003,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                 ${MATCH_FLAGS.map((f) => `<label class="rule-editor-flag-label"><input type="checkbox" class="rule-editor-flag-cb" data-flag="${escapeAttr(f.key)}" ${flags[f.key] ? 'checked' : ''} aria-label="${escapeAttr(f.label)}" />${escapeHtml(f.label)}</label>`).join('')}
                 <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-fuzzy-bigram-cb" class="rule-editor-flag-cb rule-editor-fuzzy-bigram-cb" ${flags.semanticAlign ? 'checked' : ''} aria-label="Fuzzy text match using character bigrams (Dice), not embeddings" />Fuzzy text</label>
                 <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-embedding-similarity-cb" class="rule-editor-flag-cb rule-editor-embedding-similarity-cb" ${flags.embeddingSimilarity ? 'checked' : ''} aria-label="Semantic match using local fast embedding model (MiniLM via backend)" />Semantic</label>
+                <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-rxnorm-cb" class="rule-editor-flag-cb rule-editor-rxnorm-cb" ${flags.rxnormMatch ? 'checked' : ''} aria-label="Drug name match: normalize brand/generic drug names via RxNorm before comparing" />RxNorm (drug name)</label>
+                <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-mesh-cb" class="rule-editor-flag-cb rule-editor-mesh-cb" ${flags.meshMatch ? 'checked' : ''} aria-label="Diagnosis/condition match: normalize synonyms via MeSH before comparing" />MeSH (diagnosis / condition)</label>
               </div>
             </div>
             <div class="dataset-meta-field rule-editor-numeric-wrap" id="rule-editor-numeric-wrap" style="display:none;">
@@ -2060,8 +2079,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const showStr = ((matchSelectEl?.value ?? '').trim() || 'exact') === 'exact';
       const fuzzyCb = editorOverlay.querySelector('#rule-editor-fuzzy-bigram-cb');
       const embedCb = editorOverlay.querySelector('#rule-editor-embedding-similarity-cb');
+      const rxnormCb = editorOverlay.querySelector('#rule-editor-rxnorm-cb');
+      const meshCb = editorOverlay.querySelector('#rule-editor-mesh-cb');
       if (fuzzyCb) fuzzyCb.disabled = !showStr;
       if (embedCb) embedCb.disabled = !showStr;
+      if (rxnormCb) rxnormCb.disabled = !showStr;
+      if (meshCb) meshCb.disabled = !showStr;
       editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
         cb.disabled = !showStr;
       });
@@ -2092,27 +2115,24 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
     const fuzzyBigramCbEl = editorOverlay.querySelector('#rule-editor-fuzzy-bigram-cb');
     const embeddingSimilarityCbEl = editorOverlay.querySelector('#rule-editor-embedding-similarity-cb');
-    fuzzyBigramCbEl?.addEventListener('change', () => {
-      if (fuzzyBigramCbEl.checked) {
-        if (embeddingSimilarityCbEl) embeddingSimilarityCbEl.checked = false;
-        editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
-      }
-      clearError();
-      if (isEdit) persistEdit();
-    });
-    embeddingSimilarityCbEl?.addEventListener('change', () => {
-      if (embeddingSimilarityCbEl.checked) {
-        if (fuzzyBigramCbEl) fuzzyBigramCbEl.checked = false;
-        editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
-      }
-      clearError();
-      if (isEdit) persistEdit();
+    const rxnormCbEl = editorOverlay.querySelector('#rule-editor-rxnorm-cb');
+    const meshCbEl = editorOverlay.querySelector('#rule-editor-mesh-cb');
+    /** "Smart match" modes are mutually exclusive with each other and with the plain flag checkboxes. */
+    const smartModeCbEls = [fuzzyBigramCbEl, embeddingSimilarityCbEl, rxnormCbEl, meshCbEl].filter(Boolean);
+    smartModeCbEls.forEach((cbEl) => {
+      cbEl.addEventListener('change', () => {
+        if (cbEl.checked) {
+          smartModeCbEls.forEach((other) => { if (other !== cbEl) other.checked = false; });
+          editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
+        }
+        clearError();
+        if (isEdit) persistEdit();
+      });
     });
     editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
       cb.addEventListener('change', () => {
         if (cb.checked) {
-          if (fuzzyBigramCbEl) fuzzyBigramCbEl.checked = false;
-          if (embeddingSimilarityCbEl) embeddingSimilarityCbEl.checked = false;
+          smartModeCbEls.forEach((other) => { other.checked = false; });
         }
         clearError();
         if (isEdit) persistEdit();
@@ -2137,8 +2157,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const matchFlags = { ...DEFAULT_MATCH_FLAGS };
       const fuzzyCb = editorOverlay.querySelector('#rule-editor-fuzzy-bigram-cb');
       const embedCb = editorOverlay.querySelector('#rule-editor-embedding-similarity-cb');
+      const rxnormCb = editorOverlay.querySelector('#rule-editor-rxnorm-cb');
+      const meshCb = editorOverlay.querySelector('#rule-editor-mesh-cb');
       matchFlags.semanticAlign = matchType === 'exact' && !!(fuzzyCb && fuzzyCb.checked);
       matchFlags.embeddingSimilarity = matchType === 'exact' && !!(embedCb && embedCb.checked);
+      matchFlags.rxnormMatch = matchType === 'exact' && !!(rxnormCb && rxnormCb.checked);
+      matchFlags.meshMatch = matchType === 'exact' && !!(meshCb && meshCb.checked);
       flagCbs.forEach((cb) => {
         const key = cb.getAttribute('data-flag');
         if (key && (key === 'contains' || key === 'ignoreCase' || key === 'ignoreSymbols' || key === 'ignoreWhitespace')) matchFlags[key] = !!cb.checked;
@@ -2271,6 +2295,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       flagPart = ' · Semantic';
     } else if (mt === 'exact' && flags.semanticAlign) {
       flagPart = ' · Fuzzy text';
+    } else if (mt === 'exact' && medicalConceptSource(flags)) {
+      flagPart = ` · ${MEDICAL_CONCEPT_SOURCE_LABELS[medicalConceptSource(flags)]}`;
     } else {
       const flagLabels = MATCH_FLAGS.filter((f) => flags[f.key]).map((f) => f.label);
       flagPart = flagLabels.length > 0 ? ` · ${flagLabels.join(', ')}` : '';
@@ -2547,6 +2573,23 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       } catch (e) {
         showAlert(String(e?.message || e), { title: 'Embedding comparison failed' });
         scoreEmbeddingCosineMap = new Map();
+      }
+    }
+    scoreConceptIdMap = new Map();
+    if (!isCodeMode && rulesFlat.some((r) => medicalConceptSource(getMatchFlags(r)))) {
+      try {
+        scoreConceptIdMap = await prefetchConceptIdMap(API_BASE, {
+          root: embeddingWalkRoot,
+          results,
+          outputFields,
+          runWs,
+          gtContent,
+          getRunValue,
+          getGtValue,
+        });
+      } catch (e) {
+        showAlert(String(e?.message || e), { title: 'Medical concept comparison failed' });
+        scoreConceptIdMap = new Map();
       }
     }
     let runToGt, runCount;
@@ -3751,6 +3794,7 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     return getGtValue(gtContent, rowIndex, columnName);
   };
   let exportEmbeddingCosineMap = new Map();
+  let exportConceptIdMap = new Map();
   const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
     const runResult = resultsByIndex.get(runRowIndex) || null;
     const runValRaw = getRunValue(runResult, rule.outputKey, runRowIndex, runWs, outputFields);
@@ -3769,6 +3813,9 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     }
     if (matchType === 'exact' && flags.semanticAlign) {
       return gtValsRaw.some((g) => stringsMatchSemanticAlign(runValRaw, g));
+    }
+    if (matchType === 'exact' && medicalConceptSource(flags)) {
+      return gtValsRaw.some((g) => conceptPairMatches(runValRaw, g, exportConceptIdMap));
     }
     const runVal = normalizeForMatch(runValRaw, flags, false);
     return gtValsRaw.some((g) => {
@@ -3838,6 +3885,22 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
       });
     } catch (_) {
       exportEmbeddingCosineMap = new Map();
+    }
+  }
+  exportConceptIdMap = new Map();
+  if (rulesFlat.some((r) => medicalConceptSource(getMatchFlags(r)))) {
+    try {
+      exportConceptIdMap = await prefetchConceptIdMap(API_BASE, {
+        root: scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot),
+        results,
+        outputFields,
+        runWs,
+        gtContent,
+        getRunValue,
+        getGtValue,
+      });
+    } catch (_) {
+      exportConceptIdMap = new Map();
     }
   }
   const { runToGt } = computeMatchPerRow(inputRoot, outputRoot, results, outputFields, runWs, gtContent);

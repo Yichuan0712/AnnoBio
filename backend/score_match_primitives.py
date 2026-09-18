@@ -26,6 +26,8 @@ SCORE_GT_ROW_INDEX_COLUMN = "__score_gt_row_index__"
 DEFAULT_MATCH_FLAGS: dict[str, Any] = {
     "semanticAlign": False,
     "embeddingSimilarity": False,
+    "rxnormMatch": False,
+    "meshMatch": False,
     "contains": False,
     "ignoreCase": False,
     "ignoreSymbols": False,
@@ -77,13 +79,23 @@ def canonicalize_match_flags(f: dict[str, Any] | None) -> dict[str, Any]:
 
     embedding_similarity = bool(merged.get("embeddingSimilarity"))
     semantic_align = bool(merged.get("semanticAlign"))
+    rxnorm_match = bool(merged.get("rxnormMatch"))
+    mesh_match = bool(merged.get("meshMatch"))
+    # Only one "smart match" mode at a time -- same cascading precedence the UI's mutual-exclusion enforces:
+    # embedding > semantic > rxnorm > mesh.
     if embedding_similarity and semantic_align:
         semantic_align = False
-    soft_string = embedding_similarity or semantic_align
+    if (embedding_similarity or semantic_align) and rxnorm_match:
+        rxnorm_match = False
+    if (embedding_similarity or semantic_align or rxnorm_match) and mesh_match:
+        mesh_match = False
+    soft_string = embedding_similarity or semantic_align or rxnorm_match or mesh_match
 
     return {
         "semanticAlign": semantic_align,
         "embeddingSimilarity": embedding_similarity,
+        "rxnormMatch": rxnorm_match,
+        "meshMatch": mesh_match,
         "contains": False if soft_string else bool(merged.get("contains")),
         "ignoreCase": False if soft_string else bool(merged.get("ignoreCase")),
         "ignoreSymbols": False if soft_string else bool(merged.get("ignoreSymbols")),
@@ -93,6 +105,15 @@ def canonicalize_match_flags(f: dict[str, Any] | None) -> dict[str, Any]:
         "numericRelEpsilon": rel_e,
         "numericDecimalPlaces": dec,
     }
+
+
+def medical_concept_source(flags: dict[str, Any]) -> str | None:
+    """Which terminology vocabulary (if any) a canonicalized flags dict selects for concept matching."""
+    if flags.get("rxnormMatch"):
+        return "rxnorm"
+    if flags.get("meshMatch"):
+        return "mesh"
+    return None
 
 
 def get_match_flags(rule: Any) -> dict[str, Any]:
@@ -293,3 +314,44 @@ def build_embedding_cosine_map_via_local_model(pairs: list[tuple[str, str]]) -> 
         return {}
     cosines = compute_pair_cosine_similarities(unique_pairs)
     return {_cosine_map_key(a, b): c for (a, b), c in zip(unique_pairs, cosines)}
+
+
+def concept_pair_matches(run_val_raw: Any, gt_val_raw: Any, concept_id_map: dict[str, dict | None]) -> bool:
+    """
+    Unlike embedding_pair_matches, this looks each side up *individually* (not by a pair key)
+    since concept normalization is a per-value operation, not a pairwise one.
+    """
+    a = "" if run_val_raw is None else str(run_val_raw)
+    b = "" if gt_val_raw is None else str(gt_val_raw)
+    if len(a) == 0 and len(b) == 0:
+        return True
+    if len(a) == 0 or len(b) == 0:
+        return False
+    ra = concept_id_map.get(a)
+    rb = concept_id_map.get(b)
+    if not ra or not rb:
+        return False
+    concept_a = ra.get("concept_id")
+    concept_b = rb.get("concept_id")
+    return bool(concept_a) and concept_a == concept_b
+
+
+def build_concept_id_map(terms: list[str], source: str = "auto") -> dict[str, dict | None]:
+    """
+    Backend-native equivalent of the frontend's `prefetchConceptIdMap`, which calls
+    POST /api/terminology/normalize over HTTP. Running in the same process as that endpoint,
+    we can call terminology_client.resolve_concepts_bulk directly; it self-loads the
+    NCBI credentials from settings when not passed explicitly.
+    """
+    from terminology_client import resolve_concepts_bulk
+
+    unique_terms: list[str] = []
+    seen: set[str] = set()
+    for t in terms:
+        t = "" if t is None else str(t)
+        if t and t not in seen:
+            seen.add(t)
+            unique_terms.append(t)
+    if not unique_terms:
+        return {}
+    return resolve_concepts_bulk(unique_terms, source=source)
