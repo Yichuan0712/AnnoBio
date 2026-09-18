@@ -8415,6 +8415,20 @@ button.btn.btn-danger:hover:not(:disabled) {
 .wd-image-viewer-panel p { margin: 8px 0 0; color: var(--text-muted); }
 .wd-image-viewer-panel .modal-close { position: absolute; right: 8px; top: 5px; }
 
+/* Web project picker (browser build only — desktop uses native Open/Save dialogs) */
+.modal-panel--project-picker { width: 480px; max-width: 92vw; }
+.project-picker-new { display: flex; gap: 8px; margin-bottom: 14px; }
+.project-picker-name-input { flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); }
+.project-picker-list { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.project-picker-empty { color: var(--text-muted); font-size: 13px; margin: 8px 0; }
+.project-picker-row { display: flex; align-items: stretch; gap: 4px; }
+.project-picker-open { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--control-radius, 6px); background: var(--bg-bar); color: var(--text); text-align: left; cursor: pointer; }
+.project-picker-open:hover { background: var(--hover); }
+.project-picker-row-name { font-size: 13px; font-weight: 500; }
+.project-picker-row-date { font-size: 11px; color: var(--text-muted); }
+.project-picker-delete { width: 32px; border: 1px solid var(--border); border-radius: var(--control-radius, 6px); background: var(--bg-bar); color: var(--text-muted); cursor: pointer; font-size: 16px; line-height: 1; }
+.project-picker-delete:hover { background: var(--hover); color: var(--text); }
+
 /* 右栏：结果表格 + 搜索 + 分页 + Save to workspace，全部复用 run-detail-results-* 系列
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */
 

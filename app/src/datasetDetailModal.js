@@ -7,6 +7,8 @@
 
 import * as XLSX from 'xlsx';
 import { displayCell, imageCell, isImageCell, normalizeDatasetContent } from './datasetContent.js';
+import { getCurrentProjectId } from './currentProject.js';
+import * as webImageApi from './webImageApi.js';
 
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 /** 行高下限：至少一行字高度（约 12px 字号 + 行高 + 内边距） */
@@ -74,6 +76,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   }
 
   const name = (node?.dataset?.datasetName ?? node?.dataset?.subsetName ?? '').trim() || 'Dataset';
+  const hasElectron = !!window.electronAPI;
 
   let headers = [];
   let rows = [];
@@ -290,11 +293,14 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   }
 
   function buildFileInfos(filePaths) {
-    return (Array.isArray(filePaths) ? filePaths : []).map((filePath) => {
-      const name = basename(filePath);
+    return (Array.isArray(filePaths) ? filePaths : []).map((entry) => {
+      // Desktop: entry is an absolute path string. Web: entry is a File object (no real path
+      // available in a browser), matched and later uploaded by its .name instead.
+      const isFileObject = entry && typeof entry === 'object' && typeof entry.name === 'string';
+      const name = isFileObject ? entry.name : basename(entry);
       const stem = filenameStem(name);
       const key = normalizeMatchKey(stem);
-      return { path: filePath, name, stem, key };
+      return { path: entry, name, stem, key };
     });
   }
 
@@ -575,8 +581,8 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       alert('Add a filename text column first. Each row should contain a filename like xxx.png.');
       return;
     }
-    if (!window.electronAPI?.pickImageFiles || !window.electronAPI?.importImages) {
-      alert('Image import is unavailable in this build.');
+    if (!hasElectron && !getCurrentProjectId()) {
+      alert('Open a project first.');
       return;
     }
 
@@ -687,7 +693,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     });
     sourceColumnSelect.addEventListener('change', renderPlan);
     pickFilesBtn.addEventListener('click', async () => {
-      selectedFiles = await window.electronAPI.pickImageFiles();
+      selectedFiles = await (hasElectron ? window.electronAPI.pickImageFiles() : webImageApi.pickImageFiles());
       renderPlan();
     });
     applyBtn.addEventListener('click', async () => {
@@ -695,7 +701,10 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       if (applyBtn.disabled) return;
       try {
         applyBtn.disabled = true;
-        const imported = await window.electronAPI.importImages(plan.matchedFileEntries.map((entry) => entry.path));
+        const paths = plan.matchedFileEntries.map((entry) => entry.path);
+        const imported = hasElectron
+          ? await window.electronAPI.importImages(paths)
+          : await webImageApi.importImages(getCurrentProjectId(), paths);
         const grouped = new Map();
         imported.forEach((asset, index) => {
           const rowIndex = plan.matchedFileEntries[index]?.rowIndex;
@@ -739,14 +748,16 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       alert('Add a text path column first, then import those paths into this image column.');
       return;
     }
-    if (!window.electronAPI?.pickImageDirectory || !window.electronAPI?.resolveImageCandidates || !window.electronAPI?.importImages) {
-      alert('Path import is unavailable in this build.');
+    if (!hasElectron && !getCurrentProjectId()) {
+      alert('Open a project first.');
       return;
     }
 
     let currentPathColIndex = textColumns[0].index;
     let importMode = 'replace';
-    let baseDir = '';
+    let baseDir = ''; // desktop: absolute folder path
+    let webFileMap = null; // web: Map from webImageApi.pickImageDirectory()
+    const hasBaseSelected = () => (hasElectron ? !!baseDir : !!webFileMap);
     let plan = buildImageImportPlanFromResolvedRows(targetColIndex, currentPathColIndex, []);
     let renderSeq = 0;
 
@@ -849,14 +860,14 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         ${previewRowsHtml}
         ${missingPreview ? `<p class="dataset-image-import-help"><strong>Path issues:</strong> ${escapeHtml(missingPreview)}${plan.missingRows.length > 8 ? ' ...' : ''}</p>` : ''}
       `;
-      applyBtn.disabled = !baseDir || plan.matchedFileEntries.length === 0;
-      setError(!baseDir ? 'Choose a base folder to resolve relative paths.' : '');
+      applyBtn.disabled = !hasBaseSelected() || plan.matchedFileEntries.length === 0;
+      setError(!hasBaseSelected() ? 'Choose a base folder to resolve relative paths.' : '');
     }
 
     async function refreshPlan() {
       currentPathColIndex = parseInt(pathColumnSelect.value, 10);
       importMode = modeSelect.value === 'append' ? 'append' : 'replace';
-      if (!baseDir) {
+      if (!hasBaseSelected()) {
         plan = buildImageImportPlanFromResolvedRows(targetColIndex, currentPathColIndex, []);
         renderPreview();
         return;
@@ -865,7 +876,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       summaryEl.innerHTML = '<div class="dataset-image-import-summary-card">Scanning path column...</div>';
       previewEl.innerHTML = '';
       const rawValues = fixedRawValues || rows.map((row) => displayCell(row?.[currentPathColIndex] ?? ''));
-      const resolvedRows = await window.electronAPI.resolveImageCandidates(rawValues, baseDir);
+      const resolvedRows = hasElectron
+        ? await window.electronAPI.resolveImageCandidates(rawValues, baseDir)
+        : webImageApi.resolveImageCandidatesFromFileMap(rawValues, webFileMap);
       if (seq !== renderSeq) return;
       plan = buildImageImportPlanFromResolvedRows(targetColIndex, currentPathColIndex, resolvedRows);
       renderPreview();
@@ -879,10 +892,17 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     pathColumnSelect.addEventListener('change', () => { void refreshPlan(); });
     modeSelect.addEventListener('change', () => { void refreshPlan(); });
     pickDirBtn.addEventListener('click', async () => {
-      const picked = await window.electronAPI.pickImageDirectory();
-      if (!picked) return;
-      baseDir = picked;
-      sourceStatusEl.textContent = picked;
+      if (hasElectron) {
+        const picked = await window.electronAPI.pickImageDirectory();
+        if (!picked) return;
+        baseDir = picked;
+        sourceStatusEl.textContent = picked;
+      } else {
+        const picked = await webImageApi.pickImageDirectory();
+        if (!picked) return;
+        webFileMap = picked.fileMap;
+        sourceStatusEl.textContent = `${picked.fileCount} file${picked.fileCount === 1 ? '' : 's'} in "${picked.name}"`;
+      }
       void refreshPlan();
     });
     applyBtn.addEventListener('click', async () => {
@@ -890,7 +910,10 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       if (applyBtn.disabled) return;
       try {
         applyBtn.disabled = true;
-        const imported = await window.electronAPI.importImages(plan.matchedFileEntries.map((entry) => entry.path));
+        const paths = plan.matchedFileEntries.map((entry) => entry.path);
+        const imported = hasElectron
+          ? await window.electronAPI.importImages(paths)
+          : await webImageApi.importImages(getCurrentProjectId(), paths);
         const grouped = new Map();
         imported.forEach((asset, index) => {
           const rowIndex = plan.matchedFileEntries[index]?.rowIndex;
@@ -1140,7 +1163,13 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
           add.textContent = 'Import image';
           add.addEventListener('click', async () => {
             try {
-              const assets = await window.electronAPI.importImages();
+              let assets;
+              if (hasElectron) {
+                assets = await window.electronAPI.importImages();
+              } else {
+                const files = await webImageApi.pickImageFiles();
+                assets = files.length ? await webImageApi.importImages(getCurrentProjectId(), files) : [];
+              }
               if (!assets.length) return;
               rows[originalRowIdx][colIdx] = imageCell(
                 [...cell.assetIds, ...assets.map((a) => a.id)],
@@ -1174,7 +1203,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
             tile.textContent = 'Loading…';
             tile.addEventListener('click', async () => {
               try {
-                const full = await window.electronAPI.imagePreview(assetId, false);
+                const full = hasElectron
+                  ? await window.electronAPI.imagePreview(assetId, false)
+                  : await webImageApi.imagePreview(getCurrentProjectId(), assetId, false);
                 const viewer = document.createElement('div');
                 viewer.className = 'modal-overlay wd-image-viewer';
                 viewer.innerHTML = `<div class="wd-image-viewer-panel"><button type="button" class="modal-close" aria-label="Close">×</button><img alt="${escapeHtml(full.name || 'Dataset image')}" src="${full.url}"><p>${escapeHtml(full.name || '')} · ${full.width}×${full.height}</p></div>`;
@@ -1184,7 +1215,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
               } catch (error) { alert(error.message); }
             });
             strip.appendChild(tile);
-            window.electronAPI.imagePreview(assetId).then((preview) => {
+            (hasElectron ? window.electronAPI.imagePreview(assetId) : webImageApi.imagePreview(getCurrentProjectId(), assetId)).then((preview) => {
               if (!tile.isConnected) return;
               tile.textContent = '';
               const img = document.createElement('img');
@@ -1361,7 +1392,11 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       }
       if (path) {
         if (columnTypes.includes('image')) {
-          await api.exportImageDataset(path, { headers, columnTypes, rowIds, rows });
+          if (hasElectron) {
+            await api.exportImageDataset(path, { headers, columnTypes, rowIds, rows });
+          } else {
+            await webImageApi.exportDatasetZip(getCurrentProjectId(), { headers, columnTypes, rowIds, rows });
+          }
           return;
         }
         const ext = path.toLowerCase().slice(path.lastIndexOf('.'));

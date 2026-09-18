@@ -30,6 +30,9 @@ import { openAddPromptModal } from './addPromptModal.js';
 import { openAddDatasetModal } from './addDatasetModal.js';
 import { initModalDrag } from './modalDrag.js';
 import { initModalMaximize } from './modalMaximize.js';
+import { showProjectPickerModal, loadWebProject, saveWebProject } from './webProjectModal.js';
+import { showAlert } from './alertModal.js';
+import { setCurrentProjectId } from './currentProject.js';
 
 function showInitError(err) {
   const root = document.getElementById('app') || document.body;
@@ -57,26 +60,35 @@ window.addEventListener('DOMContentLoaded', () => {
     appBody.appendChild(appMain);
     root.appendChild(appBody);
 
-    let currentProjectPath = null;
+    const isElectron = !!window.electronAPI;
+    let currentProjectPath = null; // desktop: absolute file path. web: opaque project id.
+    function setCurrentProject(path) {
+      currentProjectPath = path;
+      setCurrentProjectId(path);
+    }
     const canvasAPI = buildWorkflowCanvas(appMain, {
       getCurrentProjectPath: () => currentProjectPath,
     });
 
   const APP_TITLE = 'Prompt Studio';
-  function updateWindowTitle(projectPath) {
-    let name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
-    if (name && /\.(json|yc)$/i.test(name)) name = name.replace(/\.(json|yc)$/i, '');
-    document.title = name ? `${name} - ${APP_TITLE}` : APP_TITLE;
-    topBarAPI?.setProjectTitle?.(name || APP_TITLE);
+  function updateWindowTitle(displayName) {
+    document.title = displayName ? `${displayName} - ${APP_TITLE}` : APP_TITLE;
+    topBarAPI?.setProjectTitle?.(displayName || APP_TITLE);
   }
 
-  const onNewProject = async () => {
+  function updateWindowTitleFromPath(projectPath) {
+    let name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
+    if (name && /\.(json|yc)$/i.test(name)) name = name.replace(/\.(json|yc)$/i, '');
+    updateWindowTitle(name);
+  }
+
+  const onNewProjectDesktop = async () => {
     const api = window.electronAPI;
     if (!api?.showNewProjectDialog) return;
     const path = await api.showNewProjectDialog();
     if (!path) return;
-    currentProjectPath = path;
-    updateWindowTitle(path);
+    setCurrentProject(path);
+    updateWindowTitleFromPath(path);
     const state = canvasAPI.getCanvasState();
     await api.saveProject(path, state);
     topBarAPI.setAddMenuEnabled(true);
@@ -84,7 +96,7 @@ window.addEventListener('DOMContentLoaded', () => {
     canvasAPI.setAgentWindowVisible?.(true);
   };
 
-  const onOpenProject = async () => {
+  const onOpenProjectDesktop = async () => {
     const api = window.electronAPI;
     if (!api?.showOpenProjectDialog || !api?.loadProject) return;
     const path = await api.showOpenProjectDialog();
@@ -93,26 +105,66 @@ window.addEventListener('DOMContentLoaded', () => {
     const state = loaded?.state || loaded;
     const resolvedPath = loaded?.resolvedPath || path;
     canvasAPI.loadCanvasState(state);
-    currentProjectPath = resolvedPath;
-    updateWindowTitle(resolvedPath);
+    setCurrentProject(resolvedPath);
+    updateWindowTitleFromPath(resolvedPath);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
     canvasAPI.setAgentWindowVisible?.(true);
   };
 
-  const onSaveAsProject = async () => {
+  const onSaveAsProjectDesktop = async () => {
     const api = window.electronAPI;
     if (!api?.showSaveAsProjectDialog || !api?.saveProject) return;
     const path = await api.showSaveAsProjectDialog(currentProjectPath || undefined);
     if (!path) return;
     const state = canvasAPI.getCanvasState();
     await api.saveProject(path, state);
-    currentProjectPath = path;
-    updateWindowTitle(path);
+    setCurrentProject(path);
+    updateWindowTitleFromPath(path);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
     canvasAPI.setAgentWindowVisible?.(true);
   };
+
+  // Web: New and Open both surface the same picker (list existing / create new) since there's
+  // no native "Open File" dialog in a browser — see webProjectModal.js.
+  const openProjectWeb = async ({ id, name }) => {
+    try {
+      const project = await loadWebProject(id);
+      canvasAPI.loadCanvasState(project.state || {});
+      setCurrentProject(id);
+      updateWindowTitle(project.name || name);
+      topBarAPI.setAddMenuEnabled(true);
+      topBarAPI.setSaveAsEnabled?.(true);
+      canvasAPI.setAgentWindowVisible?.(true);
+    } catch (err) {
+      showAlert(err.message || 'Could not open project.', { title: 'Error' });
+    }
+  };
+
+  const onNewOrOpenProjectWeb = async () => {
+    const picked = await showProjectPickerModal();
+    if (!picked) return;
+    await openProjectWeb(picked);
+  };
+
+  const onSaveAsProjectWeb = async () => {
+    const picked = await showProjectPickerModal();
+    // The picker doubles as "save as" here: creating a fresh project from it and then
+    // saving the current canvas into it approximates desktop's "duplicate under a new name".
+    if (!picked) return;
+    const state = canvasAPI.getCanvasState();
+    try {
+      await saveWebProject(picked.id, state);
+      await openProjectWeb(picked);
+    } catch (err) {
+      showAlert(err.message || 'Could not save project.', { title: 'Error' });
+    }
+  };
+
+  const onNewProject = isElectron ? onNewProjectDesktop : onNewOrOpenProjectWeb;
+  const onOpenProject = isElectron ? onOpenProjectDesktop : onNewOrOpenProjectWeb;
+  const onSaveAsProject = isElectron ? onSaveAsProjectDesktop : onSaveAsProjectWeb;
 
   const topBarAPI = buildTopBar(root, {
     openAddPromptModal: () => openAddPromptModal(canvasAPI),
@@ -127,11 +179,20 @@ window.addEventListener('DOMContentLoaded', () => {
 
   let saveTimeout = null;
   canvasAPI.setOnCanvasChange(() => {
-    if (!currentProjectPath || !window.electronAPI?.saveProject) return;
+    if (!currentProjectPath) return;
+    if (isElectron && !window.electronAPI?.saveProject) return;
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(async () => {
       const state = canvasAPI.getCanvasState();
-      await window.electronAPI.saveProject(currentProjectPath, state);
+      if (isElectron) {
+        await window.electronAPI.saveProject(currentProjectPath, state);
+      } else {
+        try {
+          await saveWebProject(currentProjectPath, state);
+        } catch (err) {
+          showAlert(err.message || 'Could not save project.', { title: 'Error' });
+        }
+      }
     }, 400);
   });
   } catch (err) {
