@@ -276,14 +276,17 @@ function createEditingMessageNode(content, options = {}) {
   return wrapper;
 }
 
-async function loadReviewCredential() {
+/** Falls back to the Review default when no Agent default is set, so upgrading doesn't silently
+ * break chats that were already relying on the old Review-default behavior. */
+async function loadAgentCredential() {
   const [credentials, settings] = await Promise.all([
     fetch(`${API_BASE}/api/credentials`).then((res) => (res.ok ? res.json() : [])),
     fetch(`${API_BASE}/api/settings`).then((res) => (res.ok ? res.json() : null)),
   ]);
-  const reviewId = String(settings?.default_review_credential_id || '').trim();
+  const agentId = String(settings?.default_agent_credential_id || '').trim()
+    || String(settings?.default_review_credential_id || '').trim();
   const credential = Array.isArray(credentials)
-    ? credentials.find((item) => item && item.id === reviewId)
+    ? credentials.find((item) => item && item.id === agentId)
     : null;
   return credential || null;
 }
@@ -433,7 +436,7 @@ export function mountAgentChatSession({
       ? 'Select a chat first'
       : credentialId
         ? (sendInFlight ? 'Waiting for response...' : 'Send a message...')
-        : 'Select a Review model in Settings first';
+        : 'Select an Agent model in Settings first';
   }
 
   function syncComposerDraftFromConversation() {
@@ -1381,7 +1384,7 @@ function shouldPreventRepeatedExecution(skillName) {
 
   async function initializeCredential() {
     try {
-      const credential = await loadReviewCredential();
+      const credential = await loadAgentCredential();
       if (!isMounted()) return;
       if (!credential) {
         credentialId = '';
@@ -1390,7 +1393,7 @@ function shouldPreventRepeatedExecution(skillName) {
       }
     } catch (error) {
       credentialId = '';
-      console.error('Load Review model:', error);
+      console.error('Load Agent model:', error);
     }
     updateComposerState();
   }

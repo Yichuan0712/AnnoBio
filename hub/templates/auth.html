@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt Studio</title>
+<style>
+{{SHARED_CSS}}
+
+  a.link { color: var(--accent); text-decoration: none; }
+  a.link:hover { text-decoration: underline; }
+
+  .auth-wrap {
+    display: flex;
+    justify-content: center;
+    padding: 64px 24px;
+  }
+  .auth-card {
+    width: 100%;
+    max-width: 360px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px 28px;
+  }
+  .auth-card h1 { font-size: 21px; margin: 0 0 22px; letter-spacing: -0.01em; }
+  .field { margin-bottom: 14px; }
+  .field input {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--text);
+    font-family: inherit;
+  }
+  .field input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .error {
+    background: rgba(200, 0, 0, 0.08);
+    color: #b00020;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-bottom: 14px;
+  }
+  .btn-submit {
+    width: 100%;
+    padding: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .btn-submit:hover { background: #1d4fd1; }
+  .auth-footer { text-align: center; font-size: 13px; color: var(--text-muted); margin: 18px 0 0; }
+</style>
+</head>
+<body>
+
+{{NAV}}
+
+<div class="auth-wrap">
+  <div class="auth-card">
+    <h1>{{HEADING}}</h1>
+    {{ERROR}}
+    <form method="post" action="{{FORM_ACTION}}">
+      <div class="field"><input name="email" type="email" placeholder="Email" required></div>
+      <div class="field"><input name="password" type="password" placeholder="{{PASSWORD_PLACEHOLDER}}" required {{PASSWORD_MINLENGTH}}></div>
+      <button type="submit" class="btn-submit">{{SUBMIT_LABEL}}</button>
+    </form>
+    <p class="auth-footer">{{FOOTER_LINK}}</p>
+  </div>
+</div>
+
+</body>
+</html>

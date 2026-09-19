@@ -112,6 +112,9 @@ PROCESS_DF_JOBS_FILE = DATA_DIR / "process_df_jobs.json"
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
     "default_review_credential_id": "",
+    # Used by the Agent window's chat. Blank = fall back to default_review_credential_id (see
+    # agentChatSession.js's loadAgentCredential) so upgrading doesn't silently break existing chats.
+    "default_agent_credential_id": "",
     # Registered review method id (backend/review_methods.py); blank = registry default. Per-node choice on a
     # Review-capable Score node (dataset.reviewMethod) overrides this.
     "default_review_method": "",
@@ -189,6 +192,7 @@ class SettingsPatch(BaseModel):
     """Partial settings update; only provided fields are updated."""
     default_run_credential_id: str | None = None
     default_review_credential_id: str | None = None
+    default_agent_credential_id: str | None = None
     default_review_method: str | None = None
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)

@@ -1,0 +1,90 @@
+/* Shared by every Hub-rendered page (landing, auth, download, guide, profile) — one
+   token set, one nav, one button system, so the site reads as one product. Page-specific CSS
+   lives in each page's own <style> block, appended after this. */
+:root {
+  --bg: #e2e6ea;
+  --bg-bar: #e8eaee;
+  --bg-panel: #f4f5f7;
+  --text: #1a1d21;
+  --text-muted: #5c636a;
+  --border: #c0c4c9;
+  --accent: #2563eb;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+
+nav.top {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-bar);
+}
+.brand { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; text-decoration: none; color: var(--text); flex-shrink: 0; }
+.nav-links { display: flex; align-items: center; gap: 4px; flex: 1; }
+.nav-link {
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--text-muted);
+}
+.nav-link:hover { color: var(--text); background: rgba(0, 0, 0, 0.04); }
+.nav-link--active { color: var(--accent); }
+.nav-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.nav-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  /* Matches the app's own avatar exactly (app/src/index.css's --primary-btn-bg/--primary-btn-text
+     for the light theme) — same element, same page in spirit, so it can't visibly shift shade
+     when you move between a Hub page and the app itself. */
+  background: rgba(37, 99, 235, 0.22);
+  color: #2563eb;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 18px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: #1d4fd1; }
+.btn-secondary { background: transparent; color: var(--text); border-color: var(--border); }
+.btn-secondary:hover { background: rgba(0, 0, 0, 0.04); }
+.btn-ghost { background: transparent; color: var(--text-muted); padding: 9px 12px; }
+.btn-ghost:hover { color: var(--text); }
+.btn-lg { padding: 13px 26px; font-size: 15.5px; border-radius: 7px; }
+.btn[aria-disabled="true"] { opacity: 0.55; cursor: default; pointer-events: none; }
+.btn:disabled { opacity: 0.55; cursor: default; }
+
+footer.site-footer { padding: 20px 24px; text-align: center; font-size: 12.5px; color: var(--text-muted); }
+footer.site-footer a { text-decoration: underline; }
+
+@media (max-width: 720px) {
+  .nav-links { display: none; }
+}

@@ -1,6 +1,6 @@
-"""Admin CLI for the invite-only Hub — the entire account-creation mechanism. There is no
-self-serve signup and no password reset flow yet; an admin runs this, hands the printed
-temporary password to the invitee directly, and that's the account.
+"""Admin CLI for the Hub. Accounts are also created via self-serve registration at /register now
+(see hub/main.py) — this remains for an admin to hand someone an account directly, or to grant
+--admin, without them going through the public form. There is no password reset flow yet.
 
 Usage:
     python hub/manage_users.py invite alice@example.edu [--admin]
