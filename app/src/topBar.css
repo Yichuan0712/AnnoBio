@@ -77,9 +77,12 @@
 }
 
 .top-bar-wordmark {
-  /* Matches the Hub's .brand (hub/templates/shared.css) — same size/weight/color, so the
-     wordmark reads as the same brand mark continuing across both. Web-only; desktop never
-     renders this element (see topBar.js's buildWebTopBar). */
+  /* Matches the Hub's .brand (hub/templates/shared.css) — same size/weight/color and same brand
+     mark icon, so it reads as one continuous brand across both. Web-only; desktop never renders
+     this element (see topBar.js's buildWebTopBar). */
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -87,6 +90,13 @@
   white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
+}
+
+.top-bar-wordmark svg {
+  width: 19px;
+  height: 19px;
+  color: var(--primary-btn-text, #2563eb);
+  flex-shrink: 0;
 }
 
 @media (max-width: 640px) {
@@ -206,6 +216,19 @@
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.menu-dropdown.top-bar-avatar-dropdown {
+  min-width: 220px;
+}
+
+.top-bar-avatar-email {
+  padding: 8px 12px 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- Web: taller bar, scaled-up controls (see the .top-bar-web comment in topBar.js) ---- */
