@@ -219,7 +219,7 @@ export async function openAgentWindowModal(options = {}) {
   overlay.innerHTML = `
     <div class="modal-panel agent-window">
       <div class="modal-header">
-        <h2 id="agent-window-title" class="modal-title">Agent Window</h2>
+        <h2 id="agent-window-title" class="modal-title">Agent Assistant</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body agent-window__body">

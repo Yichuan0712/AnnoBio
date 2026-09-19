@@ -417,6 +417,19 @@ ipcMain.handle('project:load', async (_e, filePath) => {
   return { state, resolvedPath: resolved };
 });
 
+ipcMain.handle('project:pick-merge-source-dialog', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Choose a project to merge in',
+    filters: [{ name: 'Your Canvas File', extensions: [YC_EXTENSION.slice(1)] }],
+    properties: ['openFile'],
+  });
+  return canceled || !filePaths?.length ? null : filePaths[0];
+});
+
+ipcMain.handle('project:merge', async (_e, targetFile, sourceFile) => {
+  return projectAssets.merge(targetFile, sourceFile);
+});
+
 ipcMain.handle('agent-conversations:load', async (_e, projectPath) => {
   const resolved = String(projectPath || '').trim();
   if (!resolved) return { activeConversationId: '', conversations: [] };

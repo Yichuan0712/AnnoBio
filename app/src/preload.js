@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showSaveAsProjectDialog: (defaultPath) => ipcRenderer.invoke('project:save-as-dialog', defaultPath),
   saveProject: (filePath, state) => ipcRenderer.invoke('project:save', filePath, state),
   loadProject: (filePath) => ipcRenderer.invoke('project:load', filePath),
+  showMergeSourceDialog: () => ipcRenderer.invoke('project:pick-merge-source-dialog'),
+  mergeProject: (targetFile, sourceFile) => ipcRenderer.invoke('project:merge', targetFile, sourceFile),
   loadAgentConversations: (projectPath) => ipcRenderer.invoke('agent-conversations:load', projectPath),
   saveAgentConversations: (projectPath, data) => ipcRenderer.invoke('agent-conversations:save', projectPath, data),
   showSaveFileDialog: (opts) => ipcRenderer.invoke('dialog:show-save', opts),

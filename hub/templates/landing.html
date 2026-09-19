@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt Studio</title>
+<style>
+{{SHARED_CSS}}
+
+  .hero {
+    min-height: calc(100vh - 60px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 48px 24px;
+  }
+  h1 {
+    font-size: 40px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    margin: 0 0 16px;
+    text-wrap: balance;
+  }
+  .hero p.lead {
+    font-size: 16.5px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    max-width: 520px;
+    margin: 0 0 32px;
+    text-wrap: balance;
+  }
+  .hero-ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+  @media (max-width: 640px) {
+    h1 { font-size: 30px; }
+  }
+</style>
+</head>
+<body>
+
+{{NAV}}
+
+<section class="hero">
+  <h1>Prompt Studio</h1>
+  <p class="lead">
+    A research tool for prompt engineering: build workflows on a visual canvas connecting prompts,
+    datasets, and runs, optimize them with GEPA, MIPROv2, TextGrad, and other methods, and export
+    projects to share with collaborators or move them to the desktop app.
+  </p>
+  <div class="hero-ctas">
+    <a class="btn btn-primary btn-lg" href="{{PRIMARY_CTA_HREF}}">{{PRIMARY_CTA_LABEL}}</a>
+    <a class="btn btn-secondary btn-lg" href="/download">Download for desktop</a>
+  </div>
+</section>
+
+<footer class="site-footer">
+  &copy; Prompt Studio &middot; <a href="/login">Log in</a>
+</footer>
+
+</body>
+</html>

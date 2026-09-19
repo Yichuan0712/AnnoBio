@@ -176,6 +176,97 @@ def delete_project(project_id: str):
     return {"ok": True}
 
 
+@router.post("/{project_id}/duplicate")
+def duplicate_project(project_id: str):
+    """Copies a project (canvas state + images) under a new id — a project-management action
+    grouped here with delete/export/import in the picker, not a "current project" action, so it
+    works on any listed project without opening it first."""
+    with _lock:
+        data = _read_project(project_id)
+        new_id = uuid.uuid4().hex
+        now = time.time()
+        assets = data.get("assets") or {}
+        source_root = _assets_root(project_id)
+        target_root = _assets_root(new_id)
+        for asset_id, asset in assets.items():
+            src_file = (source_root / asset["path"]).resolve()
+            if not src_file.is_relative_to(source_root.resolve()) or not src_file.is_file():
+                continue
+            dst_file = target_root / asset["path"]
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            dst_file.write_bytes(src_file.read_bytes())
+        name = (data.get("meta") or {}).get("name") or "Untitled Project"
+        new_data = {
+            "meta": {"name": f"{name} (copy)", "createdAt": now, "updatedAt": now},
+            "state": data.get("state") or {},
+            "assets": assets,
+            "agentSession": None,  # a fresh copy starts its own agent chat, not the source's history
+        }
+        _atomic_write_json(_project_file(new_id), new_data)
+    return {"id": new_id}
+
+
+@router.post("/{target_id}/merge/{source_id}")
+def merge_project(target_id: str, source_id: str):
+    """Adds source_id's nodes, connections and images into target_id's canvas, alongside
+    whatever is already there — nothing in target_id is removed or overwritten.
+
+    Node ids are `n_<timestamp>_<random>` (see workflowCanvas.js's generateNodeId), so two
+    independently created projects colliding on one is practically impossible; this relies on
+    that instead of rewriting ids and every field that references one (connections, plus a
+    handful of node-type-specific fields like sourceNodeId/runWorkingSetId). Asset ids are a
+    sha256 of the image bytes, so the same is true for merging the two assets dicts — a matching
+    id is guaranteed to already be the same file, never a real conflict.
+    """
+    if target_id == source_id:
+        raise HTTPException(400, "Cannot merge a project into itself.")
+    with _lock:
+        target_data = _read_project(target_id)
+        source_data = _read_project(source_id)
+
+        target_state = dict(target_data.get("state") or {})
+        source_state = dict(source_data.get("state") or {})
+        target_nodes = list(target_state.get("nodes") or [])
+        source_nodes = [dict(n) for n in (source_state.get("nodes") or [])]
+
+        # Shift the incoming nodes to sit to the right of whatever's already on the canvas, so
+        # they land in open space instead of stacked on top of existing ones.
+        if target_nodes and source_nodes:
+            target_right_edge = max((n.get("left") or 0) for n in target_nodes)
+            source_left_edge = min((n.get("left") or 0) for n in source_nodes)
+            offset = (target_right_edge + 400) - source_left_edge
+            for node in source_nodes:
+                node["left"] = (node.get("left") or 0) + offset
+
+        target_state["nodes"] = target_nodes + source_nodes
+        target_state["connections"] = list(target_state.get("connections") or []) + list(source_state.get("connections") or [])
+
+        target_assets = dict(target_data.get("assets") or {})
+        source_assets = source_data.get("assets") or {}
+        source_root = _assets_root(source_id)
+        target_root = _assets_root(target_id)
+        for asset_id, asset in source_assets.items():
+            if asset_id in target_assets:
+                continue
+            src_file = (source_root / asset["path"]).resolve()
+            if not src_file.is_relative_to(source_root.resolve()) or not src_file.is_file():
+                continue  # skip anything unreadable rather than failing the whole merge over one image
+            dst_file = target_root / asset["path"]
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            if not dst_file.exists():
+                dst_file.write_bytes(src_file.read_bytes())
+            target_assets[asset_id] = asset
+
+        target_data["state"] = target_state
+        target_data["assets"] = target_assets
+        target_data.setdefault("meta", {})["updatedAt"] = time.time()
+        _atomic_write_json(_project_file(target_id), target_data)
+
+    state = dict(target_state)
+    state["assets"] = target_assets
+    return {"id": target_id, "name": (target_data.get("meta") or {}).get("name"), "state": state}
+
+
 @router.post("/{project_id}/assets/import")
 async def import_assets(project_id: str, files: list[UploadFile] = File(...)):
     from PIL import Image

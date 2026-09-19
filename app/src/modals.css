@@ -8416,9 +8416,9 @@ button.btn.btn-danger:hover:not(:disabled) {
 .wd-image-viewer-panel .modal-close { position: absolute; right: 8px; top: 5px; }
 
 /* Web project picker (browser build only — desktop uses native Open/Save dialogs) */
-.modal-panel--project-picker { width: 480px; max-width: 92vw; }
-.project-picker-new { display: flex; gap: 8px; margin-bottom: 14px; }
-.project-picker-name-input { flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); }
+.modal-panel--project-picker { width: 560px; max-width: 92vw; }
+.project-picker-new { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.project-picker-name-input { flex: 1; min-width: 160px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); }
 .project-picker-list { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
 .project-picker-empty { color: var(--text-muted); font-size: 13px; margin: 8px 0; }
 .project-picker-row { display: flex; align-items: stretch; gap: 4px; }
@@ -8426,8 +8426,24 @@ button.btn.btn-danger:hover:not(:disabled) {
 .project-picker-open:hover { background: var(--hover); }
 .project-picker-row-name { font-size: 13px; font-weight: 500; }
 .project-picker-row-date { font-size: 11px; color: var(--text-muted); }
-.project-picker-delete { width: 32px; border: 1px solid var(--border); border-radius: var(--control-radius, 6px); background: var(--bg-bar); color: var(--text-muted); cursor: pointer; font-size: 16px; line-height: 1; }
-.project-picker-delete:hover { background: var(--hover); color: var(--text); }
+.project-picker-merge,
+.project-picker-duplicate,
+.project-picker-download,
+.project-picker-delete {
+  width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 6px);
+  background: var(--bg-bar);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.project-picker-merge:hover,
+.project-picker-duplicate:hover,
+.project-picker-download:hover { background: var(--hover); color: var(--text); }
+.project-picker-delete:hover { background: var(--hover); color: #c0392b; }
 
 /* 右栏：结果表格 + 搜索 + 分页 + Save to workspace，全部复用 run-detail-results-* 系列
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */

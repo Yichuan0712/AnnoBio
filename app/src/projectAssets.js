@@ -110,28 +110,107 @@ export class ProjectAssets {
   }
 
   async load(file) {
-    return this.enqueue(async () => {
-      const resolved = path.resolve(file);
-      const payload = JSON.parse(await fs.readFile(resolved, 'utf8'));
-      const bundled = payload && typeof payload === 'object' && payload.bundleVersion === BUNDLE_VERSION && payload.project;
-      const state = bundled ? payload.project : payload;
-      if (state.schemaVersion > 2) throw new Error('This project requires a newer version of Prompt Studio.');
-      this.file = resolved;
-      this.assets = state.assets || {};
-      if (bundled) {
-        const root = await createTempAssetRoot();
-        for (const [id, asset] of Object.entries(this.assets)) {
-          const encoded = payload.assetBlobs?.[id];
-          if (!encoded) throw new Error(`Missing bundled image data: ${asset.name || id}`);
-          const target = path.join(root, asset.path);
-          await fs.mkdir(path.dirname(target), { recursive: true });
-          await fs.writeFile(target, Buffer.from(encoded, 'base64'));
-        }
-        await this.setAssetRoot(root, { temporary: true });
-      } else {
-        await this.setAssetRoot(assetRootFor(resolved), { temporary: false });
+    return this.enqueue(() => this._loadInner(file));
+  }
+
+  // Shared by load() and merge() below — merge() runs inside its own enqueue()d operation and
+  // must call this directly (not through load(), which would re-enter enqueue() and deadlock
+  // against the operation it's already running inside of).
+  async _loadInner(file) {
+    const resolved = path.resolve(file);
+    const payload = JSON.parse(await fs.readFile(resolved, 'utf8'));
+    const bundled = payload && typeof payload === 'object' && payload.bundleVersion === BUNDLE_VERSION && payload.project;
+    const state = bundled ? payload.project : payload;
+    if (state.schemaVersion > 2) throw new Error('This project requires a newer version of Prompt Studio.');
+    this.file = resolved;
+    this.assets = state.assets || {};
+    if (bundled) {
+      const root = await createTempAssetRoot();
+      for (const [id, asset] of Object.entries(this.assets)) {
+        const encoded = payload.assetBlobs?.[id];
+        if (!encoded) throw new Error(`Missing bundled image data: ${asset.name || id}`);
+        const target = path.join(root, asset.path);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, Buffer.from(encoded, 'base64'));
       }
-      return state;
+      await this.setAssetRoot(root, { temporary: true });
+    } else {
+      await this.setAssetRoot(assetRootFor(resolved), { temporary: false });
+    }
+    return state;
+  }
+
+  /**
+   * Adds sourceFile's nodes, connections and images into targetFile's canvas, alongside
+   * whatever is already there — nothing in targetFile is removed or overwritten. Both files
+   * must be bundled .yc projects (the desktop counterpart of backend/project_store.py's
+   * /merge endpoint; see that module's docstring for why plain array-concat + asset-dict-union
+   * is safe here without rewriting any ids).
+   */
+  async merge(targetFile, sourceFile) {
+    return this.enqueue(async () => {
+      const resolvedTarget = path.resolve(targetFile);
+      const resolvedSource = path.resolve(sourceFile);
+      if (resolvedTarget === resolvedSource) throw new Error('Cannot merge a project into itself.');
+      if (!isBundledProjectFile(resolvedTarget) || !isBundledProjectFile(resolvedSource)) {
+        throw new Error('Merge only supports .yc project files.');
+      }
+      const targetPayload = await this.readBundlePayload(resolvedTarget);
+      const sourcePayload = await this.readBundlePayload(resolvedSource);
+      if (!targetPayload?.project) throw new Error('Target project file is missing or invalid.');
+      if (!sourcePayload?.project) throw new Error('Source project file is missing or invalid.');
+
+      const targetState = { ...targetPayload.project };
+      const sourceState = { ...sourcePayload.project };
+      const targetNodes = Array.isArray(targetState.nodes) ? targetState.nodes.slice() : [];
+      const sourceNodes = (Array.isArray(sourceState.nodes) ? sourceState.nodes : []).map((n) => ({ ...n }));
+
+      // Shift the incoming nodes to sit to the right of whatever's already on the canvas, so
+      // they land in open space instead of stacked on top of existing ones.
+      if (targetNodes.length && sourceNodes.length) {
+        const targetRightEdge = Math.max(...targetNodes.map((n) => n.left || 0));
+        const sourceLeftEdge = Math.min(...sourceNodes.map((n) => n.left || 0));
+        const offset = (targetRightEdge + 400) - sourceLeftEdge;
+        for (const node of sourceNodes) node.left = (node.left || 0) + offset;
+      }
+
+      targetState.nodes = targetNodes.concat(sourceNodes);
+      targetState.connections = (targetState.connections || []).concat(sourceState.connections || []);
+
+      // Images are embedded as base64 (assetBlobs), keyed by the sha256 of their bytes — a
+      // matching id is guaranteed to already be the same image, so merging is a plain union,
+      // no file-copying needed the way the web build's separate-files-on-disk format requires.
+      const targetAssets = { ...(targetState.assets || {}) };
+      const sourceAssets = sourceState.assets || {};
+      const targetBlobs = { ...(targetPayload.assetBlobs || {}) };
+      const sourceBlobs = sourcePayload.assetBlobs || {};
+      for (const [id, asset] of Object.entries(sourceAssets)) {
+        if (targetAssets[id]) continue;
+        const blob = sourceBlobs[id];
+        if (!blob) continue; // source file itself is missing this image's data; skip rather than fail the whole merge
+        targetAssets[id] = asset;
+        targetBlobs[id] = blob;
+      }
+      targetState.assets = targetAssets;
+
+      const payload = {
+        bundleVersion: BUNDLE_VERSION,
+        project: { ...targetState, schemaVersion: 2 },
+        assetBlobs: targetBlobs,
+        agentSession: targetPayload.agentSession || null,
+      };
+      const temp = resolvedTarget + '.' + crypto.randomUUID() + '.tmp';
+      await fs.writeFile(temp, JSON.stringify(payload, null, 2), 'utf8');
+      await replaceFile(temp, resolvedTarget);
+
+      // If targetFile is the currently open project, re-materialize its asset root from the
+      // file we just wrote so newly merged-in images are readable immediately (not just after
+      // the app is restarted) — same code path load() uses, called directly to avoid
+      // re-entering enqueue() from inside this already-enqueued operation.
+      if (this.file && path.resolve(this.file) === resolvedTarget) {
+        return this._loadInner(resolvedTarget);
+      }
+      return targetState;
     });
   }
 
