@@ -84,6 +84,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     const canvasAPI = buildWorkflowCanvas(appMain, {
       getCurrentProjectPath: () => currentProjectPath,
+      isElectron,
     });
 
   const APP_TITLE = 'Prompt Studio';

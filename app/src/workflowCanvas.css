@@ -7,6 +7,56 @@
   background-color: var(--bg-canvas);
 }
 
+/* Web-only empty-canvas guidance (see workflowCanvas.js's buildWorkflowCanvas) — centered, and
+   pointer-events: none on the outer layer so panning/zooming an empty canvas still works
+   everywhere except directly over the guidance box itself. */
+.workflow-empty-state {
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.workflow-empty-state:not([hidden]) {
+  display: flex;
+}
+
+.workflow-empty-state__box {
+  pointer-events: auto;
+  max-width: 340px;
+  text-align: center;
+  padding: 18px 22px;
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 3px);
+}
+
+.workflow-empty-state__title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.workflow-empty-state__body {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.workflow-empty-state__link {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.workflow-empty-state__link a {
+  color: var(--primary-btn-text, #2563eb);
+}
+
 .workflow-canvas__scroll {
   position: absolute;
   inset: 0;
