@@ -4,26 +4,39 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{TITLE}} · Prompt Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%232563eb%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%222%22%20y%3D%228.5%22%20width%3D%227%22%20height%3D%227%22%20rx%3D%221.5%22%2F%3E%3Crect%20x%3D%2214%22%20y%3D%222%22%20width%3D%227%22%20height%3D%227%22%20rx%3D%221.5%22%2F%3E%3Crect%20x%3D%2214%22%20y%3D%2215%22%20width%3D%227%22%20height%3D%227%22%20rx%3D%221.5%22%2F%3E%3Cpath%20d%3D%22M9%2012v-3a2%202%200%200%201%202-2h3%22%2F%3E%3Cpath%20d%3D%22M9%2012v3a2%202%200%200%200%202%202h3%22%2F%3E%3C%2Fsvg%3E">
 <style>
 {{SHARED_CSS}}
 
-  .page-wrap { max-width: 960px; margin: 0 auto; padding: 40px 24px 72px; }
+  .page-outer { max-width: 960px; margin: 40px auto 72px; padding: 0 24px; }
+  /* Narrower pages (Profile) don't stretch their content to the same 960px as a data-table or
+     multi-card page — same panel, just sized to what's actually in it instead of leaving a wide
+     empty margin down one side. */
+  .page-outer--narrow { max-width: 620px; }
+  /* Sits on the canvas-grid backdrop (see body.canvas-grid below) — same surface as the app's
+     own .modal-panel (--bg-bar, 1px border, square corners, no shadow), so the grid stays
+     visible around it but text reads against a flat panel instead of fighting the grid lines. */
+  .page-wrap {
+    padding: 40px 40px 56px;
+  }
   .page-wrap h1 { font-size: 28px; letter-spacing: -0.01em; margin: 0 0 8px; }
   .page-sub { color: var(--text-muted); font-size: 15px; margin: 0 0 32px; }
 
 {{EXTRA_CSS}}
 </style>
 </head>
-<body>
+<body class="canvas-grid">
 
 {{NAV}}
 
-<div class="page-wrap">
+<div class="page-outer {{OUTER_CLASS}}">
+<div class="page-wrap hub-panel">
 {{BODY}}
+</div>
 </div>
 
 <footer class="site-footer">
-  &copy; Prompt Studio &middot; <a href="/login">Log in</a>
+  &copy; 2026 <a href="https://digbio.github.io">Digital Biology Lab</a>'s Prompt Studio &middot; <a href="/login">Log in</a>
 </footer>
 
 </body>

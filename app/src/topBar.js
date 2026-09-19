@@ -280,18 +280,31 @@ const iconLlmChip = () => svgIcon({
   ],
 });
 
+// Brand mark — two nodes flowing into one, drawn in Lucide's own style (24x24, 2px stroke, round
+// caps/joins) to match every other icon here, but an original composition. Same markup as
+// hub/main.py's BRAND_MARK_SVG — one icon, everywhere "Prompt Studio" appears.
+const iconBrandMark = () => svgIcon({
+  rects: [[2, 8.5, 7, 7, 1.5], [14, 2, 7, 7, 1.5], [14, 15, 7, 7, 1.5]],
+  paths: ['M9 12v-3a2 2 0 0 1 2-2h3', 'M9 12v3a2 2 0 0 0 2 2h3'],
+});
+
 function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject }) {
   document.documentElement.classList.add('top-bar-web');
 
   const bar = document.createElement('nav');
   bar.className = 'top-bar top-bar--web';
 
-  // ---- Wordmark (no mark/logo for now — see topBar.css's .top-bar-mark if it comes back) ----
+  // ---- Brand mark + wordmark ----
   // Links back to the Hub's Home page (see hub/main.py) — the same nav.top's brand link does
   // there, so it behaves the same way whether you're on a Hub page or inside the app itself.
   const brand = document.createElement('div');
   brand.className = 'top-bar-brand';
-  brand.innerHTML = `<a class="top-bar-wordmark" href="/">Prompt Studio</a>`;
+  const brandLink = document.createElement('a');
+  brandLink.className = 'top-bar-wordmark';
+  brandLink.href = '/';
+  brandLink.appendChild(iconBrandMark());
+  brandLink.appendChild(document.createTextNode('Prompt Studio'));
+  brand.appendChild(brandLink);
   bar.appendChild(brand);
 
   const divider = document.createElement('div');
@@ -374,18 +387,27 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   spacer.className = 'top-bar-spacer';
   bar.appendChild(spacer);
 
-  // ---- Account avatar (only present when served by the Hub and logged in) — a plain link to
-  // /profile, no dropdown, matching the Hub nav's own avatar (hub/main.py's render_nav) exactly.
-  // Log out lives on the Profile page itself rather than duplicated here, so there's one
-  // behavior for "click the avatar" everywhere instead of a dropdown on one page and a direct
-  // link on the rest. ----
+  // ---- Account avatar (only present when served by the Hub and logged in) — hover dropdown
+  // with Profile + Log out, matching the Hub nav's own avatar (hub/main.py's render_nav) exactly,
+  // so clicking the avatar behaves the same everywhere on the site. ----
   fetch('/whoami').then((res) => (res.ok ? res.json() : null)).then((who) => {
     const email = String(who?.email || '').trim();
     if (!email) return;
     const initials = email.slice(0, 2).toUpperCase();
     const avatarWrap = document.createElement('div');
-    avatarWrap.className = 'top-bar-icon-item top-bar-avatar-item';
-    avatarWrap.innerHTML = `<a class="top-bar-avatar" href="/profile" title="${email}" aria-label="Profile: ${email}">${initials}</a>`;
+    avatarWrap.className = 'top-bar-icon-item has-submenu top-bar-avatar-item';
+    avatarWrap.innerHTML = `
+      <button type="button" class="top-bar-avatar" title="${email}" aria-label="Account: ${email}">${initials}</button>
+      <div class="menu-dropdown top-bar-icon-dropdown top-bar-avatar-dropdown">
+        <div class="top-bar-avatar-email">${email}</div>
+        <a class="menu-option" href="/profile">Profile</a>
+        <button type="button" class="menu-option" data-action="logout">Log out</button>
+      </div>
+    `;
+    avatarWrap.querySelector('[data-action="logout"]').addEventListener('click', async () => {
+      await fetch('/logout', { method: 'POST' }).catch(() => {});
+      window.location.href = '/login';
+    });
     bar.appendChild(avatarWrap);
   }).catch(() => {});
 

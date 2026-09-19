@@ -68,6 +68,21 @@ def current_user(request: Request) -> dict | None:
     return db.get_user_by_id(user_id) if user_id else None
 
 
+# Brand mark — two nodes flowing into one, drawn in Lucide's own style (24x24 grid, 2px stroke,
+# round caps/joins) since that's what every icon elsewhere on the site already uses, but an
+# original composition rather than reusing one of theirs verbatim. Same markup as app/src/topBar.js's
+# brand mark in the Workspace's own top bar — one icon, everywhere "Prompt Studio" appears.
+BRAND_MARK_SVG = (
+    '<svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<rect x="2" y="8.5" width="7" height="7" rx="1.5"/>'
+    '<rect x="14" y="2" width="7" height="7" rx="1.5"/>'
+    '<rect x="14" y="15" width="7" height="7" rx="1.5"/>'
+    '<path d="M9 12v-3a2 2 0 0 1 2-2h3"/>'
+    '<path d="M9 12v3a2 2 0 0 0 2 2h3"/>'
+    '</svg>'
+)
+
 NAV_LINKS = [
     ("/", "Home"),
     ("/app", "Workspace"),
@@ -86,7 +101,16 @@ def render_nav(user: dict | None, active: str = "") -> str:
     )
     if user:
         initials = user["email"][:2].upper()
-        actions_html = f'<a class="nav-avatar" href="/profile" title="{user["email"]}" aria-label="Profile: {user["email"]}">{initials}</a>'
+        actions_html = (
+            '<div class="nav-avatar-wrap">'
+            f'<button type="button" class="nav-avatar" aria-label="Account: {user["email"]}">{initials}</button>'
+            '<div class="nav-avatar-dropdown">'
+            f'<div class="nav-avatar-email">{user["email"]}</div>'
+            '<a class="menu-option" href="/profile">Profile</a>'
+            '<form method="post" action="/logout"><button type="submit" class="menu-option">Log out</button></form>'
+            '</div>'
+            '</div>'
+        )
     else:
         actions_html = (
             '<a class="btn btn-ghost" href="/login">Log in</a>'
@@ -94,14 +118,14 @@ def render_nav(user: dict | None, active: str = "") -> str:
         )
     return (
         '<nav class="top">'
-        '<a class="brand" href="/">Prompt Studio</a>'
+        f'<a class="brand" href="/">{BRAND_MARK_SVG}Prompt Studio</a>'
         f'<div class="nav-links">{links_html}</div>'
         f'<div class="nav-actions">{actions_html}</div>'
         '</nav>'
     )
 
 
-def render_page(*, title: str, user: dict | None, active: str = "", body: str, extra_css: str = "") -> str:
+def render_page(*, title: str, user: dict | None, active: str = "", body: str, extra_css: str = "", narrow: bool = False) -> str:
     """Shared shell for Download/Guide/Profile — nav + a plain content well, styled with the same
     tokens as landing/auth. See templates/page.html."""
     return (
@@ -110,6 +134,7 @@ def render_page(*, title: str, user: dict | None, active: str = "", body: str, e
         .replace("{{EXTRA_CSS}}", extra_css)
         .replace("{{TITLE}}", title)
         .replace("{{NAV}}", render_nav(user, active=active))
+        .replace("{{OUTER_CLASS}}", "page-outer--narrow" if narrow else "")
         .replace("{{BODY}}", body)
     )
 
@@ -244,7 +269,7 @@ def download_page(request: Request):
     """
     extra_css = """
       .download-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
-      .download-card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px; padding: 22px; text-align: center; }
+      .download-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius); padding: 22px; text-align: center; }
       .download-card h3 { margin: 0 0 4px; font-size: 17px; }
       .download-card p { margin: 0 0 16px; color: var(--text-muted); font-size: 13.5px; }
       .download-note { color: var(--text-muted); font-size: 14px; line-height: 1.6; }
@@ -298,7 +323,6 @@ GUIDE_SECTIONS = [
 @app.get("/guide")
 def guide_page(request: Request):
     user = current_user(request)
-    toc_html = "".join(f'<a class="guide-toc-link" href="#{i}">{title}</a>' for i, (title, _) in enumerate(GUIDE_SECTIONS))
     sections_html = "".join(
         f'<section class="guide-section" id="{i}"><h2>{i + 1}. {title}</h2><p>{body}</p></section>'
         for i, (title, body) in enumerate(GUIDE_SECTIONS)
@@ -306,13 +330,9 @@ def guide_page(request: Request):
     body = f"""
       <h1>User Guide</h1>
       <p class="page-sub">A short walkthrough of the core workflow — canvas, prompts, datasets, runs, and review.</p>
-      <nav class="guide-toc">{toc_html}</nav>
       {sections_html}
     """
     extra_css = """
-      .guide-toc { display: flex; flex-wrap: wrap; gap: 6px 4px; margin-bottom: 32px; padding-bottom: 24px; border-bottom: 1px solid var(--border); }
-      .guide-toc-link { padding: 6px 10px; border-radius: 6px; font-size: 13px; font-weight: 600; text-decoration: none; color: var(--accent); background: var(--bg-panel); }
-      .guide-toc-link:hover { background: rgba(37, 99, 235, 0.12); }
       .guide-section { margin-bottom: 28px; }
       .guide-section h2 { font-size: 17px; margin: 0 0 8px; }
       .guide-section p { color: var(--text-muted); font-size: 14.5px; line-height: 1.65; margin: 0; max-width: 720px; }
@@ -378,8 +398,7 @@ async def profile_page(request: Request):
       </div>
     """
     extra_css = """
-      .profile-col { max-width: 480px; }
-      .profile-card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px; padding: 6px 20px; margin-bottom: 22px; }
+      .profile-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius); padding: 6px 20px; margin-bottom: 22px; }
       .profile-row { display: flex; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
       .profile-row:last-child { border-bottom: none; }
       .profile-label { color: var(--text-muted); }
@@ -387,18 +406,18 @@ async def profile_page(request: Request):
       .workspaces-empty { color: var(--text-muted); font-size: 14px; }
       a.link { color: var(--accent); text-decoration: none; }
       a.link:hover { text-decoration: underline; }
-      .workspace-list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+      .workspace-list { border: 1px solid var(--border); border-radius: var(--control-radius); overflow: hidden; }
       .workspace-row {
         display: flex; align-items: center; justify-content: space-between;
         padding: 13px 18px; text-decoration: none; color: var(--text);
-        background: var(--bg-panel); border-bottom: 1px solid var(--border); font-size: 14px;
+        background: var(--bg); border-bottom: 1px solid var(--border); font-size: 14px;
       }
       .workspace-row:last-child { border-bottom: none; }
       .workspace-row:hover { background: rgba(37, 99, 235, 0.06); }
       .workspace-name { font-weight: 600; }
       .workspace-date { color: var(--text-muted); font-size: 12.5px; }
     """
-    return HTMLResponse(render_page(title="Profile", user=user, active="/profile", body=body, extra_css=extra_css))
+    return HTMLResponse(render_page(title="Profile", user=user, active="/profile", body=body, extra_css=extra_css, narrow=True))
 
 
 @app.middleware("http")
