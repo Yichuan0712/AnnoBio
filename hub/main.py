@@ -244,29 +244,32 @@ def whoami(request: Request):
     return {"email": request.state.user["email"]}
 
 
+WINDOWS_INSTALLER_URL = "https://drive.google.com/file/d/1BoNqaCO4QrfS6XlvbVhRjaF9RLkZ17Ly/view?usp=drive_link"
+MAC_INSTALLER_URL = "https://drive.google.com/file/d/17tZiG-wMFrAlmfw7S96BQs0mhJfb5_-f/view?usp=drive_link"
+
+
 @app.get("/download")
 def download_page(request: Request):
-    """Public — no installers published yet (see the plan's Phase 1 scope), but the page itself
-    is real so the landing page's "Download for desktop" link goes somewhere."""
+    """Public page for the two desktop installers (built by .github/workflows/build-desktop.yml,
+    hosted on Google Drive rather than served from the Hub itself)."""
     user = current_user(request)
-    body = """
+    body = f"""
       <h1>Download Prompt Studio</h1>
       <p class="page-sub">The full Electron app: native file access, local project storage, works entirely offline.</p>
       <div class="download-grid">
         <div class="download-card">
           <h3>Windows</h3>
           <p>.exe installer</p>
-          <button class="btn btn-secondary" disabled>Coming soon</button>
+          <a class="btn btn-primary" href="{WINDOWS_INSTALLER_URL}" target="_blank" rel="noopener">Download</a>
         </div>
         <div class="download-card">
           <h3>macOS</h3>
-          <p>.dmg installer</p>
-          <button class="btn btn-secondary" disabled>Coming soon</button>
+          <p>.dmg installer, Apple Silicon</p>
+          <a class="btn btn-primary" href="{MAC_INSTALLER_URL}" target="_blank" rel="noopener">Download</a>
         </div>
       </div>
       <p class="download-note">
-        Desktop builds aren't published yet. In the meantime, <a class="link" href="/register">use Prompt Studio in your browser</a> —
-        same projects, same file format, and you can move a project to desktop later once builds are available.
+        Prefer the browser? <a class="link" href="/register">Use Prompt Studio online</a> instead.
       </p>
     """
     extra_css = """
