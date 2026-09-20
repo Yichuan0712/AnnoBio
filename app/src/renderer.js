@@ -23,13 +23,30 @@ import './topBar.css';
 import './workflowCanvas.css';
 import './modals.css';
 import './agentWindow.css';
-import { getStoredTheme, setTheme } from './theme.js';
+import { getStoredTheme, setTheme, THEME_LIGHT } from './theme.js';
 import { buildTopBar } from './topBar.js';
 import { buildWorkflowCanvas } from './workflowCanvas.js';
 import { openAddPromptModal } from './addPromptModal.js';
 import { openAddDatasetModal } from './addDatasetModal.js';
 import { initModalDrag } from './modalDrag.js';
 import { initModalMaximize } from './modalMaximize.js';
+import { showProjectPickerModal, loadWebProject, saveWebProject, createWebProject, findUniqueProjectName } from './webProjectModal.js';
+import { showAlert } from './alertModal.js';
+import { setCurrentProjectId } from './currentProject.js';
+
+// Web has no "recent files" of its own the way the OS gives desktop one — without this, every
+// page refresh drops back to "Open a project" even though the project itself is untouched. Falls
+// back silently (and forgets the id) if the stored project no longer loads, e.g. it was deleted.
+const WEB_LAST_PROJECT_KEY = 'promptStudio.web.lastProjectId';
+function getStoredWebProjectId() {
+  try { return localStorage.getItem(WEB_LAST_PROJECT_KEY) || null; } catch (_) { return null; }
+}
+function setStoredWebProjectId(id) {
+  try {
+    if (id) localStorage.setItem(WEB_LAST_PROJECT_KEY, id);
+    else localStorage.removeItem(WEB_LAST_PROJECT_KEY);
+  } catch (_) { /* private mode / storage blocked — just skip persistence */ }
+}
 
 function showInitError(err) {
   const root = document.getElementById('app') || document.body;
@@ -44,7 +61,10 @@ window.addEventListener('DOMContentLoaded', () => {
     const loadingEl = root.querySelector('.app-loading');
     if (loadingEl) loadingEl.remove();
 
-    setTheme(getStoredTheme());
+    const isElectron = !!window.electronAPI;
+    // Web has no theme switcher (see topBar.js) — always light, regardless of what a previous
+    // desktop session on this machine left in localStorage or what the OS prefers.
+    setTheme(isElectron ? getStoredTheme() : THEME_LIGHT);
     initModalDrag();
     initModalMaximize();
 
@@ -57,34 +77,44 @@ window.addEventListener('DOMContentLoaded', () => {
     appBody.appendChild(appMain);
     root.appendChild(appBody);
 
-    let currentProjectPath = null;
+    let currentProjectPath = null; // desktop: absolute file path. web: opaque project id.
+    function setCurrentProject(path) {
+      currentProjectPath = path;
+      setCurrentProjectId(path);
+    }
     const canvasAPI = buildWorkflowCanvas(appMain, {
       getCurrentProjectPath: () => currentProjectPath,
+      isElectron,
     });
 
   const APP_TITLE = 'Prompt Studio';
-  function updateWindowTitle(projectPath) {
-    let name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
-    if (name && /\.(json|yc)$/i.test(name)) name = name.replace(/\.(json|yc)$/i, '');
-    document.title = name ? `${name} - ${APP_TITLE}` : APP_TITLE;
-    topBarAPI?.setProjectTitle?.(name || APP_TITLE);
+  function updateWindowTitle(displayName) {
+    document.title = displayName ? `${displayName} - ${APP_TITLE}` : APP_TITLE;
+    topBarAPI?.setProjectTitle?.(displayName || APP_TITLE);
   }
 
-  const onNewProject = async () => {
+  function updateWindowTitleFromPath(projectPath) {
+    let name = projectPath ? projectPath.replace(/^.*[/\\]/, '') : null;
+    if (name && /\.(json|yc)$/i.test(name)) name = name.replace(/\.(json|yc)$/i, '');
+    updateWindowTitle(name);
+  }
+
+  const onNewProjectDesktop = async () => {
     const api = window.electronAPI;
     if (!api?.showNewProjectDialog) return;
     const path = await api.showNewProjectDialog();
     if (!path) return;
-    currentProjectPath = path;
-    updateWindowTitle(path);
+    setCurrentProject(path);
+    updateWindowTitleFromPath(path);
     const state = canvasAPI.getCanvasState();
     await api.saveProject(path, state);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
+    topBarAPI.setMergeEnabled?.(true);
     canvasAPI.setAgentWindowVisible?.(true);
   };
 
-  const onOpenProject = async () => {
+  const onOpenProjectDesktop = async () => {
     const api = window.electronAPI;
     if (!api?.showOpenProjectDialog || !api?.loadProject) return;
     const path = await api.showOpenProjectDialog();
@@ -93,45 +123,146 @@ window.addEventListener('DOMContentLoaded', () => {
     const state = loaded?.state || loaded;
     const resolvedPath = loaded?.resolvedPath || path;
     canvasAPI.loadCanvasState(state);
-    currentProjectPath = resolvedPath;
-    updateWindowTitle(resolvedPath);
+    setCurrentProject(resolvedPath);
+    updateWindowTitleFromPath(resolvedPath);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
+    topBarAPI.setMergeEnabled?.(true);
     canvasAPI.setAgentWindowVisible?.(true);
   };
 
-  const onSaveAsProject = async () => {
+  const onSaveAsProjectDesktop = async () => {
     const api = window.electronAPI;
     if (!api?.showSaveAsProjectDialog || !api?.saveProject) return;
     const path = await api.showSaveAsProjectDialog(currentProjectPath || undefined);
     if (!path) return;
     const state = canvasAPI.getCanvasState();
     await api.saveProject(path, state);
-    currentProjectPath = path;
-    updateWindowTitle(path);
+    setCurrentProject(path);
+    updateWindowTitleFromPath(path);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
+    topBarAPI.setMergeEnabled?.(true);
     canvasAPI.setAgentWindowVisible?.(true);
   };
 
+  const onMergeProjectDesktop = async () => {
+    const api = window.electronAPI;
+    if (!api?.showMergeSourceDialog || !api?.mergeProject || !currentProjectPath) return;
+    const sourcePath = await api.showMergeSourceDialog();
+    if (!sourcePath) return;
+    try {
+      const mergedState = await api.mergeProject(currentProjectPath, sourcePath);
+      canvasAPI.loadCanvasState(mergedState);
+    } catch (err) {
+      showAlert(err.message || 'Could not merge project.', { title: 'Error' });
+    }
+  };
+
+  // Web: New and Open both surface the same picker (list existing / create new) since there's
+  // no native "Open File" dialog in a browser — see webProjectModal.js. `silent` is used by the
+  // page-load restore attempt below, where a stale/deleted project id should just fall back to
+  // the empty state instead of popping an error dialog on every refresh.
+  const openProjectWeb = async ({ id, name }, { silent = false } = {}) => {
+    try {
+      const project = await loadWebProject(id);
+      canvasAPI.loadCanvasState(project.state || {});
+      setCurrentProject(id);
+      setStoredWebProjectId(id);
+      updateWindowTitle(project.name || name);
+      topBarAPI.setAddMenuEnabled(true);
+      topBarAPI.setSaveAsEnabled?.(true);
+      topBarAPI.setMergeEnabled?.(true);
+      canvasAPI.setAgentWindowVisible?.(true);
+    } catch (err) {
+      if (silent) { setStoredWebProjectId(null); return; }
+      showAlert(err.message || 'Could not open project.', { title: 'Error' });
+    }
+  };
+
+  // The picker doubles as the merge entry point (click a project's "merge into current" button
+  // instead of "open") when a project is already open — see webProjectModal.js.
+  const onNewOrOpenProjectWeb = async () => {
+    const picked = await showProjectPickerModal(currentProjectPath);
+    if (!picked) return;
+    if (picked.type === 'merged') {
+      canvasAPI.loadCanvasState(picked.state);
+      return;
+    }
+    await openProjectWeb(picked);
+  };
+
+  const onNewProject = isElectron ? onNewProjectDesktop : onNewOrOpenProjectWeb;
+  const onOpenProject = isElectron ? onOpenProjectDesktop : onNewOrOpenProjectWeb;
+  // Web has no "Save as" entry point anymore — Duplicate lives in the project picker instead
+  // (webProjectModal.js), working on any listed project rather than just the one that's open.
+  const onSaveAsProject = isElectron ? onSaveAsProjectDesktop : undefined;
+
+  // Web's Create-prompt/dataset buttons are always enabled (see topBar.js) — with no project
+  // open yet, clicking one just creates an Untitled Project first instead of requiring you to
+  // go through the picker separately.
+  const ensureWebProjectOpen = async () => {
+    if (currentProjectPath) return true;
+    try {
+      const name = await findUniqueProjectName('Untitled Project');
+      const { id } = await createWebProject(name);
+      await openProjectWeb({ id, name });
+      return true;
+    } catch (err) {
+      showAlert(err.message || 'Could not create project.', { title: 'Error' });
+      return false;
+    }
+  };
+  const openAddPromptModalWeb = async () => {
+    if (await ensureWebProjectOpen()) openAddPromptModal(canvasAPI);
+  };
+  const openAddDatasetModalWeb = async () => {
+    if (await ensureWebProjectOpen()) openAddDatasetModal(canvasAPI);
+  };
+
   const topBarAPI = buildTopBar(root, {
-    openAddPromptModal: () => openAddPromptModal(canvasAPI),
-    openAddDatasetModal: () => openAddDatasetModal(canvasAPI),
+    openAddPromptModal: isElectron ? () => openAddPromptModal(canvasAPI) : openAddPromptModalWeb,
+    openAddDatasetModal: isElectron ? () => openAddDatasetModal(canvasAPI) : openAddDatasetModalWeb,
     onNewProject,
     onOpenProject,
     onSaveAsProject,
+    onMergeProject: isElectron ? onMergeProjectDesktop : undefined,
   });
   topBarAPI.setProjectTitle?.(APP_TITLE);
   topBarAPI.setAddMenuEnabled(false);
   canvasAPI.setAgentWindowVisible?.(false);
 
+  if (!isElectron) {
+    // Arriving from the Hub's Profile page (see hub/main.py) with ?open=<id> — a specific
+    // workspace was picked there, so it wins over the usual "reopen the last project" restore.
+    const openId = new URLSearchParams(window.location.search).get('open');
+    if (openId) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('open');
+      window.history.replaceState({}, '', url);
+      openProjectWeb({ id: openId, name: '' });
+    } else {
+      const lastId = getStoredWebProjectId();
+      if (lastId) openProjectWeb({ id: lastId, name: '' }, { silent: true });
+    }
+  }
+
   let saveTimeout = null;
   canvasAPI.setOnCanvasChange(() => {
-    if (!currentProjectPath || !window.electronAPI?.saveProject) return;
+    if (!currentProjectPath) return;
+    if (isElectron && !window.electronAPI?.saveProject) return;
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(async () => {
       const state = canvasAPI.getCanvasState();
-      await window.electronAPI.saveProject(currentProjectPath, state);
+      if (isElectron) {
+        await window.electronAPI.saveProject(currentProjectPath, state);
+      } else {
+        try {
+          await saveWebProject(currentProjectPath, state);
+        } catch (err) {
+          showAlert(err.message || 'Could not save project.', { title: 'Error' });
+        }
+      }
     }, 400);
   });
   } catch (err) {

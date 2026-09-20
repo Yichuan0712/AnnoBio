@@ -1,4 +1,7 @@
-/* Top menu bar (square) */
+/* Top bar. Base rules + .menu-item/.top-bar-project-title below are desktop's original
+   File/Edit/Settings menu bar, unchanged. Everything from "Brand" onward down to the
+   "html.top-bar-web" block is web-only (see topBar.js's buildWebTopBar) and never applies to
+   desktop's DOM. */
 .top-bar {
   position: relative;
   z-index: 200;
@@ -47,6 +50,246 @@
 
 .top-bar .menu-item:hover {
   background: var(--hover);
+}
+
+/* ---- Brand (web only) ---- */
+.top-bar-brand {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.top-bar-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary-btn-text, #2563eb);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.top-bar-wordmark {
+  /* Matches the Hub's .brand (hub/templates/shared.css) — same size/weight/color and same brand
+     mark icon, so it reads as one continuous brand across both. Web-only; desktop never renders
+     this element (see topBar.js's buildWebTopBar). */
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.top-bar-wordmark svg {
+  width: 19px;
+  height: 19px;
+  color: var(--primary-btn-text, #2563eb);
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .top-bar-wordmark { display: none; }
+}
+
+.top-bar-divider {
+  -webkit-app-region: no-drag;
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 10px;
+  flex-shrink: 0;
+}
+
+/* ---- Current project ---- */
+.top-bar-project {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--control-radius, 3px);
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  min-width: 0;
+  max-width: 40vw;
+}
+
+.top-bar-project:hover {
+  background: var(--hover);
+}
+
+.top-bar-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-bar-project svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.top-bar-project--placeholder .top-bar-project-name {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* ---- Icon rail ---- */
+.top-bar-rail {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.top-bar-icon-item {
+  position: relative;
+}
+
+.top-bar-icon-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--control-radius, 3px);
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.top-bar-icon-btn:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.top-bar-icon-btn:disabled {
+  color: var(--text-muted);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.top-bar-icon-item.has-submenu:hover > .top-bar-icon-dropdown {
+  display: block;
+}
+
+.menu-dropdown.top-bar-icon-dropdown {
+  left: auto;
+  right: 0;
+  min-width: 200px;
+}
+
+/* ---- Account avatar ---- */
+.top-bar-avatar-item {
+  margin-left: 6px;
+}
+
+.top-bar-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: var(--primary-btn-bg, rgba(37, 99, 235, 0.22));
+  color: var(--primary-btn-text, #2563eb);
+  font-size: 10px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.menu-dropdown.top-bar-avatar-dropdown {
+  min-width: 220px;
+}
+
+.top-bar-avatar-email {
+  padding: 8px 12px 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Web: taller bar, scaled-up controls (see the .top-bar-web comment in topBar.js) ---- */
+html.top-bar-web {
+  --app-top-bar-height: 52px;
+}
+
+.top-bar--web {
+  /* Matches the Hub's nav.top side padding (hub/templates/shared.css) so the app's header reads
+     as the same bar continuing, not a narrower one nested inside it. */
+  padding: 0 24px;
+}
+
+.top-bar--web .top-bar-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.top-bar--web .top-bar-divider {
+  height: 24px;
+  margin: 0 14px;
+}
+
+.top-bar--web .top-bar-project {
+  height: 36px;
+  padding: 0 10px;
+  font-size: 14.5px;
+  border-radius: 6px;
+}
+
+.top-bar--web .top-bar-project svg {
+  width: 14px;
+  height: 14px;
+}
+
+.top-bar--web .top-bar-rail {
+  gap: 4px;
+  margin-left: 14px;
+}
+
+.top-bar--web .top-bar-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 7px;
+}
+
+.top-bar--web .top-bar-icon-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.top-bar--web .top-bar-avatar-item {
+  margin-left: 10px;
+}
+
+.top-bar--web .top-bar-avatar {
+  width: 32px;
+  height: 32px;
+  font-size: 11.5px;
 }
 
 .top-bar-window-controls {
@@ -116,6 +359,8 @@
   cursor: pointer;
   text-align: left;
   font-family: inherit;
+  text-decoration: none;
+  box-sizing: border-box;
 }
 
 .menu-dropdown .menu-option:hover {

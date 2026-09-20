@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 import dspy
 
-from llm import _prepare_provider_env, _resolve_base_url, _resolve_model_name
+from llm import _resolve_base_url, _resolve_model_name
 from review_gepa import _make_rule_matches_row, _resolve_gt_value
 from score_match_primitives import build_concept_id_map, build_embedding_cosine_map_via_local_model, get_match_flags, medical_concept_source
 from score_run_gt_pairing import evaluate_score_tree
@@ -73,12 +73,22 @@ class SectionModule(dspy.Module):
 def build_dspy_lm(*, provider: str, model: str, api_key: str, base_url: str, max_tokens: int) -> dspy.LM:
     """Same provider->litellm-model-string mapping llm.py's own chat()/run_structured() use, so a DSPy
     optimizer's internal calls hit the same endpoint this review job's credential is configured for."""
-    _prepare_provider_env(provider, api_key)
+    provider_id = (provider or "").strip().lower()
     resolved_base = _resolve_base_url(provider, base_url)
+    resolved_api_key = api_key
     kwargs: dict[str, Any] = {}
+    if provider_id in ("bedrock", "amazon-bedrock"):
+        # Same per-call bearer-token handling as llm.py's _make_completion_kwargs — dspy.LM
+        # forwards unknown kwargs straight through to litellm on every call, so passing
+        # aws_region_name here (instead of a process-global env var) is enough.
+        raw = (api_key or "").strip()
+        if "=" in raw:
+            raw = raw.split("=", 1)[-1].strip()
+        resolved_api_key = raw
+        kwargs["aws_region_name"] = "us-east-1"
     if resolved_base:
         kwargs["api_base"] = resolved_base
-    return dspy.LM(model=_resolve_model_name(provider, model), api_key=api_key, max_tokens=max_tokens, **kwargs)
+    return dspy.LM(model=_resolve_model_name(provider, model), api_key=resolved_api_key, max_tokens=max_tokens, **kwargs)
 
 
 def format_demos_block(demos: list[Any], input_keys: list[str], output_field_keys: list[str]) -> str:

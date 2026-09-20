@@ -51,7 +51,7 @@ align-items:center;justify-content:center;height:100vh;margin:0}}
     return HTMLResponse(content=html)
 
 
-def start_oauth(backend_host: str, backend_port: int) -> dict[str, str]:
+def start_oauth(backend_host: str, backend_port: int, public_base_url: str = "") -> dict[str, str]:
     _prune_expired()
     state = uuid.uuid4().hex
     verifier = secrets.token_urlsafe(64)
@@ -63,7 +63,12 @@ def start_oauth(backend_host: str, backend_port: int) -> dict[str, str]:
         "error": None,
         "created_at": time.time(),
     }
-    callback_url = f"http://{backend_host}:{backend_port}/api/credentials/openrouter/callback?state={state}"
+    # Desktop: this backend's own loopback address is where the browser can reach it. Behind a
+    # Hub (see hub/proxy.py), it isn't — the container has no public address of its own, only
+    # the Hub's own domain does, which then routes /api/* back to this same container based on
+    # the researcher's session. public_base_url carries that public domain in that case.
+    base = public_base_url.rstrip("/") if public_base_url else f"http://{backend_host}:{backend_port}"
+    callback_url = f"{base}/api/credentials/openrouter/callback?state={state}"
     auth_url = (
         f"{_AUTHORIZE_URL}?callback_url={quote(callback_url, safe='')}"
         f"&code_challenge={challenge}&code_challenge_method=S256"

@@ -52,9 +52,11 @@ from llm import chat as llm_chat, run_structured as llm_run_structured
 from provider_detect import detect_provider, verify_credential
 
 from asset_store import router as asset_router, resolve_content
+from project_store import router as project_router
 
 app = FastAPI()
 app.include_router(asset_router)
+app.include_router(project_router)
 
 BACKEND_HOST = os.environ.get("PROMPT_STUDIO_BACKEND_HOST", "127.0.0.1")
 BACKEND_PORT = int(os.environ.get("PROMPT_STUDIO_BACKEND_PORT", "8000"))
@@ -110,6 +112,9 @@ PROCESS_DF_JOBS_FILE = DATA_DIR / "process_df_jobs.json"
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
     "default_review_credential_id": "",
+    # Used by the Agent window's chat. Blank = fall back to default_review_credential_id (see
+    # agentChatSession.js's loadAgentCredential) so upgrading doesn't silently break existing chats.
+    "default_agent_credential_id": "",
     # Registered review method id (backend/review_methods.py); blank = registry default. Per-node choice on a
     # Review-capable Score node (dataset.reviewMethod) overrides this.
     "default_review_method": "",
@@ -187,6 +192,7 @@ class SettingsPatch(BaseModel):
     """Partial settings update; only provided fields are updated."""
     default_run_credential_id: str | None = None
     default_review_credential_id: str | None = None
+    default_agent_credential_id: str | None = None
     default_review_method: str | None = None
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
@@ -1054,7 +1060,8 @@ def start_openrouter_oauth():
     """Begin OpenRouter OAuth PKCE login; returns the URL to open in the system browser."""
     from oauth_openrouter import start_oauth
 
-    return start_oauth(BACKEND_HOST, BACKEND_PORT)
+    public_base_url = os.environ.get("PROMPT_STUDIO_PUBLIC_BASE_URL", "")
+    return start_oauth(BACKEND_HOST, BACKEND_PORT, public_base_url)
 
 
 @app.get("/api/credentials/openrouter/callback")

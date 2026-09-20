@@ -1,0 +1,184 @@
+/* Shared by every Hub-rendered page (landing, auth, download, guide, profile) — one
+   token set, one nav, one button system, so the site reads as one product. Page-specific CSS
+   lives in each page's own <style> block, appended after this. */
+/* Every token here is copied from app/src/index.css's light theme, not a separate palette picked
+   to "look similar" — there is no --bg-panel or shadow-elevation system in the app (see
+   .modal-panel's own comment: flat 1px borders, no box-shadow, border-radius: 0 — a big blurred
+   shadow reads as a thick vertical line down the sides of a panel that size), so the Hub doesn't
+   invent one either. */
+:root {
+  --bg: #e2e6ea;
+  --bg-bar: #e8eaee;
+  --text: #1a1d21;
+  --text-muted: #5c636a;
+  --border: #c0c4c9;
+  --accent: #2563eb;
+  --hover: #d2d6db;
+  --control-radius: 3px;
+  --shadow: rgba(0, 0, 0, 0.1);
+  /* Same grid-line color the actual canvas draws (app/src/workflowCanvas.css's --grid-color,
+     light theme) — used on the sparser pages so they visually echo the product instead of
+     feeling like a separate marketing site bolted onto it. */
+  --grid-color: rgba(0, 0, 0, 0.08);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  background-color: var(--bg);
+}
+a { color: inherit; }
+
+/* Same grid the canvas itself draws (app/src/workflowCanvas.css's --grid-color) — applied only
+   to the sparser pages (landing hero, login/register) where it reads as a nod to the product;
+   left off text-dense pages (Download, User Guide, Profile), where it fought with reading long
+   paragraphs instead of just sitting quietly behind short lines and cards. */
+.canvas-grid {
+  background-image:
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Same treatment as the app's own .top-bar: a flat 1px border, no shadow. */
+nav.top {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 16px 24px;
+  background: var(--bg-bar);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  z-index: 1;
+}
+
+/* The one floating "panel" surface on the site (login/register card, and the Download/User
+   Guide/Profile content sheet) — exactly app/src/modals.css's .modal-panel: --bg-bar, a 1px
+   border, square corners, no box-shadow. */
+.hub-panel {
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: 0;
+}
+.brand { display: flex; align-items: center; gap: 7px; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; text-decoration: none; color: var(--text); flex-shrink: 0; }
+.brand-mark { width: 19px; height: 19px; color: var(--accent); flex-shrink: 0; }
+.nav-links { display: flex; align-items: center; gap: 4px; flex: 1; }
+.nav-link {
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--text-muted);
+}
+.nav-link:hover { color: var(--text); background: rgba(0, 0, 0, 0.04); }
+.nav-link--active { color: var(--accent); }
+.nav-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.nav-avatar-wrap { position: relative; flex-shrink: 0; }
+.nav-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  /* Matches the app's own avatar exactly (app/src/index.css's --primary-btn-bg/--primary-btn-text
+     for the light theme) — same element, same page in spirit, so it can't visibly shift shade
+     when you move between a Hub page and the app itself. */
+  background: rgba(37, 99, 235, 0.22);
+  color: #2563eb;
+  font-size: 11.5px;
+  font-weight: 700;
+  border: none;
+  text-decoration: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Same dropdown the app's account avatar opens (app/src/topBar.css's .menu-dropdown) — hover to
+   reveal, Profile + Log out, so clicking the avatar behaves identically everywhere on the site,
+   Hub pages included, instead of a plain link here and a menu there. */
+.nav-avatar-dropdown {
+  display: none;
+  position: absolute;
+  /* Flush against the avatar (no margin-top gap) — same as the app's own .menu-dropdown. A gap
+     here was a dead zone: moving the mouse from the avatar down to the menu crossed empty space
+     that belongs to neither element, so :hover ended and the menu closed before the cursor
+     arrived — this is what made "Profile"/"Log out" seem to disappear when you tried to click them. */
+  top: 100%;
+  right: 0;
+  min-width: 200px;
+  margin-top: 0;
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--control-radius) var(--control-radius);
+  box-shadow: 0 2px 8px var(--shadow);
+  z-index: 100;
+  overflow: hidden;
+}
+.nav-avatar-wrap:hover .nav-avatar-dropdown { display: block; }
+.nav-avatar-email {
+  padding: 10px 12px 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-avatar-dropdown .menu-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text);
+  background: none;
+  border: none;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.nav-avatar-dropdown .menu-option:hover { background: var(--hover); }
+
+/* Same shape as the app's own .btn (app/src/modals.css): outlined/tinted rather than solid-fill,
+   3px corners, same hover surface — a button here should look like the same control, just on a
+   different page, not a separate "marketing site" button style. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 14px;
+  border-radius: var(--control-radius);
+  font-size: 13px;
+  text-decoration: none;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-family: inherit;
+  transition: filter 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.btn-primary {
+  color: var(--accent);
+  background: rgba(37, 99, 235, 0.22);
+  border-color: var(--accent);
+}
+.btn-primary:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+.btn-secondary { background: var(--bg-bar); color: var(--text); }
+.btn-secondary:hover { background: var(--hover); }
+.btn-ghost { background: transparent; color: var(--text-muted); border-color: transparent; padding: 8px 12px; }
+.btn-ghost:hover { color: var(--text); background: rgba(0, 0, 0, 0.04); }
+/* Hero-scale CTAs still need to read as the biggest thing on an otherwise-empty page — same
+   shape/colors as the rest, just larger, the one place sized deliberately differently from the
+   app's compact toolbar buttons (which have no equivalent "hero" context to match). */
+.btn-lg { padding: 13px 26px; font-size: 15.5px; }
+.btn[aria-disabled="true"] { opacity: 0.55; cursor: default; pointer-events: none; }
+.btn:disabled { opacity: 0.55; cursor: default; }
+
+footer.site-footer { padding: 20px 24px; text-align: center; font-size: 12.5px; color: var(--text-muted); }
+footer.site-footer a { text-decoration: underline; }
+
+@media (max-width: 720px) {
+  .nav-links { display: none; }
+}

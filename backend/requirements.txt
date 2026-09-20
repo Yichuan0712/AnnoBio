@@ -13,6 +13,8 @@ langchain-core>=0.3.0
 rapidfuzz>=3.0.0
 gepa==0.1.4
 dspy==3.3.1
+Pillow>=10.0.0
+python-multipart>=0.0.9
 
 # textgrad's normal `pip install textgrad` pulls in ~100MB of dependencies its own benchmark-dataset
 # example scripts need (datasets, pyarrow, gdown, pandas, pillow) but review_textgrad.py's actual usage

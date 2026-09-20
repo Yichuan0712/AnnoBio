@@ -21,16 +21,41 @@ class Registration(BaseModel):
     assets: dict
 
 
+def create_session(root: Path, assets: dict) -> str:
+    """Register a (root, assets) pair for image_ref resolution during a run. Shared by the
+    HTTP endpoint below (desktop, token-gated) and project_store.py (web, same-process call —
+    the project store already knows its own asset root, so there's nothing to authenticate)."""
+    root = Path(root).resolve()
+    session_id = str(uuid.uuid4())
+    with _lock:
+        _sessions[session_id] = (root, assets)
+    return session_id
+
+
+def detect_image_mime(data: bytes) -> str | None:
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+    if data[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp'
+    return None
+
+
+def is_animated_image(data: bytes, mime: str) -> bool:
+    if mime == 'image/png':
+        return b'acTL' in data
+    if mime == 'image/webp':
+        return b'ANIM' in data
+    return False
+
+
 @router.post('/api/assets/register')
 def register(body: Registration, x_asset_token: str = Header(default='')):
     expected = os.environ.get('PROMPT_STUDIO_ASSET_TOKEN', '')
     if not expected or not hmac.compare_digest(x_asset_token, expected):
         raise HTTPException(403, 'Project registration requires the desktop application.')
-    root = Path(body.root).resolve()
-    session_id = str(uuid.uuid4())
-    with _lock:
-        _sessions[session_id] = (root, body.assets)
-    return {'project_session_id': session_id}
+    return {'project_session_id': create_session(body.root, body.assets)}
 
 
 def image_data_url(session_id, asset_id):
@@ -50,13 +75,8 @@ def image_data_url(session_id, asset_id):
     data = target.read_bytes()
     if 'sha256:' + hashlib.sha256(data).hexdigest() != asset_id:
         raise ValueError(f'Image contents changed: {asset_id}. Import it as a new image.')
-    if data.startswith(b'\x89PNG\r\n\x1a\n'):
-        mime = 'image/png'
-    elif data.startswith(b'\xff\xd8\xff'):
-        mime = 'image/jpeg'
-    elif data[:4] == b'RIFF' and data[8:12] == b'WEBP':
-        mime = 'image/webp'
-    else:
+    mime = detect_image_mime(data)
+    if not mime:
         raise ValueError('Only PNG, JPEG and WebP images are supported.')
     return f'data:{mime};base64,' + base64.b64encode(data).decode('ascii')
 
