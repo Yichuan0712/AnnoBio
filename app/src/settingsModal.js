@@ -22,6 +22,7 @@ const PROVIDER_LABELS = {
 const MODEL_SETTINGS_DEFAULTS = {
   default_run_credential_id: '',
   default_review_credential_id: '',
+  default_agent_credential_id: '',
   run_max_tokens: 8192,
   review_max_tokens: 32768,
   run_max_retries: 2,
@@ -608,6 +609,7 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
       return;
     }
     if (window.electronAPI?.openExternal) window.electronAPI.openExternal(started.auth_url);
+    else window.open(started.auth_url, '_blank', 'noopener');
     statusEl.textContent = 'Waiting for approval in your browser…';
     const deadline = Date.now() + OPENROUTER_POLL_TIMEOUT_MS;
     pollTimer = setInterval(async () => {
@@ -715,6 +717,7 @@ export function openSettingsModal() {
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="settings-panel-credentials" id="settings-tab-credentials" data-tab="credentials">New credential</button>
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Run defaults</button>
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Review defaults</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-agent" id="settings-tab-agent" data-tab="agent">Agent defaults</button>
                     </div>
                   </div>
                   <div class="review-detail-tab-panels model-settings-tab-panels">
@@ -857,6 +860,18 @@ export function openSettingsModal() {
                           </div>
                       </div>
                     </div>
+                    <div class="review-detail-tab-panel" id="settings-panel-agent" role="tabpanel" aria-labelledby="settings-tab-agent" data-panel="agent">
+                      <div class="defaults-page-scroll">
+                          <div class="defaults-row">
+                            <div class="defaults-field defaults-field--full">
+                              <label class="dataset-meta-label" for="settings-default-agent-credential">Default model</label>
+                              <select id="settings-default-agent-credential" class="credentials-select dataset-meta-input" aria-label="Default model for the Agent window">
+                                <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
+                              </select>
+                            </div>
+                          </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div class="prompt-actions model-settings-footer">
@@ -876,6 +891,7 @@ export function openSettingsModal() {
 
   const runCredSelect = overlay.querySelector('#settings-default-run-credential');
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
+  const agentCredSelect = overlay.querySelector('#settings-default-agent-credential');
   const reviewMethodDefaultSelect = overlay.querySelector('#settings-default-review-method');
   const methodSpecificSettingsBlocks = overlay.querySelectorAll('.settings-review-method-specific[data-method-settings]');
   const gepaMaxIterationsInp = overlay.querySelector('#settings-gepa-max-iterations');
@@ -899,7 +915,7 @@ export function openSettingsModal() {
   const footerAdd = overlay.querySelector('#settings-footer-add');
 
   function activateSettingsTab(name) {
-    const n = name === 'run' || name === 'review' || name === 'credentials' ? name : 'credentials';
+    const n = name === 'run' || name === 'review' || name === 'agent' || name === 'credentials' ? name : 'credentials';
     tabs.forEach((btn) => {
       const on = btn.dataset.tab === n;
       btn.classList.toggle('review-detail-tab--active', on);
@@ -988,12 +1004,14 @@ export function openSettingsModal() {
     const optNone = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`;
     runCredSelect.innerHTML = optNone + optHtml;
     reviewCredSelect.innerHTML = optNone + optHtml;
+    if (agentCredSelect) agentCredSelect.innerHTML = optNone + optHtml;
   }
 
   function applySettings(settings) {
     if (!settings) return;
     runCredSelect.value = settings.default_run_credential_id || '';
     reviewCredSelect.value = settings.default_review_credential_id || '';
+    if (agentCredSelect) agentCredSelect.value = settings.default_agent_credential_id || '';
     if (reviewMethodDefaultSelect) {
       if (settings.default_review_method) {
         reviewMethodDefaultSelect.value = settings.default_review_method;
@@ -1042,11 +1060,13 @@ export function openSettingsModal() {
         const ids = {
           run: (runCredSelect.value || '').trim(),
           review: (reviewCredSelect.value || '').trim(),
+          agent: (agentCredSelect?.value || '').trim(),
         };
         const credentials = await loadCredentials();
         populateCredentialSelects(credentials);
         runCredSelect.value = ids.run;
         reviewCredSelect.value = ids.review;
+        if (agentCredSelect) agentCredSelect.value = ids.agent;
       },
     });
     const liteLlmAdd = wireCredentialsAddForm(addRoot, credRoot);
@@ -1102,6 +1122,7 @@ export function openSettingsModal() {
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
+      default_agent_credential_id: (agentCredSelect?.value || '').trim() || '',
       default_review_method: (reviewMethodDefaultSelect?.value || '').trim() || '',
       gepa_max_iterations: gepaMaxIterations,
       miprov2_num_trials: miprov2NumTrials,

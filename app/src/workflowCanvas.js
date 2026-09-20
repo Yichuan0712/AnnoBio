@@ -990,6 +990,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     options && typeof options.getCurrentProjectPath === 'function'
       ? options.getCurrentProjectPath
       : () => '';
+  const isElectron = !!options.isElectron;
   const canvas = document.createElement('div');
   canvas.className = 'workflow-canvas';
 
@@ -2729,9 +2730,9 @@ export function buildWorkflowCanvas(root, options = {}) {
   const autopilotToolbar = document.createElement('div');
   autopilotToolbar.className = 'workflow-canvas__autopilot-toolbar';
   autopilotToolbar.innerHTML = `
-    <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agent Window">
+    <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agent Assistant">
       <span class="workflow-canvas__autopilot-icon">✦</span>
-      <span>Agent Window</span>
+      <span>Agent Assistant</span>
     </button>
   `;
   autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', () => {
@@ -4619,6 +4620,35 @@ export function buildWorkflowCanvas(root, options = {}) {
     } catch (_) {
       return result;
     }
+  }
+
+  // Web-only empty-canvas guidance: nothing here before pointed a new user at the top bar's
+  // icons or the User Guide, so a brand-new (or freshly-opened, still-empty) project just looked
+  // like a blank grid with no indication of what to do next. Desktop is untouched — its users
+  // are assumed to already know the app. Driven by a MutationObserver on nodesLayer rather than
+  // hooking every node-add/remove/load code path individually, so it stays correct regardless of
+  // which of those (there are many: toolbar buttons, the agent, merge, project load) changed it.
+  if (!isElectron) {
+    const emptyState = document.createElement('div');
+    emptyState.className = 'workflow-empty-state';
+    emptyState.innerHTML = `
+      <div class="workflow-empty-state__box">
+        <p class="workflow-empty-state__title">Nothing here yet</p>
+        <p class="workflow-empty-state__body">
+          Use the icons in the top bar to create a prompt or dataset, connect them on the canvas, then run.
+        </p>
+        <p class="workflow-empty-state__link">
+          <a href="/guide" target="_blank" rel="noopener">Read the full walkthrough &rarr;</a>
+        </p>
+      </div>
+    `;
+    canvas.appendChild(emptyState);
+
+    function updateEmptyState() {
+      emptyState.hidden = nodesLayer.children.length > 0;
+    }
+    updateEmptyState();
+    new MutationObserver(updateEmptyState).observe(nodesLayer, { childList: true });
   }
 
   root.appendChild(canvas);

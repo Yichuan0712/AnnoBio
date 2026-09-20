@@ -21,6 +21,7 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { evaluateScoreOutputGt } from './scoreOutputGtMatcher.js';
 import { compileReviewInputs } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
+import { getCurrentProjectId } from './currentProject.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -115,7 +116,7 @@ export async function runVerifyPassRate({
   const samples = compileReviewInputs(templateText, inputEntries);
 
   // Submit run
-  const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema }, signal);
+  const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema }, signal, undefined, getCurrentProjectId());
   if (!runRes.ok) {
     const t = await runRes.text().catch(() => String(runRes.status));
     throw new Error(`Run API error ${runRes.status}: ${t}`);

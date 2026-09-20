@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User Guide · Prompt Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%232563eb%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%222%22%20y%3D%228.5%22%20width%3D%227%22%20height%3D%227%22%20rx%3D%221.5%22%2F%3E%3Crect%20x%3D%2214%22%20y%3D%222%22%20width%3D%227%22%20height%3D%227%22%20rx%3D%221.5%22%2F%3E%3Crect%20x%3D%2214%22%20y%3D%2215%22%20width%3D%227%22%20height%3D%227%22%20rx%3D%221.5%22%2F%3E%3Cpath%20d%3D%22M9%2012v-3a2%202%200%200%201%202-2h3%22%2F%3E%3Cpath%20d%3D%22M9%2012v3a2%202%200%200%200%202%202h3%22%2F%3E%3C%2Fsvg%3E">
+<style>
+{{SHARED_CSS}}
+
+  body.docs-body { background-color: var(--bg); }
+
+  /* Sits on the canvas-grid backdrop like every other Hub page's .hub-panel — the grid stays
+     visible around it, but body text reads against a flat panel instead of fighting the grid
+     lines underneath it. */
+  .docs-outer { max-width: 1180px; margin: 32px auto 72px; padding: 0 24px; }
+
+  .docs-shell {
+    display: flex;
+    align-items: flex-start;
+    gap: 40px;
+    padding: 40px;
+  }
+
+  .docs-sidebar {
+    position: sticky;
+    top: 24px;
+    width: 220px;
+    flex: 0 0 220px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+  }
+
+  .docs-sidebar-heading {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0 0 10px;
+  }
+
+  .docs-toc { list-style: none; margin: 0; padding: 0; }
+  .docs-toc li { margin: 0; }
+  .docs-toc a {
+    display: block;
+    padding: 6px 10px;
+    margin: 1px 0;
+    border-radius: var(--control-radius, 3px);
+    font-size: 13px;
+    color: var(--text-muted);
+    text-decoration: none;
+    line-height: 1.4;
+  }
+  .docs-toc a:hover { background: var(--hover); color: var(--text); }
+  .docs-toc a.docs-toc-active { background: var(--bg-bar); color: var(--primary-btn-text, #2563eb); font-weight: 600; }
+
+  .docs-main { flex: 1 1 auto; min-width: 0; }
+
+  .docs-hero-title { font-size: 28px; letter-spacing: -0.01em; margin: 0 0 8px; }
+  .docs-hero-subtitle { color: var(--text-muted); font-size: 15px; margin: 0 0 36px; max-width: 640px; }
+
+  .docs-chapter { margin-bottom: 44px; }
+  .docs-chapter-title {
+    font-size: 20px;
+    margin: 0 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .docs-article { max-width: 720px; }
+  .docs-article h3 { font-size: 15px; margin: 22px 0 8px; }
+  .docs-article p { color: var(--text); font-size: 14.5px; line-height: 1.65; margin: 0 0 12px; }
+  .docs-article ul, .docs-article ol { margin: 0 0 14px; padding-left: 22px; }
+  .docs-article li { font-size: 14.5px; line-height: 1.6; margin-bottom: 4px; }
+  .docs-article a { color: var(--primary-btn-text, #2563eb); }
+  .docs-article strong { font-weight: 600; }
+  .docs-article code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+
+  .docs-table-wrap { overflow-x: auto; margin: 0 0 18px; }
+  .docs-article table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--bg); border: 1px solid var(--border); }
+  .docs-article th, .docs-article td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .docs-article th { color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; background: var(--bg-bar); }
+  .docs-article tr:last-child td { border-bottom: none; }
+
+  .docs-figure {
+    margin: 0 0 22px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    border-radius: var(--control-radius, 3px);
+    overflow: hidden;
+  }
+  .docs-figure img { display: block; width: 100%; height: auto; }
+  .docs-figure figcaption {
+    padding: 8px 12px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    background: var(--bg-bar);
+  }
+
+  @media (max-width: 860px) {
+    .docs-outer { padding: 0 16px; }
+    .docs-shell { flex-direction: column; padding: 24px; gap: 24px; }
+    .docs-sidebar { position: static; width: 100%; flex: none; max-height: none; }
+    .docs-toc { display: flex; flex-wrap: wrap; gap: 4px; }
+    .docs-toc a { padding: 5px 9px; }
+  }
+</style>
+</head>
+<body class="canvas-grid docs-body">
+
+{{NAV}}
+
+<div class="docs-outer">
+  <div class="docs-shell hub-panel">
+    <aside class="docs-sidebar">
+      <div class="docs-sidebar-heading">Contents</div>
+      <ul class="docs-toc">
+{{TOC_ITEMS}}
+      </ul>
+    </aside>
+    <main class="docs-main">
+      <h1 class="docs-hero-title">User Guide</h1>
+      <p class="docs-hero-subtitle">A complete walkthrough of Prompt Studio, from your first project to optimizing a prompt across a full dataset.</p>
+{{CHAPTERS}}
+    </main>
+  </div>
+</div>
+
+<footer class="site-footer">
+  &copy; 2026 <a href="https://digbio.github.io">Digital Biology Lab</a>'s Prompt Studio
+</footer>
+
+</body>
+</html>

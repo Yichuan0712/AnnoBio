@@ -13,6 +13,7 @@ import { applyScoreMappingEdits } from './scoreMappingEdits.js';
 import { isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import { compileRows } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
+import { getCurrentProjectId } from './currentProject.js';
 import { cloneCell } from './datasetContent.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {
@@ -622,7 +623,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         samples,
         output_schema: outputSchema,
         run_node_id: normalizedRunNodeId,
-    });
+    }, undefined, undefined, getCurrentProjectId());
     const data = await response.json().catch(() => ({}));
 
     if (response.status === 202) {

@@ -6,6 +6,7 @@ import {
 } from './reviewWorkingSections.js';
 import { compileReviewInputs } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
+import { getCurrentProjectId } from './currentProject.js';
 
 function normalizeSections(sections) {
   return Array.isArray(sections)
@@ -67,7 +68,7 @@ async function runPromptsAndWaitForResults({
     credential_id: credentialId,
     samples,
     output_schema: outputSchema,
-  }, undefined, apiBase);
+  }, undefined, apiBase, getCurrentProjectId());
   if (!runResponse.ok) {
     const errorText = await runResponse.text().catch(() => String(runResponse.status));
     throw new Error(`Run API error ${runResponse.status}: ${errorText}`);

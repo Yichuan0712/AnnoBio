@@ -1,0 +1,12 @@
+.venv/
+data/
+python-embed/
+__pycache__/
+*.pyc
+*.log
+logs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

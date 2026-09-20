@@ -1,0 +1,6 @@
+fastapi>=0.100.0
+uvicorn>=0.22.0
+httpx>=0.24.0
+docker>=7.0.0
+itsdangerous>=2.0.0
+python-multipart>=0.0.9

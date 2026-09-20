@@ -59,6 +59,7 @@ app/builder-debug.yml
 .venv/
 backend/.venv/
 backend/data/
+hub/data/
 # Embedded Python runtime (Windows/macOS) - built by CI / scripts/prepare-python-embed-windows.ps1,
 # not committed. See .github/workflows/build-desktop.yml.
 backend/python-embed/
