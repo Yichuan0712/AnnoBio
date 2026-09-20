@@ -86,7 +86,7 @@ def ensure_running(user_id: int) -> str:
                 network=NETWORK_NAME,
                 volumes={volume_name(user_id): {"bind": "/app/backend/data", "mode": "rw"}},
                 environment={"PROMPT_STUDIO_PUBLIC_BASE_URL": PUBLIC_BASE_URL} if PUBLIC_BASE_URL else {},
-                mem_limit="1g",
+                mem_limit="512m",
                 nano_cpus=1_000_000_000,  # 1 CPU — cheap hardening against a runaway Process-node script.
                 restart_policy={"Name": "unless-stopped"},
             )
