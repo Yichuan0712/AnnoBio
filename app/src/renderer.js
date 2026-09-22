@@ -33,6 +33,7 @@ import { initModalMaximize } from './modalMaximize.js';
 import { showProjectPickerModal, loadWebProject, saveWebProject, createWebProject, findUniqueProjectName } from './webProjectModal.js';
 import { showAlert } from './alertModal.js';
 import { setCurrentProjectId } from './currentProject.js';
+import { createUndoHistory } from './undoHistory.js';
 
 // Web has no "recent files" of its own the way the OS gives desktop one — without this, every
 // page refresh drops back to "Open a project" even though the project itself is untouched. Falls
@@ -107,6 +108,7 @@ window.addEventListener('DOMContentLoaded', () => {
     setCurrentProject(path);
     updateWindowTitleFromPath(path);
     const state = canvasAPI.getCanvasState();
+    undoHistory.reset(state);
     await api.saveProject(path, state);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
@@ -123,6 +125,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const state = loaded?.state || loaded;
     const resolvedPath = loaded?.resolvedPath || path;
     canvasAPI.loadCanvasState(state);
+    undoHistory.reset(canvasAPI.getCanvasState());
     setCurrentProject(resolvedPath);
     updateWindowTitleFromPath(resolvedPath);
     topBarAPI.setAddMenuEnabled(true);
@@ -154,6 +157,7 @@ window.addEventListener('DOMContentLoaded', () => {
     try {
       const mergedState = await api.mergeProject(currentProjectPath, sourcePath);
       canvasAPI.loadCanvasState(mergedState);
+      undoHistory.reset(canvasAPI.getCanvasState());
     } catch (err) {
       showAlert(err.message || 'Could not merge project.', { title: 'Error' });
     }
@@ -167,6 +171,7 @@ window.addEventListener('DOMContentLoaded', () => {
     try {
       const project = await loadWebProject(id);
       canvasAPI.loadCanvasState(project.state || {});
+      undoHistory.reset(canvasAPI.getCanvasState());
       setCurrentProject(id);
       setStoredWebProjectId(id);
       updateWindowTitle(project.name || name);
@@ -187,6 +192,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!picked) return;
     if (picked.type === 'merged') {
       canvasAPI.loadCanvasState(picked.state);
+      undoHistory.reset(canvasAPI.getCanvasState());
       return;
     }
     await openProjectWeb(picked);
@@ -220,6 +226,16 @@ window.addEventListener('DOMContentLoaded', () => {
     if (await ensureWebProjectOpen()) openAddDatasetModal(canvasAPI);
   };
 
+  // Undo/redo: snapshot-based (see undoHistory.js), scoped to whatever project is currently
+  // open — reset() is called everywhere a different project's state gets loaded in below.
+  let notifyUndoRedo = () => {};
+  const undoHistory = createUndoHistory({
+    loadCanvasState: (state) => canvasAPI.loadCanvasState(state),
+    onChange: (info) => notifyUndoRedo(info),
+  });
+  undoHistory.reset(canvasAPI.getCanvasState());
+  canvasAPI.setOnCanvasChange(() => undoHistory.push(canvasAPI.getCanvasState()));
+
   const topBarAPI = buildTopBar(root, {
     openAddPromptModal: isElectron ? () => openAddPromptModal(canvasAPI) : openAddPromptModalWeb,
     openAddDatasetModal: isElectron ? () => openAddDatasetModal(canvasAPI) : openAddDatasetModalWeb,
@@ -227,10 +243,30 @@ window.addEventListener('DOMContentLoaded', () => {
     onOpenProject,
     onSaveAsProject,
     onMergeProject: isElectron ? onMergeProjectDesktop : undefined,
+    onUndo: () => undoHistory.undo(),
+    onRedo: () => undoHistory.redo(),
   });
+  notifyUndoRedo = ({ canUndo, canRedo }) => topBarAPI.setUndoRedoEnabled?.(canUndo, canRedo);
   topBarAPI.setProjectTitle?.(APP_TITLE);
   topBarAPI.setAddMenuEnabled(false);
   canvasAPI.setAgentWindowVisible?.(false);
+
+  // Keyboard shortcuts — ignored while typing in a field (including CodeMirror's process-node
+  // editor) so they don't fight the native undo of whatever the user is actually editing there.
+  document.addEventListener('keydown', (e) => {
+    const isUndo = (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'z' && !e.shiftKey;
+    const isRedo = (e.ctrlKey || e.metaKey) && !e.altKey && (
+      (e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y'
+    );
+    if (!isUndo && !isRedo) return;
+    const active = document.activeElement;
+    const tag = active?.tagName;
+    const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+      || active?.isContentEditable || !!active?.closest?.('.cm-editor');
+    if (isEditable) return;
+    e.preventDefault();
+    if (isUndo) undoHistory.undo(); else undoHistory.redo();
+  });
 
   if (!isElectron) {
     // Arriving from the Hub's Profile page (see hub/main.py) with ?open=<id> — a specific

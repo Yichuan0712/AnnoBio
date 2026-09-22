@@ -1625,10 +1625,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     const runBusy = kind === 'run' && pendingRuns.has(nodeId);
     const reviewBusy =
       kind === 'promptReview' && (pendingReviews.has(nodeId) || pendingReviewNodeIds.has(nodeId));
-    let msg = 'Delete this node? This cannot be undone.';
+    let msg = 'Delete this node? You can undo this with Ctrl+Z.';
     if (runBusy || reviewBusy) {
       msg =
-        'Delete this node? A job is still running on it; deleting will cancel that run or review on the server.';
+        "Delete this node? A job is still running on it; deleting will cancel that run or review on the server — that part can't be undone.";
     }
     const ok = await showConfirm(msg, { title: 'Delete node', confirmText: 'Delete' });
     if (!ok) return;
