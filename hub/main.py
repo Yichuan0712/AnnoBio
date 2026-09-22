@@ -253,6 +253,7 @@ def download_page(request: Request):
     """Public page for the two desktop installers (built by .github/workflows/build-desktop.yml,
     hosted on Google Drive rather than served from the Hub itself)."""
     user = current_user(request)
+    browser_href = "/app" if user else "/register"
     body = f"""
       <h1>Download AnnoBio</h1>
       <p class="page-sub">The full Electron app: native file access, local project storage, works entirely offline.</p>
@@ -269,7 +270,7 @@ def download_page(request: Request):
         </div>
       </div>
       <p class="download-note">
-        Prefer the browser? <a class="link" href="/register">Use AnnoBio online</a> instead.
+        Prefer the browser? <a class="link" href="{browser_href}">Use AnnoBio online</a> instead.
       </p>
     """
     extra_css = """
