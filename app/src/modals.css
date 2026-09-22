@@ -2130,14 +2130,6 @@
   gap: 6px;
 }
 
-.dataset-detail-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-
 .dataset-detail-name-value {
   font-size: 14px;
   color: var(--text);
@@ -6196,9 +6188,9 @@ body.wd-row-resizing {
   color: var(--text-muted);
 }
 
-.modal-panel--dataset-image-import .prompt-detail-label {
-  text-transform: none;
-  letter-spacing: normal;
+.modal-panel--dataset-image-import .prompt-actions {
+  justify-content: flex-end;
+  padding: 8px 20px 16px;
 }
 
 .dataset-image-import-body {
@@ -6224,20 +6216,6 @@ body.wd-row-resizing {
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.dataset-image-import-help {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.4;
-}
-
-.dataset-image-import-pick-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
 }
 
 .dataset-image-import-source-status {
@@ -6284,17 +6262,6 @@ body.wd-row-resizing {
   overflow: auto;
 }
 
-.dataset-image-import-actions {
-  justify-content: flex-end;
-}
-
-.dataset-image-import-actions__trailing {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: auto;
-}
-
 .dataset-image-import-table th,
 .dataset-image-import-table td {
   vertical-align: top;
@@ -6313,20 +6280,6 @@ body.wd-row-resizing {
   min-width: 2.5em;
   text-align: right;
   vertical-align: middle;
-  color: var(--text-muted);
-}
-
-.prompt-detail-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.prompt-detail-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--text-muted);
 }
 

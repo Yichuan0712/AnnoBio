@@ -664,18 +664,18 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         </div>
         <div class="modal-body dataset-image-import-body">
           <div class="dataset-image-import-form">
-            <div class="prompt-detail-row">
-              <label class="prompt-detail-label" for="wd-image-source-column">Filename Column</label>
-              <select id="wd-image-source-column" class="dataset-detail-input">
+            <div class="agent-form-field">
+              <label class="dataset-meta-label" for="wd-image-source-column">Filename Column</label>
+              <select id="wd-image-source-column" class="dataset-meta-input">
                 ${textColumns.map(({ index, header }) => `<option value="${index}" ${index === sourceColIndex ? 'selected' : ''}>${escapeHtml(header)}</option>`).join('')}
               </select>
-              <p class="dataset-image-import-help">Values in this column are matched to uploaded image filenames.</p>
+              <p class="dataset-sheet-hint">Values in this column are matched to uploaded image filenames.</p>
             </div>
-            <div class="prompt-detail-row">
-              <label class="prompt-detail-label">Image Files</label>
-              <div class="dataset-image-import-pick-row">
+            <div class="agent-form-field">
+              <label class="dataset-meta-label">Image Files</label>
+              <div class="dataset-import-actions">
                 <button type="button" class="btn btn-secondary dataset-image-import-pick-files">Choose images</button>
-                <span class="dataset-image-import-source-status">No image files selected.</span>
+                <span class="dataset-filename dataset-image-import-source-status">No image files selected.</span>
               </div>
             </div>
           </div>
@@ -683,11 +683,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
           <div class="dataset-image-import-summary"></div>
           <div class="dataset-image-import-preview"></div>
         </div>
-        <div class="prompt-actions dataset-image-import-actions">
-          <div class="dataset-image-import-actions__trailing">
-            <button type="button" class="btn btn-secondary dataset-image-import-cancel">Cancel</button>
-            <button type="button" class="btn btn-primary dataset-image-import-apply">Import</button>
-          </div>
+        <div class="prompt-actions">
+          <button type="button" class="btn btn-secondary dataset-image-import-cancel">Cancel</button>
+          <button type="button" class="btn btn-primary dataset-image-import-apply">Import</button>
         </div>
       </div>
     `;
@@ -831,24 +829,24 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         <div class="modal-body dataset-image-import-body">
           <div class="dataset-image-import-grid">
             <div class="dataset-image-import-field">
-              <label class="dataset-detail-label" for="wd-image-path-column">Path column</label>
-              <select id="wd-image-path-column" class="dataset-detail-input">
+              <label class="dataset-meta-label" for="wd-image-path-column">Path column</label>
+              <select id="wd-image-path-column" class="dataset-meta-input">
                 ${textColumns.map(({ index, header }) => `<option value="${index}" ${index === currentPathColIndex ? 'selected' : ''}>${escapeHtml(header)}</option>`).join('')}
               </select>
-              <p class="dataset-image-import-help">${fixedRawValues ? 'Current text values in this column will be resolved as image paths.' : 'Cells may contain one relative path or a JSON array of paths.'}</p>
+              <p class="dataset-sheet-hint">${fixedRawValues ? 'Current text values in this column will be resolved as image paths.' : 'Cells may contain one relative path or a JSON array of paths.'}</p>
             </div>
             <div class="dataset-image-import-field dataset-image-import-field--mode">
-              <label class="dataset-detail-label" for="wd-image-path-mode">Write mode</label>
-              <select id="wd-image-path-mode" class="dataset-detail-input">
+              <label class="dataset-meta-label" for="wd-image-path-mode">Write mode</label>
+              <select id="wd-image-path-mode" class="dataset-meta-input">
                 <option value="replace">Replace existing images</option>
                 <option value="append">Append to existing images</option>
               </select>
-              <p class="dataset-image-import-help">Choose the folder that relative paths are based on.</p>
+              <p class="dataset-sheet-hint">Choose the folder that relative paths are based on.</p>
             </div>
           </div>
-          <div class="dataset-image-import-pick-row">
+          <div class="dataset-import-actions">
             <button type="button" class="btn btn-secondary dataset-image-import-pick-dir">Choose base folder</button>
-            <span class="dataset-image-import-source-status">No base folder selected.</span>
+            <span class="dataset-filename dataset-image-import-source-status">No base folder selected.</span>
           </div>
           <div class="prompt-form-error prompt-modal-error dataset-image-import-error" hidden></div>
           <div class="dataset-image-import-summary"></div>
@@ -911,13 +909,13 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
               `).join('')}
             </tbody>
           </table>
-          ${plan.matchedEntries.length > plan.previewRows.length ? `<p class="dataset-image-import-help">Showing first ${plan.previewRows.length} matched rows.</p>` : ''}
+          ${plan.matchedEntries.length > plan.previewRows.length ? `<p class="dataset-sheet-hint">Showing first ${plan.previewRows.length} matched rows.</p>` : ''}
         `
         : '<p class="dataset-detail-no-data">No rows resolved yet.</p>';
       const missingPreview = plan.missingRows.slice(0, 8).map((item) => `${item.rowIndex + 1}: ${item.error}`).join(' | ');
       previewEl.innerHTML = `
         ${previewRowsHtml}
-        ${missingPreview ? `<p class="dataset-image-import-help"><strong>Path issues:</strong> ${escapeHtml(missingPreview)}${plan.missingRows.length > 8 ? ' ...' : ''}</p>` : ''}
+        ${missingPreview ? `<p class="dataset-sheet-hint"><strong>Path issues:</strong> ${escapeHtml(missingPreview)}${plan.missingRows.length > 8 ? ' ...' : ''}</p>` : ''}
       `;
       applyBtn.disabled = !hasBaseSelected() || plan.matchedFileEntries.length === 0;
       setError(!hasBaseSelected() ? 'Choose a base folder to resolve relative paths.' : '');
