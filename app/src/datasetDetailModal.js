@@ -9,7 +9,7 @@ import * as XLSX from 'xlsx';
 import { displayCell, imageCell, isImageCell, normalizeDatasetContent } from './datasetContent.js';
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
-import { iconUpload, iconImageAdd } from './icons.js';
+import { iconImageAdd } from './icons.js';
 
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 /** 行高下限：至少一行字高度（约 12px 字号 + 行高 + 内边距） */
@@ -295,7 +295,14 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       }
       const textarea = cell.querySelector('.wd-cell-textarea');
       const headerInp = cell.querySelector('.wd-header-inp');
-      const text = textarea ? textarea.value : (headerInp ? headerInp.value : '');
+      // Image cells have neither — they show thumbnails directly, and clicking one already opens
+      // a full viewer, so there's nothing worth putting in a text tooltip here (used to show up
+      // as an empty box next to the cursor).
+      if (!textarea && !headerInp) {
+        tableTooltip.hidden = true;
+        return;
+      }
+      const text = textarea ? textarea.value : headerInp.value;
       tableTooltip.innerHTML = '';
       const raw = document.createElement('pre');
       raw.className = 'wd-tooltip-raw';
@@ -652,7 +659,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     modal.innerHTML = `
       <div class="modal-panel modal-panel--dataset-image-import">
         <div class="modal-header">
-          <h2 class="modal-title">Batch import images</h2>
+          <h2 class="modal-title">Batch import images<span class="dataset-image-import-target-note">into "${escapeHtml(imageColName)}"</span></h2>
           <button type="button" class="modal-close" aria-label="Close">×</button>
         </div>
         <div class="modal-body dataset-image-import-body">
@@ -663,10 +670,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
                 ${textColumns.map(({ index, header }) => `<option value="${index}" ${index === sourceColIndex ? 'selected' : ''}>${escapeHtml(header)}</option>`).join('')}
               </select>
               <p class="dataset-image-import-help">Values in this column are matched to uploaded image filenames.</p>
-            </div>
-            <div class="prompt-detail-row">
-              <label class="prompt-detail-label">Target Column</label>
-              <div class="dataset-image-import-static-value">${escapeHtml(imageColName)}</div>
             </div>
             <div class="prompt-detail-row">
               <label class="prompt-detail-label">Image Files</label>
@@ -1117,7 +1120,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         batchBtn.className = 'btn btn-secondary wd-header-batch-btn';
         batchBtn.title = 'Batch import images';
         batchBtn.setAttribute('aria-label', 'Batch import images');
-        batchBtn.appendChild(iconUpload(14));
+        batchBtn.appendChild(iconImageAdd(14));
         batchBtn.addEventListener('click', async (e) => {
           e.preventDefault();
           e.stopPropagation();
