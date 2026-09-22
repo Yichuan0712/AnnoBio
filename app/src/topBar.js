@@ -300,6 +300,12 @@ const iconGlobe = () => svgIcon({
   circles: [[12, 12, 10]],
 });
 
+// Browse Gallery = Lucide's "layout-grid" — a 2x2 grid, deliberately not the globe (Publish)
+// above: this one *goes to* the Gallery rather than putting the current project into it.
+const iconGalleryGrid = () => svgIcon({
+  rects: [[3, 3, 7, 7, 1], [14, 3, 7, 7, 1], [14, 14, 7, 7, 1], [3, 14, 7, 7, 1]],
+});
+
 // LLM settings = Lucide's "cpu", not a generic gear — reads as "the model" specifically rather
 // than "app settings" in general.
 const iconLlmChip = () => svgIcon({
@@ -414,6 +420,17 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   });
   rail.appendChild(newDatasetBtn.wrap);
 
+  // Browse Gallery — a site-wide destination, not an account action, so it lives here in the
+  // rail rather than in the avatar dropdown (which is Profile/Review/Log out — things about
+  // *this account*, not public navigation). Always enabled: browsing has nothing to do with
+  // whatever project is or isn't currently open.
+  const galleryBtn = iconButton({
+    icon: iconGalleryGrid,
+    label: 'Browse Gallery',
+    onClick: () => { window.location.href = '/gallery'; },
+  });
+  rail.appendChild(galleryBtn.wrap);
+
   // Publish to Gallery — disabled until a project is open (unlike New Prompt/Dataset, publishing
   // has nothing to do with an empty/no project, so there's no "create one first" fallback here).
   // Lives here, one click away, rather than buried in the project picker among Duplicate/Delete —
@@ -441,9 +458,9 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   bar.appendChild(spacer);
 
   // ---- Account avatar (only present when served by the Hub and logged in) — clicking it goes
-  // straight to Profile, and it still opens a hover dropdown with Gallery/Profile/Log out,
-  // matching the Hub nav's own avatar (hub/main.py's render_nav) exactly, so it behaves the same
-  // everywhere on the site. ----
+  // straight to Profile, and it still opens a hover dropdown with Profile/Review(admin)/Log out:
+  // things about *this account*, not general site navigation — Gallery lives in the rail above
+  // instead (see galleryBtn), same reasoning as Publish not living in the project picker. ----
   fetch('/whoami').then((res) => (res.ok ? res.json() : null)).then((who) => {
     const email = String(who?.email || '').trim();
     if (!email) return;
@@ -455,7 +472,6 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
       <button type="button" class="top-bar-avatar" title="${email}" aria-label="Account: ${email}">${initials}</button>
       <div class="menu-dropdown top-bar-icon-dropdown top-bar-avatar-dropdown">
         <div class="top-bar-avatar-email">${email}</div>
-        <a class="menu-option" href="/gallery">Gallery</a>
         <a class="menu-option" href="/profile">Profile</a>
         ${reviewLinkHtml}
         <button type="button" class="menu-option" data-action="logout">Log out</button>
