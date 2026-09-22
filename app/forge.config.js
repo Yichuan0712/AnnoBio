@@ -33,8 +33,8 @@ module.exports = {
   packagerConfig: {
     asar: true,
     // electron-packager names the packaged output dir `${name}-${platform}-${arch}`,
-    // and infers `name` from package.json's `productName` ("Prompt Studio") when this
-    // isn't set - producing `out/Prompt Studio-win32-x64`. The `dist`/`dist:mac` npm
+    // and infers `name` from package.json's `productName` ("AnnoBio") when this
+    // isn't set - producing `out/AnnoBio-win32-x64`. The `dist`/`dist:mac` npm
     // scripts and electron-builder.yml's `--pd` flag hardcode `out/app-<platform>-<arch>`,
     // so without this override electron-builder was always pointed at a directory that
     // never existed - the real root cause of every NSIS/dmg build failure so far.

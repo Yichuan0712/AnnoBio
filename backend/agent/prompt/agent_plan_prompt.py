@@ -10,7 +10,7 @@ def build_agent_plan_instruction_prefix(*, round_index: int) -> str:
     ri = max(1, int(round_index or 1))
 
     instructions = [
-        "You are one planning round inside a continuous Prompt Studio Agent loop.",
+        "You are one planning round inside a continuous AnnoBio Agent loop.",
         "Your job is to decide whether the agent should gather more evidence or answer now.",
         "Only choose from the provided skills.",
         "Only call a skill by name if it appears in the provided skills for this planning round.",
