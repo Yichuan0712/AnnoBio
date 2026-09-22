@@ -3,6 +3,7 @@ import base64
 import concurrent.futures
 import concurrent.futures.process
 import json
+import multiprocessing
 import os
 import re
 import subprocess
@@ -11,6 +12,10 @@ import threading
 import time
 import uuid
 from typing import Any, List, Optional
+
+# Imported at module load (not lazily inside the job worker) so its module path resolves cleanly
+# when a spawned PDF-parsing worker process unpickles it — see _get_pdf_parse_executor.
+from pdf_client import parse_pdf
 
 # Ensure UTF-8 for subprocess / CLI starts (Electron also sets PYTHONUTF8 when spawning).
 os.environ.setdefault("PYTHONUTF8", "1")
@@ -2238,27 +2243,27 @@ def _reshape_pdf_rows(pdfs: list[dict]) -> tuple[list[str], list[list]]:
     return headers, rows
 
 
-def _parse_pdf_isolated(data: bytes) -> dict:
-    """Entry point run inside a worker *process* (see _get_pdf_parse_executor) rather than
-    imported at module load: PyMuPDF/pdfplumber are both C-extension-backed, and a malformed or
-    unusual real-world PDF can crash the interpreter outright (segfault) in a way no Python
-    try/except can catch. Isolating each parse in its own process means that crash only takes
-    down that worker — caught as BrokenProcessPool by the caller — instead of the whole backend
-    (which is exactly what happened before this was added: a single PDF upload killed the user's
-    whole per-user container, twice, silently, with no traceback)."""
-    from pdf_client import parse_pdf
-    return parse_pdf(data)
-
-
 PDF_PARSE_TIMEOUT_SEC = 120
 
 _pdf_parse_executor: "concurrent.futures.ProcessPoolExecutor | None" = None
+# spawn, not the platform default (fork on Linux): this backend is heavily multi-threaded (Run
+# concurrency, every *_import background job) by the time a PDF import request comes in, and
+# forking a child process while another thread holds a lock it's mid-use of (import machinery,
+# logging, a native library's own worker threads - numpy/onnxruntime/grpc all qualify) can leave
+# that lock permanently held in the child, hanging it forever on the first thing that needs it.
+# That's what "parsing is absurdly slow" turned out to be: not slow, hung until PDF_PARSE_TIMEOUT_SEC
+# killed it. spawn starts a genuinely fresh interpreter instead, sidestepping that class of bug
+# entirely, at the cost of the child having to import whatever module the target function lives in
+# - which is why parse_pdf (submitted directly, not wrapped) lives in the lightweight pdf_client.py
+# rather than here: the spawned child only needs to import pdf_client + PyMuPDF/pdfplumber, not the
+# rest of this file's much heavier dependency stack (dspy, langchain, boto3, fastembed, ...).
+_pdf_mp_context = multiprocessing.get_context("spawn")
 
 
 def _get_pdf_parse_executor() -> concurrent.futures.ProcessPoolExecutor:
     global _pdf_parse_executor
     if _pdf_parse_executor is None:
-        _pdf_parse_executor = concurrent.futures.ProcessPoolExecutor(max_workers=2)
+        _pdf_parse_executor = concurrent.futures.ProcessPoolExecutor(max_workers=2, mp_context=_pdf_mp_context)
     return _pdf_parse_executor
 
 
@@ -2284,7 +2289,7 @@ def _do_pdf_import_work(job_id: str, files: list[tuple[str, bytes]]) -> None:
             if job_id in _pdf_import_cancelled:
                 break
             try:
-                future = _get_pdf_parse_executor().submit(_parse_pdf_isolated, data)
+                future = _get_pdf_parse_executor().submit(parse_pdf, data)
                 parsed = future.result(timeout=PDF_PARSE_TIMEOUT_SEC)
                 pdfs.append({
                     "name": name,
