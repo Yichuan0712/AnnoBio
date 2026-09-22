@@ -601,7 +601,7 @@ async def profile_page(request: Request):
     projects.sort(key=lambda p: p.get("updatedAt") or 0, reverse=True)
 
     if not projects:
-        workspaces_html = '<p class="workspaces-empty">No workspaces yet — <a class="link" href="/app">create one</a>.</p>'
+        workspaces_html = '<p class="workspaces-empty">No workspaces yet. <a class="link" href="/app">Create one</a>.</p>'
     else:
         # Same card-grid look as the public Gallery (see ARCHIVE_CSS/_archive_thumb_html above) —
         # a thumbnail per workspace, generated client-side on every autosave (see renderer.js's
@@ -640,7 +640,7 @@ async def profile_page(request: Request):
         </div>
         <div class="profile-row profile-save-row"><button type="submit" class="btn btn-secondary">Save</button></div>
       </form>
-      <p class="page-sub profile-info-note">Shown to the admin reviewing anything you publish to the Gallery — required before you can publish.</p>
+      <p class="page-sub profile-info-note">Shown to the admin reviewing anything you publish to the Gallery. Required before you can publish.</p>
 
       <form method="post" action="/logout">
         <button type="submit" class="btn btn-secondary">Log out</button>
@@ -718,7 +718,7 @@ def archive_list_page(request: Request):
     user = current_user(request)
     items = db.list_archive_items()
     if not items:
-        grid_html = '<p class="workspaces-empty">Nothing published yet — open a project and use "Publish to Gallery" to be the first.</p>'
+        grid_html = '<p class="workspaces-empty">Nothing published yet. Open a project and use "Publish to Gallery" to be the first.</p>'
     else:
         cards = "".join(
             f"""
@@ -735,7 +735,7 @@ def archive_list_page(request: Request):
         grid_html = f'<div class="archive-grid">{cards}</div>'
     body = f"""
       <h1>Gallery</h1>
-      <p class="page-sub">Projects the community has published — browse freely, and add any of them to your own account to start from.</p>
+      <p class="page-sub">Projects the community has published. Browse freely, and add any of them to your own account to start from.</p>
       {grid_html}
     """
     return HTMLResponse(render_page(title="Gallery", user=user, active="/gallery", body=body, extra_css=ARCHIVE_CSS))
@@ -878,7 +878,7 @@ def admin_gallery_page(request: Request):
         grid_html = f'<div class="admin-review-grid">{cards}</div>'
     body = f"""
       <h1>Review submissions</h1>
-      <p class="page-sub">Pending Gallery publishes — edit if needed, then approve or delete.</p>
+      <p class="page-sub">Pending Gallery publishes. Edit if needed, then approve or delete.</p>
       {grid_html}
     """
     return HTMLResponse(render_page(title="Review submissions", user=user, active="/admin/gallery", body=body, extra_css=ADMIN_REVIEW_CSS))
