@@ -14,7 +14,7 @@ import { isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import { compileRows } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
-import { cloneCell } from './datasetContent.js';
+import { cloneCell, imageCell } from './datasetContent.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {
   const {
@@ -2437,6 +2437,131 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     };
   }
 
+  const PDF_IMPORT_POLL_INTERVAL_MS = 1200;
+  const PDF_IMPORT_MAX_WAIT_MS = 15 * 60 * 1000; // parsing many/large PDFs can take a while
+
+  /**
+   * Bulk-imports PDF files into a Dataset node: one row per PDF, with its full text, embedded
+   * images (one "Image N" column per image — sized to however many the richest PDF in the batch
+   * has), and any detected tables (one "Table N" column each, rendered as markdown). The backend
+   * (see /api/pdf/import in main.py) only parses bytes; it has no project/asset-store context, so
+   * extracted images come back as base64 placeholders that get registered into the actual
+   * project's asset store here, through `importImageBytes` — a platform-specific callback the
+   * caller (addDatasetModal.js) supplies, since this module doesn't know if it's running desktop
+   * or web.
+   * @param {(entries: {data: Uint8Array, name: string}[]) => Promise<{id: string, name: string}[]>} importImageBytes
+   */
+  async function importPdfDataset({
+    files = [],
+    name = '',
+    notes = '',
+    left,
+    top,
+    ensureUniqueName = true,
+    importImageBytes,
+    onProgress,
+  } = {}) {
+    const fileList = Array.isArray(files) ? files.filter(Boolean) : [];
+    if (fileList.length === 0) {
+      throw new Error('At least one PDF file is required.');
+    }
+    if (typeof importImageBytes !== 'function') {
+      throw new Error('importPdfDataset requires an importImageBytes callback.');
+    }
+
+    const formData = new FormData();
+    fileList.forEach((file) => formData.append('files', file));
+    const startResponse = await fetch(`${RUN_API_BASE}/api/pdf/import`, { method: 'POST', body: formData });
+    const startData = await startResponse.json().catch(() => ({}));
+    if (!startResponse.ok) {
+      throw new Error(String(startData?.detail || startResponse.statusText || 'Failed to start PDF import.'));
+    }
+    const jobId = String(startData?.job_id || '').trim();
+    if (!jobId) {
+      throw new Error('PDF import started but no job id was returned by the backend.');
+    }
+    const startSkipped = Array.isArray(startData?.skipped) ? startData.skipped : [];
+
+    const startedAt = Date.now();
+    let result = null;
+    while (true) {
+      if (Date.now() - startedAt > PDF_IMPORT_MAX_WAIT_MS) {
+        throw new Error('PDF import timed out.');
+      }
+      const pollResponse = await fetch(`${RUN_API_BASE}/api/pdf/import/result/${jobId}`);
+      const pollData = await pollResponse.json().catch(() => ({}));
+      if (!pollResponse.ok && pollResponse.status !== 202) {
+        throw new Error(String(pollData?.detail || pollResponse.statusText || 'Failed to fetch PDF import result.'));
+      }
+      if (pollData?.status === 'running') {
+        onProgress?.({ completed: pollData.completed || 0, total: pollData.total || 0 });
+        await delay(PDF_IMPORT_POLL_INTERVAL_MS);
+        continue;
+      }
+      result = pollData;
+      break;
+    }
+
+    if (result?.error) {
+      throw new Error(String(result.error));
+    }
+
+    const headers = Array.isArray(result?.headers) ? result.headers.slice() : [];
+    const rawRows = Array.isArray(result?.rows) ? result.rows : [];
+    const errors = Array.isArray(result?.errors) ? result.errors : [];
+    const skipped = [...startSkipped, ...(Array.isArray(result?.skipped) ? result.skipped : [])];
+    if (rawRows.length === 0) {
+      throw new Error(errors.length > 0 ? `Could not parse any PDFs: ${errors.join('; ')}` : 'PDF import returned no rows.');
+    }
+
+    // Collect every image placeholder across the whole batch and register them all in one call,
+    // then splice the resulting asset ids back into their row/column slot.
+    const placeholders = [];
+    const byteEntries = [];
+    rawRows.forEach((row, rowIndex) => {
+      row.forEach((cell, colIndex) => {
+        if (cell && typeof cell === 'object' && cell.__pdfImage__) {
+          const bytes = Uint8Array.from(atob(cell.data), (c) => c.charCodeAt(0));
+          placeholders.push({ rowIndex, colIndex, name: cell.name });
+          byteEntries.push({ data: bytes, name: cell.name });
+        }
+      });
+    });
+
+    const registered = byteEntries.length > 0 ? await importImageBytes(byteEntries) : [];
+
+    const rows = rawRows.map((row) => row.slice());
+    placeholders.forEach((placeholder, i) => {
+      const asset = registered[i];
+      rows[placeholder.rowIndex][placeholder.colIndex] = asset
+        ? imageCell([asset.id], [asset.name || placeholder.name])
+        : imageCell();
+    });
+
+    const columnTypes = headers.map((h) => (h.startsWith('Image ') ? 'image' : 'text'));
+
+    const finalName = String(name || '').trim() || 'PDF Import';
+    const finalNotes = String(notes || '').trim() || [
+      `Imported ${rows.length} PDF${rows.length === 1 ? '' : 's'}.`,
+      skipped.length ? `${skipped.length} file${skipped.length === 1 ? '' : 's'} skipped.` : '',
+      errors.length ? `${errors.length} failed to parse.` : '',
+    ].filter(Boolean).join(' ');
+
+    const created = addDatasetNode({
+      name: finalName,
+      notes: finalNotes,
+      headers,
+      rows,
+      columnTypes,
+      left,
+      top,
+      ensureUniqueName,
+      agentCreated: true,
+    });
+
+    return { ...created, skipped, errors };
+  }
+
   const CHEMBL_IMPORT_POLL_INTERVAL_MS = 1200;
   const CHEMBL_IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
 
@@ -2552,5 +2677,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     importClinicaltrialsDataset,
     importPreprintDataset,
     importChemblDataset,
+    importPdfDataset,
   };
 }
