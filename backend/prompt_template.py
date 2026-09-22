@@ -18,14 +18,19 @@ from typing import Any
 _PLACEHOLDER_RE = re.compile(r"(?<!\{)\{([^{}]+)\}(?!\})")
 
 
-def _is_image_cell(value: Any) -> bool:
-    return isinstance(value, dict) and value.get("kind") == "images" and isinstance(value.get("assetIds"), list)
+def _asset_cell_kind(value: Any) -> str | None:
+    if isinstance(value, dict) and isinstance(value.get("assetIds"), list):
+        if value.get("kind") == "images":
+            return "image"
+        if value.get("kind") == "pdf":
+            return "PDF"
+    return None
 
 
 def compile_input_text(template: str, values: dict[str, Any]) -> tuple[str, str | None]:
     """
     Substitute `{key}` placeholders in `template` from `values`. Returns (text, error) — error is set (and
-    text is best-effort / possibly incomplete) when a placeholder resolves to an image cell, which this
+    text is best-effort / possibly incomplete) when a placeholder resolves to an image/PDF cell, which this
     text-only port cannot render.
     """
     out: list[str] = []
@@ -38,8 +43,9 @@ def compile_input_text(template: str, values: dict[str, Any]) -> tuple[str, str 
             out.append(m.group(0))
         else:
             value = values[key]
-            if _is_image_cell(value):
-                return "".join(out), f'Input "{key}" is an image; GEPA task execution is text-only.'
+            asset_kind = _asset_cell_kind(value)
+            if asset_kind:
+                return "".join(out), f'Input "{key}" is an {asset_kind}; GEPA task execution is text-only.'
             out.append("" if value is None else str(value))
         end = m.end()
     out.append(template[end:])

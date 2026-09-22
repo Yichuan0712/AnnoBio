@@ -148,6 +148,7 @@ def get_catalog() -> list[dict[str, Any]]:
                 "name": m.get("name") or m["id"],
                 "context_length": m.get("context_length"),
                 "vision": "image" in (arch.get("input_modalities") or []),
+                "pdf": "file" in (arch.get("input_modalities") or []),
                 "prompt_price": pricing.get("prompt"),
                 "completion_price": pricing.get("completion"),
             }

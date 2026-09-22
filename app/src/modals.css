@@ -8437,6 +8437,49 @@ button.btn.btn-danger:hover:not(:disabled) {
 .wd-image-thumb-remove:focus-visible {
   opacity: 1;
 }
+.wd-pdf-cell { position: relative; min-width: 150px; min-height: 66px; padding: 28px 6px 6px; }
+.wd-pdf-cell--empty { min-height: 0; padding: 4px 6px; }
+.wd-pdf-strip { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+.wd-pdf-chip-wrap { position: relative; display: inline-flex; max-width: 100%; }
+.wd-pdf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--control-radius, 3px);
+  background: var(--surface-secondary);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.wd-pdf-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wd-pdf-chip-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+  font-size: 13px;
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .1s;
+}
+.wd-pdf-chip-wrap:hover .wd-pdf-chip-remove,
+.wd-pdf-chip-remove:focus-visible {
+  opacity: 1;
+}
 .wd-image-viewer { z-index: 15000; }
 .wd-image-viewer-panel { position: relative; max-width: 92vw; max-height: 92vh; padding: 36px 18px 12px; border-radius: 8px; background: var(--surface-primary); box-shadow: 0 16px 48px rgba(0,0,0,.45); text-align: center; }
 .wd-image-viewer-panel img { display: block; max-width: 86vw; max-height: 76vh; object-fit: contain; }

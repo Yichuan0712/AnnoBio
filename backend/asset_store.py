@@ -1,4 +1,4 @@
-"""Project-scoped immutable image references. Registration is restricted to Electron."""
+"""Project-scoped immutable image/PDF references. Registration is restricted to Electron."""
 import base64
 import hashlib
 import hmac
@@ -14,6 +14,7 @@ router = APIRouter()
 _sessions = {}
 _lock = threading.Lock()
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
+MAX_PDF_BYTES = 32 * 1024 * 1024  # matches Anthropic's hard per-document limit, the tightest of the major providers
 
 
 class Registration(BaseModel):
@@ -50,6 +51,10 @@ def is_animated_image(data: bytes, mime: str) -> bool:
     return False
 
 
+def detect_pdf_mime(data: bytes) -> str | None:
+    return 'application/pdf' if data[:5] == b'%PDF-' else None
+
+
 @router.post('/api/assets/register')
 def register(body: Registration, x_asset_token: str = Header(default='')):
     expected = os.environ.get('PROMPT_STUDIO_ASSET_TOKEN', '')
@@ -58,27 +63,39 @@ def register(body: Registration, x_asset_token: str = Header(default='')):
     return {'project_session_id': create_session(body.root, body.assets)}
 
 
-def image_data_url(session_id, asset_id):
+def _asset_bytes(session_id, asset_id, max_bytes, label):
     with _lock:
         session = _sessions.get(session_id)
     if not session:
-        raise ValueError('Image project session expired. Reopen the project or retry the run.')
+        raise ValueError('Project session expired. Reopen the project or retry the run.')
     root, assets = session
     entry = assets.get(asset_id)
     if not entry:
-        raise ValueError(f'Image is not registered in this project: {asset_id}')
+        raise ValueError(f'{label} is not registered in this project: {asset_id}')
     target = (root / entry['path']).resolve()
     if not target.is_relative_to(root) or not target.is_file():
-        raise ValueError(f'Image file is missing or outside the project: {asset_id}')
-    if target.stat().st_size > MAX_IMAGE_BYTES:
-        raise ValueError('Image exceeds the 30 MB application limit.')
+        raise ValueError(f'{label} file is missing or outside the project: {asset_id}')
+    if target.stat().st_size > max_bytes:
+        raise ValueError(f'{label} exceeds the {max_bytes // (1024 * 1024)} MB application limit.')
     data = target.read_bytes()
     if 'sha256:' + hashlib.sha256(data).hexdigest() != asset_id:
-        raise ValueError(f'Image contents changed: {asset_id}. Import it as a new image.')
+        raise ValueError(f'{label} contents changed: {asset_id}. Import it again.')
+    return data
+
+
+def image_data_url(session_id, asset_id):
+    data = _asset_bytes(session_id, asset_id, MAX_IMAGE_BYTES, 'Image')
     mime = detect_image_mime(data)
     if not mime:
         raise ValueError('Only PNG, JPEG and WebP images are supported.')
     return f'data:{mime};base64,' + base64.b64encode(data).decode('ascii')
+
+
+def pdf_data_url(session_id, asset_id):
+    data = _asset_bytes(session_id, asset_id, MAX_PDF_BYTES, 'PDF')
+    if not detect_pdf_mime(data):
+        raise ValueError('Only PDF files are supported.')
+    return 'data:application/pdf;base64,' + base64.b64encode(data).decode('ascii')
 
 
 def resolve_content(parts, session_id):
@@ -88,6 +105,8 @@ def resolve_content(parts, session_id):
             output.append({'type': 'text', 'text': str(part.get('text', ''))})
         elif part.get('type') == 'image_ref':
             output.append({'type': 'image_url', 'image_url': {'url': image_data_url(session_id, part['asset_id'])}})
+        elif part.get('type') == 'pdf_ref':
+            output.append({'type': 'file', 'file': {'file_data': pdf_data_url(session_id, part['asset_id']), 'format': 'application/pdf'}})
         else:
             raise ValueError('Unsupported input content block.')
     return output
@@ -99,13 +118,15 @@ def review_content(text, rows, session_id):
     for row in rows:
         row = row if isinstance(row, dict) else row.model_dump()
         for name, value in (row.get('row_input') or {}).items():
-            if not isinstance(value, dict) or value.get('kind') != 'images':
+            kind = value.get('kind') if isinstance(value, dict) else None
+            if kind not in ('images', 'pdf'):
                 continue
+            label = 'image' if kind == 'images' else 'PDF'
             for index, asset_id in enumerate(value.get('assetIds', [])):
                 key = (row.get('input_row_index'), name, index, asset_id)
                 if key in seen:
                     continue
                 seen.add(key)
-                parts.append({'type': 'text', 'text': f'\nInput row {row.get("input_row_index")}, {name}, image {index + 1}:\n'})
-                parts.append({'type': 'image_ref', 'asset_id': asset_id})
+                parts.append({'type': 'text', 'text': f'\nInput row {row.get("input_row_index")}, {name}, {label} {index + 1}:\n'})
+                parts.append({'type': 'pdf_ref' if kind == 'pdf' else 'image_ref', 'asset_id': asset_id})
     return resolve_content(parts, session_id) if seen else text

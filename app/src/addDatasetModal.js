@@ -8,7 +8,7 @@
 import * as XLSX from 'xlsx';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { showConfirm } from './alertModal.js';
-import { imageCell } from './datasetContent.js';
+import { pdfCell } from './datasetContent.js';
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
 
@@ -17,7 +17,6 @@ const PUBMED_POLL_INTERVAL_MS = 1200;
 const CLINICALTRIALS_POLL_INTERVAL_MS = 1200;
 const PREPRINT_POLL_INTERVAL_MS = 1200;
 const CHEMBL_POLL_INTERVAL_MS = 1200;
-const PDF_POLL_INTERVAL_MS = 1200;
 
 /** Keep in sync with backend/pubmed_client.py PUBMED_FIELDS. */
 const PUBMED_FIELD_OPTIONS = [
@@ -216,14 +215,11 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <div class="dataset-source-panel" data-source-panel="pdf" hidden>
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Upload PDFs</h3>
-                    <p class="dataset-sheet-hint">One row per PDF: full text, one "Image N" column per embedded image (sized to the richest PDF in the batch), and one "Table N" column per detected table (as markdown). Scanned/image-only PDFs come back with empty text and no tables.</p>
+                    <p class="dataset-sheet-hint">One row per PDF, with a Filename column and a PDF column — the file itself is attached, not parsed, so it can be sent straight to models that accept PDF input.</p>
                     <div class="dataset-import-actions">
                       <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple hidden />
-                      <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDF files and parse</button>
+                      <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDFs</button>
                       <span class="dataset-filename pdf-import-filenames" aria-live="polite"></span>
-                    </div>
-                    <div class="dataset-import-actions">
-                      <span class="dataset-filename pdf-import-fetch-status" aria-live="polite"></span>
                     </div>
                   </div>
                 </div>
@@ -378,7 +374,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
   const pdfFileInput = overlay.querySelector('#pdf-file-input');
   const pdfChooseBtn = overlay.querySelector('.pdf-import-choose-btn');
   const pdfFilenamesEl = overlay.querySelector('.pdf-import-filenames');
-  const pdfFetchStatusEl = overlay.querySelector('.pdf-import-fetch-status');
   let dataSource = 'upload';
   let pubmedJobId = null;
   let pubmedPollTimer = null;
@@ -388,8 +383,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
   let preprintPollTimer = null;
   let chemblJobId = null;
   let chemblPollTimer = null;
-  let pdfJobId = null;
-  let pdfPollTimer = null;
   /** @type {File[]} */
   let selectedPdfFiles = [];
 
@@ -1012,110 +1005,40 @@ export function openAddDatasetModal(workflowCanvasApi) {
     }
   });
 
-  function stopPdfPolling() {
-    if (pdfPollTimer) clearTimeout(pdfPollTimer);
-    pdfPollTimer = null;
-  }
-
   function setPdfRunningUi(running) {
     pdfChooseBtn.disabled = running;
     addBtn.disabled = running;
   }
 
-  function setPdfFetchStatus(text) {
-    if (pdfFetchStatusEl) pdfFetchStatusEl.textContent = text || '';
-  }
-
-  /** Registers every extracted image into the actual project's asset store — Electron writes
-   * straight to the local project's asset folder, web uploads to the backend's per-project asset
-   * store — then swaps each `__pdfImage__` placeholder cell for a real imageCell(). Both paths
-   * mirror datasetDetailModal.js's existing image-import branching. */
-  async function resolvePdfImagePlaceholders(headers, rawRows) {
+  /** Registers each picked PDF as a project asset (not parsed) and builds a Filename + PDF
+   * column dataset from them, one row per file — mirrors datasetDetailModal.js's PDF-column
+   * import branching. */
+  async function importPdfFiles(files) {
+    hideError();
+    if (files.length === 0) {
+      showError('Choose at least one PDF file.');
+      return;
+    }
     const hasElectron = !!window.electronAPI;
-    const placeholders = [];
-    rawRows.forEach((row, rowIndex) => {
-      row.forEach((cell, colIndex) => {
-        if (cell && typeof cell === 'object' && cell.__pdfImage__) placeholders.push({ rowIndex, colIndex, cell });
-      });
-    });
-    const rows = rawRows.map((row) => row.slice());
-    if (placeholders.length === 0) {
-      return { rows, columnTypes: headers.map((h) => (h.startsWith('Image ') ? 'image' : 'text')) };
-    }
     if (!hasElectron && !getCurrentProjectId()) {
-      throw new Error('Open a project first.');
+      showError('Open a project first.');
+      return;
     }
-
-    let registered;
-    if (hasElectron) {
-      const entries = placeholders.map(({ cell }) => ({
-        data: Uint8Array.from(atob(cell.data), (c) => c.charCodeAt(0)),
-        name: cell.name,
-      }));
-      registered = await window.electronAPI.importImageBuffers(entries);
-    } else {
-      const files = placeholders.map(({ cell }) => {
-        const bytes = Uint8Array.from(atob(cell.data), (c) => c.charCodeAt(0));
-        return new File([bytes], cell.name, { type: `image/${cell.ext || 'png'}` });
-      });
-      registered = await webImageApi.importImages(getCurrentProjectId(), files);
-    }
-
-    placeholders.forEach((p, i) => {
-      const asset = registered[i];
-      rows[p.rowIndex][p.colIndex] = asset ? imageCell([asset.id], [asset.name || p.cell.name]) : imageCell();
-    });
-    return { rows, columnTypes: headers.map((h) => (h.startsWith('Image ') ? 'image' : 'text')) };
-  }
-
-  async function pollPdfJob(jobId) {
+    setPdfRunningUi(true);
     try {
-      const res = await fetch(`${API_BASE}/api/pdf/import/result/${jobId}`);
-      const data = await res.json().catch(() => ({}));
-      if (data.status === 'running') {
-        setPdfFetchStatus(`Parsing… ${data.completed ?? 0}/${data.total ?? '?'}`);
-        pdfPollTimer = setTimeout(() => pollPdfJob(jobId), PDF_POLL_INTERVAL_MS);
-        return;
-      }
-      pdfJobId = null;
-      if (data.error) {
-        setPdfRunningUi(false);
-        showError(`PDF import failed: ${data.error}`);
-        setPdfFetchStatus('');
-        return;
-      }
-      const headers = data.headers || [];
-      const rawRows = data.rows || [];
-      const errors = data.errors || [];
-      const skipped = data.skipped || [];
-      if (rawRows.length === 0) {
-        setPdfRunningUi(false);
-        setPdfFetchStatus(data.status === 'cancelled' ? 'Cancelled.' : 'No PDFs parsed.');
-        if (errors.length > 0) showError(`Could not parse: ${errors.join('; ')}`);
-        return;
-      }
-      setPdfFetchStatus('Registering images…');
-      try {
-        const { rows, columnTypes } = await resolvePdfImagePlaceholders(headers, rawRows);
-        fileImported = true;
-        parsedDatasetContent = { headers, rows, columnTypes };
-        const previewRows = rows.slice(0, MAX_PREVIEW_ROWS);
-        renderPreviewTable(headers, previewRows, rows.length);
-        setPdfFetchStatus(`${rows.length} PDF${rows.length === 1 ? '' : 's'} parsed${data.status === 'cancelled' ? ' (cancelled early)' : ''}`);
-        const notes = [];
-        if (skipped.length > 0) notes.push(`${skipped.length} file${skipped.length === 1 ? '' : 's'} skipped: ${skipped.join('; ')}`);
-        if (errors.length > 0) notes.push(`${errors.length} failed to parse: ${errors.join('; ')}`);
-        if (notes.length > 0) showError(notes.join(' '));
-      } catch (e) {
-        showError(`Could not register extracted images: ${(e && e.message) || e}`);
-      } finally {
-        setPdfRunningUi(false);
-      }
+      const registered = hasElectron
+        ? await window.electronAPI.importPdfs(files.map((f) => window.electronAPI.getPathForFile(f)))
+        : await webImageApi.importPdfs(getCurrentProjectId(), files);
+      const headers = ['Filename', 'PDF'];
+      const columnTypes = ['text', 'pdf'];
+      const rows = registered.map((asset) => [asset.name, pdfCell([asset.id], [asset.name])]);
+      fileImported = true;
+      parsedDatasetContent = { headers, rows, columnTypes };
+      renderPreviewTable(headers, rows.slice(0, MAX_PREVIEW_ROWS), rows.length);
     } catch (e) {
-      pdfJobId = null;
+      showError(`Could not upload PDFs: ${(e && e.message) || e}`);
+    } finally {
       setPdfRunningUi(false);
-      showError(`Could not reach backend: ${(e && e.message) || e}`);
-      setPdfFetchStatus('');
     }
   }
 
@@ -1127,40 +1050,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
       : selectedPdfFiles.length === 1
         ? selectedPdfFiles[0].name
         : `${selectedPdfFiles.length} files selected`;
-    if (selectedPdfFiles.length > 0) startPdfParse();
+    if (selectedPdfFiles.length > 0) importPdfFiles(selectedPdfFiles);
   });
-
-  async function startPdfParse() {
-    hideError();
-    if (selectedPdfFiles.length === 0) {
-      showError('Choose at least one PDF file.');
-      return;
-    }
-    const formData = new FormData();
-    selectedPdfFiles.forEach((file) => formData.append('files', file));
-
-    setPdfRunningUi(true);
-    setPdfFetchStatus('Uploading…');
-    try {
-      const res = await fetch(`${API_BASE}/api/pdf/import`, { method: 'POST', body: formData });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setPdfRunningUi(false);
-        showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
-        setPdfFetchStatus('');
-        return;
-      }
-      pdfJobId = data.job_id;
-      if (Array.isArray(data.skipped) && data.skipped.length > 0) {
-        showError(`${data.skipped.length} file${data.skipped.length === 1 ? '' : 's'} skipped: ${data.skipped.join('; ')}`);
-      }
-      pollPdfJob(pdfJobId);
-    } catch (e) {
-      setPdfRunningUi(false);
-      showError(`Could not reach backend: ${(e && e.message) || e}`);
-      setPdfFetchStatus('');
-    }
-  }
 
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
@@ -1295,7 +1186,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
             : dataSource === 'chembl'
               ? 'Fetch at least one molecule from ChEMBL first.'
               : dataSource === 'pdf'
-                ? 'Parse at least one PDF first.'
+                ? 'Choose at least one PDF file first.'
                 : dataSource === 'empty'
                   ? 'Empty dataset is not ready yet.'
                   : 'Choose a file to import first.');
@@ -1327,8 +1218,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
     if (preprintJobId) fetch(`${API_BASE}/api/preprint/import/cancel/${preprintJobId}`, { method: 'POST' }).catch(() => {});
     stopChemblPolling();
     if (chemblJobId) fetch(`${API_BASE}/api/chembl/import/cancel/${chemblJobId}`, { method: 'POST' }).catch(() => {});
-    stopPdfPolling();
-    if (pdfJobId) fetch(`${API_BASE}/api/pdf/import/cancel/${pdfJobId}`, { method: 'POST' }).catch(() => {});
     overlay.remove();
     document.body.style.overflow = '';
   };

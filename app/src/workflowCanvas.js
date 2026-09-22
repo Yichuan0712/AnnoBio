@@ -65,7 +65,7 @@ import { DATASET_BORDER_COLORS } from './workflowNodeColors.js';
 import { showAlert, showConfirm } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
-import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isImageCell } from './datasetContent.js';
+import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -1204,7 +1204,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content (imported or sampled) */
   const datasetContentByNodeId = new DatasetContentMap();
 
-  /** Every image asset id any dataset node's image cells currently reference — the "keep" set
+  /** Every image/PDF asset id any dataset node's asset cells currently reference — the "keep" set
    * for pruneUnusedImageAssets (see renderer.js): anything in the project's asset registry that
    * ISN'T in this set is safe to delete. */
   function getUsedAssetIds() {
@@ -1212,26 +1212,27 @@ export function buildWorkflowCanvas(root, options = {}) {
     datasetContentByNodeId.forEach((content) => {
       (content.rows || []).forEach((row) => {
         row.forEach((cell) => {
-          if (isImageCell(cell)) cell.assetIds.forEach((id) => ids.add(id));
+          if (isAssetCell(cell)) cell.assetIds.forEach((id) => ids.add(id));
         });
       });
     });
     return Array.from(ids);
   }
 
-  /** Whether a dataset node's content has any image cell with at least one image — used to warn
-   * on delete that undo can't bring the image files back (unused assets are pruned on autosave,
-   * which can happen before an undo, so a restored cell can end up pointing at deleted files). */
+  /** Whether a dataset node's content has any image/PDF cell with at least one asset — used to
+   * warn on delete that undo can't bring the asset files back (unused assets are pruned on
+   * autosave, which can happen before an undo, so a restored cell can end up pointing at deleted
+   * files). */
   function nodeHasImageCells(nodeId) {
     const content = datasetContentByNodeId.get(nodeId);
     if (!content) return false;
     return (content.rows || []).some((row) =>
-      row.some((cell) => isImageCell(cell) && cell.assetIds && cell.assetIds.length > 0),
+      row.some((cell) => isAssetCell(cell) && cell.assetIds && cell.assetIds.length > 0),
     );
   }
 
   const IMAGE_UNDO_WARNING =
-    " It contains images — undo can bring back the row, but not the image files themselves, since unused images are cleaned up automatically and may already be gone.";
+    " It contains images or PDFs — undo can bring back the row, but not those files themselves, since unused assets are cleaned up automatically and may already be gone.";
 
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
@@ -2902,7 +2903,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     importClinicaltrialsDataset,
     importPreprintDataset,
     importChemblDataset,
-    importPdfDataset,
   } = createWorkflowCanvasRuntime({
     extractInputFieldsFromSections,
     deriveOutputFields,
@@ -4919,7 +4919,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     importClinicaltrialsDataset,
     importPreprintDataset,
     importChemblDataset,
-    importPdfDataset,
     loadCanvasState,
     setOnCanvasChange,
     setAgentWindowVisible,

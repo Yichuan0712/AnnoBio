@@ -100,3 +100,15 @@ export const iconImageAdd = (size) => svgIcon({
   ],
   circles: [[9, 9, 2]],
 });
+
+/** Lucide "file-text" — used for PDF-column cell chips and buttons. */
+export const iconFileText = (size) => svgIcon({
+  size,
+  paths: [
+    'M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z',
+    'M14 2v5a1 1 0 0 0 1 1h5',
+    'M10 9H8',
+    'M16 13H8',
+    'M16 17H8',
+  ],
+});

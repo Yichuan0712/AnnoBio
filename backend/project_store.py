@@ -31,13 +31,14 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from asset_store import create_session, detect_image_mime, is_animated_image
+from asset_store import create_session, detect_image_mime, detect_pdf_mime, is_animated_image
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PROJECTS_DIR = DATA_DIR / "projects"
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
+MAX_PDF_BYTES = 32 * 1024 * 1024  # matches asset_store.py's limit
 BUNDLE_VERSION = 1  # matches app/src/projectAssets.js's YC_EXTENSION bundle format
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -77,10 +78,10 @@ def _read_asset_bytes(project_id: str, asset: dict, asset_id: str) -> bytes:
     root = _assets_root(project_id)
     target = (root / asset["path"]).resolve()
     if not target.is_relative_to(root.resolve()) or not target.is_file():
-        raise HTTPException(404, f"Image file is missing: {asset.get('name', asset_id)}")
+        raise HTTPException(404, f"Asset file is missing: {asset.get('name', asset_id)}")
     data = target.read_bytes()
     if "sha256:" + hashlib.sha256(data).hexdigest() != asset_id:
-        raise HTTPException(409, f"Image changed: {asset.get('name', asset_id)}")
+        raise HTTPException(409, f"Asset changed: {asset.get('name', asset_id)}")
     return data
 
 
@@ -319,6 +320,49 @@ async def import_assets(project_id: str, files: list[UploadFile] = File(...)):
     return result
 
 
+@router.post("/{project_id}/assets/import-pdfs")
+async def import_pdf_assets(project_id: str, files: list[UploadFile] = File(...)):
+    """Same shape as /assets/import, for PDFs (registered as attachments, not parsed)."""
+    _read_project(project_id)  # 404s if the project doesn't exist
+
+    prepared = []
+    for upload in files:
+        raw = await upload.read()
+        if len(raw) > MAX_PDF_BYTES:
+            raise HTTPException(400, f"PDF must be under {MAX_PDF_BYTES // (1024 * 1024)} MB: {upload.filename}")
+        if not detect_pdf_mime(raw):
+            raise HTTPException(400, f"Not a PDF: {upload.filename}")
+        digest = hashlib.sha256(raw).hexdigest()
+        prepared.append({
+            "raw": raw, "digest": digest,
+            "name": upload.filename or f"{digest}.pdf",
+        })
+
+    root = _assets_root(project_id)
+    originals = root / "originals"
+    result = []
+    with _lock:
+        data = _read_project(project_id)
+        assets = data.get("assets") or {}
+        originals.mkdir(parents=True, exist_ok=True)
+        for item in prepared:
+            asset_id = f"sha256:{item['digest']}"
+            relative = f"originals/{item['digest']}.pdf"
+            target = root / relative
+            if not target.exists():
+                target.write_bytes(item["raw"])
+            record = {
+                "path": relative, "name": item["name"], "mime": "application/pdf",
+                "bytes": len(item["raw"]),
+            }
+            assets[asset_id] = record
+            result.append({"id": asset_id, **record})
+        data["assets"] = assets
+        data.setdefault("meta", {})["updatedAt"] = time.time()
+        _atomic_write_json(_project_file(project_id), data)
+    return result
+
+
 class AssetPruneRequest(BaseModel):
     usedIds: list[str] = []
     dryRun: bool = False
@@ -416,15 +460,18 @@ def export_dataset(project_id: str, body: DatasetExport):
         for row in body.rows:
             out_row = []
             for cell in row:
-                if not isinstance(cell, dict) or cell.get("kind") != "images":
+                kind = cell.get("kind") if isinstance(cell, dict) else None
+                if kind not in ("images", "pdf"):
                     out_row.append("" if cell is None else str(cell))
                     continue
+                folder = "images" if kind == "images" else "pdfs"
+                label = "image" if kind == "images" else "PDF"
                 names = []
                 for asset_id in cell.get("assetIds", []):
                     asset = assets.get(asset_id)
                     if not asset:
-                        raise HTTPException(400, f"Missing image: {asset_id}")
-                    arcname = f"images/{Path(asset['path']).name}"
+                        raise HTTPException(400, f"Missing {label}: {asset_id}")
+                    arcname = f"{folder}/{Path(asset['path']).name}"
                     if arcname not in written:
                         zf.writestr(arcname, _read_asset_bytes(project_id, asset, asset_id))
                         written.add(arcname)

@@ -6,20 +6,45 @@ export function imageCell(assetIds = [], names = []) {
   return { kind: 'images', assetIds: assetIds.slice(), names: names.slice() };
 }
 
+export function isPdfCell(value) {
+  return !!value && typeof value === 'object' && value.kind === 'pdf' && Array.isArray(value.assetIds);
+}
+
+export function pdfCell(assetIds = [], names = []) {
+  return { kind: 'pdf', assetIds: assetIds.slice(), names: names.slice() };
+}
+
+export function isAssetCell(value) {
+  return isImageCell(value) || isPdfCell(value);
+}
+
 export function cloneCell(value) {
-  return isImageCell(value) ? imageCell(value.assetIds, value.names || []) : String(value ?? '');
+  if (isImageCell(value)) return imageCell(value.assetIds, value.names || []);
+  if (isPdfCell(value)) return pdfCell(value.assetIds, value.names || []);
+  return String(value ?? '');
 }
 
 export function displayCell(value) {
-  return isImageCell(value) ? (value.names?.length ? value.names : value.assetIds).join(', ') : String(value ?? '');
+  return isAssetCell(value) ? (value.names?.length ? value.names : value.assetIds).join(', ') : String(value ?? '');
+}
+
+/** A column's type is 'image'/'pdf' once any cell in it is that kind of asset cell (declared via
+ * columnTypes, or inferred from existing rows so old saves without columnTypes still work). */
+function inferColumnType(declaredType, rows, colIndex) {
+  if (declaredType === 'image' || rows.some((row) => isImageCell(row[colIndex]))) return 'image';
+  if (declaredType === 'pdf' || rows.some((row) => isPdfCell(row[colIndex]))) return 'pdf';
+  return 'text';
 }
 
 export function normalizeDatasetContent(content = {}) {
   const headers = (content.headers || []).map(String);
-  const columnTypes = headers.map((_, i) => content.columnTypes?.[i] === 'image'
-    || (content.rows || []).some((row) => isImageCell(row[i])) ? 'image' : 'text');
-  const rows = (content.rows || []).map((row) => headers.map((_, i) =>
-    columnTypes[i] === 'image' ? (isImageCell(row[i]) ? cloneCell(row[i]) : imageCell()) : cloneCell(row[i])));
+  const rawRows = content.rows || [];
+  const columnTypes = headers.map((_, i) => inferColumnType(content.columnTypes?.[i], rawRows, i));
+  const rows = rawRows.map((row) => headers.map((_, i) => {
+    if (columnTypes[i] === 'image') return isImageCell(row[i]) ? cloneCell(row[i]) : imageCell();
+    if (columnTypes[i] === 'pdf') return isPdfCell(row[i]) ? cloneCell(row[i]) : pdfCell();
+    return cloneCell(row[i]);
+  }));
   const seen = new Set();
   const rowIds = rows.map((_, i) => {
     const id = content.rowIds?.[i];

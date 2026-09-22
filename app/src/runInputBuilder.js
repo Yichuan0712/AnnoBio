@@ -1,4 +1,9 @@
-import { isImageCell, inputValues } from './datasetContent.js';
+import { isImageCell, isPdfCell, inputValues } from './datasetContent.js';
+
+const ASSET_KINDS = {
+  image: { test: isImageCell, refType: 'image_ref', label: 'Image' },
+  pdf: { test: isPdfCell, refType: 'pdf_ref', label: 'PDF' },
+};
 
 // One compiler shared by manual/Agent runs, Review verification and optimization.
 export function compileInput(template, values, types = {}) {
@@ -16,18 +21,21 @@ export function compileInput(template, values, types = {}) {
     appendText(template.slice(end, match.index));
     const key = match[1];
     const value = values[key];
+    const assetEntry = Object.entries(ASSET_KINDS).find(([, { test }]) => test(value));
+    const [assetKindKey, assetKind] = assetEntry || [];
     if (!Object.prototype.hasOwnProperty.call(values, key)) {
       appendText(match[0]);
-    } else if (isImageCell(value)) {
-      if (types[key] === 'text') throw new Error(`Input "${key}" is Text but maps to an Image column. Change its type in Prompt inputs.`);
-      if (!value.assetIds.length) throw new Error(`Missing image for "${key}".`);
-      appendText(`\n[Images: ${key}]\n`);
-      if (!attached.has(key)) value.assetIds.forEach((asset_id, image_index) => {
-        content.push({ type: 'image_ref', asset_id, input_name: key, image_index });
+    } else if (assetKind) {
+      if (types[key] === 'text') throw new Error(`Input "${key}" is Text but maps to a ${assetKind.label} column. Change its type in Prompt inputs.`);
+      if (types[key] && types[key] !== assetKindKey && types[key] in ASSET_KINDS) throw new Error(`Input "${key}" requires a ${ASSET_KINDS[types[key]].label} column.`);
+      if (!value.assetIds.length) throw new Error(`Missing ${assetKind.label.toLowerCase()} for "${key}".`);
+      appendText(`\n[${assetKind.label}s: ${key}]\n`);
+      if (!attached.has(key)) value.assetIds.forEach((asset_id, index) => {
+        content.push({ type: assetKind.refType, asset_id, input_name: key, index });
       });
       attached.add(key);
     } else {
-      if (types[key] === 'image') throw new Error(`Input "${key}" requires an Image column.`);
+      if (types[key] in ASSET_KINDS) throw new Error(`Input "${key}" requires a ${ASSET_KINDS[types[key]].label} column.`);
       appendText(String(value ?? ''));
     }
     end = match.index + match[0].length;

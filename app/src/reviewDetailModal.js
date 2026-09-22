@@ -24,7 +24,7 @@ import { attachModalPaneCycle } from './paneToggleButton.js';
 import { compileReviewInputs } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
-import { displayCell, isImageCell } from './datasetContent.js';
+import { displayCell, isAssetCell } from './datasetContent.js';
 import {
   ensureReviewResultIds,
   ensureSuggestionObjectId,
@@ -474,7 +474,7 @@ function debugKvHtml(obj) {
   const MAX = 480;
   const cellHtml = (raw) => {
     if (raw == null || raw === '') return '<span class="review-diagnosis-detail-empty">—</span>';
-    let s = isImageCell(raw) ? displayCell(raw) : (typeof raw === 'object' ? JSON.stringify(raw) : String(raw));
+    let s = isAssetCell(raw) ? displayCell(raw) : (typeof raw === 'object' ? JSON.stringify(raw) : String(raw));
     s = s.replace(/\s+/g, ' ').trim();
     if (!s) return '<span class="review-diagnosis-detail-empty">—</span>';
     if (s.length > MAX) return `<span title="${escapeHtml(s)}">${escapeHtml(s.slice(0, MAX))}\u2026</span>`;
