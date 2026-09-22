@@ -109,6 +109,7 @@ window.addEventListener('DOMContentLoaded', () => {
     updateWindowTitleFromPath(path);
     const state = canvasAPI.getCanvasState();
     undoHistory.reset(state);
+    canvasAPI.clearSelection?.();
     await api.saveProject(path, state);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
@@ -126,6 +127,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const resolvedPath = loaded?.resolvedPath || path;
     canvasAPI.loadCanvasState(state);
     undoHistory.reset(canvasAPI.getCanvasState());
+    canvasAPI.clearSelection?.();
     setCurrentProject(resolvedPath);
     updateWindowTitleFromPath(resolvedPath);
     topBarAPI.setAddMenuEnabled(true);
@@ -158,6 +160,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const mergedState = await api.mergeProject(currentProjectPath, sourcePath);
       canvasAPI.loadCanvasState(mergedState);
       undoHistory.reset(canvasAPI.getCanvasState());
+      canvasAPI.clearSelection?.();
     } catch (err) {
       showAlert(err.message || 'Could not merge project.', { title: 'Error' });
     }
@@ -172,6 +175,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const project = await loadWebProject(id);
       canvasAPI.loadCanvasState(project.state || {});
       undoHistory.reset(canvasAPI.getCanvasState());
+      canvasAPI.clearSelection?.();
       setCurrentProject(id);
       setStoredWebProjectId(id);
       updateWindowTitle(project.name || name);
@@ -193,6 +197,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (picked.type === 'merged') {
       canvasAPI.loadCanvasState(picked.state);
       undoHistory.reset(canvasAPI.getCanvasState());
+      canvasAPI.clearSelection?.();
       return;
     }
     await openProjectWeb(picked);
@@ -251,21 +256,32 @@ window.addEventListener('DOMContentLoaded', () => {
   topBarAPI.setAddMenuEnabled(false);
   canvasAPI.setAgentWindowVisible?.(false);
 
-  // Keyboard shortcuts — ignored while typing in a field (including CodeMirror's process-node
-  // editor) so they don't fight the native undo of whatever the user is actually editing there.
+  // Keyboard shortcuts — Delete/Backspace and undo/redo are ignored while typing in a field
+  // (including CodeMirror's process-node editor) so they don't fight normal text editing there.
+  // Escape (clear selection) isn't gated the same way — it doesn't collide with anything a text
+  // field itself does with Escape, so it's fine to also fire while a field has focus.
   document.addEventListener('keydown', (e) => {
-    const isUndo = (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'z' && !e.shiftKey;
-    const isRedo = (e.ctrlKey || e.metaKey) && !e.altKey && (
-      (e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y'
-    );
-    if (!isUndo && !isRedo) return;
+    if (e.key === 'Escape') canvasAPI.clearSelection?.();
+
     const active = document.activeElement;
     const tag = active?.tagName;
     const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
       || active?.isContentEditable || !!active?.closest?.('.cm-editor');
     if (isEditable) return;
-    e.preventDefault();
-    if (isUndo) undoHistory.undo(); else undoHistory.redo();
+
+    const isUndo = (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'z' && !e.shiftKey;
+    const isRedo = (e.ctrlKey || e.metaKey) && !e.altKey && (
+      (e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y'
+    );
+    if (isUndo || isRedo) {
+      e.preventDefault();
+      if (isUndo) undoHistory.undo(); else undoHistory.redo();
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      canvasAPI.deleteSelectedNodes?.();
+    }
   });
 
   if (!isElectron) {

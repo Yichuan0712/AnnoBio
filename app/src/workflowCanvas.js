@@ -1067,10 +1067,79 @@ export function buildWorkflowCanvas(root, options = {}) {
     document.removeEventListener('pointerup', onPanEnd);
     document.removeEventListener('pointercancel', onPanEnd);
   }
+
+  // Marquee (box) select — Ctrl/Shift+drag on empty canvas, in place of the plain-drag pan above.
+  // Tracked in plain viewport (client) coordinates throughout, compared against each node's own
+  // getBoundingClientRect(): both are already in the same space, so no zoom/scroll math is needed
+  // (unlike node dragging, which works in un-scaled canvas-content coordinates instead).
+  const marqueeEl = document.createElement('div');
+  marqueeEl.className = 'workflow-canvas__marquee';
+  document.body.appendChild(marqueeEl);
+  let marqueeStartX = 0;
+  let marqueeStartY = 0;
+  /** Selection as it stood before this marquee drag started — toggle mode diffs against this, not the live selection, so growing/shrinking the rectangle stays reversible. */
+  let marqueeBaseline = new Set();
+  /** @type {'add'|'toggle'} */
+  let marqueeMode = 'add';
+
+  function rectsIntersect(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function onMarqueeMove(e) {
+    const rect = {
+      left: Math.min(marqueeStartX, e.clientX),
+      top: Math.min(marqueeStartY, e.clientY),
+      right: Math.max(marqueeStartX, e.clientX),
+      bottom: Math.max(marqueeStartY, e.clientY),
+    };
+    marqueeEl.style.left = `${rect.left}px`;
+    marqueeEl.style.top = `${rect.top}px`;
+    marqueeEl.style.width = `${rect.right - rect.left}px`;
+    marqueeEl.style.height = `${rect.bottom - rect.top}px`;
+
+    const hits = new Set();
+    nodesLayer.querySelectorAll('.workflow-node').forEach((node) => {
+      if (rectsIntersect(rect, node.getBoundingClientRect())) hits.add(node.dataset.nodeId);
+    });
+    const next = new Set(marqueeBaseline);
+    hits.forEach((id) => {
+      if (marqueeMode === 'toggle' && marqueeBaseline.has(id)) next.delete(id);
+      else next.add(id);
+    });
+    selectedNodeIds = next;
+    applySelectionVisuals();
+  }
+  function onMarqueeEnd() {
+    marqueeEl.classList.remove('workflow-canvas__marquee--active');
+    document.removeEventListener('pointermove', onMarqueeMove);
+    document.removeEventListener('pointerup', onMarqueeEnd);
+    document.removeEventListener('pointercancel', onMarqueeEnd);
+  }
+  function startMarqueeSelect(e) {
+    marqueeStartX = e.clientX;
+    marqueeStartY = e.clientY;
+    marqueeBaseline = new Set(selectedNodeIds);
+    marqueeMode = e.ctrlKey ? 'toggle' : 'add';
+    marqueeEl.style.left = `${e.clientX}px`;
+    marqueeEl.style.top = `${e.clientY}px`;
+    marqueeEl.style.width = '0px';
+    marqueeEl.style.height = '0px';
+    marqueeEl.classList.add('workflow-canvas__marquee--active');
+    document.addEventListener('pointermove', onMarqueeMove);
+    document.addEventListener('pointerup', onMarqueeEnd, { once: true });
+    document.addEventListener('pointercancel', onMarqueeEnd, { once: true });
+  }
+
   scrollWrapper.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     if (e.target.closest('.workflow-node') || e.target.closest('.workflow-canvas__zoom-toolbar')) return;
     e.preventDefault();
+    if (e.ctrlKey || e.shiftKey) {
+      startMarqueeSelect(e);
+      return;
+    }
+    clearSelection();
     panStartScrollLeft = scrollWrapper.scrollLeft;
     panStartScrollTop = scrollWrapper.scrollTop;
     panStartClientX = e.clientX;
@@ -1096,6 +1165,41 @@ export function buildWorkflowCanvas(root, options = {}) {
   const STAGGER = 36;
   /** @type {{ fromId: string, toId: string, type: string }[]} */
   let connections = [];
+
+  /** @type {Set<string>} Multi-selected node ids — Ctrl/Shift+click or marquee-select (see startMarqueeSelect). */
+  let selectedNodeIds = new Set();
+
+  function applySelectionVisuals() {
+    nodesLayer.querySelectorAll('.workflow-node').forEach((node) => {
+      node.classList.toggle('workflow-node--selected', selectedNodeIds.has(node.dataset.nodeId));
+    });
+  }
+
+  function clearSelection() {
+    if (selectedNodeIds.size === 0) return;
+    selectedNodeIds = new Set();
+    applySelectionVisuals();
+  }
+
+  function isNodeSelected(nodeId) {
+    return selectedNodeIds.has(nodeId);
+  }
+
+  function getSelectedNodeIds() {
+    return selectedNodeIds;
+  }
+
+  /** @param {'add'|'toggle'} mode */
+  function toggleNodeSelection(nodeId, mode) {
+    const next = new Set(selectedNodeIds);
+    if (mode === 'toggle') {
+      if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
+    } else {
+      next.add(nodeId);
+    }
+    selectedNodeIds = next;
+    applySelectionVisuals();
+  }
 
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content (imported or sampled) */
   const datasetContentByNodeId = new DatasetContentMap();
@@ -1633,6 +1737,104 @@ export function buildWorkflowCanvas(root, options = {}) {
     const ok = await showConfirm(msg, { title: 'Delete node', confirmText: 'Delete' });
     if (!ok) return;
     doDelete();
+  }
+
+  function getNodeKind(node) {
+    if (node.classList.contains('workflow-node--dataset')) return 'dataset';
+    if (node.classList.contains('workflow-node--sampler')) return 'sampler';
+    if (node.classList.contains('workflow-node--process')) return 'process';
+    if (node.classList.contains('workflow-node--run')) return 'run';
+    if (node.classList.contains('workflow-node--score')) return 'score';
+    if (node.classList.contains('workflow-node--prompt-review')) return 'promptReview';
+    return 'prompt';
+  }
+
+  /**
+   * Same rule as getWorkflowNodeDeleteBlockReason, except a reference from another node that's
+   * ALSO being deleted in this batch doesn't count as blocking — only a reference from outside
+   * the batch does. Used by deleteSelectedNodes() so selecting a connected pair (e.g. a Prompt and
+   * its Run) and deleting them together doesn't get blocked by their own connection to each other.
+   * @param {Set<string>} batchIds
+   */
+  function getWorkflowNodeDeleteBlockReasonForBatch(nodeId, kind, batchIds) {
+    const outsideOutgoing = getOutgoingEdgesFromNode(nodeId).filter((c) => !batchIds.has(c.toId));
+    if (outsideOutgoing.length > 0) return { blocked: true, reason: 'downstream' };
+    if (kind === 'dataset') {
+      const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
+        (n) => (n.dataset.runWorkingSetId || '').trim() === nodeId && !batchIds.has(n.dataset.nodeId),
+      );
+      const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
+        (n) => (n.dataset.scoreGroundTruthId || '').trim() === nodeId && !batchIds.has(n.dataset.nodeId),
+      );
+      if (usedByRun || usedByScore) return { blocked: true, reason: 'dataset_ref' };
+    }
+    return { blocked: false };
+  }
+
+  /** Delete every currently-selected node in one confirm + one undo step. Falls back to the
+   * single-node path (with its existing messaging) when only one node is selected. */
+  async function deleteSelectedNodes() {
+    const ids = Array.from(selectedNodeIds);
+    if (ids.length === 0) return;
+    if (ids.length === 1) {
+      const node = getNodeById(ids[0]);
+      if (!node) return;
+      const kind = getNodeKind(node);
+      await handleWorkflowNodeDeleteClick(ids[0], kind, () => {
+        removeConnectionsInvolvingNodeId(ids[0]);
+        node.remove();
+        selectedNodeIds.delete(ids[0]);
+        updateContentSize();
+        updateEdges();
+        emitCanvasChanged();
+      });
+      return;
+    }
+
+    const batchIds = new Set(ids);
+    const deletable = [];
+    let blockedCount = 0;
+    ids.forEach((id) => {
+      const node = getNodeById(id);
+      if (!node) return;
+      const kind = getNodeKind(node);
+      const block = getWorkflowNodeDeleteBlockReasonForBatch(id, kind, batchIds);
+      if (block.blocked) blockedCount += 1;
+      else deletable.push({ id, node, kind });
+    });
+
+    if (deletable.length === 0) {
+      showAlert(
+        "None of the selected nodes can be deleted — they're all still referenced by nodes outside the selection.",
+        { title: 'Cannot delete' },
+      );
+      return;
+    }
+
+    const anyBusy = deletable.some(
+      ({ id, kind }) =>
+        (kind === 'run' && pendingRuns.has(id)) ||
+        (kind === 'promptReview' && (pendingReviews.has(id) || pendingReviewNodeIds.has(id))),
+    );
+    let msg = `Delete ${deletable.length} node${deletable.length > 1 ? 's' : ''}? You can undo this with Ctrl+Z.`;
+    if (anyBusy) {
+      msg = `Delete ${deletable.length} node${deletable.length > 1 ? 's' : ''}? Some have a job still running; deleting them will cancel that run or review on the server — that part can't be undone.`;
+    }
+    if (blockedCount > 0) {
+      msg += ` (${blockedCount} other selected node${blockedCount > 1 ? 's' : ''} can't be deleted — still referenced outside the selection — and will be left alone.)`;
+    }
+    const ok = await showConfirm(msg, { title: 'Delete nodes', confirmText: 'Delete' });
+    if (!ok) return;
+
+    deletable.forEach(({ id, node }) => {
+      removeConnectionsInvolvingNodeId(id);
+      node.remove();
+      selectedNodeIds.delete(id);
+    });
+    applySelectionVisuals();
+    updateContentSize();
+    updateEdges();
+    emitCanvasChanged();
   }
 
   /**
@@ -2636,6 +2838,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     findUniqueDatasetExportName,
     isPromptNameAlreadyUsed,
     isRunNameAlreadyUsedForPrompt: isRunNameAlreadyUsedForPromptNodeId,
+    toggleNodeSelection,
+    isNodeSelected,
+    clearSelection,
+    getSelectedNodeIds,
   });
 
   const {
@@ -4683,5 +4889,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     isPromptNameAlreadyUsed,
     isDatasetNameAlreadyUsed,
     shutdownRunPoll,
+    clearSelection,
+    deleteSelectedNodes,
   };
 }

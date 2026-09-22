@@ -266,6 +266,26 @@
   z-index: 10;
 }
 
+.workflow-node--selected {
+  outline: 2px solid var(--primary-btn-text, #2563eb);
+  outline-offset: 2px;
+}
+
+/* Rubber-band select rectangle — tracked in viewport coordinates (see startMarqueeSelect in
+   workflowCanvas.js), so it's appended straight to <body>, not any zoomed/scrolled canvas layer. */
+.workflow-canvas__marquee {
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  border: 1px solid var(--primary-btn-text, #2563eb);
+  background: var(--primary-btn-bg, rgba(37, 99, 235, 0.12));
+}
+
+.workflow-canvas__marquee--active {
+  display: block;
+}
+
 .workflow-node--agent-created .workflow-node__icon {
   position: relative;
   overflow: visible;
