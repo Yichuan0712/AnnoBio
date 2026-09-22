@@ -102,6 +102,7 @@ NAV_LINKS = [
     ("/gallery", "Gallery"),
     ("/download", "Download"),
     ("/guide", "User Guide"),
+    ("/about", "About"),
 ]
 
 
@@ -412,6 +413,32 @@ def download_page(request: Request):
       a.link:hover { text-decoration: underline; }
     """
     return HTMLResponse(render_page(title="Download", user=user, active="/download", body=body, extra_css=extra_css))
+
+
+@app.get("/about")
+def about_page(request: Request):
+    user = current_user(request)
+    body = """
+      <h1>About AnnoBio</h1>
+      <p class="page-sub">
+        Build, tune, and share LLM annotation pipelines for biomedical data. Design a pipeline on
+        a visual canvas, auto-optimize it against ground truth, then turn it into a demo to share
+        with your team, or move it to the desktop app.
+      </p>
+      <h2 class="about-heading">Contact</h2>
+      <p>For questions about AnnoBio data, methods, website feedback, or collaboration, please contact:</p>
+      <ul class="about-contacts">
+        <li>Yichuan Zhang (<a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a>)</li>
+        <li>Duolin Wang (<a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>)</li>
+      </ul>
+    """
+    extra_css = """
+      .about-heading { font-size: 18px; margin: 32px 0 12px; }
+      .about-contacts { margin: 0; padding-left: 20px; line-height: 1.8; }
+      a.link { color: var(--accent); text-decoration: none; }
+      a.link:hover { text-decoration: underline; }
+    """
+    return HTMLResponse(render_page(title="About", user=user, active="/about", body=body, extra_css=extra_css, narrow=True))
 
 
 # Screenshots referenced by GUIDE_CHAPTERS below, served from GUIDE_IMAGES_DIR at /guide/images/*
@@ -1030,7 +1057,7 @@ async def require_login(request: Request, call_next):
     # Overleaf-style, so it's worth sharing outside the app. Publishing and forking are POSTs,
     # so they fall through to the login check below same as everything else under /gallery.
     if (
-        path in ("/", "/login", "/logout", "/register", "/download", "/guide", "/gallery", "/forgot-password", "/reset-password")
+        path in ("/", "/login", "/logout", "/register", "/download", "/guide", "/about", "/gallery", "/forgot-password", "/reset-password")
         or path.startswith("/guide/images/")
         or path.startswith("/gallery-images/")
         or (path.startswith("/gallery/") and request.method == "GET")
