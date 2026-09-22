@@ -59,6 +59,10 @@ export function createWorkflowNodeFactories(deps = {}) {
     isPromptNameAlreadyUsed,
     isRunNameAlreadyUsedForPrompt,
     openProcessDetailModal,
+    toggleNodeSelection,
+    isNodeSelected,
+    clearSelection,
+    getSelectedNodeIds,
   } = deps;
 
   function getConnectionsList() {
@@ -71,21 +75,55 @@ export function createWorkflowNodeFactories(deps = {}) {
     let nodeStartLeft = 0;
     let nodeStartTop = 0;
     let lastInteractionWasDrag = false;
+    // Set when the drag started on a node that's part of a multi-node selection — every entry
+    // moves together by the same delta. null means a normal single-node drag (the common case).
+    let groupDragEntries = null;
 
     function onPointerDown(e) {
       if (e.button !== 0) return;
       if (e.target.closest('.workflow-node__delete')) return;
+      const nodeId = node.dataset.nodeId;
+      // Ctrl/Shift+click toggles this node into/out of the selection instead of starting a drag
+      // or opening the detail modal (see the `if (e.ctrlKey || e.shiftKey) return;` guard each
+      // factory's own click handler adds right after this).
+      if (e.ctrlKey || e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleNodeSelection?.(nodeId, e.ctrlKey ? 'toggle' : 'add');
+        return;
+      }
       e.preventDefault();
       lastInteractionWasDrag = false;
-      const rect = node.getBoundingClientRect();
       const swRect = scrollWrapper.getBoundingClientRect();
       const sl = scrollWrapper.scrollLeft;
       const st = scrollWrapper.scrollTop;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
-      nodeStartLeft = (rect.left - swRect.left + sl) / getZoomLevel();
-      nodeStartTop = (rect.top - swRect.top + st) / getZoomLevel();
-      node.classList.add('workflow-node--dragging');
+
+      const isGroupDrag = isNodeSelected?.(nodeId) && (getSelectedNodeIds?.()?.size || 0) > 1;
+      if (!isGroupDrag) clearSelection?.();
+
+      if (isGroupDrag) {
+        groupDragEntries = [];
+        getSelectedNodeIds().forEach((id) => {
+          const el = getNodeById(id);
+          if (!el) return;
+          const r = el.getBoundingClientRect();
+          groupDragEntries.push({
+            el,
+            left: (r.left - swRect.left + sl) / getZoomLevel(),
+            top: (r.top - swRect.top + st) / getZoomLevel(),
+          });
+          el.classList.add('workflow-node--dragging');
+        });
+      } else {
+        groupDragEntries = null;
+        const rect = node.getBoundingClientRect();
+        nodeStartLeft = (rect.left - swRect.left + sl) / getZoomLevel();
+        nodeStartTop = (rect.top - swRect.top + st) / getZoomLevel();
+        node.classList.add('workflow-node--dragging');
+      }
+
       document.addEventListener('pointermove', onPointerMove);
       document.addEventListener('pointerup', onPointerUp, { once: true });
     }
@@ -94,12 +132,21 @@ export function createWorkflowNodeFactories(deps = {}) {
       lastInteractionWasDrag = true;
       const dx = (e.clientX - dragStartX) / getZoomLevel();
       const dy = (e.clientY - dragStartY) / getZoomLevel();
-      setNodeCanvasPosition(node, nodeStartLeft + dx, nodeStartTop + dy);
+      if (groupDragEntries) {
+        groupDragEntries.forEach(({ el, left, top }) => setNodeCanvasPosition(el, left + dx, top + dy));
+      } else {
+        setNodeCanvasPosition(node, nodeStartLeft + dx, nodeStartTop + dy);
+      }
       updateEdges();
     }
 
     function onPointerUp() {
-      node.classList.remove('workflow-node--dragging');
+      if (groupDragEntries) {
+        groupDragEntries.forEach(({ el }) => el.classList.remove('workflow-node--dragging'));
+      } else {
+        node.classList.remove('workflow-node--dragging');
+      }
+      groupDragEntries = null;
       document.removeEventListener('pointermove', onPointerMove);
       updateContentSize();
       updateEdges();
@@ -167,6 +214,7 @@ export function createWorkflowNodeFactories(deps = {}) {
 
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
+      if (e.ctrlKey || e.shiftKey) return; // handled as a selection toggle on pointerdown, not a click
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
@@ -321,6 +369,7 @@ export function createWorkflowNodeFactories(deps = {}) {
 
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
+      if (e.ctrlKey || e.shiftKey) return; // handled as a selection toggle on pointerdown, not a click
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
@@ -387,6 +436,7 @@ export function createWorkflowNodeFactories(deps = {}) {
 
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
+      if (e.ctrlKey || e.shiftKey) return; // handled as a selection toggle on pointerdown, not a click
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
@@ -465,6 +515,7 @@ export function createWorkflowNodeFactories(deps = {}) {
 
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
+      if (e.ctrlKey || e.shiftKey) return; // handled as a selection toggle on pointerdown, not a click
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
@@ -591,6 +642,7 @@ export function createWorkflowNodeFactories(deps = {}) {
 
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
+      if (e.ctrlKey || e.shiftKey) return; // handled as a selection toggle on pointerdown, not a click
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
@@ -657,6 +709,7 @@ export function createWorkflowNodeFactories(deps = {}) {
 
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
+      if (e.ctrlKey || e.shiftKey) return; // handled as a selection toggle on pointerdown, not a click
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
@@ -879,6 +932,7 @@ export function createWorkflowNodeFactories(deps = {}) {
 
     node.addEventListener('click', (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
+      if (e.ctrlKey || e.shiftKey) return; // handled as a selection toggle on pointerdown, not a click
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
