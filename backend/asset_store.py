@@ -63,7 +63,8 @@ def register(body: Registration, x_asset_token: str = Header(default='')):
     return {'project_session_id': create_session(body.root, body.assets)}
 
 
-def _asset_bytes(session_id, asset_id, max_bytes, label):
+def _validated_asset(session_id, asset_id, max_bytes, label):
+    """Resolves + integrity-checks an asset, returning (path, data)."""
     with _lock:
         session = _sessions.get(session_id)
     if not session:
@@ -80,7 +81,40 @@ def _asset_bytes(session_id, asset_id, max_bytes, label):
     data = target.read_bytes()
     if 'sha256:' + hashlib.sha256(data).hexdigest() != asset_id:
         raise ValueError(f'{label} contents changed: {asset_id}. Import it again.')
+    return target, data
+
+
+def _asset_bytes(session_id, asset_id, max_bytes, label):
+    _, data = _validated_asset(session_id, asset_id, max_bytes, label)
     return data
+
+
+_MAX_BYTES_BY_KIND = {'images': MAX_IMAGE_BYTES, 'pdf': MAX_PDF_BYTES}
+_LABEL_BY_KIND = {'images': 'Image', 'pdf': 'PDF'}
+
+
+def resolve_asset_paths(kind, asset_ids, session_id):
+    """A cell's assetIds -> real filesystem paths, for handing to code that runs on the same
+    machine (Process/Score custom code) instead of embedding file bytes into its input — the
+    code opens the file itself only if/when it actually needs the contents."""
+    max_bytes = _MAX_BYTES_BY_KIND[kind]
+    label = _LABEL_BY_KIND[kind]
+    return [str(_validated_asset(session_id, asset_id, max_bytes, label)[0]) for asset_id in asset_ids]
+
+
+def resolve_cell_for_code(value, session_id):
+    """Recursively replaces every image/pdf cell in `value` (a row dict, a list of rows, or a
+    bare cell) with a plain list of real file paths — see resolve_asset_paths. Non-asset values
+    pass through unchanged. Raises if an asset cell is present but session_id is falsy."""
+    if isinstance(value, dict) and value.get('kind') in ('images', 'pdf') and isinstance(value.get('assetIds'), list):
+        if not session_id:
+            raise ValueError('Image/PDF inputs require a project session.')
+        return resolve_asset_paths(value['kind'], value['assetIds'], session_id)
+    if isinstance(value, dict):
+        return {k: resolve_cell_for_code(v, session_id) for k, v in value.items()}
+    if isinstance(value, list):
+        return [resolve_cell_for_code(v, session_id) for v in value]
+    return value
 
 
 def image_data_url(session_id, asset_id):

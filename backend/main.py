@@ -2344,6 +2344,7 @@ class ProcessRunRequest(BaseModel):
     code: str = Field(..., min_length=1, description="User code defining process(row) -> dict | None")
     headers: list[str] = Field(..., description="Column names; row dict passed to process() is keyed by these")
     rows: list[list[Any]] = Field(default_factory=list, description="Input rows, same order as headers")
+    project_session_id: str | None = Field(default=None, description="Required when any row has an image/PDF cell -- see asset_store.py")
 
 
 def _touch_process_activity(job_id: str) -> None:
@@ -2378,9 +2379,11 @@ _load_process_jobs()
 
 def _do_process_work(job_id: str, req: ProcessRunRequest) -> None:
     from process_exec import run_process_rows
+    from asset_store import resolve_cell_for_code
 
     try:
-        total = len(req.rows)
+        resolved_rows = resolve_cell_for_code(req.rows, req.project_session_id)
+        total = len(resolved_rows)
         with _process_jobs_lock:
             _process_jobs[job_id]["total"] = total
             _process_jobs[job_id]["completed"] = 0
@@ -2405,7 +2408,7 @@ def _do_process_work(job_id: str, req: ProcessRunRequest) -> None:
             is_abandoned = (time.time() - _process_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
             return is_stopped or is_abandoned
 
-        run_process_rows(req.python_path, req.code, req.headers, req.rows, on_row, is_cancelled)
+        run_process_rows(req.python_path, req.code, req.headers, resolved_rows, on_row, is_cancelled)
 
         with _process_jobs_lock:
             _process_jobs[job_id]["status"] = "cancelled" if job_id in _process_cancelled else "done"
@@ -2490,6 +2493,7 @@ class MatchRunRequest(BaseModel):
     code: str = Field(..., min_length=1, description="User code defining match(input_row, output_row, gt_row) -> bool")
     run_rows: list[dict] = Field(default_factory=list, description="Each: {input_row: dict, output_row: dict}")
     gt_rows: list[dict] = Field(default_factory=list, description="Each: {gt_row: dict}")
+    project_session_id: str | None = Field(default=None, description="Required when any row has an image/PDF cell -- see asset_store.py")
 
 
 def _touch_match_activity(job_id: str) -> None:
@@ -2524,9 +2528,12 @@ _load_match_jobs()
 
 def _do_match_work(job_id: str, req: MatchRunRequest) -> None:
     from match_exec import run_match_pairs
+    from asset_store import resolve_cell_for_code
 
     try:
-        total = len(req.run_rows)
+        resolved_run_rows = resolve_cell_for_code(req.run_rows, req.project_session_id)
+        resolved_gt_rows = resolve_cell_for_code(req.gt_rows, req.project_session_id)
+        total = len(resolved_run_rows)
         with _match_jobs_lock:
             _match_jobs[job_id]["total"] = total
             _match_jobs[job_id]["completed"] = 0
@@ -2551,7 +2558,7 @@ def _do_match_work(job_id: str, req: MatchRunRequest) -> None:
             is_abandoned = (time.time() - _match_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
             return is_stopped or is_abandoned
 
-        run_match_pairs(req.python_path, req.code, req.run_rows, req.gt_rows, on_row, is_cancelled)
+        run_match_pairs(req.python_path, req.code, resolved_run_rows, resolved_gt_rows, on_row, is_cancelled)
 
         with _match_jobs_lock:
             _match_jobs[job_id]["status"] = "cancelled" if job_id in _match_cancelled else "done"
@@ -2628,6 +2635,7 @@ class ProcessDfRunRequest(BaseModel):
     code: str = Field(..., min_length=1, description="User code defining process(df) -> DataFrame")
     headers: list[str] = Field(..., description="Column names; each row dict passed into the DataFrame is keyed by these")
     rows: list[list[Any]] = Field(default_factory=list, description="Input rows, same order as headers")
+    project_session_id: str | None = Field(default=None, description="Required when any row has an image/PDF cell -- see asset_store.py")
 
 
 def _touch_process_df_activity(job_id: str) -> None:
@@ -2662,14 +2670,16 @@ _load_process_df_jobs()
 
 def _do_process_df_work(job_id: str, req: ProcessDfRunRequest) -> None:
     from process_df_exec import run_process_df_code
+    from asset_store import resolve_cell_for_code
 
     try:
         _touch_process_df_activity(job_id)
+        resolved_rows = resolve_cell_for_code(req.rows, req.project_session_id)
 
         def register_proc(proc: subprocess.Popen) -> None:
             _process_df_procs[job_id] = proc
 
-        outcome = run_process_df_code(req.python_path, req.code, req.headers, req.rows, register_proc=register_proc)
+        outcome = run_process_df_code(req.python_path, req.code, req.headers, resolved_rows, register_proc=register_proc)
 
         with _process_df_jobs_lock:
             was_cancelled = job_id in _process_df_cancelled
