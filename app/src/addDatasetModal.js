@@ -184,19 +184,20 @@ export function openAddDatasetModal(workflowCanvasApi) {
             <div class="dataset-source-tabs-row">
               <div class="review-detail-view-switch dataset-source-switch" role="tablist" aria-label="Data source">
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="empty">Empty table</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" data-source="upload">Upload file</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" data-source="upload">Upload Table</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pdf">Upload PDF</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pubmed">Import from PubMed</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="clinicaltrials">Import from ClinicalTrials.gov</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="preprint">Import from bioRxiv / medRxiv</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="chembl">Import from ChEMBL</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pdf">Import from PDFs</button>
               </div>
             </div>
             <div class="dataset-add-step2-scroll">
               <div class="dataset-add-step2-left">
                 <div class="dataset-source-panel dataset-source-panel--active" data-source-panel="upload">
                   <div class="dataset-import">
-                    <h3 class="dataset-import-title">Select file</h3>
+                    <h3 class="dataset-import-title">Upload a table</h3>
+                    <p class="dataset-sheet-hint">Import rows from a spreadsheet file on your computer (CSV, TSV, or XLSX). Each column becomes a text column you can retype as Image afterward.</p>
                     <div class="dataset-import-actions">
                       <input type="file" id="dataset-file-input" accept=".csv,.tsv,.xlsx,.xls,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden />
                       <button type="button" class="btn btn-secondary dataset-import-btn">Choose CSV / TSV / XLSX file</button>
@@ -212,6 +213,21 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     </div>
                   </div>
                 </div>
+                <div class="dataset-source-panel" data-source-panel="pdf" hidden>
+                  <div class="dataset-import">
+                    <h3 class="dataset-import-title">Upload PDFs</h3>
+                    <p class="dataset-sheet-hint">One row per PDF: full text, one "Image N" column per embedded image (sized to the richest PDF in the batch), and one "Table N" column per detected table (as markdown). Scanned/image-only PDFs come back with empty text and no tables — there's no OCR yet.</p>
+                    <div class="dataset-import-actions">
+                      <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple hidden />
+                      <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDF files</button>
+                      <span class="dataset-filename pdf-import-filenames" aria-live="polite"></span>
+                    </div>
+                    <div class="dataset-import-actions">
+                      <button type="button" class="btn btn-secondary pdf-import-fetch-btn">Parse PDFs</button>
+                      <span class="dataset-filename pdf-import-fetch-status" aria-live="polite"></span>
+                    </div>
+                  </div>
+                </div>
                 <div class="dataset-source-panel" data-source-panel="empty" hidden>
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Create an empty dataset</h3>
@@ -220,6 +236,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 </div>
                 <div class="dataset-source-panel" data-source-panel="pubmed" hidden>
                   <div class="dataset-import">
+                    <h3 class="dataset-import-title">Import from PubMed</h3>
+                    <p class="dataset-sheet-hint">Look up articles by PMID and import whichever fields you pick (title, abstract, authors, ...) as columns — one row per article.</p>
                     <label class="dataset-meta-label" for="pm-ids">PMIDs (one per line, or comma/space separated)</label>
                     <textarea id="pm-ids" class="dataset-meta-input dataset-meta-textarea pubmed-import-ids" rows="6" placeholder="13252012&#10;7834742&#10;11988757"></textarea>
                     <div class="pubmed-import-fields">
@@ -242,6 +260,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 </div>
                 <div class="dataset-source-panel" data-source-panel="clinicaltrials" hidden>
                   <div class="dataset-import">
+                    <h3 class="dataset-import-title">Import from ClinicalTrials.gov</h3>
+                    <p class="dataset-sheet-hint">Look up studies by NCT ID and import whichever fields you pick (title, status, conditions, ...) as columns — one row per study.</p>
                     <label class="dataset-meta-label" for="ct-ids">NCT IDs (one per line, or comma/space separated)</label>
                     <textarea id="ct-ids" class="dataset-meta-input dataset-meta-textarea clinicaltrials-import-ids" rows="6" placeholder="NCT00001372&#10;NCT04280705"></textarea>
                     <div class="clinicaltrials-import-fields">
@@ -264,6 +284,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 </div>
                 <div class="dataset-source-panel" data-source-panel="preprint" hidden>
                   <div class="dataset-import">
+                    <h3 class="dataset-import-title">Import from bioRxiv / medRxiv</h3>
+                    <p class="dataset-sheet-hint">Look up preprints by DOI and import whichever fields you pick (title, abstract, authors, ...) as columns — one row per preprint.</p>
                     <label class="dataset-meta-label" for="pp-ids">DOIs (one per line, or comma/space separated)</label>
                     <textarea id="pp-ids" class="dataset-meta-input dataset-meta-textarea preprint-import-ids" rows="6" placeholder="10.1101/2020.09.16.300343"></textarea>
                     <div class="preprint-import-fields">
@@ -286,6 +308,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 </div>
                 <div class="dataset-source-panel" data-source-panel="chembl" hidden>
                   <div class="dataset-import">
+                    <h3 class="dataset-import-title">Import from ChEMBL</h3>
+                    <p class="dataset-sheet-hint">Look up molecules by ChEMBL ID and import whichever fields you pick (name, structure, properties, ...) as columns — one row per molecule.</p>
                     <label class="dataset-meta-label" for="chembl-ids">ChEMBL IDs (one per line, or comma/space separated)</label>
                     <textarea id="chembl-ids" class="dataset-meta-input dataset-meta-textarea chembl-import-ids" rows="6" placeholder="CHEMBL25&#10;CHEMBL192"></textarea>
                     <div class="chembl-import-fields">
@@ -303,21 +327,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     <div class="dataset-import-actions">
                       <button type="button" class="btn btn-secondary chembl-import-fetch-btn">Fetch from ChEMBL</button>
                       <span class="dataset-filename chembl-import-fetch-status" aria-live="polite"></span>
-                    </div>
-                  </div>
-                </div>
-                <div class="dataset-source-panel" data-source-panel="pdf" hidden>
-                  <div class="dataset-import">
-                    <h3 class="dataset-import-title">Select PDF files</h3>
-                    <p class="dataset-sheet-hint">One row per PDF: full text, one "Image N" column per embedded image (sized to the richest PDF in the batch), and one "Table N" column per detected table (as markdown). Scanned/image-only PDFs come back with empty text and no tables — there's no OCR yet.</p>
-                    <div class="dataset-import-actions">
-                      <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple hidden />
-                      <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDF files</button>
-                      <span class="dataset-filename pdf-import-filenames" aria-live="polite"></span>
-                    </div>
-                    <div class="dataset-import-actions">
-                      <button type="button" class="btn btn-secondary pdf-import-fetch-btn">Parse PDFs</button>
-                      <span class="dataset-filename pdf-import-fetch-status" aria-live="polite"></span>
                     </div>
                   </div>
                 </div>
