@@ -38,7 +38,7 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PROJECTS_DIR = DATA_DIR / "projects"
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
-MAX_PDF_BYTES = 32 * 1024 * 1024  # matches asset_store.py's limit
+MAX_PDF_BYTES = 50 * 1024 * 1024  # matches asset_store.py's limit
 BUNDLE_VERSION = 1  # matches app/src/projectAssets.js's YC_EXTENSION bundle format
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
