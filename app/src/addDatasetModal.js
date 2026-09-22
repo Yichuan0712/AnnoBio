@@ -184,8 +184,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
               <div class="review-detail-view-switch dataset-source-switch" role="tablist" aria-label="Data source">
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="empty">Empty table</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" data-source="upload">Upload Table</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pdf">Upload PDF</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="image">Upload Images</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pdf">Upload PDF</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pubmed">Import from PubMed</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="clinicaltrials">Import from ClinicalTrials.gov</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="preprint">Import from bioRxiv / medRxiv</button>
@@ -213,17 +213,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     </div>
                   </div>
                 </div>
-                <div class="dataset-source-panel" data-source-panel="pdf" hidden>
-                  <div class="dataset-import">
-                    <h3 class="dataset-import-title">Upload PDFs</h3>
-                    <p class="dataset-sheet-hint">One row per PDF, with a Filename column and a PDF column — the file itself is attached, not parsed, so it can be sent straight to models that accept PDF input.</p>
-                    <div class="dataset-import-actions">
-                      <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple hidden />
-                      <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDFs</button>
-                      <span class="dataset-filename pdf-import-filenames" aria-live="polite"></span>
-                    </div>
-                  </div>
-                </div>
                 <div class="dataset-source-panel" data-source-panel="image" hidden>
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Upload images</h3>
@@ -232,6 +221,17 @@ export function openAddDatasetModal(workflowCanvasApi) {
                       <input type="file" id="image-file-input" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple hidden />
                       <button type="button" class="btn btn-secondary image-import-choose-btn">Choose images</button>
                       <span class="dataset-filename image-import-filenames" aria-live="polite"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="dataset-source-panel" data-source-panel="pdf" hidden>
+                  <div class="dataset-import">
+                    <h3 class="dataset-import-title">Upload PDFs</h3>
+                    <p class="dataset-sheet-hint">One row per PDF, with a Filename column and a PDF column — the file itself is attached, not parsed, so it can be sent straight to models that accept PDF input.</p>
+                    <div class="dataset-import-actions">
+                      <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple hidden />
+                      <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDFs</button>
+                      <span class="dataset-filename pdf-import-filenames" aria-live="polite"></span>
                     </div>
                   </div>
                 </div>
