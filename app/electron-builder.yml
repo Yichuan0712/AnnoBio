@@ -1,7 +1,7 @@
 # 使用方式: 先 npm run package，再对本脚本用 --pd 指向 out/app-win32-x64
 # 即: npm run dist 会执行 package && electron-builder --win --pd out/app-win32-x64
 appId: com.digitalbiologylab.promptstudio
-productName: Prompt Studio
+productName: AnnoBio
 directories:
   output: dist
 win:
@@ -9,14 +9,14 @@ win:
     - target: nsis
       arch:
         - x64
-  executableName: Prompt Studio
+  executableName: AnnoBio
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   allowElevation: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Prompt Studio
+  shortcutName: AnnoBio
   installerLanguages:
     - zh_CN
     - en_US
@@ -39,5 +39,5 @@ dmg:
   # Default title (`${productName} ${version}`) contains spaces, which trips
   # a known electron-builder/hdiutil bug on GitHub Actions macOS runners
   # (hdiutil create exits 1 with no usable error - see electron-builder#9246).
-  title: PromptStudio
+  title: AnnoBio
   format: UDZO

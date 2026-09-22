@@ -73,7 +73,7 @@ def current_user(request: Request) -> dict | None:
 # Brand mark — two nodes flowing into one, drawn in Lucide's own style (24x24 grid, 2px stroke,
 # round caps/joins) since that's what every icon elsewhere on the site already uses, but an
 # original composition rather than reusing one of theirs verbatim. Same markup as app/src/topBar.js's
-# brand mark in the Workspace's own top bar — one icon, everywhere "Prompt Studio" appears.
+# brand mark in the Workspace's own top bar — one icon, everywhere "AnnoBio" appears.
 BRAND_MARK_SVG = (
     '<svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
@@ -120,7 +120,7 @@ def render_nav(user: dict | None, active: str = "") -> str:
         )
     return (
         '<nav class="top">'
-        f'<a class="brand" href="/">{BRAND_MARK_SVG}Prompt Studio</a>'
+        f'<a class="brand" href="/">{BRAND_MARK_SVG}AnnoBio</a>'
         f'<div class="nav-links">{links_html}</div>'
         f'<div class="nav-actions">{actions_html}</div>'
         '</nav>'
@@ -254,7 +254,7 @@ def download_page(request: Request):
     hosted on Google Drive rather than served from the Hub itself)."""
     user = current_user(request)
     body = f"""
-      <h1>Download Prompt Studio</h1>
+      <h1>Download AnnoBio</h1>
       <p class="page-sub">The full Electron app: native file access, local project storage, works entirely offline.</p>
       <div class="download-grid">
         <div class="download-card">
@@ -269,7 +269,7 @@ def download_page(request: Request):
         </div>
       </div>
       <p class="download-note">
-        Prefer the browser? <a class="link" href="/register">Use Prompt Studio online</a> instead.
+        Prefer the browser? <a class="link" href="/register">Use AnnoBio online</a> instead.
       </p>
     """
     extra_css = """
@@ -331,7 +331,7 @@ REVIEW_METHODS_TABLE = """
 
 GUIDE_CHAPTERS = [
     ("overview", "Overview", lambda: f"""
-<p>Prompt Studio is a canvas for building, running, and improving LLM prompts against real datasets. You write a
+<p>AnnoBio is a canvas for building, running, and improving LLM prompts against real datasets. You write a
 prompt once, connect it to a dataset, run it across every row, and, if the output isn't good enough yet, let an
 automatic optimizer rewrite the prompt for you based on what went wrong.</p>
 <p>It's built for the kind of work that shows up in chemistry and medical research: pulling structured facts out of
@@ -370,7 +370,7 @@ optimization method can use that signal to rewrite the prompt and try again.</p>
 involved. Useful for the parts of a pipeline that are plain data manipulation, not something worth spending a
 model call on.</p>
 <h3>Credential</h3>
-<p>A <strong>credential</strong> is an API key for a model provider. You bring your own; Prompt Studio doesn't
+<p>A <strong>credential</strong> is an API key for a model provider. You bring your own; AnnoBio doesn't
 meter or bill LLM usage on your behalf.</p>
 """),
     ("website-overview", "Where to go", lambda: """
@@ -401,7 +401,7 @@ reopens exactly as you left it.</p>
 """),
     ("add-your-model", "Add your model", lambda: f"""
 <p>Before writing a prompt, open <strong>LLM settings</strong> (the chip icon in the top bar) and add a credential:
-Run, Review, and the Agent Assistant all need one to actually talk to a model. Prompt Studio doesn't restrict
+Run, Review, and the Agent Assistant all need one to actually talk to a model. AnnoBio doesn't restrict
 which LLM you use, and doesn't meter or bill usage on your behalf; you bring your own API key, and it talks to
 that provider directly. There are two ways to add one:</p>
 <ul>
@@ -458,9 +458,9 @@ dataset is built, the result is the same: a table of rows and columns you can fe
 {fig("canvas-connected", "A prompt node connected to a Run node. The dataset isn't wired in with a drawn line; that happens inside the Run node itself, next.")}
 <p>Open the Run node. Under <strong>Input dataset</strong>, pick the dataset to run against, then use the
 <strong>Map input dataset columns to prompt inputs</strong> table to match each <code>{{placeholder}}</code> from
-your prompt's sections to an actual column. Prompt Studio suggests a match automatically when the names line up.
+your prompt's sections to an actual column. AnnoBio suggests a match automatically when the names line up.
 Pick a model at the bottom and click <strong>Run</strong>.</p>
-<p>Prompt Studio sends the filled-in prompt to your model once per row, in parallel up to your configured
+<p>AnnoBio sends the filled-in prompt to your model once per row, in parallel up to your configured
 concurrency, and streams results back into a table as they complete.</p>
 {fig("run-progress", "A run in progress: completed rows appear in the results table as they finish.")}
 {fig("run-results", "A finished run: one output row per input row, with the fields defined in the prompt's output schema.")}
@@ -470,7 +470,7 @@ row's output looks wrong and you want to know why.</p>
     ("review-and-optimize", "Review and optimize a prompt", lambda: f"""
 <p>Attach a <strong>Score node</strong> to a finished run. Pick a <strong>ground truth dataset</strong> (rows with
 the answer you expect) and add one or more matching rules (for example, "Input # equals Ground truth #"). A row
-counts as a match only when every rule is satisfied; Prompt Studio computes precision, recall, and F1 across the
+counts as a match only when every rule is satisfied; AnnoBio computes precision, recall, and F1 across the
 whole run automatically. Simple comparisons like this don't need code; switch to <strong>Match by code</strong>
 instead if matching needs logic a rule can't express (fuzzy matching, numeric tolerance, and so on).</p>
 <p>Once rows are scored, the review-method dropdown becomes available. Pick a method and click
@@ -589,7 +589,7 @@ async def profile_page(request: Request):
 
     body = f"""
       <h1>Profile</h1>
-      <p class="page-sub">Your Prompt Studio account.</p>
+      <p class="page-sub">Your AnnoBio account.</p>
       <div class="profile-col">
         <div class="profile-card">
           <div class="profile-row"><span class="profile-label">Email</span><span>{user["email"]}</span></div>
