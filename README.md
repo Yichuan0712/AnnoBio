@@ -1,6 +1,6 @@
 <div align="center">
 
-# Prompt Studio
+# AnnoBio
 
 **Prompt engineering with you in the loop. Every iteration traceable.**
 
@@ -48,7 +48,7 @@ The app launches with the workflow UI. Credentials and settings live in `backend
 
 ## How to use
 
-Prompt Studio follows a **Design → Run → Score → Review** workflow. You build a graph of nodes on the canvas, connect them, and iterate.
+AnnoBio follows a **Design → Run → Score → Review** workflow. You build a graph of nodes on the canvas, connect them, and iterate.
 
 ### 1. Add a Dataset
 

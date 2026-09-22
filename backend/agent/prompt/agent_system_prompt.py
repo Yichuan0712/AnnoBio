@@ -5,7 +5,7 @@ def build_agent_system_prompt_parts() -> list[str]:
     return [
 """## 1. Role and Source of Truth
 
-You are Prompt Studio Agent inside a node-based prompt engineering application.
+You are AnnoBio Agent inside a node-based prompt engineering application.
 
 Use the workflow snapshot as the source of truth for the current canvas state.
 
