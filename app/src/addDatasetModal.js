@@ -8,7 +8,7 @@
 import * as XLSX from 'xlsx';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { showConfirm } from './alertModal.js';
-import { pdfCell } from './datasetContent.js';
+import { imageCell, pdfCell } from './datasetContent.js';
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
 
@@ -185,6 +185,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="empty">Empty table</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" data-source="upload">Upload Table</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pdf">Upload PDF</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="image">Upload Images</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pubmed">Import from PubMed</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="clinicaltrials">Import from ClinicalTrials.gov</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="preprint">Import from bioRxiv / medRxiv</button>
@@ -220,6 +221,17 @@ export function openAddDatasetModal(workflowCanvasApi) {
                       <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple hidden />
                       <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDFs</button>
                       <span class="dataset-filename pdf-import-filenames" aria-live="polite"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="dataset-source-panel" data-source-panel="image" hidden>
+                  <div class="dataset-import">
+                    <h3 class="dataset-import-title">Upload images</h3>
+                    <p class="dataset-sheet-hint">One row per image, with a Filename column and an Image column.</p>
+                    <div class="dataset-import-actions">
+                      <input type="file" id="image-file-input" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple hidden />
+                      <button type="button" class="btn btn-secondary image-import-choose-btn">Choose images</button>
+                      <span class="dataset-filename image-import-filenames" aria-live="polite"></span>
                     </div>
                   </div>
                 </div>
@@ -374,6 +386,9 @@ export function openAddDatasetModal(workflowCanvasApi) {
   const pdfFileInput = overlay.querySelector('#pdf-file-input');
   const pdfChooseBtn = overlay.querySelector('.pdf-import-choose-btn');
   const pdfFilenamesEl = overlay.querySelector('.pdf-import-filenames');
+  const imageFileInput = overlay.querySelector('#image-file-input');
+  const imageChooseBtn = overlay.querySelector('.image-import-choose-btn');
+  const imageFilenamesEl = overlay.querySelector('.image-import-filenames');
   let dataSource = 'upload';
   let pubmedJobId = null;
   let pubmedPollTimer = null;
@@ -385,6 +400,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
   let chemblPollTimer = null;
   /** @type {File[]} */
   let selectedPdfFiles = [];
+  /** @type {File[]} */
+  let selectedImageFiles = [];
 
   let fileImported = false;
   /** @type {{ headers: string[], rows: string[][] } | null} */
@@ -1052,6 +1069,53 @@ export function openAddDatasetModal(workflowCanvasApi) {
     if (selectedPdfFiles.length > 0) importPdfFiles(selectedPdfFiles);
   });
 
+  function setImageRunningUi(running) {
+    imageChooseBtn.disabled = running;
+    addBtn.disabled = running;
+  }
+
+  /** Registers each picked image as a project asset and builds a Filename + Image column
+   * dataset from them, one row per file — mirrors importPdfFiles above. */
+  async function importImageFilesForDataset(files) {
+    hideError();
+    if (files.length === 0) {
+      showError('Choose at least one image file.');
+      return;
+    }
+    const hasElectron = !!window.electronAPI;
+    if (!hasElectron && !getCurrentProjectId()) {
+      showError('Open a project first.');
+      return;
+    }
+    setImageRunningUi(true);
+    try {
+      const registered = hasElectron
+        ? await window.electronAPI.importImages(files.map((f) => window.electronAPI.getPathForFile(f)))
+        : await webImageApi.importImages(getCurrentProjectId(), files);
+      const headers = ['Filename', 'Image'];
+      const columnTypes = ['text', 'image'];
+      const rows = registered.map((asset) => [asset.name, imageCell([asset.id], [asset.name])]);
+      fileImported = true;
+      parsedDatasetContent = { headers, rows, columnTypes };
+      renderPreviewTable(headers, rows.slice(0, MAX_PREVIEW_ROWS), rows.length);
+    } catch (e) {
+      showError(`Could not upload images: ${(e && e.message) || e}`);
+    } finally {
+      setImageRunningUi(false);
+    }
+  }
+
+  imageChooseBtn.addEventListener('click', () => imageFileInput.click());
+  imageFileInput.addEventListener('change', () => {
+    selectedImageFiles = Array.from(imageFileInput.files || []);
+    imageFilenamesEl.textContent = selectedImageFiles.length === 0
+      ? ''
+      : selectedImageFiles.length === 1
+        ? selectedImageFiles[0].name
+        : `${selectedImageFiles.length} files selected`;
+    if (selectedImageFiles.length > 0) importImageFilesForDataset(selectedImageFiles);
+  });
+
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
     if (!file) return;
@@ -1186,9 +1250,11 @@ export function openAddDatasetModal(workflowCanvasApi) {
               ? 'Fetch at least one molecule from ChEMBL first.'
               : dataSource === 'pdf'
                 ? 'Choose at least one PDF file first.'
-                : dataSource === 'empty'
-                  ? 'Empty dataset is not ready yet.'
-                  : 'Choose a file to import first.');
+                : dataSource === 'image'
+                  ? 'Choose at least one image file first.'
+                  : dataSource === 'empty'
+                    ? 'Empty dataset is not ready yet.'
+                    : 'Choose a file to import first.');
       return;
     }
     const headers = parsedDatasetContent.headers;
