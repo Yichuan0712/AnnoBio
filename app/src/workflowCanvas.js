@@ -1219,6 +1219,20 @@ export function buildWorkflowCanvas(root, options = {}) {
     return Array.from(ids);
   }
 
+  /** Whether a dataset node's content has any image cell with at least one image — used to warn
+   * on delete that undo can't bring the image files back (unused assets are pruned on autosave,
+   * which can happen before an undo, so a restored cell can end up pointing at deleted files). */
+  function nodeHasImageCells(nodeId) {
+    const content = datasetContentByNodeId.get(nodeId);
+    if (!content) return false;
+    return (content.rows || []).some((row) =>
+      row.some((cell) => isImageCell(cell) && cell.assetIds && cell.assetIds.length > 0),
+    );
+  }
+
+  const IMAGE_UNDO_WARNING =
+    " It contains images — undo can bring back the row, but not the image files themselves, since unused images are cleaned up automatically and may already be gone.";
+
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
   /** Pending Review jobs: reviewNodeId -> reviewId. Poll backend and update Review node when done (like Run). */
@@ -1749,6 +1763,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       msg =
         "Delete this node? A job is still running on it; deleting will cancel that run or review on the server — that part can't be undone.";
     }
+    if (nodeHasImageCells(nodeId)) {
+      msg += IMAGE_UNDO_WARNING;
+    }
     const ok = await showConfirm(msg, { title: 'Delete node', confirmText: 'Delete' });
     if (!ok) return;
     doDelete();
@@ -1834,6 +1851,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     let msg = `Delete ${deletable.length} node${deletable.length > 1 ? 's' : ''}? You can undo this with Ctrl+Z.`;
     if (anyBusy) {
       msg = `Delete ${deletable.length} node${deletable.length > 1 ? 's' : ''}? Some have a job still running; deleting them will cancel that run or review on the server — that part can't be undone.`;
+    }
+    if (deletable.some(({ id }) => nodeHasImageCells(id))) {
+      msg += IMAGE_UNDO_WARNING;
     }
     if (blockedCount > 0) {
       msg += ` (${blockedCount} other selected node${blockedCount > 1 ? 's' : ''} can't be deleted — still referenced outside the selection — and will be left alone.)`;
