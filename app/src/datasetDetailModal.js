@@ -9,6 +9,7 @@ import * as XLSX from 'xlsx';
 import { displayCell, imageCell, isImageCell, normalizeDatasetContent } from './datasetContent.js';
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
+import { iconUpload, iconImageAdd } from './icons.js';
 
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 /** 行高下限：至少一行字高度（约 12px 字号 + 行高 + 内边距） */
@@ -101,8 +102,8 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   let searchQuery = '';
   let selectedRowIndex = -1;
   let selectedColIndex = -1;
-  // Image columns need more room than text for the "Import image"/"Clear" overlay buttons to fit
-  // without overflowing the cell (see .wd-image-cell in modals.css) — matches the 180px new
+  // Image columns need more room than text to comfortably show the image thumbnail strip (see
+  // .wd-image-cell in modals.css) — matches the 180px new
   // image columns already get when added via the in-modal "+" menu (addImageColumn below), just
   // also applied to image columns a dataset already has when this modal opens (e.g. from the PDF
   // import's Image N columns), which this line previously defaulted to the same 140px as text.
@@ -1114,7 +1115,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         const batchBtn = document.createElement('button');
         batchBtn.type = 'button';
         batchBtn.className = 'btn btn-secondary wd-header-batch-btn';
-        batchBtn.textContent = 'Batch import';
+        batchBtn.title = 'Batch import images';
+        batchBtn.setAttribute('aria-label', 'Batch import images');
+        batchBtn.appendChild(iconUpload(14));
         batchBtn.addEventListener('click', async (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1215,7 +1218,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
           const add = document.createElement('button');
           add.type = 'button';
           add.className = 'btn btn-secondary wd-image-import-btn';
-          add.textContent = 'Import image';
+          add.title = 'Import image';
+          add.setAttribute('aria-label', 'Import image');
+          add.appendChild(iconImageAdd(14));
           add.addEventListener('click', async () => {
             try {
               let assets;
@@ -1235,22 +1240,12 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
             } catch (error) { alert(error.message); }
           });
           overlayActions.appendChild(add);
-          if (cell.assetIds.length) {
-            const clear = document.createElement('button');
-            clear.type = 'button';
-            clear.className = 'btn btn-secondary wd-image-clear-btn';
-            clear.textContent = 'Clear';
-            clear.addEventListener('click', () => {
-              rows[originalRowIdx][colIdx] = imageCell();
-              persistContent();
-              render();
-            });
-            overlayActions.appendChild(clear);
-          }
           imageBox.appendChild(overlayActions);
           const strip = document.createElement('div');
           strip.className = 'wd-image-strip';
           cell.assetIds.forEach((assetId, imageIndex) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'wd-image-thumb-wrap';
             const tile = document.createElement('button');
             tile.type = 'button';
             tile.className = 'wd-image-thumb';
@@ -1269,7 +1264,26 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
                 document.body.appendChild(viewer);
               } catch (error) { alert(error.message); }
             });
-            strip.appendChild(tile);
+            wrap.appendChild(tile);
+            // Sibling, not nested inside the thumb <button> (buttons can't contain buttons) —
+            // positioned over the corner via CSS, only shown while hovering this one wrap.
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'wd-image-thumb-remove';
+            remove.title = 'Remove this image';
+            remove.setAttribute('aria-label', 'Remove this image');
+            remove.textContent = '×';
+            remove.addEventListener('click', (e) => {
+              e.stopPropagation();
+              rows[originalRowIdx][colIdx] = imageCell(
+                cell.assetIds.filter((_, i) => i !== imageIndex),
+                (cell.names || []).filter((_, i) => i !== imageIndex),
+              );
+              persistContent();
+              render();
+            });
+            wrap.appendChild(remove);
+            strip.appendChild(wrap);
             (hasElectron ? window.electronAPI.imagePreview(assetId) : webImageApi.imagePreview(getCurrentProjectId(), assetId)).then((preview) => {
               if (!tile.isConnected) return;
               tile.textContent = '';
