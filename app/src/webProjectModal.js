@@ -6,9 +6,10 @@
  * near-duplicate modal. Desktop keeps using native save/open dialogs (see renderer.js) and
  * never imports this module's UI path.
  */
+import { toBlob } from 'html-to-image';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { showAlert, showConfirm } from './alertModal.js';
-import { iconMerge, iconCopy, iconDownload, iconTrash } from './icons.js';
+import { iconMerge, iconCopy, iconDownload, iconTrash, iconGlobe } from './icons.js';
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -79,6 +80,95 @@ async function importProjectYc(file) {
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
     throw new Error(detail.detail || 'Could not import project.');
+  }
+  return res.json();
+}
+
+/** Small title/description prompt for publishing — its own modal rather than reusing showConfirm
+ * since it needs two text inputs, not just a yes/no. @returns {Promise<{title: string, description: string} | null>} */
+function showPublishDetailsModal(defaultTitle) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.innerHTML = `
+      <div class="modal-panel modal-panel--alert">
+        <div class="modal-header">
+          <h2 class="modal-title">Publish to Archive</h2>
+          <button type="button" class="modal-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="page-sub" style="margin:0 0 16px;color:var(--text-muted);font-size:13px;">
+            Anyone can see and copy this into their own account — image/PDF files included.
+          </p>
+          <div class="agent-form">
+            <div class="agent-form-field">
+              <label class="dataset-meta-label" for="archive-publish-title">Title</label>
+              <input type="text" id="archive-publish-title" class="dataset-meta-input" maxlength="200" />
+            </div>
+            <div class="agent-form-field">
+              <label class="dataset-meta-label" for="archive-publish-desc">Description (optional)</label>
+              <textarea id="archive-publish-desc" class="dataset-meta-input dataset-meta-textarea" rows="3" maxlength="2000"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="prompt-actions">
+          <button type="button" class="btn btn-secondary archive-publish-cancel">Cancel</button>
+          <button type="button" class="btn btn-primary archive-publish-confirm">Publish</button>
+        </div>
+      </div>
+    `;
+    const titleInp = overlay.querySelector('#archive-publish-title');
+    const descInp = overlay.querySelector('#archive-publish-desc');
+    titleInp.value = defaultTitle || '';
+
+    function done(value) {
+      overlay.remove();
+      document.body.style.overflow = '';
+      resolve(value);
+    }
+    overlay.querySelector('.modal-close').addEventListener('click', () => done(null));
+    overlay.querySelector('.archive-publish-cancel').addEventListener('click', () => done(null));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+    overlay.querySelector('.archive-publish-confirm').addEventListener('click', () => {
+      const title = titleInp.value.trim();
+      if (!title) { titleInp.focus(); return; }
+      done({ title, description: descInp.value.trim() });
+    });
+
+    document.body.style.overflow = 'hidden';
+    document.body.appendChild(overlay);
+    titleInp.focus();
+  });
+}
+
+/** Screenshots the live canvas viewport (whatever's currently visible/scrolled to) as a PNG blob
+ * for the Archive listing's thumbnail — best-effort: a capture failure shouldn't block publishing,
+ * it just means the listing falls back to an empty thumbnail. */
+async function captureCanvasThumbnail() {
+  const el = document.querySelector('.workflow-canvas');
+  if (!el) return null;
+  try {
+    return await toBlob(el, { pixelRatio: 0.5, backgroundColor: '#ffffff' });
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Publishes `projectId` (must be the currently open project — see captureCanvasThumbnail) to the
+ * Hub's public Archive. Hub-level endpoint, not proxied per-user backend, so it's a plain relative
+ * fetch rather than going through BACKEND_API_BASE (which points at this user's own container). */
+async function publishProjectToArchive(projectId, title, description) {
+  const thumbnail = await captureCanvasThumbnail();
+  const formData = new FormData();
+  formData.append('project_id', projectId);
+  formData.append('title', title);
+  formData.append('description', description);
+  if (thumbnail) formData.append('thumbnail', thumbnail, 'thumbnail.png');
+  const res = await fetch('/archive/publish', { method: 'POST', body: formData });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(detail || 'Could not publish to the Archive.');
   }
   return res.json();
 }
@@ -186,6 +276,30 @@ export function showProjectPickerModal(currentProjectId = null) {
               }
             });
             row.appendChild(mergeBtn);
+          }
+
+          if (project.id === currentProjectId) {
+            const publishBtn = document.createElement('button');
+            publishBtn.type = 'button';
+            publishBtn.className = 'project-picker-publish';
+            publishBtn.setAttribute('aria-label', `Publish ${project.name} to the Archive`);
+            publishBtn.title = 'Publish to Archive (public)';
+            publishBtn.appendChild(iconGlobe(15));
+            publishBtn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              const details = await showPublishDetailsModal(project.name);
+              if (!details) return;
+              publishBtn.disabled = true;
+              try {
+                await publishProjectToArchive(project.id, details.title, details.description);
+                showAlert('Published — anyone can find it in the Archive now.', { title: 'Published' });
+              } catch (err) {
+                showAlert(err.message || 'Could not publish to the Archive.', { title: 'Error' });
+              } finally {
+                publishBtn.disabled = false;
+              }
+            });
+            row.appendChild(publishBtn);
           }
 
           const duplicateBtn = document.createElement('button');

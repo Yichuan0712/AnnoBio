@@ -10,14 +10,16 @@ for an admin to create/list accounts by hand, but it's no longer the only way in
 import asyncio
 import datetime
 import os
+from html import escape
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Form, Request, Response
+from fastapi import FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
+import archive
 import containers
 import db
 from proxy import proxy_request
@@ -88,6 +90,7 @@ BRAND_MARK_SVG = (
 NAV_LINKS = [
     ("/", "Home"),
     ("/app", "Workspace"),
+    ("/archive", "Archive"),
     ("/download", "Download"),
     ("/guide", "User Guide"),
 ]
@@ -627,6 +630,139 @@ async def profile_page(request: Request):
     return HTMLResponse(render_page(title="Profile", user=user, active="/profile", body=body, extra_css=extra_css, narrow=True))
 
 
+ARCHIVE_CSS = """
+  .archive-intro-actions { margin-bottom: 24px; }
+  .archive-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }
+  .archive-card {
+    display: block; text-decoration: none; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius);
+    overflow: hidden; transition: border-color .1s;
+  }
+  .archive-card:hover { border-color: var(--accent); }
+  .archive-card-thumb, .archive-card-thumb-empty { aspect-ratio: 16/10; background: var(--bg-bar, #f4f4f5); }
+  .archive-card-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .archive-card-body { padding: 12px 14px; }
+  .archive-card-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .archive-card-meta { font-size: 12px; color: var(--text-muted); }
+  .archive-detail { display: flex; gap: 32px; flex-wrap: wrap; }
+  .archive-detail-thumb { flex: 1 1 360px; max-width: 480px; }
+  .archive-detail-thumb img, .archive-detail-thumb .archive-card-thumb-empty { display: block; width: 100%; border-radius: var(--control-radius); border: 1px solid var(--border); aspect-ratio: 16/10; object-fit: cover; background: var(--bg-bar, #f4f4f5); }
+  .archive-detail-info { flex: 1 1 280px; }
+  .archive-detail-meta { color: var(--text-muted); font-size: 13.5px; margin: 4px 0 16px; }
+  .archive-detail-desc { font-size: 14px; line-height: 1.6; margin: 0 0 24px; white-space: pre-wrap; }
+"""
+
+
+def _archive_thumb_html(item: dict, css_class: str = "archive-card-thumb") -> str:
+    if not item.get("thumbnail_path"):
+        return f'<div class="{css_class} archive-card-thumb-empty"></div>'
+    return f'<div class="{css_class}"><img src="/archive-images/{item["thumbnail_path"]}" alt="" loading="lazy"></div>'
+
+
+def _fmt_date(ts: float) -> str:
+    return datetime.datetime.fromtimestamp(ts).strftime("%b %-d, %Y") if ts else ""
+
+
+@app.get("/archive")
+def archive_list_page(request: Request):
+    user = current_user(request)
+    items = db.list_archive_items()
+    if not items:
+        grid_html = '<p class="workspaces-empty">Nothing published yet — open a project and use "Publish to Archive" to be the first.</p>'
+    else:
+        cards = "".join(
+            f"""
+            <a class="archive-card" href="/archive/{item['id']}">
+              {_archive_thumb_html(item)}
+              <div class="archive-card-body">
+                <div class="archive-card-title">{escape(item['title'])}</div>
+                <div class="archive-card-meta">{escape(item['owner_email'])} · {_fmt_date(item['created_at'])}</div>
+              </div>
+            </a>
+            """
+            for item in items
+        )
+        grid_html = f'<div class="archive-grid">{cards}</div>'
+    body = f"""
+      <h1>Archive</h1>
+      <p class="page-sub">Projects the community has published — browse freely, and add any of them to your own account to start from.</p>
+      {grid_html}
+    """
+    return HTMLResponse(render_page(title="Archive", user=user, active="/archive", body=body, extra_css=ARCHIVE_CSS))
+
+
+@app.get("/archive/{item_id}")
+def archive_detail_page(request: Request, item_id: int):
+    user = current_user(request)
+    item = db.get_archive_item(item_id)
+    if not item:
+        body = "<h1>Not found</h1><p class=\"page-sub\">This project isn't in the Archive (anymore).</p>"
+        return HTMLResponse(render_page(title="Archive", user=user, active="/archive", body=body), status_code=404)
+    if user:
+        action_html = f'<form method="post" action="/archive/{item_id}/fork"><button type="submit" class="btn btn-primary">Add to my account</button></form>'
+    else:
+        action_html = '<a class="btn btn-primary" href="/login">Log in to add this to your account</a>'
+    desc_html = f'<p class="archive-detail-desc">{escape(item["description"])}</p>' if item.get("description") else ""
+    body = f"""
+      <div class="archive-detail">
+        <div class="archive-detail-thumb">{_archive_thumb_html(item, css_class="")}</div>
+        <div class="archive-detail-info">
+          <h1>{escape(item['title'])}</h1>
+          <p class="archive-detail-meta">Published by {escape(item['owner_email'])} · {_fmt_date(item['created_at'])}</p>
+          {desc_html}
+          {action_html}
+        </div>
+      </div>
+    """
+    return HTMLResponse(render_page(title=item["title"], user=user, active="/archive", body=body, extra_css=ARCHIVE_CSS))
+
+
+@app.post("/archive/publish")
+async def archive_publish(
+    request: Request,
+    project_id: str = Form(...),
+    title: str = Form(...),
+    description: str = Form(""),
+    thumbnail: UploadFile | None = File(None),
+):
+    """Called by the web app (see webProjectModal.js) with the currently open project's id, a
+    title/description, and a PNG thumbnail captured client-side from the canvas — the Hub has no
+    way to render a canvas screenshot itself. Fetches the actual bundle from the publishing user's
+    own container (see archive.fetch_project_bundle) rather than trusting anything about the
+    project's contents from the client."""
+    user = request.state.user
+    title = title.strip()[:200]
+    if not title:
+        return Response(content="Title is required.", status_code=400)
+    try:
+        bundle_bytes = await archive.fetch_project_bundle(user["id"], project_id)
+    except (ValueError, containers.BackendUnavailable) as e:
+        return Response(content=str(e), status_code=400)
+    bundle_path = archive.save_bundle(bundle_bytes)
+    thumbnail_path = None
+    if thumbnail is not None:
+        thumb_bytes = await thumbnail.read()
+        if 0 < len(thumb_bytes) <= archive.MAX_THUMBNAIL_BYTES:
+            thumbnail_path = archive.save_thumbnail(thumb_bytes)
+    item_id = db.create_archive_item(user["id"], title, description.strip()[:2000], bundle_path, thumbnail_path)
+    return {"id": item_id}
+
+
+@app.post("/archive/{item_id}/fork")
+async def archive_fork(request: Request, item_id: int):
+    user = request.state.user
+    item = db.get_archive_item(item_id)
+    if not item:
+        return RedirectResponse("/archive", status_code=302)
+    bundle_bytes = archive.read_bundle(item["bundle_path"])
+    try:
+        new_id = await archive.import_bundle_into_container(user["id"], bundle_bytes, f"{item['title']}.yc")
+    except (ValueError, containers.BackendUnavailable) as e:
+        body = f"<h1>Could not add project</h1><p class=\"page-sub\">{escape(str(e))}</p>"
+        return HTMLResponse(render_page(title="Archive", user=user, active="/archive", body=body), status_code=502)
+    return RedirectResponse(f"/app/?open={new_id}", status_code=302)
+
+
 @app.middleware("http")
 async def no_cache_for_pages(request: Request, call_next):
     """Every page here (the Hub's own routes, and the SPA's index.html served under /app) can
@@ -645,7 +781,15 @@ async def no_cache_for_pages(request: Request, call_next):
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
-    if path in ("/", "/login", "/logout", "/register", "/download", "/guide") or path.startswith("/guide/images/"):
+    # Archive browsing (the list, a project's detail page, its thumbnail image) is public —
+    # Overleaf-style, so it's worth sharing outside the app. Publishing and forking are POSTs,
+    # so they fall through to the login check below same as everything else under /archive.
+    if (
+        path in ("/", "/login", "/logout", "/register", "/download", "/guide", "/archive")
+        or path.startswith("/guide/images/")
+        or path.startswith("/archive-images/")
+        or (path.startswith("/archive/") and request.method == "GET")
+    ):
         return await call_next(request)
     user = current_user(request)
     if not user:
@@ -672,3 +816,9 @@ if FRONTEND_DIST.is_dir():
 
 if GUIDE_IMAGES_DIR.is_dir():
     app.mount("/guide/images", StaticFiles(directory=GUIDE_IMAGES_DIR), name="guide-images")
+
+# Unlike GUIDE_IMAGES_DIR (pre-seeded before deploy), thumbnails are written by archive_publish()
+# at runtime, so the directory has to exist *before* mounting rather than being mounted
+# conditionally on already existing.
+archive.ARCHIVE_THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/archive-images", StaticFiles(directory=archive.ARCHIVE_THUMBS_DIR), name="archive-images")

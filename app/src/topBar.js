@@ -428,6 +428,7 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
       <button type="button" class="top-bar-avatar" title="${email}" aria-label="Account: ${email}">${initials}</button>
       <div class="menu-dropdown top-bar-icon-dropdown top-bar-avatar-dropdown">
         <div class="top-bar-avatar-email">${email}</div>
+        <a class="menu-option" href="/archive">Archive</a>
         <a class="menu-option" href="/profile">Profile</a>
         <button type="button" class="menu-option" data-action="logout">Log out</button>
       </div>
