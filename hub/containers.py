@@ -86,7 +86,14 @@ def ensure_running(user_id: int) -> str:
                 network=NETWORK_NAME,
                 volumes={volume_name(user_id): {"bind": "/app/backend/data", "mode": "rw"}},
                 environment={"PROMPT_STUDIO_PUBLIC_BASE_URL": PUBLIC_BASE_URL} if PUBLIC_BASE_URL else {},
-                mem_limit="512m",
+                # 512m was too tight even at rest: with dspy/langchain/boto3/fastembed/etc. all
+                # loaded, uvicorn's own baseline RSS was already ~510MB, so any extra memory
+                # pressure (e.g. PyMuPDF/pdfplumber parsing an image-heavy PDF) tipped the whole
+                # container over its cgroup limit and got uvicorn itself OOM-killed by the kernel
+                # — not a crash isolation problem, since a SIGKILL from outside the process can't
+                # be caught no matter how the work inside is isolated. See also the PDF worker's
+                # own RLIMIT_AS cap (main.py) as a second line of defense for any one file.
+                mem_limit="1024m",
                 nano_cpus=1_000_000_000,  # 1 CPU — cheap hardening against a runaway Process-node script.
                 restart_policy={"Name": "unless-stopped"},
             )
