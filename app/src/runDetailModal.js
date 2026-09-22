@@ -662,7 +662,7 @@ export function openRunDetailModal({
       });
       let sourceTypes = [];
       try { sourceTypes = JSON.parse(node?.dataset?.runInputContent || '{}').columnTypes || []; } catch (_) {}
-      const columnTypes = ['text', ...ih.map((_, i) => sourceTypes[i] === 'image' ? 'image' : 'text'), 'text', ...outputHeaders.map(() => 'text')];
+      const columnTypes = ['text', ...ih.map((_, i) => (sourceTypes[i] === 'image' || sourceTypes[i] === 'pdf') ? sourceTypes[i] : 'text'), 'text', ...outputHeaders.map(() => 'text')];
       document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: exportHeaders, columnTypes, rows } }));
       closeModal();
     });
@@ -742,7 +742,7 @@ export function openRunDetailModal({
     const content = selectedNodeId ? getSubsetContent(selectedNodeId) : null;
     const ws = getSelectedWorkingSet();
     const headers = (content?.headers || ws?.headers || []).slice();
-    const columnTypes = headers.map((_, i) => content?.columnTypes?.[i] === 'image' ? 'image' : 'text');
+    const columnTypes = headers.map((_, i) => (content?.columnTypes?.[i] === 'image' || content?.columnTypes?.[i] === 'pdf') ? content.columnTypes[i] : 'text');
     const inputTypes = getPromptTemplate()?.inputTypes || {};
     const headerSet = new Set(headers);
     inputsListEl.innerHTML = '';
@@ -766,7 +766,7 @@ export function openRunDetailModal({
       const currentCol = inputToColumn[inputName] || '';
       const requiredType = inputTypes[inputName];
       const options = headers.map((h, i) => ({ h, type: columnTypes[i] })).filter((entry) => !requiredType || entry.type === requiredType);
-      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Dataset column for ${escapeAttr(inputName)}"><option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>${options.map(({ h, type }) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}${type === 'image' ? ' 🖼' : ''}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}${requiredType ? ` <small>(${requiredType})</small>` : ''}</span>`;
+      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Dataset column for ${escapeAttr(inputName)}"><option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>${options.map(({ h, type }) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}${type === 'image' ? ' 🖼' : type === 'pdf' ? ' 📄' : ''}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}${requiredType ? ` <small>(${requiredType})</small>` : ''}</span>`;
       row.querySelector('.run-detail-column-select').addEventListener('change', (e) => {
         inputToColumn[inputName] = (e.target.value || '').trim() || '';
         if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}

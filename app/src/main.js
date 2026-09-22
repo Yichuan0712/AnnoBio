@@ -33,12 +33,12 @@ ipcMain.handle('assets:import', async (_event, paths) => {
   return projectAssets.importFiles(paths);
 });
 
-// Renderer has no filesystem access, so images that only exist in memory (e.g. extracted from a
-// PDF by the backend — see the PDF dataset import flow) come through here as raw bytes rather
-// than a file path, same asset pipeline either way.
-ipcMain.handle('assets:import-buffers', async (_event, entries) => {
-  const list = Array.isArray(entries) ? entries : [];
-  return projectAssets.importFiles(list.map((e) => ({ buffer: Buffer.from(e.data), name: e.name })));
+ipcMain.handle('assets:import-pdfs', async (_event, paths) => {
+  if (!Array.isArray(paths)) {
+    const result = await dialog.showOpenDialog({ title: 'Upload PDFs', properties: ['openFile', 'multiSelections'], filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+    paths = result.canceled ? [] : result.filePaths;
+  }
+  return projectAssets.importPdfFiles(paths);
 });
 
 ipcMain.handle('assets:prune-unused', async (_event, usedIds, options) => {
@@ -49,6 +49,14 @@ ipcMain.handle('assets:pick-files', async () => {
     title: 'Choose images to match',
     properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+ipcMain.handle('assets:pick-pdf-files', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose PDFs to match',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
   });
   return result.canceled ? [] : result.filePaths;
 });

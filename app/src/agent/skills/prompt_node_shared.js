@@ -36,7 +36,7 @@ export function buildPromptNodeSpec(args = {}) {
   const ensureUniqueName = normalizeBoolean(args?.ensure_unique_name, true);
   const inputTypes = Object.fromEntries(Object.entries(args?.inputTypes || args?.input_types || {})
     .map(([key, type]) => [toCleanString(key), toCleanString(type)])
-    .filter(([key, type]) => key && (type === 'text' || type === 'image')));
+    .filter(([key, type]) => key && (type === 'text' || type === 'image' || type === 'pdf')));
 
   if (!note) {
     throw new Error('Prompt note is required.');

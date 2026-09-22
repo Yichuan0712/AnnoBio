@@ -297,7 +297,7 @@ export class ProjectAssets {
   /**
    * @param {(string | { buffer: Uint8Array, name: string })[]} files - a file path (existing
    *   behavior), or an in-memory buffer + suggested name for bytes that don't exist as a
-   *   standalone file on disk (e.g. an image extracted from a PDF — see assets:import-buffers).
+   *   standalone file on disk.
    */
   async importFiles(files) {
     return this.enqueue(async () => {
@@ -331,6 +331,30 @@ export class ProjectAssets {
         const relative = `originals/${hash}.${ext}`;
         await fs.writeFile(path.join(root, relative), data, { flag: 'wx' }).catch((e) => { if (e.code !== 'EEXIST') throw e; });
         this.assets[id] = { path: relative, name: baseName, mime: `image/${jpg ? 'jpeg' : ext}`, bytes: data.length, width: image.width, height: image.height };
+        result.push({ id, ...this.assets[id] });
+      }
+      return result;
+    });
+  }
+
+  /** @param {string[]} files - PDF file paths, registered as attachments (not parsed). */
+  async importPdfFiles(files) {
+    return this.enqueue(async () => {
+      if (!this.file) throw new Error('Create or open a project first.');
+      const root = await this.ensureAssetRoot(this.file);
+      await fs.mkdir(path.join(root, 'originals'), { recursive: true });
+      const result = [];
+      for (const file of files) {
+        const stat = await fs.stat(file);
+        if (!stat.isFile() || stat.size > 32 * 1024 * 1024) throw new Error(`PDF must be a file under 32 MB: ${path.basename(file)}`);
+        const data = await fs.readFile(file);
+        const baseName = path.basename(file);
+        if (data.subarray(0, 5).toString('ascii') !== '%PDF-') throw new Error(`Not a PDF: ${baseName}`);
+        const hash = crypto.createHash('sha256').update(data).digest('hex');
+        const id = 'sha256:' + hash;
+        const relative = `originals/${hash}.pdf`;
+        await fs.writeFile(path.join(root, relative), data, { flag: 'wx' }).catch((e) => { if (e.code !== 'EEXIST') throw e; });
+        this.assets[id] = { path: relative, name: baseName, mime: 'application/pdf', bytes: data.length };
         result.push({ id, ...this.assets[id] });
       }
       return result;
@@ -382,8 +406,11 @@ export class ProjectAssets {
 
   async preview(id, thumbnail = true) {
     const asset = this.assets[id];
-    if (!asset || !this.file) throw new Error('Image is not in the current project.');
+    if (!asset || !this.file) throw new Error('Asset is not in the current project.');
     const data = await this.readAssetData(id, asset);
+    if (asset.mime === 'application/pdf') {
+      return { ...asset, url: `data:${asset.mime};base64,${data.toString('base64')}` };
+    }
     const image = this.decodeImage(data, thumbnail ? 160 : null);
     return { ...asset, url: image.url || `data:${asset.mime};base64,${data.toString('base64')}` };
   }
@@ -396,22 +423,26 @@ export class ProjectAssets {
   }
 
   async exportDataset(file, content) {
-    const imageDir = path.basename(file, path.extname(file)) + '.images';
-    const root = path.join(path.dirname(file), imageDir);
-    await fs.mkdir(root, { recursive: true });
+    const base = path.basename(file, path.extname(file));
+    const dirs = { images: `${base}.images`, pdf: `${base}.pdfs` };
+    for (const dirName of Object.values(dirs)) {
+      await fs.mkdir(path.join(path.dirname(file), dirName), { recursive: true });
+    }
     const rows = [];
     for (const row of content.rows) {
       const out = [];
       for (const cell of row) {
-        if (cell?.kind !== 'images') { out.push(String(cell ?? '')); continue; }
+        const dirName = dirs[cell?.kind];
+        if (!dirName) { out.push(String(cell ?? '')); continue; }
+        const root = path.join(path.dirname(file), dirName);
         const names = [];
         for (const id of cell.assetIds) {
           const asset = this.assets[id];
-          if (!asset) throw new Error('Missing image: ' + id);
+          if (!asset) throw new Error('Missing asset: ' + id);
           const data = await this.readAssetData(id, asset);
           const name = path.basename(asset.path);
           await fs.writeFile(path.join(root, name), data);
-          names.push(`${imageDir}/${name}`);
+          names.push(`${dirName}/${name}`);
         }
         out.push(JSON.stringify(names));
       }

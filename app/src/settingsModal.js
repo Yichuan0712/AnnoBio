@@ -326,7 +326,7 @@ async function openModelPicker({ loadModels, onPick, renderMeta = defaultModelPi
     }
     listEl.innerHTML = matches.slice(0, 200).map((m) => `
       <button type="button" class="openrouter-model-picker-row" data-model-id="${escapeHtml(m.id)}">
-        <span class="openrouter-model-picker-row-name">${escapeHtml(renderTitle(m))}${m.vision ? ' 🖼' : ''}</span>
+        <span class="openrouter-model-picker-row-name">${escapeHtml(renderTitle(m))}${m.vision ? ' 🖼' : ''}${m.pdf ? ' 📄' : ''}</span>
         <span class="openrouter-model-picker-row-meta">${renderMeta(m)}</span>
       </button>
     `).join('');

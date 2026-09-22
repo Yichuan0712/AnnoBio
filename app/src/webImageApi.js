@@ -35,6 +35,25 @@ export function pickImageFiles() {
   return pickFiles({ multiple: true, directory: false });
 }
 
+/** @returns {Promise<File[]>} */
+export function pickPdfFiles() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.accept = 'application/pdf';
+    input.style.display = 'none';
+    function settle(files) {
+      input.remove();
+      resolve(files);
+    }
+    input.addEventListener('change', () => settle(Array.from(input.files || [])));
+    input.addEventListener('cancel', () => settle([]));
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
 /**
  * @returns {Promise<{ name: string, fileMap: Map<string, File>, fileCount: number } | null>}
  *   `fileMap` keys files by their path relative to the chosen folder (matching how a desktop
@@ -96,6 +115,23 @@ export async function importImages(projectId, files) {
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
     throw new Error(detail.detail || 'Could not import images.');
+  }
+  return res.json();
+}
+
+/** @param {File[]} files @returns {Promise<Array<{id, path, name, mime, bytes}>>} */
+export async function importPdfs(projectId, files) {
+  if (!projectId) throw new Error('Open a project before uploading PDFs.');
+  if (!files.length) return [];
+  const formData = new FormData();
+  files.forEach((file) => formData.append('files', file));
+  const res = await fetch(`${BACKEND_API_BASE}/api/projects/${projectId}/assets/import-pdfs`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || 'Could not upload PDFs.');
   }
   return res.json();
 }

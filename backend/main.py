@@ -1,9 +1,7 @@
 from pathlib import Path
 import base64
 import concurrent.futures
-import concurrent.futures.process
 import json
-import multiprocessing
 import os
 import re
 import subprocess
@@ -12,10 +10,6 @@ import threading
 import time
 import uuid
 from typing import Any, List, Optional
-
-# Imported at module load (not lazily inside the job worker) so its module path resolves cleanly
-# when a spawned PDF-parsing worker process unpickles it — see _get_pdf_parse_executor.
-from pdf_client import parse_pdf
 
 # Ensure UTF-8 for subprocess / CLI starts (Electron also sets PYTHONUTF8 when spawning).
 os.environ.setdefault("PYTHONUTF8", "1")
@@ -111,7 +105,6 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 PUBMED_JOBS_FILE = DATA_DIR / "pubmed_jobs.json"
 CLINICALTRIALS_JOBS_FILE = DATA_DIR / "clinicaltrials_jobs.json"
 PREPRINT_JOBS_FILE = DATA_DIR / "preprint_jobs.json"
-PDF_IMPORT_JOBS_FILE = DATA_DIR / "pdf_import_jobs.json"
 CHEMBL_JOBS_FILE = DATA_DIR / "chembl_jobs.json"
 PROCESS_JOBS_FILE = DATA_DIR / "process_jobs.json"
 MATCH_JOBS_FILE = DATA_DIR / "match_jobs.json"
@@ -305,10 +298,10 @@ class RunRequest(BaseModel):
                 if not isinstance(sample.get("content"), list):
                     raise ValueError("Each sample requires a content array.")
                 for block in sample["content"]:
-                    if not isinstance(block, dict) or block.get("type") not in ("text", "image_ref"):
+                    if not isinstance(block, dict) or block.get("type") not in ("text", "image_ref", "pdf_ref"):
                         raise ValueError("Unsupported sample content block.")
-                    if block["type"] == "image_ref" and (not self.project_session_id or not isinstance(block.get("asset_id"), str)):
-                        raise ValueError("Image blocks require an asset ID and a project session.")
+                    if block["type"] in ("image_ref", "pdf_ref") and (not self.project_session_id or not isinstance(block.get("asset_id"), str)):
+                        raise ValueError("Image/PDF blocks require an asset ID and a project session.")
         return self
     output_schema: dict = Field(..., description="return_shape + fields: [{ key, type, description?, allow_none? }]")
     run_node_id: str | None = Field(default=None, description="Frontend Run node id for correlation when polling")
@@ -367,15 +360,15 @@ class ReviewRequest(BaseModel):
 
     @model_validator(mode="after")
     def image_inputs_require_session(self):
-        has_images = any(
+        has_assets = any(
             isinstance(value, dict)
-            and value.get("kind") == "images"
+            and value.get("kind") in ("images", "pdf")
             and bool(value.get("assetIds"))
             for row in self.comparison_rows
             for value in (row.row_input or {}).values()
         )
-        if has_images and not self.project_session_id:
-            raise ValueError("Review image inputs require a project session.")
+        if has_assets and not self.project_session_id:
+            raise ValueError("Review image/PDF inputs require a project session.")
         return self
 
 
@@ -704,6 +697,7 @@ def litellm_catalog():
                 "name": model_id,
                 "provider": provider,
                 "vision": info.get("supports_vision") is True,
+                "pdf": info.get("supports_pdf_input") is True,
                 "prompt_price": info.get("input_cost_per_token"),
                 "completion_price": info.get("output_cost_per_token"),
             }
@@ -2167,262 +2161,6 @@ def cancel_preprint_import(job_id: str):
             return {"ok": True, "status": _preprint_jobs[job_id].get("status")}
         _preprint_cancelled.add(job_id)
         _touch_preprint_activity(job_id)
-    return {"ok": True, "status": "cancelling"}
-
-
-# ---------- PDF import (bulk-parse PDFs into a Dataset: text + images + tables) ----------
-# Same background-thread + job_id + polling shape as the imports above, except the request body
-# is multipart file uploads (read into memory before backgrounding — Starlette's UploadFile can't
-# be read once the request context ends) rather than JSON ids. Per-PDF results accumulate in
-# job["pdfs"] as they finish; the final {headers, rows} table is only shaped once (in
-# _reshape_pdf_rows) after every PDF is done, since the column *count* for images/tables depends
-# on the max found across the whole batch. Image cells carry base64 bytes + a marker
-# (__pdfImage__) instead of an asset id: the caller (app/src/workflowCanvasRuntime.js) registers
-# each one through the normal per-platform asset pipeline and swaps in the real asset id before
-# creating the dataset node, since this endpoint has no project/asset-store context of its own.
-PDF_IMPORT_MAX_FILE_BYTES = 50 * 1024 * 1024  # 50MB/file — PDFs run bigger than the 30MB image cap
-PDF_IMPORT_MAX_FILES = 200  # sane ceiling regardless of what the client sends
-
-_pdf_import_jobs: dict[str, dict] = {}
-_pdf_import_jobs_lock = threading.Lock()
-_pdf_import_cancelled: set[str] = set()
-
-
-def _persist_pdf_import_jobs() -> None:
-    with _pdf_import_jobs_lock:
-        snapshot = dict(_pdf_import_jobs)
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        PDF_IMPORT_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-    except (OSError, TypeError) as e:
-        _safe_print(f"[PDF import] persist failed: {e}", file=sys.stderr)
-
-
-def _load_pdf_import_jobs() -> None:
-    if not PDF_IMPORT_JOBS_FILE.exists():
-        return
-    try:
-        raw = PDF_IMPORT_JOBS_FILE.read_text(encoding="utf-8")
-        jobs = json.loads(raw) or {}
-        with _pdf_import_jobs_lock:
-            _pdf_import_jobs.clear()
-            _pdf_import_jobs.update(jobs)
-    except (OSError, json.JSONDecodeError) as e:
-        _safe_print(f"[PDF import] load persisted jobs failed: {e}", file=sys.stderr)
-
-
-_load_pdf_import_jobs()
-
-
-def _reshape_pdf_rows(pdfs: list[dict]) -> tuple[list[str], list[list]]:
-    """Pivot each PDF's variable-length images/tables into fixed columns sized to the widest PDF
-    in the batch (e.g. 5 images anywhere in the batch -> every row gets "Image 1".."Image 5",
-    empty for PDFs with fewer)."""
-    max_images = max((len(p["images"]) for p in pdfs), default=0)
-    max_tables = max((len(p["tables"]) for p in pdfs), default=0)
-    headers = ["PDF Name", "Text"]
-    headers += [f"Image {i + 1}" for i in range(max_images)]
-    headers += [f"Table {i + 1}" for i in range(max_tables)]
-    rows: list[list] = []
-    for p in pdfs:
-        row: list = [p["name"], p["text"]]
-        for i in range(max_images):
-            if i < len(p["images"]):
-                img = p["images"][i]
-                row.append({
-                    "__pdfImage__": True,
-                    "data": img["data"],
-                    "ext": img["ext"],
-                    "name": f"{p['name']} image {i + 1}.{img['ext']}",
-                })
-            else:
-                row.append(None)
-        for i in range(max_tables):
-            row.append(p["tables"][i] if i < len(p["tables"]) else "")
-        rows.append(row)
-    return headers, rows
-
-
-PDF_PARSE_TIMEOUT_SEC = 120
-
-_pdf_parse_executor: "concurrent.futures.ProcessPoolExecutor | None" = None
-# spawn, not the platform default (fork on Linux): this backend is heavily multi-threaded (Run
-# concurrency, every *_import background job) by the time a PDF import request comes in, and
-# forking a child process while another thread holds a lock it's mid-use of (import machinery,
-# logging, a native library's own worker threads - numpy/onnxruntime/grpc all qualify) can leave
-# that lock permanently held in the child, hanging it forever on the first thing that needs it.
-# That's what "parsing is absurdly slow" turned out to be: not slow, hung until PDF_PARSE_TIMEOUT_SEC
-# killed it. spawn starts a genuinely fresh interpreter instead, sidestepping that class of bug
-# entirely, at the cost of the child having to import whatever module the target function lives in
-# - which is why parse_pdf (submitted directly, not wrapped) lives in the lightweight pdf_client.py
-# rather than here: the spawned child only needs to import pdf_client + PyMuPDF/pdfplumber, not the
-# rest of this file's much heavier dependency stack (dspy, langchain, boto3, fastembed, ...).
-_pdf_mp_context = multiprocessing.get_context("spawn")
-
-# ~400MB per worker process, well under the per-user container's mem_limit (see
-# hub/containers.py) even with two workers running at once. An image-heavy PDF can make
-# PyMuPDF/pdfplumber allocate enough to push the whole container over its cgroup memory limit,
-# and the kernel's OOM killer picks a victim process in that cgroup with no regard for which
-# process actually caused the pressure — it killed uvicorn itself, not just the worker, taking
-# the whole backend down with it. BrokenProcessPool/exception handling in _do_pdf_import_work
-# can't help against a SIGKILL from outside the process; this rlimit turns "container run out of
-# memory" into "this one worker hit MemoryError," which those handlers already catch.
-_PDF_WORKER_MEMORY_LIMIT_BYTES = 400 * 1024 * 1024
-
-
-def _pdf_worker_init() -> None:
-    try:
-        import resource
-        resource.setrlimit(resource.RLIMIT_AS, (_PDF_WORKER_MEMORY_LIMIT_BYTES, _PDF_WORKER_MEMORY_LIMIT_BYTES))
-    except Exception:
-        pass  # no resource module on Windows (local dev) — production runs Linux in Docker
-
-
-def _get_pdf_parse_executor() -> concurrent.futures.ProcessPoolExecutor:
-    global _pdf_parse_executor
-    if _pdf_parse_executor is None:
-        _pdf_parse_executor = concurrent.futures.ProcessPoolExecutor(
-            max_workers=2, mp_context=_pdf_mp_context, initializer=_pdf_worker_init,
-        )
-    return _pdf_parse_executor
-
-
-def _reset_pdf_parse_executor() -> None:
-    """Call after a BrokenProcessPool: the pool-wide failure means every OTHER pending/future
-    submission to that same executor would also raise, so it has to be thrown away and rebuilt
-    before the next file can be parsed."""
-    global _pdf_parse_executor
-    old, _pdf_parse_executor = _pdf_parse_executor, None
-    if old is not None:
-        try:
-            old.shutdown(wait=False, cancel_futures=True)
-        except Exception:
-            pass
-
-
-def _do_pdf_import_work(job_id: str, files: list[tuple[str, bytes]]) -> None:
-    try:
-        pdfs: list[dict] = []
-        errors: list[str] = []
-        total = len(files)
-        for i, (name, data) in enumerate(files):
-            if job_id in _pdf_import_cancelled:
-                break
-            try:
-                future = _get_pdf_parse_executor().submit(parse_pdf, data)
-                parsed = future.result(timeout=PDF_PARSE_TIMEOUT_SEC)
-                pdfs.append({
-                    "name": name,
-                    "text": parsed["text"],
-                    "images": [{"data": base64.b64encode(img["bytes"]).decode("ascii"), "ext": img["ext"]} for img in parsed["images"]],
-                    "tables": parsed["tables"],
-                })
-            except concurrent.futures.process.BrokenProcessPool:
-                errors.append(f"{name}: PDF parser crashed on this file (likely an unusual/corrupt PDF structure) — skipped")
-                _reset_pdf_parse_executor()
-            except concurrent.futures.TimeoutError:
-                errors.append(f"{name}: took longer than {PDF_PARSE_TIMEOUT_SEC}s to parse — skipped")
-            except Exception as e:
-                errors.append(f"{name}: {e}")
-            with _pdf_import_jobs_lock:
-                _pdf_import_jobs[job_id]["completed"] = i + 1
-                _pdf_import_jobs[job_id]["errors"] = errors
-            _persist_pdf_import_jobs()
-
-        headers, rows = _reshape_pdf_rows(pdfs) if pdfs else ([], [])
-        with _pdf_import_jobs_lock:
-            _pdf_import_jobs[job_id]["status"] = "cancelled" if job_id in _pdf_import_cancelled else "done"
-            _pdf_import_jobs[job_id]["headers"] = headers
-            _pdf_import_jobs[job_id]["rows"] = rows
-        _persist_pdf_import_jobs()
-    except Exception as e:
-        with _pdf_import_jobs_lock:
-            _pdf_import_jobs[job_id] = {"status": "done", "error": str(e)}
-        _persist_pdf_import_jobs()
-
-
-@app.post("/api/pdf/import")
-async def start_pdf_import(files: List[UploadFile] = File(...)):
-    """Start a bulk PDF import (text + embedded images + tables) in the background; returns 202
-    with job_id. Poll GET .../result/{job_id}."""
-    if not files:
-        raise HTTPException(status_code=400, detail="No files uploaded")
-    if len(files) > PDF_IMPORT_MAX_FILES:
-        raise HTTPException(status_code=400, detail=f"Too many files (max {PDF_IMPORT_MAX_FILES})")
-
-    read_files: list[tuple[str, bytes]] = []
-    skipped: list[str] = []
-    for f in files:
-        data = await f.read()
-        name = f.filename or "document.pdf"
-        if not name.lower().endswith(".pdf"):
-            skipped.append(f"{name}: not a PDF")
-            continue
-        if len(data) > PDF_IMPORT_MAX_FILE_BYTES:
-            skipped.append(f"{name}: over {PDF_IMPORT_MAX_FILE_BYTES // (1024 * 1024)}MB")
-            continue
-        read_files.append((name, data))
-
-    if not read_files:
-        raise HTTPException(status_code=400, detail="No valid PDFs to import: " + "; ".join(skipped) if skipped else "No valid PDFs to import")
-
-    job_id = str(uuid.uuid4())
-    with _pdf_import_jobs_lock:
-        _pdf_import_jobs[job_id] = {
-            "status": "running",
-            "completed": 0,
-            "total": len(read_files),
-            "headers": [],
-            "rows": [],
-            "errors": [],
-            "skipped": skipped,
-        }
-    _persist_pdf_import_jobs()
-    thread = threading.Thread(target=_do_pdf_import_work, args=(job_id, read_files), daemon=True)
-    thread.start()
-    from fastapi.responses import JSONResponse
-    return JSONResponse(status_code=202, content={"job_id": job_id, "skipped": skipped})
-
-
-@app.get("/api/pdf/import/result/{job_id}")
-def get_pdf_import_result(job_id: str):
-    """Return 202 while running, 200 when done. Rows/headers are only meaningful once done —
-    see _reshape_pdf_rows's docstring for why the column count can't be known mid-batch."""
-    with _pdf_import_jobs_lock:
-        job = _pdf_import_jobs.get(job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Import job not found")
-        status = job.get("status")
-        completed = job.get("completed", 0)
-        total = job.get("total", 0)
-        errors = job.get("errors") or []
-        skipped = job.get("skipped") or []
-        error = job.get("error")
-    if status == "running":
-        from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=202, content={"status": "running", "completed": completed, "total": total})
-    if error:
-        return {"status": "done", "error": error, "headers": [], "rows": []}
-    return {
-        "status": status,
-        "completed": completed,
-        "total": total,
-        "headers": job.get("headers") or [],
-        "rows": job.get("rows") or [],
-        "errors": errors,
-        "skipped": skipped,
-    }
-
-
-@app.post("/api/pdf/import/cancel/{job_id}")
-def cancel_pdf_import(job_id: str):
-    """Mark import as cancelled; worker stops before the next PDF (already-parsed ones are kept)."""
-    with _pdf_import_jobs_lock:
-        if job_id not in _pdf_import_jobs:
-            raise HTTPException(status_code=404, detail="Import job not found")
-        if _pdf_import_jobs[job_id].get("status") != "running":
-            return {"ok": True, "status": _pdf_import_jobs[job_id].get("status")}
-        _pdf_import_cancelled.add(job_id)
     return {"ok": True, "status": "cancelling"}
 
 

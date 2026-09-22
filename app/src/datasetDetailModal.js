@@ -6,10 +6,10 @@
  */
 
 import * as XLSX from 'xlsx';
-import { displayCell, imageCell, isImageCell, normalizeDatasetContent } from './datasetContent.js';
+import { displayCell, imageCell, isImageCell, pdfCell, isPdfCell, cloneCell, normalizeDatasetContent } from './datasetContent.js';
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
-import { iconImageAdd } from './icons.js';
+import { iconImageAdd, iconFileText } from './icons.js';
 
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 /** 行高下限：至少一行字高度（约 12px 字号 + 行高 + 内边距） */
@@ -107,10 +107,10 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   // image columns already get when added via the in-modal "+" menu (addImageColumn below), just
   // also applied to image columns a dataset already has when this modal opens (e.g. from the PDF
   // import's Image N columns), which this line previously defaulted to the same 140px as text.
-  let columnWidths = headers.map((_, i) => (columnTypes[i] === 'image' ? 180 : 140));
+  let columnWidths = headers.map((_, i) => (columnTypes[i] === 'image' ? 180 : columnTypes[i] === 'pdf' ? 160 : 140));
   let rowHeights = rows.map(() => undefined);
   const initialHeaders = headers.map((h) => h);
-  const initialRows = rows.map((r) => r.map((cell) => isImageCell(cell) ? imageCell(cell.assetIds, cell.names) : cell));
+  const initialRows = rows.map((r) => r.map((cell) => cloneCell(cell)));
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -367,7 +367,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     });
   }
 
-  function buildLinkImagesPlan(targetColIndex, sourceColIndex, filePaths = []) {
+  function buildLinkImagesPlan(targetColIndex, sourceColIndex, filePaths = [], cellTest = isImageCell) {
     const sourceRows = rows.map((row, rowIndex) => {
       const rawValue = displayCell(row?.[sourceColIndex] ?? '').trim();
       const key = normalizeMatchKey(basename(rawValue));
@@ -421,13 +421,13 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     const matchedFileEntries = matchedEntries.flatMap((entry) => entry.files.map((file) => ({ ...file, rowIndex: entry.rowIndex })));
     const overwriteRows = matchedEntries.filter(({ rowIndex }) => {
       const current = Number.isInteger(targetColIndex) ? rows[rowIndex]?.[targetColIndex] : null;
-      return isImageCell(current) && current.assetIds.length > 0;
+      return cellTest(current) && current.assetIds.length > 0;
     });
     const previewRows = matchedEntries.slice(0, 12).map(({ rowIndex, files }) => ({
       rowIndex,
       sourceValue: sourceRows[rowIndex]?.rawValue || '',
       fileNames: files.map((file) => file.name),
-      existingCount: Number.isInteger(targetColIndex) && isImageCell(rows[rowIndex]?.[targetColIndex])
+      existingCount: Number.isInteger(targetColIndex) && cellTest(rows[rowIndex]?.[targetColIndex])
         ? rows[rowIndex][targetColIndex].assetIds.length
         : 0,
     }));
@@ -792,6 +792,166 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     renderPlan();
   }
 
+  async function openPdfImportModal(targetColIndex) {
+    if (!Number.isInteger(targetColIndex) || columnTypes[targetColIndex] !== 'pdf') {
+      alert('Please open batch import from a PDF column.');
+      return;
+    }
+    const textColumns = headers
+      .map((header, index) => ({ index, header: String(header ?? '').trim() || `Column ${index + 1}` }))
+      .filter(({ index }) => columnTypes[index] !== 'pdf');
+    if (textColumns.length === 0) {
+      alert('Add a filename text column first. Each row should contain a filename like xxx.pdf.');
+      return;
+    }
+    if (!hasElectron && !getCurrentProjectId()) {
+      alert('Open a project first.');
+      return;
+    }
+
+    const pdfColName = headers[targetColIndex] || `PDF ${targetColIndex + 1}`;
+    let sourceColIndex = textColumns[0].index;
+    let selectedFiles = [];
+    let plan = buildLinkImagesPlan(targetColIndex, sourceColIndex, selectedFiles, isPdfCell);
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+      <div class="modal-panel modal-panel--dataset-image-import">
+        <div class="modal-header">
+          <h2 class="modal-title">Batch import PDFs<span class="dataset-image-import-target-note">into "${escapeHtml(pdfColName)}"</span></h2>
+          <button type="button" class="modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body dataset-image-import-body">
+          <div class="dataset-image-import-form">
+            <div class="agent-form-field">
+              <label class="dataset-meta-label" for="wd-pdf-source-column">Filename Column</label>
+              <select id="wd-pdf-source-column" class="dataset-meta-input">
+                ${textColumns.map(({ index, header }) => `<option value="${index}" ${index === sourceColIndex ? 'selected' : ''}>${escapeHtml(header)}</option>`).join('')}
+              </select>
+              <p class="dataset-sheet-hint">Values in this column are matched to uploaded PDF filenames.</p>
+            </div>
+            <div class="agent-form-field">
+              <label class="dataset-meta-label">PDF Files</label>
+              <div class="dataset-import-actions">
+                <button type="button" class="btn btn-secondary dataset-image-import-pick-files">Choose PDFs</button>
+                <span class="dataset-filename dataset-image-import-source-status">No PDF files selected.</span>
+              </div>
+            </div>
+          </div>
+          <div class="prompt-form-error prompt-modal-error dataset-image-import-error" hidden></div>
+          <div class="dataset-image-import-summary"></div>
+          <div class="dataset-image-import-preview"></div>
+        </div>
+        <div class="prompt-actions">
+          <button type="button" class="btn btn-secondary dataset-image-import-cancel">Cancel</button>
+          <button type="button" class="btn btn-primary dataset-image-import-apply">Import</button>
+        </div>
+      </div>
+    `;
+
+    const closeModal = () => modal.remove();
+    const closeBtn = modal.querySelector('.modal-close');
+    const cancelBtn = modal.querySelector('.dataset-image-import-cancel');
+    const applyBtn = modal.querySelector('.dataset-image-import-apply');
+    const pickFilesBtn = modal.querySelector('.dataset-image-import-pick-files');
+    const sourceColumnSelect = modal.querySelector('#wd-pdf-source-column');
+    const sourceStatusEl = modal.querySelector('.dataset-image-import-source-status');
+    const errorEl = modal.querySelector('.dataset-image-import-error');
+    const summaryEl = modal.querySelector('.dataset-image-import-summary');
+    const previewEl = modal.querySelector('.dataset-image-import-preview');
+
+    function setError(message = '') {
+      errorEl.textContent = message;
+      errorEl.hidden = !message;
+    }
+
+    function renderPlan() {
+      sourceColIndex = parseInt(sourceColumnSelect.value, 10);
+      plan = buildLinkImagesPlan(targetColIndex, sourceColIndex, selectedFiles, isPdfCell);
+      sourceStatusEl.textContent = selectedFiles.length
+        ? `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} selected.`
+        : 'No PDF files selected.';
+      summaryEl.innerHTML = `
+        ${selectedFiles.length === 0
+          ? '<p class="dataset-image-import-note">Choose PDF files to preview matches.</p>'
+          : `
+            <p class="dataset-image-import-summary-line">
+              ${plan.matchedFileEntries.length} matched file${plan.matchedFileEntries.length === 1 ? '' : 's'} across ${plan.matchedEntries.length} row${plan.matchedEntries.length === 1 ? '' : 's'}.
+            </p>
+            <p class="dataset-image-import-note">
+              Missing rows: ${plan.missingRows.length} · Unused files: ${plan.unmatchedFiles.length} · Existing PDFs: ${plan.overwriteRows.length}
+            </p>
+          `}
+      `;
+      const missingPreview = plan.missingRows.slice(0, 8).map((item) => item.rawValue).join(', ');
+      const unmatchedPreview = plan.unmatchedFiles.slice(0, 8).map((item) => item.name).join(', ');
+      const duplicatePreview = plan.duplicateSourceKeys.slice(0, 5).map((item) => item.sample).join(', ');
+      previewEl.innerHTML = `
+        ${missingPreview ? `<p class="dataset-image-import-note">Missing filenames: ${escapeHtml(missingPreview)}${plan.missingRows.length > 8 ? ' ...' : ''}</p>` : ''}
+        ${unmatchedPreview ? `<p class="dataset-image-import-note">Unused uploaded files: ${escapeHtml(unmatchedPreview)}${plan.unmatchedFiles.length > 8 ? ' ...' : ''}</p>` : ''}
+        ${duplicatePreview ? `<p class="dataset-image-import-note">Duplicate source filenames: ${escapeHtml(duplicatePreview)}${plan.duplicateSourceKeys.length > 5 ? ' ...' : ''}</p>` : ''}
+      `;
+      const warnings = [];
+      if (plan.duplicateSourceKeys.length > 0) {
+        warnings.push('The filename column contains duplicate values. Each filename should map to one row.');
+      }
+      if (selectedFiles.length > 0 && plan.matchedFileEntries.length === 0) {
+        warnings.push('No uploaded filenames matched the selected filename column.');
+      }
+      setError(warnings.join(' '));
+      applyBtn.disabled = selectedFiles.length === 0 || plan.matchedFileEntries.length === 0 || plan.duplicateSourceKeys.length > 0;
+    }
+
+    closeBtn.addEventListener('click', closeModal);
+    cancelBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) closeModal();
+    });
+    sourceColumnSelect.addEventListener('change', renderPlan);
+    pickFilesBtn.addEventListener('click', async () => {
+      selectedFiles = await (hasElectron ? window.electronAPI.pickPdfFiles() : webImageApi.pickPdfFiles());
+      renderPlan();
+    });
+    applyBtn.addEventListener('click', async () => {
+      renderPlan();
+      if (applyBtn.disabled) return;
+      try {
+        applyBtn.disabled = true;
+        const paths = plan.matchedFileEntries.map((entry) => entry.path);
+        const imported = hasElectron
+          ? await window.electronAPI.importPdfs(paths)
+          : await webImageApi.importPdfs(getCurrentProjectId(), paths);
+        const grouped = new Map();
+        imported.forEach((asset, index) => {
+          const rowIndex = plan.matchedFileEntries[index]?.rowIndex;
+          if (!Number.isInteger(rowIndex)) return;
+          const list = grouped.get(rowIndex) || [];
+          list.push(asset);
+          grouped.set(rowIndex, list);
+        });
+        grouped.forEach((assets, rowIndex) => {
+          const nextAssets = [];
+          const nextNames = [];
+          assets.forEach((asset) => {
+            nextAssets.push(asset.id);
+            nextNames.push(asset.name);
+          });
+          rows[rowIndex][targetColIndex] = pdfCell(nextAssets, nextNames);
+        });
+        persistContent();
+        render();
+        closeModal();
+      } catch (error) {
+        setError(error?.message || String(error));
+        applyBtn.disabled = false;
+      }
+    });
+
+    document.body.appendChild(modal);
+    renderPlan();
+  }
+
   async function openImagePathImportModal(targetColIndex, options = {}) {
     const imageColName = headers[targetColIndex] || `Image ${targetColIndex + 1}`;
     const fixedRawValues = Array.isArray(options.rawValues) ? options.rawValues.map((value) => String(value ?? '')) : null;
@@ -1034,6 +1194,17 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     return nextIndex;
   }
 
+  function addPdfColumn() {
+    headers.push(`PDF ${headers.length + 1}`);
+    columnTypes.push('pdf');
+    columnWidths.push(160);
+    rows.forEach((row) => row.push(pdfCell()));
+    const nextIndex = headers.length - 1;
+    render();
+    persistContent();
+    return nextIndex;
+  }
+
   function openAddColumnMenu(anchor) {
     closeAddColumnMenu();
     const rect = anchor.getBoundingClientRect();
@@ -1042,6 +1213,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     menu.innerHTML = `
       <button type="button" class="wd-add-column-menu__item" data-kind="text">Text column</button>
       <button type="button" class="wd-add-column-menu__item" data-kind="image">Image column</button>
+      <button type="button" class="wd-add-column-menu__item" data-kind="pdf">PDF column</button>
     `;
     menu.style.left = `${Math.max(8, rect.left)}px`;
     menu.style.top = `${rect.bottom}px`;
@@ -1055,6 +1227,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       const item = event.target.closest('.wd-add-column-menu__item');
       if (!item) return;
       if (item.dataset.kind === 'image') addImageColumn();
+      else if (item.dataset.kind === 'pdf') addPdfColumn();
       else addTextColumn();
       closeAddColumnMenu();
       document.removeEventListener('pointerdown', onDocPointerDown, true);
@@ -1075,7 +1248,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
 
     const table = overlay.querySelector('.working-dataset-edit-table');
     if (table && columnWidths.length !== headers.length) {
-      while (columnWidths.length < headers.length) columnWidths.push(columnTypes[columnWidths.length] === 'image' ? 180 : 140);
+      while (columnWidths.length < headers.length) columnWidths.push(columnTypes[columnWidths.length] === 'image' ? 180 : columnTypes[columnWidths.length] === 'pdf' ? 160 : 140);
       if (columnWidths.length > headers.length) columnWidths = columnWidths.slice(0, headers.length);
     }
     applyTableLayout();
@@ -1109,20 +1282,22 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         }
       });
       inp.addEventListener('click', (e) => e.stopPropagation());
-      if (columnTypes[colIdx] === 'image') {
+      if (columnTypes[colIdx] === 'image' || columnTypes[colIdx] === 'pdf') {
+        const isPdfCol = columnTypes[colIdx] === 'pdf';
         const headerTop = document.createElement('div');
         headerTop.className = 'wd-header-top';
         headerTop.appendChild(inp);
         const batchBtn = document.createElement('button');
         batchBtn.type = 'button';
         batchBtn.className = 'btn btn-secondary wd-header-batch-btn';
-        batchBtn.title = 'Batch import images';
-        batchBtn.setAttribute('aria-label', 'Batch import images');
-        batchBtn.appendChild(iconImageAdd(14));
+        batchBtn.title = isPdfCol ? 'Batch import PDFs' : 'Batch import images';
+        batchBtn.setAttribute('aria-label', isPdfCol ? 'Batch import PDFs' : 'Batch import images');
+        batchBtn.appendChild(isPdfCol ? iconFileText(14) : iconImageAdd(14));
         batchBtn.addEventListener('click', async (e) => {
           e.preventDefault();
           e.stopPropagation();
-          await openImageImportModal(colIdx);
+          if (isPdfCol) await openPdfImportModal(colIdx);
+          else await openImageImportModal(colIdx);
         });
         headerTop.appendChild(batchBtn);
         th.appendChild(headerTop);
@@ -1299,6 +1474,89 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
           tr.appendChild(td);
           return;
         }
+        if (columnTypes[colIdx] === 'pdf') {
+          const cell = isPdfCell(rowData[colIdx]) ? rowData[colIdx] : pdfCell();
+          const pdfBox = document.createElement('div');
+          pdfBox.className = 'wd-pdf-cell';
+          if (!cell.assetIds.length) pdfBox.classList.add('wd-pdf-cell--empty');
+          const overlayActions = document.createElement('div');
+          overlayActions.className = 'wd-image-overlay-actions';
+          const add = document.createElement('button');
+          add.type = 'button';
+          add.className = 'btn btn-secondary wd-image-import-btn';
+          add.title = 'Upload PDF';
+          add.setAttribute('aria-label', 'Upload PDF');
+          add.appendChild(iconFileText(14));
+          add.addEventListener('click', async () => {
+            try {
+              let assets;
+              if (hasElectron) {
+                assets = await window.electronAPI.importPdfs();
+              } else {
+                const files = await webImageApi.pickPdfFiles();
+                assets = files.length ? await webImageApi.importPdfs(getCurrentProjectId(), files) : [];
+              }
+              if (!assets.length) return;
+              rows[originalRowIdx][colIdx] = pdfCell(
+                [...cell.assetIds, ...assets.map((a) => a.id)],
+                [...(cell.names || []), ...assets.map((a) => a.name)],
+              );
+              persistContent();
+              render();
+            } catch (error) { alert(error.message); }
+          });
+          overlayActions.appendChild(add);
+          pdfBox.appendChild(overlayActions);
+          const strip = document.createElement('div');
+          strip.className = 'wd-pdf-strip';
+          cell.assetIds.forEach((assetId, fileIndex) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'wd-pdf-chip-wrap';
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'wd-pdf-chip';
+            const chipName = cell.names?.[fileIndex] || 'PDF';
+            chip.title = chipName;
+            chip.appendChild(iconFileText(14));
+            const label = document.createElement('span');
+            label.className = 'wd-pdf-chip-name';
+            label.textContent = chipName;
+            chip.appendChild(label);
+            chip.addEventListener('click', async () => {
+              try {
+                const full = hasElectron
+                  ? await window.electronAPI.imagePreview(assetId, false)
+                  : await webImageApi.imagePreview(getCurrentProjectId(), assetId, false);
+                const blob = await (await fetch(full.url)).blob();
+                window.open(URL.createObjectURL(blob), '_blank');
+              } catch (error) { alert(error.message); }
+            });
+            wrap.appendChild(chip);
+            // Sibling, not nested inside the chip <button> (buttons can't contain buttons) —
+            // positioned over the corner via CSS, only shown while hovering this one wrap.
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'wd-pdf-chip-remove';
+            remove.title = 'Remove this PDF';
+            remove.setAttribute('aria-label', 'Remove this PDF');
+            remove.textContent = '×';
+            remove.addEventListener('click', (e) => {
+              e.stopPropagation();
+              rows[originalRowIdx][colIdx] = pdfCell(
+                cell.assetIds.filter((_, i) => i !== fileIndex),
+                (cell.names || []).filter((_, i) => i !== fileIndex),
+              );
+              persistContent();
+              render();
+            });
+            wrap.appendChild(remove);
+            strip.appendChild(wrap);
+          });
+          pdfBox.append(strip);
+          td.appendChild(pdfBox);
+          tr.appendChild(td);
+          return;
+        }
         const textarea = document.createElement('textarea');
         textarea.rows = 2;
         textarea.className = 'wd-cell-inp wd-cell-textarea';
@@ -1383,7 +1641,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   }
 
   addRowBtn.addEventListener('click', () => {
-    rows.push(columnTypes.map((type) => type === 'image' ? imageCell() : ''));
+    rows.push(columnTypes.map((type) => type === 'image' ? imageCell() : type === 'pdf' ? pdfCell() : ''));
     rowIds.push(crypto.randomUUID());
     rowHeights.push(undefined);
     render();
@@ -1446,7 +1704,8 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         { name: 'TSV', extensions: ['tsv'] },
         { name: 'Excel', extensions: ['xlsx'] },
       ];
-      if (columnTypes.includes('image')) filters.splice(1);
+      const hasAssetColumn = columnTypes.includes('image') || columnTypes.includes('pdf');
+      if (hasAssetColumn) filters.splice(1);
       let path;
       let encoding = 'utf8';
       let payload;
@@ -1461,7 +1720,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         path = `${defaultBase}.csv`;
       }
       if (path) {
-        if (columnTypes.includes('image')) {
+        if (hasAssetColumn) {
           if (hasElectron) {
             await api.exportImageDataset(path, { headers, columnTypes, rowIds, rows });
           } else {

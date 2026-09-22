@@ -10,7 +10,7 @@ export const designPromptNodeMeta = Object.freeze({
         content: 'string (required section content)',
       },
     ],
-    input_types: 'object (optional placeholder name -> "text" or "image")',
+    input_types: 'object (optional placeholder name -> "text", "image" or "pdf")',
     outputFormat: {
       returnShape: 'string (optional, usually "single" or "table")',
       fields: [
