@@ -8,6 +8,11 @@ import io
 import pymupdf as fitz  # `import fitz` still works but is the deprecated spelling
 import pdfplumber
 
+# Academic PDFs embed plenty of images that aren't figures — journal logos, section-heading
+# icons, single-color spacer/rule images, tiny bullet glyphs. Anything smaller than this in
+# either dimension gets dropped rather than cluttering the Image N columns with noise.
+MIN_IMAGE_DIMENSION_PX = 64
+
 
 def _rows_to_markdown(rows: "list[list[str | None]]") -> str:
     """Render a pdfplumber-style table (list of row lists) as a GitHub-flavored markdown table."""
@@ -32,7 +37,8 @@ def parse_pdf(data: bytes) -> dict:
     """
     Returns {"text": str, "images": [{"bytes": bytes, "ext": str}], "tables": [str]}.
     Images are the PDF's own embedded raster images (not full-page renders), deduped by xref
-    within the document; tables are detected per page and each rendered independently as
+    within the document and filtered to at least MIN_IMAGE_DIMENSION_PX in both dimensions (drops
+    logos/icons/spacer images); tables are detected per page and each rendered independently as
     markdown, in page order.
     """
     text_parts: list[str] = []
@@ -50,6 +56,8 @@ def parse_pdf(data: bytes) -> dict:
                 try:
                     extracted = doc.extract_image(xref)
                 except Exception:
+                    continue
+                if extracted.get("width", 0) < MIN_IMAGE_DIMENSION_PX or extracted.get("height", 0) < MIN_IMAGE_DIMENSION_PX:
                     continue
                 img_bytes = extracted.get("image")
                 if img_bytes:

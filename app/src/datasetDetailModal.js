@@ -101,7 +101,12 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   let searchQuery = '';
   let selectedRowIndex = -1;
   let selectedColIndex = -1;
-  let columnWidths = headers.map(() => 140);
+  // Image columns need more room than text for the "Import image"/"Clear" overlay buttons to fit
+  // without overflowing the cell (see .wd-image-cell in modals.css) — matches the 180px new
+  // image columns already get when added via the in-modal "+" menu (addImageColumn below), just
+  // also applied to image columns a dataset already has when this modal opens (e.g. from the PDF
+  // import's Image N columns), which this line previously defaulted to the same 140px as text.
+  let columnWidths = headers.map((_, i) => (columnTypes[i] === 'image' ? 180 : 140));
   let rowHeights = rows.map(() => undefined);
   const initialHeaders = headers.map((h) => h);
   const initialRows = rows.map((r) => r.map((cell) => isImageCell(cell) ? imageCell(cell.assetIds, cell.names) : cell));
@@ -236,6 +241,44 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     table.style.width = `${Math.max(tableWidth, rowNumWidth)}px`;
   }
 
+  /** Recognizes the specific GFM table shape backend/pdf_client.py's _rows_to_markdown emits
+   * (header row, a |---|---| separator, body rows) — not a general markdown parser. Returns null
+   * for anything else so plain text cells keep showing just the raw-text tooltip. */
+  function parseMarkdownTable(text) {
+    const lines = String(text || '').trim().split('\n').map((l) => l.trim()).filter(Boolean);
+    if (lines.length < 2) return null;
+    const isRow = (l) => l.startsWith('|') && l.endsWith('|') && l.length > 1;
+    if (!isRow(lines[0]) || !/^\|(\s*:?-+:?\s*\|)+$/.test(lines[1])) return null;
+    const splitRow = (l) => l.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+    return { header: splitRow(lines[0]), body: lines.slice(2).filter(isRow).map(splitRow) };
+  }
+
+  function renderMarkdownTablePreview({ header, body }) {
+    const table = document.createElement('table');
+    table.className = 'wd-tooltip-md-table';
+    const thead = document.createElement('thead');
+    const headerTr = document.createElement('tr');
+    header.forEach((h) => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      headerTr.appendChild(th);
+    });
+    thead.appendChild(headerTr);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    body.forEach((row) => {
+      const tr = document.createElement('tr');
+      row.forEach((c) => {
+        const td = document.createElement('td');
+        td.textContent = c;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    return table;
+  }
+
   const tableTooltip = document.createElement('div');
   tableTooltip.className = 'prompt-detail-schema-tooltip';
   tableTooltip.setAttribute('role', 'tooltip');
@@ -252,7 +295,19 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
       const textarea = cell.querySelector('.wd-cell-textarea');
       const headerInp = cell.querySelector('.wd-header-inp');
       const text = textarea ? textarea.value : (headerInp ? headerInp.value : '');
-      tableTooltip.textContent = text ?? '';
+      tableTooltip.innerHTML = '';
+      const raw = document.createElement('pre');
+      raw.className = 'wd-tooltip-raw';
+      raw.textContent = text ?? '';
+      tableTooltip.appendChild(raw);
+      const parsedTable = parseMarkdownTable(text);
+      if (parsedTable) {
+        const label = document.createElement('p');
+        label.className = 'wd-tooltip-md-table-label';
+        label.textContent = 'Preview';
+        tableTooltip.appendChild(label);
+        tableTooltip.appendChild(renderMarkdownTablePreview(parsedTable));
+      }
       tableTooltip.hidden = false;
     });
     tableWrap.addEventListener('mouseout', (e) => {
@@ -1018,7 +1073,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
 
     const table = overlay.querySelector('.working-dataset-edit-table');
     if (table && columnWidths.length !== headers.length) {
-      while (columnWidths.length < headers.length) columnWidths.push(140);
+      while (columnWidths.length < headers.length) columnWidths.push(columnTypes[columnWidths.length] === 'image' ? 180 : 140);
       if (columnWidths.length > headers.length) columnWidths = columnWidths.slice(0, headers.length);
     }
     applyTableLayout();
