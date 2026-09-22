@@ -31,7 +31,7 @@ import { openAddDatasetModal } from './addDatasetModal.js';
 import { initModalDrag } from './modalDrag.js';
 import { initModalMaximize } from './modalMaximize.js';
 import { showProjectPickerModal, loadWebProject, saveWebProject, saveWebProjectThumbnail, createWebProject, findUniqueProjectName, publishCurrentProjectToGallery } from './webProjectModal.js';
-import { showAlert } from './alertModal.js';
+import { showAlert, showConfirm } from './alertModal.js';
 import { setCurrentProjectId } from './currentProject.js';
 import { createUndoHistory } from './undoHistory.js';
 import { pruneUnusedAssets as pruneUnusedAssetsWeb } from './webImageApi.js';
@@ -173,6 +173,15 @@ window.addEventListener('DOMContentLoaded', () => {
   // no native "Open File" dialog in a browser — see webProjectModal.js. `silent` is used by the
   // page-load restore attempt below, where a stale/deleted project id should just fall back to
   // the empty state instead of popping an error dialog on every refresh.
+  // Shown instead of the generic error alert when the Hub reports its per-user containers are
+  // all full (see hub/containers.py's CapacityExceeded, surfaced via loadWebProject/
+  // createWebProject's throwApiError in webProjectModal.js) — offers the desktop app as a
+  // working alternative rather than just leaving the user stuck.
+  const offerDesktopDownload = async (message) => {
+    const goDownload = await showConfirm(message, { title: 'Server busy', confirmText: 'Download desktop app' });
+    if (goDownload) window.location.href = '/download';
+  };
+
   const openProjectWeb = async ({ id, name }, { silent = false } = {}) => {
     try {
       const project = await loadWebProject(id);
@@ -189,6 +198,7 @@ window.addEventListener('DOMContentLoaded', () => {
       canvasAPI.setAgentWindowVisible?.(true);
     } catch (err) {
       if (silent) { setStoredWebProjectId(null); return; }
+      if (err.capacityExceeded) { await offerDesktopDownload(err.message); return; }
       showAlert(err.message || 'Could not open project.', { title: 'Error' });
     }
   };
@@ -224,6 +234,7 @@ window.addEventListener('DOMContentLoaded', () => {
       await openProjectWeb({ id, name });
       return true;
     } catch (err) {
+      if (err.capacityExceeded) { await offerDesktopDownload(err.message); return false; }
       showAlert(err.message || 'Could not create project.', { title: 'Error' });
       return false;
     }

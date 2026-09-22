@@ -24,11 +24,27 @@ IDLE_TIMEOUT_SEC = int(os.environ.get("PROMPT_STUDIO_IDLE_TIMEOUT_SEC", "1800"))
 PUBLIC_BASE_URL = os.environ.get("PROMPT_STUDIO_PUBLIC_BASE_URL", "")
 BACKEND_PORT = 8000
 
+# Caps how many per-user backend containers (see mem_limit/nano_cpus below) can run at once,
+# so a burst of new web sessions can't overwhelm the host the Hub itself is running on. Unset by
+# default — this box's capacity depends entirely on its actual RAM/CPU, and there's no default
+# that's safe to guess, so an admin opts in with a number sized to their own host (roughly host
+# RAM ÷ 1GB, minus a bit of headroom for the Hub/Caddy/OS themselves). Only ever checked when a
+# user's container doesn't exist yet (see ensure_running) — a session already running is never
+# interrupted just because the host later fills up.
+MAX_ACTIVE_CONTAINERS = os.environ.get("PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS")
+_CONTAINER_NAME_PREFIX = "promptstudio-user-"
+
 _client = None
 
 
 class BackendUnavailable(Exception):
     """Raised when Docker itself, or this user's container, can't be reached/started."""
+
+
+class CapacityExceeded(BackendUnavailable):
+    """Raised by ensure_running instead of starting a brand-new container once
+    MAX_ACTIVE_CONTAINERS is already running — see proxy.py, which turns this into a response
+    the web app recognizes and points the user at the desktop app instead of a generic error."""
 
 
 def client():
@@ -39,6 +55,10 @@ def client():
         except DockerException as e:
             raise BackendUnavailable(f"Docker is not reachable: {e}") from e
     return _client
+
+
+def _count_running_backend_containers() -> int:
+    return len(client().containers.list(filters={"status": "running", "name": _CONTAINER_NAME_PREFIX}))
 
 
 def container_name(user_id: int) -> str:
@@ -79,6 +99,11 @@ def ensure_running(user_id: int) -> str:
                 container.start()
                 just_started = True
         except NotFound:
+            if MAX_ACTIVE_CONTAINERS and _count_running_backend_containers() >= int(MAX_ACTIVE_CONTAINERS):
+                raise CapacityExceeded(
+                    "The server is at capacity right now. Please try again in a few minutes, "
+                    "or use the desktop app instead."
+                )
             c.containers.run(
                 BACKEND_IMAGE,
                 name=name,

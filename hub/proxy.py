@@ -3,6 +3,7 @@ backend container (see containers.py) — the Hub has no run/review/credential l
 """
 import httpx
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 
 import containers
 import db
@@ -11,6 +12,11 @@ import db
 async def proxy_request(request: Request, user_id: int) -> Response:
     try:
         name = containers.ensure_running(user_id)
+    except containers.CapacityExceeded as e:
+        # A distinct, JSON body (rather than BackendUnavailable's plain text below) so the web
+        # app can recognize this specific case and point the user at /download instead of just
+        # showing a generic "couldn't load" error — see webProjectModal.js's throwApiError.
+        return JSONResponse({"error": "capacity_exceeded", "detail": str(e)}, status_code=503)
     except containers.BackendUnavailable as e:
         return Response(content=str(e), status_code=503)
     db.touch_container(user_id)
