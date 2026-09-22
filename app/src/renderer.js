@@ -30,7 +30,7 @@ import { openAddPromptModal } from './addPromptModal.js';
 import { openAddDatasetModal } from './addDatasetModal.js';
 import { initModalDrag } from './modalDrag.js';
 import { initModalMaximize } from './modalMaximize.js';
-import { showProjectPickerModal, loadWebProject, saveWebProject, createWebProject, findUniqueProjectName } from './webProjectModal.js';
+import { showProjectPickerModal, loadWebProject, saveWebProject, saveWebProjectThumbnail, createWebProject, findUniqueProjectName } from './webProjectModal.js';
 import { showAlert } from './alertModal.js';
 import { setCurrentProjectId } from './currentProject.js';
 import { createUndoHistory } from './undoHistory.js';
@@ -316,6 +316,9 @@ window.addEventListener('DOMContentLoaded', () => {
           showAlert(err.message || 'Could not save project.', { title: 'Error' });
           return;
         }
+        // Best-effort preview for the Hub's Profile page — not awaited, autosave shouldn't wait
+        // on a canvas screenshot.
+        saveWebProjectThumbnail(currentProjectPath);
       }
       // Silent housekeeping, not a user-initiated action — no dialog either way, success or
       // failure. Runs after every autosave (not just via the manual "Clean up unused images..."
