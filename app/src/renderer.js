@@ -30,7 +30,7 @@ import { openAddPromptModal } from './addPromptModal.js';
 import { openAddDatasetModal } from './addDatasetModal.js';
 import { initModalDrag } from './modalDrag.js';
 import { initModalMaximize } from './modalMaximize.js';
-import { showProjectPickerModal, loadWebProject, saveWebProject, saveWebProjectThumbnail, createWebProject, findUniqueProjectName } from './webProjectModal.js';
+import { showProjectPickerModal, loadWebProject, saveWebProject, saveWebProjectThumbnail, createWebProject, findUniqueProjectName, publishCurrentProjectToGallery } from './webProjectModal.js';
 import { showAlert } from './alertModal.js';
 import { setCurrentProjectId } from './currentProject.js';
 import { createUndoHistory } from './undoHistory.js';
@@ -90,7 +90,9 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
   const APP_TITLE = 'AnnoBio';
+  let currentProjectName = null;
   function updateWindowTitle(displayName) {
+    currentProjectName = displayName || null;
     document.title = displayName ? `${displayName} - ${APP_TITLE}` : APP_TITLE;
     topBarAPI?.setProjectTitle?.(displayName || APP_TITLE);
   }
@@ -183,6 +185,7 @@ window.addEventListener('DOMContentLoaded', () => {
       topBarAPI.setAddMenuEnabled(true);
       topBarAPI.setSaveAsEnabled?.(true);
       topBarAPI.setMergeEnabled?.(true);
+      topBarAPI.setPublishEnabled?.(true);
       canvasAPI.setAgentWindowVisible?.(true);
     } catch (err) {
       if (silent) { setStoredWebProjectId(null); return; }
@@ -231,6 +234,10 @@ window.addEventListener('DOMContentLoaded', () => {
   const openAddDatasetModalWeb = async () => {
     if (await ensureWebProjectOpen()) openAddDatasetModal(canvasAPI);
   };
+  const onPublishToGalleryWeb = async () => {
+    if (!currentProjectPath) return;
+    await publishCurrentProjectToGallery(currentProjectPath, currentProjectName || 'Untitled Project');
+  };
 
   // Undo/redo: snapshot-based (see undoHistory.js), scoped to whatever project is currently
   // open — reset() is called everywhere a different project's state gets loaded in below.
@@ -251,10 +258,12 @@ window.addEventListener('DOMContentLoaded', () => {
     onMergeProject: isElectron ? onMergeProjectDesktop : undefined,
     onUndo: () => undoHistory.undo(),
     onRedo: () => undoHistory.redo(),
+    onPublishToGallery: isElectron ? undefined : onPublishToGalleryWeb,
   });
   notifyUndoRedo = ({ canUndo, canRedo }) => topBarAPI.setUndoRedoEnabled?.(canUndo, canRedo);
   topBarAPI.setProjectTitle?.(APP_TITLE);
   topBarAPI.setAddMenuEnabled(false);
+  topBarAPI.setPublishEnabled?.(false);
   canvasAPI.setAgentWindowVisible?.(false);
 
   // Keyboard shortcuts — Delete/Backspace and undo/redo are ignored while typing in a field

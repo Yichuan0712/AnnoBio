@@ -9,7 +9,7 @@
 import { toBlob } from 'html-to-image';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { showAlert, showConfirm } from './alertModal.js';
-import { iconMerge, iconCopy, iconDownload, iconTrash, iconGlobe } from './icons.js';
+import { iconMerge, iconCopy, iconDownload, iconTrash } from './icons.js';
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -189,6 +189,22 @@ export async function saveWebProjectThumbnail(projectId) {
   } catch (_) { /* best-effort */ }
 }
 
+/** Full "Publish to Gallery" flow for `projectId` (the currently open project) — prompts for a
+ * title/description, then publishes via publishProjectToArchive, showing a success/error alert.
+ * Lives on the top bar itself (see topBar.js), not the project picker: publishing is a
+ * broadcast-to-the-public action on the one project you have open, not a per-row list-management
+ * action like Duplicate/Delete, so it doesn't belong mixed in among those. */
+export async function publishCurrentProjectToGallery(projectId, projectName) {
+  const details = await showPublishDetailsModal(projectName);
+  if (!details) return;
+  try {
+    await publishProjectToArchive(projectId, details.title, details.description);
+    showAlert('Published — anyone can find it in the Gallery now.', { title: 'Published' });
+  } catch (err) {
+    showAlert(err.message || 'Could not publish to the Gallery.', { title: 'Error' });
+  }
+}
+
 /**
  * Project picker: create/import/open/duplicate/download/delete, plus — only when
  * currentProjectId is given — a "Merge into current" action per row, so merging doesn't need
@@ -292,30 +308,6 @@ export function showProjectPickerModal(currentProjectId = null) {
               }
             });
             row.appendChild(mergeBtn);
-          }
-
-          if (project.id === currentProjectId) {
-            const publishBtn = document.createElement('button');
-            publishBtn.type = 'button';
-            publishBtn.className = 'project-picker-publish';
-            publishBtn.setAttribute('aria-label', `Publish ${project.name} to the Gallery`);
-            publishBtn.title = 'Publish to Gallery (public)';
-            publishBtn.appendChild(iconGlobe(15));
-            publishBtn.addEventListener('click', async (e) => {
-              e.stopPropagation();
-              const details = await showPublishDetailsModal(project.name);
-              if (!details) return;
-              publishBtn.disabled = true;
-              try {
-                await publishProjectToArchive(project.id, details.title, details.description);
-                showAlert('Published — anyone can find it in the Gallery now.', { title: 'Published' });
-              } catch (err) {
-                showAlert(err.message || 'Could not publish to the Gallery.', { title: 'Error' });
-              } finally {
-                publishBtn.disabled = false;
-              }
-            });
-            row.appendChild(publishBtn);
           }
 
           const duplicateBtn = document.createElement('button');
