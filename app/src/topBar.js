@@ -13,8 +13,8 @@ import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaxim
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, onMergeProject?: () => void, onUndo?: () => void, onRedo?: () => void }} options
- * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void, setMergeEnabled: (enabled: boolean) => void, setProjectTitle: (title: string) => void, setUndoRedoEnabled: (canUndo: boolean, canRedo: boolean) => void }}
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, onMergeProject?: () => void, onUndo?: () => void, onRedo?: () => void, onPublishToGallery?: () => void }} options
+ * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void, setMergeEnabled: (enabled: boolean) => void, setProjectTitle: (title: string) => void, setUndoRedoEnabled: (canUndo: boolean, canRedo: boolean) => void, setPublishEnabled?: (enabled: boolean) => void }}
  */
 export function buildTopBar(root, options) {
   return window.electronAPI ? buildDesktopTopBar(root, options) : buildWebTopBar(root, options);
@@ -290,6 +290,16 @@ const iconNewDataset = () => svgIcon({
   paths: ['M3 5V19A9 3 0 0 0 21 19V5', 'M3 12A9 3 0 0 0 21 12'],
 });
 
+// Publish to Gallery = Lucide's "globe" (public, web-only) — same path data as icons.js's
+// iconGlobe, duplicated locally since this file draws its own rail icons rather than importing.
+const iconGlobe = () => svgIcon({
+  paths: [
+    'M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20',
+    'M2 12h20',
+  ],
+  circles: [[12, 12, 10]],
+});
+
 // LLM settings = Lucide's "cpu", not a generic gear — reads as "the model" specifically rather
 // than "app settings" in general.
 const iconLlmChip = () => svgIcon({
@@ -309,7 +319,7 @@ const iconBrandMark = () => svgIcon({
   paths: ['M9 12v-3a2 2 0 0 1 2-2h3', 'M9 12v3a2 2 0 0 0 2 2h3'],
 });
 
-function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onUndo, onRedo }) {
+function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onUndo, onRedo, onPublishToGallery }) {
   document.documentElement.classList.add('top-bar-web');
 
   const bar = document.createElement('nav');
@@ -404,6 +414,21 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   });
   rail.appendChild(newDatasetBtn.wrap);
 
+  // Publish to Gallery — disabled until a project is open (unlike New Prompt/Dataset, publishing
+  // has nothing to do with an empty/no project, so there's no "create one first" fallback here).
+  // Lives here, one click away, rather than buried in the project picker among Duplicate/Delete —
+  // see webProjectModal.js's publishCurrentProjectToGallery for why.
+  const publishBtn = iconButton({
+    icon: iconGlobe,
+    label: 'Publish to Gallery',
+    onClick: () => { if (!publishBtn.btn.disabled) onPublishToGallery?.(); },
+  });
+  publishBtn.btn.disabled = true;
+  rail.appendChild(publishBtn.wrap);
+  function setPublishEnabled(enabled) {
+    publishBtn.btn.disabled = !enabled;
+  }
+
   // No Merge button here — it's a per-row action in the project picker now (click the project
   // name), grouped with the other things you do to another project rather than the one you're
   // in. See webProjectModal.js and onOpenProject below.
@@ -459,5 +484,5 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
     redoBtn.btn.disabled = !canRedo;
   }
 
-  return { setAddMenuEnabled, setSaveAsEnabled, setMergeEnabled, setProjectTitle, setUndoRedoEnabled };
+  return { setAddMenuEnabled, setSaveAsEnabled, setMergeEnabled, setProjectTitle, setUndoRedoEnabled, setPublishEnabled };
 }
