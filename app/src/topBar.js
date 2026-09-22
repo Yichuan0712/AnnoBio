@@ -13,8 +13,8 @@ import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaxim
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, onMergeProject?: () => void }} options
- * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void, setMergeEnabled: (enabled: boolean) => void, setProjectTitle: (title: string) => void }}
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, onMergeProject?: () => void, onUndo?: () => void, onRedo?: () => void }} options
+ * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void, setMergeEnabled: (enabled: boolean) => void, setProjectTitle: (title: string) => void, setUndoRedoEnabled: (canUndo: boolean, canRedo: boolean) => void }}
  */
 export function buildTopBar(root, options) {
   return window.electronAPI ? buildDesktopTopBar(root, options) : buildWebTopBar(root, options);
@@ -24,7 +24,7 @@ export function buildTopBar(root, options) {
 // Desktop — unchanged from the original File/Edit/Settings menu bar (Merge item added, nothing
 // else). Do not fold this into buildWebTopBar or add electronAPI branches to it.
 // ============================================================================================
-function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, onMergeProject }) {
+function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, onMergeProject, onUndo, onRedo }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -61,9 +61,16 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
   const editDrop = document.createElement('div');
   editDrop.className = 'menu-dropdown';
   editDrop.innerHTML = `
+    <button type="button" class="menu-option" data-action="undo" disabled>Undo</button>
+    <button type="button" class="menu-option" data-action="redo" disabled>Redo</button>
+    <div class="menu-separator"></div>
     <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt...</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new dataset...</button>
   `;
+  const undoOpt = editDrop.querySelector('[data-action="undo"]');
+  const redoOpt = editDrop.querySelector('[data-action="redo"]');
+  undoOpt.addEventListener('click', () => { if (!undoOpt.disabled) onUndo?.(); });
+  redoOpt.addEventListener('click', () => { if (!redoOpt.disabled) onRedo?.(); });
   const createPromptOpt = editDrop.querySelector('[data-action="new-prompt"]');
   const createDatasetOpt = editDrop.querySelector('[data-action="new-dataset"]');
   createPromptOpt.addEventListener('click', (e) => {
@@ -189,7 +196,12 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
     projectTitleEl.title = normalized || 'AnnoBio';
   }
 
-  return { setAddMenuEnabled, setSaveAsEnabled, setMergeEnabled, setProjectTitle };
+  function setUndoRedoEnabled(canUndo, canRedo) {
+    undoOpt.disabled = !canUndo;
+    redoOpt.disabled = !canRedo;
+  }
+
+  return { setAddMenuEnabled, setSaveAsEnabled, setMergeEnabled, setProjectTitle, setUndoRedoEnabled };
 }
 
 // ============================================================================================
@@ -251,6 +263,15 @@ function svgIcon({ paths = [], circles = [], ellipses = [], rects = [], lines = 
 const iconAdd = () => svgIcon({ paths: ['M12 5v14', 'M5 12h14'] });
 const iconChevronDown = () => svgIcon({ paths: ['m6 9 6 6 6-6'], size: 12 });
 
+// Undo/redo — Lucide's "undo-2"/"redo-2" (a curved arrow looping into a horizontal bar), not the
+// plain rotate-ccw arrow, so it reads as "step back" rather than "reload/refresh".
+const iconUndo = () => svgIcon({
+  paths: ['M9 14 4 9l5-5', 'M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11'],
+});
+const iconRedo = () => svgIcon({
+  paths: ['m15 14 5-5-5-5', 'M20 9H9.5A5.5 5.5 0 0 0 4 14.5v0A5.5 5.5 0 0 0 9.5 20H13'],
+});
+
 // Prompt = a text document, not a chat bubble (a chat implies back-and-forth; a prompt here is a
 // reusable template). Lucide's "file-text", used at full size to match the other two icons.
 const iconNewPrompt = () => svgIcon({
@@ -288,7 +309,7 @@ const iconBrandMark = () => svgIcon({
   paths: ['M9 12v-3a2 2 0 0 1 2-2h3', 'M9 12v3a2 2 0 0 0 2 2h3'],
 });
 
-function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject }) {
+function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onUndo, onRedo }) {
   document.documentElement.classList.add('top-bar-web');
 
   const bar = document.createElement('nav');
@@ -354,6 +375,13 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   // meaningful with nothing open yet. No Python settings (nothing local to browse for outside the
   // desktop app) and no Display mode (web is always light, see renderer.js's setTheme call — no
   // switcher to show), so it's a single action, not a dropdown.
+  const undoBtn = iconButton({ icon: iconUndo, label: 'Undo', onClick: () => { if (!undoBtn.btn.disabled) onUndo?.(); } });
+  const redoBtn = iconButton({ icon: iconRedo, label: 'Redo', onClick: () => { if (!redoBtn.btn.disabled) onRedo?.(); } });
+  undoBtn.btn.disabled = true;
+  redoBtn.btn.disabled = true;
+  rail.appendChild(undoBtn.wrap);
+  rail.appendChild(redoBtn.wrap);
+
   const settingsBtn = iconButton({ icon: iconLlmChip, label: 'LLM settings', onClick: openSettingsModal });
   rail.appendChild(settingsBtn.wrap);
 
@@ -421,5 +449,10 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
     projectBtn.classList.toggle('top-bar-project--placeholder', isPlaceholder);
   }
 
-  return { setAddMenuEnabled, setSaveAsEnabled, setMergeEnabled, setProjectTitle };
+  function setUndoRedoEnabled(canUndo, canRedo) {
+    undoBtn.btn.disabled = !canUndo;
+    redoBtn.btn.disabled = !canRedo;
+  }
+
+  return { setAddMenuEnabled, setSaveAsEnabled, setMergeEnabled, setProjectTitle, setUndoRedoEnabled };
 }
