@@ -346,7 +346,10 @@ export class ProjectAssets {
       const result = [];
       for (const file of files) {
         const stat = await fs.stat(file);
-        if (!stat.isFile() || stat.size > 32 * 1024 * 1024) throw new Error(`PDF must be a file under 32 MB: ${path.basename(file)}`);
+        // Desktop storage is the user's own disk, not a shared server -- this is a fat-finger
+        // guard, not an attempt to match any LLM provider's request-size limit (that's enforced
+        // separately, at send time, by asset_store.py's MAX_PDF_BYTES).
+        if (!stat.isFile() || stat.size > 200 * 1024 * 1024) throw new Error(`PDF must be a file under 200 MB: ${path.basename(file)}`);
         const data = await fs.readFile(file);
         const baseName = path.basename(file);
         if (data.subarray(0, 5).toString('ascii') !== '%PDF-') throw new Error(`Not a PDF: ${baseName}`);

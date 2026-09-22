@@ -14,7 +14,7 @@ router = APIRouter()
 _sessions = {}
 _lock = threading.Lock()
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
-MAX_PDF_BYTES = 32 * 1024 * 1024  # matches Anthropic's hard per-document limit, the tightest of the major providers
+MAX_PDF_BYTES = 50 * 1024 * 1024  # sanity ceiling, not tied to any one provider's exact limit -- a model that can't take a file this big fails clearly at the provider call instead
 
 
 class Registration(BaseModel):
