@@ -610,7 +610,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
     setClinicaltrialsFetchStatus('');
     setPreprintFetchStatus('');
     setChemblFetchStatus('');
-    setPdfFetchStatus('');
   }
 
   function stageEmptyDataset() {
