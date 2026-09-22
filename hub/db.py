@@ -45,6 +45,19 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS archive_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id INTEGER NOT NULL REFERENCES users(id),
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                bundle_path TEXT NOT NULL,
+                thumbnail_path TEXT
+            )
+            """
+        )
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> str:
@@ -118,3 +131,37 @@ def upsert_container(user_id: int, container_name: str, status: str) -> None:
 def touch_container(user_id: int) -> None:
     with _connect() as conn:
         conn.execute("UPDATE containers SET last_active_at = ? WHERE user_id = ?", (time.time(), user_id))
+
+
+def create_archive_item(owner_user_id: int, title: str, description: str, bundle_path: str, thumbnail_path: str | None) -> int:
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO archive_items (owner_user_id, title, description, created_at, bundle_path, thumbnail_path) VALUES (?, ?, ?, ?, ?, ?)",
+            (owner_user_id, title, description, time.time(), bundle_path, thumbnail_path),
+        )
+        return cur.lastrowid
+
+
+def list_archive_items() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT archive_items.*, users.email AS owner_email
+            FROM archive_items JOIN users ON users.id = archive_items.owner_user_id
+            ORDER BY archive_items.created_at DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_archive_item(item_id: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT archive_items.*, users.email AS owner_email
+            FROM archive_items JOIN users ON users.id = archive_items.owner_user_id
+            WHERE archive_items.id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+        return dict(row) if row else None

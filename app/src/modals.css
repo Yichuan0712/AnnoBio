@@ -8498,6 +8498,7 @@ button.btn.btn-danger:hover:not(:disabled) {
 .project-picker-row-name { font-size: 13px; font-weight: 500; }
 .project-picker-row-date { font-size: 11px; color: var(--text-muted); }
 .project-picker-merge,
+.project-picker-publish,
 .project-picker-duplicate,
 .project-picker-download,
 .project-picker-delete {
@@ -8512,6 +8513,7 @@ button.btn.btn-danger:hover:not(:disabled) {
   cursor: pointer;
 }
 .project-picker-merge:hover,
+.project-picker-publish:hover,
 .project-picker-duplicate:hover,
 .project-picker-download:hover { background: var(--hover); color: var(--text); }
 .project-picker-delete:hover { background: var(--hover); color: #c0392b; }
