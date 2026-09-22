@@ -30,6 +30,13 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, de
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+def _drop_column_if_present(conn: sqlite3.Connection, table: str, column: str) -> None:
+    """Idempotent `ALTER TABLE DROP COLUMN` (SQLite 3.35+, which every deploy target here has)."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column in existing:
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+
+
 def init_db() -> None:
     with _connect() as conn:
         conn.execute(
@@ -81,8 +88,11 @@ def init_db() -> None:
         # 'approved' (they were already public before review existed); create_archive_item below
         # overrides that default to 'pending' for anything published from here on.
         _add_column_if_missing(conn, "users", "name", "TEXT NOT NULL DEFAULT ''")
-        _add_column_if_missing(conn, "users", "contact", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, "archive_items", "status", "TEXT NOT NULL DEFAULT 'approved'")
+        # contact briefly existed alongside name (both filled in on Profile, required to publish
+        # to the Gallery) but turned out redundant — the account's own email already does the
+        # same job for an admin reviewing a submission, so this drops it again.
+        _drop_column_if_present(conn, "users", "contact")
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> str:
@@ -97,13 +107,6 @@ def verify_password(password: str, stored: str) -> bool:
     except ValueError:
         return False
     return secrets.compare_digest(_hash_password(password, bytes.fromhex(salt_hex)), stored)
-
-
-def update_password(user_id: int, new_password: str) -> None:
-    """Used directly by the logged-in Change Password form on Profile — see
-    consume_password_reset below for the logged-out forgot-password flow's equivalent."""
-    with _connect() as conn:
-        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (_hash_password(new_password), user_id))
 
 
 def create_password_reset(user_id: int, ttl_seconds: int = 3600) -> str:
@@ -147,15 +150,12 @@ def create_user(email: str, password: str, is_admin: bool = False, name: str = "
         return cur.lastrowid
 
 
-def update_user_info(user_id: int, name: str, contact: str) -> None:
-    """Name + contact live on the account (filled once via the Profile page) rather than being
-    re-asked on every Gallery publish — see archive_publish in main.py, which requires both to be
-    set before it'll accept a submission."""
+def update_user_info(user_id: int, name: str) -> None:
+    """Name lives on the account (filled once via the Profile page) rather than being re-asked on
+    every Gallery publish — see archive_publish in main.py, which requires it to be set before
+    it'll accept a submission."""
     with _connect() as conn:
-        conn.execute(
-            "UPDATE users SET name = ?, contact = ? WHERE id = ?",
-            (name.strip()[:200], contact.strip()[:200], user_id),
-        )
+        conn.execute("UPDATE users SET name = ? WHERE id = ?", (name.strip()[:200], user_id))
 
 
 def set_admin(user_id: int, is_admin: bool) -> None:
@@ -224,7 +224,7 @@ def create_archive_item(owner_user_id: int, title: str, description: str, bundle
 
 
 _ARCHIVE_ITEM_SELECT = """
-    SELECT archive_items.*, users.email AS owner_email, users.name AS owner_name, users.contact AS owner_contact
+    SELECT archive_items.*, users.email AS owner_email, users.name AS owner_name
     FROM archive_items JOIN users ON users.id = archive_items.owner_user_id
 """
 

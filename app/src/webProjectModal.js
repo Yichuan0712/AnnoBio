@@ -218,12 +218,12 @@ export async function saveWebProjectThumbnail(projectId) {
  * broadcast-to-the-public action on the one project you have open, not a per-row list-management
  * action like Duplicate/Delete, so it doesn't belong mixed in among those. */
 export async function publishCurrentProjectToGallery(projectId, projectName) {
-  // Name/contact live on the account (Profile page), not asked here — checked up front so a
-  // missing one is caught before typing a title/description, not after. The Hub enforces this
-  // too (archive_publish in main.py); this is just so the failure shows up sooner.
+  // Name lives on the account (Profile page), not asked here — checked up front so a missing
+  // one is caught before typing a title/description, not after. The Hub enforces this too
+  // (archive_publish in main.py); this is just so the failure shows up sooner.
   const who = await fetch('/whoami').then((res) => (res.ok ? res.json() : null)).catch(() => null);
-  if (!who?.name?.trim() || !who?.contact?.trim()) {
-    showAlert('Add your name and a contact method on your Profile page before publishing.', { title: 'Profile incomplete' });
+  if (!who?.name?.trim()) {
+    showAlert('Add your name on your Profile page before publishing.', { title: 'Profile incomplete' });
     return;
   }
   const details = await showPublishDetailsModal(projectName);

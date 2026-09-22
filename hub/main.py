@@ -362,15 +362,14 @@ def logout(request: Request):
 def whoami(request: Request):
     """Lets the frontend show who's logged in (account avatar in the top bar) without teaching
     it anything about sessions — require_login below already gated this request and attached
-    the user. is_admin drives whether the top bar shows a Review link (see topBar.js); name/
-    contact let the web app warn before Publish if either is still blank (see
-    publishCurrentProjectToGallery in webProjectModal.js)."""
+    the user. is_admin drives whether the top bar shows a Review link (see topBar.js); name
+    lets the web app warn before Publish if it's still blank (see publishCurrentProjectToGallery
+    in webProjectModal.js)."""
     user = request.state.user
     return {
         "email": user["email"],
         "is_admin": bool(user.get("is_admin")),
         "name": user.get("name") or "",
-        "contact": user.get("contact") or "",
     }
 
 
@@ -738,15 +737,9 @@ async def profile_page(request: Request):
           <label class="profile-label" for="profile-name">Name</label>
           <input id="profile-name" name="name" type="text" maxlength="200" value="{escape(user.get('name') or '')}">
         </div>
-        <div class="profile-row">
-          <label class="profile-label" for="profile-contact">Contact</label>
-          <input id="profile-contact" name="contact" type="text" maxlength="200" value="{escape(user.get('contact') or '')}" placeholder="Email or other way to reach you">
-        </div>
         <div class="profile-row profile-save-row"><button type="submit" class="btn btn-secondary">Save</button></div>
       </form>
       <p class="page-sub profile-info-note">Shown to the admin reviewing anything you publish to the Gallery. Required before you can publish.</p>
-
-      <p><a class="link" href="/profile/password">Change password</a></p>
 
       <form method="post" action="/logout">
         <button type="submit" class="btn btn-secondary">Log out</button>
@@ -772,48 +765,9 @@ async def profile_page(request: Request):
 
 
 @app.post("/profile/info")
-def profile_update_info(request: Request, name: str = Form(""), contact: str = Form("")):
-    db.update_user_info(request.state.user["id"], name, contact)
+def profile_update_info(request: Request, name: str = Form("")):
+    db.update_user_info(request.state.user["id"], name)
     return RedirectResponse("/profile", status_code=302)
-
-
-@app.get("/profile/password")
-def profile_password_page(request: Request):
-    user = request.state.user
-    error = request.query_params.get("password_error")
-    banner_html = {
-        "wrong_current": '<div class="error">Current password is incorrect.</div>',
-        "too_short": '<div class="error">New password must be at least 8 characters.</div>',
-    }.get(error, "")
-    if request.query_params.get("password_changed"):
-        banner_html = '<div class="profile-success">Password updated.</div>'
-    body = f"""
-      <h1>Change password</h1>
-      <form method="post" action="/profile/password" class="simple-form">
-        {banner_html}
-        <div class="field"><input name="current_password" type="password" placeholder="Current password" required></div>
-        <div class="field"><input name="new_password" type="password" placeholder="New password (min 8 characters)" minlength="8" required></div>
-        <button type="submit" class="btn-submit">Change password</button>
-      </form>
-      <p class="simple-form-footer"><a class="link" href="/profile">Back to Profile</a></p>
-    """
-    extra_css = _SIMPLE_FORM_CSS + """
-      .profile-success { background: rgba(16, 137, 62, 0.08); color: #10893e; font-size: 13px; padding: 8px 10px; border-radius: var(--control-radius); margin-bottom: 14px; }
-      a.link { color: var(--accent); text-decoration: none; }
-      a.link:hover { text-decoration: underline; }
-    """
-    return HTMLResponse(render_page(title="Change password", user=user, active="/profile", body=body, extra_css=extra_css, narrow=True))
-
-
-@app.post("/profile/password")
-def profile_change_password(request: Request, current_password: str = Form(...), new_password: str = Form(...)):
-    user = request.state.user
-    if not db.verify_password(current_password, user["password_hash"]):
-        return RedirectResponse("/profile/password?password_error=wrong_current", status_code=302)
-    if len(new_password) < 8:
-        return RedirectResponse("/profile/password?password_error=too_short", status_code=302)
-    db.update_password(user["id"], new_password)
-    return RedirectResponse("/profile/password?password_changed=1", status_code=302)
 
 
 ARCHIVE_CSS = """
@@ -931,9 +885,9 @@ async def archive_publish(
     title = title.strip()[:200]
     if not title:
         return Response(content="Title is required.", status_code=400)
-    if not (user.get("name") or "").strip() or not (user.get("contact") or "").strip():
+    if not (user.get("name") or "").strip():
         return Response(
-            content="Add your name and a contact method on your Profile page before publishing.",
+            content="Add your name on your Profile page before publishing.",
             status_code=400,
         )
     try:
@@ -1008,8 +962,7 @@ def admin_gallery_page(request: Request):
                 </form>
                 <p class="admin-review-meta">
                   Submitted by {escape(item.get('owner_name') or '(no name on file)')}
-                  &lt;{escape(item['owner_email'])}&gt; · Contact: {escape(item.get('owner_contact') or '—')}
-                  · {_fmt_date(item['created_at'])}
+                  &lt;{escape(item['owner_email'])}&gt; · {_fmt_date(item['created_at'])}
                 </p>
                 <div class="admin-review-actions">
                   <form method="post" action="/admin/gallery/{item['id']}/approve"><button type="submit" class="btn btn-primary">Approve</button></form>
