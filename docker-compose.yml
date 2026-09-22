@@ -10,6 +10,21 @@
 # public-facing one (see the plan's Phase 3+ note: a scoped Docker API proxy would replace this
 # before that).
 services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - prompt-studio-net
+    depends_on:
+      - hub
+
   hub:
     build:
       context: hub
@@ -43,3 +58,5 @@ networks:
 
 volumes:
   hub-data:
+  caddy-data:
+  caddy-config:
