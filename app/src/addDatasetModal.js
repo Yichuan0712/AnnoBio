@@ -216,14 +216,13 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <div class="dataset-source-panel" data-source-panel="pdf" hidden>
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Upload PDFs</h3>
-                    <p class="dataset-sheet-hint">One row per PDF: full text, one "Image N" column per embedded image (sized to the richest PDF in the batch), and one "Table N" column per detected table (as markdown). Scanned/image-only PDFs come back with empty text and no tables — there's no OCR yet.</p>
+                    <p class="dataset-sheet-hint">One row per PDF: full text, one "Image N" column per embedded image (sized to the richest PDF in the batch), and one "Table N" column per detected table (as markdown). Scanned/image-only PDFs come back with empty text and no tables.</p>
                     <div class="dataset-import-actions">
                       <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple hidden />
-                      <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDF files</button>
+                      <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDF files and parse</button>
                       <span class="dataset-filename pdf-import-filenames" aria-live="polite"></span>
                     </div>
                     <div class="dataset-import-actions">
-                      <button type="button" class="btn btn-secondary pdf-import-fetch-btn">Parse PDFs</button>
                       <span class="dataset-filename pdf-import-fetch-status" aria-live="polite"></span>
                     </div>
                   </div>
@@ -379,7 +378,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
   const pdfFileInput = overlay.querySelector('#pdf-file-input');
   const pdfChooseBtn = overlay.querySelector('.pdf-import-choose-btn');
   const pdfFilenamesEl = overlay.querySelector('.pdf-import-filenames');
-  const pdfFetchBtn = overlay.querySelector('.pdf-import-fetch-btn');
   const pdfFetchStatusEl = overlay.querySelector('.pdf-import-fetch-status');
   let dataSource = 'upload';
   let pubmedJobId = null;
@@ -1021,7 +1019,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
 
   function setPdfRunningUi(running) {
     pdfChooseBtn.disabled = running;
-    pdfFetchBtn.disabled = running;
     addBtn.disabled = running;
   }
 
@@ -1130,9 +1127,10 @@ export function openAddDatasetModal(workflowCanvasApi) {
       : selectedPdfFiles.length === 1
         ? selectedPdfFiles[0].name
         : `${selectedPdfFiles.length} files selected`;
+    if (selectedPdfFiles.length > 0) startPdfParse();
   });
 
-  pdfFetchBtn.addEventListener('click', async () => {
+  async function startPdfParse() {
     hideError();
     if (selectedPdfFiles.length === 0) {
       showError('Choose at least one PDF file.');
@@ -1162,7 +1160,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       showError(`Could not reach backend: ${(e && e.message) || e}`);
       setPdfFetchStatus('');
     }
-  });
+  }
 
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];

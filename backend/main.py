@@ -1,6 +1,7 @@
 from pathlib import Path
 import base64
 import concurrent.futures
+import concurrent.futures.process
 import json
 import os
 import re
@@ -2237,9 +2238,44 @@ def _reshape_pdf_rows(pdfs: list[dict]) -> tuple[list[str], list[list]]:
     return headers, rows
 
 
-def _do_pdf_import_work(job_id: str, files: list[tuple[str, bytes]]) -> None:
+def _parse_pdf_isolated(data: bytes) -> dict:
+    """Entry point run inside a worker *process* (see _get_pdf_parse_executor) rather than
+    imported at module load: PyMuPDF/pdfplumber are both C-extension-backed, and a malformed or
+    unusual real-world PDF can crash the interpreter outright (segfault) in a way no Python
+    try/except can catch. Isolating each parse in its own process means that crash only takes
+    down that worker — caught as BrokenProcessPool by the caller — instead of the whole backend
+    (which is exactly what happened before this was added: a single PDF upload killed the user's
+    whole per-user container, twice, silently, with no traceback)."""
     from pdf_client import parse_pdf
+    return parse_pdf(data)
 
+
+PDF_PARSE_TIMEOUT_SEC = 120
+
+_pdf_parse_executor: "concurrent.futures.ProcessPoolExecutor | None" = None
+
+
+def _get_pdf_parse_executor() -> concurrent.futures.ProcessPoolExecutor:
+    global _pdf_parse_executor
+    if _pdf_parse_executor is None:
+        _pdf_parse_executor = concurrent.futures.ProcessPoolExecutor(max_workers=2)
+    return _pdf_parse_executor
+
+
+def _reset_pdf_parse_executor() -> None:
+    """Call after a BrokenProcessPool: the pool-wide failure means every OTHER pending/future
+    submission to that same executor would also raise, so it has to be thrown away and rebuilt
+    before the next file can be parsed."""
+    global _pdf_parse_executor
+    old, _pdf_parse_executor = _pdf_parse_executor, None
+    if old is not None:
+        try:
+            old.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+
+def _do_pdf_import_work(job_id: str, files: list[tuple[str, bytes]]) -> None:
     try:
         pdfs: list[dict] = []
         errors: list[str] = []
@@ -2248,13 +2284,19 @@ def _do_pdf_import_work(job_id: str, files: list[tuple[str, bytes]]) -> None:
             if job_id in _pdf_import_cancelled:
                 break
             try:
-                parsed = parse_pdf(data)
+                future = _get_pdf_parse_executor().submit(_parse_pdf_isolated, data)
+                parsed = future.result(timeout=PDF_PARSE_TIMEOUT_SEC)
                 pdfs.append({
                     "name": name,
                     "text": parsed["text"],
                     "images": [{"data": base64.b64encode(img["bytes"]).decode("ascii"), "ext": img["ext"]} for img in parsed["images"]],
                     "tables": parsed["tables"],
                 })
+            except concurrent.futures.process.BrokenProcessPool:
+                errors.append(f"{name}: PDF parser crashed on this file (likely an unusual/corrupt PDF structure) — skipped")
+                _reset_pdf_parse_executor()
+            except concurrent.futures.TimeoutError:
+                errors.append(f"{name}: took longer than {PDF_PARSE_TIMEOUT_SEC}s to parse — skipped")
             except Exception as e:
                 errors.append(f"{name}: {e}")
             with _pdf_import_jobs_lock:
