@@ -32,6 +32,14 @@ ipcMain.handle('assets:import', async (_event, paths) => {
   }
   return projectAssets.importFiles(paths);
 });
+
+// Renderer has no filesystem access, so images that only exist in memory (e.g. extracted from a
+// PDF by the backend — see the PDF dataset import flow) come through here as raw bytes rather
+// than a file path, same asset pipeline either way.
+ipcMain.handle('assets:import-buffers', async (_event, entries) => {
+  const list = Array.isArray(entries) ? entries : [];
+  return projectAssets.importFiles(list.map((e) => ({ buffer: Buffer.from(e.data), name: e.name })));
+});
 ipcMain.handle('assets:pick-files', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Choose images to match',

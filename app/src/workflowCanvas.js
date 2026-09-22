@@ -2867,6 +2867,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     importClinicaltrialsDataset,
     importPreprintDataset,
     importChemblDataset,
+    importPdfDataset,
   } = createWorkflowCanvasRuntime({
     extractInputFieldsFromSections,
     deriveOutputFields,
@@ -4883,6 +4884,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     importClinicaltrialsDataset,
     importPreprintDataset,
     importChemblDataset,
+    importPdfDataset,
     loadCanvasState,
     setOnCanvasChange,
     setAgentWindowVisible,

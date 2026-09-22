@@ -1,4 +1,5 @@
 from pathlib import Path
+import base64
 import concurrent.futures
 import json
 import os
@@ -35,7 +36,7 @@ _HL = "\033[1;33m"   # bold yellow
 _R = "\033[0m"       # reset
 _SEP = "=" * 60      # unified separator for LLM prompt/output logs
 
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from run_output_schema import (
@@ -104,6 +105,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 PUBMED_JOBS_FILE = DATA_DIR / "pubmed_jobs.json"
 CLINICALTRIALS_JOBS_FILE = DATA_DIR / "clinicaltrials_jobs.json"
 PREPRINT_JOBS_FILE = DATA_DIR / "preprint_jobs.json"
+PDF_IMPORT_JOBS_FILE = DATA_DIR / "pdf_import_jobs.json"
 CHEMBL_JOBS_FILE = DATA_DIR / "chembl_jobs.json"
 PROCESS_JOBS_FILE = DATA_DIR / "process_jobs.json"
 MATCH_JOBS_FILE = DATA_DIR / "match_jobs.json"
@@ -2159,6 +2161,201 @@ def cancel_preprint_import(job_id: str):
             return {"ok": True, "status": _preprint_jobs[job_id].get("status")}
         _preprint_cancelled.add(job_id)
         _touch_preprint_activity(job_id)
+    return {"ok": True, "status": "cancelling"}
+
+
+# ---------- PDF import (bulk-parse PDFs into a Dataset: text + images + tables) ----------
+# Same background-thread + job_id + polling shape as the imports above, except the request body
+# is multipart file uploads (read into memory before backgrounding — Starlette's UploadFile can't
+# be read once the request context ends) rather than JSON ids. Per-PDF results accumulate in
+# job["pdfs"] as they finish; the final {headers, rows} table is only shaped once (in
+# _reshape_pdf_rows) after every PDF is done, since the column *count* for images/tables depends
+# on the max found across the whole batch. Image cells carry base64 bytes + a marker
+# (__pdfImage__) instead of an asset id: the caller (app/src/workflowCanvasRuntime.js) registers
+# each one through the normal per-platform asset pipeline and swaps in the real asset id before
+# creating the dataset node, since this endpoint has no project/asset-store context of its own.
+PDF_IMPORT_MAX_FILE_BYTES = 50 * 1024 * 1024  # 50MB/file — PDFs run bigger than the 30MB image cap
+PDF_IMPORT_MAX_FILES = 200  # sane ceiling regardless of what the client sends
+
+_pdf_import_jobs: dict[str, dict] = {}
+_pdf_import_jobs_lock = threading.Lock()
+_pdf_import_cancelled: set[str] = set()
+
+
+def _persist_pdf_import_jobs() -> None:
+    with _pdf_import_jobs_lock:
+        snapshot = dict(_pdf_import_jobs)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        PDF_IMPORT_JOBS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError) as e:
+        _safe_print(f"[PDF import] persist failed: {e}", file=sys.stderr)
+
+
+def _load_pdf_import_jobs() -> None:
+    if not PDF_IMPORT_JOBS_FILE.exists():
+        return
+    try:
+        raw = PDF_IMPORT_JOBS_FILE.read_text(encoding="utf-8")
+        jobs = json.loads(raw) or {}
+        with _pdf_import_jobs_lock:
+            _pdf_import_jobs.clear()
+            _pdf_import_jobs.update(jobs)
+    except (OSError, json.JSONDecodeError) as e:
+        _safe_print(f"[PDF import] load persisted jobs failed: {e}", file=sys.stderr)
+
+
+_load_pdf_import_jobs()
+
+
+def _reshape_pdf_rows(pdfs: list[dict]) -> tuple[list[str], list[list]]:
+    """Pivot each PDF's variable-length images/tables into fixed columns sized to the widest PDF
+    in the batch (e.g. 5 images anywhere in the batch -> every row gets "Image 1".."Image 5",
+    empty for PDFs with fewer)."""
+    max_images = max((len(p["images"]) for p in pdfs), default=0)
+    max_tables = max((len(p["tables"]) for p in pdfs), default=0)
+    headers = ["PDF Name", "Text"]
+    headers += [f"Image {i + 1}" for i in range(max_images)]
+    headers += [f"Table {i + 1}" for i in range(max_tables)]
+    rows: list[list] = []
+    for p in pdfs:
+        row: list = [p["name"], p["text"]]
+        for i in range(max_images):
+            if i < len(p["images"]):
+                img = p["images"][i]
+                row.append({
+                    "__pdfImage__": True,
+                    "data": img["data"],
+                    "ext": img["ext"],
+                    "name": f"{p['name']} image {i + 1}.{img['ext']}",
+                })
+            else:
+                row.append(None)
+        for i in range(max_tables):
+            row.append(p["tables"][i] if i < len(p["tables"]) else "")
+        rows.append(row)
+    return headers, rows
+
+
+def _do_pdf_import_work(job_id: str, files: list[tuple[str, bytes]]) -> None:
+    from pdf_client import parse_pdf
+
+    try:
+        pdfs: list[dict] = []
+        errors: list[str] = []
+        total = len(files)
+        for i, (name, data) in enumerate(files):
+            if job_id in _pdf_import_cancelled:
+                break
+            try:
+                parsed = parse_pdf(data)
+                pdfs.append({
+                    "name": name,
+                    "text": parsed["text"],
+                    "images": [{"data": base64.b64encode(img["bytes"]).decode("ascii"), "ext": img["ext"]} for img in parsed["images"]],
+                    "tables": parsed["tables"],
+                })
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+            with _pdf_import_jobs_lock:
+                _pdf_import_jobs[job_id]["completed"] = i + 1
+                _pdf_import_jobs[job_id]["errors"] = errors
+            _persist_pdf_import_jobs()
+
+        headers, rows = _reshape_pdf_rows(pdfs) if pdfs else ([], [])
+        with _pdf_import_jobs_lock:
+            _pdf_import_jobs[job_id]["status"] = "cancelled" if job_id in _pdf_import_cancelled else "done"
+            _pdf_import_jobs[job_id]["headers"] = headers
+            _pdf_import_jobs[job_id]["rows"] = rows
+        _persist_pdf_import_jobs()
+    except Exception as e:
+        with _pdf_import_jobs_lock:
+            _pdf_import_jobs[job_id] = {"status": "done", "error": str(e)}
+        _persist_pdf_import_jobs()
+
+
+@app.post("/api/pdf/import")
+async def start_pdf_import(files: List[UploadFile] = File(...)):
+    """Start a bulk PDF import (text + embedded images + tables) in the background; returns 202
+    with job_id. Poll GET .../result/{job_id}."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+    if len(files) > PDF_IMPORT_MAX_FILES:
+        raise HTTPException(status_code=400, detail=f"Too many files (max {PDF_IMPORT_MAX_FILES})")
+
+    read_files: list[tuple[str, bytes]] = []
+    skipped: list[str] = []
+    for f in files:
+        data = await f.read()
+        name = f.filename or "document.pdf"
+        if not name.lower().endswith(".pdf"):
+            skipped.append(f"{name}: not a PDF")
+            continue
+        if len(data) > PDF_IMPORT_MAX_FILE_BYTES:
+            skipped.append(f"{name}: over {PDF_IMPORT_MAX_FILE_BYTES // (1024 * 1024)}MB")
+            continue
+        read_files.append((name, data))
+
+    if not read_files:
+        raise HTTPException(status_code=400, detail="No valid PDFs to import: " + "; ".join(skipped) if skipped else "No valid PDFs to import")
+
+    job_id = str(uuid.uuid4())
+    with _pdf_import_jobs_lock:
+        _pdf_import_jobs[job_id] = {
+            "status": "running",
+            "completed": 0,
+            "total": len(read_files),
+            "headers": [],
+            "rows": [],
+            "errors": [],
+            "skipped": skipped,
+        }
+    _persist_pdf_import_jobs()
+    thread = threading.Thread(target=_do_pdf_import_work, args=(job_id, read_files), daemon=True)
+    thread.start()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={"job_id": job_id, "skipped": skipped})
+
+
+@app.get("/api/pdf/import/result/{job_id}")
+def get_pdf_import_result(job_id: str):
+    """Return 202 while running, 200 when done. Rows/headers are only meaningful once done —
+    see _reshape_pdf_rows's docstring for why the column count can't be known mid-batch."""
+    with _pdf_import_jobs_lock:
+        job = _pdf_import_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        status = job.get("status")
+        completed = job.get("completed", 0)
+        total = job.get("total", 0)
+        errors = job.get("errors") or []
+        skipped = job.get("skipped") or []
+        error = job.get("error")
+    if status == "running":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={"status": "running", "completed": completed, "total": total})
+    if error:
+        return {"status": "done", "error": error, "headers": [], "rows": []}
+    return {
+        "status": status,
+        "completed": completed,
+        "total": total,
+        "headers": job.get("headers") or [],
+        "rows": job.get("rows") or [],
+        "errors": errors,
+        "skipped": skipped,
+    }
+
+
+@app.post("/api/pdf/import/cancel/{job_id}")
+def cancel_pdf_import(job_id: str):
+    """Mark import as cancelled; worker stops before the next PDF (already-parsed ones are kept)."""
+    with _pdf_import_jobs_lock:
+        if job_id not in _pdf_import_jobs:
+            raise HTTPException(status_code=404, detail="Import job not found")
+        if _pdf_import_jobs[job_id].get("status") != "running":
+            return {"ok": True, "status": _pdf_import_jobs[job_id].get("status")}
+        _pdf_import_cancelled.add(job_id)
     return {"ok": True, "status": "cancelling"}
 
 

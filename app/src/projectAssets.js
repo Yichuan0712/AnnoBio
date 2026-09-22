@@ -294,6 +294,11 @@ export class ProjectAssets {
     });
   }
 
+  /**
+   * @param {(string | { buffer: Uint8Array, name: string })[]} files - a file path (existing
+   *   behavior), or an in-memory buffer + suggested name for bytes that don't exist as a
+   *   standalone file on disk (e.g. an image extracted from a PDF — see assets:import-buffers).
+   */
   async importFiles(files) {
     return this.enqueue(async () => {
       if (!this.file) throw new Error('Create or open a project first.');
@@ -301,22 +306,31 @@ export class ProjectAssets {
       await fs.mkdir(path.join(root, 'originals'), { recursive: true });
       const result = [];
       for (const file of files) {
-        const stat = await fs.stat(file);
-        if (!stat.isFile() || stat.size > 30 * 1024 * 1024) throw new Error(`Image must be a file under 30 MB: ${path.basename(file)}`);
-        const data = await fs.readFile(file);
+        const isInline = file && typeof file === 'object';
+        let data, baseName;
+        if (isInline) {
+          data = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer);
+          baseName = file.name || 'image';
+          if (data.length > 30 * 1024 * 1024) throw new Error(`Image must be under 30 MB: ${baseName}`);
+        } else {
+          const stat = await fs.stat(file);
+          if (!stat.isFile() || stat.size > 30 * 1024 * 1024) throw new Error(`Image must be a file under 30 MB: ${path.basename(file)}`);
+          data = await fs.readFile(file);
+          baseName = path.basename(file);
+        }
         const png = data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
         const jpg = data[0] === 255 && data[1] === 216 && data[2] === 255;
         const webp = data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP';
-        if (!png && !jpg && !webp) throw new Error(`Unsupported image: ${path.basename(file)}. Use PNG, JPEG or WebP.`);
+        if (!png && !jpg && !webp) throw new Error(`Unsupported image: ${baseName}. Use PNG, JPEG or WebP.`);
         if ((png && data.includes(Buffer.from('acTL'))) || (webp && data.includes(Buffer.from('ANIM')))) throw new Error('Animated images are not supported. Import a still image.');
         const image = this.decodeImage(data);
-        if (!image || !image.width || !image.height) throw new Error(`Cannot decode image: ${path.basename(file)}`);
+        if (!image || !image.width || !image.height) throw new Error(`Cannot decode image: ${baseName}`);
         const hash = crypto.createHash('sha256').update(data).digest('hex');
         const id = 'sha256:' + hash;
         const ext = png ? 'png' : jpg ? 'jpg' : 'webp';
         const relative = `originals/${hash}.${ext}`;
         await fs.writeFile(path.join(root, relative), data, { flag: 'wx' }).catch((e) => { if (e.code !== 'EEXIST') throw e; });
-        this.assets[id] = { path: relative, name: path.basename(file), mime: `image/${jpg ? 'jpeg' : ext}`, bytes: data.length, width: image.width, height: image.height };
+        this.assets[id] = { path: relative, name: baseName, mime: `image/${jpg ? 'jpeg' : ext}`, bytes: data.length, width: image.width, height: image.height };
         result.push({ id, ...this.assets[id] });
       }
       return result;
