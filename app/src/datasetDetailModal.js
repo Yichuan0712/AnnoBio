@@ -158,6 +158,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
                 <button type="button" class="btn btn-secondary working-dataset-export-local">Save to local</button>
                 <div class="working-dataset-detail-footer__actions">
                   <button type="button" class="btn btn-secondary working-dataset-link-images">Add images</button>
+                  <button type="button" class="btn btn-secondary working-dataset-link-pdf">Add pdf</button>
                   <button type="button" class="btn btn-secondary working-dataset-add-row">Add row</button>
                   <button type="button" class="btn btn-secondary working-dataset-add-col">Add column</button>
                   <button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button>
@@ -181,6 +182,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   const nextBtn = overlay.querySelector('.wd-next-page');
   const rowsPerPageSelect = overlay.querySelector('#wd-rows-per-page');
   const linkImagesBtn = overlay.querySelector('.working-dataset-link-images');
+  const linkPdfBtn = overlay.querySelector('.working-dataset-link-pdf');
   const addRowBtn = overlay.querySelector('.working-dataset-add-row');
   const addColBtn = overlay.querySelector('.working-dataset-add-col');
   const deleteRowBtn = overlay.querySelector('.working-dataset-delete-row');
@@ -1655,6 +1657,15 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   if (linkImagesBtn) {
     linkImagesBtn.addEventListener('click', () => {
       const newIndex = addImageColumn();
+      selectedColIndex = newIndex;
+      selectedRowIndex = -1;
+      render();
+    });
+  }
+
+  if (linkPdfBtn) {
+    linkPdfBtn.addEventListener('click', () => {
+      const newIndex = addPdfColumn();
       selectedColIndex = newIndex;
       selectedRowIndex = -1;
       render();
