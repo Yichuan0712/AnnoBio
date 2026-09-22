@@ -725,14 +725,6 @@ async def profile_page(request: Request):
         )
         workspaces_html = f'<div class="archive-grid">{cards}</div>'
 
-    password_error = request.query_params.get("password_error")
-    password_banner_html = {
-        "wrong_current": '<div class="error">Current password is incorrect.</div>',
-        "too_short": '<div class="error">New password must be at least 8 characters.</div>',
-    }.get(password_error, "")
-    if request.query_params.get("password_changed"):
-        password_banner_html = '<div class="profile-success">Password updated.</div>'
-
     body = f"""
       <h1>Profile</h1>
       <p class="page-sub">Your AnnoBio account.</p>
@@ -754,18 +746,7 @@ async def profile_page(request: Request):
       </form>
       <p class="page-sub profile-info-note">Shown to the admin reviewing anything you publish to the Gallery. Required before you can publish.</p>
 
-      <form method="post" action="/profile/password" class="profile-card">
-        {password_banner_html}
-        <div class="profile-row">
-          <label class="profile-label" for="profile-current-password">Current password</label>
-          <input id="profile-current-password" name="current_password" type="password" required>
-        </div>
-        <div class="profile-row">
-          <label class="profile-label" for="profile-new-password">New password</label>
-          <input id="profile-new-password" name="new_password" type="password" minlength="8" required>
-        </div>
-        <div class="profile-row profile-save-row"><button type="submit" class="btn btn-secondary">Change password</button></div>
-      </form>
+      <p><a class="link" href="/profile/password">Change password</a></p>
 
       <form method="post" action="/logout">
         <button type="submit" class="btn btn-secondary">Log out</button>
@@ -779,15 +760,13 @@ async def profile_page(request: Request):
       .profile-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
       .profile-row:last-child { border-bottom: none; }
       .profile-label { color: var(--text-muted); }
-      .profile-row input[type="text"], .profile-row input[type="password"] { flex: 1; max-width: 260px; margin-left: 16px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; }
+      .profile-row input[type="text"] { flex: 1; max-width: 260px; margin-left: 16px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; }
       .profile-save-row { justify-content: flex-end; padding-top: 12px; }
       .profile-info-note { max-width: 460px; font-size: 12.5px; margin: -12px 0 22px; }
       .workspaces-heading { font-size: 18px; margin: 40px 0 14px; }
       .workspaces-empty { color: var(--text-muted); font-size: 14px; }
       a.link { color: var(--accent); text-decoration: none; }
       a.link:hover { text-decoration: underline; }
-      .error { background: rgba(200, 0, 0, 0.08); color: #b00020; font-size: 13px; padding: 8px 10px; border-radius: var(--control-radius); margin-bottom: 4px; }
-      .profile-success { background: rgba(16, 137, 62, 0.08); color: #10893e; font-size: 13px; padding: 8px 10px; border-radius: var(--control-radius); margin-bottom: 4px; }
     """
     return HTMLResponse(render_page(title="Profile", user=user, active="/profile", body=body, extra_css=extra_css))
 
@@ -798,15 +777,43 @@ def profile_update_info(request: Request, name: str = Form(""), contact: str = F
     return RedirectResponse("/profile", status_code=302)
 
 
+@app.get("/profile/password")
+def profile_password_page(request: Request):
+    user = request.state.user
+    error = request.query_params.get("password_error")
+    banner_html = {
+        "wrong_current": '<div class="error">Current password is incorrect.</div>',
+        "too_short": '<div class="error">New password must be at least 8 characters.</div>',
+    }.get(error, "")
+    if request.query_params.get("password_changed"):
+        banner_html = '<div class="profile-success">Password updated.</div>'
+    body = f"""
+      <h1>Change password</h1>
+      <form method="post" action="/profile/password" class="simple-form">
+        {banner_html}
+        <div class="field"><input name="current_password" type="password" placeholder="Current password" required></div>
+        <div class="field"><input name="new_password" type="password" placeholder="New password (min 8 characters)" minlength="8" required></div>
+        <button type="submit" class="btn-submit">Change password</button>
+      </form>
+      <p class="simple-form-footer"><a class="link" href="/profile">Back to Profile</a></p>
+    """
+    extra_css = _SIMPLE_FORM_CSS + """
+      .profile-success { background: rgba(16, 137, 62, 0.08); color: #10893e; font-size: 13px; padding: 8px 10px; border-radius: var(--control-radius); margin-bottom: 14px; }
+      a.link { color: var(--accent); text-decoration: none; }
+      a.link:hover { text-decoration: underline; }
+    """
+    return HTMLResponse(render_page(title="Change password", user=user, active="/profile", body=body, extra_css=extra_css, narrow=True))
+
+
 @app.post("/profile/password")
 def profile_change_password(request: Request, current_password: str = Form(...), new_password: str = Form(...)):
     user = request.state.user
     if not db.verify_password(current_password, user["password_hash"]):
-        return RedirectResponse("/profile?password_error=wrong_current", status_code=302)
+        return RedirectResponse("/profile/password?password_error=wrong_current", status_code=302)
     if len(new_password) < 8:
-        return RedirectResponse("/profile?password_error=too_short", status_code=302)
+        return RedirectResponse("/profile/password?password_error=too_short", status_code=302)
     db.update_password(user["id"], new_password)
-    return RedirectResponse("/profile?password_changed=1", status_code=302)
+    return RedirectResponse("/profile/password?password_changed=1", status_code=302)
 
 
 ARCHIVE_CSS = """
