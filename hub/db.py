@@ -22,6 +22,14 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    """Idempotent `ALTER TABLE ADD COLUMN` — table/column/decl are always our own fixed literals
+    (never request input), so building the statement with an f-string is safe here."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db() -> None:
     with _connect() as conn:
         conn.execute(
@@ -58,6 +66,13 @@ def init_db() -> None:
             )
             """
         )
+        # Added after both tables already existed in production — ALTER TABLE rather than baking
+        # into the CREATE above, so existing rows survive. Pre-existing archive_items default to
+        # 'approved' (they were already public before review existed); create_archive_item below
+        # overrides that default to 'pending' for anything published from here on.
+        _add_column_if_missing(conn, "users", "name", "TEXT NOT NULL DEFAULT ''")
+        _add_column_if_missing(conn, "users", "contact", "TEXT NOT NULL DEFAULT ''")
+        _add_column_if_missing(conn, "archive_items", "status", "TEXT NOT NULL DEFAULT 'approved'")
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> str:
@@ -74,13 +89,29 @@ def verify_password(password: str, stored: str) -> bool:
     return secrets.compare_digest(_hash_password(password, bytes.fromhex(salt_hex)), stored)
 
 
-def create_user(email: str, password: str, is_admin: bool = False) -> int:
+def create_user(email: str, password: str, is_admin: bool = False, name: str = "") -> int:
     with _connect() as conn:
         cur = conn.execute(
-            "INSERT INTO users (email, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)",
-            (email.strip().lower(), _hash_password(password), int(is_admin), time.time()),
+            "INSERT INTO users (email, password_hash, is_admin, name, created_at) VALUES (?, ?, ?, ?, ?)",
+            (email.strip().lower(), _hash_password(password), int(is_admin), name.strip()[:200], time.time()),
         )
         return cur.lastrowid
+
+
+def update_user_info(user_id: int, name: str, contact: str) -> None:
+    """Name + contact live on the account (filled once via the Profile page) rather than being
+    re-asked on every Gallery publish — see archive_publish in main.py, which requires both to be
+    set before it'll accept a submission."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET name = ?, contact = ? WHERE id = ?",
+            (name.strip()[:200], contact.strip()[:200], user_id),
+        )
+
+
+def set_admin(user_id: int, is_admin: bool) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE users SET is_admin = ? WHERE id = ?", (int(is_admin), user_id))
 
 
 def list_users() -> list[dict]:
@@ -136,32 +167,64 @@ def touch_container(user_id: int) -> None:
 def create_archive_item(owner_user_id: int, title: str, description: str, bundle_path: str, thumbnail_path: str | None) -> int:
     with _connect() as conn:
         cur = conn.execute(
-            "INSERT INTO archive_items (owner_user_id, title, description, created_at, bundle_path, thumbnail_path) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO archive_items (owner_user_id, title, description, created_at, bundle_path, thumbnail_path, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'pending')",
             (owner_user_id, title, description, time.time(), bundle_path, thumbnail_path),
         )
         return cur.lastrowid
 
 
+_ARCHIVE_ITEM_SELECT = """
+    SELECT archive_items.*, users.email AS owner_email, users.name AS owner_name, users.contact AS owner_contact
+    FROM archive_items JOIN users ON users.id = archive_items.owner_user_id
+"""
+
+
 def list_archive_items() -> list[dict]:
+    """Public Gallery listing — approved items only; see list_pending_archive_items for the
+    admin review queue."""
     with _connect() as conn:
         rows = conn.execute(
-            """
-            SELECT archive_items.*, users.email AS owner_email
-            FROM archive_items JOIN users ON users.id = archive_items.owner_user_id
-            ORDER BY archive_items.created_at DESC
-            """
+            _ARCHIVE_ITEM_SELECT + " WHERE archive_items.status = 'approved' ORDER BY archive_items.created_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_pending_archive_items() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            _ARCHIVE_ITEM_SELECT + " WHERE archive_items.status = 'pending' ORDER BY archive_items.created_at ASC"
         ).fetchall()
         return [dict(row) for row in rows]
 
 
 def get_archive_item(item_id: int) -> dict | None:
+    """Unfiltered by status — used both for the public detail page (which checks status ==
+    'approved' itself before showing anything) and for the admin review actions below."""
     with _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT archive_items.*, users.email AS owner_email
-            FROM archive_items JOIN users ON users.id = archive_items.owner_user_id
-            WHERE archive_items.id = ?
-            """,
-            (item_id,),
-        ).fetchone()
+        row = conn.execute(_ARCHIVE_ITEM_SELECT + " WHERE archive_items.id = ?", (item_id,)).fetchone()
         return dict(row) if row else None
+
+
+def update_archive_item(item_id: int, title: str, description: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE archive_items SET title = ?, description = ? WHERE id = ?",
+            (title.strip()[:200], description.strip()[:2000], item_id),
+        )
+
+
+def approve_archive_item(item_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE archive_items SET status = 'approved' WHERE id = ?", (item_id,))
+
+
+def delete_archive_item(item_id: int) -> dict | None:
+    """Returns the deleted row (so the caller can also remove its bundle/thumbnail files —
+    see archive.py) or None if it didn't exist."""
+    item = get_archive_item(item_id)
+    if not item:
+        return None
+    with _connect() as conn:
+        conn.execute("DELETE FROM archive_items WHERE id = ?", (item_id,))
+    return item

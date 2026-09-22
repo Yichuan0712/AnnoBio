@@ -74,6 +74,7 @@
     {{ERROR}}
     <form method="post" action="{{FORM_ACTION}}">
       <div class="field"><input name="email" type="email" placeholder="Email" required></div>
+      {{EXTRA_FIELDS}}
       <div class="field"><input name="password" type="password" placeholder="{{PASSWORD_PLACEHOLDER}}" required {{PASSWORD_MINLENGTH}}></div>
       <button type="submit" class="btn-submit">{{SUBMIT_LABEL}}</button>
     </form>

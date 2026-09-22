@@ -450,12 +450,14 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
     const initials = email.slice(0, 2).toUpperCase();
     const avatarWrap = document.createElement('div');
     avatarWrap.className = 'top-bar-icon-item has-submenu top-bar-avatar-item';
+    const reviewLinkHtml = who?.is_admin ? '<a class="menu-option" href="/admin/gallery">Review</a>' : '';
     avatarWrap.innerHTML = `
       <button type="button" class="top-bar-avatar" title="${email}" aria-label="Account: ${email}">${initials}</button>
       <div class="menu-dropdown top-bar-icon-dropdown top-bar-avatar-dropdown">
         <div class="top-bar-avatar-email">${email}</div>
         <a class="menu-option" href="/gallery">Gallery</a>
         <a class="menu-option" href="/profile">Profile</a>
+        ${reviewLinkHtml}
         <button type="button" class="menu-option" data-action="logout">Log out</button>
       </div>
     `;
