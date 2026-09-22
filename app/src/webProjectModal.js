@@ -22,9 +22,32 @@ function formatDate(seconds) {
   return new Date(seconds * 1000).toLocaleString();
 }
 
+/** Throws a friendly Error for a failed API response. If the Hub reports that this user's
+ * per-user backend container couldn't be cold-started because the host is already at
+ * PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS (see hub/containers.py's CapacityExceeded and
+ * hub/proxy.py), the thrown Error carries `.capacityExceeded = true` so callers that open a
+ * workspace (see renderer.js) can point the user at the desktop app instead of just showing a
+ * generic failure. */
+async function throwApiError(res, fallbackMessage) {
+  if (res.status === 503) {
+    try {
+      const body = await res.json();
+      if (body?.error === 'capacity_exceeded') {
+        const err = new Error(body.detail || 'The server is at capacity right now.');
+        err.capacityExceeded = true;
+        throw err;
+      }
+    } catch (err) {
+      if (err?.capacityExceeded) throw err;
+      // Not JSON (or no capacity marker) — fall through to the generic message below.
+    }
+  }
+  throw new Error(fallbackMessage);
+}
+
 async function fetchProjects() {
   const res = await fetch(`${BACKEND_API_BASE}/api/projects`);
-  if (!res.ok) throw new Error('Could not load projects.');
+  if (!res.ok) await throwApiError(res, 'Could not load projects.');
   return res.json();
 }
 
@@ -68,7 +91,7 @@ export async function createWebProject(name) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   });
-  if (!res.ok) throw new Error('Could not create project.');
+  if (!res.ok) await throwApiError(res, 'Could not create project.');
   return res.json();
 }
 
@@ -423,7 +446,7 @@ export function showProjectPickerModal(currentProjectId = null) {
 /** Fetch a project's canvas state by id. Throws on failure. */
 export async function loadWebProject(id) {
   const res = await fetch(`${BACKEND_API_BASE}/api/projects/${id}`);
-  if (!res.ok) throw new Error('Could not load project.');
+  if (!res.ok) await throwApiError(res, 'Could not load project.');
   return res.json();
 }
 

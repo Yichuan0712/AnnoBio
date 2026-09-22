@@ -40,6 +40,11 @@ services:
       # OpenRouter OAuth login to work (see hub/containers.py); everything else works without it.
       PROMPT_STUDIO_PUBLIC_BASE_URL: ${PROMPT_STUDIO_PUBLIC_BASE_URL:-}
       PROMPT_STUDIO_IDLE_TIMEOUT_SEC: ${PROMPT_STUDIO_IDLE_TIMEOUT_SEC:-1800}
+      # How many per-user backend containers (1GB RAM / 1 CPU each — see containers.py) this host
+      # allows running at once before new web sessions get turned away and pointed at the desktop
+      # app instead. Unset (the default) means no cap at all — size it to this host's actual RAM
+      # once you know it, e.g. a 8GB box might set 6 to leave headroom for the Hub/Caddy/OS.
+      PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS: ${PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS:-}
       PROMPT_STUDIO_REAP_INTERVAL_SEC: ${PROMPT_STUDIO_REAP_INTERVAL_SEC:-300}
     volumes:
       - hub-data:/app/hub/data
