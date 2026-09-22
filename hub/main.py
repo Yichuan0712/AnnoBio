@@ -427,21 +427,13 @@ def about_page(request: Request):
       </p>
       <h2 class="about-heading">Contact</h2>
       <p class="page-sub about-contact-intro">For questions about AnnoBio data, methods, website feedback, or collaboration, please contact:</p>
-      <div class="profile-card">
-        <div class="profile-row"><span class="profile-label">Yichuan Zhang</span><a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a></div>
-        <div class="profile-row"><span class="profile-label">Duolin Wang</span><a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a></div>
-      </div>
+      <p class="about-contact-line">Yichuan Zhang (<a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a>)</p>
+      <p class="about-contact-line">Duolin Wang (<a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>)</p>
     """
-    # Same .profile-card/.profile-row/.profile-label look as Profile (see profile_page above) —
-    # a label + value row inside a bordered card, rather than inventing new heading/list styles
-    # for a page that's otherwise just "some text and a couple of facts".
     extra_css = """
       .about-heading { font-size: 18px; margin: 32px 0 12px; }
       .about-contact-intro { margin-bottom: 16px; }
-      .profile-card { max-width: 460px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius); padding: 6px 20px; }
-      .profile-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
-      .profile-row:last-child { border-bottom: none; }
-      .profile-label { color: var(--text-muted); }
+      .about-contact-line { margin: 0 0 8px; font-size: 14px; color: var(--text); }
       a.link { color: var(--accent); text-decoration: none; }
       a.link:hover { text-decoration: underline; }
     """
