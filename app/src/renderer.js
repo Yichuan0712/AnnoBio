@@ -31,7 +31,7 @@ import { openAddDatasetModal } from './addDatasetModal.js';
 import { initModalDrag } from './modalDrag.js';
 import { initModalMaximize } from './modalMaximize.js';
 import { showProjectPickerModal, loadWebProject, saveWebProject, createWebProject, findUniqueProjectName } from './webProjectModal.js';
-import { showAlert, showConfirm } from './alertModal.js';
+import { showAlert } from './alertModal.js';
 import { setCurrentProjectId } from './currentProject.js';
 import { createUndoHistory } from './undoHistory.js';
 import { pruneUnusedAssets as pruneUnusedAssetsWeb } from './webImageApi.js';
@@ -232,53 +232,6 @@ window.addEventListener('DOMContentLoaded', () => {
     if (await ensureWebProjectOpen()) openAddDatasetModal(canvasAPI);
   };
 
-  function formatBytes(bytes) {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  // Deletes any image asset no dataset cell references anymore (e.g. a PDF-import dataset that
-  // got deleted later, or a cell cleared/replaced) — see pruneUnusedAssets in projectAssets.js /
-  // project_store.py. Always previews first so the confirm dialog can show a real count/size
-  // instead of an unconditional "delete everything unused" with no idea what that means.
-  const onCleanUpUnusedImages = async () => {
-    if (!currentProjectPath) {
-      showAlert('Open a project first.', { title: 'Clean up unused images' });
-      return;
-    }
-    const usedIds = canvasAPI.getUsedAssetIds?.() || [];
-    const prune = (opts) => (isElectron
-      ? window.electronAPI.pruneUnusedAssets(usedIds, opts)
-      : pruneUnusedAssetsWeb(currentProjectPath, usedIds, opts));
-    try {
-      const preview = await prune({ dryRun: true });
-      if (!preview?.removed?.length) {
-        showAlert('No unused images found.', { title: 'Clean up unused images' });
-        return;
-      }
-      const count = preview.removed.length;
-      const ok = await showConfirm(
-        `Found ${count} unused image${count === 1 ? '' : 's'} (${formatBytes(preview.freedBytes)}). Delete ${count === 1 ? 'it' : 'them'}? This can't be undone.`,
-        { title: 'Clean up unused images', confirmText: 'Delete' },
-      );
-      if (!ok) return;
-      const result = await prune({ dryRun: false });
-      const state = canvasAPI.getCanvasState();
-      if (isElectron) {
-        await window.electronAPI.saveProject(currentProjectPath, state);
-      } else {
-        await saveWebProject(currentProjectPath, state);
-      }
-      showAlert(
-        `Deleted ${result.removed.length} unused image${result.removed.length === 1 ? '' : 's'}, freed ${formatBytes(result.freedBytes)}.`,
-        { title: 'Clean up unused images' },
-      );
-    } catch (err) {
-      showAlert(err.message || 'Could not clean up unused images.', { title: 'Error' });
-    }
-  };
-
   // Undo/redo: snapshot-based (see undoHistory.js), scoped to whatever project is currently
   // open — reset() is called everywhere a different project's state gets loaded in below.
   let notifyUndoRedo = () => {};
@@ -298,7 +251,6 @@ window.addEventListener('DOMContentLoaded', () => {
     onMergeProject: isElectron ? onMergeProjectDesktop : undefined,
     onUndo: () => undoHistory.undo(),
     onRedo: () => undoHistory.redo(),
-    onCleanUpUnusedImages,
   });
   notifyUndoRedo = ({ canUndo, canRedo }) => topBarAPI.setUndoRedoEnabled?.(canUndo, canRedo);
   topBarAPI.setProjectTitle?.(APP_TITLE);
@@ -362,8 +314,23 @@ window.addEventListener('DOMContentLoaded', () => {
           await saveWebProject(currentProjectPath, state);
         } catch (err) {
           showAlert(err.message || 'Could not save project.', { title: 'Error' });
+          return;
         }
       }
+      // Silent housekeeping, not a user-initiated action — no dialog either way, success or
+      // failure. Runs after every autosave (not just via the manual "Clean up unused images..."
+      // action) so images orphaned by deleting/clearing a cell don't just sit there until someone
+      // remembers to clean up by hand.
+      try {
+        const usedIds = canvasAPI.getUsedAssetIds?.() || [];
+        const pruneResult = isElectron
+          ? await window.electronAPI.pruneUnusedAssets(usedIds)
+          : await pruneUnusedAssetsWeb(currentProjectPath, usedIds);
+        if (pruneResult?.removed?.length) {
+          if (isElectron) await window.electronAPI.saveProject(currentProjectPath, state);
+          else await saveWebProject(currentProjectPath, state);
+        }
+      } catch (_) { /* best-effort — a failed sweep just tries again on the next save */ }
     }, 400);
   });
   } catch (err) {
