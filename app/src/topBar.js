@@ -290,20 +290,14 @@ const iconNewDataset = () => svgIcon({
   paths: ['M3 5V19A9 3 0 0 0 21 19V5', 'M3 12A9 3 0 0 0 21 12'],
 });
 
-// Publish to Gallery = Lucide's "globe" (public, web-only) — same path data as icons.js's
-// iconGlobe, duplicated locally since this file draws its own rail icons rather than importing.
-const iconGlobe = () => svgIcon({
+// Publish to Gallery = Lucide's "cloud-upload" (official path data) — reads as "send this up
+// to a shared place" rather than the globe's general "public/web" or the megaphone's "announce".
+const iconCloudUpload = () => svgIcon({
   paths: [
-    'M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20',
-    'M2 12h20',
+    'M12 13v8',
+    'M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242',
+    'm8 17 4-4 4 4',
   ],
-  circles: [[12, 12, 10]],
-});
-
-// Browse Gallery = Lucide's "layout-grid" — a 2x2 grid, deliberately not the globe (Publish)
-// above: this one *goes to* the Gallery rather than putting the current project into it.
-const iconGalleryGrid = () => svgIcon({
-  rects: [[3, 3, 7, 7, 1], [14, 3, 7, 7, 1], [14, 14, 7, 7, 1], [3, 14, 7, 7, 1]],
 });
 
 // LLM settings = Lucide's "cpu", not a generic gear — reads as "the model" specifically rather
@@ -420,23 +414,12 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   });
   rail.appendChild(newDatasetBtn.wrap);
 
-  // Browse Gallery — a site-wide destination, not an account action, so it lives here in the
-  // rail rather than in the avatar dropdown (which is Profile/Review/Log out — things about
-  // *this account*, not public navigation). Always enabled: browsing has nothing to do with
-  // whatever project is or isn't currently open.
-  const galleryBtn = iconButton({
-    icon: iconGalleryGrid,
-    label: 'Browse Gallery',
-    onClick: () => { window.location.href = '/gallery'; },
-  });
-  rail.appendChild(galleryBtn.wrap);
-
   // Publish to Gallery — disabled until a project is open (unlike New Prompt/Dataset, publishing
   // has nothing to do with an empty/no project, so there's no "create one first" fallback here).
   // Lives here, one click away, rather than buried in the project picker among Duplicate/Delete —
   // see webProjectModal.js's publishCurrentProjectToGallery for why.
   const publishBtn = iconButton({
-    icon: iconGlobe,
+    icon: iconCloudUpload,
     label: 'Publish to Gallery',
     onClick: () => { if (!publishBtn.btn.disabled) onPublishToGallery?.(); },
   });
@@ -459,8 +442,9 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
 
   // ---- Account avatar (only present when served by the Hub and logged in) — clicking it goes
   // straight to Profile, and it still opens a hover dropdown with Profile/Review(admin)/Log out:
-  // things about *this account*, not general site navigation — Gallery lives in the rail above
-  // instead (see galleryBtn), same reasoning as Publish not living in the project picker. ----
+  // things about *this account*, not general site navigation. No Gallery entry point here or in
+  // the rail by design — browsing it from inside the app isn't a supported path right now, only
+  // from the Hub's own pages outside /app. ----
   fetch('/whoami').then((res) => (res.ok ? res.json() : null)).then((who) => {
     const email = String(who?.email || '').trim();
     if (!email) return;

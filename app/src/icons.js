@@ -61,16 +61,6 @@ export const iconMerge = (size) => svgIcon({
   ],
 });
 
-/** Lucide "globe" — used for "Publish to Gallery" (public, web-only). */
-export const iconGlobe = (size) => svgIcon({
-  size,
-  paths: [
-    'M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20',
-    'M2 12h20',
-  ],
-  circles: [[12, 12, 10]],
-});
-
 /** Lucide "copy" */
 export const iconCopy = (size) => svgIcon({
   size,
