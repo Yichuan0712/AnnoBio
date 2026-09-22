@@ -6030,9 +6030,12 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 
 .working-dataset-edit-table th .wd-header-batch-btn {
   flex: 0 0 auto;
-  padding: 2px 8px;
-  font-size: 11px;
-  white-space: nowrap;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .working-dataset-edit-table th .wd-header-inp:hover,
@@ -8433,15 +8436,48 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 
 .wd-column-type { display: block; width: calc(100% - 12px); margin: 3px 6px 5px; font-size: 11px; }
-.wd-image-cell { position: relative; min-width: 150px; min-height: 66px; padding: 30px 6px 6px; }
+.wd-image-cell { position: relative; min-width: 150px; min-height: 66px; padding: 28px 6px 6px; }
 .wd-image-cell--empty { min-height: 0; padding: 4px 6px; }
 .wd-image-strip { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .wd-image-overlay-actions { position: absolute; top: 6px; right: 6px; z-index: 1; display: flex; align-items: center; gap: 6px; }
 .wd-image-cell--empty .wd-image-overlay-actions { position: static; justify-content: flex-end; }
-.wd-image-overlay-actions .btn { padding: 2px 6px; font-size: 11px; }
+.wd-image-overlay-actions .btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.wd-image-thumb-wrap { position: relative; display: inline-flex; }
 .wd-image-thumb { width: 54px; height: 54px; padding: 0; overflow: hidden; border: 1px solid var(--border-color); background: var(--surface-secondary); color: var(--text-muted); font-size: 10px; cursor: zoom-in; }
 .wd-image-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .wd-image-thumb--error { color: #e05252; }
+.wd-image-thumb-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+  font-size: 13px;
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .1s;
+}
+.wd-image-thumb-wrap:hover .wd-image-thumb-remove,
+.wd-image-thumb-remove:focus-visible {
+  opacity: 1;
+}
 .wd-image-viewer { z-index: 15000; }
 .wd-image-viewer-panel { position: relative; max-width: 92vw; max-height: 92vh; padding: 36px 18px 12px; border-radius: 8px; background: var(--surface-primary); box-shadow: 0 16px 48px rgba(0,0,0,.45); text-align: center; }
 .wd-image-viewer-panel img { display: block; max-width: 86vw; max-height: 76vh; object-fit: contain; }

@@ -86,3 +86,21 @@ export const iconTrash = (size) => svgIcon({
   ],
   lines: [[10, 11, 10, 17], [14, 11, 14, 17]],
 });
+
+/** Lucide "upload" — used for "batch import" (bring several files in at once). */
+export const iconUpload = (size) => svgIcon({
+  size,
+  paths: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'],
+  polylines: ['7 8 12 3 17 8'],
+  lines: [[12, 3, 12, 15]],
+});
+
+/** Picture frame + plus badge — used for "import (one) image", distinct from the plain upload
+ * arrow above so the two buttons read as "add one" vs. "bring in a batch". */
+export const iconImageAdd = (size) => svgIcon({
+  size,
+  rects: [[3, 3, 14, 14, 2]],
+  circles: [[9, 9, 1.5]],
+  paths: ['m3 13 4-4c.6-.6 1.6-.6 2.2 0L13 13'],
+  lines: [[19, 5, 19, 11], [16, 8, 22, 8]],
+});
