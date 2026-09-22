@@ -319,6 +319,43 @@ async def import_assets(project_id: str, files: list[UploadFile] = File(...)):
     return result
 
 
+class AssetPruneRequest(BaseModel):
+    usedIds: list[str] = []
+    dryRun: bool = False
+
+
+@router.post("/{project_id}/assets/prune")
+def prune_unused_assets(project_id: str, body: AssetPruneRequest):
+    """Deletes any tracked asset not in body.usedIds — the web counterpart of
+    projectAssets.js's pruneUnusedAssets(). With dryRun, only reports what would be removed."""
+    used = set(body.usedIds or [])
+    with _lock:
+        data = _read_project(project_id)
+        assets = data.get("assets") or {}
+        unused = {aid: a for aid, a in assets.items() if aid not in used}
+        if not unused:
+            return {"removed": [], "freedBytes": 0}
+        if body.dryRun:
+            return {
+                "removed": [{"id": aid, "name": a.get("name")} for aid, a in unused.items()],
+                "freedBytes": sum(a.get("bytes", 0) for a in unused.values()),
+            }
+        root = _assets_root(project_id)
+        removed = []
+        freed_bytes = 0
+        for aid, asset in unused.items():
+            target = (root / asset["path"]).resolve()
+            if target.is_relative_to(root.resolve()) and target.is_file():
+                target.unlink()
+            del assets[aid]
+            freed_bytes += asset.get("bytes", 0)
+            removed.append({"id": aid, "name": asset.get("name")})
+        data["assets"] = assets
+        data.setdefault("meta", {})["updatedAt"] = time.time()
+        _atomic_write_json(_project_file(project_id), data)
+    return {"removed": removed, "freedBytes": freed_bytes}
+
+
 @router.get("/{project_id}/assets/{asset_id}/preview")
 def preview_asset(project_id: str, asset_id: str, thumbnail: bool = True):
     data = _read_project(project_id)

@@ -65,7 +65,7 @@ import { DATASET_BORDER_COLORS } from './workflowNodeColors.js';
 import { showAlert, showConfirm } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
-import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell } from './datasetContent.js';
+import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isImageCell } from './datasetContent.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -1203,6 +1203,21 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content (imported or sampled) */
   const datasetContentByNodeId = new DatasetContentMap();
+
+  /** Every image asset id any dataset node's image cells currently reference — the "keep" set
+   * for pruneUnusedImageAssets (see renderer.js): anything in the project's asset registry that
+   * ISN'T in this set is safe to delete. */
+  function getUsedAssetIds() {
+    const ids = new Set();
+    datasetContentByNodeId.forEach((content) => {
+      (content.rows || []).forEach((row) => {
+        row.forEach((cell) => {
+          if (isImageCell(cell)) cell.assetIds.forEach((id) => ids.add(id));
+        });
+      });
+    });
+    return Array.from(ids);
+  }
 
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
@@ -4893,5 +4908,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     shutdownRunPoll,
     clearSelection,
     deleteSelectedNodes,
+    getUsedAssetIds,
   };
 }

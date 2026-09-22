@@ -100,6 +100,21 @@ export async function importImages(projectId, files) {
   return res.json();
 }
 
+/** @param {string[]} usedIds @returns {Promise<{removed: {id:string,name:string}[], freedBytes: number}>} */
+export async function pruneUnusedAssets(projectId, usedIds, { dryRun = false } = {}) {
+  if (!projectId) throw new Error('Open a project before cleaning up images.');
+  const res = await fetch(`${BACKEND_API_BASE}/api/projects/${projectId}/assets/prune`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ usedIds: usedIds || [], dryRun }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || 'Could not clean up unused images.');
+  }
+  return res.json();
+}
+
 export async function imagePreview(projectId, assetId, thumbnail = true) {
   if (!projectId) throw new Error('Open a project before previewing images.');
   const res = await fetch(`${BACKEND_API_BASE}/api/projects/${projectId}/assets/${encodeURIComponent(assetId)}/preview?thumbnail=${thumbnail}`);

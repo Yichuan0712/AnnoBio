@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   importImages: (paths) => ipcRenderer.invoke('assets:import', paths),
   importImageBuffers: (entries) => ipcRenderer.invoke('assets:import-buffers', entries),
+  pruneUnusedAssets: (usedIds, options) => ipcRenderer.invoke('assets:prune-unused', usedIds, options),
   pickImageFiles: () => ipcRenderer.invoke('assets:pick-files'),
   pickImageDirectory: () => ipcRenderer.invoke('assets:pick-directory'),
   imagePreview: (id, thumbnail = true) => ipcRenderer.invoke('assets:preview', id, thumbnail),
