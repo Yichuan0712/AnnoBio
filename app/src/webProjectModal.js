@@ -94,7 +94,7 @@ function showPublishDetailsModal(defaultTitle) {
     overlay.innerHTML = `
       <div class="modal-panel modal-panel--alert">
         <div class="modal-header">
-          <h2 class="modal-title">Publish to Archive</h2>
+          <h2 class="modal-title">Publish to Gallery</h2>
           <button type="button" class="modal-close" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
@@ -142,9 +142,10 @@ function showPublishDetailsModal(defaultTitle) {
   });
 }
 
-/** Screenshots the live canvas viewport (whatever's currently visible/scrolled to) as a PNG blob
- * for the Archive listing's thumbnail — best-effort: a capture failure shouldn't block publishing,
- * it just means the listing falls back to an empty thumbnail. */
+/** Screenshots the live canvas viewport (whatever's currently visible/scrolled to) as a PNG blob —
+ * used both for the Gallery listing's thumbnail and for the per-project preview on the Hub's
+ * Profile page (see saveWebProjectThumbnail). Best-effort: a capture failure shouldn't block
+ * publishing or autosave, it just means the listing falls back to an empty thumbnail. */
 async function captureCanvasThumbnail() {
   const el = document.querySelector('.workflow-canvas');
   if (!el) return null;
@@ -156,7 +157,7 @@ async function captureCanvasThumbnail() {
 }
 
 /** Publishes `projectId` (must be the currently open project — see captureCanvasThumbnail) to the
- * Hub's public Archive. Hub-level endpoint, not proxied per-user backend, so it's a plain relative
+ * Hub's public Gallery. Hub-level endpoint, not proxied per-user backend, so it's a plain relative
  * fetch rather than going through BACKEND_API_BASE (which points at this user's own container). */
 async function publishProjectToArchive(projectId, title, description) {
   const thumbnail = await captureCanvasThumbnail();
@@ -165,12 +166,27 @@ async function publishProjectToArchive(projectId, title, description) {
   formData.append('title', title);
   formData.append('description', description);
   if (thumbnail) formData.append('thumbnail', thumbnail, 'thumbnail.png');
-  const res = await fetch('/archive/publish', { method: 'POST', body: formData });
+  const res = await fetch('/gallery/publish', { method: 'POST', body: formData });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
-    throw new Error(detail || 'Could not publish to the Archive.');
+    throw new Error(detail || 'Could not publish to the Gallery.');
   }
   return res.json();
+}
+
+/** Screenshots the canvas and pushes it as `projectId`'s preview image, proxied through to this
+ * user's own container (backend/project_store.py's PUT /{id}/thumbnail) — best-effort, same as
+ * captureCanvasThumbnail itself: a failed capture or upload just leaves the previous (or no)
+ * thumbnail in place rather than surfacing an error. Called after every successful autosave (see
+ * renderer.js) so the Hub's Profile page can show a live-ish preview per workspace. */
+export async function saveWebProjectThumbnail(projectId) {
+  const thumbnail = await captureCanvasThumbnail();
+  if (!thumbnail) return;
+  const formData = new FormData();
+  formData.append('file', thumbnail, 'thumbnail.png');
+  try {
+    await fetch(`${BACKEND_API_BASE}/api/projects/${projectId}/thumbnail`, { method: 'PUT', body: formData });
+  } catch (_) { /* best-effort */ }
 }
 
 /**
@@ -282,8 +298,8 @@ export function showProjectPickerModal(currentProjectId = null) {
             const publishBtn = document.createElement('button');
             publishBtn.type = 'button';
             publishBtn.className = 'project-picker-publish';
-            publishBtn.setAttribute('aria-label', `Publish ${project.name} to the Archive`);
-            publishBtn.title = 'Publish to Archive (public)';
+            publishBtn.setAttribute('aria-label', `Publish ${project.name} to the Gallery`);
+            publishBtn.title = 'Publish to Gallery (public)';
             publishBtn.appendChild(iconGlobe(15));
             publishBtn.addEventListener('click', async (e) => {
               e.stopPropagation();
@@ -292,9 +308,9 @@ export function showProjectPickerModal(currentProjectId = null) {
               publishBtn.disabled = true;
               try {
                 await publishProjectToArchive(project.id, details.title, details.description);
-                showAlert('Published — anyone can find it in the Archive now.', { title: 'Published' });
+                showAlert('Published — anyone can find it in the Gallery now.', { title: 'Published' });
               } catch (err) {
-                showAlert(err.message || 'Could not publish to the Archive.', { title: 'Error' });
+                showAlert(err.message || 'Could not publish to the Gallery.', { title: 'Error' });
               } finally {
                 publishBtn.disabled = false;
               }

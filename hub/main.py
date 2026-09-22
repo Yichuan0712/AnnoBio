@@ -90,7 +90,7 @@ BRAND_MARK_SVG = (
 NAV_LINKS = [
     ("/", "Home"),
     ("/app", "Workspace"),
-    ("/archive", "Archive"),
+    ("/gallery", "Gallery"),
     ("/download", "Download"),
     ("/guide", "User Guide"),
 ]
@@ -108,7 +108,7 @@ def render_nav(user: dict | None, active: str = "") -> str:
         initials = user["email"][:2].upper()
         actions_html = (
             '<div class="nav-avatar-wrap">'
-            f'<button type="button" class="nav-avatar" aria-label="Account: {user["email"]}">{initials}</button>'
+            f'<button type="button" class="nav-avatar" aria-label="Account: {user["email"]}" onclick="location.href=\'/profile\'">{initials}</button>'
             '<div class="nav-avatar-dropdown">'
             f'<div class="nav-avatar-email">{user["email"]}</div>'
             '<a class="menu-option" href="/profile">Profile</a>'
@@ -580,35 +580,40 @@ async def profile_page(request: Request):
     if not projects:
         workspaces_html = '<p class="workspaces-empty">No workspaces yet — <a class="link" href="/app">create one</a>.</p>'
     else:
-        rows = "".join(
+        # Same card-grid look as the public Gallery (see ARCHIVE_CSS/_archive_thumb_html above) —
+        # a thumbnail per workspace, generated client-side on every autosave (see renderer.js's
+        # saveWebProjectThumbnail) and served back through the per-user proxy at /api/projects/...
+        # rather than a Hub-owned static path, since it's private to this user's own container.
+        cards = "".join(
             f"""
-            <a class="workspace-row" href="/app/?open={p['id']}">
-              <span class="workspace-name">{p.get('name') or 'Untitled Project'}</span>
-              <span class="workspace-date">{datetime.datetime.fromtimestamp(p['updatedAt']).strftime('%b %-d, %Y')}</span>
+            <a class="archive-card" href="/app/?open={p['id']}">
+              {_workspace_thumb_html(p)}
+              <div class="archive-card-body">
+                <div class="archive-card-title">{escape(p.get('name') or 'Untitled Project')}</div>
+                <div class="archive-card-meta">{datetime.datetime.fromtimestamp(p['updatedAt']).strftime('%b %-d, %Y')}</div>
+              </div>
             </a>
             """
             for p in projects
         )
-        workspaces_html = f'<div class="workspace-list">{rows}</div>'
+        workspaces_html = f'<div class="archive-grid">{cards}</div>'
 
     body = f"""
       <h1>Profile</h1>
       <p class="page-sub">Your AnnoBio account.</p>
-      <div class="profile-col">
-        <div class="profile-card">
-          <div class="profile-row"><span class="profile-label">Email</span><span>{user["email"]}</span></div>
-          <div class="profile-row"><span class="profile-label">Member since</span><span>{joined}</span></div>
-        </div>
-        <form method="post" action="/logout">
-          <button type="submit" class="btn btn-secondary">Log out</button>
-        </form>
-
-        <h2 class="workspaces-heading">Your workspaces</h2>
-        {workspaces_html}
+      <div class="profile-card">
+        <div class="profile-row"><span class="profile-label">Email</span><span>{user["email"]}</span></div>
+        <div class="profile-row"><span class="profile-label">Member since</span><span>{joined}</span></div>
       </div>
+      <form method="post" action="/logout">
+        <button type="submit" class="btn btn-secondary">Log out</button>
+      </form>
+
+      <h2 class="workspaces-heading">Your workspaces</h2>
+      {workspaces_html}
     """
-    extra_css = """
-      .profile-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius); padding: 6px 20px; margin-bottom: 22px; }
+    extra_css = ARCHIVE_CSS + """
+      .profile-card { max-width: 460px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius); padding: 6px 20px; margin-bottom: 22px; }
       .profile-row { display: flex; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
       .profile-row:last-child { border-bottom: none; }
       .profile-label { color: var(--text-muted); }
@@ -616,18 +621,8 @@ async def profile_page(request: Request):
       .workspaces-empty { color: var(--text-muted); font-size: 14px; }
       a.link { color: var(--accent); text-decoration: none; }
       a.link:hover { text-decoration: underline; }
-      .workspace-list { border: 1px solid var(--border); border-radius: var(--control-radius); overflow: hidden; }
-      .workspace-row {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 13px 18px; text-decoration: none; color: var(--text);
-        background: var(--bg); border-bottom: 1px solid var(--border); font-size: 14px;
-      }
-      .workspace-row:last-child { border-bottom: none; }
-      .workspace-row:hover { background: rgba(37, 99, 235, 0.06); }
-      .workspace-name { font-weight: 600; }
-      .workspace-date { color: var(--text-muted); font-size: 12.5px; }
     """
-    return HTMLResponse(render_page(title="Profile", user=user, active="/profile", body=body, extra_css=extra_css, narrow=True))
+    return HTMLResponse(render_page(title="Profile", user=user, active="/profile", body=body, extra_css=extra_css))
 
 
 ARCHIVE_CSS = """
@@ -656,23 +651,32 @@ ARCHIVE_CSS = """
 def _archive_thumb_html(item: dict, css_class: str = "archive-card-thumb") -> str:
     if not item.get("thumbnail_path"):
         return f'<div class="{css_class} archive-card-thumb-empty"></div>'
-    return f'<div class="{css_class}"><img src="/archive-images/{item["thumbnail_path"]}" alt="" loading="lazy"></div>'
+    return f'<div class="{css_class}"><img src="/gallery-images/{item["thumbnail_path"]}" alt="" loading="lazy"></div>'
+
+
+def _workspace_thumb_html(project: dict) -> str:
+    """Same card look as _archive_thumb_html, but for the Profile page's own (private) workspaces
+    — served through the per-user proxy at /api/projects/... (see project_store.py's
+    GET /{id}/thumbnail) rather than a Hub-owned static path, since only its owner may see it."""
+    if not project.get("hasThumbnail"):
+        return '<div class="archive-card-thumb archive-card-thumb-empty"></div>'
+    return f'<div class="archive-card-thumb"><img src="/api/projects/{project["id"]}/thumbnail" alt="" loading="lazy"></div>'
 
 
 def _fmt_date(ts: float) -> str:
     return datetime.datetime.fromtimestamp(ts).strftime("%b %-d, %Y") if ts else ""
 
 
-@app.get("/archive")
+@app.get("/gallery")
 def archive_list_page(request: Request):
     user = current_user(request)
     items = db.list_archive_items()
     if not items:
-        grid_html = '<p class="workspaces-empty">Nothing published yet — open a project and use "Publish to Archive" to be the first.</p>'
+        grid_html = '<p class="workspaces-empty">Nothing published yet — open a project and use "Publish to Gallery" to be the first.</p>'
     else:
         cards = "".join(
             f"""
-            <a class="archive-card" href="/archive/{item['id']}">
+            <a class="archive-card" href="/gallery/{item['id']}">
               {_archive_thumb_html(item)}
               <div class="archive-card-body">
                 <div class="archive-card-title">{escape(item['title'])}</div>
@@ -684,22 +688,22 @@ def archive_list_page(request: Request):
         )
         grid_html = f'<div class="archive-grid">{cards}</div>'
     body = f"""
-      <h1>Archive</h1>
+      <h1>Gallery</h1>
       <p class="page-sub">Projects the community has published — browse freely, and add any of them to your own account to start from.</p>
       {grid_html}
     """
-    return HTMLResponse(render_page(title="Archive", user=user, active="/archive", body=body, extra_css=ARCHIVE_CSS))
+    return HTMLResponse(render_page(title="Gallery", user=user, active="/gallery", body=body, extra_css=ARCHIVE_CSS))
 
 
-@app.get("/archive/{item_id}")
+@app.get("/gallery/{item_id}")
 def archive_detail_page(request: Request, item_id: int):
     user = current_user(request)
     item = db.get_archive_item(item_id)
     if not item:
-        body = "<h1>Not found</h1><p class=\"page-sub\">This project isn't in the Archive (anymore).</p>"
-        return HTMLResponse(render_page(title="Archive", user=user, active="/archive", body=body), status_code=404)
+        body = "<h1>Not found</h1><p class=\"page-sub\">This project isn't in the Gallery (anymore).</p>"
+        return HTMLResponse(render_page(title="Gallery", user=user, active="/gallery", body=body), status_code=404)
     if user:
-        action_html = f'<form method="post" action="/archive/{item_id}/fork"><button type="submit" class="btn btn-primary">Add to my account</button></form>'
+        action_html = f'<form method="post" action="/gallery/{item_id}/fork"><button type="submit" class="btn btn-primary">Add to my account</button></form>'
     else:
         action_html = '<a class="btn btn-primary" href="/login">Log in to add this to your account</a>'
     desc_html = f'<p class="archive-detail-desc">{escape(item["description"])}</p>' if item.get("description") else ""
@@ -714,10 +718,10 @@ def archive_detail_page(request: Request, item_id: int):
         </div>
       </div>
     """
-    return HTMLResponse(render_page(title=item["title"], user=user, active="/archive", body=body, extra_css=ARCHIVE_CSS))
+    return HTMLResponse(render_page(title=item["title"], user=user, active="/gallery", body=body, extra_css=ARCHIVE_CSS))
 
 
-@app.post("/archive/publish")
+@app.post("/gallery/publish")
 async def archive_publish(
     request: Request,
     project_id: str = Form(...),
@@ -748,18 +752,18 @@ async def archive_publish(
     return {"id": item_id}
 
 
-@app.post("/archive/{item_id}/fork")
+@app.post("/gallery/{item_id}/fork")
 async def archive_fork(request: Request, item_id: int):
     user = request.state.user
     item = db.get_archive_item(item_id)
     if not item:
-        return RedirectResponse("/archive", status_code=302)
+        return RedirectResponse("/gallery", status_code=302)
     bundle_bytes = archive.read_bundle(item["bundle_path"])
     try:
         new_id = await archive.import_bundle_into_container(user["id"], bundle_bytes, f"{item['title']}.yc")
     except (ValueError, containers.BackendUnavailable) as e:
         body = f"<h1>Could not add project</h1><p class=\"page-sub\">{escape(str(e))}</p>"
-        return HTMLResponse(render_page(title="Archive", user=user, active="/archive", body=body), status_code=502)
+        return HTMLResponse(render_page(title="Gallery", user=user, active="/gallery", body=body), status_code=502)
     return RedirectResponse(f"/app/?open={new_id}", status_code=302)
 
 
@@ -781,14 +785,14 @@ async def no_cache_for_pages(request: Request, call_next):
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
-    # Archive browsing (the list, a project's detail page, its thumbnail image) is public —
+    # Gallery browsing (the list, a project's detail page, its thumbnail image) is public —
     # Overleaf-style, so it's worth sharing outside the app. Publishing and forking are POSTs,
-    # so they fall through to the login check below same as everything else under /archive.
+    # so they fall through to the login check below same as everything else under /gallery.
     if (
-        path in ("/", "/login", "/logout", "/register", "/download", "/guide", "/archive")
+        path in ("/", "/login", "/logout", "/register", "/download", "/guide", "/gallery")
         or path.startswith("/guide/images/")
-        or path.startswith("/archive-images/")
-        or (path.startswith("/archive/") and request.method == "GET")
+        or path.startswith("/gallery-images/")
+        or (path.startswith("/gallery/") and request.method == "GET")
     ):
         return await call_next(request)
     user = current_user(request)
@@ -821,4 +825,4 @@ if GUIDE_IMAGES_DIR.is_dir():
 # at runtime, so the directory has to exist *before* mounting rather than being mounted
 # conditionally on already existing.
 archive.ARCHIVE_THUMBS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/archive-images", StaticFiles(directory=archive.ARCHIVE_THUMBS_DIR), name="archive-images")
+app.mount("/gallery-images", StaticFiles(directory=archive.ARCHIVE_THUMBS_DIR), name="gallery-images")

@@ -39,6 +39,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 PROJECTS_DIR = DATA_DIR / "projects"
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
 MAX_PDF_BYTES = 50 * 1024 * 1024  # matches asset_store.py's limit
+MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024  # matches hub/archive.py's cap on the same kind of upload
 BUNDLE_VERSION = 1  # matches app/src/projectAssets.js's YC_EXTENSION bundle format
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -58,6 +59,10 @@ def _project_file(project_id: str) -> Path:
 
 def _assets_root(project_id: str) -> Path:
     return _project_path(project_id) / "assets"
+
+
+def _thumbnail_file(project_id: str) -> Path:
+    return _project_path(project_id) / "thumbnail.png"
 
 
 def _atomic_write_json(path: Path, payload: dict):
@@ -123,6 +128,7 @@ def list_projects():
             "name": meta.get("name") or "Untitled Project",
             "createdAt": meta.get("createdAt"),
             "updatedAt": meta.get("updatedAt"),
+            "hasThumbnail": (entry / "thumbnail.png").is_file(),
         })
     out.sort(key=lambda p: p.get("updatedAt") or 0, reverse=True)
     return out
@@ -165,6 +171,27 @@ def save_project(project_id: str, body: ProjectSave):
         data.setdefault("meta", {})["updatedAt"] = time.time()
         _atomic_write_json(_project_file(project_id), data)
     return {"ok": True}
+
+
+@router.put("/{project_id}/thumbnail")
+async def save_thumbnail(project_id: str, file: UploadFile = File(...)):
+    """Best-effort canvas screenshot the web app pushes after each autosave (see renderer.js), so
+    the Hub's Profile page can show a live preview per workspace the same way the public Gallery
+    shows one per published project."""
+    _read_project(project_id)  # 404s if the project doesn't exist
+    data = await file.read()
+    if len(data) > MAX_THUMBNAIL_BYTES:
+        raise HTTPException(413, "Thumbnail too large.")
+    _thumbnail_file(project_id).write_bytes(data)
+    return {"ok": True}
+
+
+@router.get("/{project_id}/thumbnail")
+def get_thumbnail(project_id: str):
+    path = _thumbnail_file(project_id)
+    if not path.is_file():
+        raise HTTPException(404, "No thumbnail yet.")
+    return Response(content=path.read_bytes(), media_type="image/png")
 
 
 @router.delete("/{project_id}")

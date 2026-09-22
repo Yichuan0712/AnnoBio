@@ -61,7 +61,7 @@ export const iconMerge = (size) => svgIcon({
   ],
 });
 
-/** Lucide "globe" — used for "Publish to Archive" (public, web-only). */
+/** Lucide "globe" — used for "Publish to Gallery" (public, web-only). */
 export const iconGlobe = (size) => svgIcon({
   size,
   paths: [

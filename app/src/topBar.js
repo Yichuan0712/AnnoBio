@@ -415,9 +415,10 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   spacer.className = 'top-bar-spacer';
   bar.appendChild(spacer);
 
-  // ---- Account avatar (only present when served by the Hub and logged in) — hover dropdown
-  // with Profile + Log out, matching the Hub nav's own avatar (hub/main.py's render_nav) exactly,
-  // so clicking the avatar behaves the same everywhere on the site. ----
+  // ---- Account avatar (only present when served by the Hub and logged in) — clicking it goes
+  // straight to Profile, and it still opens a hover dropdown with Gallery/Profile/Log out,
+  // matching the Hub nav's own avatar (hub/main.py's render_nav) exactly, so it behaves the same
+  // everywhere on the site. ----
   fetch('/whoami').then((res) => (res.ok ? res.json() : null)).then((who) => {
     const email = String(who?.email || '').trim();
     if (!email) return;
@@ -428,11 +429,14 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
       <button type="button" class="top-bar-avatar" title="${email}" aria-label="Account: ${email}">${initials}</button>
       <div class="menu-dropdown top-bar-icon-dropdown top-bar-avatar-dropdown">
         <div class="top-bar-avatar-email">${email}</div>
-        <a class="menu-option" href="/archive">Archive</a>
+        <a class="menu-option" href="/gallery">Gallery</a>
         <a class="menu-option" href="/profile">Profile</a>
         <button type="button" class="menu-option" data-action="logout">Log out</button>
       </div>
     `;
+    avatarWrap.querySelector('.top-bar-avatar').addEventListener('click', () => {
+      window.location.href = '/profile';
+    });
     avatarWrap.querySelector('[data-action="logout"]').addEventListener('click', async () => {
       await fetch('/logout', { method: 'POST' }).catch(() => {});
       window.location.href = '/login';
