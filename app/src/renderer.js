@@ -87,7 +87,7 @@ window.addEventListener('DOMContentLoaded', () => {
       isElectron,
     });
 
-  const APP_TITLE = 'Prompt Studio';
+  const APP_TITLE = 'AnnoBio';
   function updateWindowTitle(displayName) {
     document.title = displayName ? `${displayName} - ${APP_TITLE}` : APP_TITLE;
     topBarAPI?.setProjectTitle?.(displayName || APP_TITLE);

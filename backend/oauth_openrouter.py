@@ -87,7 +87,7 @@ def get_status(state: str) -> dict[str, Any]:
 def handle_callback(state: str, code: str) -> HTMLResponse:
     sess = _SESSIONS.get(state)
     if not sess:
-        return _page("Link expired", "This OpenRouter connection request expired or was already used. Go back to Prompt Studio and try again.")
+        return _page("Link expired", "This OpenRouter connection request expired or was already used. Go back to AnnoBio and try again.")
     if sess["status"] != "pending":
         return _page("Already handled", "This OpenRouter connection was already processed. You can close this tab.")
     try:
@@ -103,7 +103,7 @@ def handle_callback(state: str, code: str) -> HTMLResponse:
     except Exception as e:
         sess["status"] = "error"
         sess["error"] = str(e)
-        return _page("Connection failed", "Could not complete the OpenRouter connection. Go back to Prompt Studio and try again.")
+        return _page("Connection failed", "Could not complete the OpenRouter connection. Go back to AnnoBio and try again.")
 
     from main import _load_credentials, _save_credentials, _mask_key  # lazy: avoid circular import
 
@@ -121,7 +121,7 @@ def handle_callback(state: str, code: str) -> HTMLResponse:
     _save_credentials(items)
     sess["status"] = "done"
     sess["credential_id"] = new_id
-    return _page("Connected", "Prompt Studio is now connected to your OpenRouter account. You can close this tab.")
+    return _page("Connected", "AnnoBio is now connected to your OpenRouter account. You can close this tab.")
 
 
 def get_catalog() -> list[dict[str, Any]]:

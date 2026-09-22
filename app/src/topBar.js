@@ -30,7 +30,7 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
 
   const projectTitleEl = document.createElement('div');
   projectTitleEl.className = 'top-bar-project-title';
-  projectTitleEl.textContent = 'Prompt Studio';
+  projectTitleEl.textContent = 'AnnoBio';
   bar.appendChild(projectTitleEl);
 
   const fileBtn = document.createElement('button');
@@ -185,8 +185,8 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
 
   function setProjectTitle(title) {
     const normalized = String(title || '').trim();
-    projectTitleEl.textContent = normalized || 'Prompt Studio';
-    projectTitleEl.title = normalized || 'Prompt Studio';
+    projectTitleEl.textContent = normalized || 'AnnoBio';
+    projectTitleEl.title = normalized || 'AnnoBio';
   }
 
   return { setAddMenuEnabled, setSaveAsEnabled, setMergeEnabled, setProjectTitle };
@@ -282,7 +282,7 @@ const iconLlmChip = () => svgIcon({
 
 // Brand mark — two nodes flowing into one, drawn in Lucide's own style (24x24, 2px stroke, round
 // caps/joins) to match every other icon here, but an original composition. Same markup as
-// hub/main.py's BRAND_MARK_SVG — one icon, everywhere "Prompt Studio" appears.
+// hub/main.py's BRAND_MARK_SVG — one icon, everywhere "AnnoBio" appears.
 const iconBrandMark = () => svgIcon({
   rects: [[2, 8.5, 7, 7, 1.5], [14, 2, 7, 7, 1.5], [14, 15, 7, 7, 1.5]],
   paths: ['M9 12v-3a2 2 0 0 1 2-2h3', 'M9 12v3a2 2 0 0 0 2 2h3'],
@@ -303,7 +303,7 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   brandLink.className = 'top-bar-wordmark';
   brandLink.href = '/';
   brandLink.appendChild(iconBrandMark());
-  brandLink.appendChild(document.createTextNode('Prompt Studio'));
+  brandLink.appendChild(document.createTextNode('AnnoBio'));
   brand.appendChild(brandLink);
   bar.appendChild(brand);
 
@@ -317,7 +317,7 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   projectBtn.className = 'top-bar-project';
   const projectNameEl = document.createElement('span');
   projectNameEl.className = 'top-bar-project-name';
-  projectNameEl.textContent = 'Prompt Studio';
+  projectNameEl.textContent = 'AnnoBio';
   projectBtn.appendChild(projectNameEl);
   projectBtn.appendChild(iconChevronDown());
   projectBtn.title = 'Switch project';
@@ -415,7 +415,7 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
 
   function setProjectTitle(title) {
     const normalized = String(title || '').trim();
-    const isPlaceholder = !normalized || normalized === 'Prompt Studio';
+    const isPlaceholder = !normalized || normalized === 'AnnoBio';
     projectNameEl.textContent = isPlaceholder ? 'Open a project' : normalized;
     projectBtn.title = isPlaceholder ? 'Open or create a project' : `${normalized} — click to switch project`;
     projectBtn.classList.toggle('top-bar-project--placeholder', isPlaceholder);

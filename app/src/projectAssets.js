@@ -121,7 +121,7 @@ export class ProjectAssets {
     const payload = JSON.parse(await fs.readFile(resolved, 'utf8'));
     const bundled = payload && typeof payload === 'object' && payload.bundleVersion === BUNDLE_VERSION && payload.project;
     const state = bundled ? payload.project : payload;
-    if (state.schemaVersion > 2) throw new Error('This project requires a newer version of Prompt Studio.');
+    if (state.schemaVersion > 2) throw new Error('This project requires a newer version of AnnoBio.');
     this.file = resolved;
     this.assets = state.assets || {};
     if (bundled) {
