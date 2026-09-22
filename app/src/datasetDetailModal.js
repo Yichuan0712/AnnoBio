@@ -9,7 +9,7 @@ import * as XLSX from 'xlsx';
 import { displayCell, imageCell, isImageCell, pdfCell, isPdfCell, cloneCell, normalizeDatasetContent } from './datasetContent.js';
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
-import { iconImageAdd, iconFileText } from './icons.js';
+import { iconImageAdd, iconFileText, iconFileAdd } from './icons.js';
 
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 /** 行高下限：至少一行字高度（约 12px 字号 + 行高 + 内边距） */
@@ -1294,7 +1294,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
         batchBtn.className = 'btn btn-secondary wd-header-batch-btn';
         batchBtn.title = isPdfCol ? 'Batch import PDFs' : 'Batch import images';
         batchBtn.setAttribute('aria-label', isPdfCol ? 'Batch import PDFs' : 'Batch import images');
-        batchBtn.appendChild(isPdfCol ? iconFileText(14) : iconImageAdd(14));
+        batchBtn.appendChild(isPdfCol ? iconFileAdd(14) : iconImageAdd(14));
         batchBtn.addEventListener('click', async (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1488,7 +1488,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
           add.className = 'btn btn-secondary wd-image-import-btn';
           add.title = 'Upload PDF';
           add.setAttribute('aria-label', 'Upload PDF');
-          add.appendChild(iconFileText(14));
+          add.appendChild(iconFileAdd(14));
           add.addEventListener('click', async () => {
             try {
               let assets;
