@@ -337,6 +337,49 @@ export class ProjectAssets {
     });
   }
 
+  /**
+   * Deletes any tracked asset NOT in usedIds — nothing on the canvas references it, so it's
+   * orphaned (e.g. a dataset built from a bulk PDF import, later deleted, whose extracted images
+   * were never referenced anywhere else). Bundled .yc projects have no separate file to delete
+   * (the bytes are embedded in the project JSON as assetBlobs); dropping the entry from
+   * this.assets is enough, since save() only re-embeds blobs for ids still in this.assets.
+   * With dryRun, computes what WOULD be removed without touching anything — used to show a
+   * confirm dialog with a count/size before actually deleting (see renderer.js).
+   * Caller is responsible for saving the project afterward so the pruned registry persists.
+   */
+  async pruneUnusedAssets(usedIds, { dryRun = false } = {}) {
+    return this.enqueue(async () => {
+      if (!this.file) throw new Error('Create or open a project first.');
+      const used = new Set(usedIds || []);
+      const unused = Object.entries(this.assets).filter(([id]) => !used.has(id));
+      if (unused.length === 0) return { removed: [], freedBytes: 0 };
+      if (dryRun) {
+        return {
+          removed: unused.map(([id, asset]) => ({ id, name: asset.name })),
+          freedBytes: unused.reduce((sum, [, asset]) => sum + (asset.bytes || 0), 0),
+        };
+      }
+      if (!isBundledProjectFile(this.file)) {
+        const root = this.assetRoot || assetRootFor(this.file);
+        for (const [, asset] of unused) {
+          try {
+            await fs.unlink(await checkedAssetPath(root, asset.path));
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+          }
+        }
+      }
+      let freedBytes = 0;
+      const removed = [];
+      for (const [id, asset] of unused) {
+        delete this.assets[id];
+        freedBytes += asset.bytes || 0;
+        removed.push({ id, name: asset.name });
+      }
+      return { removed, freedBytes };
+    });
+  }
+
   async preview(id, thumbnail = true) {
     const asset = this.assets[id];
     if (!asset || !this.file) throw new Error('Image is not in the current project.');

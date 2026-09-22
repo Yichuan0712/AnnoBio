@@ -24,7 +24,7 @@ export function buildTopBar(root, options) {
 // Desktop — unchanged from the original File/Edit/Settings menu bar (Merge item added, nothing
 // else). Do not fold this into buildWebTopBar or add electronAPI branches to it.
 // ============================================================================================
-function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, onMergeProject, onUndo, onRedo }) {
+function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, onMergeProject, onUndo, onRedo, onCleanUpUnusedImages }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -44,6 +44,8 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
     <button type="button" class="menu-option" data-action="open-project">Open project...</button>
     <button type="button" class="menu-option" data-action="save-as-project" disabled>Save as...</button>
     <button type="button" class="menu-option" data-action="merge-project" disabled>Merge project into this one...</button>
+    <div class="menu-separator"></div>
+    <button type="button" class="menu-option" data-action="clean-up-images" disabled>Clean up unused images...</button>
   `;
   fileDrop.querySelector('[data-action="new-project"]').addEventListener('click', () => onNewProject?.());
   fileDrop.querySelector('[data-action="open-project"]').addEventListener('click', () => onOpenProject?.());
@@ -51,6 +53,8 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
   saveAsOpt.addEventListener('click', () => { if (!saveAsOpt.disabled) onSaveAsProject?.(); });
   const mergeOpt = fileDrop.querySelector('[data-action="merge-project"]');
   mergeOpt.addEventListener('click', () => { if (!mergeOpt.disabled) onMergeProject?.(); });
+  const cleanUpOpt = fileDrop.querySelector('[data-action="clean-up-images"]');
+  cleanUpOpt.addEventListener('click', () => { if (!cleanUpOpt.disabled) onCleanUpUnusedImages?.(); });
   fileBtn.appendChild(fileDrop);
   bar.appendChild(fileBtn);
 
@@ -188,6 +192,7 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
 
   function setMergeEnabled(enabled) {
     mergeOpt.disabled = !enabled;
+    cleanUpOpt.disabled = !enabled;
   }
 
   function setProjectTitle(title) {
@@ -272,6 +277,11 @@ const iconRedo = () => svgIcon({
   paths: ['m15 14 5-5-5-5', 'M20 9H9.5A5.5 5.5 0 0 0 4 14.5v0A5.5 5.5 0 0 0 9.5 20H13'],
 });
 
+// Clean up unused images — Lucide's "trash-2".
+const iconCleanup = () => svgIcon({
+  paths: ['M3 6h18', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6', 'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2', 'M10 11v6', 'M14 11v6'],
+});
+
 // Prompt = a text document, not a chat bubble (a chat implies back-and-forth; a prompt here is a
 // reusable template). Lucide's "file-text", used at full size to match the other two icons.
 const iconNewPrompt = () => svgIcon({
@@ -309,7 +319,7 @@ const iconBrandMark = () => svgIcon({
   paths: ['M9 12v-3a2 2 0 0 1 2-2h3', 'M9 12v3a2 2 0 0 0 2 2h3'],
 });
 
-function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onUndo, onRedo }) {
+function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onUndo, onRedo, onCleanUpUnusedImages }) {
   document.documentElement.classList.add('top-bar-web');
 
   const bar = document.createElement('nav');
@@ -384,6 +394,9 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
 
   const settingsBtn = iconButton({ icon: iconLlmChip, label: 'LLM settings', onClick: openSettingsModal });
   rail.appendChild(settingsBtn.wrap);
+
+  const cleanUpBtn = iconButton({ icon: iconCleanup, label: 'Clean up unused images', onClick: () => onCleanUpUnusedImages?.() });
+  rail.appendChild(cleanUpBtn.wrap);
 
   // Create prompt / dataset — always visible and always enabled, same as Settings: with no
   // project open yet, clicking one just creates a project first (see renderer.js's

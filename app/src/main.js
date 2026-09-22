@@ -40,6 +40,10 @@ ipcMain.handle('assets:import-buffers', async (_event, entries) => {
   const list = Array.isArray(entries) ? entries : [];
   return projectAssets.importFiles(list.map((e) => ({ buffer: Buffer.from(e.data), name: e.name })));
 });
+
+ipcMain.handle('assets:prune-unused', async (_event, usedIds, options) => {
+  return projectAssets.pruneUnusedAssets(usedIds, options);
+});
 ipcMain.handle('assets:pick-files', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Choose images to match',
