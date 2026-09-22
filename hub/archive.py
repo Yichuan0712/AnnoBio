@@ -65,3 +65,13 @@ def save_thumbnail(thumbnail_bytes: bytes) -> str:
 
 def read_bundle(bundle_path: str) -> bytes:
     return (ARCHIVE_DIR / bundle_path).read_bytes()
+
+
+def delete_files(item: dict) -> None:
+    """Removes a rejected/deleted item's stored bundle and thumbnail — called by main.py's admin
+    delete route right after db.delete_archive_item drops the row. Missing files are fine (a
+    thumbnail is optional in the first place)."""
+    for key, root in (("bundle_path", ARCHIVE_DIR), ("thumbnail_path", ARCHIVE_THUMBS_DIR)):
+        rel = item.get(key)
+        if rel:
+            (root / rel).unlink(missing_ok=True)

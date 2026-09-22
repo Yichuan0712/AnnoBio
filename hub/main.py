@@ -72,6 +72,14 @@ def current_user(request: Request) -> dict | None:
     return db.get_user_by_id(user_id) if user_id else None
 
 
+def _require_admin(request: Request) -> dict | None:
+    """None if the caller isn't an admin — every /admin/* route below returns 403 in that case
+    rather than the redirect-to-login require_login gives everyone else, since a non-admin who's
+    already logged in should see "forbidden", not get bounced to a login form they'd pass."""
+    user = request.state.user
+    return user if user.get("is_admin") else None
+
+
 # Brand mark — two nodes flowing into one, drawn in Lucide's own style (24x24 grid, 2px stroke,
 # round caps/joins) since that's what every icon elsewhere on the site already uses, but an
 # original composition rather than reusing one of theirs verbatim. Same markup as app/src/topBar.js's
@@ -106,12 +114,14 @@ def render_nav(user: dict | None, active: str = "") -> str:
     )
     if user:
         initials = user["email"][:2].upper()
+        review_link_html = '<a class="menu-option" href="/admin/gallery">Review</a>' if user.get("is_admin") else ""
         actions_html = (
             '<div class="nav-avatar-wrap">'
             f'<button type="button" class="nav-avatar" aria-label="Account: {user["email"]}" onclick="location.href=\'/profile\'">{initials}</button>'
             '<div class="nav-avatar-dropdown">'
             f'<div class="nav-avatar-email">{user["email"]}</div>'
             '<a class="menu-option" href="/profile">Profile</a>'
+            f'{review_link_html}'
             '<form method="post" action="/logout"><button type="submit" class="menu-option">Log out</button></form>'
             '</div>'
             '</div>'
@@ -147,10 +157,11 @@ def render_page(*, title: str, user: dict | None, active: str = "", body: str, e
 def render_auth_page(
     *, heading: str, form_action: str, password_placeholder: str = "Password",
     password_minlength: str = "", error: str = "", submit_label: str, footer_link: str,
-    user: dict | None = None,
+    user: dict | None = None, extra_fields: str = "",
 ) -> str:
     """Shared shell for /login and /register — same card, same tokens as the landing page, just
-    a different heading/fields/footer link so the two don't visually read as separate products."""
+    a different heading/fields/footer link so the two don't visually read as separate products.
+    extra_fields is register's hook for the Name field below (login has none)."""
     error_html = f'<div class="error">{error}</div>' if error else ""
     return (
         AUTH_TEMPLATE
@@ -163,6 +174,7 @@ def render_auth_page(
         .replace("{{ERROR}}", error_html)
         .replace("{{SUBMIT_LABEL}}", submit_label)
         .replace("{{FOOTER_LINK}}", footer_link)
+        .replace("{{EXTRA_FIELDS}}", extra_fields)
     )
 
 
@@ -191,7 +203,7 @@ def _login_page_html(error: str = "") -> str:
     )
 
 
-def _register_page_html(error: str = "") -> str:
+def _register_page_html(error: str = "", name: str = "") -> str:
     return render_auth_page(
         heading="Create an account",
         form_action="/register",
@@ -200,6 +212,7 @@ def _register_page_html(error: str = "") -> str:
         error=error,
         submit_label="Create account",
         footer_link='Already have an account? <a class="link" href="/login">Log in</a>',
+        extra_fields=f'<div class="field"><input name="name" type="text" placeholder="Name" value="{escape(name)}" maxlength="200" required></div>',
     )
 
 
@@ -223,12 +236,14 @@ def register_page():
 
 
 @app.post("/register")
-def register_submit(request: Request, email: str = Form(...), password: str = Form(...)):
+def register_submit(request: Request, email: str = Form(...), password: str = Form(...), name: str = Form(...)):
+    if not name.strip():
+        return HTMLResponse(_register_page_html(error="Name is required."), status_code=400)
     if len(password) < 8:
-        return HTMLResponse(_register_page_html(error="Password must be at least 8 characters."), status_code=400)
+        return HTMLResponse(_register_page_html(error="Password must be at least 8 characters.", name=name), status_code=400)
     if db.get_user_by_email(email):
-        return HTMLResponse(_register_page_html(error="An account with this email already exists."), status_code=400)
-    user_id = db.create_user(email, password)
+        return HTMLResponse(_register_page_html(error="An account with this email already exists.", name=name), status_code=400)
+    user_id = db.create_user(email, password, name=name)
     request.session["user_id"] = user_id
     return RedirectResponse("/app", status_code=302)
 
@@ -243,8 +258,16 @@ def logout(request: Request):
 def whoami(request: Request):
     """Lets the frontend show who's logged in (account avatar in the top bar) without teaching
     it anything about sessions — require_login below already gated this request and attached
-    the user."""
-    return {"email": request.state.user["email"]}
+    the user. is_admin drives whether the top bar shows a Review link (see topBar.js); name/
+    contact let the web app warn before Publish if either is still blank (see
+    publishCurrentProjectToGallery in webProjectModal.js)."""
+    user = request.state.user
+    return {
+        "email": user["email"],
+        "is_admin": bool(user.get("is_admin")),
+        "name": user.get("name") or "",
+        "contact": user.get("contact") or "",
+    }
 
 
 WINDOWS_INSTALLER_URL = "https://drive.google.com/file/d/1BoNqaCO4QrfS6XlvbVhRjaF9RLkZ17Ly/view?usp=drive_link"
@@ -605,6 +628,20 @@ async def profile_page(request: Request):
         <div class="profile-row"><span class="profile-label">Email</span><span>{user["email"]}</span></div>
         <div class="profile-row"><span class="profile-label">Member since</span><span>{joined}</span></div>
       </div>
+
+      <form method="post" action="/profile/info" class="profile-card">
+        <div class="profile-row">
+          <label class="profile-label" for="profile-name">Name</label>
+          <input id="profile-name" name="name" type="text" maxlength="200" value="{escape(user.get('name') or '')}">
+        </div>
+        <div class="profile-row">
+          <label class="profile-label" for="profile-contact">Contact</label>
+          <input id="profile-contact" name="contact" type="text" maxlength="200" value="{escape(user.get('contact') or '')}" placeholder="Email or other way to reach you">
+        </div>
+        <div class="profile-row profile-save-row"><button type="submit" class="btn btn-secondary">Save</button></div>
+      </form>
+      <p class="page-sub profile-info-note">Shown to the admin reviewing anything you publish to the Gallery — required before you can publish.</p>
+
       <form method="post" action="/logout">
         <button type="submit" class="btn btn-secondary">Log out</button>
       </form>
@@ -614,15 +651,24 @@ async def profile_page(request: Request):
     """
     extra_css = ARCHIVE_CSS + """
       .profile-card { max-width: 460px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius); padding: 6px 20px; margin-bottom: 22px; }
-      .profile-row { display: flex; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+      .profile-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
       .profile-row:last-child { border-bottom: none; }
       .profile-label { color: var(--text-muted); }
+      .profile-row input[type="text"] { flex: 1; max-width: 260px; margin-left: 16px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; }
+      .profile-save-row { justify-content: flex-end; padding-top: 12px; }
+      .profile-info-note { max-width: 460px; font-size: 12.5px; margin: -12px 0 22px; }
       .workspaces-heading { font-size: 18px; margin: 40px 0 14px; }
       .workspaces-empty { color: var(--text-muted); font-size: 14px; }
       a.link { color: var(--accent); text-decoration: none; }
       a.link:hover { text-decoration: underline; }
     """
     return HTMLResponse(render_page(title="Profile", user=user, active="/profile", body=body, extra_css=extra_css))
+
+
+@app.post("/profile/info")
+def profile_update_info(request: Request, name: str = Form(""), contact: str = Form("")):
+    db.update_user_info(request.state.user["id"], name, contact)
+    return RedirectResponse("/profile", status_code=302)
 
 
 ARCHIVE_CSS = """
@@ -699,7 +745,9 @@ def archive_list_page(request: Request):
 def archive_detail_page(request: Request, item_id: int):
     user = current_user(request)
     item = db.get_archive_item(item_id)
-    if not item:
+    # Pending items 404 the same as missing ones (rather than a distinct "not approved yet"
+    # message) — no reason to confirm to a random visitor that some unapproved item exists.
+    if not item or item.get("status") != "approved":
         body = "<h1>Not found</h1><p class=\"page-sub\">This project isn't in the Gallery (anymore).</p>"
         return HTMLResponse(render_page(title="Gallery", user=user, active="/gallery", body=body), status_code=404)
     if user:
@@ -738,6 +786,11 @@ async def archive_publish(
     title = title.strip()[:200]
     if not title:
         return Response(content="Title is required.", status_code=400)
+    if not (user.get("name") or "").strip() or not (user.get("contact") or "").strip():
+        return Response(
+            content="Add your name and a contact method on your Profile page before publishing.",
+            status_code=400,
+        )
     try:
         bundle_bytes = await archive.fetch_project_bundle(user["id"], project_id)
     except (ValueError, containers.BackendUnavailable) as e:
@@ -756,7 +809,7 @@ async def archive_publish(
 async def archive_fork(request: Request, item_id: int):
     user = request.state.user
     item = db.get_archive_item(item_id)
-    if not item:
+    if not item or item.get("status") != "approved":
         return RedirectResponse("/gallery", status_code=302)
     bundle_bytes = archive.read_bundle(item["bundle_path"])
     try:
@@ -765,6 +818,96 @@ async def archive_fork(request: Request, item_id: int):
         body = f"<h1>Could not add project</h1><p class=\"page-sub\">{escape(str(e))}</p>"
         return HTMLResponse(render_page(title="Gallery", user=user, active="/gallery", body=body), status_code=502)
     return RedirectResponse(f"/app/?open={new_id}", status_code=302)
+
+
+ADMIN_REVIEW_CSS = ARCHIVE_CSS + """
+  .admin-review-grid { display: flex; flex-direction: column; gap: 18px; }
+  .admin-review-card { display: flex; gap: 20px; border: 1px solid var(--border); border-radius: var(--control-radius); padding: 16px; background: var(--bg); }
+  .admin-review-thumb { flex: 0 0 200px; }
+  .admin-review-thumb .archive-card-thumb, .admin-review-thumb .archive-card-thumb-empty { border-radius: var(--control-radius); }
+  .admin-review-body { flex: 1; min-width: 0; }
+  .admin-review-edit-form input, .admin-review-edit-form textarea {
+    display: block; width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 6px 8px;
+    border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--bg);
+    color: var(--text); font-size: 13px; font-family: inherit;
+  }
+  .admin-review-edit-form textarea { min-height: 60px; resize: vertical; }
+  .admin-review-meta { color: var(--text-muted); font-size: 12.5px; margin: 4px 0 12px; }
+  .admin-review-actions { display: flex; gap: 8px; }
+  .admin-review-actions .btn-delete { color: #c0392b; border-color: #c0392b; }
+"""
+
+
+@app.get("/admin/gallery")
+def admin_gallery_page(request: Request):
+    """Review queue for pending Gallery publishes — the flip side of archive_publish's status
+    default: nothing a user submits shows up in the public /gallery until an admin approves it
+    here. Reuses ARCHIVE_CSS's thumbnail look, not the public listing's read-only card, since
+    each item needs its own edit form."""
+    user = _require_admin(request)
+    if not user:
+        return HTMLResponse("<h1>Forbidden</h1>", status_code=403)
+    items = db.list_pending_archive_items()
+    if not items:
+        grid_html = '<p class="workspaces-empty">Nothing pending review.</p>'
+    else:
+        cards = "".join(
+            f"""
+            <div class="admin-review-card">
+              <div class="admin-review-thumb">{_archive_thumb_html(item)}</div>
+              <div class="admin-review-body">
+                <form method="post" action="/admin/gallery/{item['id']}/save" class="admin-review-edit-form">
+                  <input type="text" name="title" value="{escape(item['title'])}" maxlength="200">
+                  <textarea name="description" maxlength="2000">{escape(item.get('description') or '')}</textarea>
+                  <button type="submit" class="btn btn-secondary">Save changes</button>
+                </form>
+                <p class="admin-review-meta">
+                  Submitted by {escape(item.get('owner_name') or '(no name on file)')}
+                  &lt;{escape(item['owner_email'])}&gt; · Contact: {escape(item.get('owner_contact') or '—')}
+                  · {_fmt_date(item['created_at'])}
+                </p>
+                <div class="admin-review-actions">
+                  <form method="post" action="/admin/gallery/{item['id']}/approve"><button type="submit" class="btn btn-primary">Approve</button></form>
+                  <form method="post" action="/admin/gallery/{item['id']}/delete" onsubmit="return confirm('Delete this submission? This cannot be undone.');"><button type="submit" class="btn btn-secondary btn-delete">Delete</button></form>
+                </div>
+              </div>
+            </div>
+            """
+            for item in items
+        )
+        grid_html = f'<div class="admin-review-grid">{cards}</div>'
+    body = f"""
+      <h1>Review submissions</h1>
+      <p class="page-sub">Pending Gallery publishes — edit if needed, then approve or delete.</p>
+      {grid_html}
+    """
+    return HTMLResponse(render_page(title="Review submissions", user=user, active="/admin/gallery", body=body, extra_css=ADMIN_REVIEW_CSS))
+
+
+@app.post("/admin/gallery/{item_id}/save")
+def admin_gallery_save(request: Request, item_id: int, title: str = Form(...), description: str = Form("")):
+    if not _require_admin(request):
+        return HTMLResponse("<h1>Forbidden</h1>", status_code=403)
+    db.update_archive_item(item_id, title, description)
+    return RedirectResponse("/admin/gallery", status_code=302)
+
+
+@app.post("/admin/gallery/{item_id}/approve")
+def admin_gallery_approve(request: Request, item_id: int):
+    if not _require_admin(request):
+        return HTMLResponse("<h1>Forbidden</h1>", status_code=403)
+    db.approve_archive_item(item_id)
+    return RedirectResponse("/admin/gallery", status_code=302)
+
+
+@app.post("/admin/gallery/{item_id}/delete")
+def admin_gallery_delete(request: Request, item_id: int):
+    if not _require_admin(request):
+        return HTMLResponse("<h1>Forbidden</h1>", status_code=403)
+    item = db.delete_archive_item(item_id)
+    if item:
+        archive.delete_files(item)
+    return RedirectResponse("/admin/gallery", status_code=302)
 
 
 @app.middleware("http")
