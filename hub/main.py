@@ -22,6 +22,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import archive
 import containers
 import db
+import mailer
 from proxy import proxy_request
 
 db.init_db()
@@ -199,7 +200,10 @@ def _login_page_html(error: str = "") -> str:
         form_action="/login",
         error=error,
         submit_label="Log in",
-        footer_link='Need an account? <a class="link" href="/register">Register</a>',
+        footer_link=(
+            'Need an account? <a class="link" href="/register">Register</a>'
+            '<br><a class="link" href="/forgot-password">Forgot your password?</a>'
+        ),
     )
 
 
@@ -246,6 +250,106 @@ def register_submit(request: Request, email: str = Form(...), password: str = Fo
     user_id = db.create_user(email, password, name=name)
     request.session["user_id"] = user_id
     return RedirectResponse("/app", status_code=302)
+
+
+# Same card look as login/register (see auth.html), but a standalone block rather than another
+# render_auth_page() variant — that shared template hard-codes an email field *and* a password
+# field, and these two pages each only ever want one of the two, not both.
+_SIMPLE_FORM_CSS = """
+  .simple-form { max-width: 360px; }
+  .simple-form .field { margin-bottom: 14px; }
+  .simple-form input {
+    width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 13px;
+    border: 1px solid var(--border); border-radius: var(--control-radius);
+    background: var(--bg); color: var(--text); font-family: inherit;
+  }
+  .simple-form .btn-submit {
+    width: 100%; padding: 8px 14px; font-size: 13px; font-family: inherit;
+    color: var(--accent); background: rgba(37, 99, 235, 0.22); border: 1px solid var(--accent);
+    border-radius: var(--control-radius); cursor: pointer;
+  }
+  .simple-form .btn-submit:hover { background: var(--hover); }
+  .simple-form-footer { margin-top: 14px; font-size: 13px; color: var(--text-muted); }
+  .error { background: rgba(200, 0, 0, 0.08); color: #b00020; font-size: 13px; padding: 8px 10px; border-radius: var(--control-radius); margin-bottom: 14px; }
+"""
+
+
+@app.get("/forgot-password")
+def forgot_password_page():
+    body = """
+      <h1>Reset your password</h1>
+      <p class="page-sub">Enter your account email and we'll send you a link to set a new one.</p>
+      <form method="post" action="/forgot-password" class="simple-form">
+        <div class="field"><input name="email" type="email" placeholder="Email" required></div>
+        <button type="submit" class="btn-submit">Send reset link</button>
+      </form>
+      <p class="simple-form-footer"><a class="link" href="/login">Back to log in</a></p>
+    """
+    return HTMLResponse(render_page(title="Reset password", user=None, body=body, extra_css=_SIMPLE_FORM_CSS, narrow=True))
+
+
+@app.post("/forgot-password")
+def forgot_password_submit(request: Request, email: str = Form(...)):
+    """Same response whether or not the email matches an account — the page never confirms or
+    denies an account's existence to whoever's asking. If it does match, a fresh single-use
+    token (see db.create_password_reset) is emailed as a /reset-password link."""
+    user = db.get_user_by_email(email)
+    if user:
+        token = db.create_password_reset(user["id"])
+        base = containers.PUBLIC_BASE_URL.rstrip("/") if containers.PUBLIC_BASE_URL else str(request.base_url).rstrip("/")
+        link = f"{base}/reset-password?token={token}"
+        mailer.send_email(
+            user["email"],
+            "Reset your AnnoBio password",
+            "Someone (hopefully you) asked to reset your AnnoBio password.\n\n"
+            f"Click this link to set a new one — it's valid for 1 hour:\n{link}\n\n"
+            "If you didn't request this, you can safely ignore this email.",
+        )
+    body = """
+      <h1>Check your email</h1>
+      <p class="page-sub">If that email has an AnnoBio account, we've sent a link to reset your password. It's valid for 1 hour.</p>
+      <p class="simple-form-footer"><a class="link" href="/login">Back to log in</a></p>
+    """
+    return HTMLResponse(render_page(title="Check your email", user=None, body=body, narrow=True))
+
+
+def _reset_password_form_html(token: str, error: str = "") -> str:
+    error_html = f'<div class="error">{escape(error)}</div>' if error else ""
+    return f"""
+      <h1>Set a new password</h1>
+      {error_html}
+      <form method="post" action="/reset-password" class="simple-form">
+        <input type="hidden" name="token" value="{escape(token)}">
+        <div class="field"><input name="password" type="password" placeholder="New password (min 8 characters)" minlength="8" required></div>
+        <button type="submit" class="btn-submit">Set new password</button>
+      </form>
+    """
+
+
+_RESET_LINK_INVALID_BODY = """
+  <h1>Link expired</h1>
+  <p class="page-sub">This password reset link is invalid or has expired.</p>
+  <p class="simple-form-footer"><a class="link" href="/forgot-password">Request a new one</a></p>
+"""
+
+
+@app.get("/reset-password")
+def reset_password_page(token: str = ""):
+    if not db.get_valid_password_reset(token):
+        return HTMLResponse(render_page(title="Link expired", user=None, body=_RESET_LINK_INVALID_BODY), status_code=400)
+    return HTMLResponse(render_page(title="Set a new password", user=None, body=_reset_password_form_html(token), extra_css=_SIMPLE_FORM_CSS, narrow=True))
+
+
+@app.post("/reset-password")
+def reset_password_submit(token: str = Form(...), password: str = Form(...)):
+    reset = db.get_valid_password_reset(token)
+    if not reset:
+        return HTMLResponse(render_page(title="Link expired", user=None, body=_RESET_LINK_INVALID_BODY), status_code=400)
+    if len(password) < 8:
+        body = _reset_password_form_html(token, error="Password must be at least 8 characters.")
+        return HTMLResponse(render_page(title="Set a new password", user=None, body=body, extra_css=_SIMPLE_FORM_CSS, narrow=True), status_code=400)
+    db.consume_password_reset(token, reset["user_id"], password)
+    return RedirectResponse("/login", status_code=302)
 
 
 @app.post("/logout")
@@ -621,6 +725,14 @@ async def profile_page(request: Request):
         )
         workspaces_html = f'<div class="archive-grid">{cards}</div>'
 
+    password_error = request.query_params.get("password_error")
+    password_banner_html = {
+        "wrong_current": '<div class="error">Current password is incorrect.</div>',
+        "too_short": '<div class="error">New password must be at least 8 characters.</div>',
+    }.get(password_error, "")
+    if request.query_params.get("password_changed"):
+        password_banner_html = '<div class="profile-success">Password updated.</div>'
+
     body = f"""
       <h1>Profile</h1>
       <p class="page-sub">Your AnnoBio account.</p>
@@ -642,6 +754,19 @@ async def profile_page(request: Request):
       </form>
       <p class="page-sub profile-info-note">Shown to the admin reviewing anything you publish to the Gallery. Required before you can publish.</p>
 
+      <form method="post" action="/profile/password" class="profile-card">
+        {password_banner_html}
+        <div class="profile-row">
+          <label class="profile-label" for="profile-current-password">Current password</label>
+          <input id="profile-current-password" name="current_password" type="password" required>
+        </div>
+        <div class="profile-row">
+          <label class="profile-label" for="profile-new-password">New password</label>
+          <input id="profile-new-password" name="new_password" type="password" minlength="8" required>
+        </div>
+        <div class="profile-row profile-save-row"><button type="submit" class="btn btn-secondary">Change password</button></div>
+      </form>
+
       <form method="post" action="/logout">
         <button type="submit" class="btn btn-secondary">Log out</button>
       </form>
@@ -654,13 +779,15 @@ async def profile_page(request: Request):
       .profile-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
       .profile-row:last-child { border-bottom: none; }
       .profile-label { color: var(--text-muted); }
-      .profile-row input[type="text"] { flex: 1; max-width: 260px; margin-left: 16px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; }
+      .profile-row input[type="text"], .profile-row input[type="password"] { flex: 1; max-width: 260px; margin-left: 16px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; }
       .profile-save-row { justify-content: flex-end; padding-top: 12px; }
       .profile-info-note { max-width: 460px; font-size: 12.5px; margin: -12px 0 22px; }
       .workspaces-heading { font-size: 18px; margin: 40px 0 14px; }
       .workspaces-empty { color: var(--text-muted); font-size: 14px; }
       a.link { color: var(--accent); text-decoration: none; }
       a.link:hover { text-decoration: underline; }
+      .error { background: rgba(200, 0, 0, 0.08); color: #b00020; font-size: 13px; padding: 8px 10px; border-radius: var(--control-radius); margin-bottom: 4px; }
+      .profile-success { background: rgba(16, 137, 62, 0.08); color: #10893e; font-size: 13px; padding: 8px 10px; border-radius: var(--control-radius); margin-bottom: 4px; }
     """
     return HTMLResponse(render_page(title="Profile", user=user, active="/profile", body=body, extra_css=extra_css))
 
@@ -669,6 +796,17 @@ async def profile_page(request: Request):
 def profile_update_info(request: Request, name: str = Form(""), contact: str = Form("")):
     db.update_user_info(request.state.user["id"], name, contact)
     return RedirectResponse("/profile", status_code=302)
+
+
+@app.post("/profile/password")
+def profile_change_password(request: Request, current_password: str = Form(...), new_password: str = Form(...)):
+    user = request.state.user
+    if not db.verify_password(current_password, user["password_hash"]):
+        return RedirectResponse("/profile?password_error=wrong_current", status_code=302)
+    if len(new_password) < 8:
+        return RedirectResponse("/profile?password_error=too_short", status_code=302)
+    db.update_password(user["id"], new_password)
+    return RedirectResponse("/profile?password_changed=1", status_code=302)
 
 
 ARCHIVE_CSS = """
@@ -932,7 +1070,7 @@ async def require_login(request: Request, call_next):
     # Overleaf-style, so it's worth sharing outside the app. Publishing and forking are POSTs,
     # so they fall through to the login check below same as everything else under /gallery.
     if (
-        path in ("/", "/login", "/logout", "/register", "/download", "/guide", "/gallery")
+        path in ("/", "/login", "/logout", "/register", "/download", "/guide", "/gallery", "/forgot-password", "/reset-password")
         or path.startswith("/guide/images/")
         or path.startswith("/gallery-images/")
         or (path.startswith("/gallery/") and request.method == "GET")
