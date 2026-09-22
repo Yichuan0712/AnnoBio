@@ -56,9 +56,9 @@ export {
   medicalConceptSource,
 };
 import { BACKEND_API_BASE } from './backendConfig.js';
-import { prepareReviewBody } from './runClient.js';
+import { prepareReviewBody, prepareAssets } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
-import { displayCell } from './datasetContent.js';
+import { displayCell, cloneCell, isAssetCell } from './datasetContent.js';
 
 const API_BASE = BACKEND_API_BASE;
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -111,14 +111,16 @@ ${commentLines.join('\n')}
 `;
 }
 
-/** input_row for the "Match by code" run: this run row's input dataset columns, keyed by column name. */
+/** input_row for the "Match by code" run: this run row's input dataset columns, keyed by column name.
+ * Image/PDF cells pass through as {kind, assetIds, names} (not stringified) so the backend can resolve
+ * them to real file paths before the row reaches user code -- see asset_store.resolve_cell_for_code. */
 function buildMatchRunRowInputDict(runResult, runWs) {
   const headers = runWs?.headers || [];
   const rows = runWs?.rows || [];
   const inputRowIdx = runResult?.input_row_index;
   const rowValues = (typeof inputRowIdx === 'number' && rows[inputRowIdx]) ? rows[inputRowIdx] : [];
   const dict = {};
-  headers.forEach((h, i) => { dict[String(h ?? '')] = rowValues[i] != null ? String(rowValues[i]) : ''; });
+  headers.forEach((h, i) => { dict[String(h ?? '')] = cloneCell(rowValues[i]); });
   return dict;
 }
 
@@ -130,13 +132,14 @@ function buildMatchRunRowOutputDict(runResult) {
   return dict;
 }
 
-/** gt_row for the "Match by code" run: one candidate ground-truth row's columns, keyed by column name. */
+/** gt_row for the "Match by code" run: one candidate ground-truth row's columns, keyed by column name.
+ * Image/PDF cells pass through structured (see buildMatchRunRowInputDict above). */
 function buildMatchGtRowDict(gtContent, rowIndex) {
   const headers = gtContent?.headers || [];
   const rows = gtContent?.rows || [];
   const rowValues = rows[rowIndex] || [];
   const dict = {};
-  headers.forEach((h, i) => { dict[String(h ?? '')] = rowValues[i] != null ? String(rowValues[i]) : ''; });
+  headers.forEach((h, i) => { dict[String(h ?? '')] = cloneCell(rowValues[i]); });
   return dict;
 }
 
@@ -1788,10 +1791,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     showCodeResultsPlaceholder('');
 
     try {
+      const hasAssetCells = [...runRowsPayload.flatMap((r) => [...Object.values(r.input_row), ...Object.values(r.output_row)]),
+        ...gtRowsPayload.flatMap((r) => Object.values(r.gt_row))].some((v) => isAssetCell(v));
+      const session = hasAssetCells ? await prepareAssets(getCurrentProjectId()) : {};
       const res = await fetch(`${API_BASE}/api/score/match/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ python_path: pythonPath, code: getMatchCode(), run_rows: runRowsPayload, gt_rows: gtRowsPayload }),
+        body: JSON.stringify({ python_path: pythonPath, code: getMatchCode(), run_rows: runRowsPayload, gt_rows: gtRowsPayload, ...session }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

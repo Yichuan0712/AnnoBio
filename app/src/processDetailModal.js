@@ -14,7 +14,15 @@ import { python } from '@codemirror/lang-python';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { createRowResultsPanel } from './rowResultsTable.js';
-import { cloneCell, normalizeDatasetContent } from './datasetContent.js';
+import { cloneCell, normalizeDatasetContent, isAssetCell } from './datasetContent.js';
+import { prepareAssets } from './runClient.js';
+import { getCurrentProjectId } from './currentProject.js';
+
+/** Whether any cell in `rows` is an image/PDF reference -- if so, the backend needs a
+ * project_session_id to resolve assetIds to real file paths before user code runs. */
+function rowsHaveAssetCells(rows) {
+  return (rows || []).some((row) => (row || []).some((cell) => isAssetCell(cell)));
+}
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -423,10 +431,11 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
     showPlaceholder('Starting…');
 
     try {
+      const session = rowsHaveAssetCells(inputRows) ? await prepareAssets(getCurrentProjectId()) : {};
       const res = await fetch(`${API_BASE}/api/process/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ python_path: pythonPath, code: getCode(), headers: inputHeaders, rows: inputRows }),
+        body: JSON.stringify({ python_path: pythonPath, code: getCode(), headers: inputHeaders, rows: inputRows, ...session }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -500,10 +509,11 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
     showPlaceholder('Running…');
 
     try {
+      const session = rowsHaveAssetCells(inputRows) ? await prepareAssets(getCurrentProjectId()) : {};
       const res = await fetch(`${API_BASE}/api/process/df/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ python_path: pythonPath, code: getDfCode(), headers: inputHeaders, rows: inputRows }),
+        body: JSON.stringify({ python_path: pythonPath, code: getDfCode(), headers: inputHeaders, rows: inputRows, ...session }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
