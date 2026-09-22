@@ -66,6 +66,16 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_resets (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                expires_at REAL NOT NULL,
+                used INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
         # Added after both tables already existed in production — ALTER TABLE rather than baking
         # into the CREATE above, so existing rows survive. Pre-existing archive_items default to
         # 'approved' (they were already public before review existed); create_archive_item below
@@ -87,6 +97,45 @@ def verify_password(password: str, stored: str) -> bool:
     except ValueError:
         return False
     return secrets.compare_digest(_hash_password(password, bytes.fromhex(salt_hex)), stored)
+
+
+def update_password(user_id: int, new_password: str) -> None:
+    """Used directly by the logged-in Change Password form on Profile — see
+    consume_password_reset below for the logged-out forgot-password flow's equivalent."""
+    with _connect() as conn:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (_hash_password(new_password), user_id))
+
+
+def create_password_reset(user_id: int, ttl_seconds: int = 3600) -> str:
+    """A fresh reset link invalidates any earlier one for the same user — so a leaked or
+    forgotten-about old email can't still be redeemed once someone requests a new link."""
+    token = secrets.token_urlsafe(32)
+    with _connect() as conn:
+        conn.execute("DELETE FROM password_resets WHERE user_id = ?", (user_id,))
+        conn.execute(
+            "INSERT INTO password_resets (token, user_id, expires_at, used) VALUES (?, ?, ?, 0)",
+            (token, user_id, time.time() + ttl_seconds),
+        )
+    return token
+
+
+def get_valid_password_reset(token: str) -> dict | None:
+    """None for a token that doesn't exist, was already used, or expired — main.py treats all
+    three the same way ("this link is invalid or has expired"), so it doesn't distinguish here."""
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM password_resets WHERE token = ?", (token,)).fetchone()
+    if not row or row["used"] or row["expires_at"] < time.time():
+        return None
+    return dict(row)
+
+
+def consume_password_reset(token: str, user_id: int, new_password: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (_hash_password(new_password), user_id),
+        )
+        conn.execute("UPDATE password_resets SET used = 1 WHERE token = ?", (token,))
 
 
 def create_user(email: str, password: str, is_admin: bool = False, name: str = "") -> int:

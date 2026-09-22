@@ -45,6 +45,16 @@ services:
       # app instead. Unset (the default) means no cap at all — size it to this host's actual RAM
       # once you know it, e.g. a 8GB box might set 6 to leave headroom for the Hub/Caddy/OS.
       PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS: ${PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS:-}
+      # Outbound mail for password-reset links (see hub/mailer.py) — an SES SMTP credential pair,
+      # not a raw AWS access key/secret (those aren't interchangeable). Unset SMTP_PASSWORD just
+      # logs the reset link to the Hub's own stdout instead of emailing it, so local dev works
+      # without any of this configured.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-no-reply@annobio.org}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
       PROMPT_STUDIO_REAP_INTERVAL_SEC: ${PROMPT_STUDIO_REAP_INTERVAL_SEC:-300}
     volumes:
       - hub-data:/app/hub/data
