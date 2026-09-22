@@ -2259,11 +2259,31 @@ _pdf_parse_executor: "concurrent.futures.ProcessPoolExecutor | None" = None
 # rest of this file's much heavier dependency stack (dspy, langchain, boto3, fastembed, ...).
 _pdf_mp_context = multiprocessing.get_context("spawn")
 
+# ~400MB per worker process, well under the per-user container's mem_limit (see
+# hub/containers.py) even with two workers running at once. An image-heavy PDF can make
+# PyMuPDF/pdfplumber allocate enough to push the whole container over its cgroup memory limit,
+# and the kernel's OOM killer picks a victim process in that cgroup with no regard for which
+# process actually caused the pressure — it killed uvicorn itself, not just the worker, taking
+# the whole backend down with it. BrokenProcessPool/exception handling in _do_pdf_import_work
+# can't help against a SIGKILL from outside the process; this rlimit turns "container run out of
+# memory" into "this one worker hit MemoryError," which those handlers already catch.
+_PDF_WORKER_MEMORY_LIMIT_BYTES = 400 * 1024 * 1024
+
+
+def _pdf_worker_init() -> None:
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, (_PDF_WORKER_MEMORY_LIMIT_BYTES, _PDF_WORKER_MEMORY_LIMIT_BYTES))
+    except Exception:
+        pass  # no resource module on Windows (local dev) — production runs Linux in Docker
+
 
 def _get_pdf_parse_executor() -> concurrent.futures.ProcessPoolExecutor:
     global _pdf_parse_executor
     if _pdf_parse_executor is None:
-        _pdf_parse_executor = concurrent.futures.ProcessPoolExecutor(max_workers=2, mp_context=_pdf_mp_context)
+        _pdf_parse_executor = concurrent.futures.ProcessPoolExecutor(
+            max_workers=2, mp_context=_pdf_mp_context, initializer=_pdf_worker_init,
+        )
     return _pdf_parse_executor
 
 
