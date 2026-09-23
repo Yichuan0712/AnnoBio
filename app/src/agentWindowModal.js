@@ -2,6 +2,8 @@ import { attachModalPaneToggle } from './paneToggleButton.js';
 import { mountAgentChatSession } from './agentChatSession.js';
 import { clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { detectPipelines } from './pipelineDetection.js';
+import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
 
 // Web fallback for the electronAPI methods this module relies on: same two method names,
 // backed by backend/project_store.py's REST endpoints instead of local-file IPC, keyed by
@@ -176,6 +178,7 @@ export async function openAgentWindowModal(options = {}) {
   const onClose = typeof options?.onClose === 'function' ? options.onClose : null;
   const projectPath = String(options?.projectPath || '').trim();
   const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
+  const getCanvasState = typeof options?.getCanvasState === 'function' ? options.getCanvasState : null;
   const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
   const addRunNode = typeof options?.addRunNode === 'function' ? options.addRunNode : null;
   const addScoreNode = typeof options?.addScoreNode === 'function' ? options.addScoreNode : null;
@@ -232,6 +235,7 @@ export async function openAgentWindowModal(options = {}) {
         <section class="agent-window__main">
           <div class="agent-window__main-header">
             <p class="agent-window__main-label">Agent</p>
+            <button type="button" class="agent-window__view-pipeline-btn btn btn-secondary">View pipeline</button>
           </div>
           <div class="agent-window__content">
             <div class="agent-window__conversation">
@@ -261,6 +265,15 @@ export async function openAgentWindowModal(options = {}) {
   const messagesEl = overlay.querySelector('.agent-window__messages');
   const composerInputEl = overlay.querySelector('.agent-window__composer-input');
   const composerSendEl = overlay.querySelector('.agent-window__composer-send');
+  const viewPipelineBtn = overlay.querySelector('.agent-window__view-pipeline-btn');
+  viewPipelineBtn?.addEventListener('click', () => {
+    if (!getCanvasState) return;
+    try {
+      showPipelineOverviewModal(detectPipelines(getCanvasState()));
+    } catch (error) {
+      console.error('View pipeline:', error);
+    }
+  });
   let chatSession = null;
   let pendingPollTimeout = null;
   let saveChain = Promise.resolve();
