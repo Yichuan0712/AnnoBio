@@ -6,7 +6,8 @@
  * instance at all.
  *
  * A "pipeline" here is a chain of Prompt (+ the Run that executes it), Process and Dataset steps,
- * so it reads the same way the canvas does: dataset -> prompt -> dataset -> prompt.
+ * so it reads the same way the canvas does: dataset -> prompt -> dataset -> prompt. At least one
+ * Prompt is required: a chain of only datasets and processes is data prep, not a pipeline.
  * Score/PromptReview stay out: they're evaluation/tuning scaffolding, not part of "the thing that
  * produces output" this is meant to describe. See the AnnoBio canvas→code-export planning
  * discussion this was built for.
@@ -276,13 +277,18 @@ export function detectPipelines(canvasState) {
     components.push(component);
   }
 
-  return components.map((componentIds, index) => {
-    const idSet = new Set(componentIds);
-    const localEdges = stepEdges.filter((e) => idSet.has(e.from) && idSet.has(e.to));
-    const order = topoSort(componentIds, localEdges);
-    return {
-      id: `pipeline-${index + 1}`,
-      steps: order.map((id) => stepById.get(id)),
-    };
-  });
+  // A component only counts as a pipeline if a Prompt runs somewhere in it: a bare
+  // dataset -> process -> dataset chain is data prep, not the thing that produces output.
+  // Numbering happens after this filter so the kept pipelines stay 1..n with no gaps.
+  return components
+    .filter((componentIds) => componentIds.some((id) => stepById.get(id)?.kind === STEP_KIND.PROMPT))
+    .map((componentIds, index) => {
+      const idSet = new Set(componentIds);
+      const localEdges = stepEdges.filter((e) => idSet.has(e.from) && idSet.has(e.to));
+      const order = topoSort(componentIds, localEdges);
+      return {
+        id: `pipeline-${index + 1}`,
+        steps: order.map((id) => stepById.get(id)),
+      };
+    });
 }
