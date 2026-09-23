@@ -8,8 +8,8 @@
  */
 import { toBlob } from 'html-to-image';
 import { BACKEND_API_BASE } from './backendConfig.js';
-import { showAlert, showConfirm } from './alertModal.js';
-import { iconMerge, iconCopy, iconDownload, iconTrash } from './icons.js';
+import { showAlert, showConfirm, showPrompt } from './alertModal.js';
+import { iconMerge, iconPencil, iconCopy, iconDownload, iconTrash } from './icons.js';
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -237,15 +237,18 @@ export async function publishCurrentProjectToGallery(projectId, projectName) {
 }
 
 /**
- * Project picker: create/import/open/duplicate/download/delete, plus — only when
+ * Project picker: create/import/open/rename/duplicate/download/delete, plus — only when
  * currentProjectId is given — a "Merge into current" action per row, so merging doesn't need
  * its own top-bar button or its own near-duplicate modal.
  * @param {string | null} [currentProjectId] the currently open project, if any. Its own row
  *   gets no merge button (a project can't merge into itself).
+ * @param {{ onRenamed?: (name: string) => void }} [options] onRenamed fires only when the row
+ *   renamed is currentProjectId's, since renaming happens in-place here rather than through the
+ *   resolved value — the picker stays open afterwards and may never resolve with a pick at all.
  * @returns {Promise<{ type: 'open', id: string, name: string } | { type: 'merged', state: object } | null>}
  *   null if closed without picking anything.
  */
-export function showProjectPickerModal(currentProjectId = null) {
+export function showProjectPickerModal(currentProjectId = null, options = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -340,6 +343,34 @@ export function showProjectPickerModal(currentProjectId = null) {
             });
             row.appendChild(mergeBtn);
           }
+
+          const renameBtn = document.createElement('button');
+          renameBtn.type = 'button';
+          renameBtn.className = 'project-picker-rename';
+          renameBtn.setAttribute('aria-label', `Rename ${project.name}`);
+          renameBtn.title = 'Rename';
+          renameBtn.appendChild(iconPencil(15));
+          renameBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const name = await showPrompt('Project name', {
+              title: 'Rename project', confirmText: 'Rename', initialValue: project.name,
+            });
+            if (name === null || name === project.name) return;
+            try {
+              const res = await fetch(`${BACKEND_API_BASE}/api/projects/${project.id}/name`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+              });
+              if (!res.ok) throw new Error('Could not rename project.');
+              const saved = await res.json();
+              if (project.id === currentProjectId) options.onRenamed?.(saved.name || name);
+              refresh();
+            } catch (err) {
+              showAlert(err.message || 'Could not rename project.', { title: 'Error' });
+            }
+          });
+          row.appendChild(renameBtn);
 
           const duplicateBtn = document.createElement('button');
           duplicateBtn.type = 'button';

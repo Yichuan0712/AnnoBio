@@ -98,6 +98,10 @@ class ProjectSave(BaseModel):
     state: dict[str, Any]
 
 
+class ProjectRename(BaseModel):
+    name: str
+
+
 class AgentConversationsSave(BaseModel):
     activeConversationId: str = ""
     conversations: list[dict[str, Any]] = []
@@ -171,6 +175,21 @@ def save_project(project_id: str, body: ProjectSave):
         data.setdefault("meta", {})["updatedAt"] = time.time()
         _atomic_write_json(_project_file(project_id), data)
     return {"ok": True}
+
+
+@router.put("/{project_id}/name")
+def rename_project(project_id: str, body: ProjectRename):
+    """Renames a project without touching its canvas state. save_project() above deliberately
+    writes only state/assets, so the picker needs its own endpoint to reach meta.name — the
+    same blank-name fallback as create_project()."""
+    with _lock:
+        data = _read_project(project_id)
+        meta = data.setdefault("meta", {})
+        name = body.name.strip() or "Untitled Project"
+        meta["name"] = name
+        meta["updatedAt"] = time.time()
+        _atomic_write_json(_project_file(project_id), data)
+    return {"ok": True, "name": name}
 
 
 @router.put("/{project_id}/thumbnail")
