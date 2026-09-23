@@ -249,6 +249,7 @@ def _prompt_module(
     prompt: dict[str, Any],
     run: dict[str, Any],
     model_config: dict[str, Any],
+    available_columns: list[str],
 ) -> tuple[str, dict[str, Any], str]:
     name = _text(prompt.get("name")) or "Prompt"
     sections = prompt.get("sections") or []
@@ -266,10 +267,28 @@ def _prompt_module(
         input_types = {}
     input_types = {str(key): str(value) for key, value in input_types.items()}
     placeholders = _extract_placeholders(sections)
+    # Older Run nodes did not always persist an explicit mapping when a placeholder and its
+    # Dataset column had the same name. Preserve that long-standing implicit behavior in exports
+    # while keeping genuinely ambiguous inputs as validation errors.
+    columns_by_folded_name = {
+        column.casefold(): column
+        for column in available_columns
+        if _text(column)
+    }
+    for field in placeholders:
+        if _text(mapping.get(field)):
+            continue
+        matching_column = columns_by_folded_name.get(field.casefold())
+        if matching_column:
+            mapping[field] = matching_column
     missing = [field for field in placeholders if not _text(mapping.get(field))]
     if missing:
         joined = ", ".join(f"{{{field}}}" for field in missing)
-        raise PipelineExportError(f'Prompt "{name}" has unmapped inputs: {joined}.')
+        run_name = _text(run.get("runName")) or "Run"
+        raise PipelineExportError(
+            f'Prompt "{name}" needs Dataset columns for {joined}. '
+            f'Open "{run_name}" and map each input before exporting.'
+        )
     output_schema = _prompt_output_schema(prompt)
     if not output_schema["fields"]:
         raise PipelineExportError(f'Prompt "{name}" must define at least one output field.')
@@ -1096,12 +1115,18 @@ def build_pipeline_archive(
             default_credential_id,
             run_max_tokens,
         )
-        prompt_name, prompt_config, module = _prompt_module(prompt, run, model_config)
         previous_dataset = next(
             (entry for entry in reversed(manifest_steps) if entry.get("type") == "dataset"),
             None,
         )
-        available_columns = {column["name"] for column in (previous_dataset or {}).get("columns", [])}
+        available_column_list = [column["name"] for column in (previous_dataset or {}).get("columns", [])]
+        prompt_name, prompt_config, module = _prompt_module(
+            prompt,
+            run,
+            model_config,
+            available_column_list,
+        )
+        available_columns = set(available_column_list)
         unknown_columns = sorted(
             {column for column in prompt_config["input_mapping"].values() if column not in available_columns}
         )

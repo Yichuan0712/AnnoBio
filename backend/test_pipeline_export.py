@@ -199,11 +199,24 @@ assert result.to_dict(orient="records")[0]["Output: answer"] == "ok"
             finally:
                 shutil.rmtree(test_root, ignore_errors=True)
 
-    def test_current_duplicate_mapping_is_validated(self):
+    def test_same_name_input_mapping_is_inferred_for_legacy_runs(self):
         state = _canvas_state()
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
         run["runInputToColumn"] = "{}"
-        with self.assertRaisesRegex(PipelineExportError, "unmapped inputs"):
+        filename, archive = self.build(state)
+        self.assertEqual(filename, "research-pipeline.zip")
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            manifest = json.loads(bundle.read("research-pipeline/pipeline.json"))
+        prompt_step = next(step for step in manifest["route"] if step["type"] == "prompt")
+        self.assertEqual(prompt_step["input_mapping"], {"text": "text"})
+
+    def test_unmapped_input_explains_how_to_fix_the_selected_run(self):
+        state = _canvas_state()
+        prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")
+        prompt["sections"] = [{"name": "Task", "content": "Answer {question}"}]
+        run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
+        run["runInputToColumn"] = "{}"
+        with self.assertRaisesRegex(PipelineExportError, 'Open "Run A1" and map each input'):
             self.build(state)
 
 
