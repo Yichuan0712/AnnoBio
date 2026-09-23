@@ -242,22 +242,16 @@
 }
 
 .workflow-canvas__nodes {
-  position: absolute;
-  left: 0;
-  top: 0;
-  min-width: 100%;
-  min-height: 100%;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.workflow-canvas__nodes > * {
-  pointer-events: auto;
+  /* Keep this element as a DOM/state container without giving it a canvas-sized hit-test box.
+     The previous pointer-events:none parent + pointer-events:auto children arrangement could
+     leave Chromium displaying nodes from a stale composited layer while targeting the canvas. */
+  display: contents;
 }
 
 /* Node (rectangular box, node-editor style). Hover: outer ring + lift shadow, no border change so it works with any node border color. */
 .workflow-node {
   position: absolute;
+  z-index: 1;
   min-width: 200px;
   max-width: 280px;
   max-height: 220px;
