@@ -2076,6 +2076,48 @@ export function buildWorkflowCanvas(root, options = {}) {
    * @param {number} edgeIndex - index in connections (for data-edge-index / future click)
    */
   const RUN_NODE_FALLBACK_HEIGHT = 40;
+  const EDGE_CURVE_MIN_VERTICAL_DELTA = 96;
+  const EDGE_CURVE_SLOPE_THRESHOLD = 0.75;
+
+  /**
+   * Keep ordinary left-to-right connections straight. When an edge is steep or bends back
+   * toward the left, use a cubic Bezier with horizontal tangents at both nodes so its source
+   * and destination remain visually unambiguous.
+   */
+  function getEdgeGeometry(startX, startY, endX, endY) {
+    const deltaX = endX - startX;
+    const deltaY = endY - startY;
+    const shouldCurve = deltaX <= 0
+      || (Math.abs(deltaY) >= EDGE_CURVE_MIN_VERTICAL_DELTA
+        && Math.abs(deltaY) > Math.abs(deltaX) * EDGE_CURVE_SLOPE_THRESHOLD);
+
+    if (!shouldCurve) {
+      return {
+        tagName: 'line',
+        attributes: { x1: startX, y1: startY, x2: endX, y2: endY },
+      };
+    }
+
+    const handleLength = Math.min(
+      180,
+      Math.max(48, Math.abs(deltaX) * 0.45, Math.abs(deltaY) * 0.3),
+    );
+    return {
+      tagName: 'path',
+      attributes: {
+        d: `M ${startX} ${startY} C ${startX + handleLength} ${startY}, ${endX - handleLength} ${endY}, ${endX} ${endY}`,
+        fill: 'none',
+      },
+    };
+  }
+
+  function createEdgeShape(geometry) {
+    const shape = document.createElementNS('http://www.w3.org/2000/svg', geometry.tagName);
+    Object.entries(geometry.attributes).forEach(([name, value]) => {
+      shape.setAttribute(name, String(value));
+    });
+    return shape;
+  }
 
   function renderEdge(g, edge, edgeIndex) {
     const fromNode = getNodeById(edge.fromId);
@@ -2099,12 +2141,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       const startY = y1 + h1 / 2;
       const endX = x2;
       const endY = y2 + h2 / 2;
+      const geometry = getEdgeGeometry(startX, startY, endX, endY);
       // Hit area: invisible wide stroke (drawn first, behind visible line)
-      const hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      hitLine.setAttribute('x1', String(startX));
-      hitLine.setAttribute('y1', String(startY));
-      hitLine.setAttribute('x2', String(endX));
-      hitLine.setAttribute('y2', String(endY));
+      const hitLine = createEdgeShape(geometry);
       hitLine.setAttribute('stroke', 'transparent');
       hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
       hitLine.setAttribute('data-edge-type', edge.type);
@@ -2112,11 +2151,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       hitLine.setAttribute('pointer-events', 'stroke');
       hitLine.setAttribute('class', 'workflow-edge-hit');
       g.appendChild(hitLine);
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('x1', String(startX));
-      line.setAttribute('y1', String(startY));
-      line.setAttribute('x2', String(endX));
-      line.setAttribute('y2', String(endY));
+      const line = createEdgeShape(geometry);
       line.setAttribute('stroke', 'var(--text-muted)');
       line.setAttribute('stroke-width', '2');
       line.setAttribute('marker-end', 'url(#workflow-arrow)');
@@ -2131,12 +2166,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       const endX = x2;
       const toHeight = isRunOrScore ? RUN_NODE_FALLBACK_HEIGHT : h2;
       const endY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
+      const geometry = getEdgeGeometry(startX, startY, endX, endY);
       if (!edge.derived) {
-        const hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        hitLine.setAttribute('x1', String(startX));
-        hitLine.setAttribute('y1', String(startY));
-        hitLine.setAttribute('x2', String(endX));
-        hitLine.setAttribute('y2', String(endY));
+        const hitLine = createEdgeShape(geometry);
         hitLine.setAttribute('stroke', 'transparent');
         hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
         hitLine.setAttribute('data-edge-type', edge.type || '');
@@ -2145,11 +2177,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         hitLine.setAttribute('class', 'workflow-edge-hit');
         g.appendChild(hitLine);
       }
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('x1', String(startX));
-      line.setAttribute('y1', String(startY));
-      line.setAttribute('x2', String(endX));
-      line.setAttribute('y2', String(endY));
+      const line = createEdgeShape(geometry);
       line.setAttribute('stroke', 'var(--text-muted)');
       line.setAttribute('stroke-width', '2');
       line.setAttribute('marker-end', 'url(#workflow-arrow)');
@@ -2429,10 +2457,11 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   function onEdgesLayerClick(e) {
-    const lineEl = e.target && (e.target.tagName === 'line' || e.target.localName === 'line') ? e.target : null;
-    if (!lineEl) return;
-    const edgeType = lineEl.getAttribute('data-edge-type');
-    const indexStr = lineEl.getAttribute('data-edge-index');
+    const localName = e.target?.localName?.toLowerCase();
+    const edgeShape = localName === 'line' || localName === 'path' ? e.target : null;
+    if (!edgeShape) return;
+    const edgeType = edgeShape.getAttribute('data-edge-type');
+    const indexStr = edgeShape.getAttribute('data-edge-index');
     if (indexStr === null) return;
     const edgeIndex = parseInt(indexStr, 10);
     const edge = connections[edgeIndex];
