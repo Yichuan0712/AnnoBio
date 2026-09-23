@@ -4082,7 +4082,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:add-dataset-node', (e) => {
-    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', colorIndex: detailColorIndex } = e.detail || {};
+    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', runNodeId = '', colorIndex: detailColorIndex } = e.detail || {};
     const VISIBLE_PADDING = 40;
     let startLeft = typeof detailLeft === 'number' ? detailLeft : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
     let startTop = typeof detailTop === 'number' ? detailTop : (scrollWrapper.scrollTop + VISIBLE_PADDING);
@@ -4133,6 +4133,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       left: startLeft,
       top: startTop,
       samplerNodeId: samplerNodeId || '',
+      sourceRunNodeId: runNodeId || '',
       colorIndex: detailColorIndex,
       headers: datasetHeaders,
       rows: datasetRows,
@@ -4351,6 +4352,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           name: node.dataset.datasetName || node.dataset.subsetName || '',
           note: node.dataset.datasetNote ?? node.dataset.subsetNote ?? '',
           samplerNodeId: node.dataset.samplerNodeId || '',
+          sourceRunNodeId: node.dataset.sourceRunNodeId || '',
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
           datasetContent: content ? cloneDatasetContent(content) : undefined,
           nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
@@ -4550,6 +4552,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           top: n.top,
           nodeId: n.nodeId || n.id,
           samplerNodeId: n.samplerNodeId || '',
+          sourceRunNodeId: n.sourceRunNodeId || '',
           colorIndex: n.colorIndex,
           headers: content?.headers,
           rows: content?.rows,

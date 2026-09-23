@@ -663,7 +663,7 @@ export function openRunDetailModal({
       let sourceTypes = [];
       try { sourceTypes = JSON.parse(node?.dataset?.runInputContent || '{}').columnTypes || []; } catch (_) {}
       const columnTypes = ['text', ...ih.map((_, i) => (sourceTypes[i] === 'image' || sourceTypes[i] === 'pdf') ? sourceTypes[i] : 'text'), 'text', ...outputHeaders.map(() => 'text')];
-      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: exportHeaders, columnTypes, rows } }));
+      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: exportHeaders, columnTypes, rows, runNodeId: node?.dataset?.nodeId || '' } }));
       closeModal();
     });
     const scoreBtn = document.createElement('button');
