@@ -2992,7 +2992,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   currentPipelineBtn.addEventListener('click', () => {
     showPipelineOverviewModal(detectPipelines(getCanvasState()));
   });
-  autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', () => {
+  const agentAssistantBtn = autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn');
+  agentAssistantBtn.addEventListener('click', () => {
     openAgentWindowModal({
       projectPath: getCurrentProjectPath(),
       getWorkflowSnapshot,
@@ -3021,6 +3022,20 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   });
   canvasControlsStack.appendChild(autopilotToolbar);
+
+  // Greys out whichever button's window is already up. Both windows also close from the inside
+  // (their own ✕, Escape), so this watches for the overlays themselves rather than assuming a
+  // click is what opens and closes them.
+  const toolbarWindowButtons = [
+    [currentPipelineBtn, '.pipeline-overview-overlay'],
+    [agentAssistantBtn, '.agent-window-overlay'],
+  ];
+  function syncToolbarWindowState() {
+    for (const [btn, overlaySelector] of toolbarWindowButtons) {
+      btn.classList.toggle('is-open', Boolean(document.querySelector(overlaySelector)));
+    }
+  }
+  new MutationObserver(syncToolbarWindowState).observe(document.body, { childList: true });
 
   // Tracks whether a project is open, not whether the Agent window is — the toolbar stays put
   // while the chat is up so Current Pipeline is still one click away.

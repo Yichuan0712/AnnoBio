@@ -115,6 +115,14 @@ function renderPipeline(pipeline, index, selectedByStepId) {
 
 /** @param {Array<import('./pipelineDetection.js').Pipeline>} pipelines */
 export function showPipelineOverviewModal(pipelines) {
+  // Non-modal, so the toolbar button stays reachable while this is up and a second click would
+  // otherwise stack a second copy on the first.
+  const existing = document.querySelector('.pipeline-overview-overlay');
+  if (existing) {
+    existing.querySelector('.modal-close')?.focus();
+    return;
+  }
+
   const overlay = document.createElement('div');
   // Non-modal (see .pipeline-overview-overlay): the canvas stays usable while this is up, so it
   // deliberately doesn't claim aria-modal, dim the page, or lock body scrolling. Dragging and
