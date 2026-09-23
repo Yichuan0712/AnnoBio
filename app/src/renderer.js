@@ -206,7 +206,9 @@ window.addEventListener('DOMContentLoaded', () => {
   // The picker doubles as the merge entry point (click a project's "merge into current" button
   // instead of "open") when a project is already open — see webProjectModal.js.
   const onNewOrOpenProjectWeb = async () => {
-    const picked = await showProjectPickerModal(currentProjectPath);
+    const picked = await showProjectPickerModal(currentProjectPath, {
+      onRenamed: (name) => updateWindowTitle(name),
+    });
     if (!picked) return;
     if (picked.type === 'merged') {
       canvasAPI.loadCanvasState(picked.state);
