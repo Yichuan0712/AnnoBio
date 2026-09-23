@@ -241,6 +241,12 @@
   transition: stroke 0.15s ease, stroke-width 0.15s ease;
 }
 
+/* Read-only data dependencies inferred from Run input/output metadata. */
+.workflow-canvas__edges line.workflow-edge--derived {
+  pointer-events: none;
+  cursor: default;
+}
+
 .workflow-canvas__nodes {
   position: absolute;
   left: 0;

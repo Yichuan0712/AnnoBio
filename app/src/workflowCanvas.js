@@ -117,6 +117,10 @@ const EDGE_TYPE_SAMPLER_TO_DATASET = 'sampler-to-dataset';
 const EDGE_TYPE_DATASET_TO_DATASET = 'dataset-to-dataset';
 /** Edge type for prompt → run (run/test this prompt). */
 const EDGE_TYPE_PROMPT_TO_RUN = 'prompt-to-run';
+/** Read-only visual edge for the Dataset selected as a Run's input. */
+const EDGE_TYPE_DATASET_TO_RUN = 'dataset-to-run';
+/** Read-only visual edge for a Dataset materialized from Run results. */
+const EDGE_TYPE_RUN_TO_DATASET = 'run-to-dataset';
 /** Edge type for run → score (compare result with ground truth). */
 const EDGE_TYPE_RUN_TO_SCORE = 'run-to-score';
 /** Edge type for score → prompt review (LLM analyzes results and suggests prompt changes). */
@@ -2126,19 +2130,26 @@ export function buildWorkflowCanvas(root, options = {}) {
       const startY = y1 + h1 / 2;
       const endX = x2;
       const toHeight = isRunOrScore ? RUN_NODE_FALLBACK_HEIGHT : h2;
-      const endY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
-      const hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      hitLine.setAttribute('x1', String(startX));
-      hitLine.setAttribute('y1', String(startY));
-      hitLine.setAttribute('x2', String(endX));
-      hitLine.setAttribute('y2', String(endY));
-      hitLine.setAttribute('stroke', 'transparent');
-      hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
-      hitLine.setAttribute('data-edge-type', edge.type || '');
-      hitLine.setAttribute('data-edge-index', String(edgeIndex));
-      hitLine.setAttribute('pointer-events', 'stroke');
-      hitLine.setAttribute('class', 'workflow-edge-hit');
-      g.appendChild(hitLine);
+      const defaultEndY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
+      // Prompt and Dataset are independent inputs to a Run. Offset the automatic Dataset input
+      // slightly so both arrows remain legible when their source nodes happen to align.
+      const endY = edge.type === EDGE_TYPE_DATASET_TO_RUN
+        ? y2 + (toHeight > 0 ? toHeight * 0.75 : RUN_NODE_FALLBACK_HEIGHT * 0.75)
+        : defaultEndY;
+      if (!edge.derived) {
+        const hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        hitLine.setAttribute('x1', String(startX));
+        hitLine.setAttribute('y1', String(startY));
+        hitLine.setAttribute('x2', String(endX));
+        hitLine.setAttribute('y2', String(endY));
+        hitLine.setAttribute('stroke', 'transparent');
+        hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
+        hitLine.setAttribute('data-edge-type', edge.type || '');
+        hitLine.setAttribute('data-edge-index', String(edgeIndex));
+        hitLine.setAttribute('pointer-events', 'stroke');
+        hitLine.setAttribute('class', 'workflow-edge-hit');
+        g.appendChild(hitLine);
+      }
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('x1', String(startX));
       line.setAttribute('y1', String(startY));
@@ -2150,13 +2161,51 @@ export function buildWorkflowCanvas(root, options = {}) {
       line.setAttribute('data-edge-type', edge.type || '');
       line.setAttribute('data-edge-index', String(edgeIndex));
       line.setAttribute('pointer-events', 'none');
+      if (edge.derived) {
+        line.setAttribute('class', 'workflow-edge--derived');
+        line.setAttribute('data-derived', 'true');
+        line.setAttribute('aria-label', edge.type === EDGE_TYPE_DATASET_TO_RUN
+          ? 'Selected input dataset'
+          : 'Dataset saved from Run results');
+      }
       g.appendChild(line);
     }
+  }
+
+  /** Build read-only data-flow edges from fields that already drive execution and provenance. */
+  function getDerivedDataFlowEdges() {
+    const derived = [];
+    const seen = new Set(connections.map((edge) => `${edge.type}:${edge.fromId}:${edge.toId}`));
+    const add = (fromId, toId, type) => {
+      if (!fromId || !toId || !getNodeById(fromId) || !getNodeById(toId)) return;
+      const key = `${type}:${fromId}:${toId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      derived.push({ fromId, toId, type, derived: true });
+    };
+
+    nodesLayer.querySelectorAll('.workflow-node--run').forEach((runNode) => {
+      add(
+        String(runNode.dataset.runWorkingSetId || '').trim(),
+        String(runNode.dataset.nodeId || '').trim(),
+        EDGE_TYPE_DATASET_TO_RUN,
+      );
+    });
+    nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((datasetNode) => {
+      add(
+        String(datasetNode.dataset.sourceRunNodeId || '').trim(),
+        String(datasetNode.dataset.nodeId || '').trim(),
+        EDGE_TYPE_RUN_TO_DATASET,
+      );
+    });
+    return derived;
   }
 
   function updateEdges() {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('pointer-events', 'auto');
+    // Automatic dependency lines sit behind explicit, user-managed workflow edges.
+    getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1));
     connections.forEach((edge, i) => renderEdge(g, edge, i));
     const existing = edgesLayer.querySelector('g');
     if (existing) existing.remove();

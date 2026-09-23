@@ -74,6 +74,11 @@ export function createWorkflowNodeFactories(deps = {}) {
     return Array.isArray(getConnections?.()) ? getConnections() : [];
   }
 
+  function onRunWorkingSetChange() {
+    updateEdges();
+    emitCanvasChanged();
+  }
+
   function attachDrag(node) {
     let dragStartX = 0;
     let dragStartY = 0;
@@ -303,6 +308,7 @@ export function createWorkflowNodeFactories(deps = {}) {
               getPromptName: () => (node.dataset.promptName || '').trim() || (node.querySelector('.workflow-node__title')?.textContent?.trim() || ''),
               getUniqueDatasetExportName: findUniqueDatasetExportName,
               isRunNameAlreadyUsedForPrompt,
+              onWorkingSetChange: onRunWorkingSetChange,
               getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
                 try {
                   const raw = n.dataset.runInputToColumn;
@@ -590,6 +596,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
         isRunNameAlreadyUsedForPrompt,
+        onWorkingSetChange: onRunWorkingSetChange,
         getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
           try {
             const raw = n.dataset.runInputToColumn;
