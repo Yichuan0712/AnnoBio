@@ -89,12 +89,13 @@
 
 .workflow-canvas__autopilot-toolbar {
   display: flex;
+  flex-direction: column;
   gap: 6px;
 }
 
 .workflow-canvas__autopilot-btn,
-.workflow-canvas__view-pipeline-btn {
-  flex: 1;
+.workflow-canvas__my-pipeline-btn {
+  flex: none;
   height: 30px;
   padding: 0 10px;
   display: flex;
@@ -114,7 +115,7 @@
 }
 
 .workflow-canvas__autopilot-btn:hover,
-.workflow-canvas__view-pipeline-btn:hover {
+.workflow-canvas__my-pipeline-btn:hover {
   background: var(--hover);
   box-shadow: 0 3px 10px var(--shadow);
 }
@@ -124,6 +125,11 @@
   line-height: 1;
   transform: translateY(-1px);
   display: inline-block;
+  color: var(--text-muted);
+}
+
+.workflow-canvas__my-pipeline-icon {
+  flex: none;
   color: var(--text-muted);
 }
 

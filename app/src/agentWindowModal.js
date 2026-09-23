@@ -172,8 +172,6 @@ export async function openAgentWindowModal(options = {}) {
     return;
   }
 
-  const onOpen = typeof options?.onOpen === 'function' ? options.onOpen : null;
-  const onClose = typeof options?.onClose === 'function' ? options.onClose : null;
   const projectPath = String(options?.projectPath || '').trim();
   const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
   const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
@@ -418,11 +416,6 @@ export async function openAgentWindowModal(options = {}) {
     chatSession = null;
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);
-    try {
-      onClose?.();
-    } catch (error) {
-      console.error('Agent window onClose callback:', error);
-    }
   }
 
   function onKeyDown(e) {
@@ -473,11 +466,6 @@ export async function openAgentWindowModal(options = {}) {
   });
   document.addEventListener('keydown', onKeyDown);
   document.body.appendChild(overlay);
-  try {
-    onOpen?.();
-  } catch (error) {
-    console.error('Agent window onOpen callback:', error);
-  }
   chatSession = mountAgentChatSession({
     overlay,
     messagesEl,

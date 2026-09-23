@@ -66,6 +66,7 @@ import { showAlert, showConfirm } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
 import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
+import { iconWorkflow } from './icons.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 
@@ -2974,17 +2975,21 @@ export function buildWorkflowCanvas(root, options = {}) {
   const autopilotToolbar = document.createElement('div');
   autopilotToolbar.className = 'workflow-canvas__autopilot-toolbar';
   autopilotToolbar.innerHTML = `
-    <button type="button" class="workflow-canvas__view-pipeline-btn" aria-label="View pipeline">
-      <span>View pipeline</span>
+    <button type="button" class="workflow-canvas__my-pipeline-btn" aria-label="Open My Pipeline">
+      <span>My Pipeline</span>
     </button>
     <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agent Assistant">
       <span class="workflow-canvas__autopilot-icon">✦</span>
       <span>Agent Assistant</span>
     </button>
   `;
+  const myPipelineBtn = autopilotToolbar.querySelector('.workflow-canvas__my-pipeline-btn');
+  const myPipelineIcon = iconWorkflow(16);
+  myPipelineIcon.classList.add('workflow-canvas__my-pipeline-icon');
+  myPipelineBtn.prepend(myPipelineIcon);
   // Sits beside the Agent Assistant toggle, not inside its chat window — pipeline detection is a
   // one-click read of the current canvas, not something that needs a conversation open first.
-  autopilotToolbar.querySelector('.workflow-canvas__view-pipeline-btn').addEventListener('click', () => {
+  myPipelineBtn.addEventListener('click', () => {
     showPipelineOverviewModal(detectPipelines(getCanvasState()));
   });
   autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', () => {
@@ -3013,12 +3018,12 @@ export function buildWorkflowCanvas(root, options = {}) {
       importClinicaltrialsDataset,
       importPreprintDataset,
       importChemblDataset,
-      onOpen: () => setAgentWindowVisible(false),
-      onClose: () => setAgentWindowVisible(true),
     });
   });
   canvasControlsStack.appendChild(autopilotToolbar);
 
+  // Tracks whether a project is open, not whether the Agent window is — the toolbar stays put
+  // while the chat is up so My Pipeline is still one click away.
   function setAgentWindowVisible(visible) {
     autopilotToolbar.style.display = visible ? '' : 'none';
   }
