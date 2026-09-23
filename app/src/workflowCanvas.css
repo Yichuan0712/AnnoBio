@@ -225,7 +225,8 @@
   fill: var(--text);
 }
 
-.workflow-canvas__edges line {
+.workflow-canvas__edges > g > line,
+.workflow-canvas__edges > g > path {
   pointer-events: stroke;
   cursor: pointer;
 }
@@ -235,14 +236,15 @@
 }
 
 /* Edge hover: visible line gets brighter + slightly thicker. Arrow brightness is via workflow-arrow-hover marker (see #workflow-arrow-hover path above). */
-.workflow-canvas__edges line.workflow-edge-hit:hover + line {
+.workflow-canvas__edges > g > .workflow-edge-hit:hover + line,
+.workflow-canvas__edges > g > .workflow-edge-hit:hover + path {
   stroke: var(--text);
   stroke-width: 3;
   transition: stroke 0.15s ease, stroke-width 0.15s ease;
 }
 
 /* Read-only data dependencies inferred from Run input/output metadata. */
-.workflow-canvas__edges line.workflow-edge--derived {
+.workflow-canvas__edges .workflow-edge--derived {
   pointer-events: none;
   cursor: default;
 }
