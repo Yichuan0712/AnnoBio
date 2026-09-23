@@ -386,7 +386,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sourceRunNodeId = '', colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -402,6 +402,10 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (notes !== undefined && notes !== null) node.dataset.datasetNote = String(notes);
     node.dataset.nodeType = 'dataset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
+    // Provenance only — not a live wire like samplerNodeId (which drives sampled-dataset naming/
+    // regeneration). Set when this dataset was materialized from a Run's results (see
+    // saveRunResultsToWorkspace); purely informational, nothing reads it to affect execution.
+    if (sourceRunNodeId) node.dataset.sourceRunNodeId = sourceRunNodeId;
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticDatasetColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = DATASET_BORDER_COLORS[colorIndex];
