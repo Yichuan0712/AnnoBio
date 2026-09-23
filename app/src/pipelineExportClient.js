@@ -21,6 +21,7 @@ function exportCanvasDefinition(canvasState, route) {
           type: 'dataset',
           nodeId: node.nodeId,
           name: node.name,
+          sourceRunNodeId: node.sourceRunNodeId,
           datasetContent: {
             headers: node.datasetContent?.headers || [],
             columnTypes: node.datasetContent?.columnTypes || [],
