@@ -8516,10 +8516,18 @@ button.btn.btn-danger:hover:not(:disabled) {
 .project-picker-download:hover { background: var(--hover); color: var(--text); }
 .project-picker-delete:hover { background: var(--hover); color: #c0392b; }
 
-/* "My Pipeline" result modal (workflowCanvas.js / pipelineOverviewModal.js) — each detected
+/* "Current Pipeline" result panel (workflowCanvas.js / pipelineOverviewModal.js) — each detected
    pipeline is a horizontal row of step chips joined by arrows, not a table; Dataset nodes are
    deliberately not shown as steps (see pipelineDetection.js's file doc for why). */
-.pipeline-overview-overlay { z-index: 2100; } /* above .agent-window-overlay's 2000 — both can be open at once */
+/* Non-modal, the same way .agent-window-overlay is: the backdrop lets clicks through so the canvas
+   stays usable underneath, and only the panel itself takes pointer events. z-index sits above
+   .agent-window-overlay's 2000 since both can be open at once. */
+.pipeline-overview-overlay {
+  z-index: 2100;
+  background: transparent;
+  pointer-events: none;
+}
+.pipeline-overview-overlay .modal-panel { pointer-events: auto; }
 .modal-panel--pipeline-overview { width: 720px; max-width: 92vw; }
 .pipeline-overview-empty { color: var(--text-muted); font-size: 13.5px; }
 .pipeline-overview-card { margin-bottom: 22px; }
@@ -8538,6 +8546,7 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 .pipeline-step-kind--prompt { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
 .pipeline-step-kind--process { background: rgba(16, 137, 62, 0.14); color: #10893e; }
+.pipeline-step-kind--dataset { background: rgba(124, 58, 237, 0.14); color: #7c3aed; }
 .pipeline-step-name { font-size: 13px; color: var(--text); }
 .pipeline-step-version-select {
   font-size: 12.5px; padding: 2px 4px; border: 1px solid var(--border);

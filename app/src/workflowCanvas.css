@@ -94,7 +94,7 @@
 }
 
 .workflow-canvas__autopilot-btn,
-.workflow-canvas__my-pipeline-btn {
+.workflow-canvas__current-pipeline-btn {
   flex: none;
   height: 30px;
   padding: 0 10px;
@@ -115,7 +115,7 @@
 }
 
 .workflow-canvas__autopilot-btn:hover,
-.workflow-canvas__my-pipeline-btn:hover {
+.workflow-canvas__current-pipeline-btn:hover {
   background: var(--hover);
   box-shadow: 0 3px 10px var(--shadow);
 }
@@ -128,7 +128,7 @@
   color: var(--text-muted);
 }
 
-.workflow-canvas__my-pipeline-icon {
+.workflow-canvas__current-pipeline-icon {
   flex: none;
   color: var(--text-muted);
 }
