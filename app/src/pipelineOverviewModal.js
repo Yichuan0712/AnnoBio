@@ -202,15 +202,33 @@ function renderRouteStep(step) {
   `;
 }
 
-function renderPipeline(pipeline, index, selectedByChoiceId) {
+function getVisibleRoute(route, hideIntermediateDatasets) {
+  if (!hideIntermediateDatasets) return route;
+  const firstDatasetIndex = route.findIndex((step) => step.kind === 'dataset');
+  return route.filter((step, index) => step.kind !== 'dataset' || index === firstDatasetIndex);
+}
+
+function getPipelineViewId(pipeline, index) {
+  return String(pipeline?.id || `pipeline-index-${index}`);
+}
+
+function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDatasets) {
   const route = buildSelectedRoute(pipeline, selectedByChoiceId);
-  const steps = route.map(renderRouteStep)
+  const visibleRoute = getVisibleRoute(route, hideIntermediateDatasets);
+  const steps = visibleRoute.map(renderRouteStep)
     .join('<li class="pipeline-overview-arrow" aria-hidden="true">&#8594;</li>');
   return `
     <div class="pipeline-overview-card" data-pipeline-index="${index}">
       <div class="pipeline-overview-card-header">
         <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
-        <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python</button>
+        <div class="pipeline-overview-card-actions">
+          <label class="pipeline-overview-data-toggle">
+            <input type="checkbox" class="pipeline-overview-data-toggle-input" data-pipeline-index="${index}"${hideIntermediateDatasets ? ' checked' : ''}>
+            <span class="pipeline-overview-data-toggle-track" aria-hidden="true"></span>
+            <span>Hide data nodes</span>
+          </label>
+          <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python</button>
+        </div>
       </div>
       <ol class="pipeline-overview-steps">${steps}</ol>
     </div>
@@ -235,6 +253,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   let pipelines = [];
   let pipelineSignature = '';
   let refreshFrame = 0;
+  const showIntermediateDatasetsByPipelineId = new Map();
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay pipeline-overview-overlay';
@@ -257,7 +276,12 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   const bodyEl = overlay.querySelector('.pipeline-overview-body');
   function renderBody() {
     const content = pipelines.length > 0
-      ? pipelines.map((pipeline, index) => renderPipeline(pipeline, index, selectedByChoiceId)).join('')
+      ? pipelines.map((pipeline, index) => renderPipeline(
+        pipeline,
+        index,
+        selectedByChoiceId,
+        showIntermediateDatasetsByPipelineId.get(getPipelineViewId(pipeline, index)) !== true,
+      )).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
     bodyEl.innerHTML = content;
   }
@@ -284,6 +308,19 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   refresh();
 
   bodyEl.addEventListener('change', (event) => {
+    const dataToggle = event.target.closest?.('.pipeline-overview-data-toggle-input');
+    if (dataToggle) {
+      const pipelineIndex = Number.parseInt(dataToggle.getAttribute('data-pipeline-index') || '', 10);
+      const pipeline = pipelines[pipelineIndex];
+      if (pipeline) {
+        showIntermediateDatasetsByPipelineId.set(
+          getPipelineViewId(pipeline, pipelineIndex),
+          !dataToggle.checked,
+        );
+        renderBody();
+      }
+      return;
+    }
     const select = event.target.closest?.('.pipeline-step-version-select');
     if (!select) return;
     selectedByChoiceId.set(select.getAttribute('data-choice-id'), select.value);
