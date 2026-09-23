@@ -122,7 +122,7 @@ function topoSort(ids, localEdges) {
  *   | {id: string, kind: 'process', processNodeId: string, processName: string}
  *   | {id: string, kind: 'dataset', producerStepId: string|null, consumerStepIds: string[],
  *      datasets: Array<{datasetNodeId: string, datasetName: string, producerRunNodeId: string|null,
- *        consumerRunNodeIds: string[]}>}
+ *        consumerStepIds: string[], consumerRunNodeIds: string[]}>}
  * >, edges: Array<{from: string, to: string}>}>}
  */
 export function detectPipelines(canvasState) {
@@ -239,12 +239,12 @@ export function detectPipelines(canvasState) {
     const producerStepId = datasetProducerStepId.get(ds.nodeId) || null;
     const consumerStepIds = datasetConsumerStepIds.get(ds.nodeId) || new Set();
     if (!producerStepId && consumerStepIds.size === 0) continue;
-    // Datasets are alternatives only when they occupy the same exact graph position. Including
-    // every consumer in the key prevents parallel branches from being collapsed into one picker
-    // and then rendered as a false linear chain.
+    // Every output materialized from one producer occupies the same selectable slot. Its own
+    // consumerStepIds below retain where that particular dataset continues, so the panel can show
+    // one route and change the downstream chain when the user selects another output.
     const consumerKey = [...consumerStepIds].sort().join(',') || 'end';
     const key = producerStepId
-      ? `after:${producerStepId}:to:${consumerKey}`
+      ? `after:${producerStepId}`
       : `before:${consumerKey}`;
     if (!slots.has(key)) slots.set(key, { producerStepId, consumerStepIds: new Set(), datasetNodeIds: [] });
     const slot = slots.get(key);
@@ -263,6 +263,7 @@ export function detectPipelines(canvasState) {
         datasetNodeId: id,
         datasetName: nodeById.get(id)?.name || 'Dataset',
         producerRunNodeId: datasetProducerRunId.get(id) || null,
+        consumerStepIds: [...(datasetConsumerStepIds.get(id) || [])],
         consumerRunNodeIds: [...(datasetConsumerRunIds.get(id) || [])],
       })),
     };
