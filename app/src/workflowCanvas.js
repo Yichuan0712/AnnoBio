@@ -64,6 +64,8 @@ import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS } from './workflowNodeColors.js';
 import { showAlert, showConfirm } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
+import { detectPipelines } from './pipelineDetection.js';
+import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 
@@ -2972,16 +2974,23 @@ export function buildWorkflowCanvas(root, options = {}) {
   const autopilotToolbar = document.createElement('div');
   autopilotToolbar.className = 'workflow-canvas__autopilot-toolbar';
   autopilotToolbar.innerHTML = `
+    <button type="button" class="workflow-canvas__view-pipeline-btn" aria-label="View pipeline">
+      <span>View pipeline</span>
+    </button>
     <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agent Assistant">
       <span class="workflow-canvas__autopilot-icon">✦</span>
       <span>Agent Assistant</span>
     </button>
   `;
+  // Sits beside the Agent Assistant toggle, not inside its chat window — pipeline detection is a
+  // one-click read of the current canvas, not something that needs a conversation open first.
+  autopilotToolbar.querySelector('.workflow-canvas__view-pipeline-btn').addEventListener('click', () => {
+    showPipelineOverviewModal(detectPipelines(getCanvasState()));
+  });
   autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', () => {
     openAgentWindowModal({
       projectPath: getCurrentProjectPath(),
       getWorkflowSnapshot,
-      getCanvasState,
       inspectNode,
       addRunNode,
       addScoreNode,

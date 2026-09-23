@@ -89,9 +89,11 @@
 
 .workflow-canvas__autopilot-toolbar {
   display: flex;
+  gap: 6px;
 }
 
-.workflow-canvas__autopilot-btn {
+.workflow-canvas__autopilot-btn,
+.workflow-canvas__view-pipeline-btn {
   flex: 1;
   height: 30px;
   padding: 0 10px;
@@ -111,7 +113,8 @@
   transition: box-shadow 0.12s, background 0.12s;
 }
 
-.workflow-canvas__autopilot-btn:hover {
+.workflow-canvas__autopilot-btn:hover,
+.workflow-canvas__view-pipeline-btn:hover {
   background: var(--hover);
   box-shadow: 0 3px 10px var(--shadow);
 }
