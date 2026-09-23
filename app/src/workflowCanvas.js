@@ -2130,12 +2130,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const startY = y1 + h1 / 2;
       const endX = x2;
       const toHeight = isRunOrScore ? RUN_NODE_FALLBACK_HEIGHT : h2;
-      const defaultEndY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
-      // Prompt and Dataset are independent inputs to a Run. Offset the automatic Dataset input
-      // slightly so both arrows remain legible when their source nodes happen to align.
-      const endY = edge.type === EDGE_TYPE_DATASET_TO_RUN
-        ? y2 + (toHeight > 0 ? toHeight * 0.75 : RUN_NODE_FALLBACK_HEIGHT * 0.75)
-        : defaultEndY;
+      const endY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
       if (!edge.derived) {
         const hitLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         hitLine.setAttribute('x1', String(startX));
