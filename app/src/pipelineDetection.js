@@ -5,17 +5,19 @@
  * getCanvasState()'s output) and offline (fed a saved project's state) without any canvas
  * instance at all.
  *
- * A "pipeline" here means only Prompt (+ the Run that executes it) and Process nodes — Dataset
- * nodes are treated as the (invisible) pipes between steps, not steps themselves, and
- * Score/PromptReview are evaluation/tuning scaffolding, not part of "the thing that produces
- * output" this is meant to describe. See the AnnoBio canvas→code-export planning discussion this
- * was built for.
+ * A "pipeline" here is a chain of Prompt (+ the Run that executes it), Process and Dataset steps,
+ * so it reads the same way the canvas does: dataset -> prompt -> dataset -> prompt.
+ * Score/PromptReview stay out: they're evaluation/tuning scaffolding, not part of "the thing that
+ * produces output" this is meant to describe. See the AnnoBio canvas→code-export planning
+ * discussion this was built for.
  *
- * How a Dataset "pipe" is resolved between two steps:
- *  - Producer: either `dataset.sourceRunNodeId` (a Dataset materialized from a Run's results via
+ * How a Dataset attaches to the steps around it:
+ *  - Produced by: either `dataset.sourceRunNodeId` (a Dataset materialized from a Run's results via
  *    "Save to workspace" — see workflowCanvasRuntime.js's saveRunResultsToWorkspace), or a
  *    `process-to-dataset` connection.
- *  - Consumer: either a Run's own `runWorkingSetId` field, or a `dataset-to-process` connection.
+ *  - Consumed by: either a Run's own `runWorkingSetId` field, or a `dataset-to-process` connection.
+ *
+ * Only datasets that actually take part get a step; ones sitting unattached on the canvas don't.
  *
  * Known v1 limitations (documented rather than silently guessed around):
  *  - Prompt version chains (`prompt-to-prompt` edges — see addPromptVersion) are assumed linear;
@@ -24,7 +26,7 @@
  *    and a live `process-to-dataset` edge), the process-to-dataset edge wins — last one indexed.
  */
 
-const STEP_KIND = { PROMPT: 'prompt', PROCESS: 'process' };
+const STEP_KIND = { PROMPT: 'prompt', PROCESS: 'process', DATASET: 'dataset' };
 
 function indexConnections(connections) {
   const byTypeFrom = new Map(); // `${type}:${fromId}` -> toId[]
@@ -104,6 +106,9 @@ function topoSort(ids, localEdges) {
  * @returns {Array<{id: string, steps: Array<
  *   {id: string, kind: 'prompt', versions: Array<{promptNodeId: string, promptName: string, runNodeIds: string[]}>, defaultVersionIndex: number}
  *   | {id: string, kind: 'process', processNodeId: string, processName: string}
+ *   | {id: string, kind: 'dataset', producerStepId: string|null, consumerStepId: string|null,
+ *      datasets: Array<{datasetNodeId: string, datasetName: string, producerRunNodeId: string|null,
+ *        consumerRunNodeIds: string[]}>}
  * >}>}
  */
 export function detectPipelines(canvasState) {
@@ -163,35 +168,84 @@ export function detectPipelines(canvasState) {
 
   if (steps.length === 0) return [];
 
-  // Resolve each dataset's producing step, if any.
-  const datasetProducerStep = new Map();
+  // A step is a whole version chain, so the Run ids are kept alongside the step ids: they're what
+  // lets a slot narrow its datasets down to the Prompt version actually selected (see the modal).
+  const datasetProducerStepId = new Map(); // dataset nodeId -> id of the step that produced it
+  const datasetProducerRunId = new Map(); // dataset nodeId -> Run that produced it, if any
   for (const ds of datasetNodes) {
-    if (ds.sourceRunNodeId && runNodeToStep.has(ds.sourceRunNodeId)) {
-      datasetProducerStep.set(ds.nodeId, runNodeToStep.get(ds.sourceRunNodeId));
-    }
+    const producer = ds.sourceRunNodeId ? runNodeToStep.get(ds.sourceRunNodeId) : null;
+    if (!producer) continue;
+    datasetProducerStepId.set(ds.nodeId, producer.id);
+    datasetProducerRunId.set(ds.nodeId, ds.sourceRunNodeId);
   }
   for (const c of connections) {
-    if (c.type === 'process-to-dataset' && processNodeToStep.has(c.fromId)) {
-      datasetProducerStep.set(c.toId, processNodeToStep.get(c.fromId));
-    }
+    if (c.type !== 'process-to-dataset') continue;
+    const producer = processNodeToStep.get(c.fromId);
+    // A Process has no versions, so nothing to narrow by — it gets a step id but no Run id.
+    if (producer) datasetProducerStepId.set(c.toId, producer.id);
   }
 
-  // Step-to-step edges, resolved through whichever dataset connects them.
-  const stepEdges = [];
+  const datasetConsumerStepIds = new Map(); // dataset nodeId -> Set of step ids reading it
+  const datasetConsumerRunIds = new Map(); // dataset nodeId -> Set of Runs reading it
+  function addConsumer(datasetNodeId, stepId, runNodeId) {
+    const id = String(datasetNodeId || '').trim();
+    if (!id || !stepId) return;
+    if (!datasetConsumerStepIds.has(id)) datasetConsumerStepIds.set(id, new Set());
+    datasetConsumerStepIds.get(id).add(stepId);
+    if (!runNodeId) return;
+    if (!datasetConsumerRunIds.has(id)) datasetConsumerRunIds.set(id, new Set());
+    datasetConsumerRunIds.get(id).add(runNodeId);
+  }
   for (const run of runNodes) {
-    const consumerStep = runNodeToStep.get(run.nodeId);
-    if (!consumerStep) continue;
-    const producerStep = run.runWorkingSetId ? datasetProducerStep.get(run.runWorkingSetId) : null;
-    if (producerStep && producerStep.id !== consumerStep.id) {
-      stepEdges.push({ from: producerStep.id, to: consumerStep.id });
-    }
+    const consumer = runNodeToStep.get(run.nodeId);
+    if (consumer && run.runWorkingSetId) addConsumer(run.runWorkingSetId, consumer.id, run.nodeId);
   }
   for (const c of connections) {
     if (c.type !== 'dataset-to-process') continue;
-    const consumerStep = processNodeToStep.get(c.toId);
-    const producerStep = datasetProducerStep.get(c.fromId);
-    if (consumerStep && producerStep && producerStep.id !== consumerStep.id) {
-      stepEdges.push({ from: producerStep.id, to: consumerStep.id });
+    const consumer = processNodeToStep.get(c.toId);
+    if (consumer) addConsumer(c.fromId, consumer.id, null);
+  }
+
+  // Datasets are grouped by the slot they sit in rather than one step each: a Run whose results
+  // were saved to the workspace twice, or one Prompt whose Runs read different inputs, are
+  // alternatives for the same slot, so they collapse into a single switchable step the way Prompt
+  // versions do. A dataset nothing attaches to never gets a slot at all.
+  const slots = new Map(); // slot key -> {producerStepId, consumerStepIds: Set, datasetNodeIds: []}
+  for (const ds of datasetNodes) {
+    const producerStepId = datasetProducerStepId.get(ds.nodeId) || null;
+    const consumerStepIds = datasetConsumerStepIds.get(ds.nodeId) || new Set();
+    if (!producerStepId && consumerStepIds.size === 0) continue;
+    // Produced datasets belong to the slot right after their producer; an entry dataset (nothing
+    // produced it) belongs to the slot in front of whatever reads it first.
+    const key = producerStepId ? `after:${producerStepId}` : `before:${[...consumerStepIds][0]}`;
+    if (!slots.has(key)) slots.set(key, { producerStepId, consumerStepIds: new Set(), datasetNodeIds: [] });
+    const slot = slots.get(key);
+    slot.datasetNodeIds.push(ds.nodeId);
+    for (const id of consumerStepIds) slot.consumerStepIds.add(id);
+  }
+
+  const stepEdges = [];
+  for (const [key, slot] of slots) {
+    const step = {
+      id: `dataset:${key}`,
+      kind: STEP_KIND.DATASET,
+      producerStepId: slot.producerStepId,
+      // Only meaningful for an entry slot, where there's no producer to narrow by.
+      consumerStepId: slot.producerStepId ? null : ([...slot.consumerStepIds][0] || null),
+      datasets: slot.datasetNodeIds.map((id) => ({
+        datasetNodeId: id,
+        datasetName: nodeById.get(id)?.name || 'Dataset',
+        producerRunNodeId: datasetProducerRunId.get(id) || null,
+        consumerRunNodeIds: [...(datasetConsumerRunIds.get(id) || [])],
+      })),
+    };
+    steps.push(step);
+    if (slot.producerStepId) stepEdges.push({ from: slot.producerStepId, to: step.id });
+    for (const consumerStepId of slot.consumerStepIds) {
+      // A dataset feeding back into the step that produced it would close a cycle — skip that edge
+      // rather than hand topoSort a loop.
+      if (consumerStepId === slot.producerStepId) continue;
+      stepEdges.push({ from: step.id, to: consumerStepId });
     }
   }
 

@@ -1,8 +1,8 @@
 /**
- * "My Pipeline" result modal — opened from the canvas toolbar. Takes the output of
+ * "Current Pipeline" result panel — opened from the canvas toolbar. Takes the output of
  * pipelineDetection.js's detectPipelines() and renders each detected pipeline as an ordered list
- * of Prompt/Process steps, with a version picker wherever a Prompt step is ambiguous (more than
- * one version in its prompt-to-prompt chain has its own Run).
+ * of Dataset/Prompt/Process steps, with a picker wherever a step has alternatives — several Prompt
+ * versions that each have their own Run, or several datasets that can sit in the same slot.
  */
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -10,7 +10,69 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function renderStep(step) {
+/** A name, or a picker when the slot has alternatives — shared by Prompt versions and the datasets
+ * that can sit in one slot, so both read the same way. */
+function renderPickerOrName(stepId, options, selectedValue, title) {
+  if (options.length === 1) return `<span class="pipeline-step-name">${escapeHtml(options[0].label)}</span>`;
+  const optionsHtml = options
+    .map((o) => `<option value="${escapeHtml(o.value)}"${o.value === selectedValue ? ' selected' : ''}>${escapeHtml(o.label)}</option>`)
+    .join('');
+  return `<select class="pipeline-step-version-select" data-step-id="${escapeHtml(stepId)}" title="${escapeHtml(title)}">${optionsHtml}</select>`;
+}
+
+/** The Runs belonging to a Prompt step's currently selected version, or null for anything without
+ * versions to choose between (a Process, a dataset step, a missing step). */
+function selectedRunIds(step, selectedByStepId) {
+  if (!step || step.kind !== 'prompt') return null;
+  const index = parseInt(selectedByStepId.get(step.id), 10);
+  const version = step.versions[Number.isInteger(index) ? index : step.defaultVersionIndex] || step.versions[0];
+  return new Set(version?.runNodeIds || []);
+}
+
+/**
+ * Narrows a dataset slot to the Prompt version that's actually selected, so the two pickers can't
+ * be combined into a pairing that doesn't exist on the canvas. A slot's datasets are grouped by
+ * step, and a step spans a whole version chain, hence the extra filtering here.
+ * Falls back to the full list whenever filtering would leave nothing — a Process-produced dataset
+ * has no Run to match on, and neither does a dataset whose Run has since been deleted.
+ */
+function visibleDatasets(step, stepById, selectedByStepId) {
+  const all = step.datasets;
+  if (step.producerStepId) {
+    const runIds = selectedRunIds(stepById.get(step.producerStepId), selectedByStepId);
+    if (!runIds) return all;
+    const filtered = all.filter((d) => d.producerRunNodeId && runIds.has(d.producerRunNodeId));
+    return filtered.length > 0 ? filtered : all;
+  }
+  if (step.consumerStepId) {
+    const runIds = selectedRunIds(stepById.get(step.consumerStepId), selectedByStepId);
+    if (!runIds) return all;
+    const filtered = all.filter((d) => d.consumerRunNodeIds.some((id) => runIds.has(id)));
+    return filtered.length > 0 ? filtered : all;
+  }
+  return all;
+}
+
+function renderStep(step, selectedByStepId, stepById) {
+  if (step.kind === 'dataset') {
+    const datasets = visibleDatasets(step, stepById, selectedByStepId);
+    const selected = selectedByStepId.get(step.id);
+    // Picking a Prompt version can filter the previously selected dataset away, so fall back to
+    // the first one still standing rather than showing an empty picker.
+    const selectedValue = datasets.some((d) => d.datasetNodeId === selected) ? selected : datasets[0]?.datasetNodeId;
+    const picker = renderPickerOrName(
+      step.id,
+      datasets.map((d) => ({ value: d.datasetNodeId, label: d.datasetName })),
+      selectedValue,
+      'Several datasets can sit in this slot — pick which one this pipeline should use.',
+    );
+    return `
+      <li class="pipeline-overview-step">
+        <span class="pipeline-step-kind pipeline-step-kind--dataset">Dataset</span>
+        ${picker}
+      </li>
+    `;
+  }
   if (step.kind === 'process') {
     return `
       <li class="pipeline-overview-step">
@@ -20,33 +82,32 @@ function renderStep(step) {
     `;
   }
   // kind === 'prompt'
-  if (step.versions.length === 1) {
-    return `
-      <li class="pipeline-overview-step">
-        <span class="pipeline-step-kind pipeline-step-kind--prompt">Prompt</span>
-        <span class="pipeline-step-name">${escapeHtml(step.versions[0].promptName)}</span>
-      </li>
-    `;
-  }
-  const options = step.versions
-    .map((v, i) => `<option value="${i}"${i === step.defaultVersionIndex ? ' selected' : ''}>${escapeHtml(v.promptName)}</option>`)
-    .join('');
+  const stored = parseInt(selectedByStepId.get(step.id), 10);
+  const index = Number.isInteger(stored) ? stored : step.defaultVersionIndex;
+  const picker = renderPickerOrName(
+    step.id,
+    step.versions.map((v, i) => ({ value: String(i), label: v.promptName })),
+    String(index),
+    'Multiple versions of this prompt each have their own Run — pick which one this pipeline should use.',
+  );
   return `
     <li class="pipeline-overview-step">
       <span class="pipeline-step-kind pipeline-step-kind--prompt">Prompt</span>
-      <select class="pipeline-step-version-select" data-step-id="${escapeHtml(step.id)}" title="Multiple versions of this prompt each have their own Run — pick which one this pipeline should use.">
-        ${options}
-      </select>
+      ${picker}
     </li>
   `;
 }
 
-function renderPipeline(pipeline, index) {
+function renderPipeline(pipeline, index, selectedByStepId) {
+  const stepById = new Map(pipeline.steps.map((s) => [s.id, s]));
+  const steps = pipeline.steps
+    .map((step) => renderStep(step, selectedByStepId, stepById))
+    .join('<li class="pipeline-overview-arrow" aria-hidden="true">&#8594;</li>');
   return `
     <div class="pipeline-overview-card">
       <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
       <ol class="pipeline-overview-steps">
-        ${pipeline.steps.map(renderStep).join('<li class="pipeline-overview-arrow" aria-hidden="true">&#8594;</li>')}
+        ${steps}
       </ol>
     </div>
   `;
@@ -55,41 +116,54 @@ function renderPipeline(pipeline, index) {
 /** @param {Array<import('./pipelineDetection.js').Pipeline>} pipelines */
 export function showPipelineOverviewModal(pipelines) {
   const overlay = document.createElement('div');
-  // The canvas toolbar stays clickable while the Agent Assistant window is up, so this can open
-  // over it — and that overlay sits at z-index 2000 (see agentWindow.css), which a plain
-  // z-index 1000 would render underneath instead of on top.
+  // Non-modal (see .pipeline-overview-overlay): the canvas stays usable while this is up, so it
+  // deliberately doesn't claim aria-modal, dim the page, or lock body scrolling. Dragging and
+  // resizing come free from initModalDrag's handling of .modal-panel.
   overlay.className = 'modal-overlay pipeline-overview-overlay';
-  overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'pipeline-overview-title');
 
-  const body = pipelines.length > 0
-    ? pipelines.map(renderPipeline).join('')
-    : `<p class="pipeline-overview-empty">No pipelines detected yet — a pipeline needs at least one Prompt with a completed Run, or a Process connected to a Dataset.</p>`;
+  // Which alternative each multi-option step is showing, kept here rather than read off the
+  // <select> because re-rendering replaces the element that fired the change.
+  const selectedByStepId = new Map();
+
+  const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt with a completed Run, or a Process connected to a Dataset.';
 
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--pipeline-overview">
       <div class="modal-header">
-        <h2 id="pipeline-overview-title" class="modal-title">My Pipeline</h2>
+        <h2 id="pipeline-overview-title" class="modal-title">Current Pipeline</h2>
         <button type="button" class="modal-close" aria-label="Close">&times;</button>
       </div>
-      <div class="modal-body pipeline-overview-body">
-        ${body}
-      </div>
+      <div class="modal-body pipeline-overview-body"></div>
     </div>
   `;
 
+  const bodyEl = overlay.querySelector('.pipeline-overview-body');
+  function renderBody() {
+    bodyEl.innerHTML = pipelines.length > 0
+      ? pipelines.map((p, i) => renderPipeline(p, i, selectedByStepId)).join('')
+      : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
+  }
+  renderBody();
+
+  bodyEl.addEventListener('change', (e) => {
+    const select = e.target.closest?.('.pipeline-step-version-select');
+    if (!select) return;
+    // Stored as the raw option value: a version index for Prompt steps, a dataset node id for
+    // Dataset steps, whose list can be re-filtered underneath an index.
+    selectedByStepId.set(select.getAttribute('data-step-id'), select.value);
+    renderBody();
+  });
+
   function close() {
     overlay.remove();
-    document.body.style.overflow = '';
     document.removeEventListener('keydown', onKeyDown);
   }
   function onKeyDown(e) {
     if (e.key === 'Escape') close();
   }
   overlay.querySelector('.modal-close').addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   document.addEventListener('keydown', onKeyDown);
 
-  document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
 }

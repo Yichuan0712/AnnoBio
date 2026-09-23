@@ -2975,21 +2975,21 @@ export function buildWorkflowCanvas(root, options = {}) {
   const autopilotToolbar = document.createElement('div');
   autopilotToolbar.className = 'workflow-canvas__autopilot-toolbar';
   autopilotToolbar.innerHTML = `
-    <button type="button" class="workflow-canvas__my-pipeline-btn" aria-label="Open My Pipeline">
-      <span>My Pipeline</span>
+    <button type="button" class="workflow-canvas__current-pipeline-btn" aria-label="Open Current Pipeline">
+      <span>Current Pipeline</span>
     </button>
     <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agent Assistant">
       <span class="workflow-canvas__autopilot-icon">✦</span>
       <span>Agent Assistant</span>
     </button>
   `;
-  const myPipelineBtn = autopilotToolbar.querySelector('.workflow-canvas__my-pipeline-btn');
-  const myPipelineIcon = iconWorkflow(16);
-  myPipelineIcon.classList.add('workflow-canvas__my-pipeline-icon');
-  myPipelineBtn.prepend(myPipelineIcon);
+  const currentPipelineBtn = autopilotToolbar.querySelector('.workflow-canvas__current-pipeline-btn');
+  const currentPipelineIcon = iconWorkflow(16);
+  currentPipelineIcon.classList.add('workflow-canvas__current-pipeline-icon');
+  currentPipelineBtn.prepend(currentPipelineIcon);
   // Sits beside the Agent Assistant toggle, not inside its chat window — pipeline detection is a
   // one-click read of the current canvas, not something that needs a conversation open first.
-  myPipelineBtn.addEventListener('click', () => {
+  currentPipelineBtn.addEventListener('click', () => {
     showPipelineOverviewModal(detectPipelines(getCanvasState()));
   });
   autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn').addEventListener('click', () => {
@@ -3023,7 +3023,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   canvasControlsStack.appendChild(autopilotToolbar);
 
   // Tracks whether a project is open, not whether the Agent window is — the toolbar stays put
-  // while the chat is up so My Pipeline is still one click away.
+  // while the chat is up so Current Pipeline is still one click away.
   function setAgentWindowVisible(visible) {
     autopilotToolbar.style.display = visible ? '' : 'none';
   }
