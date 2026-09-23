@@ -123,6 +123,7 @@ export function openRunDetailModal({
   getUniqueDatasetExportName = (n) => n,
   isRunNameAlreadyUsedForPrompt = () => false,
   getRunMappingsFromCanvas,
+  onWorkingSetChange = () => {},
 }) {
   (getRunMappingsFromCanvas?.() || []).forEach((parsed) => {
     if (parsed && typeof parsed === 'object') {
@@ -712,6 +713,7 @@ export function openRunDetailModal({
   }
 
   function selectWorkingSet(id) {
+    const previousNodeId = selectedNodeId;
     selectedNodeId = id || '';
     updateTriggerDisplay();
     updateRunNodeBorder();
@@ -720,6 +722,9 @@ export function openRunDetailModal({
     dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.nodeId === selectedNodeId ? 'true' : 'false'));
     renderInputMappings();
     refreshButton();
+    if (selectedNodeId !== previousNodeId) {
+      onWorkingSetChange({ runNodeId: nodeId, datasetNodeId: selectedNodeId });
+    }
   }
 
   function populateDropdown() {
