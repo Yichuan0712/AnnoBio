@@ -2981,6 +2981,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     openAgentWindowModal({
       projectPath: getCurrentProjectPath(),
       getWorkflowSnapshot,
+      getCanvasState,
       inspectNode,
       addRunNode,
       addScoreNode,
