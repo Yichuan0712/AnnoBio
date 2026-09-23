@@ -20,9 +20,7 @@
  *
  * Only datasets that actually take part get a step; ones sitting unattached on the canvas don't.
  *
- * Known v1 limitations (documented rather than silently guessed around):
- *  - Prompt version chains (`prompt-to-prompt` edges — see addPromptVersion) are assumed linear;
- *    if a version has more than one forward version-edge, only the first-found branch is walked.
+ * Known v1 limitation (documented rather than silently guessed around):
  *  - If two different producers target the same dataset id (e.g. both a stale `sourceRunNodeId`
  *    and a live `process-to-dataset` edge), the process-to-dataset edge wins — last one indexed.
  */
@@ -47,31 +45,44 @@ function indexConnections(connections) {
   };
 }
 
-/** Groups prompt nodes into version-chains via `prompt-to-prompt` edges. Each family is
- * `{ rootId, chain: [nodeId in version order] }`. Assumes linear chains (see file doc). */
+/**
+ * Groups Prompt nodes into version families via `prompt-to-prompt` edges. A family may branch when
+ * a Prompt version is duplicated or receives more than one next version, so collect the complete
+ * connected component and topologically order all of its versions instead of following one edge.
+ */
 function buildPromptFamilies(promptNodes, edges) {
+  const promptIds = new Set(promptNodes.map((prompt) => prompt.nodeId));
+  const versionEdges = [];
+  const adjacent = new Map(promptNodes.map((prompt) => [prompt.nodeId, new Set()]));
+  for (const prompt of promptNodes) {
+    for (const nextId of edges.from('prompt-to-prompt', prompt.nodeId)) {
+      if (!promptIds.has(nextId)) continue;
+      versionEdges.push({ from: prompt.nodeId, to: nextId });
+      adjacent.get(prompt.nodeId).add(nextId);
+      adjacent.get(nextId).add(prompt.nodeId);
+    }
+  }
+
   const visited = new Set();
   const families = [];
-  for (const p of promptNodes) {
-    if (visited.has(p.nodeId)) continue;
-    let rootId = p.nodeId;
-    for (let guard = 0; guard < 10000; guard += 1) {
-      const backs = edges.to('prompt-to-prompt', rootId);
-      if (backs.length === 0) break;
-      rootId = backs[0];
+  for (const prompt of promptNodes) {
+    if (visited.has(prompt.nodeId)) continue;
+    const componentIds = [];
+    const stack = [prompt.nodeId];
+    visited.add(prompt.nodeId);
+    while (stack.length > 0) {
+      const currentId = stack.pop();
+      componentIds.push(currentId);
+      for (const nextId of adjacent.get(currentId) || []) {
+        if (visited.has(nextId)) continue;
+        visited.add(nextId);
+        stack.push(nextId);
+      }
     }
-    if (visited.has(rootId)) continue;
-    const chain = [rootId];
-    visited.add(rootId);
-    let cur = rootId;
-    for (let guard = 0; guard < 10000; guard += 1) {
-      const fwd = edges.from('prompt-to-prompt', cur);
-      const next = fwd.find((id) => !visited.has(id));
-      if (!next) break;
-      chain.push(next);
-      visited.add(next);
-      cur = next;
-    }
+    const idSet = new Set(componentIds);
+    const componentEdges = versionEdges.filter((edge) => idSet.has(edge.from) && idSet.has(edge.to));
+    const chain = topoSort(componentIds, componentEdges);
+    const rootId = chain.find((id) => !componentEdges.some((edge) => edge.to === id)) || chain[0];
     families.push({ rootId, chain });
   }
   return families;
@@ -105,12 +116,14 @@ function topoSort(ids, localEdges) {
 /**
  * @param {{nodes: object[], connections: {fromId:string,toId:string,type:string}[]}} canvasState
  * @returns {Array<{id: string, steps: Array<
- *   {id: string, kind: 'prompt', versions: Array<{promptNodeId: string, promptName: string, runNodeIds: string[]}>, defaultVersionIndex: number}
+ *   {id: string, kind: 'prompt', versions: Array<{promptNodeId: string, promptName: string,
+ *      runs: Array<{runNodeId: string, runName: string}>, runNodeIds: string[]}>,
+ *      defaultVersionIndex: number, defaultRunNodeId: string}
  *   | {id: string, kind: 'process', processNodeId: string, processName: string}
- *   | {id: string, kind: 'dataset', producerStepId: string|null, consumerStepId: string|null,
+ *   | {id: string, kind: 'dataset', producerStepId: string|null, consumerStepIds: string[],
  *      datasets: Array<{datasetNodeId: string, datasetName: string, producerRunNodeId: string|null,
  *        consumerRunNodeIds: string[]}>}
- * >}>}
+ * >, edges: Array<{from: string, to: string}>}>}
  */
 export function detectPipelines(canvasState) {
   const nodes = Array.isArray(canvasState?.nodes) ? canvasState.nodes : [];
@@ -139,16 +152,26 @@ export function detectPipelines(canvasState) {
     if (runsByVersion.size === 0) continue;
     const versions = family.chain
       .filter((id) => runsByVersion.has(id))
-      .map((versionId) => ({
-        promptNodeId: versionId,
-        promptName: nodeById.get(versionId)?.name || 'Prompt',
-        runNodeIds: runsByVersion.get(versionId),
-      }));
+      .map((versionId) => {
+        const runNodeIds = runsByVersion.get(versionId);
+        return {
+          promptNodeId: versionId,
+          promptName: nodeById.get(versionId)?.name || 'Prompt',
+          runs: runNodeIds.map((runNodeId) => ({
+            runNodeId,
+            runName: nodeById.get(runNodeId)?.runName || 'Run',
+          })),
+          // Kept for callers that only need membership in the selected Prompt version.
+          runNodeIds,
+        };
+      });
+    const defaultVersionIndex = versions.length - 1;
     const step = {
       id: `prompt:${family.rootId}`,
       kind: STEP_KIND.PROMPT,
       versions,
-      defaultVersionIndex: versions.length - 1, // latest version in the chain, not necessarily "correct" — see file doc
+      defaultVersionIndex, // latest version in the chain, not necessarily "correct" — see file doc
+      defaultRunNodeId: versions[defaultVersionIndex]?.runs.at(-1)?.runNodeId || '',
     };
     steps.push(step);
     for (const v of versions) {
@@ -216,9 +239,13 @@ export function detectPipelines(canvasState) {
     const producerStepId = datasetProducerStepId.get(ds.nodeId) || null;
     const consumerStepIds = datasetConsumerStepIds.get(ds.nodeId) || new Set();
     if (!producerStepId && consumerStepIds.size === 0) continue;
-    // Produced datasets belong to the slot right after their producer; an entry dataset (nothing
-    // produced it) belongs to the slot in front of whatever reads it first.
-    const key = producerStepId ? `after:${producerStepId}` : `before:${[...consumerStepIds][0]}`;
+    // Datasets are alternatives only when they occupy the same exact graph position. Including
+    // every consumer in the key prevents parallel branches from being collapsed into one picker
+    // and then rendered as a false linear chain.
+    const consumerKey = [...consumerStepIds].sort().join(',') || 'end';
+    const key = producerStepId
+      ? `after:${producerStepId}:to:${consumerKey}`
+      : `before:${consumerKey}`;
     if (!slots.has(key)) slots.set(key, { producerStepId, consumerStepIds: new Set(), datasetNodeIds: [] });
     const slot = slots.get(key);
     slot.datasetNodeIds.push(ds.nodeId);
@@ -231,8 +258,7 @@ export function detectPipelines(canvasState) {
       id: `dataset:${key}`,
       kind: STEP_KIND.DATASET,
       producerStepId: slot.producerStepId,
-      // Only meaningful for an entry slot, where there's no producer to narrow by.
-      consumerStepId: slot.producerStepId ? null : ([...slot.consumerStepIds][0] || null),
+      consumerStepIds: [...slot.consumerStepIds],
       datasets: slot.datasetNodeIds.map((id) => ({
         datasetNodeId: id,
         datasetName: nodeById.get(id)?.name || 'Dataset',
@@ -289,6 +315,7 @@ export function detectPipelines(canvasState) {
       return {
         id: `pipeline-${index + 1}`,
         steps: order.map((id) => stepById.get(id)),
+        edges: localEdges,
       };
     });
 }

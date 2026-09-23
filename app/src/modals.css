@@ -8517,8 +8517,8 @@ button.btn.btn-danger:hover:not(:disabled) {
 .project-picker-delete:hover { background: var(--hover); color: #c0392b; }
 
 /* "Current Pipeline" result panel (workflowCanvas.js / pipelineOverviewModal.js) — each detected
-   pipeline is a horizontal row of step chips joined by arrows, not a table; Dataset nodes are
-   deliberately not shown as steps (see pipelineDetection.js's file doc for why). */
+   pipeline is shown as step chips joined by real graph edges. Parallel paths get separate rows so
+   adjacent chips never imply a dependency that does not exist on the canvas. */
 /* Non-modal, the same way .agent-window-overlay is: the backdrop lets clicks through so the canvas
    stays usable underneath, and only the panel itself takes pointer events. z-index sits above
    .agent-window-overlay's 2000 since both can be open at once. */
@@ -8530,9 +8530,24 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-overview-overlay .modal-panel { pointer-events: auto; }
 .modal-panel--pipeline-overview { width: 720px; max-width: 92vw; }
 .pipeline-overview-empty { color: var(--text-muted); font-size: 13.5px; }
+.pipeline-overview-note {
+  margin: 0 0 16px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
 .pipeline-overview-card { margin-bottom: 22px; }
 .pipeline-overview-card:last-child { margin-bottom: 0; }
 .pipeline-overview-card-title { font-size: 14px; margin: 0 0 10px; }
+.pipeline-overview-path { margin-top: 10px; }
+.pipeline-overview-path:first-of-type { margin-top: 0; }
+.pipeline-overview-path-label {
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
 .pipeline-overview-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .pipeline-overview-step {
   display: flex; align-items: center; gap: 6px;
@@ -8540,6 +8555,9 @@ button.btn.btn-danger:hover:not(:disabled) {
   background: var(--bg-bar); padding: 6px 10px;
 }
 .pipeline-overview-arrow { color: var(--text-muted); font-size: 14px; }
+.pipeline-overview-step--unavailable { border-style: dashed; }
+.pipeline-overview-step--unavailable .pipeline-step-name { color: var(--text-muted); font-style: italic; }
+.pipeline-overview-limit { margin: 10px 0 0; color: var(--text-muted); font-size: 12px; }
 .pipeline-step-kind {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
   padding: 1px 6px; border-radius: 999px;
