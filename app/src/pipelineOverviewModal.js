@@ -180,6 +180,16 @@ function exportRoutePayload(route) {
   }).filter(Boolean);
 }
 
+function getCanvasNodeIds(step) {
+  const selected = step.selectedOption;
+  if (selected?.dataset?.datasetNodeId) return [selected.dataset.datasetNodeId];
+  if (selected?.kind === 'prompt') {
+    return [selected.promptNodeId, selected.runNodeId].filter(Boolean);
+  }
+  if (selected?.kind === 'process' && selected.processNodeId) return [selected.processNodeId];
+  return [];
+}
+
 function renderRouteStep(step) {
   const titles = {
     dataset: 'Preview one of the datasets available at this point in the route.',
@@ -194,8 +204,9 @@ function renderRouteStep(step) {
     step.selectedValue,
     titles[step.kind],
   );
+  const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
   return `
-    <li class="pipeline-overview-step">
+    <li class="pipeline-overview-step" data-canvas-node-ids="${canvasNodeIds}">
       <span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind]}</span>
       ${picker}
     </li>
@@ -236,7 +247,7 @@ function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDat
 
 /**
  * @param {Function|Array} pipelineSource a getter for live data, or a static array for callers
- * @param {{getCanvasState?: Function}} options live canvas access required by Python export
+ * @param {{getCanvasState?: Function, highlightCanvasNodes?: Function}} options live canvas hooks
  */
 export function showPipelineOverviewModal(pipelineSource, options = {}) {
   const existing = document.querySelector('.pipeline-overview-overlay');
@@ -249,6 +260,9 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
 
   let readPipelines = typeof pipelineSource === 'function' ? pipelineSource : () => pipelineSource;
   let getCanvasState = typeof options.getCanvasState === 'function' ? options.getCanvasState : null;
+  let highlightCanvasNodes = typeof options.highlightCanvasNodes === 'function'
+    ? options.highlightCanvasNodes
+    : () => {};
   let pipelines = [];
   let pipelineSignature = '';
   let refreshFrame = 0;
@@ -274,7 +288,23 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
 
   const panelEl = overlay.querySelector('.modal-panel--pipeline-overview');
   const bodyEl = overlay.querySelector('.pipeline-overview-body');
+  function clearCanvasHighlight() {
+    highlightCanvasNodes([]);
+  }
+  function highlightRouteStep(stepEl) {
+    if (!stepEl) {
+      clearCanvasHighlight();
+      return;
+    }
+    try {
+      const ids = JSON.parse(decodeURIComponent(stepEl.dataset.canvasNodeIds || ''));
+      highlightCanvasNodes(Array.isArray(ids) ? ids : []);
+    } catch (_) {
+      clearCanvasHighlight();
+    }
+  }
   function renderBody({ fitHeightToContent = false } = {}) {
+    clearCanvasHighlight();
     const content = pipelines.length > 0
       ? pipelines.map((pipeline, index) => renderPipeline(
         pipeline,
@@ -307,6 +337,9 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   overlay.refreshPipelineOverview = refresh;
   overlay.setPipelineOverviewOptions = (nextOptions = {}) => {
     if (typeof nextOptions.getCanvasState === 'function') getCanvasState = nextOptions.getCanvasState;
+    if (typeof nextOptions.highlightCanvasNodes === 'function') {
+      highlightCanvasNodes = nextOptions.highlightCanvasNodes;
+    }
   };
   refresh();
 
@@ -328,6 +361,25 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (!select) return;
     selectedByChoiceId.set(select.getAttribute('data-choice-id'), select.value);
     renderBody();
+  });
+
+  bodyEl.addEventListener('pointerover', (event) => {
+    const stepEl = event.target.closest?.('.pipeline-overview-step');
+    if (!stepEl || stepEl.contains(event.relatedTarget)) return;
+    highlightRouteStep(stepEl);
+  });
+  bodyEl.addEventListener('pointerout', (event) => {
+    const stepEl = event.target.closest?.('.pipeline-overview-step');
+    if (!stepEl || stepEl.contains(event.relatedTarget)) return;
+    clearCanvasHighlight();
+  });
+  bodyEl.addEventListener('focusin', (event) => {
+    highlightRouteStep(event.target.closest?.('.pipeline-overview-step'));
+  });
+  bodyEl.addEventListener('focusout', (event) => {
+    const stepEl = event.target.closest?.('.pipeline-overview-step');
+    if (!stepEl || stepEl.contains(event.relatedTarget)) return;
+    clearCanvasHighlight();
   });
 
   bodyEl.addEventListener('click', async (event) => {
@@ -365,6 +417,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
 
   function close() {
     if (refreshFrame) cancelAnimationFrame(refreshFrame);
+    clearCanvasHighlight();
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('workflow:canvas-changed', scheduleRefresh);

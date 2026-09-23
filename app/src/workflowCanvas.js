@@ -1182,6 +1182,18 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
+  function highlightPipelineNodes(nodeIds = []) {
+    const highlightedIds = new Set((Array.isArray(nodeIds) ? nodeIds : [])
+      .map((nodeId) => String(nodeId || '').trim())
+      .filter(Boolean));
+    nodesLayer.querySelectorAll('.workflow-node').forEach((node) => {
+      node.classList.toggle(
+        'workflow-node--pipeline-highlighted',
+        highlightedIds.has(node.dataset.nodeId),
+      );
+    });
+  }
+
   function clearSelection() {
     if (selectedNodeIds.size === 0) return;
     selectedNodeIds = new Set();
@@ -3124,7 +3136,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   currentPipelineBtn.addEventListener('click', () => {
     showPipelineOverviewModal(
       () => detectPipelines(getCanvasState()),
-      { getCanvasState },
+      { getCanvasState, highlightCanvasNodes: highlightPipelineNodes },
     );
   });
   const agentAssistantBtn = autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn');

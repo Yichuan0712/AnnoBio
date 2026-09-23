@@ -302,6 +302,11 @@
   outline-offset: 2px;
 }
 
+.workflow-node--pipeline-highlighted {
+  z-index: 2;
+  box-shadow: 0 0 0 3px var(--accent), 0 8px 24px var(--shadow);
+}
+
 /* Rubber-band select rectangle — tracked in viewport coordinates (see startMarqueeSelect in
    workflowCanvas.js), so it's appended straight to <body>, not any zoomed/scrolled canvas layer. */
 .workflow-canvas__marquee {
