@@ -2078,13 +2078,62 @@ export function buildWorkflowCanvas(root, options = {}) {
   const RUN_NODE_FALLBACK_HEIGHT = 40;
   const EDGE_CURVE_MIN_VERTICAL_DELTA = 96;
   const EDGE_CURVE_SLOPE_THRESHOLD = 0.75;
+  const EDGE_NODE_CLEARANCE = 12;
+  // Tried in order, so an earlier ratio wins ties: the midpoint is the default and the outer
+  // ones are only reached when nodes sit in the way.
+  const EDGE_CORRIDOR_RATIOS = [0.5, 0.35, 0.65, 0.2, 0.8];
+
+  /**
+   * Measure every node once per repaint. updateEdges() runs on every pointer move while a node is
+   * dragged, so the corridor search must not re-query and re-measure the DOM for each edge.
+   */
+  function collectNodeBoxes() {
+    return Array.from(nodesLayer.querySelectorAll('.workflow-node')).map((node) => {
+      const left = parseFloat(node.style.left) || 0;
+      const top = parseFloat(node.style.top) || 0;
+      return {
+        node,
+        left,
+        top,
+        right: left + (node.offsetWidth || 0),
+        bottom: top + (node.offsetHeight || 0),
+      };
+    });
+  }
+
+  function findOpenEdgeCorridor(startX, startY, endX, endY, fromNode, toNode, nodeBoxes) {
+    const top = Math.min(startY, endY);
+    const bottom = Math.max(startY, endY);
+
+    let bestX = startX + (endX - startX) * EDGE_CORRIDOR_RATIOS[0];
+    let bestCollisions = Infinity;
+    for (const ratio of EDGE_CORRIDOR_RATIOS) {
+      const x = startX + (endX - startX) * ratio;
+      let collisions = 0;
+      for (const box of nodeBoxes) {
+        if (box.node === fromNode || box.node === toNode) continue;
+        const overlapsVerticalSpan = box.bottom + EDGE_NODE_CLEARANCE >= top
+          && box.top - EDGE_NODE_CLEARANCE <= bottom;
+        const blocksCorridor = x >= box.left - EDGE_NODE_CLEARANCE
+          && x <= box.right + EDGE_NODE_CLEARANCE;
+        if (overlapsVerticalSpan && blocksCorridor) collisions += 1;
+      }
+      if (collisions === 0) return x;
+      if (collisions < bestCollisions) {
+        bestCollisions = collisions;
+        bestX = x;
+      }
+    }
+    return bestX;
+  }
 
   /**
    * Keep ordinary left-to-right connections straight. When an edge is steep or bends back
-   * toward the left, use a cubic Bezier with horizontal tangents at both nodes so its source
-   * and destination remain visually unambiguous.
+   * toward the left, use a pronounced S curve with horizontal tangents at both nodes so its
+   * source and destination remain visually unambiguous. The central corridor prefers open
+   * space between unrelated nodes.
    */
-  function getEdgeGeometry(startX, startY, endX, endY) {
+  function getEdgeGeometry(startX, startY, endX, endY, fromNode, toNode, nodeBoxes) {
     const deltaX = endX - startX;
     const deltaY = endY - startY;
     const shouldCurve = deltaX <= 0
@@ -2098,10 +2147,19 @@ export function buildWorkflowCanvas(root, options = {}) {
       };
     }
 
-    const handleLength = Math.min(
-      180,
-      Math.max(48, Math.abs(deltaX) * 0.45, Math.abs(deltaY) * 0.3),
-    );
+    if (deltaX > 0) {
+      const corridorX = findOpenEdgeCorridor(startX, startY, endX, endY, fromNode, toNode, nodeBoxes);
+      const middleY = startY + deltaY / 2;
+      return {
+        tagName: 'path',
+        attributes: {
+          d: `M ${startX} ${startY} C ${corridorX} ${startY}, ${corridorX} ${startY}, ${corridorX} ${middleY} C ${corridorX} ${endY}, ${corridorX} ${endY}, ${endX} ${endY}`,
+          fill: 'none',
+        },
+      };
+    }
+
+    const handleLength = Math.min(240, Math.max(96, Math.abs(deltaX) * 0.4, Math.abs(deltaY) * 0.35));
     return {
       tagName: 'path',
       attributes: {
@@ -2119,7 +2177,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     return shape;
   }
 
-  function renderEdge(g, edge, edgeIndex) {
+  function renderEdge(g, edge, edgeIndex, nodeBoxes) {
     const fromNode = getNodeById(edge.fromId);
     const toNode = getNodeById(edge.toId);
     if (!fromNode || !toNode) return;
@@ -2141,7 +2199,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const startY = y1 + h1 / 2;
       const endX = x2;
       const endY = y2 + h2 / 2;
-      const geometry = getEdgeGeometry(startX, startY, endX, endY);
+      const geometry = getEdgeGeometry(startX, startY, endX, endY, fromNode, toNode, nodeBoxes);
       // Hit area: invisible wide stroke (drawn first, behind visible line)
       const hitLine = createEdgeShape(geometry);
       hitLine.setAttribute('stroke', 'transparent');
@@ -2166,7 +2224,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const endX = x2;
       const toHeight = isRunOrScore ? RUN_NODE_FALLBACK_HEIGHT : h2;
       const endY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
-      const geometry = getEdgeGeometry(startX, startY, endX, endY);
+      const geometry = getEdgeGeometry(startX, startY, endX, endY, fromNode, toNode, nodeBoxes);
       if (!edge.derived) {
         const hitLine = createEdgeShape(geometry);
         hitLine.setAttribute('stroke', 'transparent');
@@ -2227,9 +2285,10 @@ export function buildWorkflowCanvas(root, options = {}) {
   function updateEdges() {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('pointer-events', 'auto');
+    const nodeBoxes = collectNodeBoxes();
     // Automatic dependency lines sit behind explicit, user-managed workflow edges.
-    getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1));
-    connections.forEach((edge, i) => renderEdge(g, edge, i));
+    getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1, nodeBoxes));
+    connections.forEach((edge, i) => renderEdge(g, edge, i, nodeBoxes));
     const existing = edgesLayer.querySelector('g');
     if (existing) existing.remove();
     edgesLayer.appendChild(g);
