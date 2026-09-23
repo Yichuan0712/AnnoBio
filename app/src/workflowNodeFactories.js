@@ -14,6 +14,11 @@ export function formatSamplerDescription(samplerNode) {
 }
 
 export function createWorkflowNodeFactories(deps = {}) {
+  // Ignore the sub-pixel movement routinely emitted between pointerdown and click by mice and
+  // trackpads. Without a threshold, that harmless jitter is classified as a drag and every node
+  // click is suppressed by the factory click handlers below.
+  const DRAG_THRESHOLD_PX = 4;
+
   const {
     generateNodeId,
     allocateNodePosition,
@@ -129,9 +134,12 @@ export function createWorkflowNodeFactories(deps = {}) {
     }
 
     function onPointerMove(e) {
+      const clientDx = e.clientX - dragStartX;
+      const clientDy = e.clientY - dragStartY;
+      if (!lastInteractionWasDrag && Math.hypot(clientDx, clientDy) < DRAG_THRESHOLD_PX) return;
       lastInteractionWasDrag = true;
-      const dx = (e.clientX - dragStartX) / getZoomLevel();
-      const dy = (e.clientY - dragStartY) / getZoomLevel();
+      const dx = clientDx / getZoomLevel();
+      const dy = clientDy / getZoomLevel();
       if (groupDragEntries) {
         groupDragEntries.forEach(({ el, left, top }) => setNodeCanvasPosition(el, left + dx, top + dy));
       } else {

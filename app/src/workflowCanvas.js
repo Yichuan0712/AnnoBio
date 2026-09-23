@@ -1160,11 +1160,7 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function applyZoom() {
     scaleWrapper.style.transformOrigin = '0 0';
-    // Keep the default 100% view out of a transformed compositing layer. Projects load
-    // asynchronously, and Chromium can otherwise paint newly inserted nodes before refreshing
-    // that layer's hit-test data; the nodes look correct but clicks land on the canvas until a
-    // viewport resize forces another layout. Real zoom levels still use the same transform.
-    scaleWrapper.style.transform = zoomLevel === 1 ? 'none' : `scale(${zoomLevel})`;
+    scaleWrapper.style.transform = `scale(${zoomLevel})`;
   }
 
   let nodeCount = 0;
