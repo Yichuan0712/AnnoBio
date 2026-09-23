@@ -159,6 +159,9 @@
 .workflow-canvas__zoom-toolbar {
   display: flex;
   align-items: center;
+  /* .workflow-canvas__controls-stack stretches this to the width of the wider buttons above it,
+     so without this the three controls would sit against the left edge of that extra width. */
+  justify-content: center;
   gap: 6px;
   padding: 6px 10px;
   background: var(--bg-bar);
