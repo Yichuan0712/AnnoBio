@@ -8540,7 +8540,12 @@ button.btn.btn-danger:hover:not(:disabled) {
   pointer-events: none;
 }
 .pipeline-overview-overlay .modal-panel { pointer-events: auto; }
-.modal-panel--pipeline-overview { width: fit-content; max-width: 92vw; }
+.modal-panel--pipeline-overview {
+  width: min(640px, 92vw);
+  min-width: min(520px, 92vw);
+  max-width: 92vw;
+  box-sizing: border-box;
+}
 .pipeline-overview-empty { color: var(--text-muted); font-size: 13.5px; }
 .pipeline-overview-card { margin-bottom: 22px; }
 .pipeline-overview-card:last-child { margin-bottom: 0; }

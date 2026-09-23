@@ -226,7 +226,7 @@ function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDat
             <input type="checkbox" class="rule-editor-checkbox pipeline-overview-data-toggle-input" data-pipeline-index="${index}"${hideIntermediateDatasets ? ' checked' : ''}>
             <span>Hide data nodes</span>
           </label>
-          <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python</button>
+          <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python Project</button>
         </div>
       </div>
       <ol class="pipeline-overview-steps">${steps}</ol>
@@ -274,7 +274,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
 
   const panelEl = overlay.querySelector('.modal-panel--pipeline-overview');
   const bodyEl = overlay.querySelector('.pipeline-overview-body');
-  function renderBody({ fitToContent = false } = {}) {
+  function renderBody({ fitHeightToContent = false } = {}) {
     const content = pipelines.length > 0
       ? pipelines.map((pipeline, index) => renderPipeline(
         pipeline,
@@ -284,8 +284,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       )).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
     bodyEl.innerHTML = content;
-    if (fitToContent && !overlay.classList.contains('modal-overlay--maximized')) {
-      panelEl.style.removeProperty('width');
+    if (fitHeightToContent && !overlay.classList.contains('modal-overlay--maximized')) {
       panelEl.style.removeProperty('height');
     }
   }
@@ -321,7 +320,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
           getPipelineViewId(pipeline, pipelineIndex),
           !dataToggle.checked,
         );
-        renderBody({ fitToContent: true });
+        renderBody({ fitHeightToContent: true });
       }
       return;
     }
