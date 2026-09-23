@@ -50,6 +50,7 @@ from run_output_schema import (
 from agent.chat.agent_chat import build_agent_messages, format_agent_messages_for_log
 from agent.prompt.agent_plan_prompt import build_agent_plan_instruction_prefix
 from llm import chat as llm_chat, run_structured as llm_run_structured
+from pipeline_export import PipelineExportError, build_pipeline_archive
 from provider_detect import detect_provider, verify_credential
 
 from asset_store import router as asset_router, resolve_content
@@ -307,6 +308,14 @@ class RunRequest(BaseModel):
     run_node_id: str | None = Field(default=None, description="Frontend Run node id for correlation when polling")
 
 
+class PipelineExportRequest(BaseModel):
+    """The live canvas plus one concrete route selected in Current Pipeline."""
+
+    name: str = Field(default="pipeline", min_length=1, max_length=120)
+    canvas_state: dict[str, Any]
+    route: list[dict[str, Any]] = Field(..., min_length=1)
+
+
 # ---------- Review (prompt analysis from score comparison) ----------
 class ReviewComparisonRow(BaseModel):
     row_index: int
@@ -484,6 +493,31 @@ def _credential_base_url(item: dict) -> str:
 def health():
     """Health check."""
     return {"ok": True}
+
+
+@app.post("/api/pipeline/export")
+def export_python_pipeline(body: PipelineExportRequest):
+    """Generate a code-only Python project for the concrete route selected by the user."""
+    settings = _load_settings()
+    try:
+        filename, archive = build_pipeline_archive(
+            canvas_state=body.canvas_state,
+            route=body.route,
+            name=body.name,
+            credentials=_load_credentials(),
+            default_credential_id=str(settings.get("default_run_credential_id") or ""),
+            run_max_tokens=int(settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"]),
+            run_concurrency=int(settings.get("run_concurrency") or DEFAULT_SETTINGS["run_concurrency"]),
+        )
+    except PipelineExportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    from fastapi.responses import Response
+
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/debug/backend-info")

@@ -3,6 +3,9 @@
  * Prompts consume the same Dataset, or one Run produced several Dataset exports, the corresponding
  * chip becomes a picker and the remainder of the row follows that choice.
  */
+import { showAlert } from './alertModal.js';
+import { exportPythonPipeline } from './pipelineExportClient.js';
+
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
@@ -27,6 +30,7 @@ function promptRunOptions(step) {
       options.push({
         value: run.runNodeId,
         stepId: step.id,
+        promptNodeId: version.promptNodeId,
         runNodeId: run.runNodeId,
         promptName: version.promptName,
         runName: run.runName || 'Run',
@@ -92,7 +96,7 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
       }
       const selected = chooseOption(choiceId, options, selectedByChoiceId);
       if (!selected) return;
-      route.push({ kind: 'dataset', choiceId, options, selectedValue: selected.value });
+      route.push({ kind: 'dataset', choiceId, options, selectedValue: selected.value, selectedOption: selected });
       visitedStepIds.add(selected.stepId);
       const consumerStepIds = selected.dataset.consumerStepIds
         || stepById.get(selected.stepId)?.consumerStepIds
@@ -113,6 +117,7 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
           value: `process:${step.processNodeId}`,
           label: step.processName,
           stepId: step.id,
+          processNodeId: step.processNodeId,
           kind: 'process',
         });
       }
@@ -136,7 +141,13 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
         ? `${option.promptName} — ${option.runName}`
         : option.label || option.promptName,
     }));
-    route.push({ kind: displayKind, choiceId, options: displayOptions, selectedValue: selected.value });
+    route.push({
+      kind: displayKind,
+      choiceId,
+      options: displayOptions,
+      selectedValue: selected.value,
+      selectedOption: selected,
+    });
     visitedStepIds.add(selected.stepId);
     if (selected.kind === 'prompt') selectedRunByStepId.set(selected.stepId, selected.runNodeId);
     const nextStepIds = (outgoing.get(selected.stepId) || [])
@@ -147,6 +158,26 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
   const sourceIds = steps.filter((step) => indegree.get(step.id) === 0).map((step) => step.id);
   walk(sourceIds);
   return route;
+}
+
+function exportRoutePayload(route) {
+  return route.map((step) => {
+    const selected = step.selectedOption;
+    if (selected?.dataset) {
+      return { type: 'dataset', dataset_node_id: selected.dataset.datasetNodeId };
+    }
+    if (selected?.kind === 'prompt') {
+      return {
+        type: 'prompt',
+        prompt_node_id: selected.promptNodeId,
+        run_node_id: selected.runNodeId,
+      };
+    }
+    if (selected?.kind === 'process') {
+      return { type: 'process', process_node_id: selected.processNodeId };
+    }
+    return null;
+  }).filter(Boolean);
 }
 
 function renderRouteStep(step) {
@@ -176,23 +207,31 @@ function renderPipeline(pipeline, index, selectedByChoiceId) {
   const steps = route.map(renderRouteStep)
     .join('<li class="pipeline-overview-arrow" aria-hidden="true">&#8594;</li>');
   return `
-    <div class="pipeline-overview-card">
-      <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
+    <div class="pipeline-overview-card" data-pipeline-index="${index}">
+      <div class="pipeline-overview-card-header">
+        <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
+        <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python</button>
+      </div>
       <ol class="pipeline-overview-steps">${steps}</ol>
     </div>
   `;
 }
 
-/** @param {Function|Array} pipelineSource a getter for live data, or a static array for callers */
-export function showPipelineOverviewModal(pipelineSource) {
+/**
+ * @param {Function|Array} pipelineSource a getter for live data, or a static array for callers
+ * @param {{getCanvasState?: Function}} options live canvas access required by Python export
+ */
+export function showPipelineOverviewModal(pipelineSource, options = {}) {
   const existing = document.querySelector('.pipeline-overview-overlay');
   if (existing) {
     existing.refreshPipelineOverview?.(pipelineSource);
+    existing.setPipelineOverviewOptions?.(options);
     existing.querySelector('.modal-close')?.focus();
     return;
   }
 
   let readPipelines = typeof pipelineSource === 'function' ? pipelineSource : () => pipelineSource;
+  let getCanvasState = typeof options.getCanvasState === 'function' ? options.getCanvasState : null;
   let pipelines = [];
   let pipelineSignature = '';
   let refreshFrame = 0;
@@ -220,10 +259,7 @@ export function showPipelineOverviewModal(pipelineSource) {
     const content = pipelines.length > 0
       ? pipelines.map((pipeline, index) => renderPipeline(pipeline, index, selectedByChoiceId)).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
-    bodyEl.innerHTML = `
-      <p class="pipeline-overview-note">Read-only live preview. Change a picker to follow another route already present on the canvas.</p>
-      ${content}
-    `;
+    bodyEl.innerHTML = content;
   }
   function refresh(nextSource) {
     if (typeof nextSource === 'function') readPipelines = nextSource;
@@ -242,6 +278,9 @@ export function showPipelineOverviewModal(pipelineSource) {
     });
   }
   overlay.refreshPipelineOverview = refresh;
+  overlay.setPipelineOverviewOptions = (nextOptions = {}) => {
+    if (typeof nextOptions.getCanvasState === 'function') getCanvasState = nextOptions.getCanvasState;
+  };
   refresh();
 
   bodyEl.addEventListener('change', (event) => {
@@ -249,6 +288,39 @@ export function showPipelineOverviewModal(pipelineSource) {
     if (!select) return;
     selectedByChoiceId.set(select.getAttribute('data-choice-id'), select.value);
     renderBody();
+  });
+
+  bodyEl.addEventListener('click', async (event) => {
+    const button = event.target.closest?.('.pipeline-overview-export');
+    if (!button || button.disabled) return;
+    const pipelineIndex = Number.parseInt(button.getAttribute('data-pipeline-index') || '', 10);
+    const pipeline = pipelines[pipelineIndex];
+    if (!pipeline || !getCanvasState) {
+      showAlert('The live canvas is unavailable for export.', { title: 'Cannot export Pipeline' });
+      return;
+    }
+    const route = buildSelectedRoute(pipeline, selectedByChoiceId);
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Exporting…';
+    try {
+      const promptName = route.find((step) => step.selectedOption?.kind === 'prompt')
+        ?.selectedOption?.promptName;
+      await exportPythonPipeline({
+        name: promptName ? `${promptName} pipeline` : `pipeline-${pipelineIndex + 1}`,
+        canvasState: getCanvasState(),
+        route: exportRoutePayload(route),
+      });
+    } catch (error) {
+      showAlert(error instanceof Error ? error.message : 'Could not export this Pipeline.', {
+        title: 'Cannot export Pipeline',
+      });
+    } finally {
+      if (button.isConnected) {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+    }
   });
 
   function close() {

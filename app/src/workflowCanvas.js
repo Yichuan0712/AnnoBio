@@ -2990,7 +2990,10 @@ export function buildWorkflowCanvas(root, options = {}) {
   // Sits beside the Agent Assistant toggle, not inside its chat window — pipeline detection is a
   // one-click read of the current canvas, not something that needs a conversation open first.
   currentPipelineBtn.addEventListener('click', () => {
-    showPipelineOverviewModal(() => detectPipelines(getCanvasState()));
+    showPipelineOverviewModal(
+      () => detectPipelines(getCanvasState()),
+      { getCanvasState },
+    );
   });
   const agentAssistantBtn = autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn');
   agentAssistantBtn.addEventListener('click', () => {
