@@ -1073,7 +1073,7 @@ async def require_login(request: Request, call_next):
 
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def api_proxy(request: Request, path: str):
-    return await proxy_request(request, request.state.user["id"])
+    return await proxy_request(request, request.state.user)
 
 
 # Added last so it wraps outermost and runs before require_login above — middleware added via

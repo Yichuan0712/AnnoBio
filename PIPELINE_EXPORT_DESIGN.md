@@ -55,8 +55,12 @@ can continue to consume an older archive by checking `format_version`.
   "format_version": 1,
   "name": "site-extraction",
   "entrypoint": "main.py",
+  "generated_at": "2026-09-23T17:00:00Z",
+  "authors": {
+    "workflow": "Yichuan",
+    "exported_project": "AnnoBio"
+  },
   "input": {
-    "dataset_id": "dataset-node-id",
     "format": "xlsx",
     "sheet": "Input",
     "columns": [
@@ -65,7 +69,17 @@ can continue to consume an older archive by checking `format_version`.
       {"name": "Protocol", "type": "pdf"}
     ]
   },
-  "steps": [
+  "route": [
+    {
+      "id": "dataset-node-id",
+      "type": "dataset",
+      "name": "Input data",
+      "columns": [
+        {"name": "Abstract", "type": "text"},
+        {"name": "Figures", "type": "image"},
+        {"name": "Protocol", "type": "pdf"}
+      ]
+    },
     {
       "id": "process-node-id",
       "type": "process",
@@ -74,11 +88,12 @@ can continue to consume an older archive by checking `format_version`.
       "source": "processor/processor_01_clean_rows.py"
     },
     {
-      "id": "run-node-id",
+      "id": "prompt-node-id",
+      "run_id": "run-node-id",
       "type": "prompt",
       "name": "Extract sites",
       "source": "prompt/prompt_01_extract_sites.py",
-      "prompt_node_id": "prompt-node-id",
+      "version_parent_ids": [],
       "input_mapping": {"abstract": "Abstract"},
       "input_types": {"abstract": "text"},
       "output_schema": {
@@ -92,6 +107,8 @@ can continue to consume an older archive by checking `format_version`.
       }
     }
   ],
+  "engines": ["litellm", "openrouter"],
+  "default_engine": "litellm",
   "output": {
     "format": "xlsx"
   }
@@ -100,6 +117,11 @@ can continue to consume an older archive by checking `format_version`.
 
 IDs are retained for traceability, not used as Python identifiers. File and function names are
 sanitized separately and made unique.
+
+The authenticated Hub profile name is recorded as the workflow author. The Hub strips any
+client-supplied attribution header and injects the name from the active login session. Desktop or
+local exports without an account use `AnnoBio user`. The UTC export timestamp and author are
+written consistently to Python module headers, `README.md`, and `pipeline.json`.
 
 ## Data format
 
@@ -139,6 +161,8 @@ A selected Prompt version and its selected Run become one executable Prompt step
 
 - Prompt sections are preserved in order and combined with blank lines, matching the app.
 - Run input-to-column mappings and Prompt input types are preserved.
+- Legacy Runs with no saved mapping may infer `{field} -> field` only when exactly one Dataset
+  column has that name (case-insensitive); ambiguous matches still require an explicit mapping.
 - The structured output schema and `single`/`table` return shape are preserved.
 - Provider, model, and optional base URL may be exported as non-secret defaults.
 - API keys and credential IDs are never exported. The README and `.env.example` describe the
@@ -213,10 +237,11 @@ bad row does not discard the rest of a long run.
 The export succeeds only when the selected route has:
 
 1. a starting Dataset with at least one defined column;
-2. a complete input mapping for every Prompt placeholder;
-3. at least one output field for every Prompt;
-4. Python code defining `process(row)` or `process(df)` for every Process;
-5. a supported, acyclic order from the selected starting Dataset to the selected output.
+2. non-empty, unique Dataset column names;
+3. a complete, unambiguous input mapping for every Prompt placeholder;
+4. at least one output field for every Prompt;
+5. Python code defining `process(row)` or `process(df)` for every Process;
+6. a supported, acyclic order from the selected starting Dataset to the selected output.
 
 Validation errors name the visible node and the missing configuration. Secrets, canvas positions,
 cached results, review data, and unrelated branches are excluded from the archive.
