@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from typing import Any, List, Optional
+from urllib.parse import unquote
 
 # Ensure UTF-8 for subprocess / CLI starts (Electron also sets PYTHONUTF8 when spawning).
 os.environ.setdefault("PYTHONUTF8", "1")
@@ -496,7 +497,7 @@ def health():
 
 
 @app.post("/api/pipeline/export")
-def export_python_pipeline(body: PipelineExportRequest):
+def export_python_pipeline(request: Request, body: PipelineExportRequest):
     """Generate a code-only Python project for the concrete route selected by the user."""
     settings = _load_settings()
     try:
@@ -508,6 +509,7 @@ def export_python_pipeline(body: PipelineExportRequest):
             default_credential_id=str(settings.get("default_run_credential_id") or ""),
             run_max_tokens=int(settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"]),
             run_concurrency=int(settings.get("run_concurrency") or DEFAULT_SETTINGS["run_concurrency"]),
+            author_name=unquote(request.headers.get("X-AnnoBio-User-Name", "")),
         )
     except PipelineExportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -113,6 +113,8 @@ class PipelineExportTests(unittest.TestCase):
             default_credential_id="",
             run_max_tokens=4096,
             run_concurrency=3,
+            author_name='Ada "AJ" Lovelace',
+            generated_at="2026-09-23T17:00:00Z",
         )
 
     def test_archive_is_code_only_deterministic_and_compilable(self):
@@ -144,8 +146,11 @@ class PipelineExportTests(unittest.TestCase):
             self.assertNotIn(b"must-never-be-exported", combined)
             self.assertIn(b"Edited duplicate content", combined)
             self.assertNotIn(b"Original content", combined)
-            self.assertIn(b"AnnoBio user", combined)
+            self.assertIn(b'Ada "AJ" Lovelace', combined)
             self.assertIn(b"AnnoBio", combined)
+            manifest = json.loads(bundle.read("research-pipeline/pipeline.json"))
+            self.assertEqual(manifest["authors"]["workflow"], 'Ada "AJ" Lovelace')
+            self.assertEqual(manifest["generated_at"], "2026-09-23T17:00:00Z")
 
             for name in names:
                 if name.endswith(".py"):
@@ -171,7 +176,7 @@ class PipelineExportTests(unittest.TestCase):
                 smoke_script = """
 from pathlib import Path
 import pandas as pd
-from engine.base import BaseEngine
+from engine.base import BaseEngine, parse_structured_content
 from prompt import prompt_01_edited_duplicate as prompt_step
 
 class FakeEngine(BaseEngine):
@@ -186,6 +191,12 @@ result = prompt_step.run(
     concurrency=1,
 )
 assert result.to_dict(orient="records")[0]["Output: answer"] == "ok"
+try:
+    parse_structured_content({"wrong": "value"}, prompt_step.OUTPUT_SCHEMA)
+except ValueError as exc:
+    assert "unexpected fields" in str(exc)
+else:
+    raise AssertionError("Invalid structured output was accepted")
 """
                 smoke = subprocess.run(
                     [sys.executable, "-c", smoke_script],
@@ -217,6 +228,26 @@ assert result.to_dict(orient="records")[0]["Output: answer"] == "ok"
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
         run["runInputToColumn"] = "{}"
         with self.assertRaisesRegex(PipelineExportError, 'Open "Run A1" and map each input'):
+            self.build(state)
+
+    def test_implicit_mapping_does_not_guess_between_case_collisions(self):
+        state = _canvas_state()
+        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
+        dataset["datasetContent"]["headers"] = ["Question", "question"]
+        dataset["datasetContent"]["columnTypes"] = ["text", "text"]
+        prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")
+        prompt["sections"] = [{"name": "Task", "content": "Answer {QUESTION}"}]
+        run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
+        run["runInputToColumn"] = "{}"
+        with self.assertRaisesRegex(PipelineExportError, 'Open "Run A1" and map each input'):
+            self.build(state)
+
+    def test_duplicate_dataset_columns_are_rejected(self):
+        state = _canvas_state()
+        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
+        dataset["datasetContent"]["headers"] = ["text", "text"]
+        dataset["datasetContent"]["columnTypes"] = ["text", "text"]
+        with self.assertRaisesRegex(PipelineExportError, "contains duplicate columns: text"):
             self.build(state)
 
 
