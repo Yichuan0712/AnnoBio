@@ -126,7 +126,7 @@ export function showPipelineOverviewModal(pipelines) {
   // <select> because re-rendering replaces the element that fired the change.
   const selectedByStepId = new Map();
 
-  const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt with a completed Run, or a Process connected to a Dataset.';
+  const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt that has a Run.';
 
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--pipeline-overview">
