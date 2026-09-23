@@ -1,7 +1,7 @@
 /**
- * "Current Pipeline" panel. It renders the exact Dataset/Prompt/Process graph returned by
- * pipelineDetection.js, expands branches into separate rows, and keeps its read-only preview in
- * sync while the canvas changes underneath it.
+ * "Current Pipeline" panel. A connected workflow is shown as one selectable route: when several
+ * Prompts consume the same Dataset, or one Run produced several Dataset exports, the corresponding
+ * chip becomes a picker and the remainder of the row follows that choice.
  */
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -9,12 +9,12 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function renderPickerOrName(stepId, options, selectedValue, title) {
+function renderPickerOrName(choiceId, options, selectedValue, title) {
   if (options.length === 1) return `<span class="pipeline-step-name">${escapeHtml(options[0].label)}</span>`;
   const optionsHtml = options
     .map((option) => `<option value="${escapeHtml(option.value)}"${option.value === selectedValue ? ' selected' : ''}>${escapeHtml(option.label)}</option>`)
     .join('');
-  return `<select class="pipeline-step-version-select" data-step-id="${escapeHtml(stepId)}" title="${escapeHtml(title)}">${optionsHtml}</select>`;
+  return `<select class="pipeline-step-version-select" data-choice-id="${escapeHtml(choiceId)}" title="${escapeHtml(title)}">${optionsHtml}</select>`;
 }
 
 function promptRunOptions(step) {
@@ -24,175 +24,161 @@ function promptRunOptions(step) {
       ? version.runs
       : (version.runNodeIds || []).map((runNodeId) => ({ runNodeId, runName: 'Run' }));
     for (const run of runs) {
-      options.push({ value: run.runNodeId, promptName: version.promptName, runName: run.runName || 'Run' });
+      options.push({
+        value: run.runNodeId,
+        stepId: step.id,
+        runNodeId: run.runNodeId,
+        promptName: version.promptName,
+        runName: run.runName || 'Run',
+        kind: 'prompt',
+      });
     }
   }
-  const needsRunName = options.length > 1;
-  return options.map((option) => ({
-    ...option,
-    label: needsRunName ? `${option.promptName} — ${option.runName}` : option.promptName,
-  }));
+  return options;
 }
 
-/** A Prompt step selects one concrete Run, rather than only a Prompt version. */
-function selectedRunId(step, selectedByStepId) {
-  if (!step || step.kind !== 'prompt') return null;
-  const options = promptRunOptions(step);
-  const stored = selectedByStepId.get(step.id);
-  if (options.some((option) => option.value === stored)) return stored;
-  if (options.some((option) => option.value === step.defaultRunNodeId)) return step.defaultRunNodeId;
-  return options.at(-1)?.value || null;
+function chooseOption(choiceId, options, selectedByChoiceId, preferredValue = '') {
+  const stored = selectedByChoiceId.get(choiceId);
+  return options.find((option) => option.value === stored)
+    || options.find((option) => option.value === preferredValue)
+    || options[0]
+    || null;
 }
 
-/** Keep only datasets that belong to every concrete Prompt Run selected around this graph slot. */
-function visibleDatasets(step, stepById, selectedByStepId) {
-  let datasets = step.datasets;
-  const producerRunId = selectedRunId(stepById.get(step.producerStepId), selectedByStepId);
-  if (producerRunId) {
-    datasets = datasets.filter((dataset) => dataset.producerRunNodeId === producerRunId);
+/**
+ * Resolves one route through the workflow graph. Choices are made at the node where paths diverge,
+ * so shared prefixes and suffixes appear once instead of being repeated as Branch 1/2/3 rows.
+ */
+function buildSelectedRoute(pipeline, selectedByChoiceId) {
+  const steps = Array.isArray(pipeline?.steps) ? pipeline.steps : [];
+  const stepById = new Map(steps.map((step) => [step.id, step]));
+  const outgoing = new Map(steps.map((step) => [step.id, []]));
+  const indegree = new Map(steps.map((step) => [step.id, 0]));
+  for (const edge of pipeline?.edges || []) {
+    if (!stepById.has(edge.from) || !stepById.has(edge.to)) continue;
+    if (!outgoing.get(edge.from).includes(edge.to)) outgoing.get(edge.from).push(edge.to);
+    indegree.set(edge.to, indegree.get(edge.to) + 1);
   }
-  for (const consumerStepId of step.consumerStepIds || []) {
-    const consumerRunId = selectedRunId(stepById.get(consumerStepId), selectedByStepId);
-    if (consumerRunId) {
-      datasets = datasets.filter((dataset) => dataset.consumerRunNodeIds.includes(consumerRunId));
+
+  const route = [];
+  const visitedStepIds = new Set();
+  const selectedRunByStepId = new Map();
+
+  function walk(candidateStepIds, allowedRunIds = null) {
+    if (route.length >= 200) return;
+    const candidateSteps = candidateStepIds
+      .map((id) => stepById.get(id))
+      .filter((step) => step && !visitedStepIds.has(step.id));
+    if (candidateSteps.length === 0) return;
+
+    if (candidateSteps.every((step) => step.kind === 'dataset')) {
+      const choiceId = candidateSteps.length === 1
+        ? candidateSteps[0].id
+        : `dataset-choice:${candidateSteps.map((step) => step.id).sort().join('|')}`;
+      const options = [];
+      for (const step of candidateSteps) {
+        const producerRunId = selectedRunByStepId.get(step.producerStepId) || null;
+        const datasets = producerRunId
+          ? step.datasets.filter((dataset) => dataset.producerRunNodeId === producerRunId)
+          : step.datasets;
+        for (const dataset of datasets) {
+          options.push({
+            value: dataset.datasetNodeId,
+            label: dataset.datasetName,
+            dataset,
+            stepId: step.id,
+          });
+        }
+      }
+      const selected = chooseOption(choiceId, options, selectedByChoiceId);
+      if (!selected) return;
+      route.push({ kind: 'dataset', choiceId, options, selectedValue: selected.value });
+      visitedStepIds.add(selected.stepId);
+      const consumerStepIds = selected.dataset.consumerStepIds
+        || stepById.get(selected.stepId)?.consumerStepIds
+        || [];
+      walk(consumerStepIds, new Set(selected.dataset.consumerRunNodeIds || []));
+      return;
     }
+
+    const nextOptions = [];
+    const restrictPromptRuns = allowedRunIds instanceof Set && allowedRunIds.size > 0;
+    for (const step of candidateSteps) {
+      if (step.kind === 'prompt') {
+        for (const option of promptRunOptions(step)) {
+          if (!restrictPromptRuns || allowedRunIds.has(option.runNodeId)) nextOptions.push(option);
+        }
+      } else if (step.kind === 'process') {
+        nextOptions.push({
+          value: `process:${step.processNodeId}`,
+          label: step.processName,
+          stepId: step.id,
+          kind: 'process',
+        });
+      }
+    }
+    if (nextOptions.length === 0) return;
+
+    const choiceId = candidateSteps.length === 1
+      ? candidateSteps[0].id
+      : `step-choice:${candidateSteps.map((step) => step.id).sort().join('|')}`;
+    const firstPromptStep = candidateSteps.find((step) => step.kind === 'prompt');
+    const preferredValue = firstPromptStep?.defaultRunNodeId || '';
+    const selected = chooseOption(choiceId, nextOptions, selectedByChoiceId, preferredValue);
+    if (!selected) return;
+
+    const allPrompts = nextOptions.every((option) => option.kind === 'prompt');
+    const allProcesses = nextOptions.every((option) => option.kind === 'process');
+    const displayKind = allPrompts ? 'prompt' : (allProcesses ? 'process' : 'step');
+    const displayOptions = nextOptions.map((option) => ({
+      ...option,
+      label: allPrompts && nextOptions.length > 1
+        ? `${option.promptName} — ${option.runName}`
+        : option.label || option.promptName,
+    }));
+    route.push({ kind: displayKind, choiceId, options: displayOptions, selectedValue: selected.value });
+    visitedStepIds.add(selected.stepId);
+    if (selected.kind === 'prompt') selectedRunByStepId.set(selected.stepId, selected.runNodeId);
+    const nextStepIds = (outgoing.get(selected.stepId) || [])
+      .filter((id) => stepById.get(id)?.kind === 'dataset');
+    walk(nextStepIds);
   }
-  return datasets;
+
+  const sourceIds = steps.filter((step) => indegree.get(step.id) === 0).map((step) => step.id);
+  walk(sourceIds);
+  return route;
 }
 
-function renderStep(step, selectedByStepId, stepById) {
-  if (step.kind === 'dataset') {
-    const datasets = visibleDatasets(step, stepById, selectedByStepId);
-    if (datasets.length === 0) {
-      return `
-        <li class="pipeline-overview-step pipeline-overview-step--unavailable">
-          <span class="pipeline-step-kind pipeline-step-kind--dataset">Dataset</span>
-          <span class="pipeline-step-name">No dataset matches the selected Runs</span>
-        </li>
-      `;
-    }
-    const stored = selectedByStepId.get(step.id);
-    const selectedValue = datasets.some((dataset) => dataset.datasetNodeId === stored)
-      ? stored
-      : datasets[0].datasetNodeId;
-    const picker = renderPickerOrName(
-      step.id,
-      datasets.map((dataset) => ({ value: dataset.datasetNodeId, label: dataset.datasetName })),
-      selectedValue,
-      'Preview one of the datasets that occupies this position on the canvas.',
-    );
-    return `
-      <li class="pipeline-overview-step">
-        <span class="pipeline-step-kind pipeline-step-kind--dataset">Dataset</span>
-        ${picker}
-      </li>
-    `;
-  }
-  if (step.kind === 'process') {
-    return `
-      <li class="pipeline-overview-step">
-        <span class="pipeline-step-kind pipeline-step-kind--process">Process</span>
-        <span class="pipeline-step-name">${escapeHtml(step.processName)}</span>
-      </li>
-    `;
-  }
-
-  const options = promptRunOptions(step);
-  const selectedValue = selectedRunId(step, selectedByStepId);
+function renderRouteStep(step) {
+  const titles = {
+    dataset: 'Preview one of the datasets available at this point in the route.',
+    prompt: 'Preview one concrete Prompt Run and follow its connected output.',
+    process: 'Preview one Process path.',
+    step: 'Preview one of the connected next steps.',
+  };
+  const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', step: 'Step' };
   const picker = renderPickerOrName(
-    step.id,
-    options,
-    selectedValue,
-    'Preview one concrete Prompt Run and its matching input and output datasets.',
+    step.choiceId,
+    step.options,
+    step.selectedValue,
+    titles[step.kind],
   );
   return `
     <li class="pipeline-overview-step">
-      <span class="pipeline-step-kind pipeline-step-kind--prompt">Prompt</span>
+      <span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind]}</span>
       ${picker}
     </li>
   `;
 }
 
-/**
- * Expands a DAG into source-to-sink paths. Repeating a shared step in branch rows is intentional:
- * every arrow shown by the panel then corresponds to a real edge instead of implying that two
- * parallel siblings run one after the other.
- */
-function buildPipelinePaths(pipeline) {
-  const stepIds = new Set(pipeline.steps.map((step) => step.id));
-  const edges = (pipeline.edges || []).filter((edge) => stepIds.has(edge.from) && stepIds.has(edge.to));
-  if (edges.length === 0) {
-    return { paths: pipeline.steps.map((step) => [step.id]), branched: pipeline.steps.length > 1, truncated: false };
-  }
-
-  const outgoing = new Map(pipeline.steps.map((step) => [step.id, []]));
-  const indegree = new Map(pipeline.steps.map((step) => [step.id, 0]));
-  for (const edge of edges) {
-    outgoing.get(edge.from).push(edge.to);
-    indegree.set(edge.to, indegree.get(edge.to) + 1);
-  }
-  const branched = [...outgoing.values()].some((next) => next.length > 1)
-    || [...indegree.values()].some((count) => count > 1);
-  if (!branched) {
-    const source = pipeline.steps.find((step) => indegree.get(step.id) === 0);
-    const path = [];
-    const seen = new Set();
-    let current = source?.id;
-    while (current && !seen.has(current)) {
-      path.push(current);
-      seen.add(current);
-      current = outgoing.get(current)?.[0];
-    }
-    return { paths: path.length > 0 ? [path] : pipeline.steps.map((step) => [step.id]), branched: false, truncated: false };
-  }
-
-  const paths = [];
-  const maxPaths = 100;
-  let truncated = false;
-  function walk(stepId, path, seen) {
-    if (paths.length >= maxPaths) {
-      truncated = true;
-      return;
-    }
-    const nextPath = [...path, stepId];
-    const nextSeen = new Set(seen).add(stepId);
-    const nextIds = (outgoing.get(stepId) || []).filter((id) => !nextSeen.has(id));
-    if (nextIds.length === 0) {
-      paths.push(nextPath);
-      return;
-    }
-    for (const nextId of nextIds) walk(nextId, nextPath, nextSeen);
-  }
-  const sources = pipeline.steps.filter((step) => indegree.get(step.id) === 0);
-  if (sources.length > 0) {
-    for (const source of sources) walk(source.id, [], new Set());
-  } else {
-    // Malformed cyclic state: show exact edges as two-step rows instead of inventing a sequence.
-    for (const edge of edges.slice(0, maxPaths)) paths.push([edge.from, edge.to]);
-    truncated = edges.length > maxPaths;
-  }
-  return { paths, branched: true, truncated };
-}
-
-function renderPipeline(pipeline, index, selectedByStepId) {
-  const stepById = new Map(pipeline.steps.map((step) => [step.id, step]));
-  const { paths, branched, truncated } = buildPipelinePaths(pipeline);
-  const rows = paths.map((path, pathIndex) => {
-    const steps = path
-      .map((stepId) => renderStep(stepById.get(stepId), selectedByStepId, stepById))
-      .join('<li class="pipeline-overview-arrow" aria-hidden="true">&#8594;</li>');
-    return `
-      <div class="pipeline-overview-path">
-        ${branched ? `<div class="pipeline-overview-path-label">Branch ${pathIndex + 1}</div>` : ''}
-        <ol class="pipeline-overview-steps">${steps}</ol>
-      </div>
-    `;
-  }).join('');
+function renderPipeline(pipeline, index, selectedByChoiceId) {
+  const route = buildSelectedRoute(pipeline, selectedByChoiceId);
+  const steps = route.map(renderRouteStep)
+    .join('<li class="pipeline-overview-arrow" aria-hidden="true">&#8594;</li>');
   return `
     <div class="pipeline-overview-card">
       <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
-      ${rows}
-      ${truncated ? '<p class="pipeline-overview-limit">Only the first 100 branches are shown.</p>' : ''}
+      <ol class="pipeline-overview-steps">${steps}</ol>
     </div>
   `;
 }
@@ -212,12 +198,11 @@ export function showPipelineOverviewModal(pipelineSource) {
   let refreshFrame = 0;
 
   const overlay = document.createElement('div');
-  // Non-modal: the transparent backdrop lets the user keep editing the canvas.
   overlay.className = 'modal-overlay pipeline-overview-overlay';
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-labelledby', 'pipeline-overview-title');
 
-  const selectedByStepId = new Map();
+  const selectedByChoiceId = new Map();
   const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt that has a Run.';
 
   overlay.innerHTML = `
@@ -233,10 +218,10 @@ export function showPipelineOverviewModal(pipelineSource) {
   const bodyEl = overlay.querySelector('.pipeline-overview-body');
   function renderBody() {
     const content = pipelines.length > 0
-      ? pipelines.map((pipeline, index) => renderPipeline(pipeline, index, selectedByStepId)).join('')
+      ? pipelines.map((pipeline, index) => renderPipeline(pipeline, index, selectedByChoiceId)).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
     bodyEl.innerHTML = `
-      <p class="pipeline-overview-note">Read-only live preview. Choices here only explore paths already present on the canvas.</p>
+      <p class="pipeline-overview-note">Read-only live preview. Change a picker to follow another route already present on the canvas.</p>
       ${content}
     `;
   }
@@ -262,7 +247,7 @@ export function showPipelineOverviewModal(pipelineSource) {
   bodyEl.addEventListener('change', (event) => {
     const select = event.target.closest?.('.pipeline-step-version-select');
     if (!select) return;
-    selectedByStepId.set(select.getAttribute('data-step-id'), select.value);
+    selectedByChoiceId.set(select.getAttribute('data-choice-id'), select.value);
     renderBody();
   });
 
