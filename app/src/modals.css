@@ -8530,14 +8530,11 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-overview-overlay .modal-panel { pointer-events: auto; }
 .modal-panel--pipeline-overview { width: 720px; max-width: 92vw; }
 .pipeline-overview-empty { color: var(--text-muted); font-size: 13.5px; }
-.pipeline-overview-note {
-  margin: 0 0 16px;
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
 .pipeline-overview-card { margin-bottom: 22px; }
 .pipeline-overview-card:last-child { margin-bottom: 0; }
-.pipeline-overview-card-title { font-size: 14px; margin: 0 0 10px; }
+.pipeline-overview-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.pipeline-overview-card-title { font-size: 14px; margin: 0; }
+.pipeline-overview-export { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 .pipeline-overview-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .pipeline-overview-step {
   display: flex; align-items: center; gap: 6px;

@@ -1,0 +1,1204 @@
+"""Build standalone Python projects from a selected AnnoBio pipeline route.
+
+The generated archive deliberately contains code and data contracts only. Dataset rows, binary
+assets, cached results, API keys, and canvas layout are never included.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import keyword
+import pprint
+import re
+import textwrap
+import zipfile
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+from typing import Any
+
+
+FORMAT_NAME = "annobio.pipeline"
+FORMAT_VERSION = 1
+
+
+class PipelineExportError(ValueError):
+    """A user-correctable problem in the selected route or node configuration."""
+
+
+@dataclass(frozen=True)
+class ExportedFile:
+    path: str
+    content: str
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _slug(value: Any, fallback: str = "pipeline") -> str:
+    result = re.sub(r"[^a-z0-9]+", "-", _text(value).lower()).strip("-")
+    return result[:80] or fallback
+
+
+def _identifier(value: Any, fallback: str) -> str:
+    result = re.sub(r"\W+", "_", _text(value), flags=re.UNICODE).strip("_").lower()
+    if not result or result[0].isdigit() or keyword.iskeyword(result):
+        result = f"{fallback}_{result}" if result else fallback
+    return result[:72]
+
+
+def _python_literal(value: Any) -> str:
+    return pprint.pformat(value, width=100, sort_dicts=False)
+
+
+def _parse_json_object(value: Any, label: str) -> dict[str, Any]:
+    if value in (None, ""):
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise PipelineExportError(f"{label} is not valid JSON.") from exc
+    if not isinstance(parsed, dict):
+        raise PipelineExportError(f"{label} must be an object.")
+    return parsed
+
+
+def _extract_placeholders(sections: list[dict[str, Any]]) -> list[str]:
+    template = "\n\n".join(_text(section.get("content")) for section in sections if _text(section.get("content")))
+    found: list[str] = []
+    for match in re.finditer(r"(?<!\{)\{([^{}]+)\}(?!\})", template):
+        name = match.group(1)
+        if name not in found:
+            found.append(name)
+    return found
+
+
+def _sanitize_output_fields(raw_fields: list[Any]) -> list[dict[str, Any]]:
+    fields: list[dict[str, Any]] = []
+    used: set[str] = set()
+    for raw in raw_fields:
+        if not isinstance(raw, dict):
+            continue
+        display = _text(raw.get("key"))
+        if not display:
+            continue
+        key_name = re.sub(r"\W", "_", display, flags=re.UNICODE).strip("_") or "field"
+        if key_name[0].isdigit():
+            key_name = f"field_{key_name}"
+        candidate = key_name
+        suffix = 1
+        while candidate in used:
+            candidate = f"{key_name}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        field_type = _text(raw.get("type")).lower() or "str"
+        if field_type not in {"str", "float", "list_str", "list_float"}:
+            field_type = "str"
+        fields.append(
+            {
+                "key": candidate,
+                "display": display,
+                "type": field_type,
+                "description": str(raw.get("description") or ""),
+                "examples": list(raw.get("examples") or []),
+                "allow_none": raw.get("allowNone") is True or raw.get("allow_none") is True,
+            }
+        )
+    return fields
+
+
+def _prompt_output_schema(node: dict[str, Any]) -> dict[str, Any]:
+    raw = node.get("outputFormat")
+    if isinstance(raw, dict):
+        return_shape = _text(raw.get("returnShape") or raw.get("return_shape")).lower()
+        raw_fields = raw.get("fields") or []
+    else:
+        return_shape = _text(node.get("promptOutputReturnShape")).lower()
+        try:
+            raw_fields = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        except json.JSONDecodeError as exc:
+            raise PipelineExportError(f'Prompt "{_text(node.get("name")) or "Prompt"}" has an invalid output schema.') from exc
+    fields = _sanitize_output_fields(raw_fields if isinstance(raw_fields, list) else [])
+    return {"return_shape": "table" if return_shape == "table" else "single", "fields": fields}
+
+
+def _dataset_schema(node: dict[str, Any]) -> dict[str, Any]:
+    content = node.get("datasetContent") or {}
+    headers = [str(value) for value in (content.get("headers") or [])]
+    raw_types = list(content.get("columnTypes") or [])
+    columns = []
+    for index, header in enumerate(headers):
+        column_type = raw_types[index] if index < len(raw_types) else "text"
+        if column_type not in ("text", "image", "pdf"):
+            column_type = "text"
+        columns.append({"name": header, "type": column_type})
+    return {"sheet": "Input", "columns": columns}
+
+
+def _normalize_route_item(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        raise PipelineExportError("The selected route contains an invalid item.")
+    item_type = _text(raw.get("type")).lower()
+    if item_type == "dataset":
+        node_id = _text(raw.get("dataset_node_id"))
+        return {"type": item_type, "dataset_node_id": node_id}
+    if item_type == "process":
+        node_id = _text(raw.get("process_node_id"))
+        return {"type": item_type, "process_node_id": node_id}
+    if item_type == "prompt":
+        return {
+            "type": item_type,
+            "prompt_node_id": _text(raw.get("prompt_node_id")),
+            "run_node_id": _text(raw.get("run_node_id")),
+        }
+    raise PipelineExportError(f'Unsupported route item type: "{item_type or "unknown"}".')
+
+
+def _require_node(nodes: dict[str, dict[str, Any]], node_id: str, expected_type: str) -> dict[str, Any]:
+    node = nodes.get(node_id)
+    if not node or node.get("type") != expected_type:
+        raise PipelineExportError(f'The selected {expected_type} node "{node_id}" no longer exists.')
+    return node
+
+
+def _has_connection(connections: list[dict[str, Any]], edge_type: str, from_id: str, to_id: str) -> bool:
+    return any(
+        edge.get("type") == edge_type and edge.get("fromId") == from_id and edge.get("toId") == to_id
+        for edge in connections
+    )
+
+
+def _validate_transition(
+    previous: dict[str, str],
+    current: dict[str, str],
+    nodes: dict[str, dict[str, Any]],
+    connections: list[dict[str, Any]],
+) -> None:
+    before, after = previous["type"], current["type"]
+    if before == "dataset" and after == "process":
+        if not _has_connection(connections, "dataset-to-process", previous["dataset_node_id"], current["process_node_id"]):
+            raise PipelineExportError("The selected Dataset is no longer connected to the selected Process.")
+        return
+    if before == "process" and after == "dataset":
+        if not _has_connection(connections, "process-to-dataset", previous["process_node_id"], current["dataset_node_id"]):
+            raise PipelineExportError("The selected Process is no longer connected to the selected Dataset.")
+        return
+    if before == "dataset" and after == "prompt":
+        run = _require_node(nodes, current["run_node_id"], "run")
+        if _text(run.get("runWorkingSetId")) != previous["dataset_node_id"]:
+            raise PipelineExportError("The selected Prompt Run no longer uses the preceding Dataset.")
+        return
+    if before == "prompt" and after == "dataset":
+        dataset = _require_node(nodes, current["dataset_node_id"], "dataset")
+        if _text(dataset.get("sourceRunNodeId")) != previous["run_node_id"]:
+            raise PipelineExportError("The selected Dataset is no longer produced by the preceding Prompt Run.")
+        return
+    raise PipelineExportError(f"Unsupported route transition: {before} -> {after}.")
+
+
+def _credential_config(
+    run: dict[str, Any],
+    credentials_by_id: dict[str, dict[str, Any]],
+    default_credential_id: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    credential_id = _text(run.get("runCredentialId")) or default_credential_id
+    credential = credentials_by_id.get(credential_id) or {}
+    provider = _text(credential.get("provider"))
+    model = _text(credential.get("model") or credential.get("llm"))
+    base_url = _text(credential.get("base_url"))
+    return {
+        "engine": "openrouter" if provider.lower() == "openrouter" else "litellm",
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "max_tokens": max(256, int(max_tokens or 8192)),
+    }
+
+
+def _generated_header(subject: str) -> str:
+    return (
+        f'"""{subject}\n\n'
+        "Authors:\n"
+        "- AnnoBio user: workflow logic and configuration.\n"
+        "- AnnoBio: exported project structure and runtime integration.\n"
+        '"""\n'
+    )
+
+
+def _processor_module(node: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    name = _text(node.get("name")) or "Process"
+    mode = "df" if node.get("activeMode") == "df" else "row"
+    code = str(node.get("dfCode") if mode == "df" else node.get("code") or "").strip()
+    expected_arg = "df" if mode == "df" else "row"
+    if not code or not re.search(rf"^\s*def\s+process\s*\(\s*{expected_arg}\b", code, flags=re.MULTILINE):
+        raise PipelineExportError(f'Process "{name}" must define process({expected_arg}) before it can be exported.')
+    module = _generated_header(f'User-defined Process step: {name}.') + (
+        "\n# The Process implementation below is preserved from the AnnoBio canvas.\n"
+        "# Edit it normally; main.py will continue to call process(row) or process(df).\n\n"
+        + code
+        + "\n"
+    )
+    return name, mode, {"module": module}
+
+
+def _prompt_module(
+    prompt: dict[str, Any],
+    run: dict[str, Any],
+    model_config: dict[str, Any],
+) -> tuple[str, dict[str, Any], str]:
+    name = _text(prompt.get("name")) or "Prompt"
+    sections = prompt.get("sections") or []
+    if not isinstance(sections, list) or not any(_text(section.get("content")) for section in sections if isinstance(section, dict)):
+        raise PipelineExportError(f'Prompt "{name}" has no content.')
+    sections = [
+        {"name": str(section.get("name") or ""), "content": str(section.get("content") or "")}
+        for section in sections
+        if isinstance(section, dict)
+    ]
+    mapping = _parse_json_object(run.get("runInputToColumn"), f'Run input mapping for "{name}"')
+    mapping = {str(key): str(value) for key, value in mapping.items() if _text(key)}
+    input_types = prompt.get("inputTypes") or {}
+    if not isinstance(input_types, dict):
+        input_types = {}
+    input_types = {str(key): str(value) for key, value in input_types.items()}
+    placeholders = _extract_placeholders(sections)
+    missing = [field for field in placeholders if not _text(mapping.get(field))]
+    if missing:
+        joined = ", ".join(f"{{{field}}}" for field in missing)
+        raise PipelineExportError(f'Prompt "{name}" has unmapped inputs: {joined}.')
+    output_schema = _prompt_output_schema(prompt)
+    if not output_schema["fields"]:
+        raise PipelineExportError(f'Prompt "{name}" must define at least one output field.')
+
+    module = (
+        _generated_header(f'User-defined Prompt step: {name}.')
+        + "\nfrom __future__ import annotations\n\n"
+        + "from pathlib import Path\n\n"
+        + "import pandas as pd\n\n"
+        + "from engine.base import BaseEngine, run_prompt_step\n\n\n"
+        + "# This configuration is the user's selected Prompt and Run, exported by AnnoBio.\n"
+        + "# API keys are intentionally absent; set them in .env or the process environment.\n"
+        + f"PROMPT_NAME = {_python_literal(name)}\n"
+        + f"SECTIONS = {_python_literal(sections)}\n"
+        + f"INPUT_MAPPING = {_python_literal(mapping)}\n"
+        + f"INPUT_TYPES = {_python_literal(input_types)}\n"
+        + f"OUTPUT_SCHEMA = {_python_literal(output_schema)}\n"
+        + f"MODEL_CONFIG = {_python_literal(model_config)}\n\n\n"
+        + "def run(\n"
+        + "    frame: pd.DataFrame,\n"
+        + "    engine: BaseEngine,\n"
+        + "    *,\n"
+        + "    input_root: Path,\n"
+        + "    concurrency: int,\n"
+        + "    model_override: str | None = None,\n"
+        + ") -> pd.DataFrame:\n"
+        + '    """Execute this Prompt once per input row and return its materialized Dataset."""\n'
+        + "    model_config = dict(MODEL_CONFIG)\n"
+        + "    if model_override:\n"
+        + '        model_config["model"] = model_override\n'
+        + "    return run_prompt_step(\n"
+        + "        frame,\n"
+        + "        engine,\n"
+        + "        prompt_name=PROMPT_NAME,\n"
+        + "        sections=SECTIONS,\n"
+        + "        input_mapping=INPUT_MAPPING,\n"
+        + "        input_types=INPUT_TYPES,\n"
+        + "        output_schema=OUTPUT_SCHEMA,\n"
+        + "        model_config=model_config,\n"
+        + "        input_root=input_root,\n"
+        + "        concurrency=concurrency,\n"
+        + "    )\n"
+    )
+    config = {
+        "sections": sections,
+        "input_mapping": mapping,
+        "input_types": input_types,
+        "output_schema": output_schema,
+        "model": model_config,
+    }
+    return name, config, module
+
+
+def _engine_base_module() -> str:
+    return _generated_header("Shared LLM engine contract and Prompt execution helpers generated by AnnoBio.") + r'''
+from __future__ import annotations
+
+import base64
+import json
+import mimetypes
+import re
+from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+
+class BaseEngine(ABC):
+    """Provider-neutral interface used by every generated Prompt module."""
+
+    @abstractmethod
+    def complete(
+        self,
+        *,
+        content: str | list[dict[str, Any]],
+        output_schema: dict[str, Any],
+        model_config: dict[str, Any],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """Return one structured object, or a list when return_shape is table."""
+
+
+def build_json_schema(output_schema: dict[str, Any]) -> dict[str, Any]:
+    """Translate AnnoBio field types into the JSON Schema sent to an LLM provider."""
+    type_map = {
+        "str": {"type": "string"},
+        "float": {"type": "number"},
+        "list_str": {"type": "array", "items": {"type": "string"}},
+        "list_float": {"type": "array", "items": {"type": "number"}},
+    }
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for field in output_schema.get("fields") or []:
+        key = str(field["key"])
+        schema = dict(type_map.get(field.get("type"), type_map["str"]))
+        if field.get("description"):
+            schema["description"] = str(field["description"])
+        if field.get("allow_none"):
+            schema = {"anyOf": [schema, {"type": "null"}]}
+        else:
+            required.append(key)
+        properties[key] = schema
+    row_schema = {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+    if output_schema.get("return_shape") == "table":
+        return {
+            "type": "object",
+            "properties": {"rows": {"type": "array", "items": row_schema}},
+            "required": ["rows"],
+            "additionalProperties": False,
+        }
+    return row_schema
+
+
+def response_format(output_schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "annobio_output",
+            "strict": True,
+            "schema": build_json_schema(output_schema),
+        },
+    }
+
+
+def json_instruction(output_schema: dict[str, Any]) -> str:
+    shape = "JSON object containing a rows array" if output_schema.get("return_shape") == "table" else "JSON object"
+    return (
+        f"\n\nReturn only one valid {shape} matching this JSON Schema; do not use Markdown:\n"
+        + json.dumps(build_json_schema(output_schema), ensure_ascii=False, indent=2)
+    )
+
+
+def parse_structured_content(value: Any, return_shape: str) -> dict[str, Any] | list[dict[str, Any]]:
+    """Parse provider content, accepting plain JSON or a fenced JSON response."""
+    if isinstance(value, (dict, list)):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
+        if fenced:
+            text = fenced.group(1).strip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            opening, closing = ("[", "]") if return_shape == "table" else ("{", "}")
+            start, end = text.find(opening), text.rfind(closing)
+            if start < 0 or end < start:
+                raise ValueError("The model response did not contain valid JSON.")
+            parsed = json.loads(text[start : end + 1])
+    if return_shape == "table":
+        if isinstance(parsed, dict) and isinstance(parsed.get("rows"), list):
+            parsed = parsed["rows"]
+        if not isinstance(parsed, list):
+            raise TypeError("The model must return a JSON array for a table Prompt.")
+        return [row for row in parsed if isinstance(row, dict)]
+    if not isinstance(parsed, dict):
+        raise TypeError("The model must return a JSON object for a single-row Prompt.")
+    return parsed
+
+
+def _paths_from_cell(value: Any) -> list[str]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        parsed = json.loads(text)
+        if not isinstance(parsed, list):
+            raise ValueError("File cells must contain a path or a JSON array of paths.")
+        return [str(item) for item in parsed if str(item).strip()]
+    return [text]
+
+
+def _data_url(path: Path, expected_kind: str) -> str:
+    if not path.is_file():
+        raise FileNotFoundError(f"Input file does not exist: {path}")
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    if expected_kind == "pdf" and mime != "application/pdf":
+        raise ValueError(f"Expected a PDF file: {path}")
+    if expected_kind == "image" and not mime.startswith("image/"):
+        raise ValueError(f"Expected an image file: {path}")
+    return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+
+
+def compile_prompt_content(
+    template: str,
+    values: dict[str, Any],
+    input_types: dict[str, str],
+    input_root: Path,
+) -> str | list[dict[str, Any]]:
+    """Substitute text placeholders and turn image/PDF paths into multimodal content blocks."""
+    blocks: list[dict[str, Any]] = []
+    attached: set[str] = set()
+
+    def append_text(text: str) -> None:
+        if not text:
+            return
+        if blocks and blocks[-1].get("type") == "text":
+            blocks[-1]["text"] += text
+        else:
+            blocks.append({"type": "text", "text": text})
+
+    end = 0
+    pattern = re.compile(r"(?<!\{)\{([^{}]+)\}(?!\})")
+    for match in pattern.finditer(str(template)):
+        append_text(template[end : match.start()])
+        name = match.group(1)
+        if name not in values:
+            append_text(match.group(0))
+            end = match.end()
+            continue
+        input_type = input_types.get(name, "text")
+        value = values[name]
+        if input_type not in ("image", "pdf"):
+            append_text("" if value is None or (isinstance(value, float) and pd.isna(value)) else str(value))
+            end = match.end()
+            continue
+        paths = _paths_from_cell(value)
+        if not paths:
+            raise ValueError(f'Missing {input_type} input for "{name}".')
+        append_text(f"\n[{input_type.title()} files: {name}]\n")
+        if name not in attached:
+            for raw_path in paths:
+                path = Path(raw_path).expanduser()
+                if not path.is_absolute():
+                    path = (input_root / path).resolve()
+                url = _data_url(path, input_type)
+                if input_type == "image":
+                    blocks.append({"type": "image_url", "image_url": {"url": url}})
+                else:
+                    blocks.append({
+                        "type": "file",
+                        "file": {"filename": path.name, "file_data": url, "format": "application/pdf"},
+                    })
+            attached.add(name)
+        end = match.end()
+    append_text(template[end:])
+    if len(blocks) == 1 and blocks[0].get("type") == "text":
+        return str(blocks[0].get("text") or "")
+    return blocks
+
+
+def run_prompt_step(
+    frame: pd.DataFrame,
+    engine: BaseEngine,
+    *,
+    prompt_name: str,
+    sections: list[dict[str, Any]],
+    input_mapping: dict[str, str],
+    input_types: dict[str, str],
+    output_schema: dict[str, Any],
+    model_config: dict[str, Any],
+    input_root: Path,
+    concurrency: int,
+) -> pd.DataFrame:
+    """Execute a Prompt concurrently while preserving deterministic input/output row order."""
+    template = "\n\n".join(str(section.get("content") or "").strip() for section in sections).strip()
+    records = frame.where(pd.notna(frame), None).to_dict(orient="records")
+    fields = list(output_schema.get("fields") or [])
+
+    def run_one(item: tuple[int, dict[str, Any]]) -> tuple[int, list[dict[str, Any]], str | None]:
+        index, row = item
+        try:
+            values = {name: row.get(column) for name, column in input_mapping.items()}
+            content = compile_prompt_content(template, values, input_types, input_root)
+            result = engine.complete(content=content, output_schema=output_schema, model_config=model_config)
+            rows = result if isinstance(result, list) else [result]
+            return index, [value for value in rows if isinstance(value, dict)], None
+        except Exception as exc:  # Preserve long runs: one failed row must not discard successful rows.
+            return index, [], str(exc)
+
+    worker_count = max(1, min(32, int(concurrency or 1)))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        outcomes = list(executor.map(run_one, enumerate(records)))
+
+    materialized: list[dict[str, Any]] = []
+    for input_index, output_rows, error in outcomes:
+        row = records[input_index]
+        rows = output_rows or ([{}] if error else [])
+        for output in rows:
+            record: dict[str, Any] = {"Input: #": input_index + 1}
+            record.update({f"Input: {column}": row.get(column) for column in frame.columns})
+            record["Output: #"] = len(materialized) + 1
+            for field in fields:
+                header = f"Output: {field['display']}"
+                record[header] = error if error else output.get(field["key"], output.get(field["display"]))
+            materialized.append(record)
+        print(f"[{prompt_name}] {input_index + 1}/{len(records)}", flush=True)
+    columns = ["Input: #", *[f"Input: {column}" for column in frame.columns], "Output: #"]
+    columns.extend(f"Output: {field['display']}" for field in fields)
+    return pd.DataFrame(materialized, columns=columns)
+'''
+
+
+def _litellm_engine_module() -> str:
+    return _generated_header("LiteLLM implementation of the generated AnnoBio engine contract.") + r'''
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from litellm import completion
+
+from .base import BaseEngine, json_instruction, parse_structured_content, response_format
+
+
+class LiteLLMEngine(BaseEngine):
+    """Call any LiteLLM-supported provider without embedding credentials in exported code."""
+
+    def complete(
+        self,
+        *,
+        content: str | list[dict[str, Any]],
+        output_schema: dict[str, Any],
+        model_config: dict[str, Any],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        model = os.getenv("ANNOBIO_MODEL") or str(model_config.get("model") or "").strip()
+        if not model:
+            raise ValueError("No model is configured. Set ANNOBIO_MODEL in .env.")
+        provider = str(model_config.get("provider") or "").strip().lower()
+        if provider == "openrouter" and not model.startswith("openrouter/"):
+            model = f"openrouter/{model}"
+        api_key = os.getenv("ANNOBIO_API_KEY")
+        if not api_key and provider == "openrouter":
+            api_key = os.getenv("OPENROUTER_API_KEY")
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": int(model_config.get("max_tokens") or 8192),
+            "response_format": response_format(output_schema),
+        }
+        # When ANNOBIO_API_KEY is blank, LiteLLM can use its normal provider-specific variables
+        # such as OPENAI_API_KEY or ANTHROPIC_API_KEY.
+        if api_key:
+            kwargs["api_key"] = api_key
+        base_url = os.getenv("ANNOBIO_BASE_URL") or str(model_config.get("base_url") or "").strip()
+        if base_url:
+            kwargs["api_base"] = base_url
+        try:
+            response = completion(**kwargs)
+        except Exception as exc:
+            message = str(exc).lower()
+            if not any(token in message for token in ("response_format", "json_schema", "structured output", "not supported")):
+                raise
+            kwargs.pop("response_format", None)
+            fallback = json_instruction(output_schema)
+            if isinstance(content, str):
+                kwargs["messages"] = [{"role": "user", "content": content + fallback}]
+            else:
+                kwargs["messages"] = [{"role": "user", "content": [*content, {"type": "text", "text": fallback}]}]
+            response = completion(**kwargs)
+        message = response.choices[0].message
+        parsed = getattr(message, "parsed", None)
+        raw = parsed if parsed is not None else getattr(message, "content", "")
+        return parse_structured_content(raw, str(output_schema.get("return_shape") or "single"))
+'''
+
+
+def _openrouter_engine_module() -> str:
+    return _generated_header("Direct OpenRouter implementation of the generated AnnoBio engine contract.") + r'''
+from __future__ import annotations
+
+import os
+import time
+from typing import Any
+
+import httpx
+
+from .base import BaseEngine, json_instruction, parse_structured_content, response_format
+
+
+class OpenRouterEngine(BaseEngine):
+    """Call OpenRouter's OpenAI-compatible chat-completions API directly."""
+
+    def complete(
+        self,
+        *,
+        content: str | list[dict[str, Any]],
+        output_schema: dict[str, Any],
+        model_config: dict[str, Any],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("ANNOBIO_API_KEY")
+        if not api_key:
+            raise ValueError("No OpenRouter key is configured. Set OPENROUTER_API_KEY in .env.")
+        model = os.getenv("ANNOBIO_MODEL") or str(model_config.get("model") or "").strip()
+        if model.startswith("openrouter/"):
+            model = model.removeprefix("openrouter/")
+        if not model:
+            raise ValueError("No OpenRouter model is configured. Set ANNOBIO_MODEL in .env.")
+        base_url = (os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        if os.getenv("OPENROUTER_HTTP_REFERER"):
+            headers["HTTP-Referer"] = os.environ["OPENROUTER_HTTP_REFERER"]
+        if os.getenv("OPENROUTER_APP_NAME"):
+            headers["X-OpenRouter-Title"] = os.environ["OPENROUTER_APP_NAME"]
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": int(model_config.get("max_tokens") or 8192),
+            "response_format": response_format(output_schema),
+        }
+        response = self._post(f"{base_url}/chat/completions", headers, payload)
+        if response.status_code == 400 and any(
+            token in response.text.lower() for token in ("response_format", "json_schema", "structured output", "not supported")
+        ):
+            payload.pop("response_format", None)
+            fallback = json_instruction(output_schema)
+            if isinstance(content, str):
+                payload["messages"] = [{"role": "user", "content": content + fallback}]
+            else:
+                payload["messages"] = [{"role": "user", "content": [*content, {"type": "text", "text": fallback}]}]
+            response = self._post(f"{base_url}/chat/completions", headers, payload)
+        response.raise_for_status()
+        raw = response.json()["choices"][0]["message"].get("content", "")
+        return parse_structured_content(raw, str(output_schema.get("return_shape") or "single"))
+
+    @staticmethod
+    def _post(url: str, headers: dict[str, str], payload: dict[str, Any]) -> httpx.Response:
+        last_response: httpx.Response | None = None
+        for attempt in range(4):
+            response = httpx.post(url, headers=headers, json=payload, timeout=120.0)
+            last_response = response
+            if response.status_code not in (429, 500, 502, 503, 504):
+                return response
+            if attempt < 3:
+                time.sleep(2**attempt)
+        assert last_response is not None
+        return last_response
+'''
+
+
+def _engine_init_module(default_engine: str) -> str:
+    return _generated_header("Factory for the generated AnnoBio LLM engines.") + textwrap.dedent(
+        f'''
+        from __future__ import annotations
+
+        import os
+
+        from .base import BaseEngine
+
+
+        DEFAULT_ENGINE = {_python_literal(default_engine)}
+
+
+        def create_engine(name: str | None = None) -> BaseEngine:
+            """Create the configured LLM engine without importing unused provider clients."""
+            selected = (name or os.getenv("ANNOBIO_ENGINE") or DEFAULT_ENGINE).strip().lower()
+            if selected == "litellm":
+                from .litellm_engine import LiteLLMEngine
+
+                return LiteLLMEngine()
+            if selected == "openrouter":
+                from .openrouter_engine import OpenRouterEngine
+
+                return OpenRouterEngine()
+            raise ValueError(f"Unsupported engine: {{selected}}. Choose 'litellm' or 'openrouter'.")
+        '''
+    ).lstrip()
+
+
+def _package_init(subject: str) -> str:
+    return _generated_header(subject) + "\n"
+
+
+def _main_module(executable_steps: list[dict[str, Any]], input_columns: list[str], default_concurrency: int) -> str:
+    imports: list[str] = []
+    calls: list[str] = []
+    for step in executable_steps:
+        alias = step["alias"]
+        imports.append(f"from {step['package']} import {step['module_name']} as {alias}")
+        if step["type"] == "process" and step["mode"] == "df":
+            calls.append(
+                f'    print("Running Process: {step["name"]}", flush=True)\n'
+                f"    frame = run_dataframe_processor(frame, {alias}.process, step_name={step['name']!r})"
+            )
+        elif step["type"] == "process":
+            calls.append(
+                f'    print("Running Process: {step["name"]}", flush=True)\n'
+                f"    frame = run_row_processor(frame, {alias}.process, step_name={step['name']!r})"
+            )
+        else:
+            calls.append(
+                f'    print("Running Prompt: {step["name"]}", flush=True)\n'
+                f"    frame = {alias}.run(frame, engine, input_root=input_root, "
+                "concurrency=args.concurrency, model_override=args.model)"
+            )
+    import_text = "\n".join(imports)
+    call_text = "\n\n".join(calls) if calls else "    return frame"
+    template = '''from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any, Callable
+
+import pandas as pd
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # .env loading is optional when variables are already provided by the shell.
+    def load_dotenv() -> bool:
+        return False
+
+from engine import create_engine
+# __STEP_IMPORTS__
+
+
+REQUIRED_INPUT_COLUMNS = __INPUT_COLUMNS__
+
+
+def load_input(path: Path, sheet: str) -> pd.DataFrame:
+    """Load the user-supplied workbook and enforce the exported input contract."""
+    if not path.is_file():
+        raise FileNotFoundError(f"Input workbook does not exist: {path}")
+    frame = pd.read_excel(path, sheet_name=sheet)
+    missing = [column for column in REQUIRED_INPUT_COLUMNS if column not in frame.columns]
+    if missing:
+        raise ValueError("Input workbook is missing columns: " + ", ".join(missing))
+    return frame
+
+
+def run_row_processor(
+    frame: pd.DataFrame,
+    process: Callable[[dict[str, Any]], Any],
+    *,
+    step_name: str,
+) -> pd.DataFrame:
+    """Apply a user-authored process(row); None skips a row and exceptions become error rows."""
+    output: list[dict[str, Any]] = []
+    records = frame.where(pd.notna(frame), None).to_dict(orient="records")
+    for index, row in enumerate(records):
+        try:
+            result = process(dict(row))
+            if result is None:
+                continue
+            output.append(dict(result) if isinstance(result, dict) else {"result": result})
+        except Exception as exc:
+            output.append({"error": str(exc)})
+        print(f"[{step_name}] {index + 1}/{len(records)}", flush=True)
+    return pd.DataFrame(output)
+
+
+def run_dataframe_processor(
+    frame: pd.DataFrame,
+    process: Callable[[pd.DataFrame], Any],
+    *,
+    step_name: str,
+) -> pd.DataFrame:
+    """Apply a user-authored process(df) and enforce its DataFrame return contract."""
+    result = process(frame.copy())
+    if not isinstance(result, pd.DataFrame):
+        raise TypeError(f'Process "{step_name}" must return a pandas DataFrame.')
+    return result
+
+
+def _excel_value(value: Any) -> Any:
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False)
+    return value
+
+
+def write_output(frame: pd.DataFrame, path: Path) -> None:
+    """Write scalar values directly and serialize nested structured values as JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    output = frame.map(_excel_value) if hasattr(frame, "map") else frame.applymap(_excel_value)
+    output.to_excel(path, index=False, sheet_name="Output")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the Python pipeline exported by AnnoBio.")
+    parser.add_argument("--input", required=True, type=Path, help="Input Excel workbook.")
+    parser.add_argument("--output", default=Path("output.xlsx"), type=Path, help="Output workbook.")
+    parser.add_argument("--sheet", default="Input", help="Input sheet name.")
+    parser.add_argument("--engine", choices=("litellm", "openrouter"), help="Override ANNOBIO_ENGINE.")
+    parser.add_argument("--model", help="Override the exported model for every Prompt step.")
+    parser.add_argument("--concurrency", type=int, default=__CONCURRENCY__)
+    parser.add_argument("--start-row", type=int, default=0, help="Zero-based first input row.")
+    parser.add_argument("--limit", type=int, help="Run at most this many input rows.")
+    return parser
+
+
+def main() -> int:
+    load_dotenv()
+    args = build_parser().parse_args()
+    if args.start_row < 0 or (args.limit is not None and args.limit < 1):
+        raise ValueError("--start-row must be >= 0 and --limit must be >= 1.")
+    if args.concurrency < 1:
+        raise ValueError("--concurrency must be >= 1.")
+    input_path = args.input.expanduser().resolve()
+    frame = load_input(input_path, args.sheet).iloc[args.start_row :]
+    if args.limit is not None:
+        frame = frame.iloc[: args.limit]
+    input_root = input_path.parent
+    engine = create_engine(args.engine)
+
+# __STEP_CALLS__
+
+    write_output(frame, args.output.expanduser().resolve())
+    print(f"Wrote {len(frame)} rows to {args.output}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+    template = template.replace("# __STEP_IMPORTS__", import_text)
+    template = template.replace("__INPUT_COLUMNS__", _python_literal(input_columns))
+    template = template.replace("__CONCURRENCY__", str(max(1, min(32, int(default_concurrency or 1)))))
+    template = template.replace("# __STEP_CALLS__", call_text)
+    return _generated_header("Executable entry point for this user-defined AnnoBio pipeline.") + "\n" + template
+
+
+def _data_markdown(dataset_name: str, schema: dict[str, Any]) -> str:
+    rows = []
+    for column in schema["columns"]:
+        column_type = column["type"]
+        note = "Text or number"
+        if column_type == "image":
+            note = 'Path or JSON path array, e.g. ["files/image.png"]'
+        elif column_type == "pdf":
+            note = 'Path or JSON path array, e.g. ["files/document.pdf"]'
+        rows.append(f'| {str(column["name"]).replace("|", "\\|")} | {column_type} | Yes | {note} |')
+    table = "\n".join(rows) or "| *(no columns configured)* | | | |"
+    return f"""# Input data contract
+
+This file was generated by AnnoBio from the user-selected starting Dataset **{dataset_name}**.
+No Dataset rows, images, or PDF files are included in this exported project.
+
+## Workbook
+
+- Format: Excel (`.xlsx`)
+- Default sheet: `{schema['sheet']}`
+- Column names are case-sensitive.
+
+| Column | Type | Required | Value format |
+|---|---|---:|---|
+{table}
+
+Image and PDF cells may contain one path or a JSON array of paths. Relative paths are resolved from
+the directory containing the input workbook; absolute paths are also accepted. Keep binary files
+outside the workbook because embedded Excel objects are not portable cell values.
+
+Run the pipeline with your own workbook:
+
+```bash
+python main.py --input /path/to/input.xlsx --output output.xlsx
+```
+"""
+
+
+def _readme(name: str, default_engine: str) -> str:
+    return f"""# {name}
+
+Python pipeline exported from AnnoBio.
+
+## Authorship
+
+- **AnnoBio user:** workflow design, Prompt content, schemas, mappings, and Process code.
+- **AnnoBio:** generated project structure, orchestration, validation, and LLM engine adapters.
+
+## Setup
+
+```bash
+python -m venv .venv
+python -m pip install -r requirements.txt
+```
+
+Copy `.env.example` to `.env`, add your API key, and review the model setting. The exported default
+engine is `{default_engine}`; either engine can be selected with `--engine` or `ANNOBIO_ENGINE`.
+
+## Run
+
+Read `DATA.md`, then provide your own Excel workbook:
+
+```bash
+python main.py --input /path/to/input.xlsx --output output.xlsx
+```
+
+Useful options:
+
+```text
+--engine litellm|openrouter
+--model MODEL
+--sheet SHEET
+--start-row N
+--limit N
+--concurrency N
+```
+
+`pipeline.json` is the machine-readable route manifest. Edit files under `processor/` and `prompt/`
+to change workflow behavior. Files under `engine/` provide the shared LiteLLM and OpenRouter access
+layer and contain no credentials.
+"""
+
+
+def _env_example(default_engine: str, default_model: str, base_url: str) -> str:
+    return f"""# Generated by AnnoBio. Never commit a real API key.
+ANNOBIO_ENGINE={default_engine}
+ANNOBIO_MODEL={default_model}
+ANNOBIO_API_KEY=
+ANNOBIO_BASE_URL={base_url}
+
+# Used by the direct OpenRouter engine. OPENROUTER_API_KEY falls back to ANNOBIO_API_KEY.
+OPENROUTER_API_KEY=
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_HTTP_REFERER=
+OPENROUTER_APP_NAME=AnnoBio exported pipeline
+"""
+
+
+def _requirements() -> str:
+    return """# Generated runtime dependencies. Add packages imported by your processor modules below.
+pandas>=2.0,<4
+openpyxl>=3.1,<4
+python-dotenv>=1.0,<2
+litellm>=1.83,<2
+httpx>=0.24,<1
+"""
+
+
+def build_pipeline_archive(
+    *,
+    canvas_state: dict[str, Any],
+    route: list[dict[str, Any]],
+    name: str,
+    credentials: list[dict[str, Any]] | None = None,
+    default_credential_id: str = "",
+    run_max_tokens: int = 8192,
+    run_concurrency: int = 4,
+) -> tuple[str, bytes]:
+    """Validate one selected route and return ``(<zip filename>, <zip bytes>)``."""
+    raw_nodes = canvas_state.get("nodes") if isinstance(canvas_state, dict) else None
+    raw_connections = canvas_state.get("connections") if isinstance(canvas_state, dict) else None
+    if not isinstance(raw_nodes, list) or not isinstance(raw_connections, list):
+        raise PipelineExportError("The current canvas state is invalid.")
+    nodes = {_text(node.get("nodeId") or node.get("id")): node for node in raw_nodes if isinstance(node, dict)}
+    connections = [edge for edge in raw_connections if isinstance(edge, dict)]
+    selected = [_normalize_route_item(item) for item in route]
+    if not selected or selected[0]["type"] != "dataset":
+        raise PipelineExportError("The exported route must start with a Dataset.")
+    if not any(item["type"] == "prompt" for item in selected):
+        raise PipelineExportError("The exported route must contain at least one Prompt Run.")
+    for previous, current in zip(selected, selected[1:]):
+        _validate_transition(previous, current, nodes, connections)
+
+    credentials_by_id = {_text(item.get("id")): item for item in (credentials or []) if isinstance(item, dict)}
+    root_name = _slug(name, "pipeline")
+    files: list[ExportedFile] = []
+    manifest_steps: list[dict[str, Any]] = []
+    executable_steps: list[dict[str, Any]] = []
+    dataset_count = process_count = prompt_count = 0
+    default_engine = "litellm"
+    default_model = ""
+    default_base_url = ""
+    input_schema: dict[str, Any] | None = None
+    input_dataset_name = "Dataset"
+
+    for route_index, item in enumerate(selected, start=1):
+        if item["type"] == "dataset":
+            dataset_count += 1
+            node = _require_node(nodes, item["dataset_node_id"], "dataset")
+            schema = _dataset_schema(node)
+            dataset_name = _text(node.get("name")) or f"Dataset {dataset_count}"
+            if input_schema is None:
+                input_schema = schema
+                input_dataset_name = dataset_name
+                if not schema["columns"]:
+                    raise PipelineExportError(f'Dataset "{dataset_name}" must define at least one column.')
+            manifest_steps.append(
+                {
+                    "type": "dataset",
+                    "id": item["dataset_node_id"],
+                    "name": dataset_name,
+                    "columns": schema["columns"],
+                }
+            )
+            continue
+
+        if item["type"] == "process":
+            process_count += 1
+            node = _require_node(nodes, item["process_node_id"], "process")
+            process_name, mode, generated = _processor_module(node)
+            module_name = f"processor_{process_count:02d}_{_identifier(process_name, 'process')}"
+            source = f"processor/{module_name}.py"
+            files.append(ExportedFile(source, generated["module"]))
+            manifest_steps.append(
+                {
+                    "type": "process",
+                    "id": item["process_node_id"],
+                    "name": process_name,
+                    "mode": mode,
+                    "source": source,
+                }
+            )
+            executable_steps.append(
+                {
+                    "type": "process",
+                    "name": process_name,
+                    "mode": mode,
+                    "package": "processor",
+                    "module_name": module_name,
+                    "alias": f"processor_step_{process_count:02d}",
+                }
+            )
+            continue
+
+        prompt_count += 1
+        prompt = _require_node(nodes, item["prompt_node_id"], "prompt")
+        run = _require_node(nodes, item["run_node_id"], "run")
+        if not _has_connection(connections, "prompt-to-run", item["prompt_node_id"], item["run_node_id"]):
+            raise PipelineExportError("The selected Run is no longer connected to the selected Prompt.")
+        model_config = _credential_config(
+            run,
+            credentials_by_id,
+            default_credential_id,
+            run_max_tokens,
+        )
+        prompt_name, prompt_config, module = _prompt_module(prompt, run, model_config)
+        previous_dataset = next(
+            (entry for entry in reversed(manifest_steps) if entry.get("type") == "dataset"),
+            None,
+        )
+        available_columns = {column["name"] for column in (previous_dataset or {}).get("columns", [])}
+        unknown_columns = sorted(
+            {column for column in prompt_config["input_mapping"].values() if column not in available_columns}
+        )
+        if unknown_columns:
+            raise PipelineExportError(
+                f'Prompt "{prompt_name}" maps inputs to missing columns: {", ".join(unknown_columns)}.'
+            )
+        available_types = {
+            column["name"]: column.get("type", "text")
+            for column in (previous_dataset or {}).get("columns", [])
+        }
+        type_errors: list[str] = []
+        for input_name, column_name in prompt_config["input_mapping"].items():
+            expected = prompt_config["input_types"].get(input_name)
+            actual = available_types.get(column_name, "text")
+            if expected in ("image", "pdf") and actual != expected:
+                type_errors.append(f'{{{input_name}}} requires {expected}, but "{column_name}" is {actual}')
+            elif expected == "text" and actual in ("image", "pdf"):
+                type_errors.append(f'{{{input_name}}} requires text, but "{column_name}" is {actual}')
+        if type_errors:
+            raise PipelineExportError(f'Prompt "{prompt_name}" has incompatible input mappings: ' + "; ".join(type_errors) + ".")
+        module_name = f"prompt_{prompt_count:02d}_{_identifier(prompt_name, 'prompt')}"
+        source = f"prompt/{module_name}.py"
+        files.append(ExportedFile(source, module))
+        manifest_steps.append(
+            {
+                "type": "prompt",
+                "id": item["prompt_node_id"],
+                "run_id": item["run_node_id"],
+                "version_parent_ids": [
+                    str(edge.get("fromId"))
+                    for edge in connections
+                    if edge.get("type") == "prompt-to-prompt" and edge.get("toId") == item["prompt_node_id"]
+                ],
+                "name": prompt_name,
+                "source": source,
+                **prompt_config,
+            }
+        )
+        executable_steps.append(
+            {
+                "type": "prompt",
+                "name": prompt_name,
+                "package": "prompt",
+                "module_name": module_name,
+                "alias": f"prompt_step_{prompt_count:02d}",
+            }
+        )
+        if prompt_count == 1:
+            default_engine = model_config["engine"]
+            default_model = model_config["model"]
+            default_base_url = model_config["base_url"]
+
+    assert input_schema is not None
+    manifest = {
+        "format": FORMAT_NAME,
+        "format_version": FORMAT_VERSION,
+        "name": root_name,
+        "entrypoint": "main.py",
+        "authors": {
+            "workflow": "AnnoBio user",
+            "exported_project": "AnnoBio",
+        },
+        "input": {
+            "format": "xlsx",
+            "sheet": input_schema["sheet"],
+            "columns": input_schema["columns"],
+        },
+        "route": manifest_steps,
+        "engines": ["litellm", "openrouter"],
+        "default_engine": default_engine,
+        "output": {"format": "xlsx"},
+    }
+    input_columns = [column["name"] for column in input_schema["columns"]]
+    files.extend(
+        [
+            ExportedFile("pipeline.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"),
+            ExportedFile("DATA.md", _data_markdown(input_dataset_name, input_schema)),
+            ExportedFile("README.md", _readme(root_name, default_engine)),
+            ExportedFile("requirements.txt", _requirements()),
+            ExportedFile(".env.example", _env_example(default_engine, default_model, default_base_url)),
+            ExportedFile("processor/__init__.py", _package_init("User-authored Process modules exported by AnnoBio.")),
+            ExportedFile("prompt/__init__.py", _package_init("User-authored Prompt modules exported by AnnoBio.")),
+            ExportedFile("engine/__init__.py", _engine_init_module(default_engine)),
+            ExportedFile("engine/base.py", _engine_base_module()),
+            ExportedFile("engine/litellm_engine.py", _litellm_engine_module()),
+            ExportedFile("engine/openrouter_engine.py", _openrouter_engine_module()),
+            ExportedFile("main.py", _main_module(executable_steps, input_columns, run_concurrency)),
+        ]
+    )
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for exported in sorted(files, key=lambda entry: entry.path):
+            path = PurePosixPath(root_name, exported.path).as_posix()
+            info = zipfile.ZipInfo(path, date_time=(2020, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            bundle.writestr(info, exported.content.encode("utf-8"))
+    return f"{root_name}.zip", archive.getvalue()
