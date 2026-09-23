@@ -8559,7 +8559,10 @@ button.btn.btn-danger:hover:not(:disabled) {
   display: flex; align-items: center; gap: 6px;
   border: 1px solid var(--border); border-radius: var(--control-radius, 6px);
   background: var(--bg-bar); padding: 6px 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
+.pipeline-overview-step:hover,
+.pipeline-overview-step:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .pipeline-overview-arrow { color: var(--text-muted); font-size: 14px; }
 .pipeline-step-kind {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
