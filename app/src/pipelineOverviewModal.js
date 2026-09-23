@@ -222,9 +222,8 @@ function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDat
       <div class="pipeline-overview-card-header">
         <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
         <div class="pipeline-overview-card-actions">
-          <label class="pipeline-overview-data-toggle">
-            <input type="checkbox" class="pipeline-overview-data-toggle-input" data-pipeline-index="${index}"${hideIntermediateDatasets ? ' checked' : ''}>
-            <span class="pipeline-overview-data-toggle-track" aria-hidden="true"></span>
+          <label class="rule-editor-checkbox-label pipeline-overview-data-checkbox">
+            <input type="checkbox" class="rule-editor-checkbox pipeline-overview-data-toggle-input" data-pipeline-index="${index}"${hideIntermediateDatasets ? ' checked' : ''}>
             <span>Hide data nodes</span>
           </label>
           <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python</button>
@@ -273,8 +272,9 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     </div>
   `;
 
+  const panelEl = overlay.querySelector('.modal-panel--pipeline-overview');
   const bodyEl = overlay.querySelector('.pipeline-overview-body');
-  function renderBody() {
+  function renderBody({ fitToContent = false } = {}) {
     const content = pipelines.length > 0
       ? pipelines.map((pipeline, index) => renderPipeline(
         pipeline,
@@ -284,6 +284,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       )).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
     bodyEl.innerHTML = content;
+    if (fitToContent && !overlay.classList.contains('modal-overlay--maximized')) {
+      panelEl.style.removeProperty('width');
+      panelEl.style.removeProperty('height');
+    }
   }
   function refresh(nextSource) {
     if (typeof nextSource === 'function') readPipelines = nextSource;
@@ -317,7 +321,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
           getPipelineViewId(pipeline, pipelineIndex),
           !dataToggle.checked,
         );
-        renderBody();
+        renderBody({ fitToContent: true });
       }
       return;
     }
