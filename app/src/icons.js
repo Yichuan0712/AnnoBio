@@ -114,6 +114,13 @@ export const iconFileText = (size) => svgIcon({
   ],
 });
 
+/** Lucide "workflow" — two nodes joined by an elbow connector, the canvas in miniature. */
+export const iconWorkflow = (size) => svgIcon({
+  size,
+  rects: [[3, 3, 8, 8, 2], [13, 13, 8, 8, 2]],
+  paths: ['M7 11v4a2 2 0 0 0 2 2h4'],
+});
+
 /** Lucide "file-plus" — shared by "batch import PDFs" and "import (one) PDF": the PDF equivalent
  * of iconImageAdd, a plus badge to read as "add" rather than just "here's a file". */
 export const iconFileAdd = (size) => svgIcon({

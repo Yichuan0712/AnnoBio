@@ -1,5 +1,5 @@
 /**
- * "View pipeline" result modal — shown from the Agent Assistant window. Takes the output of
+ * "My Pipeline" result modal — opened from the canvas toolbar. Takes the output of
  * pipelineDetection.js's detectPipelines() and renders each detected pipeline as an ordered list
  * of Prompt/Process steps, with a version picker wherever a Prompt step is ambiguous (more than
  * one version in its prompt-to-prompt chain has its own Run).
@@ -32,12 +32,11 @@ function renderStep(step) {
     .map((v, i) => `<option value="${i}"${i === step.defaultVersionIndex ? ' selected' : ''}>${escapeHtml(v.promptName)}</option>`)
     .join('');
   return `
-    <li class="pipeline-overview-step pipeline-overview-step--ambiguous">
+    <li class="pipeline-overview-step">
       <span class="pipeline-step-kind pipeline-step-kind--prompt">Prompt</span>
       <select class="pipeline-step-version-select" data-step-id="${escapeHtml(step.id)}" title="Multiple versions of this prompt each have their own Run — pick which one this pipeline should use.">
         ${options}
       </select>
-      <span class="pipeline-step-ambiguous-badge" title="${step.versions.length} versions of this prompt each have their own Run.">${step.versions.length} versions</span>
     </li>
   `;
 }
@@ -56,8 +55,9 @@ function renderPipeline(pipeline, index) {
 /** @param {Array<import('./pipelineDetection.js').Pipeline>} pipelines */
 export function showPipelineOverviewModal(pipelines) {
   const overlay = document.createElement('div');
-  // Opened from inside the Agent Assistant window, whose own overlay sits at z-index 2000 (see
-  // agentWindow.css) — plain z-index 1000 here would render underneath it, not on top.
+  // The canvas toolbar stays clickable while the Agent Assistant window is up, so this can open
+  // over it — and that overlay sits at z-index 2000 (see agentWindow.css), which a plain
+  // z-index 1000 would render underneath instead of on top.
   overlay.className = 'modal-overlay pipeline-overview-overlay';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'pipeline-overview-title');
@@ -69,11 +69,10 @@ export function showPipelineOverviewModal(pipelines) {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--pipeline-overview">
       <div class="modal-header">
-        <h2 id="pipeline-overview-title" class="modal-title">Detected pipelines</h2>
+        <h2 id="pipeline-overview-title" class="modal-title">My Pipeline</h2>
         <button type="button" class="modal-close" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body pipeline-overview-body">
-        <p class="page-sub pipeline-overview-note">Datasets aren't shown as steps — only Prompt (with its Run) and Process nodes count as pipeline steps. Score/Review nodes are evaluation tooling, not part of the pipeline itself.</p>
         ${body}
       </div>
     </div>
