@@ -1,3 +1,5 @@
+import { mergeProcessInputContents } from './processInputMerge.js';
+
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
   const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -612,7 +614,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  /** Process node: runs one user-written process(df) function over a connected Dataset. */
+  /** Process node: runs one user-written process(df) function over its connected Dataset inputs. */
   function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
@@ -669,12 +671,14 @@ export function createWorkflowNodeFactories(deps = {}) {
       e.preventDefault();
       e.stopPropagation();
       const processNodeId = node.dataset.nodeId;
-      const datasetEdge = getConnectionsList().find((c) => c.toId === processNodeId && c.type === 'dataset-to-process');
-      const datasetNode = datasetEdge ? getNodeById(datasetEdge.fromId) : null;
       function getSourceDatasetContent() {
-        if (!datasetNode) return { headers: [], rows: [] };
-        const c = datasetContentByNodeId.get(datasetNode.dataset.nodeId);
-        return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+        const contents = getConnectionsList()
+          .filter((connection) => connection.toId === processNodeId && connection.type === 'dataset-to-process')
+          .map((connection) => getNodeById(connection.fromId))
+          .filter((datasetNode) => datasetNode?.classList.contains('workflow-node--dataset'))
+          .map((datasetNode) => datasetContentByNodeId.get(datasetNode.dataset.nodeId))
+          .filter(Boolean);
+        return mergeProcessInputContents(contents);
       }
       openProcessDetailModal({
         node,
