@@ -8299,42 +8299,6 @@ button.btn.btn-danger:hover:not(:disabled) {
   flex: 60 1 0;
 }
 
-/* No extra margin/padding here -- .run-detail-main already applies a 12px gap between all its
-   children (label / tabs / panels / Run button row), so adding our own spacing double-counts it
-   (that's what made the gap look too large above and below). */
-.process-detail-view-switch {
-  flex: 0 0 auto;
-  align-self: flex-start;
-}
-
-.process-detail-tab:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-/* Scrollable region between the tabs and the pinned Run button; holds whichever tab panel is visible.
-   .run-detail-main's gap:12px is pulled up a bit here so the tabs sit closer to their panel below
-   (matches Review's Issue analysis / Suggested changes spacing). */
-.process-detail-panels {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  /* margin-top: -0px; */
-  overflow: hidden;
-}
-
-/* .process-editor-mid's padding-top:12px exists for when it sits directly under the "Code" label
-   with no tab bar in between (mirrors Score's .score-detail-rules-code-panel override below);
-   here the tab bar + .run-detail-main's gap already provide that separation, so it'd double up. */
-.process-detail-panel.process-editor-mid {
-  padding-top: 0;
-}
-
-.process-detail-panel[hidden] {
-  display: none;
-}
-
 /* 左栏：复用 run-detail-main 的外框/标题栏/底部按钮位（margin-top: auto），
    中间可编辑区用 process-editor-mid 撑满剩余高度 */
 .process-editor-mid {

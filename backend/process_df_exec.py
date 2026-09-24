@@ -1,11 +1,8 @@
 """
-Runs a user-authored Python `process(df)` function once on the whole dataset (Process node's
-"Process as df" mode -- the counterpart to process_exec.py's per-row "Process by row" mode), using
-whatever Python interpreter (system install or a venv) the user points at in Settings. `df` is a
-pandas DataFrame built from the dataset's rows; the function must return a DataFrame. Since it's a
-single call rather than a loop over many rows, there's no persistent-subprocess/reader-thread
-machinery here -- just one Popen + communicate() per run, with the Popen handed back to the caller
-so it can be killed on cancel.
+Runs AnnoBio's single Process-node contract: a user-authored `process(df)` function over the whole
+dataset. It uses whichever Python interpreter (system install or a venv) the user points at in
+Settings. `df` is a pandas DataFrame built from the dataset's rows and the function must return a
+DataFrame. The subprocess is handed back to the caller so it can be killed on cancel.
 """
 
 import json

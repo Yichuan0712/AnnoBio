@@ -2102,7 +2102,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     name = '',
     code = null,
     dfCode = null,
-    activeMode = null,
     left,
     top,
   } = {}) {
@@ -2120,19 +2119,15 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       ? left
       : (parseFloat(sourceNode.style.left) || 0) + (sourceNode.offsetWidth || 280) + NEW_NODE_OFFSET;
     const resolvedTop = typeof top === 'number' ? top : (parseFloat(sourceNode.style.top) || 0);
-    const normalizedCode = code != null ? String(code) : null;
-    const normalizedDfCode = dfCode != null ? String(dfCode) : null;
-    const resolvedActiveMode = (activeMode === 'df' || activeMode === 'row')
-      ? activeMode
-      : (normalizedDfCode && !normalizedCode ? 'df' : 'row');
+    // Public callers provide code as process(df). dfCode remains an input alias for saves made
+    // before Process nodes had one contract.
+    const normalizedDfCode = dfCode != null ? String(dfCode) : (code != null ? String(code) : null);
 
     const node = createProcessNode({
       left: resolvedLeft,
       top: resolvedTop,
       title: finalName,
-      code: normalizedCode,
       dfCode: normalizedDfCode,
-      activeMode: resolvedActiveMode,
     });
     if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     if (node?.dataset?.nodeId) {
@@ -2150,9 +2145,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       nodeId: String(node?.dataset?.nodeId || '').trim(),
       sourceNodeId: normalizedSourceNodeId,
       name: String(node?.dataset?.processName || finalName).trim() || finalName,
-      activeMode: node?.dataset?.processActiveMode || resolvedActiveMode,
-      hasRowCode: Boolean(normalizedCode),
-      hasDfCode: Boolean(normalizedDfCode),
+      activeMode: 'df',
+      hasDataframeCode: Boolean(normalizedDfCode),
       position: {
         left: Number.parseFloat(node?.style?.left || '') || 0,
         top: Number.parseFloat(node?.style?.top || '') || 0,

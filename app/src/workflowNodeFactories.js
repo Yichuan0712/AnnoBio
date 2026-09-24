@@ -611,8 +611,8 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  /** Process node: runs a user-written function over a connected Dataset, either per-row or as a whole pandas DataFrame (no LLM, no backend LLM calls). */
-  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, activeMode }) {
+  /** Process node: runs one user-written process(df) function over a connected Dataset. */
+  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--process workflow-node--no-body';
@@ -622,9 +622,11 @@ export function createWorkflowNodeFactories(deps = {}) {
     node.dataset.nodeType = 'process';
     const processTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Process';
     node.dataset.processName = processTitle;
+    // ``code`` is retained as a load-only legacy field. New nodes and all current callers use
+    // dfCode, which is the single process(df) contract.
     if (code != null) node.dataset.processCode = String(code);
     if (dfCode != null) node.dataset.processDfCode = String(dfCode);
-    if (activeMode === 'df' || activeMode === 'row') node.dataset.processActiveMode = activeMode;
+    if (dfCode != null) node.dataset.processActiveMode = 'df';
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
