@@ -87,9 +87,9 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
 
   function buildPromptStep(step, allowedRunIds = null) {
     const restrictPromptRuns = allowedRunIds instanceof Set && allowedRunIds.size > 0;
-    const options = promptRunOptions(step).filter((option) => (
-      !restrictPromptRuns || allowedRunIds.has(option.runNodeId)
-    ));
+    const options = promptRunOptions(step)
+      .filter((option) => !restrictPromptRuns || allowedRunIds.has(option.runNodeId))
+      .map((option) => ({ ...option, label: option.promptName || 'Prompt' }));
     const selected = chooseOption(step.id, options, selectedByChoiceId, step.defaultRunNodeId || '');
     if (!selected) return null;
     selectedRunByStepId.set(step.id, selected.runNodeId);
@@ -314,6 +314,9 @@ function getCanvasNodeIds(step) {
 }
 
 function renderRouteChip(step) {
+  if (step.kind === 'empty') {
+    return '<span class="pipeline-overview-branch-chip pipeline-overview-branch-chip--empty"><span class="pipeline-step-empty">No operation</span></span>';
+  }
   const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', step: 'Step' };
   const picker = renderPickerOrName(
     step.choiceId,
@@ -366,7 +369,18 @@ function renderRouteStep(step) {
 function getVisibleRoute(route, hideIntermediateDatasets) {
   if (!hideIntermediateDatasets) return route;
   const firstDatasetIndex = route.findIndex((step) => step.kind === 'dataset');
-  return route.filter((step, index) => step.kind !== 'dataset' || index === firstDatasetIndex);
+  return route
+    .filter((step, index) => step.kind !== 'dataset' || index === firstDatasetIndex)
+    .map((step) => {
+      if (step.kind !== 'branch') return step;
+      return {
+        ...step,
+        lanes: (step.lanes || []).map((lane) => {
+          const visibleLane = lane.filter((laneStep) => laneStep.kind !== 'dataset');
+          return visibleLane.length ? visibleLane : [{ kind: 'empty' }];
+        }),
+      };
+    });
 }
 
 function getPipelineViewId(pipeline, index) {
