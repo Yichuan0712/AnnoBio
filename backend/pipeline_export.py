@@ -1091,8 +1091,9 @@ Useful options:
 --concurrency N
 ```
 
-`pipeline.json` is the machine-readable route manifest. Edit files under `processor/` and `prompt/`
-to change workflow behavior. Files under `engine/` provide the shared LiteLLM and OpenRouter access
+`pipeline.json` is the machine-readable route or graph manifest. Edit files under `processor/` and `prompt/`
+to change workflow behavior. When a graph has several terminal Datasets, the output workbook contains
+one worksheet for each Dataset. Files under `engine/` provide the shared LiteLLM and OpenRouter access
 layer and contain no credentials.
 """
 
@@ -1123,7 +1124,7 @@ httpx>=0.24,<1
 """
 
 
-def build_pipeline_archive(
+def _build_linear_pipeline_archive(
     *,
     canvas_state: dict[str, Any],
     route: list[dict[str, Any]],
@@ -1358,3 +1359,28 @@ def build_pipeline_archive(
             info.external_attr = 0o644 << 16
             bundle.writestr(info, exported.content.encode("utf-8"))
     return f"{root_name}.zip", archive.getvalue()
+
+
+def build_pipeline_archive(**kwargs: Any) -> tuple[str, bytes]:
+    """Export simple routes with the established generator and graph routes with the DAG generator."""
+    canvas_state = kwargs.get("canvas_state") or {}
+    route = kwargs.get("route") or []
+    raw_nodes = canvas_state.get("nodes") if isinstance(canvas_state, dict) else []
+    raw_connections = canvas_state.get("connections") if isinstance(canvas_state, dict) else []
+    nodes = {_text(node.get("nodeId") or node.get("id")): node for node in raw_nodes if isinstance(node, dict)}
+    connections = [edge for edge in raw_connections if isinstance(edge, dict)]
+    try:
+        selected = [_normalize_route_item(item) for item in route]
+        linear = bool(selected) and selected[0]["type"] == "dataset"
+        if linear:
+            for previous, current in zip(selected, selected[1:]):
+                _validate_transition(previous, current, nodes, connections)
+    except PipelineExportError:
+        linear = False
+    if linear:
+        return _build_linear_pipeline_archive(**kwargs)
+    try:  # main.py imports this module as top-level; tests use backend.pipeline_export.
+        from pipeline_export_dag import build_dag_pipeline_archive
+    except ImportError:
+        from .pipeline_export_dag import build_dag_pipeline_archive
+    return build_dag_pipeline_archive(**kwargs)

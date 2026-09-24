@@ -35,6 +35,36 @@ class ProcessDataframeExecutionTests(unittest.TestCase):
         self.assertEqual(outcome["outputs"]["accepted"][0]["label"], "keep")
         self.assertEqual(outcome["outputs"]["needs_review"][0]["label"], "review")
 
+    def test_secondary_datasets_are_available_without_implicit_row_merge(self):
+        outcome = run_process_df_code(
+            sys.executable,
+            "def process(df):\n    return inputs['reference-2'].assign(primary_rows=len(df))\n",
+            ["value"],
+            [["primary"]],
+            input_datasets={
+                "primary-1": {"headers": ["value"], "rows": [["primary"]]},
+                "reference-2": {"headers": ["value"], "rows": [["reference"]]},
+            },
+            primary_dataset_id="primary-1",
+        )
+        self.assertTrue(outcome["ok"])
+        self.assertEqual(outcome["outputs"]["result"], [{"value": "reference", "primary_rows": 1}])
+
+    def test_safe_dataset_id_alias_is_available_to_process_code(self):
+        outcome = run_process_df_code(
+            sys.executable,
+            "def process(df):\n    return df_reference_2\n",
+            ["value"],
+            [["primary"]],
+            input_datasets={
+                "primary": {"headers": ["value"], "rows": [["primary"]]},
+                "reference-2": {"headers": ["value"], "rows": [["reference"]]},
+            },
+            primary_dataset_id="primary",
+        )
+        self.assertTrue(outcome["ok"])
+        self.assertEqual(outcome["outputs"]["result"], [{"value": "reference"}])
+
     def test_non_dataframe_branch_has_a_actionable_error(self):
         outcome = self.run_code("def process(df):\n    return {'accepted': ['not a dataframe']}\n")
         self.assertFalse(outcome["ok"])

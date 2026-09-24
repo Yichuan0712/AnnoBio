@@ -286,5 +286,56 @@ else:
             self.build(state)
 
 
+    def test_branched_graph_exports_multi_input_process_and_terminal_workbook(self):
+        state = {
+            "version": 2,
+            "nodes": [
+                {"type": "dataset", "nodeId": "raw", "name": "Raw", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
+                {"type": "process", "nodeId": "split", "name": "Split", "dfCode": "def process(df):\n    return {'left': df, 'right': df}\n"},
+                {"type": "dataset", "nodeId": "left", "name": "Left", "processOutputName": "left", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
+                {"type": "dataset", "nodeId": "right", "name": "Right", "processOutputName": "right", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
+                {"type": "process", "nodeId": "combine", "name": "Combine", "primaryDatasetId": "right", "dfCode": "def process(df):\n    return df\n"},
+                {"type": "dataset", "nodeId": "combined", "name": "Combined", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
+                {"type": "prompt", "nodeId": "prompt", "name": "Answer", "sections": [{"name": "Task", "content": "Answer {text}"}], "inputTypes": {"text": "text"}, "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}},
+                {"type": "run", "nodeId": "run", "runName": "Answer run", "runWorkingSetId": "combined", "runInputToColumn": json.dumps({"text": "text"})},
+                {"type": "dataset", "nodeId": "answered", "name": "Answered", "sourceRunNodeId": "run", "datasetContent": {"headers": ["Input: text", "Output: answer"], "columnTypes": ["text", "text"]}},
+            ],
+            "connections": [
+                {"fromId": "raw", "toId": "split", "type": "dataset-to-process"},
+                {"fromId": "split", "toId": "left", "type": "process-to-dataset"},
+                {"fromId": "split", "toId": "right", "type": "process-to-dataset"},
+                {"fromId": "left", "toId": "combine", "type": "dataset-to-process"},
+                {"fromId": "right", "toId": "combine", "type": "dataset-to-process"},
+                {"fromId": "combine", "toId": "combined", "type": "process-to-dataset"},
+                {"fromId": "prompt", "toId": "run", "type": "prompt-to-run"},
+            ],
+        }
+        route = [
+            {"type": "dataset", "dataset_node_id": "raw"},
+            {"type": "process", "process_node_id": "split"},
+            {"type": "dataset", "dataset_node_id": "left"},
+            {"type": "dataset", "dataset_node_id": "right"},
+            {"type": "process", "process_node_id": "combine"},
+            {"type": "dataset", "dataset_node_id": "combined"},
+            {"type": "prompt", "prompt_node_id": "prompt", "run_node_id": "run"},
+            {"type": "dataset", "dataset_node_id": "answered"},
+        ]
+        _, archive = build_pipeline_archive(
+            canvas_state=state, route=route, name="Branched", credentials=[], author_name="Ada", generated_at="2026-09-24T00:00:00Z",
+        )
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            main = bundle.read("branched/main.py").decode("utf-8")
+            manifest = json.loads(bundle.read("branched/pipeline.json"))
+            self.assertIn("run_process(frames['right'], {'left': frames['left'], 'right': frames['right']}", main)
+            self.assertIn('namespace["inputs"] = scoped_inputs', main)
+            self.assertIn("branch(result, 'left'", main)
+            self.assertIn("REQUIRED_INPUT_COLUMNS = ['text']", main)
+            self.assertIn("frames: dict[str, pd.DataFrame] = {'raw':", main)
+            self.assertEqual(manifest["graph"]["terminal_datasets"], [{"id": "answered", "name": "Answered"}])
+            for member in bundle.namelist():
+                if member.endswith(".py"):
+                    compile(bundle.read(member), member, "exec")
+
+
 if __name__ == "__main__":
     unittest.main()

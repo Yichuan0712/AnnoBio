@@ -1,4 +1,3 @@
-import { mergeProcessInputContents } from './processInputMerge.js';
 
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
@@ -614,8 +613,8 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  /** Process node: runs one user-written process(df) function over its connected Dataset inputs. */
-  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode }) {
+  /** Process node: runs user-written process(df), with one primary Dataset and optional named inputs. */
+  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, primaryDatasetId = '' }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--process workflow-node--no-body';
@@ -630,6 +629,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (code != null) node.dataset.processCode = String(code);
     if (dfCode != null) node.dataset.processDfCode = String(dfCode);
     if (dfCode != null) node.dataset.processActiveMode = 'df';
+    if (primaryDatasetId) node.dataset.processPrimaryDatasetId = String(primaryDatasetId);
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
@@ -671,18 +671,26 @@ export function createWorkflowNodeFactories(deps = {}) {
       e.preventDefault();
       e.stopPropagation();
       const processNodeId = node.dataset.nodeId;
-      function getSourceDatasetContent() {
-        const contents = getConnectionsList()
+      function getProcessInputs() {
+        const inputs = getConnectionsList()
           .filter((connection) => connection.toId === processNodeId && connection.type === 'dataset-to-process')
           .map((connection) => getNodeById(connection.fromId))
           .filter((datasetNode) => datasetNode?.classList.contains('workflow-node--dataset'))
-          .map((datasetNode) => datasetContentByNodeId.get(datasetNode.dataset.nodeId))
-          .filter(Boolean);
-        return mergeProcessInputContents(contents);
+          .map((datasetNode) => ({
+            nodeId: datasetNode.dataset.nodeId,
+            name: datasetNode.dataset.datasetName || 'Dataset',
+            content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
+          }))
+          .filter((input) => input.content);
+        const primaryDatasetId = inputs.some((input) => input.nodeId === node.dataset.processPrimaryDatasetId)
+          ? node.dataset.processPrimaryDatasetId
+          : (inputs[0]?.nodeId || '');
+        if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
+        return { inputs, primaryDatasetId };
       }
       openProcessDetailModal({
         node,
-        getSourceDatasetContent,
+        getProcessInputs,
         getUniqueDatasetExportName: findUniqueDatasetExportName,
       });
     });

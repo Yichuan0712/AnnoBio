@@ -1,7 +1,8 @@
 """
 Runs AnnoBio's single Process-node contract: a user-authored `process(df)` function over the whole
 dataset. It uses whichever Python interpreter (system install or a venv) the user points at in
-Settings. `df` is a pandas DataFrame built from the dataset's rows. A Process can return either a
+Settings. `df` is a pandas DataFrame built from the primary Dataset; other connected Datasets are
+available independently. A Process can return either a
 DataFrame or a dictionary mapping branch names to DataFrames. The subprocess is handed back to the
 caller so it can be killed on cancel.
 """
@@ -13,7 +14,7 @@ import tempfile
 
 RUN_TIMEOUT_SEC = 120
 
-_WRAPPER_HEADER = """import sys, json
+_WRAPPER_HEADER = """import sys, json, re
 
 try:
     import pandas as pd
@@ -31,7 +32,27 @@ _WRAPPER_FOOTER = """
 
 try:
     _input = json.loads(sys.stdin.read())
-    _df = pd.DataFrame(_input.get("rows") or [])
+    _raw_inputs = _input.get("input_datasets") or {"input": {"headers": _input.get("headers") or [], "rows": _input.get("rows") or []}}
+    inputs = {}
+    for _dataset_id, _dataset in _raw_inputs.items():
+        if not isinstance(_dataset, dict):
+            raise TypeError("Each Process input Dataset must contain headers and rows")
+        _headers = _dataset.get("headers") or []
+        _rows = _dataset.get("rows") or []
+        inputs[str(_dataset_id)] = pd.DataFrame(_rows, columns=_headers)
+    _primary_dataset_id = str(_input.get("primary_dataset_id") or "")
+    if _primary_dataset_id not in inputs:
+        _primary_dataset_id = next(iter(inputs), "")
+    if not _primary_dataset_id:
+        raise ValueError("A Process needs one primary Dataset")
+    # `df` is the primary Dataset. Secondary inputs remain independent and are deliberately not
+    # concatenated. User code can use inputs["node-id"] or df_<safe_node_id>.
+    for _dataset_id, _dataset_frame in inputs.items():
+        _safe_id = re.sub(r"[^A-Za-z0-9_]", "_", _dataset_id)
+        if _safe_id and _safe_id[0].isdigit():
+            _safe_id = "_" + _safe_id
+        globals()["df_" + (_safe_id or "dataset")] = _dataset_frame
+    _df = inputs[_primary_dataset_id]
     _result = process(_df)
     if isinstance(_result, pd.DataFrame):
         _outputs = {"result": _result}
@@ -60,9 +81,10 @@ def _build_wrapper(code: str) -> str:
     return _WRAPPER_HEADER + code + _WRAPPER_FOOTER
 
 
-def run_process_df_code(python_path: str, code: str, headers: list, rows: list, register_proc=None, timeout_sec: int = RUN_TIMEOUT_SEC) -> dict:
+def run_process_df_code(python_path: str, code: str, headers: list, rows: list, input_datasets: dict | None = None, primary_dataset_id: str = "", register_proc=None, timeout_sec: int = RUN_TIMEOUT_SEC) -> dict:
     """
-    Runs `code`'s process(df) once on the whole dataset (`rows`, each a list keyed by `headers`).
+    Runs `code`'s process(df) once on the primary Dataset. Additional input Datasets are exposed
+    independently through `inputs[dataset_id]` and `df_<safe_dataset_id>` globals.
     `register_proc(proc)`, if given, is called with the subprocess.Popen as soon as it's spawned,
     so the caller can kill it to cancel a run in progress. Returns {"ok": True, "outputs":
     {branch_name: [...]}} or {"ok": False, "error": ...}. Never raises.
@@ -72,11 +94,19 @@ def run_process_df_code(python_path: str, code: str, headers: list, rows: list, 
         f.write(_build_wrapper(code))
 
     try:
-        row_dicts = [
-            {h: (row[i] if i < len(row) else "") for i, h in enumerate(headers)}
-            for row in rows
-        ]
-        payload = json.dumps({"rows": row_dicts})
+        normalized_inputs = input_datasets or {primary_dataset_id or "input": {"headers": headers, "rows": rows}}
+        payload_inputs = {}
+        for dataset_id, content in normalized_inputs.items():
+            source_headers = list((content or {}).get("headers") or [])
+            source_rows = list((content or {}).get("rows") or [])
+            payload_inputs[str(dataset_id)] = {
+                "headers": source_headers,
+                "rows": [
+                    {header: (row[index] if index < len(row) else "") for index, header in enumerate(source_headers)}
+                    for row in source_rows
+                ],
+            }
+        payload = json.dumps({"input_datasets": payload_inputs, "primary_dataset_id": primary_dataset_id})
 
         try:
             proc = subprocess.Popen(

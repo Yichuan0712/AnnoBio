@@ -104,9 +104,9 @@ function restoreResults(node, ...keys) {
 }
 
 /**
- * @param {{ node: HTMLElement, getSourceDatasetContent: () => { headers: string[], rows: string[][] }, getUniqueDatasetExportName?: (base: string) => string }} options
+ * @param {{ node: HTMLElement, getProcessInputs: () => { inputs: Array<{nodeId: string, name: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, getUniqueDatasetExportName?: (base: string) => string }} options
  */
-export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqueDatasetExportName }) {
+export function openProcessDetailModal({ node, getProcessInputs, getUniqueDatasetExportName }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -117,10 +117,25 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
   }
 
   const title = (node?.dataset?.processName || 'Process').trim() || 'Process';
+  const readInputs = () => {
+    const raw = getProcessInputs?.() || {};
+    const inputs = Array.isArray(raw.inputs) ? raw.inputs.filter((input) => input?.nodeId && input?.content) : [];
+    const primaryDatasetId = inputs.some((input) => input.nodeId === raw.primaryDatasetId)
+      ? raw.primaryDatasetId
+      : (inputs[0]?.nodeId || '');
+    return { inputs, primaryDatasetId };
+  };
+  const initialInputs = readInputs();
+  const primaryInput = initialInputs.inputs.find((input) => input.nodeId === initialInputs.primaryDatasetId);
+  const inputBindings = initialInputs.inputs.map((input) => {
+    const variable = `df_${String(input.nodeId).replace(/[^A-Za-z0-9_]/g, '_').replace(/^([0-9])/, '_$1')}`;
+    const primary = input.nodeId === initialInputs.primaryDatasetId ? ' (primary: df)' : '';
+    return `<li><code>${escapeHtml(variable)}</code> &mdash; ${escapeHtml(input.name || 'Dataset')} <code>inputs[&quot;${escapeHtml(input.nodeId)}&quot;]</code>${primary}</li>`;
+  }).join('') || '<li>No connected Dataset.</li>';
   const initialCode = resolveDataframeProcessCode({
     dfCode: node?.dataset?.processDfCode,
     code: node?.dataset?.processCode,
-  }) || buildDefaultCode(getSourceDatasetContent().headers);
+  }) || buildDefaultCode(primaryInput?.content?.headers || []);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -137,7 +152,8 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
           <p class="run-detail-main-label">Python code</p>
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
-          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings → Python. <code>df</code> contains all connected Dataset rows, combined by row with a union of their columns. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
+          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the primary Dataset. Every connected Dataset is also available through <code>inputs[&quot;node id&quot;]</code> and the aliases below. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
+          <ul class="process-input-bindings">${inputBindings}</ul>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -147,8 +163,10 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
           </div>
         </div>
         <div class="run-detail-preview-wrap">
-          <h3 class="run-detail-preview-title">Results</h3>
-          <div class="process-branch-picker" hidden></div>
+          <div class="run-detail-preview-header">
+            <h3 class="run-detail-preview-title">Results</h3>
+            <div class="process-branch-picker" hidden></div>
+          </div>
           <div class="run-detail-preview-content process-results-content"></div>
         </div>
       </div>
@@ -209,8 +227,11 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
         refreshResults();
       });
     }
-    const branchSummary = entries.map(([name, output]) => `${name}: ${output.rows.length} row${output.rows.length === 1 ? '' : 's'}`).join(' · ');
-    resultsPanel.showResultsCard(branch.headers, branch.rows, lastResults.statusText || branchSummary);
+    resultsPanel.showResultsCard(
+      branch.headers,
+      branch.rows,
+      `${branch.headers.length} columns, ${branch.rows.length} rows`,
+    );
     if (saveBtnEl) saveBtnEl.textContent = entries.length > 1 ? 'Create branch datasets' : 'Create dataset';
   }
 
@@ -300,9 +321,11 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
   }
 
   async function startRun() {
-    const { headers, rows } = getSourceDatasetContent();
-    if (!rows?.length) {
-      showPlaceholder('Connected dataset has no rows.');
+    const { inputs, primaryDatasetId } = readInputs();
+    const primary = inputs.find((input) => input.nodeId === primaryDatasetId);
+    const { headers = [], rows = [] } = primary?.content || {};
+    if (!primary) {
+      showPlaceholder('Connect a primary Dataset before running.');
       return;
     }
     let pythonPath = '';
@@ -319,10 +342,12 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
     setNodeProgress(0, rows.length);
     showPlaceholder('Running…');
     try {
-      const session = rowsHaveAssetCells(rows) ? await prepareAssets(getCurrentProjectId()) : {};
+      const allRows = inputs.flatMap((input) => input.content?.rows || []);
+      const session = rowsHaveAssetCells(allRows) ? await prepareAssets(getCurrentProjectId()) : {};
+      const inputDatasets = Object.fromEntries(inputs.map((input) => [input.nodeId, input.content]));
       const response = await fetch(`${API_BASE}/api/process/df/run`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ python_path: pythonPath, code: getCode(), headers, rows, ...session }),
+        body: JSON.stringify({ python_path: pythonPath, code: getCode(), headers, rows, input_datasets: inputDatasets, primary_dataset_id: primaryDatasetId, ...session }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
