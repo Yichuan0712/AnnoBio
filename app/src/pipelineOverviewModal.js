@@ -331,13 +331,12 @@ function renderRouteStep(step) {
     const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
     const lanes = (step.lanes || []).map((lane) => `
       <div class="pipeline-overview-branch-lane">
-        <span class="pipeline-overview-branch-marker" aria-hidden="true">↳</span>
+        <span class="pipeline-overview-branch-index">BRANCH ${step.lanes.indexOf(lane) + 1}</span>
         ${lane.map(renderRouteChip).join('<span class="pipeline-overview-branch-arrow" aria-hidden="true">→</span>')}
       </div>
     `).join('');
     return `
       <li class="pipeline-overview-branch" data-canvas-node-ids="${canvasNodeIds}">
-        <span class="pipeline-overview-branch-title">Branches</span>
         <div class="pipeline-overview-branch-lanes">${lanes}</div>
       </li>
     `;
@@ -377,8 +376,14 @@ function getPipelineViewId(pipeline, index) {
 function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDatasets) {
   const route = buildSelectedRoute(pipeline, selectedByChoiceId);
   const visibleRoute = getVisibleRoute(route, hideIntermediateDatasets);
-  const steps = visibleRoute.map(renderRouteStep)
-    .join('<li class="pipeline-overview-arrow" aria-hidden="true">&#8594;</li>');
+  const steps = visibleRoute.reduce((html, step, routeIndex) => {
+    const previous = visibleRoute[routeIndex - 1];
+    // A branching block starts and ends on its own line. Do not leave a wrapped arrow at either
+    // edge: its BRANCH labels communicate the fork while the shared continuation stays clean.
+    const needsArrow = routeIndex > 0 && step.kind !== 'branch' && previous?.kind !== 'branch';
+    const arrow = needsArrow ? '<li class="pipeline-overview-arrow" aria-hidden="true">&#8594;</li>' : '';
+    return html + arrow + renderRouteStep(step);
+  }, '');
   return `
     <div class="pipeline-overview-card" data-pipeline-index="${index}">
       <div class="pipeline-overview-card-header">
@@ -515,20 +520,20 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   });
 
   bodyEl.addEventListener('pointerover', (event) => {
-    const stepEl = event.target.closest?.('.pipeline-overview-step');
+    const stepEl = event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch');
     if (!stepEl || stepEl.contains(event.relatedTarget)) return;
     highlightRouteStep(stepEl);
   });
   bodyEl.addEventListener('pointerout', (event) => {
-    const stepEl = event.target.closest?.('.pipeline-overview-step');
+    const stepEl = event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch');
     if (!stepEl || stepEl.contains(event.relatedTarget)) return;
     clearCanvasHighlight();
   });
   bodyEl.addEventListener('focusin', (event) => {
-    highlightRouteStep(event.target.closest?.('.pipeline-overview-step'));
+    highlightRouteStep(event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch'));
   });
   bodyEl.addEventListener('focusout', (event) => {
-    const stepEl = event.target.closest?.('.pipeline-overview-step');
+    const stepEl = event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch');
     if (!stepEl || stepEl.contains(event.relatedTarget)) return;
     clearCanvasHighlight();
   });
