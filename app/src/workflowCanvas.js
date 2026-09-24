@@ -62,7 +62,7 @@ import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
 import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS } from './workflowNodeColors.js';
-import { showAlert, showConfirm } from './alertModal.js';
+import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
 import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
@@ -70,6 +70,7 @@ import { iconWorkflow } from './icons.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { resolveDataframeProcessCode } from './processCode.js';
+import { mergeProcessInputContents } from './processInputMerge.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -2588,13 +2589,16 @@ export function buildWorkflowCanvas(root, options = {}) {
       e.stopPropagation();
       const processNode = getNodeById(edge.toId);
       if (processNode && processNode.classList.contains('workflow-node--process')) {
-        const datasetNode = getNodeById(edge.fromId);
         openProcessDetailModal({
           node: processNode,
           getSourceDatasetContent: () => {
-            if (!datasetNode) return { headers: [], rows: [] };
-            const c = datasetContentByNodeId.get(datasetNode.dataset.nodeId);
-            return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
+            const contents = connections
+              .filter((connection) => connection.toId === processNode.dataset.nodeId && connection.type === EDGE_TYPE_DATASET_TO_PROCESS)
+              .map((connection) => getNodeById(connection.fromId))
+              .filter((datasetNode) => datasetNode?.classList.contains('workflow-node--dataset'))
+              .map((datasetNode) => datasetContentByNodeId.get(datasetNode.dataset.nodeId))
+              .filter(Boolean);
+            return mergeProcessInputContents(contents);
           },
           getUniqueDatasetExportName: findUniqueDatasetExportName,
         });
@@ -3344,6 +3348,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="add-sampler" role="menuitem">Sample</button>
         <button type="button" class="workflow-node-context-item workflow-node-context-item--run" data-action="process-this-dataset" role="menuitem">Process with code</button>
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--run" data-action="merge-with-dataset" role="menuitem">Merge with another dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="duplicate-working-dataset" role="menuitem">Duplicate this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="add-version-of-dataset" role="menuitem">Add new version of this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-dataset-name-description" role="menuitem">Edit name & description</button>
@@ -3356,6 +3361,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     } else if (isProcess) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create datasets</button>
+        <button type="button" class="workflow-node-context-item" data-action="process-add-dataset-input" role="menuitem">Add dataset input</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-process-name" role="menuitem">Edit name</button>
       `;
     } else {
@@ -3615,6 +3621,65 @@ export function buildWorkflowCanvas(root, options = {}) {
           updateEdges();
         }
         updateContentSize();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      },
+      'merge-with-dataset': async () => {
+        if (node.dataset.nodeType !== 'dataset') return;
+        const sourceId = node.dataset.nodeId || '';
+        const candidates = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'))
+          .filter((datasetNode) => datasetNode.dataset.nodeId !== sourceId)
+          .map((datasetNode) => ({
+            value: datasetNode.dataset.nodeId || '',
+            label: (datasetNode.dataset.datasetName || 'Dataset').trim() || 'Dataset',
+          }))
+          .filter((candidate) => candidate.value);
+        if (!candidates.length) {
+          showAlert('Create another Dataset before merging.', { title: 'Merge datasets' });
+          return;
+        }
+        const otherId = await showSelect('Choose the other Dataset to combine by row.', {
+          title: 'Merge datasets',
+          confirmText: 'Create merge',
+          options: candidates,
+        });
+        if (!otherId) return;
+        const left = (parseFloat(node.style.left) || 0) + (node.offsetWidth || 280) + NEW_NODE_OFFSET;
+        const top = parseFloat(node.style.top) || 0;
+        const processNode = createProcessNode({ left, top, title: 'Merge datasets' });
+        if (!processNode?.dataset?.nodeId) return;
+        connections.push(
+          { fromId: sourceId, toId: processNode.dataset.nodeId, type: EDGE_TYPE_DATASET_TO_PROCESS },
+          { fromId: otherId, toId: processNode.dataset.nodeId, type: EDGE_TYPE_DATASET_TO_PROCESS },
+        );
+        updateEdges();
+        updateContentSize();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      },
+      'process-add-dataset-input': async () => {
+        if (node.dataset.nodeType !== 'process') return;
+        const processId = node.dataset.nodeId || '';
+        const connected = new Set(connections
+          .filter((connection) => connection.toId === processId && connection.type === EDGE_TYPE_DATASET_TO_PROCESS)
+          .map((connection) => connection.fromId));
+        const candidates = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'))
+          .filter((datasetNode) => !connected.has(datasetNode.dataset.nodeId || ''))
+          .map((datasetNode) => ({
+            value: datasetNode.dataset.nodeId || '',
+            label: (datasetNode.dataset.datasetName || 'Dataset').trim() || 'Dataset',
+          }))
+          .filter((candidate) => candidate.value);
+        if (!candidates.length) {
+          showAlert('Every Dataset is already connected to this Process.', { title: 'Add dataset input' });
+          return;
+        }
+        const datasetId = await showSelect('Choose a Dataset to combine into this Process input.', {
+          title: 'Add dataset input',
+          confirmText: 'Add input',
+          options: candidates,
+        });
+        if (!datasetId) return;
+        connections.push({ fromId: datasetId, toId: processId, type: EDGE_TYPE_DATASET_TO_PROCESS });
+        updateEdges();
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       },
       'run-this-prompt': () => {

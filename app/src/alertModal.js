@@ -177,6 +177,65 @@ export function showPrompt(message, options = {}) {
 }
 
 /**
+ * Select-one modal using the application's standard alert-panel styling.
+ * @param {string} message
+ * @param {{ title?: string, confirmText?: string, options?: Array<{value: string, label: string}> }} [options]
+ * @returns {Promise<string | null>}
+ */
+export function showSelect(message, options = {}) {
+  const title = options.title ? String(options.title) : 'Choose an option';
+  const confirmText = options.confirmText ? String(options.confirmText) : 'Choose';
+  const choices = Array.isArray(options.options) ? options.options.filter((choice) => choice?.value != null) : [];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay modal-overlay--alert';
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'select-modal-title');
+  overlay.innerHTML = `
+    <div class="modal-panel modal-panel--alert">
+      <div class="modal-header">
+        <h2 id="select-modal-title" class="modal-title">${escapeHtml(title)}</h2>
+        <button type="button" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body modal-body--alert">
+        <p class="alert-modal-message"><label for="select-modal-input">${escapeHtml(message)}</label></p>
+        <select id="select-modal-input" class="prompt-modal-input">${choices.map((choice) => (
+          `<option value="${escapeHtml(String(choice.value))}">${escapeHtml(String(choice.label || choice.value))}</option>`
+        )).join('')}</select>
+      </div>
+      <div class="modal-alert-footer">
+        <button type="button" class="btn btn-secondary select-modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-secondary select-modal-ok">${escapeHtml(confirmText)}</button>
+      </div>
+    </div>
+  `;
+  const select = overlay.querySelector('#select-modal-input');
+  let resolved = false;
+  return new Promise((resolve) => {
+    const done = (value) => {
+      if (resolved) return;
+      resolved = true;
+      overlay.remove();
+      document.body.style.overflow = '';
+      document.removeEventListener('keydown', onKeyDown);
+      resolve(value);
+    };
+    const close = () => done(null);
+    const submit = () => done(select.value || null);
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') close();
+      if (event.key === 'Enter') submit();
+    };
+    overlay.querySelector('.modal-close').addEventListener('click', close);
+    overlay.querySelector('.select-modal-cancel').addEventListener('click', close);
+    overlay.querySelector('.select-modal-ok').addEventListener('click', submit);
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+    document.addEventListener('keydown', onKeyDown);
+    document.body.style.overflow = 'hidden';
+    select.focus();
+  });
+}
+
+/**
  * Confirm modal (same style as alert): title, message, Cancel + primary action.
  * @param {string} message - Body text.
  * @param {{ title?: string, confirmText?: string }} [options] - title (default "Confirm"), confirmText (default "OK").

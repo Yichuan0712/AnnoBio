@@ -2,7 +2,8 @@
  * Process node editor.
  *
  * Process nodes use one explicit contract: ``process(df) -> DataFrame | {name: DataFrame}``.
- * Opening a legacy row processor migrates it to that contract, so every new edit and run uses one path.
+ * Multiple Dataset inputs are merged by row before calling `process`, so every edit and run uses
+ * one dataframe while a Process can still serve as a visible merge point on the canvas.
  */
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -19,7 +20,7 @@ const API_BASE = BACKEND_API_BASE;
 const PROCESS_POLL_INTERVAL_MS = 1200;
 const MAX_COMMENT_LINE_CHARS = 70;
 const FALLBACK_DEFAULT_CODE = `def process(df):
-    # df is the full connected dataset as a pandas DataFrame.
+    # df contains rows from every connected Dataset as a pandas DataFrame.
     # Return a DataFrame with the rows and columns you want to keep.
     # Or return {"accepted": df_a, "needs_review": df_b} to create named branches.
     return df
@@ -136,7 +137,7 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
           <p class="run-detail-main-label">Python code</p>
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
-            <p class="process-editor-hint">Runs once on the connected dataset with the Python interpreter set in Settings → Python. <code>df</code> is a pandas DataFrame keyed by column name. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
+          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings → Python. <code>df</code> contains all connected Dataset rows, combined by row with a union of their columns. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
