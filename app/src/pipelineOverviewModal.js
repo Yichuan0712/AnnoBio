@@ -323,12 +323,12 @@ function renderRouteChip(step) {
       ? 'Preview one of the datasets in this branch.'
       : (step.kind === 'prompt' ? 'Preview one concrete Prompt Run in this branch.' : 'Preview this Process path.'),
   );
-  return `<span class="pipeline-overview-branch-chip"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind] || 'Step'}</span>${picker}</span>`;
+  const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
+  return `<span class="pipeline-overview-branch-chip" data-canvas-node-ids="${canvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind] || 'Step'}</span>${picker}</span>`;
 }
 
 function renderRouteStep(step) {
   if (step.kind === 'branch') {
-    const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
     const lanes = (step.lanes || []).map((lane) => `
       <div class="pipeline-overview-branch-lane">
         <span class="pipeline-overview-branch-index">BRANCH ${step.lanes.indexOf(lane) + 1}</span>
@@ -336,7 +336,7 @@ function renderRouteStep(step) {
       </div>
     `).join('');
     return `
-      <li class="pipeline-overview-branch" data-canvas-node-ids="${canvasNodeIds}">
+      <li class="pipeline-overview-branch">
         <div class="pipeline-overview-branch-lanes">${lanes}</div>
       </li>
     `;
@@ -377,10 +377,9 @@ function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDat
   const route = buildSelectedRoute(pipeline, selectedByChoiceId);
   const visibleRoute = getVisibleRoute(route, hideIntermediateDatasets);
   const steps = visibleRoute.reduce((html, step, routeIndex) => {
-    const previous = visibleRoute[routeIndex - 1];
-    // A branching block starts and ends on its own line. Do not leave a wrapped arrow at either
-    // edge: its BRANCH labels communicate the fork while the shared continuation stays clean.
-    const needsArrow = routeIndex > 0 && step.kind !== 'branch' && previous?.kind !== 'branch';
+    // Keep the route connectors on both sides of a branch block. The block itself takes a full
+    // row, so flex wrapping never bends a connector through its interior.
+    const needsArrow = routeIndex > 0;
     const arrow = needsArrow ? '<li class="pipeline-overview-arrow" aria-hidden="true">&#8594;</li>' : '';
     return html + arrow + renderRouteStep(step);
   }, '');
@@ -520,20 +519,20 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   });
 
   bodyEl.addEventListener('pointerover', (event) => {
-    const stepEl = event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch');
+    const stepEl = event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch-chip');
     if (!stepEl || stepEl.contains(event.relatedTarget)) return;
     highlightRouteStep(stepEl);
   });
   bodyEl.addEventListener('pointerout', (event) => {
-    const stepEl = event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch');
+    const stepEl = event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch-chip');
     if (!stepEl || stepEl.contains(event.relatedTarget)) return;
     clearCanvasHighlight();
   });
   bodyEl.addEventListener('focusin', (event) => {
-    highlightRouteStep(event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch'));
+    highlightRouteStep(event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch-chip'));
   });
   bodyEl.addEventListener('focusout', (event) => {
-    const stepEl = event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch');
+    const stepEl = event.target.closest?.('.pipeline-overview-step, .pipeline-overview-branch-chip');
     if (!stepEl || stepEl.contains(event.relatedTarget)) return;
     clearCanvasHighlight();
   });
