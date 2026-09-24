@@ -68,12 +68,129 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
   const visitedStepIds = new Set();
   const selectedRunByStepId = new Map();
 
+  function buildDatasetStep(step) {
+    const producerRunId = selectedRunByStepId.get(step.producerStepId) || null;
+    const datasets = producerRunId
+      ? step.datasets.filter((dataset) => dataset.producerRunNodeId === producerRunId)
+      : step.datasets;
+    const options = datasets.map((dataset) => ({
+      value: dataset.datasetNodeId,
+      label: dataset.datasetName,
+      dataset,
+      stepId: step.id,
+    }));
+    const selected = chooseOption(step.id, options, selectedByChoiceId);
+    return selected ? {
+      kind: 'dataset', choiceId: step.id, options, selectedValue: selected.value, selectedOption: selected,
+    } : null;
+  }
+
+  function buildPromptStep(step, allowedRunIds = null) {
+    const restrictPromptRuns = allowedRunIds instanceof Set && allowedRunIds.size > 0;
+    const options = promptRunOptions(step).filter((option) => (
+      !restrictPromptRuns || allowedRunIds.has(option.runNodeId)
+    ));
+    const selected = chooseOption(step.id, options, selectedByChoiceId, step.defaultRunNodeId || '');
+    if (!selected) return null;
+    selectedRunByStepId.set(step.id, selected.runNodeId);
+    return {
+      kind: 'prompt', choiceId: step.id, options, selectedValue: selected.value, selectedOption: selected,
+    };
+  }
+
+  function buildProcessStep(step) {
+    const selected = {
+      value: `process:${step.processNodeId}`,
+      label: step.processName,
+      stepId: step.id,
+      processNodeId: step.processNodeId,
+      inputDatasets: Array.isArray(step.inputDatasets) ? step.inputDatasets : [],
+      kind: 'process',
+    };
+    return {
+      kind: 'process', choiceId: step.id, options: [selected], selectedValue: selected.value, selectedOption: selected,
+    };
+  }
+
+  function nextStepIdsForRouteStep(routeStep) {
+    const selected = routeStep?.selectedOption;
+    if (!selected) return [];
+    if (selected.dataset) return selected.dataset.consumerStepIds || [];
+    return (outgoing.get(selected.stepId) || []).filter((id) => stepById.has(id));
+  }
+
+  function findSharedJoin(startIds) {
+    const distancesFrom = (startId) => {
+      const distances = new Map([[startId, 0]]);
+      const queue = [startId];
+      while (queue.length) {
+        const current = queue.shift();
+        for (const next of outgoing.get(current) || []) {
+          if (distances.has(next)) continue;
+          distances.set(next, distances.get(current) + 1);
+          queue.push(next);
+        }
+      }
+      return distances;
+    };
+    const distanceMaps = startIds.map(distancesFrom);
+    const commonIds = [...distanceMaps[0].keys()].filter((id) => (
+      !startIds.includes(id) && distanceMaps.every((map) => map.has(id))
+    ));
+    commonIds.sort((a, b) => {
+      const aDistance = distanceMaps.reduce((sum, map) => sum + map.get(a), 0);
+      const bDistance = distanceMaps.reduce((sum, map) => sum + map.get(b), 0);
+      return aDistance - bDistance;
+    });
+    return commonIds[0] || '';
+  }
+
+  function buildBranchLane(startId, joinId) {
+    const lane = [];
+    const seen = new Set();
+    let currentId = startId;
+    let allowedRunIds = null;
+    while (currentId && currentId !== joinId && !seen.has(currentId) && lane.length < 100) {
+      seen.add(currentId);
+      const step = stepById.get(currentId);
+      if (!step) break;
+      const routeStep = step.kind === 'dataset'
+        ? buildDatasetStep(step)
+        : (step.kind === 'prompt' ? buildPromptStep(step, allowedRunIds) : buildProcessStep(step));
+      if (!routeStep) break;
+      lane.push(routeStep);
+      if (routeStep.kind === 'dataset') {
+        allowedRunIds = new Set(routeStep.selectedOption.dataset.consumerRunNodeIds || []);
+      } else {
+        allowedRunIds = null;
+      }
+      const nextIds = nextStepIdsForRouteStep(routeStep);
+      currentId = nextIds.includes(joinId) ? joinId : nextIds[0];
+    }
+    return lane;
+  }
+
   function walk(candidateStepIds, allowedRunIds = null) {
     if (route.length >= 200) return;
     const candidateSteps = candidateStepIds
       .map((id) => stepById.get(id))
       .filter((step) => step && !visitedStepIds.has(step.id));
     if (candidateSteps.length === 0) return;
+
+    if (candidateSteps.every((step) => step.kind === 'dataset') && candidateSteps.length > 1) {
+      const joinId = findSharedJoin(candidateSteps.map((step) => step.id));
+      if (joinId) {
+        const lanes = candidateSteps.map((step) => buildBranchLane(step.id, joinId)).filter((lane) => lane.length);
+        if (lanes.length > 1) {
+          route.push({ kind: 'branch', lanes });
+          for (const lane of lanes) {
+            for (const laneStep of lane) visitedStepIds.add(laneStep.selectedOption.stepId);
+          }
+          walk([joinId]);
+          return;
+        }
+      }
+    }
 
     if (candidateSteps.every((step) => step.kind === 'dataset')) {
       const choiceId = candidateSteps.length === 1
@@ -135,9 +252,7 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
 
     const allPrompts = nextOptions.every((option) => option.kind === 'prompt');
     const allProcesses = nextOptions.every((option) => option.kind === 'process');
-    const displayKind = allPrompts
-      ? 'prompt'
-      : (allProcesses && selected.inputDatasets?.length > 1 ? 'merge' : (allProcesses ? 'process' : 'step'));
+    const displayKind = allPrompts ? 'prompt' : (allProcesses ? 'process' : 'step');
     const displayOptions = nextOptions.map((option) => ({
       ...option,
       label: allPrompts && nextOptions.length > 1
@@ -184,6 +299,9 @@ function exportRoutePayload(route) {
 }
 
 function getCanvasNodeIds(step) {
+  if (step?.kind === 'branch') {
+    return (step.lanes || []).flatMap((lane) => lane.flatMap((laneStep) => getCanvasNodeIds(laneStep)));
+  }
   const selected = step.selectedOption;
   if (selected?.dataset?.datasetNodeId) return [selected.dataset.datasetNodeId];
   if (selected?.kind === 'prompt') {
@@ -195,15 +313,42 @@ function getCanvasNodeIds(step) {
   return [];
 }
 
+function renderRouteChip(step) {
+  const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', step: 'Step' };
+  const picker = renderPickerOrName(
+    step.choiceId,
+    step.options,
+    step.selectedValue,
+    step.kind === 'dataset'
+      ? 'Preview one of the datasets in this branch.'
+      : (step.kind === 'prompt' ? 'Preview one concrete Prompt Run in this branch.' : 'Preview this Process path.'),
+  );
+  return `<span class="pipeline-overview-branch-chip"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind] || 'Step'}</span>${picker}</span>`;
+}
+
 function renderRouteStep(step) {
+  if (step.kind === 'branch') {
+    const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
+    const lanes = (step.lanes || []).map((lane) => `
+      <div class="pipeline-overview-branch-lane">
+        <span class="pipeline-overview-branch-marker" aria-hidden="true">↳</span>
+        ${lane.map(renderRouteChip).join('<span class="pipeline-overview-branch-arrow" aria-hidden="true">→</span>')}
+      </div>
+    `).join('');
+    return `
+      <li class="pipeline-overview-branch" data-canvas-node-ids="${canvasNodeIds}">
+        <span class="pipeline-overview-branch-title">Branches</span>
+        <div class="pipeline-overview-branch-lanes">${lanes}</div>
+      </li>
+    `;
+  }
   const titles = {
     dataset: 'Preview one of the datasets available at this point in the route.',
     prompt: 'Preview one concrete Prompt Run and follow its connected output.',
     process: 'Preview one Process path.',
-    merge: 'This Process combines all listed Dataset inputs before it runs.',
     step: 'Preview one of the connected next steps.',
   };
-  const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', merge: 'Merge', step: 'Step' };
+  const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', step: 'Step' };
   const picker = renderPickerOrName(
     step.choiceId,
     step.options,
@@ -211,15 +356,10 @@ function renderRouteStep(step) {
     titles[step.kind],
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
-  const mergeInputs = step.kind === 'merge'
-    ? `<span class="pipeline-step-merge-inputs">${(step.selectedOption?.inputDatasets || [])
-      .map((input) => escapeHtml(input.datasetName || 'Dataset')).join(' + ')}</span>`
-    : '';
   return `
     <li class="pipeline-overview-step" data-canvas-node-ids="${canvasNodeIds}">
       <span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind]}</span>
       ${picker}
-      ${mergeInputs}
     </li>
   `;
 }
@@ -403,8 +543,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       return;
     }
     const route = buildSelectedRoute(pipeline, selectedByChoiceId);
-    const merge = route.find((step) => step.kind === 'merge');
-    if (merge) {
+    const hasMultiInputProcess = route.some((step) => (
+      step.selectedOption?.kind === 'process' && step.selectedOption.inputDatasets?.length > 1
+    ));
+    if (hasMultiInputProcess || route.some((step) => step.kind === 'branch')) {
       showAlert('Python export for a Pipeline with merged Dataset inputs is not available yet. Save the Merge Process output as one Dataset, then export the downstream route.', {
         title: 'Cannot export Pipeline',
       });

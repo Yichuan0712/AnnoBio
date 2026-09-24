@@ -8541,11 +8541,27 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 .pipeline-step-kind--prompt { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
 .pipeline-step-kind--process { background: rgba(16, 137, 62, 0.14); color: #10893e; }
-.pipeline-step-kind--merge { background: rgba(217, 119, 6, 0.15); color: #b45309; }
 .pipeline-step-kind--dataset { background: rgba(124, 58, 237, 0.14); color: #7c3aed; }
 .pipeline-step-kind--step { background: rgba(100, 116, 139, 0.14); color: var(--text-muted); }
 .pipeline-step-name { font-size: 13px; color: var(--text); }
-.pipeline-step-merge-inputs { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+.pipeline-overview-branch {
+  flex: 1 0 100%; display: flex; align-items: stretch; gap: 8px;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--control-radius, 6px);
+  background: color-mix(in srgb, var(--bg-bar) 82%, var(--accent) 18%);
+}
+.pipeline-overview-branch:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pipeline-overview-branch-title {
+  align-self: center; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-muted);
+}
+.pipeline-overview-branch-lanes { display: grid; gap: 5px; min-width: 0; }
+.pipeline-overview-branch-lane { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.pipeline-overview-branch-marker { color: var(--text-muted); font-size: 13px; }
+.pipeline-overview-branch-arrow { color: var(--text-muted); font-size: 12px; }
+.pipeline-overview-branch-chip {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap;
+  border: 1px solid var(--border); border-radius: var(--control-radius, 6px); background: var(--bg-bar); padding: 4px 7px;
+}
 .pipeline-step-version-select {
   font-size: 12.5px; padding: 2px 4px; border: 1px solid var(--border);
   border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); font-family: inherit;
