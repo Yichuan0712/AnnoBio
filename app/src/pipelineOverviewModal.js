@@ -383,9 +383,8 @@ function renderRouteStep(step) {
 
 function getVisibleRoute(route, hideIntermediateDatasets) {
   if (!hideIntermediateDatasets) return route;
-  const firstDatasetIndex = route.findIndex((step) => step.kind === 'dataset');
   return route
-    .filter((step, index) => step.kind !== 'dataset' || index === firstDatasetIndex)
+    .filter((step) => step.kind !== 'dataset')
     .map((step) => {
       if (step.kind !== 'branch') return step;
       return {
