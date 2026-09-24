@@ -297,14 +297,10 @@
   z-index: 10;
 }
 
-.workflow-node--selected {
+.workflow-node--selected,
+.workflow-node--pipeline-highlighted {
   outline: 2px solid var(--primary-btn-text, #2563eb);
   outline-offset: 2px;
-}
-
-.workflow-node--pipeline-highlighted {
-  z-index: 2;
-  box-shadow: 0 0 0 3px var(--accent), 0 8px 24px var(--shadow);
 }
 
 /* Rubber-band select rectangle — tracked in viewport coordinates (see startMarqueeSelect in
