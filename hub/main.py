@@ -838,6 +838,11 @@ def _fmt_date(ts: float) -> str:
     return datetime.datetime.fromtimestamp(ts).strftime("%b %-d, %Y") if ts else ""
 
 
+def _gallery_owner_name(item: dict) -> str:
+    """Public Gallery pages show the display name, never an account email address."""
+    return (item.get("owner_name") or "").strip() or "AnnoBio member"
+
+
 @app.get("/gallery")
 def archive_list_page(request: Request):
     user = current_user(request)
@@ -851,7 +856,7 @@ def archive_list_page(request: Request):
               {_archive_thumb_html(item)}
               <div class="archive-card-body">
                 <div class="archive-card-title">{escape(item['title'])}</div>
-                <div class="archive-card-meta">{escape(item['owner_email'])} · {_fmt_date(item['created_at'])}</div>
+                <div class="archive-card-meta">{escape(_gallery_owner_name(item))} · {_fmt_date(item['created_at'])}</div>
               </div>
             </a>
             """
@@ -885,7 +890,7 @@ def archive_detail_page(request: Request, item_id: int):
         <div class="archive-detail-thumb">{_archive_thumb_html(item, css_class="")}</div>
         <div class="archive-detail-info">
           <h1>{escape(item['title'])}</h1>
-          <p class="archive-detail-meta">Published by {escape(item['owner_email'])} · {_fmt_date(item['created_at'])}</p>
+          <p class="archive-detail-meta">Published by {escape(_gallery_owner_name(item))} · {_fmt_date(item['created_at'])}</p>
           {desc_html}
           {action_html}
         </div>
