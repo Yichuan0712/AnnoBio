@@ -8541,9 +8541,11 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 .pipeline-step-kind--prompt { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
 .pipeline-step-kind--process { background: rgba(16, 137, 62, 0.14); color: #10893e; }
+.pipeline-step-kind--merge { background: rgba(217, 119, 6, 0.15); color: #b45309; }
 .pipeline-step-kind--dataset { background: rgba(124, 58, 237, 0.14); color: #7c3aed; }
 .pipeline-step-kind--step { background: rgba(100, 116, 139, 0.14); color: var(--text-muted); }
 .pipeline-step-name { font-size: 13px; color: var(--text); }
+.pipeline-step-merge-inputs { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
 .pipeline-step-version-select {
   font-size: 12.5px; padding: 2px 4px; border: 1px solid var(--border);
   border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); font-family: inherit;

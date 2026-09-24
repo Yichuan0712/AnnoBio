@@ -118,6 +118,7 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
           label: step.processName,
           stepId: step.id,
           processNodeId: step.processNodeId,
+          inputDatasets: Array.isArray(step.inputDatasets) ? step.inputDatasets : [],
           kind: 'process',
         });
       }
@@ -134,7 +135,9 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
 
     const allPrompts = nextOptions.every((option) => option.kind === 'prompt');
     const allProcesses = nextOptions.every((option) => option.kind === 'process');
-    const displayKind = allPrompts ? 'prompt' : (allProcesses ? 'process' : 'step');
+    const displayKind = allPrompts
+      ? 'prompt'
+      : (allProcesses && selected.inputDatasets?.length > 1 ? 'merge' : (allProcesses ? 'process' : 'step'));
     const displayOptions = nextOptions.map((option) => ({
       ...option,
       label: allPrompts && nextOptions.length > 1
@@ -186,7 +189,9 @@ function getCanvasNodeIds(step) {
   if (selected?.kind === 'prompt') {
     return [selected.promptNodeId, selected.runNodeId].filter(Boolean);
   }
-  if (selected?.kind === 'process' && selected.processNodeId) return [selected.processNodeId];
+  if (selected?.kind === 'process' && selected.processNodeId) {
+    return [selected.processNodeId, ...(selected.inputDatasets || []).map((input) => input.datasetNodeId)].filter(Boolean);
+  }
   return [];
 }
 
@@ -195,9 +200,10 @@ function renderRouteStep(step) {
     dataset: 'Preview one of the datasets available at this point in the route.',
     prompt: 'Preview one concrete Prompt Run and follow its connected output.',
     process: 'Preview one Process path.',
+    merge: 'This Process combines all listed Dataset inputs before it runs.',
     step: 'Preview one of the connected next steps.',
   };
-  const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', step: 'Step' };
+  const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', merge: 'Merge', step: 'Step' };
   const picker = renderPickerOrName(
     step.choiceId,
     step.options,
@@ -205,10 +211,15 @@ function renderRouteStep(step) {
     titles[step.kind],
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
+  const mergeInputs = step.kind === 'merge'
+    ? `<span class="pipeline-step-merge-inputs">${(step.selectedOption?.inputDatasets || [])
+      .map((input) => escapeHtml(input.datasetName || 'Dataset')).join(' + ')}</span>`
+    : '';
   return `
     <li class="pipeline-overview-step" data-canvas-node-ids="${canvasNodeIds}">
       <span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind]}</span>
       ${picker}
+      ${mergeInputs}
     </li>
   `;
 }
@@ -392,6 +403,13 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       return;
     }
     const route = buildSelectedRoute(pipeline, selectedByChoiceId);
+    const merge = route.find((step) => step.kind === 'merge');
+    if (merge) {
+      showAlert('Python export for a Pipeline with merged Dataset inputs is not available yet. Save the Merge Process output as one Dataset, then export the downstream route.', {
+        title: 'Cannot export Pipeline',
+      });
+      return;
+    }
     const originalLabel = button.textContent;
     button.disabled = true;
     button.textContent = 'Exporting…';
