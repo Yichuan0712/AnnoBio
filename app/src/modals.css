@@ -8510,6 +8510,13 @@ button.btn.btn-danger:hover:not(:disabled) {
   max-width: 92vw;
   box-sizing: border-box;
 }
+
+.process-branch-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
 .pipeline-overview-empty { color: var(--text-muted); font-size: 13.5px; }
 .pipeline-overview-card { margin-bottom: 22px; }
 .pipeline-overview-card:last-child { margin-bottom: 0; }

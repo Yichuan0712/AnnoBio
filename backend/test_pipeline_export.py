@@ -238,6 +238,24 @@ else:
         result = namespace["process"](pd.DataFrame([{"text": "  keep  "}]))
         self.assertEqual(result.to_dict(orient="records"), [{"text": "keep"}])
 
+    def test_exported_route_selects_its_named_process_branch(self):
+        state = _canvas_state()
+        process = next(node for node in state["nodes"] if node.get("nodeId") == "process-clean")
+        process["dfCode"] = (
+            "def process(df):\n"
+            "    return {'accepted': df, 'needs_review': df.iloc[0:0]}\n"
+        )
+        process.pop("code", None)
+        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
+        dataset["processOutputName"] = "accepted"
+        _, archive = self.build(state)
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            manifest = json.loads(bundle.read("research-pipeline/pipeline.json"))
+            main = bundle.read("research-pipeline/main.py").decode("utf-8")
+        process_step = next(step for step in manifest["route"] if step["type"] == "process")
+        self.assertEqual(process_step["output_name"], "accepted")
+        self.assertIn("output_name='accepted'", main)
+
     def test_unmapped_input_explains_how_to_fix_the_selected_run(self):
         state = _canvas_state()
         prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")

@@ -1,8 +1,9 @@
 """
 Runs AnnoBio's single Process-node contract: a user-authored `process(df)` function over the whole
 dataset. It uses whichever Python interpreter (system install or a venv) the user points at in
-Settings. `df` is a pandas DataFrame built from the dataset's rows and the function must return a
-DataFrame. The subprocess is handed back to the caller so it can be killed on cancel.
+Settings. `df` is a pandas DataFrame built from the dataset's rows. A Process can return either a
+DataFrame or a dictionary mapping branch names to DataFrames. The subprocess is handed back to the
+caller so it can be killed on cancel.
 """
 
 import json
@@ -32,10 +33,23 @@ try:
     _input = json.loads(sys.stdin.read())
     _df = pd.DataFrame(_input.get("rows") or [])
     _result = process(_df)
-    if not isinstance(_result, pd.DataFrame):
-        raise TypeError("process(df) must return a pandas DataFrame")
-    _out_rows = json.loads(_result.to_json(orient="records"))
-    sys.stdout.write(json.dumps({"ok": True, "rows": _out_rows}) + "\\n")
+    if isinstance(_result, pd.DataFrame):
+        _outputs = {"result": _result}
+    elif isinstance(_result, dict):
+        _outputs = {}
+        for _branch_name, _branch_frame in _result.items():
+            if not isinstance(_branch_name, str) or not _branch_name.strip():
+                raise TypeError("Process branch names must be non-empty strings")
+            if not isinstance(_branch_frame, pd.DataFrame):
+                raise TypeError(f'Process branch "{_branch_name}" must be a pandas DataFrame')
+            _normalized_name = _branch_name.strip()
+            if _normalized_name in _outputs:
+                raise ValueError(f'Duplicate Process branch name: "{_normalized_name}"')
+            _outputs[_normalized_name] = _branch_frame
+    else:
+        raise TypeError("process(df) must return a pandas DataFrame or {branch_name: DataFrame}")
+    _out_rows = {name: json.loads(frame.to_json(orient="records")) for name, frame in _outputs.items()}
+    sys.stdout.write(json.dumps({"ok": True, "outputs": _out_rows}) + "\\n")
 except Exception as _e:
     sys.stdout.write(json.dumps({"ok": False, "error": str(_e)}) + "\\n")
 sys.stdout.flush()
@@ -50,8 +64,8 @@ def run_process_df_code(python_path: str, code: str, headers: list, rows: list, 
     """
     Runs `code`'s process(df) once on the whole dataset (`rows`, each a list keyed by `headers`).
     `register_proc(proc)`, if given, is called with the subprocess.Popen as soon as it's spawned,
-    so the caller can kill it to cancel a run in progress. Returns {"ok": True, "rows": [...]} or
-    {"ok": False, "error": ...}. Never raises.
+    so the caller can kill it to cancel a run in progress. Returns {"ok": True, "outputs":
+    {branch_name: [...]}} or {"ok": False, "error": ...}. Never raises.
     """
     fd, path = tempfile.mkstemp(suffix=".py", prefix="process_df_")
     with os.fdopen(fd, "w", encoding="utf-8") as f:

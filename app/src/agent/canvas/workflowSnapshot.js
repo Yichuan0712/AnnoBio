@@ -207,12 +207,17 @@ function getScorePreview(node) {
 function getProcessPreview(node) {
   const rowResults = parseJsonObject(node?.results, {});
   const dfResults = parseJsonObject(node?.dfResults, {});
+  const branchOutputs = dfResults?.outputs && typeof dfResults.outputs === 'object' ? dfResults.outputs : {};
+  const branchNames = Object.keys(branchOutputs);
+  const branchRowCount = branchNames.reduce((total, name) => total + safeArray(branchOutputs[name]?.rows).length, 0);
   return {
     hasRowCode: Boolean(String(node?.code || '').trim()),
     hasDfCode: Boolean(String(node?.dfCode || '').trim()),
     activeMode: node?.activeMode === 'df' ? 'df' : 'row',
     rowResultCount: safeArray(rowResults?.rows).length,
-    dfResultCount: safeArray(dfResults?.rows).length,
+    dfResultCount: branchNames.length ? branchRowCount : safeArray(dfResults?.rows).length,
+    branchNames,
+    branchCount: branchNames.length,
   };
 }
 

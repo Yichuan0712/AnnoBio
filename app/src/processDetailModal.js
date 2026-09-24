@@ -1,8 +1,8 @@
 /**
  * Process node editor.
  *
- * Process nodes use one explicit contract: ``process(df) -> pandas.DataFrame``. Opening a legacy
- * row processor migrates it to that contract, so every new edit and run uses one path.
+ * Process nodes use one explicit contract: ``process(df) -> DataFrame | {name: DataFrame}``.
+ * Opening a legacy row processor migrates it to that contract, so every new edit and run uses one path.
  */
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -21,6 +21,7 @@ const MAX_COMMENT_LINE_CHARS = 70;
 const FALLBACK_DEFAULT_CODE = `def process(df):
     # df is the full connected dataset as a pandas DataFrame.
     # Return a DataFrame with the rows and columns you want to keep.
+    # Or return {"accepted": df_a, "needs_review": df_b} to create named branches.
     return df
 `;
 
@@ -50,6 +51,7 @@ ${wrapCommentList('    # Columns: ', '    #   ', columns)}
     # Return a DataFrame. Examples:
     #   df["column"] = df["column"].astype(str).str.strip()
     #   return df[df["column"].notna()]  # filter rows
+    #   return {"accepted": df[df["score"] >= 0.8], "rejected": df[df["score"] < 0.8]}
     return df
 `;
 }
@@ -72,13 +74,29 @@ function escapeHtml(value) {
   return div.innerHTML;
 }
 
+function normalizeResults(value) {
+  if (!value || typeof value !== 'object') return null;
+  const outputs = {};
+  if (value.outputs && typeof value.outputs === 'object') {
+    Object.entries(value.outputs).forEach(([name, result]) => {
+      if (!name || !result || !Array.isArray(result.headers) || !Array.isArray(result.rows)) return;
+      outputs[name] = { headers: result.headers, rows: result.rows };
+    });
+  } else if (Array.isArray(value.headers) && Array.isArray(value.rows)) {
+    // Saved single-output results from earlier versions become the implicit result branch.
+    outputs.result = { headers: value.headers, rows: value.rows };
+  }
+  return Object.keys(outputs).length ? { outputs, statusText: String(value.statusText || '') } : null;
+}
+
 function restoreResults(node, ...keys) {
   for (const key of keys) {
     try {
       const raw = node?.dataset?.[key];
       if (!raw) continue;
       const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.headers) && Array.isArray(parsed.rows) && parsed.rows.length) return parsed;
+      const normalized = normalizeResults(parsed);
+      if (normalized) return normalized;
     } catch (_) {}
   }
   return null;
@@ -118,7 +136,7 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
           <p class="run-detail-main-label">Python code</p>
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
-            <p class="process-editor-hint">Runs once on the connected dataset with the Python interpreter set in Settings → Python. <code>df</code> is a pandas DataFrame keyed by column name. Return a pandas DataFrame.</p>
+            <p class="process-editor-hint">Runs once on the connected dataset with the Python interpreter set in Settings → Python. <code>df</code> is a pandas DataFrame keyed by column name. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -129,6 +147,7 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
         </div>
         <div class="run-detail-preview-wrap">
           <h3 class="run-detail-preview-title">Results</h3>
+          <div class="process-branch-picker" hidden></div>
           <div class="run-detail-preview-content process-results-content"></div>
         </div>
       </div>
@@ -137,12 +156,14 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
 
   const editorHost = overlay.querySelector('.process-editor-host');
   const resultsContent = overlay.querySelector('.process-results-content');
+  const branchPicker = overlay.querySelector('.process-branch-picker');
   const runBtn = overlay.querySelector('.process-run-btn');
   const editorView = new EditorView({ doc: initialCode, extensions: [basicSetup, python()], parent: editorHost });
   const getCode = () => editorView.state.doc.toString();
   let running = false;
   let currentJobId = null;
   let lastResults = restoreResults(node, 'processDfResults', 'processResults');
+  let activeBranchName = '';
   let saveBtnEl = null;
   const progressBar = node?.querySelector?.('.workflow-node__process-progress') || null;
 
@@ -153,16 +174,9 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
       saveBtnEl = document.createElement('button');
       saveBtnEl.type = 'button';
       saveBtnEl.className = 'btn btn-primary run-detail-save-to-workspace-btn process-save-btn';
-      saveBtnEl.textContent = 'Export result';
+      saveBtnEl.textContent = 'Create dataset';
       saveBtnEl.disabled = running || !lastResults;
-      saveBtnEl.addEventListener('click', () => {
-        if (!lastResults) return;
-        const baseName = `${title} results`;
-        const name = typeof getUniqueDatasetExportName === 'function' ? getUniqueDatasetExportName(baseName) : baseName;
-        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
-          detail: { name, notes: `Exported from Process "${title}".`, headers: lastResults.headers, rows: lastResults.rows, processNodeId: node?.dataset?.nodeId || '' },
-        }));
-      });
+      saveBtnEl.addEventListener('click', createBranchDatasets);
       actions.appendChild(saveBtnEl);
     },
   });
@@ -174,11 +188,53 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
 
   function refreshResults() {
     if (!lastResults) {
+      branchPicker.hidden = true;
       showPlaceholder('No results yet. Click Run.');
       return;
     }
-    const count = lastResults.rows.length;
-    resultsPanel.showResultsCard(lastResults.headers, lastResults.rows, lastResults.statusText || `${count} row${count === 1 ? '' : 's'} returned.`);
+    const entries = Object.entries(lastResults.outputs);
+    if (!entries.length) {
+      branchPicker.hidden = true;
+      showPlaceholder('No branches returned.');
+      return;
+    }
+    if (!lastResults.outputs[activeBranchName]) activeBranchName = entries[0][0];
+    const [branchName, branch] = [activeBranchName, lastResults.outputs[activeBranchName]];
+    branchPicker.hidden = entries.length < 2;
+    if (!branchPicker.hidden) {
+      branchPicker.innerHTML = `<label class="dataset-detail-search-label" for="process-branch-select">Branch</label><select id="process-branch-select" class="dataset-detail-rows-select" aria-label="Process result branch">${entries.map(([name, output]) => `<option value="${escapeHtml(name)}" ${name === branchName ? 'selected' : ''}>${escapeHtml(name)} (${output.rows.length})</option>`).join('')}</select>`;
+      branchPicker.querySelector('select').addEventListener('change', (event) => {
+        activeBranchName = event.target.value;
+        refreshResults();
+      });
+    }
+    const branchSummary = entries.map(([name, output]) => `${name}: ${output.rows.length} row${output.rows.length === 1 ? '' : 's'}`).join(' · ');
+    resultsPanel.showResultsCard(branch.headers, branch.rows, lastResults.statusText || branchSummary);
+    if (saveBtnEl) saveBtnEl.textContent = entries.length > 1 ? 'Create branch datasets' : 'Create dataset';
+  }
+
+  function createBranchDatasets() {
+    if (!lastResults) return;
+    const entries = Object.entries(lastResults.outputs);
+    const processLeft = parseFloat(node?.style?.left || '') || 0;
+    const processTop = parseFloat(node?.style?.top || '') || 0;
+    const processWidth = node?.offsetWidth || 160;
+    entries.forEach(([branchName, output], index) => {
+      const baseName = entries.length === 1 ? `${title} results` : `${title} — ${branchName}`;
+      const name = typeof getUniqueDatasetExportName === 'function' ? getUniqueDatasetExportName(baseName) : baseName;
+      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
+        detail: {
+          name,
+          notes: `Branch "${branchName}" exported from Process "${title}".`,
+          headers: output.headers,
+          rows: output.rows,
+          processNodeId: node?.dataset?.nodeId || '',
+          processOutputName: branchName,
+          left: processLeft + processWidth + 56,
+          top: processTop + index * 132,
+        },
+      }));
+    });
   }
 
   function setNodeProgress(completed, total) {
@@ -226,13 +282,17 @@ export function openProcessDetailModal({ node, getSourceDatasetContent, getUniqu
       showPlaceholder(data.error);
       return;
     }
-    const { headers, rows } = rowsFromDicts(data.rows);
-    setNodeProgress(rows.length, rows.length || 1);
-    const count = rows.length;
+    const outputs = {};
+    Object.entries(data.outputs || {}).forEach(([branchName, rowDicts]) => {
+      const { headers, rows } = rowsFromDicts(rowDicts);
+      outputs[branchName] = { headers, rows };
+    });
+    setNodeProgress(1, 1);
+    const branchCount = Object.keys(outputs).length;
     const statusText = data.status === 'cancelled'
-      ? `Cancelled. ${count} row${count === 1 ? '' : 's'} returned before stopping.`
-      : `${count} row${count === 1 ? '' : 's'} returned.`;
-    lastResults = rows.length ? { headers, rows, statusText } : null;
+      ? `Cancelled. ${branchCount} branch${branchCount === 1 ? '' : 'es'} returned before stopping.`
+      : `${branchCount} branch${branchCount === 1 ? '' : 'es'} returned.`;
+    lastResults = branchCount ? { outputs, statusText } : null;
     persistResults(lastResults);
     if (lastResults) refreshResults();
     else showPlaceholder('No rows returned.');
