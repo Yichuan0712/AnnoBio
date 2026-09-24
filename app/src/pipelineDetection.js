@@ -5,9 +5,10 @@
  * getCanvasState()'s output) and offline (fed a saved project's state) without any canvas
  * instance at all.
  *
- * A "pipeline" here is a chain of Prompt (+ the Run that executes it), Process and Dataset steps,
- * so it reads the same way the canvas does: dataset -> prompt -> dataset -> prompt. At least one
- * Prompt is required: a chain of only datasets and processes is data prep, not a pipeline.
+ * A "pipeline" here is a graph of Prompt (+ the Run that executes it), Process and Dataset steps.
+ * Most pipelines read as a linear sequence, but a Process may also receive several Dataset inputs
+ * and form an explicit merge point. At least one Prompt is required: a graph of only datasets and
+ * processes is data prep, not a pipeline.
  * Score/PromptReview stay out: they're evaluation/tuning scaffolding, not part of "the thing that
  * produces output" this is meant to describe. See the AnnoBio canvas→code-export planning
  * discussion this was built for.
@@ -185,6 +186,15 @@ export function detectPipelines(canvasState) {
       kind: STEP_KIND.PROCESS,
       processNodeId: p.nodeId,
       processName: p.name || 'Process',
+      // Process nodes accept one dataframe. With multiple incoming Dataset edges the canvas
+      // combines those datasets by row before calling process(df); retain the inputs here so the
+      // Current Pipeline can describe that convergence rather than silently showing one branch.
+      inputDatasets: edges.to('dataset-to-process', p.nodeId)
+        .filter((datasetNodeId) => nodeById.get(datasetNodeId)?.type === 'dataset')
+        .map((datasetNodeId) => ({
+          datasetNodeId,
+          datasetName: nodeById.get(datasetNodeId)?.name || 'Dataset',
+        })),
     };
     steps.push(step);
     processNodeToStep.set(p.nodeId, step);
