@@ -22,6 +22,7 @@ function exportCanvasDefinition(canvasState, route) {
           nodeId: node.nodeId,
           name: node.name,
           sourceRunNodeId: node.sourceRunNodeId,
+          processOutputName: node.processOutputName,
           datasetContent: {
             headers: node.datasetContent?.headers || [],
             columnTypes: node.datasetContent?.columnTypes || [],
@@ -36,6 +37,7 @@ function exportCanvasDefinition(canvasState, route) {
           code: node.code,
           dfCode: node.dfCode,
           activeMode: node.activeMode,
+          primaryDatasetId: node.primaryDatasetId,
         };
       }
       if (node.type === 'prompt') {
@@ -69,7 +71,7 @@ function exportCanvasDefinition(canvasState, route) {
     'prompt-to-prompt',
   ]);
   const connections = (canvasState?.connections || []).filter((edge) => (
-    executableEdgeTypes.has(edge?.type) && (ids.has(edge?.fromId) || ids.has(edge?.toId))
+    executableEdgeTypes.has(edge?.type) && ids.has(edge?.fromId) && ids.has(edge?.toId)
   ));
   return { version: canvasState?.version || 2, nodes, connections };
 }

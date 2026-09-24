@@ -5148,14 +5148,22 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   overflow: hidden;
 }
 
+.run-detail-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
 .run-detail-preview-title {
   margin: 0;
-  padding: 12px 20px;
+  padding: 4px 0;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
 }
 
 .run-detail-preview-content {
@@ -8515,7 +8523,11 @@ button.btn.btn-danger:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 8px;
+  min-width: 0;
+}
+
+.process-branch-picker .dataset-detail-rows-select {
+  max-width: min(310px, 46vw);
 }
 .pipeline-overview-empty { color: var(--text-muted); font-size: 13.5px; }
 .pipeline-overview-body { min-width: 0; overflow-x: hidden; }
@@ -8576,3 +8588,15 @@ button.btn.btn-danger:hover:not(:disabled) {
 /* 右栏：结果表格 + 搜索 + 分页 + Save to workspace，全部复用 run-detail-results-* 系列
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */
 
+
+/* Process input bindings: df is the primary frame; secondary Datasets remain independently addressable. */
+.process-input-bindings {
+  margin: 8px 0 0;
+  padding: 7px 10px 7px 26px;
+  border: 1px solid var(--border-color, #d2d8e1);
+  border-radius: 6px;
+  color: var(--text-muted, #566579);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.process-input-bindings code { color: var(--text-color, #172033); }

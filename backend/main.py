@@ -2669,8 +2669,10 @@ _process_df_procs: dict[str, subprocess.Popen] = {}
 class ProcessDfRunRequest(BaseModel):
     python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
     code: str = Field(..., min_length=1, description="User code defining process(df) -> DataFrame | dict[str, DataFrame]")
-    headers: list[str] = Field(..., description="Column names; each row dict passed into the DataFrame is keyed by these")
-    rows: list[list[Any]] = Field(default_factory=list, description="Input rows, same order as headers")
+    headers: list[str] = Field(default_factory=list, description="Legacy primary Dataset column names")
+    rows: list[list[Any]] = Field(default_factory=list, description="Legacy primary Dataset rows")
+    input_datasets: dict[str, dict[str, Any]] = Field(default_factory=dict, description="Dataset node id -> {headers, rows}; each is exposed independently to Process code")
+    primary_dataset_id: str = Field(default="", description="Dataset node id supplied as df")
     project_session_id: str | None = Field(default=None, description="Required when any row has an image/PDF cell -- see asset_store.py")
 
 
@@ -2710,12 +2712,35 @@ def _do_process_df_work(job_id: str, req: ProcessDfRunRequest) -> None:
 
     try:
         _touch_process_df_activity(job_id)
-        resolved_rows = resolve_cell_for_code(req.rows, req.project_session_id)
+        raw_inputs = req.input_datasets or {req.primary_dataset_id or "input": {"headers": req.headers, "rows": req.rows}}
+        resolved_inputs: dict[str, dict[str, Any]] = {}
+        for dataset_id, content in raw_inputs.items():
+            if not isinstance(content, dict):
+                continue
+            headers = [str(header) for header in (content.get("headers") or [])]
+            rows = content.get("rows") or []
+            if not isinstance(rows, list):
+                rows = []
+            resolved_inputs[str(dataset_id)] = {
+                "headers": headers,
+                "rows": resolve_cell_for_code(rows, req.project_session_id),
+            }
+        if not resolved_inputs:
+            raise ValueError("Connect at least one Dataset before running a Process.")
+        primary_dataset_id = req.primary_dataset_id if req.primary_dataset_id in resolved_inputs else next(iter(resolved_inputs))
 
         def register_proc(proc: subprocess.Popen) -> None:
             _process_df_procs[job_id] = proc
 
-        outcome = run_process_df_code(req.python_path, req.code, req.headers, resolved_rows, register_proc=register_proc)
+        outcome = run_process_df_code(
+            req.python_path,
+            req.code,
+            req.headers,
+            req.rows,
+            input_datasets=resolved_inputs,
+            primary_dataset_id=primary_dataset_id,
+            register_proc=register_proc,
+        )
 
         with _process_df_jobs_lock:
             was_cancelled = job_id in _process_df_cancelled

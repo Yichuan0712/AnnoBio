@@ -279,23 +279,38 @@ function buildSelectedRoute(pipeline, selectedByChoiceId) {
 }
 
 function exportRoutePayload(route) {
-  return route.map((step) => {
-    const selected = step.selectedOption;
-    if (selected?.dataset) {
-      return { type: 'dataset', dataset_node_id: selected.dataset.datasetNodeId };
+  const exported = [];
+  const seen = new Set();
+  function add(item) {
+    const key = item.type === 'dataset' ? `dataset:${item.dataset_node_id}`
+      : item.type === 'process' ? `process:${item.process_node_id}`
+        : `prompt:${item.prompt_node_id}:${item.run_node_id}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      exported.push(item);
     }
-    if (selected?.kind === 'prompt') {
-      return {
-        type: 'prompt',
-        prompt_node_id: selected.promptNodeId,
-        run_node_id: selected.runNodeId,
-      };
+  }
+  function visit(steps) {
+    for (const step of steps || []) {
+      if (step?.kind === 'branch') {
+        for (const lane of step.lanes || []) visit(lane);
+        continue;
+      }
+      const selected = step?.selectedOption;
+      if (selected?.dataset?.datasetNodeId) add({ type: 'dataset', dataset_node_id: selected.dataset.datasetNodeId });
+      if (selected?.kind === 'process') {
+        for (const input of selected.inputDatasets || []) {
+          if (input?.datasetNodeId) add({ type: 'dataset', dataset_node_id: input.datasetNodeId });
+        }
+        if (selected.processNodeId) add({ type: 'process', process_node_id: selected.processNodeId });
+      }
+      if (selected?.kind === 'prompt' && selected.promptNodeId && selected.runNodeId) {
+        add({ type: 'prompt', prompt_node_id: selected.promptNodeId, run_node_id: selected.runNodeId });
+      }
     }
-    if (selected?.kind === 'process') {
-      return { type: 'process', process_node_id: selected.processNodeId };
-    }
-    return null;
-  }).filter(Boolean);
+  }
+  visit(route);
+  return exported;
 }
 
 function getCanvasNodeIds(step) {
@@ -561,15 +576,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       return;
     }
     const route = buildSelectedRoute(pipeline, selectedByChoiceId);
-    const hasMultiInputProcess = route.some((step) => (
-      step.selectedOption?.kind === 'process' && step.selectedOption.inputDatasets?.length > 1
-    ));
-    if (hasMultiInputProcess || route.some((step) => step.kind === 'branch')) {
-      showAlert('Python export for a Pipeline with merged Dataset inputs is not available yet. Save the Merge Process output as one Dataset, then export the downstream route.', {
-        title: 'Cannot export Pipeline',
-      });
-      return;
-    }
     const originalLabel = button.textContent;
     button.disabled = true;
     button.textContent = 'Exporting…';

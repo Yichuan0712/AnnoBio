@@ -2128,6 +2128,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       top: resolvedTop,
       title: finalName,
       dfCode: normalizedDfCode,
+      primaryDatasetId: normalizedSourceNodeId,
     });
     if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     if (node?.dataset?.nodeId) {
