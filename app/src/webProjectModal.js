@@ -135,7 +135,7 @@ function showPublishDetailsModal(defaultTitle) {
             </div>
           </div>
         </div>
-        <div class="prompt-actions">
+        <div class="modal-alert-footer">
           <button type="button" class="btn btn-secondary archive-publish-cancel">Cancel</button>
           <button type="button" class="btn btn-primary archive-publish-confirm">Publish</button>
         </div>
