@@ -26,6 +26,7 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -63,6 +64,18 @@ def _assets_root(project_id: str) -> Path:
 
 def _thumbnail_file(project_id: str) -> Path:
     return _project_path(project_id) / "thumbnail.png"
+
+
+def _bundle_content_disposition(project_name: str) -> str:
+    """Return an HTTP-safe attachment filename while preserving Unicode names for browsers."""
+    source_name = str(project_name or "").strip() or "project"
+    ascii_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", source_name).strip("._") or "project"
+    utf8_filename = f"{source_name}.yc"
+    ascii_filename = f"{ascii_stem}.yc"
+    return (
+        f'attachment; filename="{ascii_filename}"; '
+        f"filename*=UTF-8''{quote(utf8_filename, safe='')}"
+    )
 
 
 def _atomic_write_json(path: Path, payload: dict):
@@ -557,7 +570,7 @@ def export_yc(project_id: str):
     name = (data.get("meta") or {}).get("name") or "project"
     body = json.dumps(payload, indent=2).encode("utf-8")
     return Response(content=body, media_type="application/json", headers={
-        "Content-Disposition": f'attachment; filename="{name}.yc"',
+        "Content-Disposition": _bundle_content_disposition(name),
     })
 
 
