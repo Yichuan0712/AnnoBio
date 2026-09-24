@@ -8546,7 +8546,7 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-step-kind--step { background: rgba(100, 116, 139, 0.14); color: var(--text-muted); }
 .pipeline-step-name { min-width: 0; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
 .pipeline-overview-branch {
-  flex: 1 0 100%; max-width: 100%; box-sizing: border-box; padding: 8px 10px; margin: 0; list-style: none;
+  flex: 0 1 auto; width: fit-content; max-width: 100%; box-sizing: border-box; padding: 8px 10px; margin: 0; list-style: none;
   border: 1px solid var(--border); border-radius: var(--control-radius, 6px); background: var(--bg-bar);
 }
 .pipeline-overview-branch-lanes { display: grid; gap: 6px; min-width: 0; }
