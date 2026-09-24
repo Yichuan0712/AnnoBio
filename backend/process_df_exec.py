@@ -14,7 +14,7 @@ import tempfile
 
 RUN_TIMEOUT_SEC = 120
 
-_WRAPPER_HEADER = """import sys, json, re
+_WRAPPER_HEADER = """import sys, json
 
 try:
     import pandas as pd
@@ -45,13 +45,11 @@ try:
         _primary_dataset_id = next(iter(inputs), "")
     if not _primary_dataset_id:
         raise ValueError("A Process needs one primary Dataset")
-    # `df` is the primary Dataset. Secondary inputs remain independent and are deliberately not
-    # concatenated. User code can use inputs["node-id"] or df_<safe_node_id>.
-    for _dataset_id, _dataset_frame in inputs.items():
-        _safe_id = re.sub(r"[^A-Za-z0-9_]", "_", _dataset_id)
-        if _safe_id and _safe_id[0].isdigit():
-            _safe_id = "_" + _safe_id
-        globals()["df_" + (_safe_id or "dataset")] = _dataset_frame
+    # The browser sends human-readable aliases, never Dataset IDs. df is primary; every other
+    # Dataset is independently available as its displayed df_<dataset_name> alias.
+    for _alias, _dataset_frame in inputs.items():
+        if _alias != "df":
+            globals()[_alias] = _dataset_frame
     _df = inputs[_primary_dataset_id]
     _result = process(_df)
     if isinstance(_result, pd.DataFrame):
@@ -84,7 +82,7 @@ def _build_wrapper(code: str) -> str:
 def run_process_df_code(python_path: str, code: str, headers: list, rows: list, input_datasets: dict | None = None, primary_dataset_id: str = "", register_proc=None, timeout_sec: int = RUN_TIMEOUT_SEC) -> dict:
     """
     Runs `code`'s process(df) once on the primary Dataset. Additional input Datasets are exposed
-    independently through `inputs[dataset_id]` and `df_<safe_dataset_id>` globals.
+    independently through readable `df_<dataset_name>` globals.
     `register_proc(proc)`, if given, is called with the subprocess.Popen as soon as it's spawned,
     so the caller can kill it to cancel a run in progress. Returns {"ok": True, "outputs":
     {branch_name: [...]}} or {"ok": False, "error": ...}. Never raises.

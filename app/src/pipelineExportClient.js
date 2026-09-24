@@ -38,6 +38,7 @@ function exportCanvasDefinition(canvasState, route) {
           dfCode: node.dfCode,
           activeMode: node.activeMode,
           primaryDatasetId: node.primaryDatasetId,
+          datasetAliases: node.datasetAliases,
         };
       }
       if (node.type === 'prompt') {

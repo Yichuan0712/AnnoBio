@@ -38,14 +38,14 @@ class ProcessDataframeExecutionTests(unittest.TestCase):
     def test_secondary_datasets_are_available_without_implicit_row_merge(self):
         outcome = run_process_df_code(
             sys.executable,
-            "def process(df):\n    return inputs['reference-2'].assign(primary_rows=len(df))\n",
+            "def process(df):\n    return df_reference_2.assign(primary_rows=len(df))\n",
             ["value"],
             [["primary"]],
             input_datasets={
-                "primary-1": {"headers": ["value"], "rows": [["primary"]]},
-                "reference-2": {"headers": ["value"], "rows": [["reference"]]},
+                "df": {"headers": ["value"], "rows": [["primary"]]},
+                "df_reference_2": {"headers": ["value"], "rows": [["reference"]]},
             },
-            primary_dataset_id="primary-1",
+            primary_dataset_id="df",
         )
         self.assertTrue(outcome["ok"])
         self.assertEqual(outcome["outputs"]["result"], [{"value": "reference", "primary_rows": 1}])
@@ -57,10 +57,10 @@ class ProcessDataframeExecutionTests(unittest.TestCase):
             ["value"],
             [["primary"]],
             input_datasets={
-                "primary": {"headers": ["value"], "rows": [["primary"]]},
-                "reference-2": {"headers": ["value"], "rows": [["reference"]]},
+                "df": {"headers": ["value"], "rows": [["primary"]]},
+                "df_reference_2": {"headers": ["value"], "rows": [["reference"]]},
             },
-            primary_dataset_id="primary",
+            primary_dataset_id="df",
         )
         self.assertTrue(outcome["ok"])
         self.assertEqual(outcome["outputs"]["result"], [{"value": "reference"}])

@@ -2,8 +2,8 @@
  * Process node editor.
  *
  * Process nodes use one explicit contract: ``process(df) -> DataFrame | {name: DataFrame}``.
- * Multiple Dataset inputs are merged by row before calling `process`, so every edit and run uses
- * one dataframe while a Process can still serve as a visible merge point on the canvas.
+ * `df` is its primary Dataset. Other canvas Datasets are exposed by readable aliases and become
+ * explicit canvas dependencies only when the Process code references them.
  */
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -15,12 +15,13 @@ import { cloneCell, normalizeDatasetContent, isAssetCell } from './datasetConten
 import { prepareAssets } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { resolveDataframeProcessCode } from './processCode.js';
+import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 
 const API_BASE = BACKEND_API_BASE;
 const PROCESS_POLL_INTERVAL_MS = 1200;
 const MAX_COMMENT_LINE_CHARS = 70;
 const FALLBACK_DEFAULT_CODE = `def process(df):
-    # df contains rows from every connected Dataset as a pandas DataFrame.
+    # df is this Process's primary Dataset.
     # Return a DataFrame with the rows and columns you want to keep.
     # Or return {"accepted": df_a, "needs_review": df_b} to create named branches.
     return df
@@ -104,9 +105,9 @@ function restoreResults(node, ...keys) {
 }
 
 /**
- * @param {{ node: HTMLElement, getProcessInputs: () => { inputs: Array<{nodeId: string, name: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, getUniqueDatasetExportName?: (base: string) => string }} options
+ * @param {{ node: HTMLElement, getProcessDatasets: () => { datasets: Array<{nodeId: string, name: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, syncProcessDependencies?: (code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
  */
-export function openProcessDetailModal({ node, getProcessInputs, getUniqueDatasetExportName }) {
+export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDependencies, getUniqueDatasetExportName }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -117,21 +118,19 @@ export function openProcessDetailModal({ node, getProcessInputs, getUniqueDatase
   }
 
   const title = (node?.dataset?.processName || 'Process').trim() || 'Process';
-  const readInputs = () => {
-    const raw = getProcessInputs?.() || {};
-    const inputs = Array.isArray(raw.inputs) ? raw.inputs.filter((input) => input?.nodeId && input?.content) : [];
-    const primaryDatasetId = inputs.some((input) => input.nodeId === raw.primaryDatasetId)
+  const readDatasets = () => {
+    const raw = getProcessDatasets?.() || {};
+    const datasets = Array.isArray(raw.datasets) ? raw.datasets.filter((dataset) => dataset?.nodeId && dataset?.content) : [];
+    const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === raw.primaryDatasetId)
       ? raw.primaryDatasetId
-      : (inputs[0]?.nodeId || '');
-    return { inputs, primaryDatasetId };
+      : (datasets[0]?.nodeId || '');
+    return { bindings: buildProcessDatasetBindings(datasets, primaryDatasetId), primaryDatasetId };
   };
-  const initialInputs = readInputs();
-  const primaryInput = initialInputs.inputs.find((input) => input.nodeId === initialInputs.primaryDatasetId);
-  const inputBindings = initialInputs.inputs.map((input) => {
-    const variable = `df_${String(input.nodeId).replace(/[^A-Za-z0-9_]/g, '_').replace(/^([0-9])/, '_$1')}`;
-    const primary = input.nodeId === initialInputs.primaryDatasetId ? ' (primary: df)' : '';
-    return `<li><code>${escapeHtml(variable)}</code> &mdash; ${escapeHtml(input.name || 'Dataset')} <code>inputs[&quot;${escapeHtml(input.nodeId)}&quot;]</code>${primary}</li>`;
-  }).join('') || '<li>No connected Dataset.</li>';
+  const initialDatasets = readDatasets();
+  const primaryInput = initialDatasets.bindings.find((binding) => binding.primary);
+  const datasetBindings = initialDatasets.bindings.map((binding) => (
+    `<li><code>${escapeHtml(binding.alias)}</code> &mdash; ${escapeHtml(binding.name || 'Dataset')}${binding.primary ? ' (this Process)' : ''}</li>`
+  )).join('') || '<li>No Dataset is available.</li>';
   const initialCode = resolveDataframeProcessCode({
     dfCode: node?.dataset?.processDfCode,
     code: node?.dataset?.processCode,
@@ -152,8 +151,9 @@ export function openProcessDetailModal({ node, getProcessInputs, getUniqueDatase
           <p class="run-detail-main-label">Python code</p>
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
-          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the primary Dataset. Every connected Dataset is also available through <code>inputs[&quot;node id&quot;]</code> and the aliases below. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
-          <ul class="process-input-bindings">${inputBindings}</ul>
+          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is this Process's Dataset. Referencing another alias automatically creates its canvas dependency. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
+          <button type="button" class="btn btn-secondary process-dataset-bindings-toggle">Available Datasets</button>
+          <ul class="process-input-bindings" hidden>${datasetBindings}</ul>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -176,7 +176,14 @@ export function openProcessDetailModal({ node, getProcessInputs, getUniqueDatase
   const editorHost = overlay.querySelector('.process-editor-host');
   const resultsContent = overlay.querySelector('.process-results-content');
   const branchPicker = overlay.querySelector('.process-branch-picker');
+  const datasetBindingsEl = overlay.querySelector('.process-input-bindings');
+  const datasetBindingsToggle = overlay.querySelector('.process-dataset-bindings-toggle');
   const runBtn = overlay.querySelector('.process-run-btn');
+  datasetBindingsToggle?.addEventListener('click', () => {
+    const nextHidden = !datasetBindingsEl.hidden;
+    datasetBindingsEl.hidden = nextHidden;
+    datasetBindingsToggle.textContent = nextHidden ? 'Available Datasets' : 'Hide Datasets';
+  });
   const editorView = new EditorView({ doc: initialCode, extensions: [basicSetup, python()], parent: editorHost });
   const getCode = () => editorView.state.doc.toString();
   let running = false;
@@ -321,8 +328,8 @@ export function openProcessDetailModal({ node, getProcessInputs, getUniqueDatase
   }
 
   async function startRun() {
-    const { inputs, primaryDatasetId } = readInputs();
-    const primary = inputs.find((input) => input.nodeId === primaryDatasetId);
+    const { bindings } = readDatasets();
+    const primary = bindings.find((binding) => binding.primary);
     const { headers = [], rows = [] } = primary?.content || {};
     if (!primary) {
       showPlaceholder('Connect a primary Dataset before running.');
@@ -342,12 +349,12 @@ export function openProcessDetailModal({ node, getProcessInputs, getUniqueDatase
     setNodeProgress(0, rows.length);
     showPlaceholder('Running…');
     try {
-      const allRows = inputs.flatMap((input) => input.content?.rows || []);
+      const allRows = bindings.flatMap((binding) => binding.content?.rows || []);
       const session = rowsHaveAssetCells(allRows) ? await prepareAssets(getCurrentProjectId()) : {};
-      const inputDatasets = Object.fromEntries(inputs.map((input) => [input.nodeId, input.content]));
+      const inputDatasets = Object.fromEntries(bindings.map((binding) => [binding.alias, binding.content]));
       const response = await fetch(`${API_BASE}/api/process/df/run`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ python_path: pythonPath, code: getCode(), headers, rows, input_datasets: inputDatasets, primary_dataset_id: primaryDatasetId, ...session }),
+        body: JSON.stringify({ python_path: pythonPath, code: getCode(), headers, rows, input_datasets: inputDatasets, primary_dataset_id: 'df', ...session }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -376,6 +383,7 @@ export function openProcessDetailModal({ node, getProcessInputs, getUniqueDatase
       node.dataset.processDfCode = getCode();
       node.dataset.processActiveMode = 'df';
       delete node.dataset.processCode;
+      syncProcessDependencies?.(getCode());
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
     if (running && currentJobId) fetch(`${API_BASE}/api/process/df/run/cancel/${currentJobId}`, { method: 'POST' }).catch(() => {});
