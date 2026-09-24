@@ -2657,8 +2657,8 @@ def cancel_match_run(job_id: str):
     return {"ok": True, "status": "cancelling"}
 
 
-# ---------- Process "Process as df" (runs a user Python process(df) function once on the whole
-#             dataset, delegates to process_df_exec.py) ----------
+# ---------- Process (runs a user Python process(df) function once on the whole dataset, delegates
+#             to process_df_exec.py; it may return one DataFrame or named DataFrame branches) ----------
 _process_df_jobs: dict[str, dict] = {}
 _process_df_jobs_lock = threading.Lock()
 _process_df_cancelled: set[str] = set()
@@ -2668,7 +2668,7 @@ _process_df_procs: dict[str, subprocess.Popen] = {}
 
 class ProcessDfRunRequest(BaseModel):
     python_path: str = Field(..., min_length=1, description="Path to a Python interpreter (system install or a venv)")
-    code: str = Field(..., min_length=1, description="User code defining process(df) -> DataFrame")
+    code: str = Field(..., min_length=1, description="User code defining process(df) -> DataFrame | dict[str, DataFrame]")
     headers: list[str] = Field(..., description="Column names; each row dict passed into the DataFrame is keyed by these")
     rows: list[list[Any]] = Field(default_factory=list, description="Input rows, same order as headers")
     project_session_id: str | None = Field(default=None, description="Required when any row has an image/PDF cell -- see asset_store.py")
@@ -2722,7 +2722,7 @@ def _do_process_df_work(job_id: str, req: ProcessDfRunRequest) -> None:
             if was_cancelled:
                 _process_df_jobs[job_id] = {"status": "cancelled"}
             elif outcome.get("ok"):
-                _process_df_jobs[job_id] = {"status": "done", "rows": outcome.get("rows") or []}
+                _process_df_jobs[job_id] = {"status": "done", "outputs": outcome.get("outputs") or {}}
             else:
                 _process_df_jobs[job_id] = {"status": "done", "error": outcome.get("error") or "Unknown error"}
         _persist_process_df_jobs()
@@ -2736,7 +2736,7 @@ def _do_process_df_work(job_id: str, req: ProcessDfRunRequest) -> None:
 
 @app.post("/api/process/df/run")
 def start_process_df_run(body: ProcessDfRunRequest):
-    """Start a Process-as-df run (Python `process(df)` over the whole dataset) in the background; returns 202 with job_id."""
+    """Start a Process run (Python `process(df)`) in the background; it may return named branches."""
     job_id = str(uuid.uuid4())
     with _process_df_jobs_lock:
         _process_df_jobs[job_id] = {"status": "running"}
@@ -2757,14 +2757,19 @@ def get_process_df_run_result(job_id: str):
         if job.get("status") == "running":
             _touch_process_df_activity(job_id)
         status = job.get("status")
+        outputs = job.get("outputs")
+        # Jobs saved by older backend versions used one unlabelled rows list. Keep it readable
+        # while the browser migrates the Process result into the named-output form.
         rows = job.get("rows") or []
         error = job.get("error")
     if status == "running":
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=202, content={"status": "running"})
     if error:
-        return {"status": "done", "error": error, "rows": []}
-    return {"status": status, "rows": rows}
+        return {"status": "done", "error": error, "outputs": {}}
+    if isinstance(outputs, dict):
+        return {"status": status, "outputs": outputs}
+    return {"status": status, "outputs": {"result": rows}}
 
 
 @app.post("/api/process/df/run/cancel/{job_id}")

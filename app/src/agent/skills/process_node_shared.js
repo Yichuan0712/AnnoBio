@@ -14,7 +14,7 @@ export function buildProcessNodeSpec(args = {}) {
     throw new Error('"code" defining process(df) is required.');
   }
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) {
-    throw new Error('Process code must define process(df) and return a pandas DataFrame.');
+    throw new Error('Process code must define process(df) and return a pandas DataFrame or named DataFrame branches.');
   }
   const name = toCleanString(args?.name) || 'Process';
   const left = Number.isFinite(Number(args?.left)) ? Number(args.left) : null;

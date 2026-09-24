@@ -3287,8 +3287,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       try {
         const pdf = JSON.parse(node.dataset.processDfResults || 'null');
         const legacy = JSON.parse(node.dataset.processResults || 'null');
-        processHasResults = (!!pdf && Array.isArray(pdf.rows) && pdf.rows.length > 0)
-          || (!!legacy && Array.isArray(legacy.rows) && legacy.rows.length > 0);
+        processHasResults = Boolean(pdf?.outputs && typeof pdf.outputs === 'object' && Object.keys(pdf.outputs).length)
+          || (!!pdf && Array.isArray(pdf.rows))
+          || (!!legacy && Array.isArray(legacy.rows));
       } catch (_) {}
     }
     let scoreHasResults = false;
@@ -3354,7 +3355,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       `;
     } else if (isProcess) {
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Export result</button>
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create datasets</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-process-name" role="menuitem">Edit name</button>
       `;
     } else {
@@ -3813,22 +3814,37 @@ export function buildWorkflowCanvas(root, options = {}) {
       },
       'process-save-to-workspace': () => {
         if (node.dataset.nodeType !== 'process') return;
-        let results = null;
+        let saved = null;
         try {
-          results = JSON.parse(node.dataset.processDfResults || node.dataset.processResults || 'null');
+          saved = JSON.parse(node.dataset.processDfResults || node.dataset.processResults || 'null');
         } catch (_) {}
-        if (!results || !Array.isArray(results.rows) || results.rows.length === 0) return;
+        const outputs = saved?.outputs && typeof saved.outputs === 'object'
+          ? saved.outputs
+          : (saved && Array.isArray(saved.headers) && Array.isArray(saved.rows)
+            ? { result: saved }
+            : {});
+        const entries = Object.entries(outputs).filter(([, result]) => (
+          result && Array.isArray(result.headers) && Array.isArray(result.rows)
+        ));
+        if (!entries.length) return;
         const processName = (node.dataset.processName || node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Process';
-        const datasetName = findUniqueDatasetExportName(`${processName} results`);
-        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
-          detail: {
-            name: datasetName,
-            notes: `Exported from Process "${processName}".`,
-            headers: results.headers || [],
-            rows: results.rows,
-            processNodeId: node.dataset.nodeId || '',
-          },
-        }));
+        const left = (parseFloat(node.style.left) || 0) + (node.offsetWidth || 160) + NEW_NODE_OFFSET;
+        const top = parseFloat(node.style.top) || 0;
+        entries.forEach(([branchName, result], index) => {
+          const baseName = entries.length === 1 ? `${processName} results` : `${processName} — ${branchName}`;
+          document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
+            detail: {
+              name: findUniqueDatasetExportName(baseName),
+              notes: `Branch "${branchName}" exported from Process "${processName}".`,
+              headers: result.headers,
+              rows: result.rows,
+              processNodeId: node.dataset.nodeId || '',
+              processOutputName: branchName,
+              left,
+              top: top + index * 132,
+            },
+          }));
+        });
       },
       'duplicate-working-dataset': () => {
         const left = parseFloat(node.style.left) || 0;
@@ -4259,7 +4275,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:add-dataset-node', (e) => {
-    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', runNodeId = '', colorIndex: detailColorIndex } = e.detail || {};
+    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', processOutputName = '', runNodeId = '', colorIndex: detailColorIndex } = e.detail || {};
     const VISIBLE_PADDING = 40;
     let startLeft = typeof detailLeft === 'number' ? detailLeft : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
     let startTop = typeof detailTop === 'number' ? detailTop : (scrollWrapper.scrollTop + VISIBLE_PADDING);
@@ -4311,6 +4327,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       top: startTop,
       samplerNodeId: samplerNodeId || '',
       sourceRunNodeId: runNodeId || '',
+      processOutputName,
       colorIndex: detailColorIndex,
       headers: datasetHeaders,
       rows: datasetRows,
@@ -4530,6 +4547,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           note: node.dataset.datasetNote ?? node.dataset.subsetNote ?? '',
           samplerNodeId: node.dataset.samplerNodeId || '',
           sourceRunNodeId: node.dataset.sourceRunNodeId || '',
+          processOutputName: node.dataset.processOutputName || '',
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
           datasetContent: content ? cloneDatasetContent(content) : undefined,
           nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
@@ -4732,6 +4750,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           nodeId: n.nodeId || n.id,
           samplerNodeId: n.samplerNodeId || '',
           sourceRunNodeId: n.sourceRunNodeId || '',
+          processOutputName: n.processOutputName || '',
           colorIndex: n.colorIndex,
           headers: content?.headers,
           rows: content?.rows,

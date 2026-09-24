@@ -7,7 +7,7 @@ export const createProcessNodeMeta = Object.freeze({
   input_schema: {
     source_node_id: 'string (required exact dataset node id to process)',
     name: 'string (optional process node name)',
-    code: 'string (required Python source defining process(df) -> pandas.DataFrame)',
+    code: 'string (required Python source defining process(df) -> pandas.DataFrame or {branch_name: pandas.DataFrame})',
     left: 'number (optional x position)',
     top: 'number (optional y position)',
   },

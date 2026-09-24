@@ -883,7 +883,8 @@ def _main_module(
         if step["type"] == "process":
             calls.append(
                 f'    print("Running Process: {step["name"]}", flush=True)\n'
-                f"    frame = run_dataframe_processor(frame, {alias}.process, step_name={step['name']!r})"
+                f"    frame = run_dataframe_processor(frame, {alias}.process, step_name={step['name']!r}, "
+                f"output_name={step.get('output_name', '')!r})"
             )
         else:
             calls.append(
@@ -932,11 +933,18 @@ def run_dataframe_processor(
     process: Callable[[pd.DataFrame], Any],
     *,
     step_name: str,
+    output_name: str = "",
 ) -> pd.DataFrame:
-    """Apply a user-authored process(df) and enforce its DataFrame return contract."""
+    """Apply a Process and select one named DataFrame output when it branches."""
     result = process(frame.copy())
+    if isinstance(result, dict):
+        if not output_name:
+            raise ValueError(f'Process "{step_name}" returned branches; select one branch before exporting this route.')
+        if output_name not in result:
+            raise ValueError(f'Process "{step_name}" did not return the selected branch "{output_name}".')
+        result = result[output_name]
     if not isinstance(result, pd.DataFrame):
-        raise TypeError(f'Process "{step_name}" must return a pandas DataFrame.')
+        raise TypeError(f'Process "{step_name}" must return a pandas DataFrame or named DataFrame branches.')
     return result
 
 
@@ -1155,7 +1163,7 @@ def build_pipeline_archive(
     input_schema: dict[str, Any] | None = None
     input_dataset_name = "Dataset"
 
-    for route_index, item in enumerate(selected, start=1):
+    for route_index, item in enumerate(selected):
         if item["type"] == "dataset":
             dataset_count += 1
             node = _require_node(nodes, item["dataset_node_id"], "dataset")
@@ -1187,6 +1195,11 @@ def build_pipeline_archive(
         if item["type"] == "process":
             process_count += 1
             node = _require_node(nodes, item["process_node_id"], "process")
+            next_item = selected[route_index + 1] if route_index + 1 < len(selected) else None
+            output_name = ""
+            if next_item and next_item["type"] == "dataset":
+                output_node = _require_node(nodes, next_item["dataset_node_id"], "dataset")
+                output_name = _text(output_node.get("processOutputName"))
             process_name, mode, generated = _processor_module(node, metadata)
             module_name = f"processor_{process_count:02d}_{_identifier(process_name, 'process')}"
             source = f"processor/{module_name}.py"
@@ -1197,6 +1210,7 @@ def build_pipeline_archive(
                     "id": item["process_node_id"],
                     "name": process_name,
                     "mode": mode,
+                    **({"output_name": output_name} if output_name else {}),
                     "source": source,
                 }
             )
@@ -1205,6 +1219,7 @@ def build_pipeline_archive(
                     "type": "process",
                     "name": process_name,
                     "mode": mode,
+                    "output_name": output_name,
                     "package": "processor",
                     "module_name": module_name,
                     "alias": f"processor_step_{process_count:02d}",
