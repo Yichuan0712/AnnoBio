@@ -221,6 +221,23 @@ else:
         prompt_step = next(step for step in manifest["route"] if step["type"] == "prompt")
         self.assertEqual(prompt_step["input_mapping"], {"text": "text"})
 
+    def test_legacy_row_processor_exports_as_a_dataframe_processor(self):
+        _, archive = self.build()
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            manifest = json.loads(bundle.read("research-pipeline/pipeline.json"))
+            process_step = next(step for step in manifest["route"] if step["type"] == "process")
+            source = bundle.read(f"research-pipeline/{process_step['source']}").decode("utf-8")
+            main = bundle.read("research-pipeline/main.py").decode("utf-8")
+        self.assertEqual(process_step["mode"], "df")
+        self.assertIn("def _annobio_legacy_row_process(row)", source)
+        self.assertIn("def process(df):", source)
+        self.assertNotIn("run_row_processor", main)
+        namespace: dict[str, object] = {}
+        exec(source, namespace)
+        import pandas as pd
+        result = namespace["process"](pd.DataFrame([{"text": "  keep  "}]))
+        self.assertEqual(result.to_dict(orient="records"), [{"text": "keep"}])
+
     def test_unmapped_input_explains_how_to_fix_the_selected_run(self):
         state = _canvas_state()
         prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")

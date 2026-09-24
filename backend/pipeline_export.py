@@ -249,18 +249,50 @@ def _credential_config(
 
 def _processor_module(node: dict[str, Any], metadata: ExportMetadata) -> tuple[str, str, dict[str, Any]]:
     name = _text(node.get("name")) or "Process"
-    mode = "df" if node.get("activeMode") == "df" else "row"
-    code = str(node.get("dfCode") if mode == "df" else node.get("code") or "").strip()
-    expected_arg = "df" if mode == "df" else "row"
-    if not code or not re.search(rf"^\s*def\s+process\s*\(\s*{expected_arg}\b", code, flags=re.MULTILINE):
-        raise PipelineExportError(f'Process "{name}" must define process({expected_arg}) before it can be exported.')
+    dataframe_code = _text(node.get("dfCode"))
+    legacy_row_code = _text(node.get("code"))
+    if dataframe_code:
+        if not re.search(r"^\s*def\s+process\s*\(\s*df\b", dataframe_code, flags=re.MULTILINE):
+            raise PipelineExportError(f'Process "{name}" must define process(df) before it can be exported.')
+        code = dataframe_code
+    elif re.search(r"^\s*def\s+process\s*\(\s*row\b", legacy_row_code, flags=re.MULTILINE):
+        # Projects saved before the unified Process editor used process(row). Export a local
+        # adapter so those projects retain their skip/error behavior but every generated step
+        # now exposes the same process(df) contract.
+        renamed = re.sub(
+            r"^(\s*)def\s+process(\s*\(\s*row\b[^)]*\))",
+            r"\1def _annobio_legacy_row_process\2",
+            legacy_row_code,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        code = (
+            "# Migrated from this project's legacy process(row) function by AnnoBio.\n"
+            "import pandas as pd\n\n"
+            f"{renamed}\n\n"
+            "def process(df):\n"
+            "    \"\"\"Apply the legacy row transform through AnnoBio's dataframe contract.\"\"\"\n"
+            "    output = []\n"
+            "    records = df.where(pd.notna(df), None).to_dict(orient=\"records\")\n"
+            "    for row in records:\n"
+            "        try:\n"
+            "            result = _annobio_legacy_row_process(dict(row))\n"
+            "            if result is None:\n"
+            "                continue\n"
+            "            output.append(dict(result) if isinstance(result, dict) else {\"result\": result})\n"
+            "        except Exception as exc:\n"
+            "            output.append({\"error\": str(exc)})\n"
+            "    return pd.DataFrame(output)\n"
+        )
+    else:
+        raise PipelineExportError(f'Process "{name}" must define process(df) before it can be exported.')
     module = metadata.python_header(f'User-defined Process step: {name}.') + (
         "\n# The Process implementation below is preserved from the AnnoBio canvas.\n"
-        "# Edit it normally; main.py will continue to call process(row) or process(df).\n\n"
+        "# Edit it normally; main.py calls process(df) for every Process step.\n\n"
         + code
         + "\n"
     )
-    return name, mode, {"module": module}
+    return name, "df", {"module": module}
 
 
 def _prompt_module(
@@ -848,15 +880,10 @@ def _main_module(
     for step in executable_steps:
         alias = step["alias"]
         imports.append(f"from {step['package']} import {step['module_name']} as {alias}")
-        if step["type"] == "process" and step["mode"] == "df":
+        if step["type"] == "process":
             calls.append(
                 f'    print("Running Process: {step["name"]}", flush=True)\n'
                 f"    frame = run_dataframe_processor(frame, {alias}.process, step_name={step['name']!r})"
-            )
-        elif step["type"] == "process":
-            calls.append(
-                f'    print("Running Process: {step["name"]}", flush=True)\n'
-                f"    frame = run_row_processor(frame, {alias}.process, step_name={step['name']!r})"
             )
         else:
             calls.append(
@@ -898,27 +925,6 @@ def load_input(path: Path, sheet: str) -> pd.DataFrame:
     if missing:
         raise ValueError("Input workbook is missing columns: " + ", ".join(missing))
     return frame
-
-
-def run_row_processor(
-    frame: pd.DataFrame,
-    process: Callable[[dict[str, Any]], Any],
-    *,
-    step_name: str,
-) -> pd.DataFrame:
-    """Apply a user-authored process(row); None skips a row and exceptions become error rows."""
-    output: list[dict[str, Any]] = []
-    records = frame.where(pd.notna(frame), None).to_dict(orient="records")
-    for index, row in enumerate(records):
-        try:
-            result = process(dict(row))
-            if result is None:
-                continue
-            output.append(dict(result) if isinstance(result, dict) else {"result": result})
-        except Exception as exc:
-            output.append({"error": str(exc)})
-        print(f"[{step_name}] {index + 1}/{len(records)}", flush=True)
-    return pd.DataFrame(output)
 
 
 def run_dataframe_processor(
