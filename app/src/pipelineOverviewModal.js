@@ -315,7 +315,7 @@ function getCanvasNodeIds(step) {
 
 function renderRouteChip(step) {
   if (step.kind === 'empty') {
-    return '<span class="pipeline-overview-branch-chip pipeline-overview-branch-chip--empty"><span class="pipeline-step-empty">No operation</span></span>';
+    return '<span class="pipeline-overview-branch-chip pipeline-overview-branch-chip--empty"><span class="pipeline-step-empty">Do nothing</span></span>';
   }
   const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', step: 'Step' };
   const picker = renderPickerOrName(
