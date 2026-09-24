@@ -178,7 +178,7 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
           <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is this Process's Dataset. Referencing another alias automatically creates its canvas dependency. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
-          <button type="button" class="btn btn-secondary process-dataset-bindings-toggle" aria-expanded="false">Available Datasets</button>
+          <button type="button" class="process-dataset-bindings-toggle" aria-expanded="false">View available datasets <span aria-hidden="true">&dtrif;</span></button>
           <div class="process-dataset-menu" hidden>${datasetBindings}</div>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
@@ -205,12 +205,30 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   const datasetBindingsEl = overlay.querySelector('.process-dataset-menu');
   const datasetBindingsToggle = overlay.querySelector('.process-dataset-bindings-toggle');
   const runBtn = overlay.querySelector('.process-run-btn');
+  function positionDatasetMenu() {
+    if (datasetBindingsEl.hidden) return;
+    const triggerRect = datasetBindingsToggle.getBoundingClientRect();
+    const menuHeight = Math.min(datasetBindingsEl.scrollHeight, 218);
+    const showAbove = window.innerHeight - triggerRect.bottom < menuHeight + 10 && triggerRect.top > menuHeight + 10;
+    datasetBindingsEl.style.left = `${Math.max(8, Math.min(triggerRect.left, window.innerWidth - 408))}px`;
+    datasetBindingsEl.style.top = `${showAbove ? triggerRect.top - menuHeight - 6 : triggerRect.bottom + 6}px`;
+  }
   datasetBindingsToggle?.addEventListener('click', () => {
     const nextHidden = !datasetBindingsEl.hidden;
     datasetBindingsEl.hidden = nextHidden;
     datasetBindingsToggle.setAttribute('aria-expanded', String(!nextHidden));
-    datasetBindingsToggle.textContent = nextHidden ? 'Available Datasets' : 'Hide Datasets';
+    datasetBindingsToggle.innerHTML = nextHidden
+      ? 'View available datasets <span aria-hidden="true">&dtrif;</span>'
+      : 'View available datasets <span aria-hidden="true">&utrif;</span>';
+    positionDatasetMenu();
   });
+  overlay.addEventListener('mousedown', (event) => {
+    if (datasetBindingsEl.hidden || event.target.closest('.process-dataset-menu, .process-dataset-bindings-toggle')) return;
+    datasetBindingsEl.hidden = true;
+    datasetBindingsToggle.setAttribute('aria-expanded', 'false');
+    datasetBindingsToggle.innerHTML = 'View available datasets <span aria-hidden="true">&dtrif;</span>';
+  });
+  window.addEventListener('resize', positionDatasetMenu);
   datasetBindingsEl?.addEventListener('click', async (event) => {
     const item = event.target.closest('.process-dataset-menu__item');
     const alias = item?.dataset?.copyAlias;
@@ -417,6 +435,7 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   });
 
   function close() {
+    window.removeEventListener('resize', positionDatasetMenu);
     if (node?.dataset) {
       node.dataset.processDfCode = getCode();
       node.dataset.processActiveMode = 'df';
