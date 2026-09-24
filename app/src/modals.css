@@ -8562,6 +8562,9 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 .pipeline-overview-branch-chip:hover,
 .pipeline-overview-branch-chip:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pipeline-overview-branch-chip--empty { color: var(--text-muted); border-style: dashed; }
+.pipeline-overview-branch-chip--empty:hover { border-color: var(--border); box-shadow: none; }
+.pipeline-step-empty { font-size: 12.5px; font-style: italic; }
 .pipeline-step-version-select {
   font-size: 12.5px; padding: 2px 4px; border: 1px solid var(--border);
   border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); font-family: inherit;
