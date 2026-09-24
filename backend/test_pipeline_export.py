@@ -294,7 +294,7 @@ else:
                 {"type": "process", "nodeId": "split", "name": "Split", "dfCode": "def process(df):\n    return {'left': df, 'right': df}\n"},
                 {"type": "dataset", "nodeId": "left", "name": "Left", "processOutputName": "left", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "dataset", "nodeId": "right", "name": "Right", "processOutputName": "right", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
-                {"type": "process", "nodeId": "combine", "name": "Combine", "primaryDatasetId": "right", "dfCode": "def process(df):\n    return df\n"},
+                {"type": "process", "nodeId": "combine", "name": "Combine", "primaryDatasetId": "right", "datasetAliases": {"left": "df_left", "right": "df"}, "dfCode": "def process(df):\n    return df\n"},
                 {"type": "dataset", "nodeId": "combined", "name": "Combined", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "prompt", "nodeId": "prompt", "name": "Answer", "sections": [{"name": "Task", "content": "Answer {text}"}], "inputTypes": {"text": "text"}, "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}},
                 {"type": "run", "nodeId": "run", "runName": "Answer run", "runWorkingSetId": "combined", "runInputToColumn": json.dumps({"text": "text"})},
@@ -326,8 +326,8 @@ else:
         with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
             main = bundle.read("branched/main.py").decode("utf-8")
             manifest = json.loads(bundle.read("branched/pipeline.json"))
-            self.assertIn("run_process(frames['right'], {'left': frames['left'], 'right': frames['right']}", main)
-            self.assertIn('namespace["inputs"] = scoped_inputs', main)
+            self.assertIn("run_process(frames['right'], {'df_left': frames['left'], 'df': frames['right']}", main)
+            self.assertIn('namespace[alias] = frame', main)
             self.assertIn("branch(result, 'left'", main)
             self.assertIn("REQUIRED_INPUT_COLUMNS = ['text']", main)
             self.assertIn("frames: dict[str, pd.DataFrame] = {'raw':", main)

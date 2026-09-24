@@ -40,7 +40,7 @@ def _dag_main(jobs: list[dict[str, Any]], input_id: str, input_columns: list[str
     for job in jobs:
         imports.append(f"from {job['package']} import {job['module']} as {job['alias']}")
         if job["type"] == "process":
-            frames = ", ".join(f"{key!r}: frames[{key!r}]" for key in job["inputs"])
+            frames = ", ".join(f"{alias!r}: frames[{dataset_id!r}]" for dataset_id, alias in job["input_aliases"].items())
             lines = [
                 f'    print("Running Process: {job["name"]}", flush=True)',
                 f"    result = run_process(frames[{job['primary_input']!r}], {{{frames}}}, {job['alias']}.process, {job['name']!r})",
@@ -80,20 +80,14 @@ def load_input(path: Path, sheet: str) -> pd.DataFrame:
         raise ValueError("Input workbook is missing columns: " + ", ".join(missing))
     return frame
 
-def input_variable_name(dataset_id: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9_]", "_", dataset_id)
-    if safe and safe[0].isdigit():
-        safe = "_" + safe
-    return "df_" + (safe or "dataset")
-
 def run_process(primary: pd.DataFrame, input_frames: dict[str, pd.DataFrame], process: Callable[[pd.DataFrame], Any], name: str) -> dict[str, pd.DataFrame]:
-    # df is one explicit primary Dataset. Other input Datasets stay independent until the user
-    # deliberately joins them in Process code, e.g. pd.concat([df, inputs["dataset-id"]]).
-    scoped_inputs = {dataset_id: frame.copy() for dataset_id, frame in input_frames.items()}
+    # df is one explicit primary Dataset. Other inputs use the readable aliases displayed in the
+    # Process editor and remain independent until user code deliberately combines them.
+    scoped_inputs = {alias: frame.copy() for alias, frame in input_frames.items()}
     namespace = process.__globals__
-    namespace["inputs"] = scoped_inputs
-    for dataset_id, frame in scoped_inputs.items():
-        namespace[input_variable_name(dataset_id)] = frame
+    for alias, frame in scoped_inputs.items():
+        if alias != "df":
+            namespace[alias] = frame
     result = process(primary.copy())
     if isinstance(result, pd.DataFrame):
         return {"result": result}
@@ -204,6 +198,16 @@ def build_dag_pipeline_archive(*, canvas_state: dict[str, Any], route: list[dict
         primary_input = _text(node.get("primaryDatasetId"))
         if primary_input not in process_inputs[key]:
             primary_input = process_inputs[key][0]
+        raw_aliases = node.get("datasetAliases") or {}
+        if isinstance(raw_aliases, str):
+            try:
+                raw_aliases = json.loads(raw_aliases)
+            except json.JSONDecodeError:
+                raw_aliases = {}
+        raw_aliases = raw_aliases if isinstance(raw_aliases, dict) else {}
+        input_aliases = {dataset_id: ("df" if dataset_id == primary_input else _text(raw_aliases.get(dataset_id))) for dataset_id in process_inputs[key]}
+        if any(not alias for alias in input_aliases.values()):
+            raise PipelineExportError(f'Process "{_text(node.get("name")) or "Process"}" needs to be opened and saved once before export so its Dataset aliases can be recorded.')
         outputs = []
         for dataset_id in process_outputs[key]:
             branch_name = _text(datasets[dataset_id].get("processOutputName")) or ("result" if len(process_outputs[key]) == 1 else "")
@@ -212,7 +216,7 @@ def build_dag_pipeline_archive(*, canvas_state: dict[str, Any], route: list[dict
             outputs.append({"id": dataset_id, "name": names[dataset_id], "branch": branch_name})
         files.append(ExportedFile(f"processor/{module}.py", generated["module"]))
         steps.append({"type": "process", "id": key, "name": process_name, "mode": mode, "source": f"processor/{module}.py", "inputs": process_inputs[key], "outputs": outputs})
-        jobs[f"process:{key}"] = {"id": f"process:{key}", "type": "process", "name": process_name, "inputs": process_inputs[key], "primary_input": primary_input, "outputs": outputs, "package": "processor", "module": module, "alias": f"processor_step_{process_number:02d}"}
+        jobs[f"process:{key}"] = {"id": f"process:{key}", "type": "process", "name": process_name, "inputs": process_inputs[key], "primary_input": primary_input, "input_aliases": input_aliases, "outputs": outputs, "package": "processor", "module": module, "alias": f"processor_step_{process_number:02d}"}
     for key, run in runs.items():
         prompt_id, working_set, outputs = run_prompt.get(key), _text(run.get("runWorkingSetId")), run_outputs[key]
         if not prompt_id or working_set not in datasets or len(outputs) != 1:

@@ -2671,8 +2671,8 @@ class ProcessDfRunRequest(BaseModel):
     code: str = Field(..., min_length=1, description="User code defining process(df) -> DataFrame | dict[str, DataFrame]")
     headers: list[str] = Field(default_factory=list, description="Legacy primary Dataset column names")
     rows: list[list[Any]] = Field(default_factory=list, description="Legacy primary Dataset rows")
-    input_datasets: dict[str, dict[str, Any]] = Field(default_factory=dict, description="Dataset node id -> {headers, rows}; each is exposed independently to Process code")
-    primary_dataset_id: str = Field(default="", description="Dataset node id supplied as df")
+    input_datasets: dict[str, dict[str, Any]] = Field(default_factory=dict, description="Python alias -> {headers, rows}; each is exposed independently to Process code")
+    primary_dataset_id: str = Field(default="", description="Alias supplied as df")
     project_session_id: str | None = Field(default=None, description="Required when any row has an image/PDF cell -- see asset_store.py")
 
 

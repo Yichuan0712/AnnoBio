@@ -8590,9 +8590,13 @@ button.btn.btn-danger:hover:not(:disabled) {
 
 
 /* Process input bindings: df is the primary frame; secondary Datasets remain independently addressable. */
+.process-dataset-bindings-toggle { margin-top: 8px; }
+
 .process-input-bindings {
+  max-height: 180px;
   margin: 8px 0 0;
   padding: 7px 10px 7px 26px;
+  overflow: auto;
   border: 1px solid var(--border-color, #d2d8e1);
   border-radius: 6px;
   color: var(--text-muted, #566579);

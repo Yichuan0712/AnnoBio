@@ -1,4 +1,4 @@
-
+import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
   const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -614,7 +614,7 @@ export function createWorkflowNodeFactories(deps = {}) {
   }
 
   /** Process node: runs user-written process(df), with one primary Dataset and optional named inputs. */
-  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, primaryDatasetId = '' }) {
+  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, primaryDatasetId = '', datasetAliases = '' }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--process workflow-node--no-body';
@@ -630,6 +630,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (dfCode != null) node.dataset.processDfCode = String(dfCode);
     if (dfCode != null) node.dataset.processActiveMode = 'df';
     if (primaryDatasetId) node.dataset.processPrimaryDatasetId = String(primaryDatasetId);
+    if (datasetAliases) node.dataset.processDatasetAliases = String(datasetAliases);
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
@@ -671,26 +672,42 @@ export function createWorkflowNodeFactories(deps = {}) {
       e.preventDefault();
       e.stopPropagation();
       const processNodeId = node.dataset.nodeId;
-      function getProcessInputs() {
-        const inputs = getConnectionsList()
-          .filter((connection) => connection.toId === processNodeId && connection.type === 'dataset-to-process')
-          .map((connection) => getNodeById(connection.fromId))
-          .filter((datasetNode) => datasetNode?.classList.contains('workflow-node--dataset'))
+      function getProcessDatasets() {
+        const datasets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'))
           .map((datasetNode) => ({
             nodeId: datasetNode.dataset.nodeId,
             name: datasetNode.dataset.datasetName || 'Dataset',
             content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
           }))
-          .filter((input) => input.content);
-        const primaryDatasetId = inputs.some((input) => input.nodeId === node.dataset.processPrimaryDatasetId)
+          .filter((dataset) => dataset.content);
+        const incoming = getConnectionsList().find((connection) => (
+          connection.toId === processNodeId && connection.type === 'dataset-to-process'
+        ));
+        const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === node.dataset.processPrimaryDatasetId)
           ? node.dataset.processPrimaryDatasetId
-          : (inputs[0]?.nodeId || '');
+          : (incoming?.fromId || datasets[0]?.nodeId || '');
         if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
-        return { inputs, primaryDatasetId };
+        return { datasets, primaryDatasetId };
+      }
+      function syncProcessDependencies(code) {
+        const { datasets, primaryDatasetId } = getProcessDatasets();
+        const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
+        node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(bindings.map((binding) => [binding.nodeId, binding.alias])));
+        const required = new Set([primaryDatasetId, ...referencedDatasetAliases(code, bindings)]);
+        const allConnections = getConnectionsList();
+        for (let index = allConnections.length - 1; index >= 0; index -= 1) {
+          if (allConnections[index].toId === processNodeId && allConnections[index].type === 'dataset-to-process') allConnections.splice(index, 1);
+        }
+        bindings.filter((binding) => required.has(binding.nodeId)).forEach((binding) => {
+          allConnections.push({ fromId: binding.nodeId, toId: processNodeId, type: 'dataset-to-process' });
+        });
+        updateEdges();
+        emitCanvasChanged();
       }
       openProcessDetailModal({
         node,
-        getProcessInputs,
+        getProcessDatasets,
+        syncProcessDependencies,
         getUniqueDatasetExportName: findUniqueDatasetExportName,
       });
     });
