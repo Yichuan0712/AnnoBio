@@ -151,7 +151,7 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   const primaryInput = initialDatasets.bindings.find((binding) => binding.primary);
   const datasetBindings = initialDatasets.bindings.map((binding) => `
     <button type="button" class="process-dataset-menu__item" data-copy-alias="${escapeHtml(binding.alias)}" title="Copy ${escapeHtml(binding.alias)}">
-      <span class="process-dataset-menu__swatch" style="--dataset-color: ${escapeHtml(binding.color || '#7b61ff')}"></span>
+      <span class="run-detail-ws-option-color" style="background: ${escapeHtml(binding.color || '#7b61ff')}"></span>
       <span class="process-dataset-menu__name">${escapeHtml(binding.name || 'Dataset')}${binding.primary ? '<span class="process-dataset-menu__primary">This Process</span>' : ''}</span>
       <code class="process-dataset-menu__alias">${escapeHtml(binding.alias)}</code>
       <span class="process-dataset-menu__copy" aria-hidden="true">Copy</span>

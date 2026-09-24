@@ -8627,7 +8627,7 @@ button.btn.btn-danger:hover:not(:disabled) {
 
 .process-dataset-menu__item {
   display: grid;
-  grid-template-columns: 11px minmax(0, 1fr) auto auto;
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
   align-items: center;
   width: 100%;
   min-height: 35px;
@@ -8646,14 +8646,6 @@ button.btn.btn-danger:hover:not(:disabled) {
 .process-dataset-menu__item:last-child { border-bottom: 0; }
 .process-dataset-menu__item:hover,
 .process-dataset-menu__item:focus-visible { background: var(--hover-bg, #eef3f8); outline: none; }
-
-.process-dataset-menu__swatch {
-  width: 9px;
-  height: 9px;
-  border: 2px solid var(--dataset-color);
-  border-radius: 1px;
-  background: var(--dataset-color);
-}
 
 .process-dataset-menu__name {
   min-width: 0;
