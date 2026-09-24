@@ -16,6 +16,7 @@ import { prepareAssets } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings } from './processDatasetBindings.js';
+import { openProcessDatasetsDialog } from './processDatasetsDialog.js';
 
 const API_BASE = BACKEND_API_BASE;
 const PROCESS_POLL_INTERVAL_MS = 1200;
@@ -76,27 +77,6 @@ function escapeHtml(value) {
   return div.innerHTML;
 }
 
-async function copyText(value) {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return true;
-    }
-    throw new Error('Clipboard API is unavailable');
-  } catch (_) {
-    const input = document.createElement('textarea');
-    input.value = value;
-    input.setAttribute('readonly', '');
-    input.style.position = 'fixed';
-    input.style.opacity = '0';
-    document.body.appendChild(input);
-    input.select();
-    const copied = document.execCommand('copy');
-    input.remove();
-    return copied;
-  }
-}
-
 function normalizeResults(value) {
   if (!value || typeof value !== 'object') return null;
   const outputs = {};
@@ -149,14 +129,6 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   };
   const initialDatasets = readDatasets();
   const primaryInput = initialDatasets.bindings.find((binding) => binding.primary);
-  const datasetBindings = initialDatasets.bindings.map((binding) => `
-    <button type="button" class="process-dataset-menu__item" data-copy-alias="${escapeHtml(binding.alias)}" title="Copy ${escapeHtml(binding.alias)}">
-      <span class="run-detail-ws-option-color" style="background: ${escapeHtml(binding.color || '#7b61ff')}"></span>
-      <span class="process-dataset-menu__name">${escapeHtml(binding.name || 'Dataset')}${binding.primary ? '<span class="process-dataset-menu__primary">This Process</span>' : ''}</span>
-      <code class="process-dataset-menu__alias">${escapeHtml(binding.alias)}</code>
-      <span class="process-dataset-menu__copy" aria-hidden="true">Copy</span>
-    </button>
-  `).join('') || '<p class="process-dataset-menu__empty">No Dataset is available.</p>';
   const initialCode = resolveDataframeProcessCode({
     dfCode: node?.dataset?.processDfCode,
     code: node?.dataset?.processCode,
@@ -178,8 +150,7 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
           <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is this Process's Dataset. Referencing another alias automatically creates its canvas dependency. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
-          <button type="button" class="process-dataset-bindings-toggle" aria-expanded="false">View available datasets <span aria-hidden="true">&dtrif;</span></button>
-          <div class="process-dataset-menu" hidden>${datasetBindings}</div>
+          <button type="button" class="process-dataset-bindings-toggle" aria-haspopup="dialog">View available datasets</button>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -202,43 +173,12 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   const editorHost = overlay.querySelector('.process-editor-host');
   const resultsContent = overlay.querySelector('.process-results-content');
   const branchPicker = overlay.querySelector('.process-branch-picker');
-  const datasetBindingsEl = overlay.querySelector('.process-dataset-menu');
   const datasetBindingsToggle = overlay.querySelector('.process-dataset-bindings-toggle');
   const runBtn = overlay.querySelector('.process-run-btn');
-  function positionDatasetMenu() {
-    if (datasetBindingsEl.hidden) return;
-    const triggerRect = datasetBindingsToggle.getBoundingClientRect();
-    const menuHeight = Math.min(datasetBindingsEl.scrollHeight, 218);
-    const showAbove = window.innerHeight - triggerRect.bottom < menuHeight + 10 && triggerRect.top > menuHeight + 10;
-    datasetBindingsEl.style.left = `${Math.max(8, Math.min(triggerRect.left, window.innerWidth - 408))}px`;
-    datasetBindingsEl.style.top = `${showAbove ? triggerRect.top - menuHeight - 6 : triggerRect.bottom + 6}px`;
-  }
-  datasetBindingsToggle?.addEventListener('click', () => {
-    const nextHidden = !datasetBindingsEl.hidden;
-    datasetBindingsEl.hidden = nextHidden;
-    datasetBindingsToggle.setAttribute('aria-expanded', String(!nextHidden));
-    datasetBindingsToggle.innerHTML = nextHidden
-      ? 'View available datasets <span aria-hidden="true">&dtrif;</span>'
-      : 'View available datasets <span aria-hidden="true">&utrif;</span>';
-    positionDatasetMenu();
-  });
-  overlay.addEventListener('mousedown', (event) => {
-    if (datasetBindingsEl.hidden || event.target.closest('.process-dataset-menu, .process-dataset-bindings-toggle')) return;
-    datasetBindingsEl.hidden = true;
-    datasetBindingsToggle.setAttribute('aria-expanded', 'false');
-    datasetBindingsToggle.innerHTML = 'View available datasets <span aria-hidden="true">&dtrif;</span>';
-  });
-  window.addEventListener('resize', positionDatasetMenu);
-  datasetBindingsEl?.addEventListener('click', async (event) => {
-    const item = event.target.closest('.process-dataset-menu__item');
-    const alias = item?.dataset?.copyAlias;
-    if (!alias) return;
-    const label = item.querySelector('.process-dataset-menu__copy');
-    const originalText = label?.textContent || 'Copy';
-    const copied = await copyText(alias);
-    if (!label) return;
-    label.textContent = copied ? 'Copied' : 'Copy failed';
-    window.setTimeout(() => { label.textContent = originalText; }, 1200);
+  let closeDatasetsDialog = null;
+  datasetBindingsToggle.addEventListener('click', () => {
+    closeDatasetsDialog?.();
+    closeDatasetsDialog = openProcessDatasetsDialog(readDatasets().bindings);
   });
   const editorView = new EditorView({ doc: initialCode, extensions: [basicSetup, python()], parent: editorHost });
   const getCode = () => editorView.state.doc.toString();
@@ -435,7 +375,7 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   });
 
   function close() {
-    window.removeEventListener('resize', positionDatasetMenu);
+    closeDatasetsDialog?.();
     if (node?.dataset) {
       node.dataset.processDfCode = getCode();
       node.dataset.processActiveMode = 'df';
