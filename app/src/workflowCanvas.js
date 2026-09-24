@@ -1227,11 +1227,15 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function getProcessDatasets(processNode) {
     const datasets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'))
-      .map((datasetNode) => ({
-        nodeId: datasetNode.dataset.nodeId,
-        name: datasetNode.dataset.datasetName || 'Dataset',
-        content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
-      }))
+      .map((datasetNode) => {
+        const colorIndex = normalizeDatasetColorIndex(datasetNode.dataset.datasetColorIndex) ?? 0;
+        return {
+          nodeId: datasetNode.dataset.nodeId,
+          name: datasetNode.dataset.datasetName || 'Dataset',
+          color: DATASET_BORDER_COLORS[colorIndex],
+          content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
+        };
+      })
       .filter((dataset) => dataset.content);
     const incoming = connections.find((connection) => (
       connection.toId === processNode?.dataset?.nodeId && connection.type === EDGE_TYPE_DATASET_TO_PROCESS

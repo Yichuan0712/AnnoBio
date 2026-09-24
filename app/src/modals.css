@@ -8592,15 +8592,59 @@ button.btn.btn-danger:hover:not(:disabled) {
 /* Process input bindings: df is the primary frame; secondary Datasets remain independently addressable. */
 .process-dataset-bindings-toggle { margin-top: 8px; }
 
-.process-input-bindings {
-  max-height: 180px;
-  margin: 8px 0 0;
-  padding: 7px 10px 7px 26px;
+.process-dataset-menu {
+  max-height: 218px;
+  margin-top: 7px;
   overflow: auto;
   border: 1px solid var(--border-color, #d2d8e1);
-  border-radius: 6px;
-  color: var(--text-muted, #566579);
-  font-size: 12px;
-  line-height: 1.5;
+  border-radius: 5px;
+  background: var(--panel-bg, #fff);
+  box-shadow: 0 2px 8px rgb(24 39 58 / 10%);
 }
-.process-input-bindings code { color: var(--text-color, #172033); }
+
+.process-dataset-menu__item {
+  display: grid;
+  grid-template-columns: 11px minmax(0, 1fr) auto auto;
+  align-items: center;
+  width: 100%;
+  min-height: 35px;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-bottom: 1px solid var(--border-color-light, #e5e9ef);
+  background: transparent;
+  color: var(--text-color, #172033);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.process-dataset-menu__item:last-child { border-bottom: 0; }
+.process-dataset-menu__item:hover,
+.process-dataset-menu__item:focus-visible { background: var(--hover-bg, #eef3f8); outline: none; }
+
+.process-dataset-menu__swatch {
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--dataset-color);
+  border-radius: 2px;
+  background: #fff;
+}
+
+.process-dataset-menu__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-dataset-menu__primary {
+  margin-left: 6px;
+  color: var(--text-muted, #566579);
+  font-size: 11px;
+}
+
+.process-dataset-menu__alias { color: var(--text-color, #172033); }
+.process-dataset-menu__copy { color: var(--text-muted, #566579); font-size: 11px; }
+.process-dataset-menu__empty { margin: 0; padding: 9px; color: var(--text-muted, #566579); font-size: 12px; }

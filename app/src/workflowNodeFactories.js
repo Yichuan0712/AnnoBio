@@ -674,11 +674,20 @@ export function createWorkflowNodeFactories(deps = {}) {
       const processNodeId = node.dataset.nodeId;
       function getProcessDatasets() {
         const datasets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'))
-          .map((datasetNode) => ({
-            nodeId: datasetNode.dataset.nodeId,
-            name: datasetNode.dataset.datasetName || 'Dataset',
-            content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
-          }))
+          .map((datasetNode) => {
+            const savedColorIndex = datasetNode.dataset.datasetColorIndex != null
+              ? parseInt(datasetNode.dataset.datasetColorIndex, 10)
+              : 0;
+            const colorIndex = Number.isFinite(savedColorIndex) && savedColorIndex >= 0
+              ? savedColorIndex % DATASET_BORDER_COLORS.length
+              : 0;
+            return {
+              nodeId: datasetNode.dataset.nodeId,
+              name: datasetNode.dataset.datasetName || 'Dataset',
+              color: DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length],
+              content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
+            };
+          })
           .filter((dataset) => dataset.content);
         const incoming = getConnectionsList().find((connection) => (
           connection.toId === processNodeId && connection.type === 'dataset-to-process'

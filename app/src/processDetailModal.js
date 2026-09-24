@@ -76,6 +76,27 @@ function escapeHtml(value) {
   return div.innerHTML;
 }
 
+async function copyText(value) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+    throw new Error('Clipboard API is unavailable');
+  } catch (_) {
+    const input = document.createElement('textarea');
+    input.value = value;
+    input.setAttribute('readonly', '');
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
+    input.select();
+    const copied = document.execCommand('copy');
+    input.remove();
+    return copied;
+  }
+}
+
 function normalizeResults(value) {
   if (!value || typeof value !== 'object') return null;
   const outputs = {};
@@ -105,7 +126,7 @@ function restoreResults(node, ...keys) {
 }
 
 /**
- * @param {{ node: HTMLElement, getProcessDatasets: () => { datasets: Array<{nodeId: string, name: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, syncProcessDependencies?: (code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
+ * @param {{ node: HTMLElement, getProcessDatasets: () => { datasets: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, syncProcessDependencies?: (code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
  */
 export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDependencies, getUniqueDatasetExportName }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
@@ -128,9 +149,14 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   };
   const initialDatasets = readDatasets();
   const primaryInput = initialDatasets.bindings.find((binding) => binding.primary);
-  const datasetBindings = initialDatasets.bindings.map((binding) => (
-    `<li><code>${escapeHtml(binding.alias)}</code> &mdash; ${escapeHtml(binding.name || 'Dataset')}${binding.primary ? ' (this Process)' : ''}</li>`
-  )).join('') || '<li>No Dataset is available.</li>';
+  const datasetBindings = initialDatasets.bindings.map((binding) => `
+    <button type="button" class="process-dataset-menu__item" data-copy-alias="${escapeHtml(binding.alias)}" title="Copy ${escapeHtml(binding.alias)}">
+      <span class="process-dataset-menu__swatch" style="--dataset-color: ${escapeHtml(binding.color || '#7b61ff')}"></span>
+      <span class="process-dataset-menu__name">${escapeHtml(binding.name || 'Dataset')}${binding.primary ? '<span class="process-dataset-menu__primary">This Process</span>' : ''}</span>
+      <code class="process-dataset-menu__alias">${escapeHtml(binding.alias)}</code>
+      <span class="process-dataset-menu__copy" aria-hidden="true">Copy</span>
+    </button>
+  `).join('') || '<p class="process-dataset-menu__empty">No Dataset is available.</p>';
   const initialCode = resolveDataframeProcessCode({
     dfCode: node?.dataset?.processDfCode,
     code: node?.dataset?.processCode,
@@ -152,8 +178,8 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
           <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is this Process's Dataset. Referencing another alias automatically creates its canvas dependency. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
-          <button type="button" class="btn btn-secondary process-dataset-bindings-toggle">Available Datasets</button>
-          <ul class="process-input-bindings" hidden>${datasetBindings}</ul>
+          <button type="button" class="btn btn-secondary process-dataset-bindings-toggle" aria-expanded="false">Available Datasets</button>
+          <div class="process-dataset-menu" hidden>${datasetBindings}</div>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -176,13 +202,25 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   const editorHost = overlay.querySelector('.process-editor-host');
   const resultsContent = overlay.querySelector('.process-results-content');
   const branchPicker = overlay.querySelector('.process-branch-picker');
-  const datasetBindingsEl = overlay.querySelector('.process-input-bindings');
+  const datasetBindingsEl = overlay.querySelector('.process-dataset-menu');
   const datasetBindingsToggle = overlay.querySelector('.process-dataset-bindings-toggle');
   const runBtn = overlay.querySelector('.process-run-btn');
   datasetBindingsToggle?.addEventListener('click', () => {
     const nextHidden = !datasetBindingsEl.hidden;
     datasetBindingsEl.hidden = nextHidden;
+    datasetBindingsToggle.setAttribute('aria-expanded', String(!nextHidden));
     datasetBindingsToggle.textContent = nextHidden ? 'Available Datasets' : 'Hide Datasets';
+  });
+  datasetBindingsEl?.addEventListener('click', async (event) => {
+    const item = event.target.closest('.process-dataset-menu__item');
+    const alias = item?.dataset?.copyAlias;
+    if (!alias) return;
+    const label = item.querySelector('.process-dataset-menu__copy');
+    const originalText = label?.textContent || 'Copy';
+    const copied = await copyText(alias);
+    if (!label) return;
+    label.textContent = copied ? 'Copied' : 'Copy failed';
+    window.setTimeout(() => { label.textContent = originalText; }, 1200);
   });
   const editorView = new EditorView({ doc: initialCode, extensions: [basicSetup, python()], parent: editorHost });
   const getCode = () => editorView.state.doc.toString();
