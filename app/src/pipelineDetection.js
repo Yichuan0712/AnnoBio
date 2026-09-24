@@ -253,8 +253,15 @@ export function detectPipelines(canvasState) {
     // consumerStepIds below retain where that particular dataset continues, so the panel can show
     // one route and change the downstream chain when the user selects another output.
     const consumerKey = [...consumerStepIds].sort().join(',') || 'end';
+    // Named Process outputs are branches, rather than interchangeable materializations of one
+    // Dataset slot. Keep each name as a distinct step so the Current Pipeline can draw the fork
+    // and later convergence. Ordinary repeated exports still share one selectable slot.
+    const outputName = String(ds.processOutputName || '').trim();
+    const namedProcessOutput = producerStepId?.startsWith('process:') && outputName;
     const key = producerStepId
-      ? `after:${producerStepId}`
+      ? (namedProcessOutput
+        ? `after:${producerStepId}:branch:${outputName}`
+        : `after:${producerStepId}`)
       : `before:${consumerKey}`;
     if (!slots.has(key)) slots.set(key, { producerStepId, consumerStepIds: new Set(), datasetNodeIds: [] });
     const slot = slots.get(key);
