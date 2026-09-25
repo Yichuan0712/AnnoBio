@@ -9,6 +9,9 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  /* Its own stacking context: nothing inside (docks, full-screen, resizers, canvas controls) can
+     rise above the node windows and dialogs appended to <body>. */
+  isolation: isolate;
 }
 
 .workflow-workspace > .workflow-canvas { grid-area: 1 / 1; min-width: 0; }
@@ -26,6 +29,9 @@
 .workspace-panel-host > .workspace-dock,
 .workspace-panel-tab > .workspace-dock {
   position: static;
+  /* Drops the floating-window z-index (.pipeline-overview-overlay, .agent-window-overlay), which
+     would otherwise apply to a dock laid out as a flex item and lift it above those windows. */
+  z-index: auto;
   width: 100%;
   height: 100%;
   pointer-events: auto;
