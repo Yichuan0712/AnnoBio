@@ -27,6 +27,8 @@ function svgIcon(pathOrPaths, viewBox = `0 0 ${ICON_SIZE} ${ICON_SIZE}`) {
 }
 
 export const iconMinimize = () => svgIcon('M2 10h8');
+/** Collapses a docked panel (workspacePanels.js); centered so it sits on the header's midline. */
+export const iconCollapse = () => svgIcon('M2 6h8');
 export const iconMaximize = () => svgIcon('M1 1h10v10H1z');
 export const iconRestore = () => svgIcon(['M1 1h10v10H1z', 'M4 4h10v10H4z']);
 export const iconClose = () => svgIcon(['M2 2l8 8', 'M10 2l-8 8']);

@@ -4,6 +4,12 @@
  */
 
 function showError(msg, err) {
+  // Desktop: listed in the bottom panel's Errors tab (appErrors.js) instead of a box over the page.
+  if (window.electronAPI) {
+    reportAppError(msg, err);
+    console.error(msg, err);
+    return;
+  }
   const root = document.getElementById('app') || document.body;
   if (root && !root.querySelector('.renderer-error-box')) {
     const box = document.createElement('div');
@@ -15,7 +21,10 @@ function showError(msg, err) {
   console.error(msg, err);
 }
 
-window.addEventListener('error', (e) => { showError('Uncaught error: ' + (e.message || e), e.error); });
+window.addEventListener('error', (e) => {
+  if (window.electronAPI) showError('Uncaught error', e.error || e.message);
+  else showError('Uncaught error: ' + (e.message || e), e.error);
+});
 window.addEventListener('unhandledrejection', (e) => { showError('Unhandled promise rejection', e.reason); });
 
 import './index.css';
@@ -34,6 +43,7 @@ import { showProjectPickerModal, loadWebProject, saveWebProject, saveWebProjectT
 import { showAlert, showConfirm } from './alertModal.js';
 import { setCurrentProjectId } from './currentProject.js';
 import { createUndoHistory } from './undoHistory.js';
+import { reportAppError } from './appErrors.js';
 import { pruneUnusedAssets as pruneUnusedAssetsWeb } from './webImageApi.js';
 
 // Web has no "recent files" of its own the way the OS gives desktop one — without this, every
@@ -272,6 +282,7 @@ window.addEventListener('DOMContentLoaded', () => {
     onUndo: () => undoHistory.undo(),
     onRedo: () => undoHistory.redo(),
     onPublishToGallery: isElectron ? undefined : onPublishToGalleryWeb,
+    panelToggles: canvasAPI.panelToggles,
   });
   notifyUndoRedo = ({ canUndo, canRedo }) => topBarAPI.setUndoRedoEnabled?.(canUndo, canRedo);
   topBarAPI.setProjectTitle?.(APP_TITLE);

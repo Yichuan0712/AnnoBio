@@ -32,6 +32,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showPickPythonDialog: () => ipcRenderer.invoke('dialog:pick-python'),
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('fs:write-file', filePath, data, encoding),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+  getBackendLog: () => ipcRenderer.invoke('backend-log:get'),
+  clearBackendLog: () => ipcRenderer.invoke('backend-log:clear'),
+  openBackendLogFolder: () => ipcRenderer.invoke('backend-log:open-folder'),
+  /** Calls `callback(lines)` with each batch of new backend output; returns an unsubscribe function. */
+  onBackendLog: (callback) => {
+    const listener = (_event, lines) => callback(lines);
+    ipcRenderer.on('backend-log:lines', listener);
+    return () => ipcRenderer.removeListener('backend-log:lines', listener);
+  },
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),

@@ -65,7 +65,10 @@ import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
 import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
-import { iconWorkflow } from './icons.js';
+import { createWorkspacePanels } from './workspacePanels.js';
+import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
+import { mountBackendLogPanel } from './backendLogPanel.js';
+import { iconLayoutPanel, iconLayoutSidebarRight, iconWorkflow } from './icons.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { resolveDataframeProcessCode } from './processCode.js';
@@ -1193,6 +1196,21 @@ export function buildWorkflowCanvas(root, options = {}) {
         'workflow-node--pipeline-highlighted',
         highlightedIds.has(node.dataset.nodeId),
       );
+    });
+  }
+
+  function focusPipelineNodes(nodeIds = []) {
+    const nodes = nodeIds.map(getNodeById).filter(Boolean);
+    if (!nodes.length) return;
+    highlightPipelineNodes(nodeIds);
+    const left = Math.min(...nodes.map((node) => parseFloat(node.style.left) || 0));
+    const top = Math.min(...nodes.map((node) => parseFloat(node.style.top) || 0));
+    const right = Math.max(...nodes.map((node) => (parseFloat(node.style.left) || 0) + node.offsetWidth));
+    const bottom = Math.max(...nodes.map((node) => (parseFloat(node.style.top) || 0) + node.offsetHeight));
+    scrollWrapper.scrollTo({
+      left: Math.max(0, (left + right) / 2 * zoomLevel - scrollWrapper.clientWidth / 2),
+      top: Math.max(0, (top + bottom) / 2 * zoomLevel - scrollWrapper.clientHeight / 2),
+      behavior: 'smooth',
     });
   }
 
@@ -2755,33 +2773,44 @@ export function buildWorkflowCanvas(root, options = {}) {
   const canvasControlsStack = document.createElement('div');
   canvasControlsStack.className = 'workflow-canvas__controls-stack';
 
-  const autopilotToolbar = document.createElement('div');
-  autopilotToolbar.className = 'workflow-canvas__autopilot-toolbar';
-  autopilotToolbar.innerHTML = `
-    <button type="button" class="workflow-canvas__current-pipeline-btn" aria-label="Open Current Pipeline">
-      <span>Current Pipeline</span>
-    </button>
-    <button type="button" class="workflow-canvas__autopilot-btn" aria-label="Open Agent Assistant">
-      <span class="workflow-canvas__autopilot-icon">✦</span>
-      <span>Agent Assistant</span>
-    </button>
+  // The panel toggles sit in the top bar (topBar.js places them: left of the window controls on
+  // desktop, left of the account avatar on web) but live here, beside the panels they control.
+  const panelToggles = document.createElement('div');
+  panelToggles.className = 'top-bar-panel-toggles';
+  panelToggles.hidden = true;
+  panelToggles.innerHTML = `
+    <button type="button" class="top-bar-panel-toggle" aria-controls="workspace-pipeline"><span class="top-bar-panel-toggle__icon" aria-hidden="true"></span></button>
+    <button type="button" class="top-bar-panel-toggle" aria-controls="workspace-agent"><span class="top-bar-panel-toggle__icon" aria-hidden="true"></span></button>
   `;
-  const currentPipelineBtn = autopilotToolbar.querySelector('.workflow-canvas__current-pipeline-btn');
-  const currentPipelineIcon = iconWorkflow(16);
-  currentPipelineIcon.classList.add('workflow-canvas__current-pipeline-icon');
-  currentPipelineBtn.prepend(currentPipelineIcon);
-  // Sits beside the Agent Assistant toggle, not inside its chat window — pipeline detection is a
-  // one-click read of the current canvas, not something that needs a conversation open first.
-  currentPipelineBtn.addEventListener('click', () => {
-    showPipelineOverviewModal(
-      () => detectPipelines(getCanvasState()),
-      { getCanvasState, highlightCanvasNodes: highlightPipelineNodes },
-    );
-  });
-  const agentAssistantBtn = autopilotToolbar.querySelector('.workflow-canvas__autopilot-btn');
-  agentAssistantBtn.addEventListener('click', () => {
+  const [currentPipelineBtn, agentAssistantBtn] = panelToggles.querySelectorAll('.top-bar-panel-toggle');
+  const [pipelineToggleIcon, agentToggleIcon] = panelToggles.querySelectorAll('.top-bar-panel-toggle__icon');
+  // Desktop's title bar gets VS Code-style layout icons that show each panel's state (redrawn in
+  // syncPanelButtons); the web top bar keeps the Pipeline / ✦ icons, with state shown by color.
+  if (!isElectron) {
+    pipelineToggleIcon.appendChild(iconWorkflow(16));
+    agentToggleIcon.textContent = '✦';
+    agentToggleIcon.classList.add('top-bar-panel-toggle__sparkle');
+  }
+  // Uncaught errors land in the bottom panel's Errors tab (desktop); this keeps them noticeable
+  // while that panel is collapsed or showing another tab.
+  const panelErrorBadge = document.createElement('span');
+  panelErrorBadge.className = 'top-bar-panel-toggle__badge';
+  panelErrorBadge.hidden = true;
+  currentPipelineBtn.appendChild(panelErrorBadge);
+  currentPipelineBtn.addEventListener('click', () => workspacePanels.toggle('pipeline'));
+  agentAssistantBtn.addEventListener('click', () => workspacePanels.toggle('agent'));
+  let panelProjectPath = '';
+  let agentMountGeneration = 0;
+  let pendingAgentMount = false;
+  function mountAgentPanel() {
+    if (pendingAgentMount || workspacePanels.agentHost.querySelector('.agent-window-overlay')) return;
+    pendingAgentMount = true;
+    const generation = agentMountGeneration;
     openAgentWindowModal({
       projectPath: getCurrentProjectPath(),
+      host: workspacePanels.agentHost,
+      onClose: () => { workspacePanels.collapse('agent'); agentAssistantBtn.focus(); },
+      isCurrent: () => generation === agentMountGeneration,
       workspace: {
         getCanvasState,
         inspectNode,
@@ -2802,28 +2831,27 @@ export function buildWorkflowCanvas(root, options = {}) {
         stopReviewNode,
         verifyReviewSuggestions,
       },
+    }).catch((error) => {
+      if (generation === agentMountGeneration) {
+        showAlert(error?.message || 'Could not open Agent Assistant.', { title: 'Agent Assistant' });
+      }
+    }).finally(() => {
+      if (generation === agentMountGeneration) pendingAgentMount = false;
     });
-  });
-  canvasControlsStack.appendChild(autopilotToolbar);
-
-  // Greys out whichever button's window is already up. Both windows also close from the inside
-  // (their own ✕, Escape), so this watches for the overlays themselves rather than assuming a
-  // click is what opens and closes them.
-  const toolbarWindowButtons = [
-    [currentPipelineBtn, '.pipeline-overview-overlay'],
-    [agentAssistantBtn, '.agent-window-overlay'],
-  ];
-  function syncToolbarWindowState() {
-    for (const [btn, overlaySelector] of toolbarWindowButtons) {
-      btn.classList.toggle('is-open', Boolean(document.querySelector(overlaySelector)));
-    }
   }
-  new MutationObserver(syncToolbarWindowState).observe(document.body, { childList: true });
 
-  // Tracks whether a project is open, not whether the Agent window is — the toolbar stays put
-  // while the chat is up so Current Pipeline is still one click away.
   function setAgentWindowVisible(visible) {
-    autopilotToolbar.style.display = visible ? '' : 'none';
+    panelToggles.hidden = !visible;
+    const projectPath = visible ? String(getCurrentProjectPath() || '') : '';
+    if (projectPath !== panelProjectPath || !visible) {
+      panelProjectPath = projectPath;
+      agentMountGeneration += 1;
+      pendingAgentMount = false;
+      workspacePanels.agentHost.querySelector('.agent-window-overlay')?.destroyAgentWindow?.();
+      workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay')?.destroyPipelineOverview?.();
+    }
+    workspacePanels.setEnabled(visible);
+    if (isElectron) setErrorsPanelAvailable(visible);
   }
 
   const zoomToolbar = document.createElement('div');
@@ -4623,6 +4651,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => syncScoreNodeProgressFromUpstreamRun(scoreNode));
     updateContentSize();
     updateEdges();
+    root.querySelector('.pipeline-overview-overlay')?.refreshPipelineOverview?.();
   }
 
   function setOnCanvasChange(fn) {
@@ -4771,7 +4800,56 @@ export function buildWorkflowCanvas(root, options = {}) {
     new MutationObserver(updateEmptyState).observe(nodesLayer, { childList: true });
   }
 
-  root.appendChild(canvas);
+  let panelVisibility = { pipeline: false, agent: false };
+  let appErrorCount = 0;
+  function syncPanelButtons() {
+    const errorNote = appErrorCount ? ` (${appErrorCount} error${appErrorCount === 1 ? '' : 's'})` : '';
+    for (const [button, visible, label] of [
+      [currentPipelineBtn, panelVisibility.pipeline, `Current Pipeline${errorNote}`],
+      [agentAssistantBtn, panelVisibility.agent, 'Agent Assistant'],
+    ]) {
+      button.classList.toggle('is-open', visible);
+      button.setAttribute('aria-expanded', String(visible));
+      button.setAttribute('aria-label', `${visible ? 'Collapse' : 'Open'} ${label}`);
+      button.title = `${visible ? 'Collapse' : 'Open'} ${label}`;
+    }
+    panelErrorBadge.hidden = !appErrorCount;
+    panelErrorBadge.textContent = appErrorCount > 99 ? '99+' : String(appErrorCount);
+    if (isElectron) {
+      pipelineToggleIcon.replaceChildren(iconLayoutPanel(panelVisibility.pipeline));
+      agentToggleIcon.replaceChildren(iconLayoutSidebarRight(panelVisibility.agent));
+    }
+  }
+  const workspacePanels = createWorkspacePanels(root, canvas, ({ pipeline, agent, tab }) => {
+    panelVisibility = { pipeline, agent };
+    syncPanelButtons();
+    if (pipeline) {
+      showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
+        host: workspacePanels.pipelineHost,
+        getCanvasState,
+        highlightCanvasNodes: highlightPipelineNodes,
+        focusCanvasNodes: focusPipelineNodes,
+      });
+    }
+    if (agent) mountAgentPanel();
+    if (!pipeline || tab !== 'pipeline') highlightPipelineNodes([]);
+  }, {
+    bottomTabs: [
+      { id: 'pipeline', label: 'Current Pipeline' },
+      ...(isElectron ? [{ id: 'log', label: 'Log' }, { id: 'errors', label: 'Errors' }] : []),
+    ],
+    onCollapse: () => currentPipelineBtn.focus(),
+  });
+  if (isElectron) {
+    mountBackendLogPanel(workspacePanels.tabHost('log'));
+    mountErrorsPanel(workspacePanels.tabHost('errors'));
+    subscribeAppErrors((list) => {
+      appErrorCount = list.length;
+      workspacePanels.setTabBadge('errors', list.length);
+      syncPanelButtons();
+    });
+  }
+  new ResizeObserver(() => updateContentSize()).observe(canvas);
   return {
     getCanvasState,
     inspectNode,
@@ -4802,6 +4880,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     loadCanvasState,
     setOnCanvasChange,
     setAgentWindowVisible,
+    panelToggles,
     isPromptNameAlreadyUsed,
     isDatasetNameAlreadyUsed,
     shutdownRunPoll,
