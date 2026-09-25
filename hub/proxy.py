@@ -5,7 +5,8 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 import containers
 import db
@@ -40,17 +41,34 @@ async def proxy_request(request: Request, user: dict) -> Response:
     author_name = str(user.get("name") or "").strip()
     if author_name:
         forwarded_headers["X-AnnoBio-User-Name"] = quote(author_name[:200], safe="")
+    client = httpx.AsyncClient(timeout=300.0)
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            upstream = await client.request(
-                request.method,
-                target_url,
-                headers=forwarded_headers,
-                content=body,
-            )
+        upstream = await client.send(
+            client.build_request(request.method, target_url, headers=forwarded_headers, content=body),
+            stream=True,
+        )
     except httpx.HTTPError as e:
+        await client.aclose()
         return Response(content=f"Your workspace container did not respond: {e}", status_code=502)
 
-    excluded_response_headers = {"content-encoding", "transfer-encoding", "connection"}
+    excluded_response_headers = {"content-encoding", "transfer-encoding", "connection", "content-length"}
     headers = {k: v for k, v in upstream.headers.items() if k.lower() not in excluded_response_headers}
-    return Response(content=upstream.content, status_code=upstream.status_code, headers=headers)
+
+    async def close_upstream():
+        await upstream.aclose()
+        await client.aclose()
+
+    # Server-sent events (the Agent's streamed turns) are relayed chunk by chunk; buffering them
+    # would hold every token back until the model finished.
+    if upstream.headers.get("content-type", "").startswith("text/event-stream"):
+        return StreamingResponse(
+            upstream.aiter_bytes(),
+            status_code=upstream.status_code,
+            headers=headers,
+            background=BackgroundTask(close_upstream),
+        )
+    try:
+        content = await upstream.aread()
+    finally:
+        await close_upstream()
+    return Response(content=content, status_code=upstream.status_code, headers=headers)

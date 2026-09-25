@@ -116,6 +116,8 @@ class ProjectRename(BaseModel):
 
 
 class AgentConversationsSave(BaseModel):
+    # 2 = tool-calling Agent messages (see app/src/agentWindowModal.js); absent on older saves.
+    format_version: int | None = None
     activeConversationId: str = ""
     conversations: list[dict[str, Any]] = []
 

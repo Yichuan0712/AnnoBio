@@ -264,6 +264,195 @@ def chat(
     return _extract_completion_text(response)
 
 
+def _normalize_tool_messages(messages: list[dict]) -> list[dict]:
+    """OpenAI-format messages for a tool-calling conversation. Unlike _normalize_messages this keeps
+    assistant `tool_calls` and tool-result `tool_call_id`, which LiteLLM translates per provider."""
+    out: list[dict] = []
+    for m in messages:
+        role = str(m.get("role") or "user").lower()
+        if role == "tool":
+            out.append({
+                "role": "tool",
+                "tool_call_id": str(m.get("tool_call_id") or ""),
+                "content": str(m.get("content") or ""),
+            })
+            continue
+        message: dict[str, Any] = {"role": role, "content": m.get("content") or ""}
+        if role == "assistant" and m.get("tool_calls"):
+            message["tool_calls"] = [
+                {
+                    "id": str(call.get("id") or ""),
+                    "type": "function",
+                    "function": {
+                        "name": str((call.get("function") or {}).get("name") or ""),
+                        "arguments": str((call.get("function") or {}).get("arguments") or "{}"),
+                    },
+                }
+                for call in m["tool_calls"]
+            ]
+            # Several providers reject an empty-string content next to tool_calls.
+            if not message["content"]:
+                message["content"] = None
+        out.append(message)
+    return out
+
+
+def stream_chat_with_tools(
+    *,
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: str,
+    messages: list[dict],
+    tools: list[dict],
+    max_tokens: int,
+    max_retries: int = 3,
+):
+    """
+    Stream one assistant response from a tool-calling conversation. Yields event dicts:
+      {"type": "text", "delta": str}
+      {"type": "tool_calls", "tool_calls": [{"id", "name", "arguments"}]}  (once, fully assembled)
+      {"type": "done", "finish_reason": str}
+    Transient errors are retried only until the first chunk arrives, so a retry never repeats
+    output the caller has already received. Raises on failure.
+    """
+    kwargs = _make_completion_kwargs(
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        max_tokens=max_tokens,
+    )
+    kwargs["messages"] = _normalize_tool_messages(messages)
+    if tools:
+        kwargs["tools"] = tools
+    kwargs["stream"] = True
+
+    def open_stream():
+        stream = completion(**kwargs)
+        iterator = iter(stream)
+        first = next(iterator, None)
+        return first, iterator
+
+    first, iterator = _retry_invoke(open_stream, max_retries=max_retries)
+
+    tool_calls: dict[int, dict[str, str]] = {}
+    finish_reason = ""
+
+    def chunks():
+        if first is not None:
+            yield first
+        yield from iterator
+
+    for chunk in chunks():
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            continue
+        choice = choices[0]
+        if getattr(choice, "finish_reason", None):
+            finish_reason = str(choice.finish_reason)
+        delta = getattr(choice, "delta", None)
+        if delta is None:
+            continue
+        text = getattr(delta, "content", None)
+        if text:
+            yield {"type": "text", "delta": _message_content_to_text(text)}
+        for call in getattr(delta, "tool_calls", None) or []:
+            index = getattr(call, "index", None)
+            if index is None:
+                index = len(tool_calls)
+            slot = tool_calls.setdefault(int(index), {"id": "", "name": "", "arguments": ""})
+            if getattr(call, "id", None):
+                slot["id"] = str(call.id)
+            function = getattr(call, "function", None)
+            if function is not None:
+                if getattr(function, "name", None):
+                    slot["name"] = str(function.name)
+                if getattr(function, "arguments", None):
+                    slot["arguments"] += str(function.arguments)
+
+    if tool_calls:
+        assembled = []
+        for index in sorted(tool_calls):
+            slot = tool_calls[index]
+            if not slot["name"]:
+                continue
+            assembled.append({
+                "id": slot["id"] or f"call_{index}_{int(time.time() * 1000)}",
+                "name": slot["name"],
+                "arguments": slot["arguments"] or "{}",
+            })
+        if assembled:
+            yield {"type": "tool_calls", "tool_calls": assembled}
+    yield {"type": "done", "finish_reason": finish_reason}
+
+
+_TOOLS_UNSUPPORTED_MARKERS = (
+    "does not support tools",
+    "does not support tool",
+    "tool use is not supported",
+    "tools are not supported",
+    "tool calling is not supported",
+    "function calling is not supported",
+    "does not support function",
+    "no endpoints found that support tool use",
+    "tool_choice",
+    "tools is not supported",
+    "unsupported parameter: 'tools'",
+)
+
+
+def is_tools_unsupported_error(error: Exception | str) -> bool:
+    """True when a provider error says the model cannot take `tools` (as opposed to auth, quota...)."""
+    text = (getattr(error, "message", None) or str(error)).lower()
+    return any(marker in text for marker in _TOOLS_UNSUPPORTED_MARKERS)
+
+
+def probe_tool_calling(*, provider: str, model: str, api_key: str, base_url: str) -> dict[str, Any]:
+    """
+    Check for real whether this model calls tools, which the Agent depends on: offer one tool and ask
+    for it to be called. Registries (LiteLLM's, OpenRouter's) only hint at this, and say nothing about
+    custom endpoints. Returns {"ok": True | False | None, "detail": str}; None means the check itself
+    failed (auth, network, quota) and says nothing about tool support.
+    """
+    kwargs = _make_completion_kwargs(
+        provider=provider, model=model, api_key=api_key, base_url=base_url, max_tokens=2048,
+    )
+    kwargs["messages"] = [
+        {"role": "system", "content": "You are testing a tool. Respond only by calling the provided tool."},
+        {"role": "user", "content": "Call the ping tool with message set to \"ready\"."},
+    ]
+    kwargs["tools"] = [{
+        "type": "function",
+        "function": {
+            "name": "ping",
+            "description": "Replies pong.",
+            "parameters": {
+                "type": "object",
+                "properties": {"message": {"type": "string"}},
+                "required": ["message"],
+            },
+        },
+    }]
+    try:
+        response = _retry_invoke(lambda: completion(**kwargs), max_retries=1)
+    except Exception as e:
+        if is_tools_unsupported_error(e):
+            return {"ok": False, "detail": f"The provider rejected tool calling for this model: {e}"}
+        return {"ok": None, "detail": f"The check could not reach the model: {e}"}
+    choices = getattr(response, "choices", None) or []
+    message = getattr(choices[0], "message", None) if choices else None
+    calls = getattr(message, "tool_calls", None) or []
+    if any(getattr(getattr(call, "function", None), "name", "") == "ping" for call in calls):
+        return {"ok": True, "detail": "The model called the test tool."}
+    text = _extract_completion_text(response)
+    return {
+        "ok": False,
+        "detail": "The model answered in text instead of calling the test tool, so it cannot drive the Agent's tools"
+        + (f" (it replied: {text[:120]})" if text else "") + ".",
+    }
+
+
 def _extract_json_from_text(text: str) -> str:
     """Extract a JSON object from text that may be wrapped in <reasoning>, markdown, etc."""
     text = text.strip()

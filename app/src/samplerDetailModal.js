@@ -4,7 +4,7 @@
  * @param {{ node: HTMLElement, hasSampledDatasets?: (samplerNodeId: string) => boolean }} options
  */
 
-import { buildSamplerNodeSpec } from './agent/skills/sampler_node_shared.js';
+import { buildSamplerNodeSpec } from './agent/operations/sampler_node_shared.js';
 
 function escapeHtml(str) {
   const div = document.createElement('div');

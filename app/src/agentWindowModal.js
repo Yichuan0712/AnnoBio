@@ -87,6 +87,11 @@ function sortChatsByRecent(chats) {
     });
 }
 
+// Conversations saved before the tool-calling Agent (no format_version) are not loaded: their
+// messages carry none of the tool history the current loop needs. See AGENT_DESIGN.md.
+const CONVERSATIONS_FORMAT_VERSION = 2;
+
+/** Keeps the fields agent/agentLoop.js stores on each message (tool calls, tool results). */
 function mapMessageForStorage(message) {
   if (!message || typeof message !== 'object') {
     return { role: 'assistant', content: '' };
@@ -95,14 +100,29 @@ function mapMessageForStorage(message) {
     role: String(message.role || 'assistant'),
     content: String(message.content || ''),
   };
-  if (Array.isArray(message.reasoningSteps) && message.reasoningSteps.length > 0) {
-    const rs = message.reasoningSteps.map((s) => String(s || '').trim()).filter(Boolean);
-    if (rs.length) out.reasoningSteps = rs;
+  if (Array.isArray(message.toolCalls) && message.toolCalls.length) {
+    out.toolCalls = message.toolCalls.map((call) => ({
+      id: String(call?.id || ''),
+      name: String(call?.name || ''),
+      arguments: String(call?.arguments || '{}'),
+      ...(call?.preview && typeof call.preview === 'object' ? { preview: call.preview } : {}),
+    }));
+  }
+  if (out.role === 'tool') {
+    out.toolCallId = String(message.toolCallId || '');
+    out.name = String(message.name || '');
+    out.ok = message.ok !== false;
+    out.label = String(message.label || '');
+    if (message.answer != null) out.answer = String(message.answer);
+    if (message.outcome != null) out.outcome = String(message.outcome);
   }
   return out;
 }
 
 function normalizeStoredChats(data) {
+  if (Number(data?.format_version) !== CONVERSATIONS_FORMAT_VERSION) {
+    return { conversations: [], activeChatId: '' };
+  }
   const conversations = Array.isArray(data?.conversations)
     ? data.conversations
         .filter((chat) => chat && typeof chat === 'object' && String(chat.id || '').trim())
@@ -146,21 +166,7 @@ function mergeRemoteConversationIntoLocal(local, remote) {
   local.pendingStatus = String(remote.pendingStatus || '').trim();
   local.unsentDraft = String(remote.unsentDraft || '');
   local.updatedAt = Math.max(lt, rt);
-  const prevMessages = local.messages;
-  local.messages = remote.messages.map((m, i) => {
-    const mapped = mapMessageForStorage(m);
-    const prev = prevMessages[i];
-    if (
-      prev
-      && prev.role === mapped.role
-      && String(prev.content || '') === String(mapped.content || '')
-      && Array.isArray(prev.reasoningSteps) && prev.reasoningSteps.length > 0
-      && !mapped.reasoningSteps
-    ) {
-      return { ...mapped, reasoningSteps: prev.reasoningSteps.slice() };
-    }
-    return mapped;
-  });
+  local.messages = remote.messages.map((m) => mapMessageForStorage(m));
   return true;
 }
 
@@ -173,29 +179,7 @@ export async function openAgentWindowModal(options = {}) {
   }
 
   const projectPath = String(options?.projectPath || '').trim();
-  const getWorkflowSnapshot = typeof options?.getWorkflowSnapshot === 'function' ? options.getWorkflowSnapshot : null;
-  const inspectNode = typeof options?.inspectNode === 'function' ? options.inspectNode : null;
-  const addRunNode = typeof options?.addRunNode === 'function' ? options.addRunNode : null;
-  const addScoreNode = typeof options?.addScoreNode === 'function' ? options.addScoreNode : null;
-  const createAndRunReviewNode = typeof options?.createAndRunReviewNode === 'function' ? options.createAndRunReviewNode : null;
-  const verifyReviewSuggestions = typeof options?.verifyReviewSuggestions === 'function' ? options.verifyReviewSuggestions : null;
-  const acceptReviewSuggestions = typeof options?.acceptReviewSuggestions === 'function' ? options.acceptReviewSuggestions : null;
-  const applyReviewSuggestions = typeof options?.applyReviewSuggestions === 'function' ? options.applyReviewSuggestions : null;
-  const startRunNode = typeof options?.startRunNode === 'function' ? options.startRunNode : null;
-  const saveRunResultsToWorkspace = typeof options?.saveRunResultsToWorkspace === 'function' ? options.saveRunResultsToWorkspace : null;
-  const saveScoreResultsToWorkspace = typeof options?.saveScoreResultsToWorkspace === 'function' ? options.saveScoreResultsToWorkspace : null;
-  const addSamplerNode = typeof options?.addSamplerNode === 'function' ? options.addSamplerNode : null;
-  const addSampledDatasetNode = typeof options?.addSampledDatasetNode === 'function' ? options.addSampledDatasetNode : null;
-  const addPromptNode = typeof options?.addPromptNode === 'function' ? options.addPromptNode : null;
-  const addPromptVersion = typeof options?.addPromptVersion === 'function' ? options.addPromptVersion : null;
-  const updateScoreNode = typeof options?.updateScoreNode === 'function' ? options.updateScoreNode : null;
-  const updateScoreRowSelection = typeof options?.updateScoreRowSelection === 'function' ? options.updateScoreRowSelection : null;
-  const addDatasetNode = typeof options?.addDatasetNode === 'function' ? options.addDatasetNode : null;
-  const addProcessNode = typeof options?.addProcessNode === 'function' ? options.addProcessNode : null;
-  const importPubmedDataset = typeof options?.importPubmedDataset === 'function' ? options.importPubmedDataset : null;
-  const importClinicaltrialsDataset = typeof options?.importClinicaltrialsDataset === 'function' ? options.importClinicaltrialsDataset : null;
-  const importPreprintDataset = typeof options?.importPreprintDataset === 'function' ? options.importPreprintDataset : null;
-  const importChemblDataset = typeof options?.importChemblDataset === 'function' ? options.importChemblDataset : null;
+  const workspace = options?.workspace || null;
   const storageApi = window.electronAPI || webAgentStorageApi;
   let storedState = { conversations: [], activeChatId: '' };
   if (projectPath && storageApi?.loadAgentConversations) {
@@ -241,7 +225,7 @@ export async function openAgentWindowModal(options = {}) {
               <textarea
                 class="agent-window__composer-input"
                 rows="3"
-                placeholder="Loading Review model..."
+                placeholder="Loading Agent model..."
               ></textarea>
               <button type="button" class="agent-window__composer-send" aria-label="Send" disabled>
                 <svg class="agent-window__button-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -265,6 +249,7 @@ export async function openAgentWindowModal(options = {}) {
 
   function buildSavePayload() {
     return {
+      format_version: CONVERSATIONS_FORMAT_VERSION,
       activeConversationId: activeChatId,
       conversations: chats.map((chat) => ({
         ...chat,
@@ -293,16 +278,17 @@ export async function openAgentWindowModal(options = {}) {
       if (!Array.isArray(c.messages)) c.messages = [];
       const msgs = c.messages;
       const last = msgs[msgs.length - 1];
-      if (last?.role === 'user' && String(last.content || '').trim()) {
-        c.pending = false;
-        c.pendingStatus = '';
+      c.pending = false;
+      c.pendingStatus = '';
+      c.updatedAt = Date.now();
+      changed = true;
+      // A turn that ended mid-way (last message a question, tool call or result) gets a note.
+      if (last && !(last.role === 'assistant' && !last.toolCalls?.length)) {
         msgs.push({
           role: 'assistant',
           content:
             'No response was saved for the previous in-flight request. Send again if you still need a reply.',
         });
-        c.updatedAt = Date.now();
-        changed = true;
       }
     }
     return changed;
@@ -472,29 +458,7 @@ export async function openAgentWindowModal(options = {}) {
     inputEl: composerInputEl,
     sendButtonEl: composerSendEl,
     autoResizeComposer,
-    getWorkflowSnapshot,
-    inspectNode,
-    addRunNode,
-    addScoreNode,
-    updateScoreNode,
-    updateScoreRowSelection,
-    createAndRunReviewNode,
-    verifyReviewSuggestions,
-    acceptReviewSuggestions,
-    applyReviewSuggestions,
-    startRunNode,
-    saveRunResultsToWorkspace,
-    saveScoreResultsToWorkspace,
-    addSamplerNode,
-    addSampledDatasetNode,
-    addPromptNode,
-    addPromptVersion,
-    addDatasetNode,
-    addProcessNode,
-    importPubmedDataset,
-    importClinicaltrialsDataset,
-    importPreprintDataset,
-    importChemblDataset,
+    workspace,
     onConversationDraftChanged: () => {
       saveConversations();
     },

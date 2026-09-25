@@ -1,0 +1,112 @@
+/**
+ * propose_changes end to end: previewing a proposal for the confirmation card, and applying it once
+ * the user approves. Both plan against the live canvas (it may have changed in between), so applying
+ * re-validates everything; imports are fetched only at apply time.
+ */
+import { BACKEND_API_BASE } from '../../backendConfig.js';
+import { planChangeSet } from './changeSet.js';
+
+const IMPORT_POLL_MS = 1200;
+const IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
+
+let sourcesPromise = null;
+
+/** Importable sources and their fields, from GET /api/agent/sources (cached per session). */
+export function loadSources() {
+  if (!sourcesPromise) {
+    sourcesPromise = fetch(`${BACKEND_API_BASE}/api/agent/sources`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Could not load import sources.'))))
+      .catch((error) => {
+        sourcesPromise = null;
+        throw error;
+      });
+  }
+  return sourcesPromise;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+/** Rows for one import, through the same background job the Add Dataset dialog uses. */
+async function fetchSourceRows(source, ids, fields, signal) {
+  const start = await fetch(`${BACKEND_API_BASE}/api/${source}/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids, fields }),
+    signal,
+  });
+  const started = await start.json().catch(() => ({}));
+  if (!start.ok || !started.job_id) throw new Error(started.detail || `Could not start the ${source} import.`);
+  const startedAt = Date.now();
+  for (;;) {
+    if (Date.now() - startedAt > IMPORT_MAX_WAIT_MS) throw new Error(`The ${source} import timed out.`);
+    const res = await fetch(`${BACKEND_API_BASE}/api/${source}/import/result/${started.job_id}`, { signal });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok && res.status !== 202) throw new Error(data.detail || `The ${source} import failed.`);
+    if (data.status === 'running') {
+      await sleep(IMPORT_POLL_MS);
+      continue;
+    }
+    if (data.error) throw new Error(String(data.error));
+    if (!Array.isArray(data.rows) || data.rows.length === 0) throw new Error(`The ${source} import found none of the requested records.`);
+    return { headers: data.headers || [], rows: data.rows, notFound: data.not_found || [] };
+  }
+}
+
+function credentialIdSet(credentialsById) {
+  return credentialsById ? new Set(credentialsById.keys()) : undefined;
+}
+
+/**
+ * @param {{operations: object[]}} proposal the propose_changes arguments
+ * @param {{getCanvasState: Function, extractInputFields: Function, credentialsById?: Map}} workspace
+ * @returns {Promise<{ok: true, items: object[], warnings: string[]} | {ok: false, error: string}>}
+ */
+export async function previewProposal(proposal, workspace) {
+  try {
+    const sources = await loadSources();
+    const plan = planChangeSet(workspace.getCanvasState(), proposal?.operations, {
+      extractInputFields: workspace.extractInputFields,
+      sources,
+      credentialIds: credentialIdSet(workspace.credentialsById),
+    });
+    return {
+      ok: true,
+      items: plan.items.map(({ kind, type, title, lines, diffs, nodeIds }) => ({ kind, type, title, lines, diffs, nodeIds })),
+      warnings: plan.warnings,
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Fetch any imports, re-plan against the current canvas and load the result as one undo step.
+ * @param {object} workspace as for previewProposal, plus applyCanvasState(state, {highlightNodeIds})
+ * @returns {Promise<object>} the tool result the Agent sees
+ */
+export async function applyProposal(proposal, workspace, { signal, onStatus } = {}) {
+  const sources = await loadSources();
+  const operations = Array.isArray(proposal?.operations) ? proposal.operations : [];
+  const imported = new Map();
+  for (const [index, op] of operations.entries()) {
+    if (op?.op !== 'import_dataset') continue;
+    onStatus?.(`Importing from ${sources[op.source]?.label || op.source}...`);
+    imported.set(index, await fetchSourceRows(op.source, op.ids, op.fields, signal));
+  }
+  const plan = planChangeSet(workspace.getCanvasState(), operations, {
+    extractInputFields: workspace.extractInputFields,
+    sources,
+    imported,
+    credentialIds: credentialIdSet(workspace.credentialsById),
+  });
+  workspace.applyCanvasState(plan.state, { highlightNodeIds: plan.nodeIds });
+  const byId = new Map(plan.state.nodes.map((n) => [n.nodeId, n]));
+  return {
+    status: 'applied',
+    created: Object.fromEntries(Object.entries(plan.refs).map(([ref, id]) => [ref, { id, type: byId.get(id)?.type }])),
+    changes: plan.items.map((item) => item.title),
+    warnings: plan.warnings.length ? plan.warnings : undefined,
+  };
+}
