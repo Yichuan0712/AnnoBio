@@ -218,6 +218,7 @@
   height: 100%;
   z-index: 0;
   color: var(--text-muted);
+  pointer-events: none;
 }
 
 /* Arrow markers: fill via CSS variables so they follow theme. currentColor on the line does not propagate to markers in SVG. */
@@ -228,28 +229,51 @@
   fill: var(--text);
 }
 
-.workflow-canvas__edges > g > line,
-.workflow-canvas__edges > g > path {
+.workflow-canvas__edges .workflow-edge--compare .workflow-edge-hit {
   pointer-events: stroke;
   cursor: pointer;
 }
 
-.workflow-canvas__edges > g {
+.workflow-canvas__edges .workflow-edge,
+.workflow-canvas__edges .workflow-edge-line {
   pointer-events: none;
 }
 
-/* Edge hover: visible line gets brighter + slightly thicker. Arrow brightness is via workflow-arrow-hover marker (see #workflow-arrow-hover path above). */
-.workflow-canvas__edges > g > .workflow-edge-hit:hover + line,
-.workflow-canvas__edges > g > .workflow-edge-hit:hover + path {
+/* Only prompt comparisons advertise an action, on both the line and its label. */
+.workflow-edge--compare:hover .workflow-edge-line,
+.workflow-edge--compare:focus-visible .workflow-edge-line {
   stroke: var(--text);
   stroke-width: 3;
+  marker-end: url(#workflow-arrow-hover);
   transition: stroke 0.15s ease, stroke-width 0.15s ease;
 }
 
-/* Read-only data dependencies inferred from Run input/output metadata. */
-.workflow-canvas__edges .workflow-edge--derived {
+.workflow-edge-compare-label {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.workflow-edge-compare-label rect {
+  fill: var(--bg-canvas);
+  stroke: var(--border);
+}
+
+.workflow-edge-compare-label text {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  user-select: none;
   pointer-events: none;
-  cursor: default;
+}
+
+.workflow-edge--compare:hover .workflow-edge-compare-label rect,
+.workflow-edge--compare:focus-visible .workflow-edge-compare-label rect {
+  stroke: var(--text);
+}
+
+.workflow-edge--compare:hover .workflow-edge-compare-label text,
+.workflow-edge--compare:focus-visible .workflow-edge-compare-label text {
+  fill: var(--text);
 }
 
 .workflow-canvas__nodes {

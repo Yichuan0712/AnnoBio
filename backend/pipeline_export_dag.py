@@ -10,14 +10,14 @@ from typing import Any
 try:  # main.py imports pipeline_export as a top-level module; tests import backend.pipeline_export.
     from pipeline_export import (
     ExportedFile, ExportMetadata, PipelineExportError, _credential_config, _data_markdown,
-    _dataset_schema, _engine_base_module, _engine_init_module, _env_example, _identifier,
+    _dataset_schema, _dataset_is_empty, _engine_base_module, _engine_init_module, _env_example, _identifier,
     _litellm_engine_module, _openrouter_engine_module, _package_init, _processor_module,
     _prompt_module, _python_literal, _readme, _requirements, _slug, _text,
 )
 except ImportError:  # Package import used by tests and external callers.
     from .pipeline_export import (
         ExportedFile, ExportMetadata, PipelineExportError, _credential_config, _data_markdown,
-        _dataset_schema, _engine_base_module, _engine_init_module, _env_example, _identifier,
+        _dataset_schema, _dataset_is_empty, _engine_base_module, _engine_init_module, _env_example, _identifier,
         _litellm_engine_module, _openrouter_engine_module, _package_init, _processor_module,
         _prompt_module, _python_literal, _readme, _requirements, _slug, _text,
     )
@@ -223,13 +223,20 @@ def build_dag_pipeline_archive(*, canvas_state: dict[str, Any], route: list[dict
             raise PipelineExportError(f'Run "{_text(run.get("runName")) or "Run"}" needs one connected Prompt, working Dataset, and saved output Dataset.')
         prompt_number += 1
         config = _credential_config(run, credentials_by_id, default_credential_id, run_max_tokens)
-        prompt_name, prompt_config, module_source = _prompt_module(prompts[prompt_id], run, config, [column["name"] for column in schemas[working_set]["columns"]], metadata)
+        defer_input_validation = working_set in produced and _dataset_is_empty(datasets[working_set])
+        prompt_name, prompt_config, module_source = _prompt_module(
+            prompts[prompt_id], run, config,
+            [column["name"] for column in schemas[working_set]["columns"]], metadata,
+            defer_input_validation=defer_input_validation,
+        )
         unknown = sorted({value for value in prompt_config["input_mapping"].values() if value not in {column["name"] for column in schemas[working_set]["columns"]}})
-        if unknown:
+        if unknown and not defer_input_validation:
             raise PipelineExportError(f'Prompt "{prompt_name}" maps inputs to missing columns: {", ".join(unknown)}.')
         available_types = {column["name"]: column.get("type", "text") for column in schemas[working_set]["columns"]}
         type_errors = []
         for input_name, column_name in prompt_config["input_mapping"].items():
+            if defer_input_validation:
+                continue
             expected, actual = prompt_config["input_types"].get(input_name), available_types.get(column_name, "text")
             if expected in ("image", "pdf") and actual != expected:
                 type_errors.append(f'{{{input_name}}} requires {expected}, but "{column_name}" is {actual}')

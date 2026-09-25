@@ -11,6 +11,7 @@ import unittest
 import uuid
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock
 
 from backend.pipeline_export import PipelineExportError, build_pipeline_archive
 
@@ -258,6 +259,8 @@ else:
 
     def test_unmapped_input_explains_how_to_fix_the_selected_run(self):
         state = _canvas_state()
+        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
+        dataset["datasetContent"]["rows"] = [["hello", ""]]
         prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")
         prompt["sections"] = [{"name": "Task", "content": "Answer {question}"}]
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
@@ -270,6 +273,7 @@ else:
         dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
         dataset["datasetContent"]["headers"] = ["Question", "question"]
         dataset["datasetContent"]["columnTypes"] = ["text", "text"]
+        dataset["datasetContent"]["rows"] = [["first", "second"]]
         prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")
         prompt["sections"] = [{"name": "Task", "content": "Answer {QUESTION}"}]
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
@@ -284,6 +288,94 @@ else:
         dataset["datasetContent"]["columnTypes"] = ["text", "text"]
         with self.assertRaisesRegex(PipelineExportError, "contains duplicate columns: text"):
             self.build(state)
+
+
+    def test_empty_generated_branch_exports_and_validates_only_when_data_arrives(self):
+        import pandas as pd
+        from backend.pipeline_export_dag import build_dag_pipeline_archive
+
+        # Exercise both archive builders, including a saved empty schema and an empty branch
+        # whose cached columns do not yet contain the Prompt's required input.
+        for graph in (False, True):
+            for headers in ([], ["other"]):
+                with self.subTest(graph=graph, headers=headers):
+                    state = _canvas_state()
+                    dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
+                    dataset["datasetContent"] = {"headers": headers, "rows": []}
+                    run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
+                    run["runInputToColumn"] = "{}"
+                    if graph:
+                        state["nodes"].append({
+                            "type": "dataset", "nodeId": "answered", "name": "Answered",
+                            "sourceRunNodeId": "run-duplicate", "datasetContent": {"headers": [], "rows": []},
+                        })
+                        _, archive = build_dag_pipeline_archive(
+                            canvas_state=state,
+                            route=[*_selected_route(), {"type": "dataset", "dataset_node_id": "answered"}],
+                            name="Research Pipeline",
+                        )
+                    else:
+                        _, archive = self.build(state)
+                    with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+                        manifest = json.loads(bundle.read("research-pipeline/pipeline.json"))
+                        steps = manifest["graph"]["steps"] if graph else manifest["route"]
+                        prompt = next(step for step in steps if step["type"] == "prompt")
+                        namespace = {}
+                        exec(bundle.read("research-pipeline/engine/base.py"), namespace)
+                        for member in bundle.namelist():
+                            if member.endswith(".py"):
+                                compile(bundle.read(member), member, "exec")
+
+                    engine = Mock()
+                    engine.complete.return_value = {"answer": "ok"}
+                    args = dict(
+                        engine=engine, prompt_name=prompt["name"],
+                        sections=[{"content": "Answer {text}"}], input_mapping=prompt["input_mapping"],
+                        input_types=prompt["input_types"], output_schema=prompt["output_schema"],
+                        model_config={}, input_root=Path.cwd(), concurrency=1,
+                    )
+                    execute = namespace["run_prompt_step"]
+                    result = execute(pd.DataFrame(columns=headers), **args)
+                    self.assertEqual(len(result), 0)
+                    self.assertIn("Output: answer", result.columns)
+                    engine.complete.assert_not_called()
+
+                    result = execute(pd.DataFrame([{"text": "hello"}]), **args)
+                    self.assertEqual(result.iloc[0]["Output: answer"], "ok")
+                    self.assertEqual(engine.complete.call_args.kwargs["content"], "Answer hello")
+                    engine.reset_mock()
+                    for bad_frame in (
+                        pd.DataFrame([{"other": "hello"}]),
+                        pd.DataFrame([{"Text": "first", "TEXT": "second"}]),
+                        pd.DataFrame(index=[0]),
+                    ):
+                        with self.assertRaisesRegex(ValueError, "has data but needs input mappings"):
+                            execute(bad_frame, **args)
+                    engine.complete.assert_not_called()
+                    with self.assertRaisesRegex(ValueError, "maps inputs to missing columns"):
+                        execute(pd.DataFrame([{"other": "hello"}]), **{**args, "input_mapping": {"text": "text"}})
+                    engine.complete.assert_not_called()
+
+    def test_empty_branch_preserves_explicit_mapping(self):
+        state = _canvas_state()
+        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
+        dataset["datasetContent"] = {"headers": [], "rows": []}
+        run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
+        run["runInputToColumn"] = json.dumps({"text": "custom_column"})
+        _, archive = self.build(state)
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            manifest = json.loads(bundle.read("research-pipeline/pipeline.json"))
+        prompt = next(step for step in manifest["route"] if step["type"] == "prompt")
+        self.assertEqual(prompt["input_mapping"], {"text": "custom_column"})
+
+    def test_empty_source_dataset_still_requires_valid_mapping(self):
+        state = _canvas_state()
+        run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
+        run.update(runWorkingSetId="dataset-raw", runInputToColumn='{"text": "missing"}')
+        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-raw")
+        dataset["datasetContent"]["rows"] = []
+        with self.assertRaisesRegex(PipelineExportError, "maps inputs to missing columns"):
+            build_pipeline_archive(canvas_state=state, route=[_selected_route()[0], _selected_route()[-1]], name="Source")
 
 
     def test_branched_graph_exports_multi_input_process_and_terminal_workbook(self):

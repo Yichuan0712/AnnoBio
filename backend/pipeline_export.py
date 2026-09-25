@@ -166,6 +166,12 @@ def _dataset_schema(node: dict[str, Any]) -> dict[str, Any]:
     return {"sheet": "Input", "columns": columns}
 
 
+def _dataset_is_empty(node: dict[str, Any]) -> bool:
+    """Saved empty branches have no rows against which to validate Prompt inputs."""
+    content = node.get("datasetContent") or {}
+    return not content.get("rows")
+
+
 def _normalize_route_item(raw: Any) -> dict[str, str]:
     if not isinstance(raw, dict):
         raise PipelineExportError("The selected route contains an invalid item.")
@@ -301,6 +307,8 @@ def _prompt_module(
     model_config: dict[str, Any],
     available_columns: list[str],
     metadata: ExportMetadata,
+    *,
+    defer_input_validation: bool = False,
 ) -> tuple[str, dict[str, Any], str]:
     name = _text(prompt.get("name")) or "Prompt"
     sections = prompt.get("sections") or []
@@ -335,7 +343,7 @@ def _prompt_module(
         elif len(folded_matches) == 1:
             mapping[field] = folded_matches[0]
     missing = [field for field in placeholders if not _text(mapping.get(field))]
-    if missing:
+    if missing and not defer_input_validation:
         joined = ", ".join(f"{{{field}}}" for field in missing)
         run_name = _text(run.get("runName")) or "Run"
         raise PipelineExportError(
@@ -650,6 +658,33 @@ def run_prompt_step(
     template = "\n\n".join(str(section.get("content") or "").strip() for section in sections).strip()
     records = frame.where(pd.notna(frame), None).to_dict(orient="records")
     fields = list(output_schema.get("fields") or [])
+    columns = ["Input: #", *[f"Input: {column}" for column in frame.columns], "Output: #"]
+    columns.extend(f"Output: {field['display']}" for field in fields)
+    if len(frame.index) == 0:
+        return pd.DataFrame(columns=columns)
+
+    # Empty canvas branches may have no schema at export time. Resolve their inputs against
+    # the actual data, and fail before any model calls if the mapping is still unresolved.
+    input_mapping = dict(input_mapping)
+    placeholders = list(dict.fromkeys(re.findall(r"(?<!\{)\{([^{}]+)\}(?!\})", template)))
+    for name in placeholders:
+        if input_mapping.get(name):
+            continue
+        exact = [column for column in frame.columns if column == name]
+        folded = [column for column in frame.columns if str(column).casefold() == name.casefold()]
+        matches = exact if exact else folded
+        if len(matches) == 1:
+            input_mapping[name] = matches[0]
+    missing = [name for name in placeholders if not input_mapping.get(name)]
+    if missing:
+        raise ValueError(
+            f'Prompt "{prompt_name}" has data but needs input mappings for '
+            + ", ".join("{" + name + "}" for name in missing)
+            + ". Set INPUT_MAPPING in its exported prompt module."
+        )
+    unknown = [str(column) for column in input_mapping.values() if column not in frame.columns]
+    if unknown:
+        raise ValueError(f'Prompt "{prompt_name}" maps inputs to missing columns: ' + ", ".join(sorted(set(unknown))) + ".")
 
     def run_one(item: tuple[int, dict[str, Any]]) -> tuple[int, list[dict[str, Any]], str | None]:
         index, row = item
@@ -679,8 +714,6 @@ def run_prompt_step(
                 record[header] = error if error else output.get(field["key"], output.get(field["display"]))
             materialized.append(record)
         print(f"[{prompt_name}] {input_index + 1}/{len(records)}", flush=True)
-    columns = ["Input: #", *[f"Input: {column}" for column in frame.columns], "Output: #"]
-    columns.extend(f"Output: {field['display']}" for field in fields)
     return pd.DataFrame(materialized, columns=columns)
 '''
 
@@ -1095,6 +1128,12 @@ Useful options:
 to change workflow behavior. When a graph has several terminal Datasets, the output workbook contains
 one worksheet for each Dataset. Files under `engine/` provide the shared LiteLLM and OpenRouter access
 layer and contain no credentials.
+
+Empty intermediate branches remain part of the exported workflow. A Prompt receiving zero rows
+returns an empty output Dataset without calling an LLM. Input mappings for branches that were
+empty on the canvas are validated when data reaches them: saved mappings are preserved, and
+unmapped placeholders can use unambiguous same-name columns. If a mapping is still missing,
+execution stops before model calls; set `INPUT_MAPPING` in the corresponding `prompt/` module.
 """
 
 
@@ -1244,18 +1283,23 @@ def _build_linear_pipeline_archive(
             None,
         )
         available_column_list = [column["name"] for column in (previous_dataset or {}).get("columns", [])]
+        defer_input_validation = bool(
+            previous_dataset and previous_dataset["id"] != selected[0]["dataset_node_id"]
+            and _dataset_is_empty(nodes[previous_dataset["id"]])
+        )
         prompt_name, prompt_config, module = _prompt_module(
             prompt,
             run,
             model_config,
             available_column_list,
             metadata,
+            defer_input_validation=defer_input_validation,
         )
         available_columns = set(available_column_list)
         unknown_columns = sorted(
             {column for column in prompt_config["input_mapping"].values() if column not in available_columns}
         )
-        if unknown_columns:
+        if unknown_columns and not defer_input_validation:
             raise PipelineExportError(
                 f'Prompt "{prompt_name}" maps inputs to missing columns: {", ".join(unknown_columns)}.'
             )
@@ -1265,6 +1309,8 @@ def _build_linear_pipeline_archive(
         }
         type_errors: list[str] = []
         for input_name, column_name in prompt_config["input_mapping"].items():
+            if defer_input_validation:
+                continue
             expected = prompt_config["input_types"].get(input_name)
             actual = available_types.get(column_name, "text")
             if expected in ("image", "pdf") and actual != expected:
