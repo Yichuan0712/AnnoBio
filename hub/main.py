@@ -885,6 +885,10 @@ def archive_detail_page(request: Request, item_id: int):
     else:
         action_html = '<a class="btn btn-primary" href="/login">Log in to add this to your account</a>'
     desc_html = f'<p class="archive-detail-desc">{escape(item["description"])}</p>' if item.get("description") else ""
+    admin_html = (
+        f'<div class="archive-detail-admin">{_admin_delete_form(item_id, "gallery", "Delete from Gallery")}</div>'
+        if user and user.get("is_admin") else ""
+    )
     body = f"""
       <div class="archive-detail">
         <div class="archive-detail-thumb">{_archive_thumb_html(item, css_class="")}</div>
@@ -893,10 +897,11 @@ def archive_detail_page(request: Request, item_id: int):
           <p class="archive-detail-meta">Published by {escape(_gallery_owner_name(item))} · {_fmt_date(item['created_at'])}</p>
           {desc_html}
           {action_html}
+          {admin_html}
         </div>
       </div>
     """
-    return HTMLResponse(render_page(title=item["title"], user=user, active="/gallery", body=body, extra_css=ARCHIVE_CSS))
+    return HTMLResponse(render_page(title=item["title"], user=user, active="/gallery", body=body, extra_css=ADMIN_REVIEW_CSS if admin_html else ARCHIVE_CSS))
 
 
 @app.post("/gallery/publish")
@@ -950,6 +955,17 @@ async def archive_fork(request: Request, item_id: int):
     return RedirectResponse(f"/app/?open={new_id}", status_code=302)
 
 
+def _admin_delete_form(item_id: int, return_to: str, label: str = "Delete") -> str:
+    """An admin's delete button for a Gallery item, published or pending. Copies people already
+    added to their accounts are independent projects, so they are not affected."""
+    confirm = "Delete this project from the Gallery? Copies people already added to their accounts are not affected. This cannot be undone."
+    return (
+        f'<form method="post" action="/admin/gallery/{item_id}/delete" onsubmit="return confirm(\'{confirm}\');">'
+        f'<input type="hidden" name="return_to" value="{return_to}">'
+        f'<button type="submit" class="btn btn-secondary btn-delete">{label}</button></form>'
+    )
+
+
 ADMIN_REVIEW_CSS = ARCHIVE_CSS + """
   .admin-review-grid { display: flex; flex-direction: column; gap: 18px; }
   .admin-review-card { display: flex; gap: 20px; border: 1px solid var(--border); border-radius: var(--control-radius); padding: 16px; background: var(--bg); }
@@ -964,7 +980,15 @@ ADMIN_REVIEW_CSS = ARCHIVE_CSS + """
   .admin-review-edit-form textarea { min-height: 60px; resize: vertical; }
   .admin-review-meta { color: var(--text-muted); font-size: 12.5px; margin: 4px 0 12px; }
   .admin-review-actions { display: flex; gap: 8px; }
-  .admin-review-actions .btn-delete { color: #c0392b; border-color: #c0392b; }
+  .admin-review-actions .btn-delete, .archive-detail-admin .btn-delete { color: #c0392b; border-color: #c0392b; }
+  .archive-detail-admin { margin-top: 16px; }
+  .admin-section-title { font-size: 16px; margin: 32px 0 12px; }
+  .admin-published-list { display: flex; flex-direction: column; gap: 10px; }
+  .admin-published-row { display: flex; align-items: center; gap: 14px; border: 1px solid var(--border); border-radius: var(--control-radius); padding: 10px 14px; background: var(--bg); }
+  .admin-published-row .archive-card-thumb, .admin-published-row .archive-card-thumb-empty { width: 96px; flex: 0 0 96px; border-radius: var(--control-radius); }
+  .admin-published-info { flex: 1; min-width: 0; }
+  .admin-published-info a { color: var(--text); font-weight: 600; text-decoration: none; }
+  .admin-published-info a:hover { text-decoration: underline; }
 """
 
 
@@ -997,7 +1021,7 @@ def admin_gallery_page(request: Request):
                 </p>
                 <div class="admin-review-actions">
                   <form method="post" action="/admin/gallery/{item['id']}/approve"><button type="submit" class="btn btn-primary">Approve</button></form>
-                  <form method="post" action="/admin/gallery/{item['id']}/delete" onsubmit="return confirm('Delete this submission? This cannot be undone.');"><button type="submit" class="btn btn-secondary btn-delete">Delete</button></form>
+                  {_admin_delete_form(item['id'], "admin")}
                 </div>
               </div>
             </div>
@@ -1005,10 +1029,32 @@ def admin_gallery_page(request: Request):
             for item in items
         )
         grid_html = f'<div class="admin-review-grid">{cards}</div>'
+    published = db.list_archive_items()
+    if not published:
+        published_html = '<p class="workspaces-empty">Nothing published yet.</p>'
+    else:
+        rows = "".join(
+            f"""
+            <div class="admin-published-row">
+              {_archive_thumb_html(item)}
+              <div class="admin-published-info">
+                <a href="/gallery/{item['id']}">{escape(item['title'])}</a>
+                <div class="admin-review-meta">
+                  {escape(item.get('owner_name') or '(no name on file)')} &lt;{escape(item['owner_email'])}&gt; · {_fmt_date(item['created_at'])}
+                </div>
+              </div>
+              {_admin_delete_form(item['id'], "admin")}
+            </div>
+            """
+            for item in published
+        )
+        published_html = f'<div class="admin-published-list">{rows}</div>'
     body = f"""
       <h1>Review submissions</h1>
       <p class="page-sub">Pending Gallery publishes. Edit if needed, then approve or delete.</p>
       {grid_html}
+      <h2 class="admin-section-title">Published ({len(published)})</h2>
+      {published_html}
     """
     return HTMLResponse(render_page(title="Review submissions", user=user, active="/admin/gallery", body=body, extra_css=ADMIN_REVIEW_CSS))
 
@@ -1030,13 +1076,15 @@ def admin_gallery_approve(request: Request, item_id: int):
 
 
 @app.post("/admin/gallery/{item_id}/delete")
-def admin_gallery_delete(request: Request, item_id: int):
+def admin_gallery_delete(request: Request, item_id: int, return_to: str = Form("admin")):
+    """Deletes a pending or published item and its stored files. return_to picks where the admin
+    lands: back on the review page, or on the Gallery when deleting from an item's own page."""
     if not _require_admin(request):
         return HTMLResponse("<h1>Forbidden</h1>", status_code=403)
     item = db.delete_archive_item(item_id)
     if item:
         archive.delete_files(item)
-    return RedirectResponse("/admin/gallery", status_code=302)
+    return RedirectResponse("/gallery" if return_to == "gallery" else "/admin/gallery", status_code=302)
 
 
 @app.middleware("http")
