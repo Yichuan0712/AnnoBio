@@ -8695,3 +8695,33 @@ button.btn.btn-danger:hover:not(:disabled) {
 .process-datasets-dialog__action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .process-datasets-dialog__status { min-height: 18px; margin: 0; color: var(--text-muted); font-size: 12px; }
 .process-datasets-dialog__empty { margin: 0; padding: 20px; color: var(--text-muted); font-size: 13px; }
+
+/* Settings → Agent defaults: whether the chosen model can drive the Agent's tools. */
+.settings-agent-model-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.settings-agent-model-status__text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-agent-model-status[data-state="ok"] .settings-agent-model-status__text {
+  color: var(--diff-added-text);
+}
+
+.settings-agent-model-status[data-state="error"] .settings-agent-model-status__text,
+.settings-agent-model-status[data-state="warning"] .settings-agent-model-status__text {
+  color: var(--diff-removed-text);
+}
+
+.settings-agent-model-status__check {
+  flex-shrink: 0;
+}

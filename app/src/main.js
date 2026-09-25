@@ -180,14 +180,27 @@ function ycPathFor(projectPath) {
   return resolved.slice(0, resolved.length - path.extname(resolved).length) + YC_EXTENSION;
 }
 
+// Mirrors mapMessageForStorage in agentWindowModal.js: the fields agent/agentLoop.js stores.
 function mapAgentMessageForStorage(msg) {
   const out = {
     role: String(msg.role || 'assistant'),
     content: String(msg.content || ''),
   };
-  if (Array.isArray(msg.reasoningSteps) && msg.reasoningSteps.length > 0) {
-    const rs = msg.reasoningSteps.map((s) => String(s ?? '').trim()).filter(Boolean);
-    if (rs.length) out.reasoningSteps = rs;
+  if (Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0) {
+    out.toolCalls = msg.toolCalls.map((call) => ({
+      id: String(call?.id || ''),
+      name: String(call?.name || ''),
+      arguments: String(call?.arguments || '{}'),
+      ...(call?.preview && typeof call.preview === 'object' ? { preview: call.preview } : {}),
+    }));
+  }
+  if (out.role === 'tool') {
+    out.toolCallId = String(msg.toolCallId || '');
+    out.name = String(msg.name || '');
+    out.ok = msg.ok !== false;
+    out.label = String(msg.label || '');
+    if (msg.answer != null) out.answer = String(msg.answer);
+    if (msg.outcome != null) out.outcome = String(msg.outcome);
   }
   return out;
 }
@@ -215,6 +228,7 @@ function normalizeAgentConversationPayload(payload) {
     : [];
   const activeConversationId = String(data.activeConversationId || '').trim();
   return {
+    ...(data.format_version != null ? { format_version: Number(data.format_version) } : {}),
     activeConversationId,
     conversations,
   };

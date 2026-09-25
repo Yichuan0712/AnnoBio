@@ -56,7 +56,6 @@ import {
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
-import { buildWorkflowSnapshot } from './agent/canvas/workflowSnapshot.js';
 import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
 import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
@@ -71,6 +70,7 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
+import { runProcessCode } from './processRunClient.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -3180,29 +3180,26 @@ export function buildWorkflowCanvas(root, options = {}) {
   agentAssistantBtn.addEventListener('click', () => {
     openAgentWindowModal({
       projectPath: getCurrentProjectPath(),
-      getWorkflowSnapshot,
-      inspectNode,
-      addRunNode,
-      addScoreNode,
-      updateScoreNode,
-      updateScoreRowSelection,
-      createAndRunReviewNode,
-      verifyReviewSuggestions,
-      acceptReviewSuggestions,
-      applyReviewSuggestions,
-      startRunNode,
-      saveRunResultsToWorkspace,
-      saveScoreResultsToWorkspace,
-      addSamplerNode,
-      addSampledDatasetNode,
-      addPromptNode,
-      addPromptVersion,
-      addDatasetNode,
-      addProcessNode,
-      importPubmedDataset,
-      importClinicaltrialsDataset,
-      importPreprintDataset,
-      importChemblDataset,
+      workspace: {
+        getCanvasState,
+        inspectNode,
+        getScoreComparisonRows,
+        getSelectedNodeIds: () => [...selectedNodeIds],
+        extractInputFields: extractInputFieldsFromSections,
+        applyCanvasState: applyAgentCanvasState,
+        highlightNodes: highlightPipelineNodes,
+        startRunNode,
+        stopRunNode,
+        runProcessNode,
+        // df / df_<name> bindings over every canvas Dataset for try_process, as a Process would see them.
+        getDatasetBindings: (primaryDatasetId) => {
+          const { datasets } = getProcessDatasets(null);
+          return buildProcessDatasetBindings(datasets, primaryDatasetId);
+        },
+        createAndRunReviewNode,
+        stopReviewNode,
+        verifyReviewSuggestions,
+      },
     });
   });
   canvasControlsStack.appendChild(autopilotToolbar);
@@ -5030,78 +5027,117 @@ export function buildWorkflowCanvas(root, options = {}) {
     document.addEventListener('workflow:canvas-changed', fn);
   }
 
-  async function getWorkflowSnapshot() {
-    const base = getCanvasState();
-    const nodes = await Promise.all(
-      base.nodes.map(async (n) => {
-        if (n.type !== 'score') return n;
-        let hasPersisted = false;
-        try {
-          const rr = n.reviewResult ? JSON.parse(n.reviewResult) : null;
-          hasPersisted = Array.isArray(rr?.comparison_rows) && rr.comparison_rows.length > 0;
-        } catch (_) {
-          hasPersisted = false;
-        }
-        if (hasPersisted) return n;
-
-        const ctx = resolveLiveScoreComparisonContext(base, n);
-        if (!ctx) return n;
-
-        try {
-          const rows = await buildReviewComparisonRows(
-            ctx.scoreEl,
-            ctx.runEl,
-            ctx.datasetMap,
-            ctx.promptSections,
-          );
-          if (!Array.isArray(rows) || rows.length === 0) return n;
-          let rr = {};
-          try {
-            rr = n.reviewResult ? JSON.parse(n.reviewResult) : {};
-            if (!rr || typeof rr !== 'object') rr = {};
-          } catch (_) {
-            rr = {};
-          }
-          const nextRr = { ...rr, comparison_rows: rows };
-          return { ...n, reviewResult: JSON.stringify(nextRr) };
-        } catch (_) {
-          return n;
-        }
-      }),
-    );
-    return buildWorkflowSnapshot(
-      { ...base, nodes },
-      { extractInputFields: extractInputFieldsFromSections, datasetPreviewRows: 3 },
-    );
+  /**
+   * Replace the canvas with a state the Agent computed (agent/operations/changeSet.js) and the user
+   * approved. One canvas-changed event follows the load, so the whole proposal is one undo step.
+   */
+  function applyAgentCanvasState(nextState, { highlightNodeIds = [] } = {}) {
+    // A node's detail window keeps a reference to its element; rebuilding the canvas under it
+    // would leave its edits writing to a detached node.
+    const openWindows = Array.from(document.querySelectorAll('.modal-overlay')).filter((el) => (
+      !el.classList.contains('agent-window-overlay') && !el.classList.contains('pipeline-overview-overlay')
+    ));
+    if (openWindows.length) {
+      throw new Error('A node window is open on the canvas. Close it, then apply the proposal again.');
+    }
+    // Runs and reviews in flight keep job bookkeeping on their elements that saved state leaves out
+    // (resume offsets, stage lists); carry it over to the rebuilt elements.
+    const carried = new Map();
+    for (const id of new Set([...pendingRuns.keys(), ...pendingReviews.keys(), ...pendingReviewNodeIds])) {
+      const el = getNodeById(id);
+      if (el) carried.set(id, { ...el.dataset });
+    }
+    loadCanvasState(nextState);
+    for (const [id, data] of carried) {
+      const el = getNodeById(id);
+      if (!el) continue;
+      for (const [key, value] of Object.entries(data)) {
+        if (!(key in el.dataset)) el.dataset[key] = value;
+      }
+    }
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    highlightPipelineNodes(highlightNodeIds);
+    if (highlightNodeIds.length) setTimeout(() => highlightPipelineNodes([]), 2500);
   }
 
-  async function inspectNode(nodeId, options = {}) {
+  /**
+   * Run a Process node's saved code (the Agent's run_nodes) and store its output on the node the way
+   * its detail view does, so the node shows 100% and its branches can be saved as Datasets.
+   */
+  async function runProcessNode(nodeId, { signal } = {}) {
+    const processNode = getNodeById(nodeId);
+    if (!processNode?.classList.contains('workflow-node--process')) throw new Error('Process node was not found.');
+    const code = resolveDataframeProcessCode({ dfCode: processNode.dataset.processDfCode, code: processNode.dataset.processCode });
+    if (!code) throw new Error('The Process has no code.');
+    const { datasets, primaryDatasetId } = getProcessDatasets(processNode);
+    const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
+    const setProgress = (el, percent) => {
+      const bar = el?.querySelector('.workflow-node__process-progress');
+      if (!bar) return;
+      bar.style.width = `${percent}%`;
+      bar.setAttribute('aria-valuenow', String(percent));
+    };
+    setProgress(processNode, 0);
+    const { outputs, cancelled } = await runProcessCode({ code, bindings, signal });
+    // The canvas may have been rebuilt while the job ran (an applied proposal); write to the live node.
+    const liveNode = getNodeById(nodeId);
+    if (!liveNode) throw new Error('The Process node was removed while it ran.');
+    const branchCount = Object.keys(outputs).length;
+    const branchesText = `${branchCount} branch${branchCount === 1 ? '' : 'es'}`;
+    liveNode.dataset.processDfResults = JSON.stringify({
+      outputs,
+      statusText: cancelled ? `Cancelled. ${branchesText} returned before stopping.` : `${branchesText} returned.`,
+    });
+    delete liveNode.dataset.processResults;
+    setProgress(liveNode, 100);
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    return { outputs, cancelled };
+  }
+
+  /** Ask the backend to stop a Run in flight; the run poll picks up the cancelled status. */
+  async function stopRunNode(nodeId) {
+    const runId = pendingRuns.get(nodeId);
+    if (!runId) return;
+    await fetch(`${RUN_API_BASE}/api/run/cancel/${runId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }).catch(() => {});
+  }
+
+  /** Ask the backend to stop a Review in flight. */
+  async function stopReviewNode(nodeId) {
+    await fetch(`${RUN_API_BASE}/api/review/cancel/by-node/${encodeURIComponent(nodeId)}`, { method: 'POST' }).catch(() => {});
+  }
+
+  /** A Score's comparison rows: the saved ones, or rebuilt from its live Run and ground truth. */
+  async function getScoreComparisonRows(nodeId) {
     const canvasState = getCanvasState();
-    let result = inspectWorkflowNode(canvasState, nodeId, {
+    const nid = canvasNormalizeNodeId(nodeId);
+    const raw = canvasState.nodes.find((n) => canvasNormalizeNodeId(n?.nodeId) === nid);
+    if (!raw || raw.type !== 'score') return [];
+    try {
+      const saved = raw.reviewResult ? JSON.parse(raw.reviewResult)?.comparison_rows : null;
+      if (Array.isArray(saved) && saved.length) return saved;
+    } catch (_) {}
+    const ctx = resolveLiveScoreComparisonContext(canvasState, raw);
+    if (!ctx) return [];
+    try {
+      const rows = await buildReviewComparisonRows(ctx.scoreEl, ctx.runEl, ctx.datasetMap, ctx.promptSections);
+      return Array.isArray(rows) ? rows : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /** The Agent's view of one node (agent/canvas/workflowNodeInspector.js) with live Score metrics. */
+  async function inspectNode(nodeId, options = {}) {
+    const result = inspectWorkflowNode(getCanvasState(), nodeId, {
       ...options,
       extractInputFields: extractInputFieldsFromSections,
     });
-    if (!result || result.found === false) return result;
-
-    const nid = canvasNormalizeNodeId(nodeId);
-    const raw = canvasState.nodes.find((n) => canvasNormalizeNodeId(n?.nodeId) === nid);
-    if (!raw || raw.type !== 'score') return result;
-
-    const ctx = resolveLiveScoreComparisonContext(canvasState, raw);
-    if (!ctx) return result;
-
-    try {
-      const rows = await buildReviewComparisonRows(
-        ctx.scoreEl,
-        ctx.runEl,
-        ctx.datasetMap,
-        ctx.promptSections,
-      );
-      if (!Array.isArray(rows) || rows.length === 0) return result;
-      return enrichInspectScoreResultWithComparisonRows(result, rows, options);
-    } catch (_) {
-      return result;
-    }
+    if (!result?.found || result.type !== 'score') return result;
+    return enrichInspectScoreResultWithComparisonRows(result, await getScoreComparisonRows(nodeId));
   }
 
   // Web-only empty-canvas guidance: nothing here before pointed a new user at the top bar's
@@ -5136,7 +5172,6 @@ export function buildWorkflowCanvas(root, options = {}) {
   root.appendChild(canvas);
   return {
     getCanvasState,
-    getWorkflowSnapshot,
     inspectNode,
     addPromptVersion,
     addRunNode,
@@ -5148,6 +5183,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     acceptReviewSuggestions,
     applyReviewSuggestions,
     startRunNode,
+    stopRunNode,
+    runProcessNode,
+    stopReviewNode,
     saveRunResultsToWorkspace,
     saveScoreResultsToWorkspace,
     addSamplerNode,

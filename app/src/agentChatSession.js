@@ -1,59 +1,15 @@
 import { AGENT_TITLE_MAX_CHARS, clampAgentTitle } from './agentTitleLimits.js';
-import { BACKEND_API_BASE } from './backendConfig.js';
-import { requestAgentChat, requestAgentPlan, requestSimpleChat } from './agent/api/agentChatClient.js';
-import { AGENT_SKILL_REGISTRY, getAgentSkillByName } from './agent/skills/registry.js';
-import { compactObservationsForPlanner } from './agent/payload/compactObservations.js';
+import { BACKEND_API_BASE, waitForBackend } from './backendConfig.js';
+import { answerQuestion, findPendingInteraction, resolveProposal, resolveRunRequest, runAgentLoop } from './agent/agentLoop.js';
+import { buildWorkspaceSummary } from './agent/context/workspaceSummary.js';
+import { formatAgentText } from './agent/formatAgentText.js';
+import { diffLines } from './agent/lineDiff.js';
+import { executeRunRequest, previewRunRequest } from './agent/execution/runJobs.js';
+import { applyProposal, previewProposal } from './agent/operations/proposals.js';
+import { ASK_USER_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, USER_TOOLS } from './agent/tools/agentTools.js';
+
 const API_BASE = BACKEND_API_BASE;
-const CHAT_MAX_MESSAGES = 40;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
-const AGENT_SKILL_NAMES = new Set(
-  AGENT_SKILL_REGISTRY.map((skill) => String(skill?.name || '').trim()).filter(Boolean)
-);
-const AGENT_LOOP_MAX_RUNTIME_MS = 7 * 60 * 1000;
-const AGENT_LOOP_REPEAT_WARNING_THRESHOLD = 2;
-const AGENT_LOOP_REPEAT_CRITICAL_THRESHOLD = 3;
-const AGENT_LOOP_STALL_WARNING_THRESHOLD = 2;
-const AGENT_LOOP_STALL_CRITICAL_THRESHOLD = 3;
-const AGENT_RUN_WAIT_HEARTBEAT_MS = 2000;
-const AGENT_RUN_WAIT_MAX_MS = 10 * 60 * 1000;
-const AGENT_RUN_WAIT_STALL_WARNING_MS = 60 * 1000;
-const AGENT_SINGLE_EXECUTION_SKILLS = new Set([
-  'create_prompt_node',
-  'add_prompt_version',
-  'create_run_node',
-  'create_score_node',
-  'create_sampler_node',
-  'create_sampled_dataset_node',
-  'create_synthetic_dataset_node',
-  'create_and_run_review_node',
-  'apply_review_suggestions',
-  'create_process_node',
-  'import_pubmed_dataset',
-  'import_clinicaltrials_dataset',
-  'import_preprint_dataset',
-  'import_chembl_dataset',
-]);
-
-function throwIfAborted(signal) {
-  if (signal?.aborted) {
-    throw new DOMException('Aborted', 'AbortError');
-  }
-}
-
-function sliceChatHistoryForApi(messages) {
-  const slim = (Array.isArray(messages) ? messages : []).map((m) => ({
-    role: String(m?.role || 'user'),
-    content: String(m?.content ?? ''),
-  }));
-  if (slim.length <= CHAT_MAX_MESSAGES) {
-    return slim;
-  }
-  let sliced = slim.slice(-CHAT_MAX_MESSAGES);
-  while (sliced.length > 1 && sliced[0].role !== 'user') {
-    sliced = sliced.slice(1);
-  }
-  return sliced;
-}
 
 function deriveConversationTitle(text) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
@@ -61,32 +17,32 @@ function deriveConversationTitle(text) {
   return clampAgentTitle(normalized);
 }
 
+function textRounds(messages) {
+  return (Array.isArray(messages) ? messages : []).filter(
+    (m) => (m?.role === 'user' || m?.role === 'assistant') && String(m.content || '').trim(),
+  );
+}
+
 function getTitleSummarySourceMessages(messages) {
   const source = [];
   let assistantRounds = 0;
-  for (const message of Array.isArray(messages) ? messages : []) {
-    if (!message || (message.role !== 'user' && message.role !== 'assistant')) continue;
-    source.push({
-      role: message.role,
-      content: String(message.content || '').trim(),
-    });
+  for (const message of textRounds(messages)) {
+    source.push({ role: message.role, content: String(message.content).trim() });
     if (message.role === 'assistant') {
       assistantRounds += 1;
       if (assistantRounds >= TITLE_SUMMARY_MAX_ROUNDS) break;
     }
   }
-  return source.filter((message) => message.content);
+  return source;
 }
 
 function shouldRefreshGeneratedTitle(messages) {
-  const assistantRounds = (Array.isArray(messages) ? messages : []).filter(
-    (message) => message?.role === 'assistant' && String(message.content || '').trim()
-  ).length;
+  const assistantRounds = textRounds(messages).filter((m) => m.role === 'assistant').length;
   return assistantRounds >= 1 && assistantRounds <= TITLE_SUMMARY_MAX_ROUNDS;
 }
 
 function buildTitleSummaryPrompt(messages) {
-  const transcript = (Array.isArray(messages) ? messages : [])
+  const transcript = messages
     .map((message) => `${message.role === 'assistant' ? 'Assistant' : 'User'}: ${message.content}`)
     .join('\n');
   return [
@@ -117,12 +73,6 @@ function autoResizeTextarea(textareaEl) {
   textareaEl.style.height = `${textareaEl.scrollHeight}px`;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, Math.max(0, ms | 0));
-  });
-}
-
 function getSendIconSvg() {
   return `
     <svg class="agent-window__button-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -131,73 +81,25 @@ function getSendIconSvg() {
   `;
 }
 
-function createMessageNode(role, content, options = {}) {
-  const {
-    loading = false,
-    loadingText = 'Thinking...',
-    editable = false,
-    actionDisabled = false,
-    onEdit = null,
-    reasoningSteps = null,
-    onStopLoading = null,
-  } = options;
+function createMessageShell(role) {
   const wrapper = document.createElement('div');
   wrapper.className = `agent-window__message agent-window__message--${role}`;
-  if (loading) wrapper.classList.add('agent-window__message--loading');
-
   const roleEl = document.createElement('div');
   roleEl.className = 'agent-window__message-role';
   roleEl.textContent = role === 'assistant' ? 'Agent' : 'You';
-
   const bubbleEl = document.createElement('div');
   bubbleEl.className = 'agent-window__message-bubble';
+  wrapper.append(roleEl, bubbleEl);
+  return { wrapper, bubbleEl };
+}
 
-  if (loading) {
-    const spinnerEl = document.createElement('span');
-    spinnerEl.className = 'agent-window__spinner';
-    spinnerEl.setAttribute('aria-hidden', 'true');
-    const loadingTextEl = document.createElement('span');
-    loadingTextEl.className = 'agent-window__loading-text';
-    loadingTextEl.textContent = String(loadingText || 'Thinking...');
-    bubbleEl.appendChild(spinnerEl);
-    bubbleEl.appendChild(loadingTextEl);
-    if (typeof onStopLoading === 'function') {
-      const stopBtn = document.createElement('button');
-      stopBtn.type = 'button';
-      stopBtn.className = 'agent-window__loading-stop';
-      stopBtn.textContent = 'Click to Stop';
-      stopBtn.setAttribute('aria-label', 'Click to stop generating');
-      stopBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        onStopLoading();
-      });
-      bubbleEl.appendChild(stopBtn);
-    }
-  } else {
-    if (
-      role === 'assistant'
-      && Array.isArray(reasoningSteps)
-      && reasoningSteps.length > 0
-    ) {
-      const detailsEl = document.createElement('details');
-      detailsEl.className = 'agent-window__reasoning';
-      const summaryEl = document.createElement('summary');
-      summaryEl.textContent = 'Trace';
-      detailsEl.appendChild(summaryEl);
-      const bodyEl = document.createElement('pre');
-      bodyEl.className = 'agent-window__reasoning-body';
-      bodyEl.textContent = reasoningSteps.map((s) => String(s || '').trim()).filter(Boolean).join('\n');
-      detailsEl.appendChild(bodyEl);
-      bubbleEl.appendChild(detailsEl);
-    }
-    const contentEl = document.createElement('div');
-    contentEl.className = 'agent-window__message-content';
-    contentEl.textContent = content;
-    bubbleEl.appendChild(contentEl);
-  }
-
-  wrapper.appendChild(roleEl);
-  if (editable && typeof onEdit === 'function') {
+function createUserMessageNode(content, { actionDisabled = false, onEdit = null } = {}) {
+  const { wrapper, bubbleEl } = createMessageShell('user');
+  const contentEl = document.createElement('div');
+  contentEl.className = 'agent-window__message-content';
+  contentEl.textContent = content;
+  bubbleEl.appendChild(contentEl);
+  if (typeof onEdit === 'function') {
     const editButtonEl = document.createElement('button');
     editButtonEl.type = 'button';
     editButtonEl.className = 'agent-window__message-action';
@@ -209,8 +111,194 @@ function createMessageNode(role, content, options = {}) {
     editButtonEl.addEventListener('click', onEdit);
     bubbleEl.appendChild(editButtonEl);
   }
-  wrapper.appendChild(bubbleEl);
   return wrapper;
+}
+
+function createAssistantTextNode(text) {
+  const { wrapper, bubbleEl } = createMessageShell('assistant');
+  const contentEl = document.createElement('div');
+  contentEl.className = 'agent-window__message-content';
+  contentEl.innerHTML = formatAgentText(text);
+  bubbleEl.appendChild(contentEl);
+  return wrapper;
+}
+
+function createActivityNode(items) {
+  const listEl = document.createElement('ul');
+  listEl.className = 'agent-window__activity';
+  for (const item of items) {
+    const itemEl = document.createElement('li');
+    // A proposal that failed validation went back to the Agent to fix: part of the flow, not an error.
+    const isCheck = (item.name === PROPOSE_CHANGES_TOOL || item.name === RUN_NODES_TOOL) && !item.outcome;
+    itemEl.className = `agent-window__activity-item${isCheck ? ' is-check' : item.ok === false ? ' is-error' : ''}`;
+    itemEl.textContent = item.label || item.name;
+    listEl.appendChild(itemEl);
+  }
+  return listEl;
+}
+
+function createQuestionNode({ question, options, answer, active, onAnswer }) {
+  const cardEl = document.createElement('div');
+  cardEl.className = 'agent-window__question';
+  const textEl = document.createElement('div');
+  textEl.className = 'agent-window__question-text';
+  textEl.textContent = question;
+  cardEl.appendChild(textEl);
+  if (answer != null) {
+    const answerEl = document.createElement('div');
+    answerEl.className = 'agent-window__question-answer';
+    answerEl.textContent = answer;
+    cardEl.appendChild(answerEl);
+    return cardEl;
+  }
+  const optionsEl = document.createElement('div');
+  optionsEl.className = 'agent-window__question-options';
+  for (const option of options) {
+    const buttonEl = document.createElement('button');
+    buttonEl.type = 'button';
+    buttonEl.className = 'btn btn-secondary agent-window__question-option';
+    buttonEl.textContent = option;
+    buttonEl.disabled = !active;
+    buttonEl.addEventListener('click', () => onAnswer(option));
+    optionsEl.appendChild(buttonEl);
+  }
+  cardEl.appendChild(optionsEl);
+  if (active) {
+    const hintEl = document.createElement('div');
+    hintEl.className = 'agent-window__question-hint';
+    hintEl.textContent = 'Or type your own answer below.';
+    cardEl.appendChild(hintEl);
+  }
+  return cardEl;
+}
+
+function createDiffNode({ label, before, after }) {
+  const detailsEl = document.createElement('details');
+  detailsEl.className = 'agent-window__diff';
+  const lines = diffLines(before, after);
+  detailsEl.open = lines.length <= 40;
+  const summaryEl = document.createElement('summary');
+  summaryEl.textContent = label;
+  const preEl = document.createElement('pre');
+  preEl.className = 'agent-window__diff-body';
+  for (const line of lines) {
+    const lineEl = document.createElement('div');
+    lineEl.className = `agent-window__diff-line is-${line.type}`;
+    lineEl.textContent = `${line.type === 'added' ? '+ ' : line.type === 'removed' ? '- ' : '  '}${line.text}`;
+    preEl.appendChild(lineEl);
+  }
+  detailsEl.append(summaryEl, preEl);
+  return detailsEl;
+}
+
+/**
+ * The card for one propose_changes call: every change with its details and diffs; Apply / Reject
+ * while it is the open proposal, or how it ended once resolved.
+ */
+function createProposalNode({
+  summary, preview, outcome, active, onApply, onReject, onHighlight,
+  applyLabel = 'Apply', rejectLabel = 'Reject', hint = null,
+}) {
+  const cardEl = document.createElement('div');
+  cardEl.className = 'agent-window__proposal';
+  const headEl = document.createElement('div');
+  headEl.className = 'agent-window__proposal-summary';
+  headEl.textContent = summary || 'Proposed changes';
+  cardEl.appendChild(headEl);
+
+  const listEl = document.createElement('ol');
+  listEl.className = 'agent-window__proposal-items';
+  for (const item of preview?.items || []) {
+    const itemEl = document.createElement('li');
+    itemEl.className = `agent-window__proposal-item is-${item.kind}`;
+    const titleEl = document.createElement('div');
+    titleEl.className = 'agent-window__proposal-title';
+    titleEl.textContent = item.title;
+    itemEl.appendChild(titleEl);
+    for (const line of item.lines || []) {
+      const lineEl = document.createElement('div');
+      lineEl.className = 'agent-window__proposal-line';
+      lineEl.textContent = line;
+      itemEl.appendChild(lineEl);
+    }
+    for (const diff of item.diffs || []) itemEl.appendChild(createDiffNode(diff));
+    if (item.nodeIds?.length && typeof onHighlight === 'function') {
+      itemEl.addEventListener('mouseenter', () => onHighlight(item.nodeIds));
+      itemEl.addEventListener('mouseleave', () => onHighlight([]));
+    }
+    listEl.appendChild(itemEl);
+  }
+  cardEl.appendChild(listEl);
+
+  for (const warning of preview?.warnings || []) {
+    const warningEl = document.createElement('div');
+    warningEl.className = 'agent-window__proposal-warning';
+    warningEl.textContent = warning;
+    cardEl.appendChild(warningEl);
+  }
+  if (preview?.total) {
+    const totalEl = document.createElement('div');
+    totalEl.className = 'agent-window__proposal-total';
+    totalEl.textContent = preview.total;
+    cardEl.appendChild(totalEl);
+  }
+
+  if (outcome != null) {
+    const outcomeEl = document.createElement('div');
+    outcomeEl.className = `agent-window__proposal-outcome${/^(Applied|Completed)\b/.test(outcome) ? ' is-applied' : ''}`;
+    outcomeEl.textContent = outcome;
+    cardEl.appendChild(outcomeEl);
+    return cardEl;
+  }
+
+  const actionsEl = document.createElement('div');
+  actionsEl.className = 'agent-window__proposal-actions';
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button';
+  applyBtn.className = 'btn btn-primary';
+  applyBtn.textContent = applyLabel;
+  applyBtn.disabled = !active;
+  applyBtn.addEventListener('click', onApply);
+  const rejectBtn = document.createElement('button');
+  rejectBtn.type = 'button';
+  rejectBtn.className = 'btn btn-secondary';
+  rejectBtn.textContent = rejectLabel;
+  rejectBtn.disabled = !active;
+  rejectBtn.addEventListener('click', () => onReject(''));
+  actionsEl.append(applyBtn, rejectBtn);
+  cardEl.appendChild(actionsEl);
+  if (active) {
+    const hintEl = document.createElement('div');
+    hintEl.className = 'agent-window__question-hint';
+    hintEl.textContent = hint || 'Nothing changes until you apply, and one undo reverts the whole proposal. To ask for something different, type it below.';
+    cardEl.appendChild(hintEl);
+  }
+  return cardEl;
+}
+
+function createPendingNode({ text, status, onStop }) {
+  const fragment = document.createDocumentFragment();
+  if (text) fragment.appendChild(createAssistantTextNode(text));
+  const statusEl = document.createElement('div');
+  statusEl.className = 'agent-window__status';
+  const spinnerEl = document.createElement('span');
+  spinnerEl.className = 'agent-window__spinner';
+  spinnerEl.setAttribute('aria-hidden', 'true');
+  const statusTextEl = document.createElement('span');
+  statusTextEl.className = 'agent-window__loading-text';
+  statusTextEl.textContent = status || 'Thinking...';
+  const stopBtn = document.createElement('button');
+  stopBtn.type = 'button';
+  stopBtn.className = 'agent-window__loading-stop';
+  stopBtn.textContent = 'Click to Stop';
+  stopBtn.setAttribute('aria-label', 'Click to stop generating');
+  stopBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    onStop();
+  });
+  statusEl.append(spinnerEl, statusTextEl, stopBtn);
+  fragment.appendChild(statusEl);
+  return fragment;
 }
 
 function createEditingMessageNode(content, options = {}) {
@@ -279,6 +367,9 @@ function createEditingMessageNode(content, options = {}) {
 /** Falls back to the Review default when no Agent default is set, so upgrading doesn't silently
  * break chats that were already relying on the old Review-default behavior. */
 async function loadAgentCredential() {
+  // Opened right after launch, the window can beat the backend; without this the missing
+  // credential would read as "no Agent model selected".
+  await waitForBackend();
   const [credentials, settings] = await Promise.all([
     fetch(`${API_BASE}/api/credentials`).then((res) => (res.ok ? res.json() : [])),
     fetch(`${API_BASE}/api/settings`).then((res) => (res.ok ? res.json() : null)),
@@ -291,6 +382,32 @@ async function loadAgentCredential() {
   return credential || null;
 }
 
+async function loadCredentialContext() {
+  const [credentials, settings] = await Promise.all([
+    fetch(`${API_BASE}/api/credentials`).then((res) => (res.ok ? res.json() : [])).catch(() => []),
+    fetch(`${API_BASE}/api/settings`).then((res) => (res.ok ? res.json() : null)).catch(() => null),
+  ]);
+  const credentialsById = new Map((Array.isArray(credentials) ? credentials : []).map((c) => [c.id, c]));
+  const defaultRunCredential = credentialsById.get(String(settings?.default_run_credential_id || '').trim()) || null;
+  return { credentialsById, defaultRunCredential };
+}
+
+async function requestTitle(credentialId, messages) {
+  const res = await fetch(`${API_BASE}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ credential_id: credentialId, messages }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  return res.ok ? String(payload?.content || '').trim() : '';
+}
+
+/**
+ * @param {object} options
+ * @param {{getCanvasState: Function, inspectNode: (id: string, options?: object) => Promise<object>,
+ *   getScoreComparisonRows: (id: string) => Promise<object[]>, getSelectedNodeIds: () => string[],
+ *   extractInputFields: Function}} options.workspace read access to the live canvas
+ */
 export function mountAgentChatSession({
   overlay,
   messagesEl,
@@ -300,31 +417,9 @@ export function mountAgentChatSession({
   onConversationUpdated,
   onConversationDraftChanged,
   resolveConversation,
-  getWorkflowSnapshot,
-  inspectNode,
-  addRunNode,
-  addScoreNode,
-  updateScoreNode,
-  updateScoreRowSelection,
-  createAndRunReviewNode,
-  verifyReviewSuggestions,
-  acceptReviewSuggestions,
-  applyReviewSuggestions,
-  startRunNode,
-  saveRunResultsToWorkspace,
-  saveScoreResultsToWorkspace,
-  addSamplerNode,
-  addSampledDatasetNode,
-  addPromptNode,
-  addPromptVersion,
-  addDatasetNode,
-  addProcessNode,
-  importPubmedDataset,
-  importClinicaltrialsDataset,
-  importPreprintDataset,
-  importChemblDataset,
+  workspace,
 }) {
-  if (!overlay || !messagesEl || !inputEl || !sendButtonEl) {
+  if (!overlay || !messagesEl || !inputEl || !sendButtonEl || !workspace) {
     return {
       setConversation() {},
       destroy() {},
@@ -333,12 +428,14 @@ export function mountAgentChatSession({
   }
 
   let credentialId = '';
+  // Set when the Agent model's check (Settings → Agent defaults) found it cannot call tools.
+  let credentialWarning = '';
   let sendInFlight = false;
   let activeAssistantAbortController = null;
-  let restoreComposerAfterAbortText = '';
   let activeConversationId = '';
   let editingMessageIndex = -1;
   let editingDraft = '';
+  let renderScheduled = false;
   const titleRequestSerialByConversation = new Map();
 
   function isMounted() {
@@ -376,96 +473,146 @@ export function mountAgentChatSession({
     }
   }
 
-  function setPendingStatus(conversation, status) {
-    if (!conversation) return;
-    conversation.pendingStatus = String(status || '').trim();
-    conversation.updatedAt = Date.now();
-    notifyConversationUpdated(conversation);
-    if (isMounted() && activeConversationId === conversation.id) renderActiveConversation();
+  function isActive(conversation) {
+    return isMounted() && activeConversationId === conversation?.id;
+  }
+
+  /** Coalesces streaming re-renders to one per frame. */
+  function scheduleRender(conversation) {
+    if (!isActive(conversation) || renderScheduled) return;
+    renderScheduled = true;
+    requestAnimationFrame(() => {
+      renderScheduled = false;
+      if (isActive(conversation)) renderActiveConversation();
+    });
   }
 
   function stopAssistant() {
     activeAssistantAbortController?.abort();
   }
 
+  // ---------- rendering ----------
+
   function renderActiveConversation() {
-    const activeConversation = getActiveConversation();
+    const conversation = getActiveConversation();
     messagesEl.innerHTML = '';
-    const messages = ensureConversationMessages(activeConversation);
+    const messages = ensureConversationMessages(conversation);
+    const busy = conversation?.pending || sendInFlight;
+    const pendingInteraction = busy ? null : findPendingInteraction(messages);
+    const responses = new Map(messages.filter((m) => m.role === 'tool' && USER_TOOLS.has(m.name)).map((m) => [m.toolCallId, m]));
+    let activity = [];
+
+    function flushActivity() {
+      if (activity.length) messagesEl.appendChild(createActivityNode(activity));
+      activity = [];
+    }
+
     messages.forEach((message, index) => {
-      if (message.role === 'user' && index === editingMessageIndex) {
-        appendEditingMessage(editingDraft, {
-          saveDisabled: !String(editingDraft || '').trim() || activeConversation?.pending || sendInFlight,
-          onInput: (value) => {
-            editingDraft = value;
-          },
-          onSave: () => {
-            submitEditedMessage();
-          },
-          onCancel: () => {
-            cancelEditingMessage();
-          },
-        });
+      if (message.role === 'tool') {
+        // Answers and proposal outcomes show on their cards; a proposal sent back to the model to
+        // fix never got a card, so that one stays in the activity list.
+        if (!USER_TOOLS.has(message.name) || (message.name !== ASK_USER_TOOL && !message.outcome)) activity.push(message);
         return;
       }
-      appendMessage(message.role, message.content, {
-        editable: message.role === 'user',
-        actionDisabled: activeConversation?.pending || sendInFlight || editingMessageIndex !== -1,
-        onEdit: () => startEditingMessage(index),
-        reasoningSteps: message.role === 'assistant' ? message.reasoningSteps : null,
-      });
+      flushActivity();
+      if (message.role === 'user') {
+        if (index === editingMessageIndex) {
+          messagesEl.appendChild(createEditingMessageNode(editingDraft, {
+            saveDisabled: !String(editingDraft || '').trim() || busy,
+            onInput: (value) => { editingDraft = value; },
+            onSave: submitEditedMessage,
+            onCancel: cancelEditingMessage,
+          }));
+        } else {
+          messagesEl.appendChild(createUserMessageNode(message.content, {
+            actionDisabled: busy || editingMessageIndex !== -1,
+            onEdit: () => startEditingMessage(index),
+          }));
+        }
+        return;
+      }
+      if (String(message.content || '').trim()) messagesEl.appendChild(createAssistantTextNode(message.content));
+      for (const call of message.toolCalls || []) {
+        if (!USER_TOOLS.has(call.name)) continue;
+        let args = {};
+        try { args = JSON.parse(call.arguments || '{}'); } catch (_) {}
+        const response = responses.get(call.id);
+        if (call.name === ASK_USER_TOOL) {
+          messagesEl.appendChild(createQuestionNode({
+            question: String(args.question || ''),
+            options: Array.isArray(args.options) ? args.options.map(String) : [],
+            answer: response ? response.answer : null,
+            active: pendingInteraction?.toolCallId === call.id,
+            onAnswer: (answer) => submitAnswer(answer),
+          }));
+        } else if (call.preview) {
+          const isRun = call.name === RUN_NODES_TOOL;
+          messagesEl.appendChild(createProposalNode({
+            summary: String(args.summary || ''),
+            preview: call.preview,
+            outcome: response ? (response.outcome || 'Resolved') : null,
+            active: pendingInteraction?.toolCallId === call.id,
+            onApply: () => (isRun ? submitRunDecision({ run: true }) : submitProposalDecision({ apply: true })),
+            onReject: (feedback) => (isRun ? submitRunDecision({ run: false, feedback }) : submitProposalDecision({ apply: false, feedback })),
+            onHighlight: workspace.highlightNodes,
+            ...(isRun ? {
+              applyLabel: 'Run',
+              rejectLabel: 'Cancel',
+              hint: 'Nothing runs until you start it. You can stop it while it runs. To change the plan, type below.',
+            } : {}),
+          }));
+        }
+      }
     });
-    if (activeConversation?.pending) {
-      appendMessage('assistant', '', {
-        loading: true,
-        loadingText: String(activeConversation?.pendingStatus || 'Thinking...'),
-        onStopLoading: stopAssistant,
-      });
+    flushActivity();
+
+    if (conversation?.pending) {
+      messagesEl.appendChild(createPendingNode({
+        text: conversation.streamingText || '',
+        status: conversation.pendingStatus,
+        onStop: stopAssistant,
+      }));
     }
+    scrollToBottom();
   }
 
   function updateComposerState() {
-    const activeConversation = getActiveConversation();
+    const conversation = getActiveConversation();
     const hasText = Boolean((inputEl.value || '').trim());
     const composerLocked = sendInFlight || editingMessageIndex !== -1;
-    inputEl.disabled = !credentialId || composerLocked || !activeConversation;
-    sendButtonEl.disabled = !credentialId || composerLocked || !activeConversation || !hasText;
+    inputEl.disabled = !credentialId || composerLocked || !conversation;
+    sendButtonEl.disabled = !credentialId || composerLocked || !conversation || !hasText;
+    const awaiting = conversation && findPendingInteraction(ensureConversationMessages(conversation));
     inputEl.placeholder = editingMessageIndex !== -1
       ? 'Finish editing this message first'
-      : !activeConversation
-      ? 'Select a chat first'
-      : credentialId
-        ? (sendInFlight ? 'Waiting for response...' : 'Send a message...')
-        : 'Select an Agent model in Settings first';
+      : !conversation
+        ? 'Select a chat first'
+        : !credentialId
+          ? 'Select an Agent model in Settings first'
+          : sendInFlight
+            ? 'Waiting for response...'
+            : awaiting?.kind === 'question'
+              ? 'Pick an option above or type your own answer...'
+              : awaiting?.kind === 'proposal'
+                ? 'Apply or reject the proposal above, or type what to change...'
+                : awaiting?.kind === 'run'
+                  ? 'Run or cancel the jobs above, or type what to change...'
+                  : credentialWarning || 'Send a message...';
   }
 
   function syncComposerDraftFromConversation() {
-    const activeConversation = getActiveConversation();
-    inputEl.value = String(activeConversation?.unsentDraft || '');
+    const conversation = getActiveConversation();
+    inputEl.value = String(conversation?.unsentDraft || '');
     if (typeof autoResizeComposer === 'function') autoResizeComposer();
   }
 
-  function appendMessage(role, content, options = {}) {
-    const node = createMessageNode(role, content, options);
-    messagesEl.appendChild(node);
-    scrollToBottom();
-    return node;
-  }
-
-  function appendEditingMessage(content, options = {}) {
-    const node = createEditingMessageNode(content, options);
-    messagesEl.appendChild(node);
-    scrollToBottom();
-    return node;
-  }
+  // ---------- editing ----------
 
   function startEditingMessage(messageIndex) {
-    const activeConversation = getActiveConversation();
-    if (!activeConversation || sendInFlight || activeConversation.pending) return;
-    const messages = ensureConversationMessages(activeConversation);
-    const targetMessage = messages[messageIndex];
+    const conversation = getActiveConversation();
+    if (!conversation || sendInFlight || conversation.pending) return;
+    const targetMessage = ensureConversationMessages(conversation)[messageIndex];
     if (!targetMessage || targetMessage.role !== 'user') return;
-
     editingMessageIndex = messageIndex;
     editingDraft = String(targetMessage.content || '');
     renderActiveConversation();
@@ -483,914 +630,320 @@ export function mountAgentChatSession({
   function handleOutsidePointerDown(event) {
     if (editingMessageIndex === -1) return;
     const editingNode = messagesEl.querySelector('.agent-window__message--editing');
-    if (!editingNode) return;
-    if (editingNode.contains(event.target)) return;
+    if (!editingNode || editingNode.contains(event.target)) return;
     cancelEditingMessage();
   }
 
-  async function readWorkflowSnapshot() {
-    if (typeof getWorkflowSnapshot !== 'function') return null;
-    try {
-      const snapshot = await getWorkflowSnapshot();
-      return snapshot && typeof snapshot === 'object' ? snapshot : null;
-    } catch (error) {
-      console.error('Read workflow snapshot:', error);
-      return null;
-    }
-  }
+  // ---------- the agent turn ----------
 
-  function stableStringify(value) {
-    if (Array.isArray(value)) {
-      return `[${value.map((item) => stableStringify(item)).join(',')}]`;
-    }
-    if (value && typeof value === 'object') {
-      const entries = Object.keys(value)
-        .sort()
-        .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`);
-      return `{${entries.join(',')}}`;
-    }
-    return JSON.stringify(value);
-  }
-
-  function normalizeSkillArgs(value) {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  }
-
-function normalizePositiveInteger(value, fallback = null) {
-  const normalized = Number.parseInt(value, 10);
-  if (!Number.isFinite(normalized) || normalized < 1) return fallback;
-  return normalized;
-}
-
-function findNodeInSnapshot(workflowSnapshot, nodeId) {
-  const normalizedNodeId = String(nodeId || '').trim();
-  if (!normalizedNodeId) return null;
-  return Array.isArray(workflowSnapshot?.nodes)
-    ? workflowSnapshot.nodes.find((node) => String(node?.id || '').trim() === normalizedNodeId) || null
-    : null;
-}
-
-  function addLoopSignal(loopSignals, signal) {
-    const normalizedSignal = String(signal || '').trim();
-    if (!normalizedSignal) return;
-    if (!loopSignals.includes(normalizedSignal)) loopSignals.push(normalizedSignal);
-  }
-
-  function buildSkillCallFingerprint(skillCall) {
-    return `${String(skillCall?.skillName || '').trim()}:${stableStringify(normalizeSkillArgs(skillCall?.args))}`;
-  }
-
-  function buildObservationFingerprint(observation) {
-    return `${String(observation?.skillName || '').trim()}:${stableStringify(normalizeSkillArgs(observation?.args))}:${stableStringify(observation?.result ?? null)}`;
-  }
-
-function shouldPreventRepeatedExecution(skillName) {
-  return AGENT_SINGLE_EXECUTION_SKILLS.has(String(skillName || '').trim());
-}
-
-  function buildObservationSummary(skill, skillCall, result, workflowSnapshot) {
-    if (skill && typeof skill.summarizeResult === 'function') {
-      return String(
-        skill.summarizeResult({
-          args: normalizeSkillArgs(skillCall?.args),
-          result,
-          runtime: {
-            inspectNode,
-            addRunNode,
-            addScoreNode,
-            createAndRunReviewNode,
-            startRunNode,
-            saveRunResultsToWorkspace,
-            saveScoreResultsToWorkspace,
-            addSamplerNode,
-            addSampledDatasetNode,
-            addPromptNode,
-            addDatasetNode,
-            addProcessNode,
-            importPubmedDataset,
-            importClinicaltrialsDataset,
-            importPreprintDataset,
-            importChemblDataset,
-            workflowSnapshot,
-          },
-        }) || ''
-      ).trim();
-    }
-    return result && typeof result === 'object'
-      ? `Executed ${String(skillCall?.skillName || 'skill').trim()} successfully`
-      : `Executed ${String(skillCall?.skillName || 'skill').trim()} with no result`;
-  }
-
-  function getSkillProgressLabel(skill, skillCall, workflowSnapshot) {
-    if (skill && typeof skill.getProgressLabel === 'function') {
-      return String(
-        skill.getProgressLabel({
-          args: normalizeSkillArgs(skillCall?.args),
-          runtime: {
-            inspectNode,
-            addRunNode,
-            addScoreNode,
-            createAndRunReviewNode,
-            startRunNode,
-            saveRunResultsToWorkspace,
-            saveScoreResultsToWorkspace,
-            addSamplerNode,
-            addSampledDatasetNode,
-            addPromptNode,
-            addDatasetNode,
-            addProcessNode,
-            importPubmedDataset,
-            importClinicaltrialsDataset,
-            importPreprintDataset,
-            importChemblDataset,
-            workflowSnapshot,
-          },
-        }) || ''
-      ).trim();
-    }
-    return `Running ${String(skillCall?.skillName || 'skill').trim()}...`;
-  }
-
-  async function executeSkillCall(skillCall, workflowSnapshot) {
-    const skillName = String(skillCall?.skillName || '').trim();
-    const args = normalizeSkillArgs(skillCall?.args);
-    const skill = getAgentSkillByName(skillName);
-    if (!skill || typeof skill.execute !== 'function') {
-      return {
-        skillName,
-        args,
-        ok: false,
-        summary: `Skill ${skillName || 'unknown'} is unavailable`,
-        result: null,
-      };
-    }
-    try {
-      const result = await skill.execute({
-        args,
-        runtime: {
-          inspectNode,
-          addRunNode,
-          addScoreNode,
-          updateScoreNode,
-          updateScoreRowSelection,
-          createAndRunReviewNode,
-          verifyReviewSuggestions,
-          acceptReviewSuggestions,
-          applyReviewSuggestions,
-          startRunNode,
-          saveRunResultsToWorkspace,
-          saveScoreResultsToWorkspace,
-          addSamplerNode,
-          addSampledDatasetNode,
-          addPromptNode,
-          addPromptVersion,
-          addDatasetNode,
-          addProcessNode,
-          importPubmedDataset,
-          importClinicaltrialsDataset,
-          importPreprintDataset,
-          importChemblDataset,
-          workflowSnapshot,
-        },
-      });
-      return {
-        skillName,
-        args,
-        ok: result !== null && result !== undefined,
-        summary: buildObservationSummary(skill, skillCall, result, workflowSnapshot),
-        result,
-      };
-    } catch (error) {
-      console.error(`Execute agent skill ${skillName}:`, error);
-      return {
-        skillName,
-        args,
-        ok: false,
-        summary: `Skill ${skillName || 'unknown'} failed: ${error instanceof Error ? error.message : 'unknown error'}`,
-        result: null,
-      };
-    }
-  }
-
-  async function waitForRunCompletion(waitState, workflowSnapshot, loopSignals, agentTrace, onProgress, signal) {
-    const startedAt = waitState?.startedAt || Date.now();
-    let lastProgress = Number(waitState?.lastObservedProgress) || 0;
-    let lastResultsCount = Number(waitState?.lastObservedResultsCount) || 0;
-    let lastProgressAt = waitState?.lastProgressAt || startedAt;
-    let warnedForStall = false;
-
-    while (true) {
-      throwIfAborted(signal);
-      const latestSnapshot = await readWorkflowSnapshot();
-      if (latestSnapshot) workflowSnapshot = latestSnapshot;
-      const runNode = findNodeInSnapshot(workflowSnapshot, waitState?.runNodeId);
-      if (!runNode || String(runNode?.type || '').trim() !== 'run') {
-        return {
-          workflowSnapshot,
-          observation: {
-            skillName: 'wait_for_run_completion',
-            args: { run_node_id: waitState?.runNodeId || '' },
-            ok: false,
-            summary: `Run node ${String(waitState?.runNodeId || '').trim() || 'unknown'} was not found while waiting.`,
-            result: {
-              runNodeId: String(waitState?.runNodeId || '').trim(),
-              status: 'missing',
-            },
-          },
-          shouldBreak: true,
-        };
-      }
-
-      const runName = String(runNode?.title || waitState?.runNodeId || 'run').trim() || 'run';
-      const pending = runNode?.status?.pending === true;
-      const progress = Number(runNode?.status?.progress) || 0;
-      const resultsCount = Number(runNode?.status?.resultsCount) || 0;
-      const completed = runNode?.status?.completed === true;
-
-      if (progress > lastProgress || resultsCount > lastResultsCount) {
-        lastProgress = progress;
-        lastResultsCount = resultsCount;
-        lastProgressAt = Date.now();
-        warnedForStall = false;
-      }
-
-      if (completed) {
-        return {
-          workflowSnapshot,
-          observation: {
-            skillName: 'wait_for_run_completion',
-            args: { run_node_id: waitState?.runNodeId || '' },
-            ok: true,
-            summary: `Run ${runName} completed.`,
-            result: {
-              runNodeId: String(waitState?.runNodeId || '').trim(),
-              status: 'completed',
-              progress,
-              resultsCount,
-            },
-          },
-          shouldBreak: false,
-        };
-      }
-
-      if (!pending) {
-        const stoppedMessage = `Run ${runName} stopped before completion.`;
-        addLoopSignal(loopSignals, stoppedMessage);
-        agentTrace.push(`WAIT STOP: ${stoppedMessage}`);
-        return {
-          workflowSnapshot,
-          observation: {
-            skillName: 'wait_for_run_completion',
-            args: { run_node_id: waitState?.runNodeId || '' },
-            ok: false,
-            summary: stoppedMessage,
-            result: {
-              runNodeId: String(waitState?.runNodeId || '').trim(),
-              status: 'stopped',
-              progress,
-              resultsCount,
-            },
-          },
-          shouldBreak: true,
-        };
-      }
-
-      const waitElapsedMs = Date.now() - startedAt;
-      const stalledForMs = Date.now() - lastProgressAt;
-      if (waitElapsedMs >= AGENT_RUN_WAIT_MAX_MS) {
-        const timeoutMessage = `Timed out waiting for run ${runName} after ${Math.round(AGENT_RUN_WAIT_MAX_MS / 1000)} seconds.`;
-        addLoopSignal(loopSignals, timeoutMessage);
-        agentTrace.push(`WAIT STOP: ${timeoutMessage}`);
-        return {
-          workflowSnapshot,
-          observation: {
-            skillName: 'wait_for_run_completion',
-            args: { run_node_id: waitState?.runNodeId || '' },
-            ok: false,
-            summary: timeoutMessage,
-            result: {
-              runNodeId: String(waitState?.runNodeId || '').trim(),
-              status: 'timeout',
-              progress,
-              resultsCount,
-            },
-          },
-          shouldBreak: true,
-        };
-      }
-
-      if (!warnedForStall && stalledForMs >= AGENT_RUN_WAIT_STALL_WARNING_MS) {
-        const stallMessage = `Run ${runName} has shown no new progress for ${Math.round(stalledForMs / 1000)} seconds.`;
-        addLoopSignal(loopSignals, stallMessage);
-        agentTrace.push(`WAIT WARN: ${stallMessage}`);
-        warnedForStall = true;
-      }
-
-      if (onProgress) {
-        onProgress(progress > 0
-          ? `Waiting for run ${runName} to finish (${progress}%)...`
-          : `Waiting for run ${runName} to finish...`);
-      }
-      await sleep(AGENT_RUN_WAIT_HEARTBEAT_MS);
-    }
-  }
-
-  async function waitForReviewCompletion(waitState, workflowSnapshot, loopSignals, agentTrace, onProgress, signal) {
-    const startedAt = waitState?.startedAt || Date.now();
-    let lastProgress = Number(waitState?.lastObservedProgress) || 0;
-    let lastSuggestionCount = Number(waitState?.lastObservedSuggestionCount) || 0;
-    let lastProgressAt = waitState?.lastProgressAt || startedAt;
-    let warnedForStall = false;
-
-    while (true) {
-      throwIfAborted(signal);
-      const latestSnapshot = await readWorkflowSnapshot();
-      if (latestSnapshot) workflowSnapshot = latestSnapshot;
-      const reviewNode = findNodeInSnapshot(workflowSnapshot, waitState?.reviewNodeId);
-      if (!reviewNode || String(reviewNode?.type || '').trim() !== 'promptReview') {
-        return {
-          workflowSnapshot,
-          observation: {
-            skillName: 'wait_for_review_completion',
-            args: { review_node_id: waitState?.reviewNodeId || '' },
-            ok: false,
-            summary: `Review node ${String(waitState?.reviewNodeId || '').trim() || 'unknown'} was not found while waiting.`,
-            result: {
-              reviewNodeId: String(waitState?.reviewNodeId || '').trim(),
-              status: 'missing',
-            },
-          },
-          shouldBreak: true,
-        };
-      }
-
-      const reviewName = String(reviewNode?.title || waitState?.reviewNodeId || 'review').trim() || 'review';
-      const pending = reviewNode?.status?.pending === true;
-      const progress = Number(reviewNode?.status?.progress) || 0;
-      const suggestionCount = Number(reviewNode?.preview?.reviewSuggestionCount) || 0;
-      const reviewSummary = String(reviewNode?.preview?.reviewSummary || '').trim();
-      const completed = !pending && (suggestionCount > 0 || Boolean(reviewSummary));
-
-      if (progress > lastProgress || suggestionCount > lastSuggestionCount) {
-        lastProgress = progress;
-        lastSuggestionCount = suggestionCount;
-        lastProgressAt = Date.now();
-        warnedForStall = false;
-      }
-
-      if (completed) {
-        return {
-          workflowSnapshot,
-          observation: {
-            skillName: 'wait_for_review_completion',
-            args: { review_node_id: waitState?.reviewNodeId || '' },
-            ok: true,
-            summary: `Review ${reviewName} completed.`,
-            result: {
-              reviewNodeId: String(waitState?.reviewNodeId || '').trim(),
-              status: 'completed',
-              progress,
-              suggestionCount,
-              reviewSummary,
-            },
-          },
-          shouldBreak: false,
-        };
-      }
-
-      if (!pending) {
-        const stoppedMessage = `Review ${reviewName} stopped before completion.`;
-        addLoopSignal(loopSignals, stoppedMessage);
-        agentTrace.push(`WAIT STOP: ${stoppedMessage}`);
-        return {
-          workflowSnapshot,
-          observation: {
-            skillName: 'wait_for_review_completion',
-            args: { review_node_id: waitState?.reviewNodeId || '' },
-            ok: false,
-            summary: stoppedMessage,
-            result: {
-              reviewNodeId: String(waitState?.reviewNodeId || '').trim(),
-              status: 'stopped',
-              progress,
-              suggestionCount,
-              reviewSummary,
-            },
-          },
-          shouldBreak: true,
-        };
-      }
-
-      const waitElapsedMs = Date.now() - startedAt;
-      const stalledForMs = Date.now() - lastProgressAt;
-      if (waitElapsedMs >= AGENT_RUN_WAIT_MAX_MS) {
-        const timeoutMessage = `Timed out waiting for review ${reviewName} after ${Math.round(AGENT_RUN_WAIT_MAX_MS / 1000)} seconds.`;
-        addLoopSignal(loopSignals, timeoutMessage);
-        agentTrace.push(`WAIT STOP: ${timeoutMessage}`);
-        return {
-          workflowSnapshot,
-          observation: {
-            skillName: 'wait_for_review_completion',
-            args: { review_node_id: waitState?.reviewNodeId || '' },
-            ok: false,
-            summary: timeoutMessage,
-            result: {
-              reviewNodeId: String(waitState?.reviewNodeId || '').trim(),
-              status: 'timeout',
-              progress,
-              suggestionCount,
-              reviewSummary,
-            },
-          },
-          shouldBreak: true,
-        };
-      }
-
-      if (!warnedForStall && stalledForMs >= AGENT_RUN_WAIT_STALL_WARNING_MS) {
-        const stallMessage = `Review ${reviewName} has shown no new progress for ${Math.round(stalledForMs / 1000)} seconds.`;
-        addLoopSignal(loopSignals, stallMessage);
-        agentTrace.push(`WAIT WARN: ${stallMessage}`);
-        warnedForStall = true;
-      }
-
-      if (onProgress) {
-        onProgress(progress > 0
-          ? `Waiting for review ${reviewName} to finish (${progress}%)...`
-          : `Waiting for review ${reviewName} to finish...`);
-      }
-      await sleep(AGENT_RUN_WAIT_HEARTBEAT_MS);
-    }
-  }
-
-  function normalizePlannedSkillCalls(plan) {
-    const calls = Array.isArray(plan?.skill_calls) ? plan.skill_calls : [];
-    const seen = new Set();
-    return calls
-      .map((call) => {
-        const args = normalizeSkillArgs(call?.args);
-        return {
-          skillName: String(call?.skill_name || '').trim(),
-          args,
-          reason: String(call?.reason || '').trim(),
-        };
-      })
-      .filter((call) => AGENT_SKILL_NAMES.has(call.skillName))
-      .filter((call) => {
-        const fingerprint = buildSkillCallFingerprint(call);
-        if (seen.has(fingerprint)) return false;
-        seen.add(fingerprint);
-        return true;
-      });
-  }
-
-  function normalizePlannerPayload(plan) {
-    return {
-      done: plan?.done === true,
-      planSummary: String(plan?.plan_summary || '').trim(),
-      expectedProgress: String(plan?.expected_progress || '').trim(),
-      skillCalls: normalizePlannedSkillCalls(plan),
-    };
-  }
-
-  async function planAgentSkills(messages, workflowSnapshot, observations, loopSignals, roundIndex, signal) {
-    if (!workflowSnapshot) {
-      return {
-        ok: true,
-        plan: {
-          done: true,
-          planSummary: 'No workflow snapshot available',
-          expectedProgress: '',
-          skillCalls: [],
-        },
-      };
-    }
-    const { ok, plan } = await requestAgentPlan({
-      credentialId,
-      messages,
-      workflowSnapshot,
-      observations,
-      availableSkills: AGENT_SKILL_REGISTRY,
-      loopSignals,
-      roundIndex,
-      signal,
+  async function buildToolRuntime() {
+    const { credentialsById, defaultRunCredential } = await loadCredentialContext();
+    const inspectOptions = { credentialsById, defaultRunCredential };
+    const inspectNode = (nodeId) => workspace.inspectNode(nodeId, inspectOptions);
+    const buildSummary = () => buildWorkspaceSummary(workspace.getCanvasState(), {
+      extractInputFields: workspace.extractInputFields,
+      inspectNode,
+      credentialsById,
+      defaultRunCredential,
+      selectedNodeIds: workspace.getSelectedNodeIds?.() || [],
     });
+    const proposalWorkspace = {
+      getCanvasState: workspace.getCanvasState,
+      extractInputFields: workspace.extractInputFields,
+      applyCanvasState: workspace.applyCanvasState,
+      credentialsById,
+    };
+    const runWorkspace = {
+      ...workspace,
+      credentialsById,
+      inspectNode,
+    };
     return {
-      ok,
-      plan: normalizePlannerPayload(plan),
+      getCanvasState: workspace.getCanvasState,
+      inspectNode,
+      getScoreComparisonRows: workspace.getScoreComparisonRows,
+      buildSummary,
+      getDatasetBindings: workspace.getDatasetBindings,
+      previewProposal: (proposal) => previewProposal(proposal, proposalWorkspace),
+      applyProposal: (proposal, options) => applyProposal(proposal, proposalWorkspace, options),
+      previewRunRequest: (request) => previewRunRequest(request, runWorkspace),
+      executeRunRequest: (request, options) => executeRunRequest(request, runWorkspace, options),
     };
   }
 
-  async function requestChatCompletion(messages, options = {}) {
-    const useWorkflowContext = options.useWorkflowContext === true;
-    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
-    const signal = options.signal;
-    const withAgentTrace = async (resultPromise, trace) => {
-      const r = await resultPromise;
-      return {
-        ...r,
-        agentTrace: Array.isArray(trace) && trace.length ? trace.slice() : null,
-      };
-    };
-    if (useWorkflowContext) {
-      const agentTrace = [`LOOP START: evaluating ${AGENT_SKILL_REGISTRY.length} available skills`];
-      let workflowSnapshot = await readWorkflowSnapshot();
-      if (!workflowSnapshot) {
-        if (onProgress) onProgress('No workflow snapshot; answering without agent tools.');
-        return withAgentTrace(requestSimpleChat({ credentialId, messages, signal }), null);
-      }
-      const observations = [];
-      const loopSignals = [];
-      const seenObservationFingerprints = new Set();
-      const callCountsByFingerprint = new Map();
-      const sampledDatasetCreateCountsBySampler = new Map();
-      const loopStartedAt = Date.now();
-      let stalledCount = 0;
-      let roundIndex = 0;
-      let waitingState = null;
-      try {
-        while (true) {
-          throwIfAborted(signal);
-          roundIndex += 1;
-          const elapsedMs = Date.now() - loopStartedAt;
-          if (elapsedMs >= AGENT_LOOP_MAX_RUNTIME_MS) {
-            addLoopSignal(loopSignals, `Agent loop runtime exceeded ${Math.round(AGENT_LOOP_MAX_RUNTIME_MS / 1000)} seconds.`);
-            agentTrace.push(`ROUND ${roundIndex} STOP: runtime watchdog reached after ${elapsedMs}ms`);
-            break;
-          }
-
-          if (waitingState) {
-            const waitResult = waitingState.kind === 'review'
-              ? await waitForReviewCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress, signal)
-              : await waitForRunCompletion(waitingState, workflowSnapshot, loopSignals, agentTrace, onProgress, signal);
-            workflowSnapshot = waitResult.workflowSnapshot || workflowSnapshot;
-            if (waitResult.observation) {
-              observations.push(waitResult.observation);
-              const observationFingerprint = buildObservationFingerprint(waitResult.observation);
-              seenObservationFingerprints.add(observationFingerprint);
-              agentTrace.push(
-                `ROUND ${roundIndex} WAIT: ${waitResult.observation.ok ? 'ok' : 'error'} | ${waitResult.observation.summary || 'no summary'}`
-              );
-            }
-            waitingState = null;
-            if (waitResult.shouldBreak) break;
-            stalledCount = 0;
-            if (onProgress) onProgress('Node finished, replanning next steps...');
-            continue;
-          }
-
-          if (onProgress) onProgress(`Planning round ${roundIndex}...`);
-          const { observations: compactedObservations, stats: compactionStats } = compactObservationsForPlanner(observations);
-          if (compactionStats.superseded > 0 || compactionStats.agedOut > 0) {
-            agentTrace.push(
-              `ROUND ${roundIndex} COMPACT: total=${compactionStats.total} `
-              + `keptFull=${compactionStats.keptFull} superseded=${compactionStats.superseded} `
-              + `agedOut=${compactionStats.agedOut} skipped=${compactionStats.skipped}`
-            );
-          }
-          const { ok, plan } = await planAgentSkills(messages, workflowSnapshot, compactedObservations, loopSignals, roundIndex, signal);
-          if (!ok) {
-            addLoopSignal(loopSignals, 'Planner request failed');
-            agentTrace.push(`ROUND ${roundIndex} PLAN ERROR: planner request failed, answering with current evidence`);
-            if (onProgress) onProgress('Planning failed, answering with current evidence...');
-            break;
-          }
-
-          agentTrace.push(
-            `ROUND ${roundIndex} PLAN: done=${plan.done} skills=${plan.skillCalls.length}`
-            + (plan.planSummary ? ` | summary=${plan.planSummary}` : '')
-            + (plan.expectedProgress ? ` | expect=${plan.expectedProgress}` : '')
-          );
-
-          if (onProgress) {
-            const ps = String(plan.planSummary || '').trim();
-            const ep = String(plan.expectedProgress || '').trim();
-            if (ps) onProgress(`Plan summary: ${ps}`);
-            if (ep) onProgress(`Expected progress: ${ep}`);
-          }
-
-          if (plan.done) {
-            agentTrace.push(`ROUND ${roundIndex} STOP: planner marked evidence sufficient`);
-            break;
-          }
-
-          if (plan.skillCalls.length === 0) {
-            addLoopSignal(loopSignals, 'Planner returned no skill calls and did not mark the task done.');
-            agentTrace.push(`ROUND ${roundIndex} STOP: no skill call selected`);
-            break;
-          }
-
-          let roundMadeProgress = false;
-          for (const skillCall of plan.skillCalls) {
-            throwIfAborted(signal);
-            const skill = getAgentSkillByName(skillCall.skillName);
-            if (onProgress) onProgress(getSkillProgressLabel(skill, skillCall, workflowSnapshot));
-
-            const callFingerprint = buildSkillCallFingerprint(skillCall);
-            const repeatCount = (callCountsByFingerprint.get(callFingerprint) || 0) + 1;
-            callCountsByFingerprint.set(callFingerprint, repeatCount);
-            if (repeatCount >= AGENT_LOOP_REPEAT_WARNING_THRESHOLD) {
-              addLoopSignal(loopSignals, `Repeated skill call detected: ${callFingerprint}`);
-            }
-
-            if (repeatCount >= AGENT_LOOP_REPEAT_WARNING_THRESHOLD && shouldPreventRepeatedExecution(skillCall.skillName)) {
-              const stopSummary = `Prevented repeated create/apply action in the same request: ${callFingerprint}`;
-              addLoopSignal(loopSignals, stopSummary);
-              agentTrace.push(`ROUND ${roundIndex} STOP: ${stopSummary}`);
-              stalledCount = Math.max(stalledCount, AGENT_LOOP_STALL_CRITICAL_THRESHOLD);
-              break;
-            }
-
-            if (skillCall.skillName === 'create_sampled_dataset_node') {
-              const samplerNodeId = String(
-                skillCall.args?.sampler_node_id || skillCall.args?.samplerNodeId || ''
-              ).trim();
-              const maxSampleUses = normalizePositiveInteger(
-                skillCall.args?.max_sample_uses ?? skillCall.args?.maxSampleUses,
-                1
-              );
-              if (samplerNodeId && maxSampleUses != null) {
-                const usedCount = sampledDatasetCreateCountsBySampler.get(samplerNodeId) || 0;
-                if (usedCount >= maxSampleUses) {
-                  const limitSummary = `Agent-side sample limit reached for sampler ${samplerNodeId}: ${usedCount}/${maxSampleUses} in this request.`;
-                  addLoopSignal(loopSignals, limitSummary);
-                  agentTrace.push(`ROUND ${roundIndex} STOP: ${limitSummary}`);
-                  stalledCount = Math.max(stalledCount, AGENT_LOOP_STALL_CRITICAL_THRESHOLD);
-                  break;
-                }
-              }
-            }
-
-            const observation = await executeSkillCall(skillCall, workflowSnapshot);
-            observations.push(observation);
-            if (observation.ok && skillCall.skillName === 'create_sampled_dataset_node') {
-              const samplerNodeId = String(
-                skillCall.args?.sampler_node_id || skillCall.args?.samplerNodeId || ''
-              ).trim();
-              if (samplerNodeId) {
-                sampledDatasetCreateCountsBySampler.set(
-                  samplerNodeId,
-                  (sampledDatasetCreateCountsBySampler.get(samplerNodeId) || 0) + 1
-                );
-              }
-            }
-            const refreshedSnapshot = await readWorkflowSnapshot();
-            if (refreshedSnapshot) workflowSnapshot = refreshedSnapshot;
-            const observationFingerprint = buildObservationFingerprint(observation);
-            const isNewObservation = !seenObservationFingerprints.has(observationFingerprint);
-            if (isNewObservation) {
-              seenObservationFingerprints.add(observationFingerprint);
-              roundMadeProgress = true;
-            }
-
-            agentTrace.push(
-              `ROUND ${roundIndex} ACT: ${skillCall.skillName}(${stableStringify(skillCall.args)}) -> `
-              + `${observation.ok ? 'ok' : 'error'} | ${observation.summary || 'no summary'} | progress=${isNewObservation ? 'yes' : 'no'}`
-            );
-
-            if (observation.ok && observation.result?.waitRequired === true && observation.result?.runNodeId) {
-              waitingState = {
-                kind: 'run',
-                runNodeId: String(observation.result.runNodeId || '').trim(),
-                runId: String(observation.result.runId || '').trim(),
-                startedAt: Date.now(),
-                lastObservedProgress: 0,
-                lastObservedResultsCount: Number(observation.result?.resultsCount) || 0,
-                lastProgressAt: Date.now(),
-              };
-              agentTrace.push(`ROUND ${roundIndex} WAIT START: run ${waitingState.runNodeId}`);
-              break;
-            }
-
-            if (observation.ok && observation.result?.waitRequired === true && observation.result?.reviewNodeId) {
-              waitingState = {
-                kind: 'review',
-                reviewNodeId: String(observation.result.reviewNodeId || '').trim(),
-                startedAt: Date.now(),
-                lastObservedProgress: Number(observation.result?.reviewProgress) || 0,
-                lastObservedSuggestionCount: 0,
-                lastProgressAt: Date.now(),
-              };
-              agentTrace.push(`ROUND ${roundIndex} WAIT START: review ${waitingState.reviewNodeId}`);
-              break;
-            }
-
-            if (!isNewObservation && repeatCount >= AGENT_LOOP_REPEAT_CRITICAL_THRESHOLD) {
-              addLoopSignal(loopSignals, `Critical repeated skill call: ${callFingerprint}`);
-              agentTrace.push(`ROUND ${roundIndex} STOP: repeated identical observation for ${callFingerprint}`);
-              stalledCount = Math.max(stalledCount, AGENT_LOOP_STALL_CRITICAL_THRESHOLD);
-              break;
-            }
-          }
-
-          if (roundMadeProgress) {
-            stalledCount = 0;
-            if (onProgress) onProgress('Reviewing new observations...');
-            agentTrace.push(`ROUND ${roundIndex} OBSERVE: progress detected`);
-          } else {
-            stalledCount += 1;
-            if (stalledCount >= AGENT_LOOP_STALL_WARNING_THRESHOLD) {
-              addLoopSignal(loopSignals, `No new information after ${stalledCount} consecutive rounds.`);
-            }
-            agentTrace.push(`ROUND ${roundIndex} OBSERVE: no new information`);
-          }
-
-          if (stalledCount >= AGENT_LOOP_STALL_CRITICAL_THRESHOLD) {
-            agentTrace.push(`ROUND ${roundIndex} STOP: stalled with no new information`);
-            break;
-          }
-        }
-
-        const latestNodeInspection = [...observations]
-          .reverse()
-          .find((observation) => observation.skillName === 'inspect_node' && observation.ok && observation.result && typeof observation.result === 'object');
-
-        agentTrace.push(`FINAL ANSWER: workflow_snapshot=yes, observations=${observations.length}`);
-        if (onProgress) onProgress('Drafting final answer...');
-        return withAgentTrace(
-          requestAgentChat({
-            credentialId,
-            messages,
-            workflowSnapshot,
-            observations,
-            nodeInspection: latestNodeInspection?.result || null,
-            agentTrace,
-            signal,
-          }),
-          agentTrace,
-        );
-      } catch (error) {
-        if (signal?.aborted || error?.name === 'AbortError') {
-          throw error;
-        }
-        console.error('Run agent loop:', error);
-        agentTrace.push(`LOOP ERROR: ${error instanceof Error ? error.message : 'unknown error'}`);
-        addLoopSignal(loopSignals, `Agent loop error: ${error instanceof Error ? error.message : 'unknown error'}`);
-        if (onProgress) onProgress('Agent loop error, answering with current evidence...');
-      }
-      const latestNodeInspection = [...observations]
-        .reverse()
-        .find((observation) => observation.skillName === 'inspect_node' && observation.ok && observation.result && typeof observation.result === 'object');
-      return withAgentTrace(
-        requestAgentChat({
-          credentialId,
-          messages,
-          workflowSnapshot,
-          observations,
-          nodeInspection: latestNodeInspection?.result || null,
-          agentTrace,
-          signal,
-        }),
-        agentTrace,
-      );
-    }
-    return withAgentTrace(requestSimpleChat({ credentialId, messages }), null);
-  }
-
-  async function refreshConversationTitle(targetConversation) {
-    if (!targetConversation?.id || !credentialId) return;
-    const fullMessages = ensureConversationMessages(targetConversation);
+  async function refreshConversationTitle(conversation) {
+    if (!conversation?.id || !credentialId) return;
+    const fullMessages = ensureConversationMessages(conversation);
     if (!shouldRefreshGeneratedTitle(fullMessages)) return;
     const sourceMessages = getTitleSummarySourceMessages(fullMessages);
-
-    const requestId = (titleRequestSerialByConversation.get(targetConversation.id) || 0) + 1;
-    titleRequestSerialByConversation.set(targetConversation.id, requestId);
+    const requestId = (titleRequestSerialByConversation.get(conversation.id) || 0) + 1;
+    titleRequestSerialByConversation.set(conversation.id, requestId);
     try {
-      const { ok, content } = await requestChatCompletion(buildTitleSummaryPrompt(sourceMessages), { useWorkflowContext: false });
-      if (!ok || titleRequestSerialByConversation.get(targetConversation.id) !== requestId) return;
-      const fallbackText =
-        sourceMessages.find((message) => message.role === 'user')?.content || targetConversation.title;
-      targetConversation.title = normalizeGeneratedTitle(content, fallbackText);
-      targetConversation.generatedTitle = true;
-      targetConversation.updatedAt = Date.now();
-      notifyConversationUpdated(targetConversation);
-      if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
+      const content = await requestTitle(credentialId, buildTitleSummaryPrompt(sourceMessages));
+      if (!content || titleRequestSerialByConversation.get(conversation.id) !== requestId) return;
+      const fallbackText = sourceMessages.find((m) => m.role === 'user')?.content || conversation.title;
+      conversation.title = normalizeGeneratedTitle(content, fallbackText);
+      conversation.generatedTitle = true;
+      conversation.updatedAt = Date.now();
+      notifyConversationUpdated(conversation);
     } catch (error) {
       console.error('Generate conversation title:', error);
     } finally {
-      if (titleRequestSerialByConversation.get(targetConversation.id) === requestId) {
-        titleRequestSerialByConversation.delete(targetConversation.id);
+      if (titleRequestSerialByConversation.get(conversation.id) === requestId) {
+        titleRequestSerialByConversation.delete(conversation.id);
       }
     }
   }
 
-  async function requestAssistantReply(targetConversation, targetMessages, options = {}) {
-    const { signal, popLastUserOnAbort = false } = options;
-    const reasoningSteps = [];
-    try {
-      setPendingStatus(targetConversation, 'Planning next steps...');
-      const { ok, content: reply, agentTrace: replyTrace } = await requestChatCompletion(sliceChatHistoryForApi(targetMessages), {
-        useWorkflowContext: true,
-        onProgress: (status) => {
-          const s = String(status || '').trim();
-          if (s && reasoningSteps[reasoningSteps.length - 1] !== s) reasoningSteps.push(s);
-          setPendingStatus(targetConversation, status);
-        },
-        signal,
-      });
+  /**
+   * Run the agent until it answers or waits for the user. On Stop, the conversation is rolled back
+   * to `turn.baseline` messages and `restoreText` goes back into the composer. `prelude` runs first
+   * (applying a proposal) and may raise turn.baseline once its result must survive a Stop.
+   */
+  async function runTurn(conversation, { baseline, restoreText = '', prelude = null }) {
+    const turn = { baseline };
+    const messages = ensureConversationMessages(conversation);
+    sendInFlight = true;
+    activeAssistantAbortController = new AbortController();
+    const { signal } = activeAssistantAbortController;
+    conversation.pending = true;
+    conversation.pendingStatus = 'Reading the workspace...';
+    conversation.streamingText = '';
+    conversation.updatedAt = Date.now();
+    notifyConversationUpdated(conversation);
+    if (isActive(conversation)) renderActiveConversation();
+    updateComposerState();
 
-      targetConversation.pending = false;
-      targetConversation.pendingStatus = '';
-      const assistantMsg = { role: 'assistant', content: reply };
-      if (Array.isArray(replyTrace) && replyTrace.length) {
-        const rs = replyTrace.map((s) => String(s || '').trim()).filter(Boolean);
-        if (rs.length) assistantMsg.reasoningSteps = rs;
-      } else if (reasoningSteps.length) {
-        assistantMsg.reasoningSteps = reasoningSteps.slice();
+    let answered = false;
+    try {
+      const runtime = await buildToolRuntime();
+      if (prelude) {
+        await prelude({
+          runtime,
+          signal,
+          turn,
+          setStatus: (status) => {
+            conversation.pendingStatus = status;
+            scheduleRender(conversation);
+          },
+        });
+        conversation.pendingStatus = 'Reading the workspace...';
       }
-      targetMessages.push(assistantMsg);
-      targetConversation.updatedAt = Date.now();
-      notifyConversationUpdated(targetConversation);
-      if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
-      if (ok) void refreshConversationTitle(targetConversation);
-    } catch (error) {
-      const aborted = Boolean(signal?.aborted || error?.name === 'AbortError');
-      if (aborted) {
-        targetConversation.pending = false;
-        targetConversation.pendingStatus = '';
-        const restore = String(restoreComposerAfterAbortText || '');
-        if (popLastUserOnAbort) {
-          const last = targetMessages[targetMessages.length - 1];
-          if (last?.role === 'user' && String(last.content || '') === restore) {
-            targetMessages.pop();
-            if (targetMessages.length === 0) {
-              targetConversation.title = 'New Agent';
-              targetConversation.generatedTitle = true;
-            }
+      const workspaceSummary = await runtime.buildSummary();
+      const outcome = await runAgentLoop({
+        messages,
+        credentialId,
+        runtime,
+        workspaceSummary,
+        signal,
+        onProgress: ({ status, text }) => {
+          if (status != null && status !== conversation.pendingStatus) {
+            conversation.pendingStatus = status;
           }
-        }
-        targetConversation.unsentDraft = restore;
-        notifyConversationDraftChanged(targetConversation);
-        if (isMounted() && activeConversationId === targetConversation.id) {
-          inputEl.value = restore;
+          if (text != null) conversation.streamingText = text;
+          scheduleRender(conversation);
+        },
+        onMessage: () => {
+          conversation.streamingText = '';
+          conversation.updatedAt = Date.now();
+          notifyConversationUpdated(conversation);
+        },
+      });
+      answered = outcome === 'answered';
+    } catch (error) {
+      if (signal.aborted || error?.name === 'AbortError') {
+        messages.splice(turn.baseline);
+        conversation.unsentDraft = restoreText;
+        notifyConversationDraftChanged(conversation);
+        if (isActive(conversation) && restoreText) {
+          inputEl.value = restoreText;
           if (typeof autoResizeComposer === 'function') autoResizeComposer();
         }
-        targetConversation.updatedAt = Date.now();
-        notifyConversationUpdated(targetConversation);
-        if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
-        return;
+        if (messages.length === 0) {
+          conversation.title = 'New Agent';
+          conversation.generatedTitle = true;
+        }
+      } else {
+        console.error('Agent turn:', error);
+        messages.push({ role: 'assistant', content: `Error: ${error instanceof Error ? error.message : 'Request failed'}` });
       }
-      const reply = `Error: ${error instanceof Error ? error.message : 'Request failed'}`;
-      targetConversation.pending = false;
-      targetConversation.pendingStatus = '';
-      const assistantMsg = { role: 'assistant', content: reply };
-      if (reasoningSteps.length) assistantMsg.reasoningSteps = reasoningSteps.slice();
-      targetMessages.push(assistantMsg);
-      targetConversation.updatedAt = Date.now();
-      notifyConversationUpdated(targetConversation);
-      if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
     } finally {
+      conversation.pending = false;
+      conversation.pendingStatus = '';
+      conversation.streamingText = '';
+      conversation.updatedAt = Date.now();
       sendInFlight = false;
       activeAssistantAbortController = null;
-      restoreComposerAfterAbortText = '';
-      if (isMounted() && activeConversationId === targetConversation.id) renderActiveConversation();
+      notifyConversationUpdated(conversation);
+      if (isActive(conversation)) renderActiveConversation();
       if (isMounted()) updateComposerState();
     }
+    if (answered) void refreshConversationTitle(conversation);
+  }
+
+  async function submitAnswer(answer, restoreText = '') {
+    const conversation = getActiveConversation();
+    const text = String(answer || '').trim();
+    if (!conversation || !text || !credentialId || sendInFlight) return;
+    const messages = ensureConversationMessages(conversation);
+    const question = findPendingInteraction(messages);
+    if (question?.kind !== 'question') return;
+    const baseline = messages.length;
+    answerQuestion(messages, question, text);
+    // The model may have asked several things at once; collect every response before continuing.
+    if (findPendingInteraction(messages)) {
+      conversation.updatedAt = Date.now();
+      notifyConversationUpdated(conversation);
+      renderActiveConversation();
+      updateComposerState();
+      return;
+    }
+    await runTurn(conversation, { baseline, restoreText });
+  }
+
+  /** Apply the open proposal, or reject it (optionally with the user's feedback), then continue. */
+  async function submitProposalDecision({ apply, feedback = '' }, restoreText = '') {
+    const conversation = getActiveConversation();
+    if (!conversation || !credentialId || sendInFlight) return;
+    const messages = ensureConversationMessages(conversation);
+    const proposal = findPendingInteraction(messages);
+    if (proposal?.kind !== 'proposal') return;
+    const baseline = messages.length;
+    if (!apply) {
+      resolveProposal(messages, proposal, { status: 'rejected', ...(feedback ? { feedback } : {}) });
+      if (findPendingInteraction(messages)) {
+        conversation.updatedAt = Date.now();
+        notifyConversationUpdated(conversation);
+        renderActiveConversation();
+        updateComposerState();
+        return;
+      }
+      await runTurn(conversation, { baseline, restoreText });
+      return;
+    }
+    await runTurn(conversation, {
+      baseline,
+      prelude: async ({ runtime, signal, turn, setStatus }) => {
+        setStatus('Applying the proposal...');
+        let result;
+        try {
+          result = await runtime.applyProposal(proposal.request, { signal, onStatus: setStatus });
+        } catch (error) {
+          if (signal.aborted || error?.name === 'AbortError') throw error;
+          result = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+        }
+        resolveProposal(messages, proposal, result);
+        // The canvas has changed (or the failure is recorded); a Stop from here on keeps it.
+        turn.baseline = messages.length;
+        conversation.updatedAt = Date.now();
+        notifyConversationUpdated(conversation);
+      },
+    });
+  }
+
+  /**
+   * Start the open run request, or cancel it (optionally with the user's feedback), then continue.
+   * A Stop while it runs stops the jobs; what finished is recorded and the turn ends there.
+   */
+  async function submitRunDecision({ run, feedback = '' }, restoreText = '') {
+    const conversation = getActiveConversation();
+    if (!conversation || !credentialId || sendInFlight) return;
+    const messages = ensureConversationMessages(conversation);
+    const request = findPendingInteraction(messages);
+    if (request?.kind !== 'run') return;
+    const baseline = messages.length;
+    if (!run) {
+      resolveRunRequest(messages, request, { status: 'cancelled', ...(feedback ? { feedback } : {}) });
+      if (findPendingInteraction(messages)) {
+        conversation.updatedAt = Date.now();
+        notifyConversationUpdated(conversation);
+        renderActiveConversation();
+        updateComposerState();
+        return;
+      }
+      await runTurn(conversation, { baseline, restoreText });
+      return;
+    }
+    await runTurn(conversation, {
+      baseline,
+      prelude: async ({ runtime, signal, turn, setStatus }) => {
+        setStatus('Starting...');
+        let result;
+        try {
+          result = await runtime.executeRunRequest(request.request, { signal, onStatus: setStatus });
+        } catch (error) {
+          result = { status: 'failed', error: error instanceof Error ? error.message : String(error), results: [] };
+        }
+        resolveRunRequest(messages, request, result);
+        // Jobs have run (or were stopped); a Stop from here on keeps that record.
+        turn.baseline = messages.length;
+        conversation.updatedAt = Date.now();
+        notifyConversationUpdated(conversation);
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      },
+    });
   }
 
   async function submitEditedMessage() {
     const text = String(editingDraft || '').trim();
-    const activeConversation = getActiveConversation();
-    if (!text || !credentialId || sendInFlight || !activeConversation || editingMessageIndex === -1) return;
-
-    const targetConversation = activeConversation;
-    const targetMessages = ensureConversationMessages(targetConversation);
+    const conversation = getActiveConversation();
+    if (!text || !credentialId || sendInFlight || !conversation || editingMessageIndex === -1) return;
+    const messages = ensureConversationMessages(conversation);
     const messageIndex = editingMessageIndex;
-    const targetMessage = targetMessages[messageIndex];
+    const targetMessage = messages[messageIndex];
     if (!targetMessage || targetMessage.role !== 'user') return;
-
-    sendInFlight = true;
-    restoreComposerAfterAbortText = '';
-    activeAssistantAbortController = new AbortController();
     editingMessageIndex = -1;
     editingDraft = '';
     targetMessage.content = text;
-    targetMessages.splice(messageIndex + 1);
-    targetConversation.pending = true;
-    targetConversation.pendingStatus = 'Planning next steps...';
-    targetConversation.updatedAt = Date.now();
+    messages.splice(messageIndex + 1);
     if (messageIndex === 0) {
-      targetConversation.title = deriveConversationTitle(text);
-      targetConversation.generatedTitle = true;
+      conversation.title = deriveConversationTitle(text);
+      conversation.generatedTitle = true;
     }
-    notifyConversationUpdated(targetConversation);
-    if (activeConversationId === targetConversation.id) renderActiveConversation();
-    updateComposerState();
+    await runTurn(conversation, { baseline: messageIndex + 1, restoreText: '' });
+  }
 
-    await requestAssistantReply(targetConversation, targetMessages, {
-      signal: activeAssistantAbortController.signal,
-      popLastUserOnAbort: false,
-    });
+  async function sendMessage() {
+    const text = String(inputEl.value || '').trim();
+    const conversation = getActiveConversation();
+    if (!text || !credentialId || sendInFlight || !conversation || editingMessageIndex !== -1) return;
+    const messages = ensureConversationMessages(conversation);
+    conversation.unsentDraft = '';
+    notifyConversationDraftChanged(conversation);
+    inputEl.value = '';
+    if (typeof autoResizeComposer === 'function') autoResizeComposer();
+
+    // A typed reply to an open question is its answer; to an open proposal, a request for changes.
+    const pending = findPendingInteraction(messages);
+    if (pending?.kind === 'question') {
+      await submitAnswer(text, text);
+      return;
+    }
+    if (pending?.kind === 'proposal') {
+      await submitProposalDecision({ apply: false, feedback: text }, text);
+      return;
+    }
+    if (pending?.kind === 'run') {
+      await submitRunDecision({ run: false, feedback: text }, text);
+      return;
+    }
+    if (messages.length === 0) {
+      conversation.title = deriveConversationTitle(text);
+      conversation.generatedTitle = true;
+    }
+    const baseline = messages.length;
+    messages.push({ role: 'user', content: text });
+    await runTurn(conversation, { baseline, restoreText: text });
   }
 
   async function initializeCredential() {
     try {
       const credential = await loadAgentCredential();
       if (!isMounted()) return;
-      if (!credential) {
-        credentialId = '';
-      } else {
-        credentialId = String(credential.id || '').trim();
-      }
+      credentialId = credential ? String(credential.id || '').trim() : '';
+      credentialWarning = credential?.agent_check_ok === false
+        ? `${credential.model} cannot call tools, so the Agent will not work well with it. Choose another model in Settings → Agent defaults.`
+        : '';
     } catch (error) {
       credentialId = '';
       console.error('Load Agent model:', error);
@@ -1398,45 +951,11 @@ function shouldPreventRepeatedExecution(skillName) {
     updateComposerState();
   }
 
-  async function sendMessage() {
-    const text = String(inputEl.value || '').trim();
-    const activeConversation = getActiveConversation();
-    if (!text || !credentialId || sendInFlight || !activeConversation || editingMessageIndex !== -1) return;
-
-    const targetConversation = activeConversation;
-    const targetMessages = ensureConversationMessages(targetConversation);
-    restoreComposerAfterAbortText = text;
-    activeAssistantAbortController = new AbortController();
-    sendInFlight = true;
-    targetConversation.unsentDraft = '';
-    notifyConversationDraftChanged(targetConversation);
-    inputEl.value = '';
-    if (typeof autoResizeComposer === 'function') autoResizeComposer();
-
-    if (targetMessages.length === 0) {
-      targetConversation.title = deriveConversationTitle(text);
-      targetConversation.generatedTitle = true;
-    }
-
-    targetMessages.push({ role: 'user', content: text });
-    targetConversation.updatedAt = Date.now();
-    targetConversation.pending = true;
-    targetConversation.pendingStatus = 'Planning next steps...';
-    notifyConversationUpdated(targetConversation);
-    if (activeConversationId === targetConversation.id) renderActiveConversation();
-    updateComposerState();
-
-    await requestAssistantReply(targetConversation, targetMessages, {
-      signal: activeAssistantAbortController.signal,
-      popLastUserOnAbort: true,
-    });
-  }
-
   function handleInput() {
-    const activeConversation = getActiveConversation();
-    if (activeConversation) {
-      activeConversation.unsentDraft = String(inputEl.value || '');
-      notifyConversationDraftChanged(activeConversation);
+    const conversation = getActiveConversation();
+    if (conversation) {
+      conversation.unsentDraft = String(inputEl.value || '');
+      notifyConversationDraftChanged(conversation);
     }
     if (typeof autoResizeComposer === 'function') autoResizeComposer();
     updateComposerState();
@@ -1474,8 +993,8 @@ function shouldPreventRepeatedExecution(skillName) {
     setConversation,
     stopAssistant,
     destroy() {
-      // Do not abort in-flight agent requests: closing the window should mirror pre-Stop
-      // behavior (run continues; state is saved). Abort is only for explicit stopAssistant().
+      // Do not abort in-flight agent requests: closing the window lets the turn finish and save.
+      // Abort is only for an explicit stopAssistant().
       inputEl.removeEventListener('input', handleInput);
       inputEl.removeEventListener('keydown', handleKeyDown);
       sendButtonEl.removeEventListener('click', handleSendClick);

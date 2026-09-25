@@ -12,6 +12,8 @@ import uuid
 from typing import Any, List, Optional
 from urllib.parse import unquote
 
+import httpx
+
 # Ensure UTF-8 for subprocess / CLI starts (Electron also sets PYTHONUTF8 when spawning).
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -39,6 +41,7 @@ _SEP = "=" * 60      # unified separator for LLM prompt/output logs
 
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from run_output_schema import (
     sanitize_field_name as _sanitize_field_name,
@@ -48,9 +51,23 @@ from run_output_schema import (
     run_structured_output_is_empty as _run_structured_output_is_empty,
 )
 
-from agent.chat.agent_chat import build_agent_messages, format_agent_messages_for_log
-from agent.prompt.agent_plan_prompt import build_agent_plan_instruction_prefix
-from llm import chat as llm_chat, run_structured as llm_run_structured
+from agent.source_search import (
+    SourceSearchError,
+    describe_sources as describe_agent_sources,
+    search_source as search_agent_source,
+)
+from agent.system_prompt import (
+    build_system_prompt as build_agent_system_prompt,
+    list_guides as list_agent_guides,
+    read_guide as read_agent_guide,
+)
+from llm import (
+    chat as llm_chat,
+    is_tools_unsupported_error,
+    probe_tool_calling as llm_probe_tool_calling,
+    run_structured as llm_run_structured,
+    stream_chat_with_tools as llm_stream_chat_with_tools,
+)
 from pipeline_export import PipelineExportError, build_pipeline_archive
 from provider_detect import detect_provider, verify_credential
 
@@ -272,6 +289,10 @@ class CredentialResponse(BaseModel):
     provider: str = ""
     last_check_ok: bool | None = None
     last_check_error: str | None = None
+    # Whether this model drives the Agent's tools, from POST /api/credentials/{id}/agent-check:
+    # True / False, or None when never checked or the check could not run.
+    agent_check_ok: bool | None = None
+    agent_check_detail: str | None = None
     api_key_masked: str
 
 
@@ -624,10 +645,77 @@ def list_credentials():
             provider=_credential_provider(item),
             last_check_ok=item.get("last_check_ok"),
             last_check_error=item.get("last_check_error"),
+            agent_check_ok=_current_agent_check(item).get("ok"),
+            agent_check_detail=_current_agent_check(item).get("detail"),
             api_key_masked=_mask_key(item["api_key"]),
         )
         for item in items
     ]
+
+
+def _current_agent_check(item: dict) -> dict:
+    """The stored agent check, if it was made for the credential's current model."""
+    check = item.get("agent_check") or {}
+    return check if check.get("model") == _credential_model(item) else {}
+
+
+def _catalog_tools_hint(item: dict, catalog: dict[str, dict]) -> bool | None:
+    """What the model registries say about tool calling: a hint only, the agent check is authoritative."""
+    model = _credential_model(item)
+    if _credential_provider(item) == "openrouter":
+        entry = catalog.get(model.removeprefix("openrouter/"))
+        return entry.get("tools") if entry else None
+    if _credential_base_url(item) and _credential_provider(item) not in DEFAULT_BASE_URLS_BY_PROVIDER:
+        return None  # a custom endpoint: registries know nothing about what is behind it
+    import litellm
+
+    from llm import _resolve_model_name
+
+    resolved = _resolve_model_name(_credential_provider(item), model)
+    try:
+        litellm.get_model_info(resolved)
+    except Exception:
+        return None  # not in LiteLLM's registry, so unknown rather than unsupported
+    try:
+        return bool(litellm.supports_function_calling(model=resolved))
+    except Exception:
+        return None
+
+
+@app.get("/api/credentials/agent-hints")
+def credential_agent_hints():
+    """{credential_id: True | False | None}: registry hints on tool calling for the Agent model picker."""
+    from oauth_openrouter import get_catalog
+
+    items = _load_credentials()
+    catalog: dict[str, dict] = {}
+    if any(_credential_provider(item) == "openrouter" for item in items):
+        try:
+            catalog = {m["id"]: m for m in get_catalog()}
+        except Exception:
+            catalog = {}
+    return {item["id"]: _catalog_tools_hint(item, catalog) for item in items}
+
+
+@app.post("/api/credentials/{credential_id}/agent-check")
+def agent_check_credential(credential_id: str):
+    """Check for real whether the credential's model calls tools (see llm.probe_tool_calling) and remember it."""
+    items = _load_credentials()
+    cred = next((item for item in items if item.get("id") == credential_id), None)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    if not cred.get("api_key"):
+        raise HTTPException(status_code=400, detail="Missing API key")
+    result = llm_probe_tool_calling(
+        provider=_credential_provider(cred),
+        model=_credential_model(cred),
+        api_key=cred["api_key"],
+        base_url=_credential_base_url(cred),
+    )
+    if result["ok"] is not None:
+        cred["agent_check"] = {**result, "model": _credential_model(cred), "checked_at": time.time()}
+        _save_credentials(items)
+    return result
 
 
 @app.post("/api/credentials/detect")
@@ -795,79 +883,6 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1, description="Conversation history; last message should be user")
 
 
-class AgentChatRequest(ChatRequest):
-    workflow_snapshot: dict[str, Any] | None = Field(
-        default=None,
-        description="Agent-friendly snapshot of the current workflow canvas",
-    )
-    node_inspection: dict[str, Any] | None = Field(
-        default=None,
-        description="Detailed context for one workflow node",
-    )
-    observations: list["AgentObservation"] = Field(
-        default_factory=list,
-        description="Structured observations gathered from previous skill calls",
-    )
-    agent_trace: list[str] = Field(
-        default_factory=list,
-        description="Ordered trace lines describing plan, skill execution, and answer stages",
-    )
-
-
-class AgentSkillDescriptor(BaseModel):
-    name: str = Field(..., description="Skill name")
-    description: str = Field(default="", description="What the skill does")
-    input_schema: dict[str, Any] = Field(default_factory=dict, description="Lightweight argument schema for the skill")
-
-
-class AgentPlanRequest(ChatRequest):
-    workflow_snapshot: dict[str, Any] | None = Field(
-        default=None,
-        description="Agent-friendly snapshot of the current workflow canvas",
-    )
-    observations: list["AgentObservation"] = Field(
-        default_factory=list,
-        description="Structured observations gathered from previous skill calls",
-    )
-    available_skills: list[AgentSkillDescriptor] = Field(
-        default_factory=list,
-        description="All skills that the planner may choose from",
-    )
-    loop_signals: list[str] = Field(
-        default_factory=list,
-        description="Warnings about repeated calls, no-progress patterns, or runtime guardrails",
-    )
-    round_index: int = Field(default=1, description="Current planning round number")
-
-
-class AgentObservation(BaseModel):
-    skill_name: str = Field(..., description="Executed skill name")
-    args: dict[str, Any] = Field(default_factory=dict, description="Arguments used for the skill call")
-    ok: bool = Field(default=True, description="Whether the skill execution succeeded")
-    summary: str = Field(default="", description="Short summary of the observation")
-    result: Any | None = Field(default=None, description="Raw structured result returned by the skill")
-
-
-class AgentSkillCall(BaseModel):
-    skill_name: str = Field(..., description="Chosen skill name")
-    args: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Arguments for the selected skill, matching the skill input schema",
-    )
-    reason: str = Field(..., description="Why this skill was chosen")
-
-
-class AgentPlanResponse(BaseModel):
-    done: bool = Field(..., description="Whether the agent has enough evidence to answer now")
-    plan_summary: str = Field(..., description="Short summary of the planner's current intent")
-    expected_progress: str = Field(..., description="What new information the planner expects to learn")
-    skill_calls: list[AgentSkillCall] = Field(..., description="Ordered list of skills to run before answering")
-
-
-AgentChatRequest.model_rebuild()
-AgentPlanRequest.model_rebuild()
-
-
 def _resolve_chat_credential(credential_id: str) -> tuple[dict, int]:
     items = _load_credentials()
     cred = None
@@ -879,60 +894,6 @@ def _resolve_chat_credential(credential_id: str) -> tuple[dict, int]:
         raise HTTPException(status_code=404, detail="Credential not found")
     max_tokens = _load_settings().get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     return cred, max_tokens
-
-
-def _build_agent_plan_prompt(
-    messages: list[dict[str, str]],
-    workflow_snapshot: dict[str, Any] | None,
-    available_skills: list[AgentSkillDescriptor],
-    observations: list[AgentObservation],
-    loop_signals: list[str],
-    round_index: int,
-) -> str:
-    serialized_skills = [
-        {
-            "name": skill.name,
-            "description": skill.description,
-            "input_schema": skill.input_schema,
-        }
-        for skill in available_skills
-    ]
-    serialized_observations = [
-        {
-            "skill_name": observation.skill_name,
-            "args": observation.args,
-            "ok": observation.ok,
-            "summary": observation.summary,
-            "result": observation.result,
-        }
-        for observation in observations
-    ]
-    return (
-        build_agent_plan_instruction_prefix(round_index=round_index)
-        + "Available skills JSON:\n"
-        + json.dumps(serialized_skills, ensure_ascii=False, indent=2)
-        + "\n\nObservation history JSON:\n"
-        + json.dumps(serialized_observations, ensure_ascii=False, indent=2)
-        + "\n\nLoop signals JSON:\n"
-        + json.dumps(loop_signals or [], ensure_ascii=False, indent=2)
-        + "\n\nWorkflow snapshot JSON:\n"
-        + json.dumps(workflow_snapshot or {}, ensure_ascii=False, indent=2)
-        + "\n\nConversation:\n"
-        + format_agent_messages_for_log(messages)
-    )
-
-
-def _summarize_messages_for_log(messages: list[dict[str, Any]]) -> str:
-    if not messages:
-        return "(no messages)"
-    parts: list[str] = []
-    for idx, message in enumerate(messages, start=1):
-        role = str(message.get("role") or "user").upper()
-        content = re.sub(r"\s+", " ", str(message.get("content") or "")).strip()
-        if len(content) > 160:
-            content = content[:157] + "..."
-        parts.append(f"[{idx}] {role}: {content or '(empty)'}")
-    return "\n".join(parts)
 
 
 @app.post("/api/chat")
@@ -960,129 +921,116 @@ def chat(body: ChatRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/api/agent/plan", response_model=AgentPlanResponse)
-def agent_plan(body: AgentPlanRequest):
-    """Plan which agent skills should run before final answering."""
-    if not body.available_skills:
-        return AgentPlanResponse(done=True, plan_summary="No skills available", skill_calls=[])
+# ---------- Agent ----------
+# The renderer owns the agent loop and executes its tools against the live canvas; this endpoint only
+# streams one model response at a time (text deltas, then any tool calls) as server-sent events.
+AGENT_MAX_TOKENS = 8192
+
+
+class AgentToolCall(BaseModel):
+    id: str
+    type: str = "function"
+    function: dict[str, Any]
+
+
+class AgentMessage(BaseModel):
+    role: str = Field(..., description="user | assistant | tool")
+    content: str | None = None
+    tool_calls: list[AgentToolCall] | None = None
+    tool_call_id: str | None = None
+
+
+class AgentTurnRequest(BaseModel):
+    credential_id: str
+    messages: list[AgentMessage] = Field(..., min_length=1)
+    tools: list[dict[str, Any]] = Field(default_factory=list, description="OpenAI-format function tools")
+    workspace_summary: str = Field(default="", description="Workspace summary built by the renderer")
+
+
+def _sse(event: dict[str, Any]) -> str:
+    return "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+
+
+@app.post("/api/agent/turn")
+def agent_turn(body: AgentTurnRequest):
+    """Stream one assistant response for the Agent window's tool-calling conversation."""
     cred, max_tokens = _resolve_chat_credential(body.credential_id)
-    model = _credential_model(cred)
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
-    provider = _credential_provider(cred)
-    base_url = _credential_base_url(cred)
-    prompt = _build_agent_plan_prompt(
-        [{"role": m.role, "content": m.content or ""} for m in body.messages],
-        workflow_snapshot=body.workflow_snapshot,
-        available_skills=body.available_skills,
-        observations=body.observations,
-        loop_signals=body.loop_signals,
-        round_index=body.round_index,
+    messages = [{"role": "system", "content": build_agent_system_prompt(body.workspace_summary)}]
+    messages += [m.model_dump(exclude_none=True) for m in body.messages]
+
+    def events():
+        try:
+            for event in llm_stream_chat_with_tools(
+                provider=_credential_provider(cred),
+                model=_credential_model(cred),
+                api_key=api_key,
+                base_url=_credential_base_url(cred),
+                messages=messages,
+                tools=body.tools,
+                max_tokens=min(max_tokens, AGENT_MAX_TOKENS),
+            ):
+                if event["type"] == "tool_calls":
+                    names = ", ".join(call["name"] for call in event["tool_calls"])
+                    _safe_print(f"[Agent] tool calls: {names}", flush=True)
+                yield _sse(event)
+        except Exception as e:
+            _safe_print(_HL + "[Agent] turn error: " + _R + str(e), flush=True)
+            message = (
+                f"The Agent model ({_credential_model(cred)}) does not support tool calling, which the Agent needs. "
+                "Choose another Agent model in Settings → Agent defaults."
+                if is_tools_unsupported_error(e)
+                else str(e)
+            )
+            yield _sse({"type": "error", "message": message})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-    try:
-        _safe_print(_HL + f"[Agent] PLAN round {max(1, int(body.round_index or 1))} start" + _R)
-        _safe_print(
-            f"[Agent] Available skills: {', '.join(skill.name for skill in body.available_skills) or '(none)'}",
-            flush=True,
-        )
-        _safe_print(
-            f"[Agent] Observations so far: {len(body.observations)} | Loop signals: {len(body.loop_signals)}",
-            flush=True,
-        )
-        result, used_fallback, debug = llm_run_structured(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            prompt=prompt,
-            response_model=AgentPlanResponse,
-            max_tokens=max_tokens,
-            return_debug=True,
-        )
-        _safe_print(_HL + "[Agent] PLAN raw output" + _R)
-        if isinstance(debug, dict) and debug.get("path"):
-            _safe_print(
-                f"[Agent] PLAN transport={debug.get('path')} fallback={'yes' if used_fallback else 'no'}",
-                flush=True,
-            )
-        if isinstance(debug, dict) and debug.get("raw_response") is not None:
-            _safe_print(json.dumps(debug.get("raw_response"), ensure_ascii=False, indent=2, default=str), flush=True)
-        elif isinstance(debug, dict) and debug.get("raw_text"):
-            _safe_print(str(debug.get("raw_text")), flush=True)
-        else:
-            _safe_print("[Agent] PLAN raw output unavailable", flush=True)
-        plan = AgentPlanResponse.model_validate(result)
-        if plan.skill_calls:
-            _safe_print(
-                f"[Agent] PLAN round {max(1, int(body.round_index or 1))} result: done={plan.done} "
-                + ", ".join(
-                    f"{call.skill_name}("
-                    + json.dumps(
-                        call.args if isinstance(call.args, dict) else {},
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    )
-                    + ")"
-                    for call in plan.skill_calls
-                ),
-                flush=True,
-            )
-        else:
-            _safe_print(
-                f"[Agent] PLAN round {max(1, int(body.round_index or 1))} result: done={plan.done}, no skill selected",
-                flush=True,
-            )
-        return plan
-    except Exception as e:
-        _safe_print(_HL + f"[Agent] PLAN round {max(1, int(body.round_index or 1))} error: " + _R + str(e), flush=True)
-        raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/api/agent/chat")
-def agent_chat(body: AgentChatRequest):
-    """Agent chat using the given credential, enriched with a workflow snapshot."""
-    cred, max_tokens = _resolve_chat_credential(body.credential_id)
-    model = _credential_model(cred)
-    api_key = cred.get("api_key", "")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing API key")
-    provider = _credential_provider(cred)
-    base_url = _credential_base_url(cred)
-    msgs = build_agent_messages(
-        [{"role": m.role, "content": m.content or ""} for m in body.messages],
-        workflow_snapshot=body.workflow_snapshot,
-        observations=[observation.model_dump() for observation in body.observations],
-        node_inspection=body.node_inspection,
-    )
+class AgentSourceSearchRequest(BaseModel):
+    source: str
+    query: str
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+@app.get("/api/agent/sources")
+def agent_sources():
+    """External sources the Agent can import from: id kind, importable fields, keyword search support."""
+    return describe_agent_sources()
+
+
+@app.post("/api/agent/search")
+def agent_search(body: AgentSourceSearchRequest):
+    """Keyword search of PubMed / ClinicalTrials.gov / ChEMBL; returns matching ids and a few samples."""
+    settings = _load_settings()
     try:
-        _safe_print(_HL + "[Agent] ROUND TRACE" + _R)
-        if body.agent_trace:
-            for line in body.agent_trace:
-                _safe_print(f"[Agent] {line}")
-        else:
-            _safe_print("[Agent] No execution trace received from client")
-        _safe_print(
-            f"[Agent] FINAL ANSWER start: workflow_snapshot={'yes' if body.workflow_snapshot else 'no'}, "
-            f"observations={len(body.observations)}, "
-            f"legacy_node_inspection={'yes' if body.node_inspection else 'no'}",
-            flush=True,
+        return search_agent_source(
+            body.source,
+            body.query,
+            body.limit,
+            ncbi_api_key=(settings.get("ncbi_api_key") or "").strip(),
+            ncbi_email=(settings.get("ncbi_email") or "").strip(),
         )
-        _safe_print(_HL + "[Agent] FINAL ANSWER message summary" + _R)
-        _safe_print(_summarize_messages_for_log(msgs), flush=True)
-        content = llm_chat(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            messages=msgs,
-            max_tokens=max_tokens,
-        )
-        _safe_print(_HL + "[Agent] FINAL ANSWER complete" + _R, flush=True)
-        return {"content": content}
-    except Exception as e:
-        _safe_print(_HL + "[Agent] FINAL ANSWER error: " + _R + str(e), flush=True)
+    except SourceSearchError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"The source did not respond: {e}")
+
+
+@app.get("/api/agent/guides/{topic}")
+def agent_guide(topic: str):
+    """One Agent guide (backend/agent/guides/<topic>.md), read on demand through the read_guide tool."""
+    text = read_agent_guide(topic)
+    if text is None:
+        raise HTTPException(status_code=404, detail=f"Unknown guide. Available: {', '.join(list_agent_guides())}")
+    return {"topic": topic, "content": text}
+
 
 
 @app.delete("/api/credentials/{credential_id}")

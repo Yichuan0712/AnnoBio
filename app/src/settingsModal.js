@@ -878,6 +878,10 @@ export function openSettingsModal() {
                               <select id="settings-default-agent-credential" class="credentials-select dataset-meta-input" aria-label="Default model for the Agent window">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
+                              <div class="settings-agent-model-status" id="settings-agent-model-status" aria-live="polite">
+                                <span class="settings-agent-model-status__text"></span>
+                                <button type="button" class="btn btn-secondary settings-agent-model-status__check" hidden>Check again</button>
+                              </div>
                             </div>
                           </div>
                       </div>
@@ -902,6 +906,13 @@ export function openSettingsModal() {
   const runCredSelect = overlay.querySelector('#settings-default-run-credential');
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
   const agentCredSelect = overlay.querySelector('#settings-default-agent-credential');
+  const agentStatusEl = overlay.querySelector('#settings-agent-model-status');
+  const agentStatusText = agentStatusEl?.querySelector('.settings-agent-model-status__text');
+  const agentCheckBtn = agentStatusEl?.querySelector('.settings-agent-model-status__check');
+  /** Credentials as last loaded, and registry hints on tool calling (/api/credentials/agent-hints). */
+  let agentCredentials = [];
+  let agentHints = {};
+  const agentChecksInFlight = new Set();
   const reviewMethodDefaultSelect = overlay.querySelector('#settings-default-review-method');
   const methodSpecificSettingsBlocks = overlay.querySelectorAll('.settings-review-method-specific[data-method-settings]');
   const gepaMaxIterationsInp = overlay.querySelector('#settings-gepa-max-iterations');
@@ -1014,14 +1025,112 @@ export function openSettingsModal() {
     const optNone = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`;
     runCredSelect.innerHTML = optNone + optHtml;
     reviewCredSelect.innerHTML = optNone + optHtml;
-    if (agentCredSelect) agentCredSelect.innerHTML = optNone + optHtml;
+    agentCredentials = credentials;
+    renderAgentCredentialOptions();
   }
+
+  /*
+   * The Agent needs a model that calls tools. Which model a user brings is unknown, so the picker
+   * shows what a live check found (POST /api/credentials/{id}/agent-check, run when a model is
+   * chosen), and until then only what the provider's model registry suggests.
+   */
+  function agentModelLabel(c) {
+    const name = c.model || c.llm || c.id;
+    if (c.agent_check_ok === true) return `${name} — works with the Agent`;
+    if (c.agent_check_ok === false) return `${name} — cannot call tools`;
+    if (agentHints[c.id] === false) return `${name} — tool calling unlikely`;
+    return name;
+  }
+
+  function renderAgentCredentialOptions() {
+    if (!agentCredSelect) return;
+    const selected = agentCredSelect.value;
+    agentCredSelect.innerHTML = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`
+      + agentCredentials.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(agentModelLabel(c))}</option>`).join('');
+    agentCredSelect.value = selected;
+    renderAgentModelStatus();
+  }
+
+  function renderAgentModelStatus(checkError = '') {
+    if (!agentStatusEl) return;
+    const c = agentCredentials.find((item) => item.id === agentCredSelect.value);
+    let text;
+    let state = 'neutral';
+    if (!c) {
+      text = 'Without a default, the Agent uses the default Review model.';
+    } else if (agentChecksInFlight.has(c.id)) {
+      text = 'Checking whether this model can call tools...';
+    } else if (checkError) {
+      text = `Could not check this model: ${checkError}`;
+      state = 'warning';
+    } else if (c.agent_check_ok === true) {
+      text = 'Works with the Agent: it called the test tool.';
+      state = 'ok';
+    } else if (c.agent_check_ok === false) {
+      text = `Cannot drive the Agent: ${c.agent_check_detail || 'it does not call tools.'}`;
+      state = 'error';
+    } else {
+      const hint = agentHints[c.id];
+      text = `Not checked yet. ${hint === true ? 'Its provider lists tool calling for it.' : hint === false ? 'Its provider does not list tool calling for it.' : 'There is no published information on its tool calling.'}`;
+    }
+    agentStatusEl.dataset.state = state;
+    agentStatusText.textContent = text;
+    agentCheckBtn.hidden = !c || agentChecksInFlight.has(c.id);
+    agentCheckBtn.textContent = c?.agent_check_ok == null && !checkError ? 'Check' : 'Check again';
+  }
+
+  async function runAgentModelCheck(credentialId) {
+    if (!credentialId || agentChecksInFlight.has(credentialId)) return;
+    agentChecksInFlight.add(credentialId);
+    renderAgentModelStatus();
+    let checkError = '';
+    try {
+      const res = await fetch(`${API_BASE}/api/credentials/${encodeURIComponent(credentialId)}/agent-check`, { method: 'POST' });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) checkError = result?.detail || res.statusText;
+      else if (result.ok == null) checkError = result.detail || 'unknown error';
+      else {
+        const c = agentCredentials.find((item) => item.id === credentialId);
+        if (c) {
+          c.agent_check_ok = result.ok;
+          c.agent_check_detail = result.detail;
+        }
+      }
+    } catch (e) {
+      checkError = e instanceof Error ? e.message : String(e);
+    } finally {
+      agentChecksInFlight.delete(credentialId);
+    }
+    renderAgentCredentialOptions();
+    if (agentCredSelect.value === credentialId) renderAgentModelStatus(checkError);
+  }
+
+  async function loadAgentHints() {
+    try {
+      const res = await fetch(`${API_BASE}/api/credentials/agent-hints`);
+      agentHints = res.ok ? await res.json() : {};
+    } catch (_) {
+      agentHints = {};
+    }
+    renderAgentCredentialOptions();
+  }
+
+  agentCredSelect?.addEventListener('change', () => {
+    const c = agentCredentials.find((item) => item.id === agentCredSelect.value);
+    renderAgentModelStatus();
+    // Choosing a model checks it once (one small model call); a known result is not re-checked.
+    if (c && c.agent_check_ok == null) void runAgentModelCheck(c.id);
+  });
+  agentCheckBtn?.addEventListener('click', () => { void runAgentModelCheck(agentCredSelect.value); });
 
   function applySettings(settings) {
     if (!settings) return;
     runCredSelect.value = settings.default_run_credential_id || '';
     reviewCredSelect.value = settings.default_review_credential_id || '';
-    if (agentCredSelect) agentCredSelect.value = settings.default_agent_credential_id || '';
+    if (agentCredSelect) {
+      agentCredSelect.value = settings.default_agent_credential_id || '';
+      renderAgentModelStatus();
+    }
     if (reviewMethodDefaultSelect) {
       if (settings.default_review_method) {
         reviewMethodDefaultSelect.value = settings.default_review_method;
@@ -1077,6 +1186,7 @@ export function openSettingsModal() {
         runCredSelect.value = ids.run;
         reviewCredSelect.value = ids.review;
         if (agentCredSelect) agentCredSelect.value = ids.agent;
+        void loadAgentHints();
       },
     });
     const liteLlmAdd = wireCredentialsAddForm(addRoot, credRoot);
@@ -1097,6 +1207,7 @@ export function openSettingsModal() {
     populateCredentialSelects(credentials);
     populateReviewMethodSelect(reviewMethods);
     applySettings(settings || MODEL_SETTINGS_DEFAULTS);
+    void loadAgentHints();
   }
 
   function getPatchFromForm() {
