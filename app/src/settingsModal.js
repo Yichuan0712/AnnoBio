@@ -5,7 +5,7 @@
 
 import { showAlert, showConfirm } from './alertModal.js';
 import { selectPlaceholderLabel } from './displayTextNormalize.js';
-import { BACKEND_API_BASE } from './backendConfig.js';
+import { BACKEND_API_BASE, waitForBackend } from './backendConfig.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -120,7 +120,17 @@ async function fetchCredentialsStrict() {
 
 async function loadAndRenderCredentials(scope) {
   try {
-    const list = await fetchCredentialsStrict();
+    let list;
+    try {
+      list = await fetchCredentialsStrict();
+    } catch (error) {
+      // A network error right after launch usually means the backend is still starting.
+      if (!(error instanceof TypeError)) throw error;
+      const tbody = getCredTbody(scope);
+      if (tbody) tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="4">Waiting for the backend to start...</td></tr>';
+      if (!(await waitForBackend())) throw error;
+      list = await fetchCredentialsStrict();
+    }
     renderCredentialsTable(scope, list);
     bindCredKeyCellClick(scope);
     bindCredTestButtons(scope);

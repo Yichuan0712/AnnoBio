@@ -69,10 +69,13 @@ VITE_DEV_SERVER_ORIGINS = [
     f"http://127.0.0.1:{VITE_DEV_SERVER_PORT}",
 ]
 
-# Allow CORS for the Electron renderer in dev mode.
+# Allow CORS for the Electron renderer in dev mode. Vite moves to the next free port (5174, ...) when
+# 5173 is taken, so any local dev-server port is accepted, not just the configured one; without this
+# every renderer request is blocked and the app shows "Unable to load" with a healthy backend.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=VITE_DEV_SERVER_ORIGINS,
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
