@@ -13,6 +13,7 @@ import { compileRows } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { cloneCell, displayCell } from './datasetContent.js';
+import { deriveOutputFields } from './runResultsExport.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
@@ -89,26 +90,8 @@ function filterResults(results, outputFields, searchQuery, inputColsCollapsed = 
   });
 }
 
-function _sanitizeFieldName(key) {
-  const s = String(key ?? '').trim().replace(/[^\w]/g, '_');
-  return s || 'field';
-}
-
-export function deriveOutputFields(results, schemaFields) {
-  if (!Array.isArray(results) || results.length === 0) return [];
-  const first = results.find((r) => r.output && typeof r.output === 'object');
-  if (!first) return [];
-  const schema = Array.isArray(schemaFields) ? schemaFields : [];
-  const schemaBySanitized = new Map();
-  schema.forEach((f) => {
-    const k = (f.key || '').trim();
-    if (k) schemaBySanitized.set(_sanitizeFieldName(k), k);
-  });
-  return Object.keys(first.output).map((outputKey) => ({
-    key: outputKey,
-    display: schemaBySanitized.get(outputKey) || outputKey,
-  }));
-}
+// Shared with the canvas's "Save to workspace" and the Agent; re-exported for existing importers.
+export { deriveOutputFields };
 
 export function openRunDetailModal({
   node,

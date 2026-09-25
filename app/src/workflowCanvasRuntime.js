@@ -14,7 +14,8 @@ import { isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import { compileRows } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
-import { cloneCell, imageCell } from './datasetContent.js';
+import { imageCell } from './datasetContent.js';
+import { buildRunResultsTable } from './runResultsExport.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {
   const {
@@ -736,9 +737,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         };
       }
     }
-    results = runContent ? embedInputRow(results, runContent) : results;
-    results = markEmptyOutputAsError(results);
-
     let schemaFields = [];
     try {
       const raw = promptNode?.dataset?.promptOutputFormat || '[]';
@@ -747,46 +745,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     } catch (_) {
       schemaFields = [];
     }
-    let outputFields = deriveOutputFields(results, schemaFields);
-    if (outputFields.length === 0 && results.some((item) => item && item.error)) {
-      outputFields = [{ key: 'error', display: 'Error' }];
-    }
-    if (outputFields.length === 0 && results.length > 0) {
-      const first = results.find((item) => item?.output && typeof item.output === 'object' && Object.keys(item.output).length > 0);
-      if (first) outputFields = Object.keys(first.output).map((key) => ({ key, display: key }));
-    }
-    if (outputFields.length === 0 && schemaFields.length > 0) {
-      outputFields = schemaFields
-        .map((field) => ({
-          key: String(field?.key || '').trim(),
-          display: String(field?.display || field?.key || '').trim() || 'field',
-        }))
-        .filter((field) => field.key);
-    }
-
-    const inputHeaders = Array.isArray(runContent?.headers) ? runContent.headers.slice() : [];
-    const inputHeaderLabels = inputHeaders.map((header) => `Input: ${String(header ?? '').trim() || ' '}`);
-    const exportHeaders = [
-      'Input: #',
-      ...inputHeaderLabels,
-      formatResultOutputColumnLabel('#'),
-      ...outputFields.map((field) => formatResultOutputColumnLabel((field?.display || field?.key || '').trim() || 'output')),
-    ];
-    const exportRows = results.map((result) => {
-      const outputPart = result?.error
-        ? outputFields.map(() => String(result.error))
-        : outputFields.map((field) => {
-          const value = result?.output?.[field.key];
-          if (value == null) return '—';
-          if (Array.isArray(value)) return value.join(', ');
-          return String(value);
-        });
-      const inputRow = Array.isArray(result?.input_row) ? result.input_row : [];
-      const inputPart = inputHeaders.map((_, index) => (inputRow[index] == null ? '—' : cloneCell(inputRow[index])));
-      const inputNum = String((result?.input_row_index ?? 0) + 1);
-      const outputNum = String((result?.row_index ?? 0) + 1);
-      return [inputNum, ...inputPart, outputNum, ...outputPart];
-    });
+    const { headers: exportHeaders, rows: exportRows, columnTypes } = buildRunResultsTable({ results, runContent, schemaFields });
 
     const runCompleted = runNode.dataset.runCompleted === '1';
     const defaultNotes = `Exported from ${promptName} ${runName}.\n${runCompleted ? 'Run completed.' : 'Run incomplete.'}`;
@@ -794,8 +753,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const visiblePadding = 40;
     const startLeft = typeof left === 'number' ? left : (scrollWrapper.scrollLeft + visiblePadding);
     const startTop = typeof top === 'number' ? top : (scrollWrapper.scrollTop + visiblePadding);
-    const sourceTypes = Array.isArray(runContent?.columnTypes) ? runContent.columnTypes : [];
-    const columnTypes = ['text', ...inputHeaders.map((_, index) => (sourceTypes[index] === 'image' || sourceTypes[index] === 'pdf') ? sourceTypes[index] : 'text'), 'text', ...outputFields.map(() => 'text')];
     const created = addDatasetNode({
       name: datasetName,
       notes: String(notes || '').trim() || defaultNotes,
