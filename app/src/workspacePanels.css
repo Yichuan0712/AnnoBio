@@ -1,0 +1,148 @@
+.workflow-workspace {
+  --workspace-agent-width: 0px;
+  --workspace-pipeline-height: 0px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--workspace-agent-width);
+  grid-template-rows: minmax(0, 1fr) var(--workspace-pipeline-height);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workflow-workspace > .workflow-canvas { grid-area: 1 / 1; min-width: 0; }
+/* contain: size keeps a dock's content out of the grid's intrinsic size. #app only has a min-height,
+   so without it a long Agent chat grows the first row past the window and pushes the Pipeline dock
+   (and the canvas controls) off-screen. */
+.workspace-panel-host { min-width: 0; min-height: 0; overflow: hidden; contain: size; background: var(--bg-bar); }
+.workspace-panel-host[hidden], .workspace-panel-resizer[hidden] { display: none; }
+.workspace-panel-host--pipeline { grid-area: 2 / 1; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.workspace-panel-host--agent { grid-area: 1 / 2 / 3 / 3; border-left: 1px solid var(--border); }
+/* Full-screen covers the canvas and the other dock; the tracks keep their sizes, so restoring does
+   not reflow the canvas. */
+.workflow-workspace > .workspace-panel-host--maximized { grid-area: 1 / 1 / 3 / 3; z-index: 30; border: 0; }
+
+.workspace-panel-host > .workspace-dock,
+.workspace-panel-tab > .workspace-dock {
+  position: static;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+}
+
+.workspace-dock > .modal-panel {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.workspace-dock .modal-header {
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 5px 12px;
+  flex-shrink: 0;
+  cursor: default;
+}
+.workspace-dock .modal-title,
+.workspace-panel-title { margin: 0; font-size: 12px; font-weight: 600; color: var(--text); }
+.workspace-dock .modal-close svg,
+.workspace-panel-header .modal-close svg { display: block; }
+
+/* Bottom panel: tabs share the Agent header's height, so both docks line up. */
+.workspace-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.workspace-panel-tabs { display: flex; align-self: stretch; gap: 6px; margin-left: -8px; }
+.workspace-panel-tab-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  box-shadow: inset 0 -2px 0 transparent;
+  cursor: pointer;
+}
+.workspace-panel-tab-button:hover { color: var(--text); }
+.workspace-panel-tab-button[aria-selected="true"] {
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--primary-btn-text, #2563eb);
+}
+.workspace-panel-tab-button:focus-visible { outline: 2px solid var(--primary-btn-text, #2563eb); outline-offset: -2px; }
+.workspace-panel-tab__badge {
+  min-width: 16px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  color: #fff;
+  background: #d92d20; /* solid in both themes; the theme red is a light pink in dark mode */
+}
+.workspace-panel-tab__badge[hidden] { display: none; }
+.workspace-panel-tab { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.workspace-panel-tab[hidden] { display: none; }
+.workspace-panel-tab > * { flex: 1; min-height: 0; }
+.workspace-dock .modal-body { min-height: 0; }
+.workspace-dock .pipeline-overview-body { padding: 14px 18px; overflow: auto; flex: 1; }
+.workspace-dock .pipeline-overview-card { margin-bottom: 18px; }
+.workspace-dock .pipeline-overview-card-title { font-size: 12px; color: var(--text-muted); }
+.workspace-dock .pipeline-overview-empty { margin: 12px 0; }
+.workspace-dock [data-canvas-node-ids] { cursor: pointer; }
+.workspace-dock [data-canvas-node-ids]:focus-visible { outline: 2px solid var(--primary-btn-text, #2563eb); outline-offset: 2px; }
+.workspace-dock .agent-window__body { grid-template-columns: minmax(0, 140px) minmax(0, 1fr); }
+.workspace-dock.agent-window-overlay--sidebar-collapsed .agent-window__body { grid-template-columns: 0 minmax(0, 1fr); }
+.workspace-dock .agent-window__sidebar-header,
+.workspace-dock .agent-window__main-header { padding: 9px 14px; }
+.workspace-dock .agent-window__main-label { font-size: 12px; }
+.workspace-dock .agent-window__sidebar-header { display: none; }
+.workspace-dock .agent-window__chat-list { padding: 8px; }
+.workspace-dock .agent-window__conversation { padding: 14px; }
+.workspace-dock .agent-window__composer { padding: 12px; }
+
+.workspace-panel-resizer { position: absolute; z-index: 20; touch-action: none; }
+.workspace-panel-resizer--agent {
+  top: 0; bottom: 0;
+  right: calc(var(--workspace-agent-width) - 3px);
+  width: 6px;
+  cursor: col-resize;
+}
+.workspace-panel-resizer--pipeline {
+  left: 0; right: var(--workspace-agent-width);
+  bottom: calc(var(--workspace-pipeline-height) - 3px);
+  height: 6px;
+  cursor: row-resize;
+}
+.workspace-panel-resizer:hover, .workspace-panel-resizer:focus-visible {
+  background: var(--primary-btn-text, #2563eb);
+  outline: none;
+}
+.workflow-workspace--resizing { user-select: none; }
+
+@media (max-width: 700px) {
+  .workspace-dock .agent-window__body { grid-template-columns: minmax(0, 110px) minmax(0, 1fr); }
+  .workspace-dock .agent-window__conversation { padding: 8px; }
+}

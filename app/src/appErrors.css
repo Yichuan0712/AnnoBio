@@ -1,0 +1,74 @@
+/* Errors tab of the bottom panel and the no-project corner notice (appErrors.js); the notice sits
+   bottom-left so it never covers the canvas zoom controls in the bottom-right. */
+.app-errors { padding: 10px 18px 14px; overflow: auto; box-sizing: border-box; }
+.app-errors__toolbar { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 6px; }
+.app-errors .btn,
+.app-error-notice .btn { padding: 4px 10px; font-size: 12px; }
+.app-errors__empty { margin: 4px 0; font-size: 12px; color: var(--text-muted); }
+.app-errors__list { margin: 0; padding: 0; list-style: none; }
+
+.app-error { position: relative; border-bottom: 1px solid var(--border); padding: 6px 0; }
+.app-error summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-right: 72px;
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.app-error summary::-webkit-details-marker { display: none; }
+.app-error summary::before { content: '▸'; flex: none; width: 10px; color: var(--text-muted); }
+.app-error details[open] summary::before { content: '▾'; }
+.app-error__time { flex: none; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.app-error__message { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; color: var(--diff-removed-text, #b91c1c); }
+.app-error__context { flex: none; color: var(--text-muted); }
+.app-error__count {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--diff-removed-text, #b91c1c);
+  background: var(--diff-removed-bg, rgba(200, 60, 60, 0.22));
+}
+.app-error > .app-error-copy { position: absolute; top: 3px; right: 0; padding: 2px 8px; font-size: 11px; }
+.app-error__stack {
+  margin: 6px 0 2px 20px;
+  font-family: ui-monospace, Consolas, 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.app-error-notice {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 3000;
+  width: min(340px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: var(--bg-bar);
+  color: var(--text);
+  border: 1px solid var(--diff-removed-text, #b91c1c);
+  border-radius: var(--control-radius, 3px);
+  box-shadow: 0 4px 16px var(--shadow);
+}
+.app-error-notice__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.app-error-notice__title { font-size: 12px; font-weight: 600; color: var(--diff-removed-text, #b91c1c); }
+.app-error-notice__close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.app-error-notice__close:hover { color: var(--text); background: var(--hover); }
+.app-error-notice__message { margin: 4px 0 8px; font-size: 12px; overflow-wrap: anywhere; }

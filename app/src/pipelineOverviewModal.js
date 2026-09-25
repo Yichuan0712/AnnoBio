@@ -342,7 +342,7 @@ function renderRouteChip(step) {
       : (step.kind === 'prompt' ? 'Preview one concrete Prompt Run in this branch.' : 'Preview this Process path.'),
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
-  return `<span class="pipeline-overview-branch-chip" data-canvas-node-ids="${canvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind] || 'Step'}</span>${picker}</span>`;
+  return `<span class="pipeline-overview-branch-chip" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind] || 'Step'}</span>${picker}</span>`;
 }
 
 function renderRouteStep(step) {
@@ -374,7 +374,7 @@ function renderRouteStep(step) {
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
   return `
-    <li class="pipeline-overview-step" data-canvas-node-ids="${canvasNodeIds}">
+    <li class="pipeline-overview-step" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}">
       <span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind]}</span>
       ${picker}
     </li>
@@ -433,11 +433,12 @@ function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDat
  * @param {{getCanvasState?: Function, highlightCanvasNodes?: Function}} options live canvas hooks
  */
 export function showPipelineOverviewModal(pipelineSource, options = {}) {
-  const existing = document.querySelector('.pipeline-overview-overlay');
+  const host = options.host || null;
+  const existing = (host || document).querySelector('.pipeline-overview-overlay');
   if (existing) {
     existing.refreshPipelineOverview?.(pipelineSource);
     existing.setPipelineOverviewOptions?.(options);
-    existing.querySelector('.modal-close')?.focus();
+    if (!host) existing.querySelector('.modal-close')?.focus();
     return;
   }
 
@@ -446,25 +447,28 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   let highlightCanvasNodes = typeof options.highlightCanvasNodes === 'function'
     ? options.highlightCanvasNodes
     : () => {};
+  let focusCanvasNodes = options.focusCanvasNodes || (() => {});
   let pipelines = [];
   let pipelineSignature = '';
   let refreshFrame = 0;
   const showIntermediateDatasetsByPipelineId = new Map();
 
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay pipeline-overview-overlay';
-  overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-labelledby', 'pipeline-overview-title');
+  overlay.className = host ? 'workspace-dock pipeline-overview-overlay' : 'modal-overlay pipeline-overview-overlay';
+  overlay.setAttribute('role', host ? 'region' : 'dialog');
+  // Docked, the bottom panel's tab names this view and owns collapse/full-screen, so no header.
+  if (host) overlay.setAttribute('aria-label', 'Current Pipeline');
+  else overlay.setAttribute('aria-labelledby', 'pipeline-overview-title');
 
   const selectedByChoiceId = new Map();
   const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt that has a Run.';
 
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--pipeline-overview">
-      <div class="modal-header">
+      ${host ? '' : `<div class="modal-header">
         <h2 id="pipeline-overview-title" class="modal-title">Current Pipeline</h2>
         <button type="button" class="modal-close" aria-label="Close">&times;</button>
-      </div>
+      </div>`}
       <div class="modal-body pipeline-overview-body"></div>
     </div>
   `;
@@ -523,6 +527,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (typeof nextOptions.highlightCanvasNodes === 'function') {
       highlightCanvasNodes = nextOptions.highlightCanvasNodes;
     }
+    if (typeof nextOptions.focusCanvasNodes === 'function') focusCanvasNodes = nextOptions.focusCanvasNodes;
   };
   refresh();
 
@@ -566,6 +571,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   });
 
   bodyEl.addEventListener('click', async (event) => {
+    if (!event.target.closest('select, button, input, label')) {
+      const step = event.target.closest('[data-canvas-node-ids]');
+      if (step) focusCanvasNodes(JSON.parse(decodeURIComponent(step.dataset.canvasNodeIds)));
+    }
     const button = event.target.closest?.('.pipeline-overview-export');
     if (!button || button.disabled) return;
     const pipelineIndex = Number.parseInt(button.getAttribute('data-pipeline-index') || '', 10);
@@ -598,19 +607,26 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     }
   });
 
-  function close() {
+  bodyEl.addEventListener('keydown', (event) => {
+    if (!event.target.matches('[data-canvas-node-ids]') || !['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    focusCanvasNodes(JSON.parse(decodeURIComponent(event.target.dataset.canvasNodeIds)));
+  });
+
+  function destroy() {
     if (refreshFrame) cancelAnimationFrame(refreshFrame);
     clearCanvasHighlight();
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('workflow:canvas-changed', scheduleRefresh);
   }
+  overlay.destroyPipelineOverview = destroy;
   function onKeyDown(event) {
-    if (event.key === 'Escape') close();
+    if (event.key === 'Escape') destroy();
   }
-  overlay.querySelector('.modal-close').addEventListener('click', close);
-  document.addEventListener('keydown', onKeyDown);
+  overlay.querySelector('.modal-close')?.addEventListener('click', destroy);
+  if (!host) document.addEventListener('keydown', onKeyDown);
   document.addEventListener('workflow:canvas-changed', scheduleRefresh);
 
-  document.body.appendChild(overlay);
+  (host || document.body).appendChild(overlay);
 }

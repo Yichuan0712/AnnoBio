@@ -87,63 +87,6 @@
   background-size: 24px 24px;
 }
 
-.workflow-canvas__autopilot-toolbar {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.workflow-canvas__autopilot-btn,
-.workflow-canvas__current-pipeline-btn {
-  flex: none;
-  height: 30px;
-  padding: 0 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text);
-  background: var(--bg-bar);
-  border: 1px solid var(--border);
-  border-radius: var(--control-radius, 6px);
-  box-shadow: 0 2px 6px var(--shadow);
-  cursor: pointer;
-  font-family: inherit;
-  transition: box-shadow 0.12s, background 0.12s, opacity 0.12s;
-}
-
-/* Its window is already open, so the button reads as "you are here" instead of an action. */
-.workflow-canvas__autopilot-btn.is-open,
-.workflow-canvas__current-pipeline-btn.is-open,
-.workflow-canvas__autopilot-btn.is-open:hover,
-.workflow-canvas__current-pipeline-btn.is-open:hover {
-  opacity: 0.5;
-  background: var(--bg-bar);
-  box-shadow: none;
-  cursor: default;
-}
-
-.workflow-canvas__autopilot-btn:hover,
-.workflow-canvas__current-pipeline-btn:hover {
-  background: var(--hover);
-  box-shadow: 0 3px 10px var(--shadow);
-}
-
-.workflow-canvas__autopilot-icon {
-  font-size: 16px;
-  line-height: 1;
-  transform: translateY(-1px);
-  display: inline-block;
-  color: var(--text-muted);
-}
-
-.workflow-canvas__current-pipeline-icon {
-  flex: none;
-  color: var(--text-muted);
-}
-
 .workflow-canvas__controls-stack {
   position: absolute;
   right: 12px;

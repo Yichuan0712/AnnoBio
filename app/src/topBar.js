@@ -13,7 +13,9 @@ import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaxim
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, onMergeProject?: () => void, onUndo?: () => void, onRedo?: () => void, onPublishToGallery?: () => void }} options
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, onMergeProject?: () => void, onUndo?: () => void, onRedo?: () => void, onPublishToGallery?: () => void, panelToggles?: HTMLElement }} options
+ *   panelToggles: the canvas's Current Pipeline / Agent Assistant toggles (workflowCanvas.js), placed
+ *   at the right end — before the window controls on desktop, before the account avatar on web.
  * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void, setMergeEnabled: (enabled: boolean) => void, setProjectTitle: (title: string) => void, setUndoRedoEnabled: (canUndo: boolean, canRedo: boolean) => void, setPublishEnabled?: (enabled: boolean) => void }}
  */
 export function buildTopBar(root, options) {
@@ -24,7 +26,7 @@ export function buildTopBar(root, options) {
 // Desktop — unchanged from the original File/Edit/Settings menu bar (Merge item added, nothing
 // else). Do not fold this into buildWebTopBar or add electronAPI branches to it.
 // ============================================================================================
-function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, onMergeProject, onUndo, onRedo }) {
+function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, onMergeProject, onUndo, onRedo, panelToggles }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -131,6 +133,7 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
   const spacer = document.createElement('div');
   spacer.className = 'top-bar-spacer';
   bar.appendChild(spacer);
+  if (panelToggles) bar.appendChild(panelToggles);
 
   const windowControls = document.createElement('div');
   windowControls.className = 'top-bar-window-controls';
@@ -319,7 +322,7 @@ const iconBrandMark = () => svgIcon({
   paths: ['M9 12v-3a2 2 0 0 1 2-2h3', 'M9 12v3a2 2 0 0 0 2 2h3'],
 });
 
-function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onUndo, onRedo, onPublishToGallery }) {
+function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onUndo, onRedo, onPublishToGallery, panelToggles }) {
   document.documentElement.classList.add('top-bar-web');
 
   const bar = document.createElement('nav');
@@ -439,6 +442,7 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   const spacer = document.createElement('div');
   spacer.className = 'top-bar-spacer';
   bar.appendChild(spacer);
+  if (panelToggles) bar.appendChild(panelToggles);
 
   // ---- Account avatar (only present when served by the Hub and logged in) — clicking it goes
   // straight to Profile, and it still opens a hover dropdown with Profile/Review(admin)/Log out:

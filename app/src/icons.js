@@ -141,3 +141,36 @@ export const iconFileAdd = (size) => svgIcon({
     'M12 18v-6',
   ],
 });
+
+/**
+ * VS Code-style layout icons for the desktop title bar's panel toggles (workflowCanvas.js): a window
+ * frame whose bottom / right region is filled while that panel is open and only outlined while it
+ * is hidden, so the icon itself shows the state. Drawn on the 12-unit grid of modalMaximize.js's
+ * window-control icons, at the same rendered line weight, so they sit together in the title bar.
+ */
+function layoutIcon(region, open, size = 12) {
+  const svg = svgIcon({ size, viewBox: '0 0 12 12', rects: [[1, 1.5, 10, 9, 0.5]] });
+  svg.setAttribute('stroke-width', '1.25');
+  const [x, y, w, h] = region === 'bottom' ? [1, 7, 10, 3.5] : [7.5, 1.5, 3.5, 9];
+  if (open) {
+    const fill = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    fill.setAttribute('x', String(x));
+    fill.setAttribute('y', String(y));
+    fill.setAttribute('width', String(w));
+    fill.setAttribute('height', String(h));
+    fill.setAttribute('fill', 'currentColor');
+    fill.setAttribute('stroke', 'none');
+    svg.appendChild(fill);
+  } else {
+    const divider = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    divider.setAttribute('d', region === 'bottom' ? 'M1 7h10' : 'M7.5 1.5v9');
+    svg.appendChild(divider);
+  }
+  return svg;
+}
+
+/** The bottom panel (Current Pipeline / Log / Errors). */
+export const iconLayoutPanel = (open, size) => layoutIcon('bottom', open, size);
+
+/** The right panel (Agent Assistant). */
+export const iconLayoutSidebarRight = (open, size) => layoutIcon('right', open, size);

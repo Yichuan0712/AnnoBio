@@ -2,6 +2,7 @@ import { attachModalPaneToggle } from './paneToggleButton.js';
 import { mountAgentChatSession } from './agentChatSession.js';
 import { clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { iconCollapse } from './modalMaximize.js';
 
 // Web fallback for the electronAPI methods this module relies on: same two method names,
 // backed by backend/project_store.py's REST endpoints instead of local-file IPC, keyed by
@@ -171,7 +172,8 @@ function mergeRemoteConversationIntoLocal(local, remote) {
 }
 
 export async function openAgentWindowModal(options = {}) {
-  const existing = document.querySelector('.agent-window-overlay');
+  const host = options.host || null;
+  const existing = (host || document).querySelector('.agent-window-overlay');
   if (existing) {
     const closeButton = existing.querySelector('.modal-close');
     if (closeButton) closeButton.focus();
@@ -189,20 +191,24 @@ export async function openAgentWindowModal(options = {}) {
       console.error('Load agent conversations:', error);
     }
   }
+  if (options.isCurrent && !options.isCurrent()) return;
 
   let chats = storedState.conversations.length ? storedState.conversations : [createDraftChat()];
   const savedActiveId = String(storedState.activeChatId || '').trim();
   let activeChatId =
     savedActiveId && chats.some((c) => c.id === savedActiveId) ? savedActiveId : chats[0].id;
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay modal-overlay--no-maximize agent-window-overlay';
+  overlay.className = host
+    ? 'workspace-dock agent-window-overlay'
+    : 'modal-overlay modal-overlay--no-maximize agent-window-overlay';
+  overlay.setAttribute('role', host ? 'region' : 'dialog');
   overlay.setAttribute('aria-labelledby', 'agent-window-title');
 
   overlay.innerHTML = `
     <div class="modal-panel agent-window">
       <div class="modal-header">
         <h2 id="agent-window-title" class="modal-title">Agent Assistant</h2>
-        <button type="button" class="modal-close" aria-label="Close">×</button>
+        <button type="button" class="modal-close" aria-label="${host ? 'Collapse Agent Assistant' : 'Close'}" title="${host ? 'Collapse panel' : 'Close'}">${host ? '' : '×'}</button>
       </div>
       <div class="modal-body agent-window__body">
         <aside class="agent-window__sidebar">
@@ -396,18 +402,27 @@ export async function openAgentWindowModal(options = {}) {
     composerInputEl.style.height = `${nextHeight}px`;
   }
 
-  function close() {
+  function destroy() {
     stopPendingPoll();
+    // A dock is destroyed only when switching projects; collapsing it keeps the turn alive.
+    if (host) chatSession?.stopAssistant?.();
     chatSession?.destroy?.();
     chatSession = null;
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);
+  }
+  overlay.destroyAgentWindow = destroy;
+
+  function close() {
+    if (host) options.onClose?.();
+    else destroy();
   }
 
   function onKeyDown(e) {
     if (e.key === 'Escape') close();
   }
 
+  if (host) overlay.querySelector('.modal-close').appendChild(iconCollapse());
   overlay.querySelector('.modal-close').addEventListener('click', close);
   const agentPaneToggle = attachModalPaneToggle({
     overlay,
@@ -450,8 +465,8 @@ export async function openAgentWindowModal(options = {}) {
     syncActiveChatUI();
     saveConversations();
   });
-  document.addEventListener('keydown', onKeyDown);
-  document.body.appendChild(overlay);
+  if (!host) document.addEventListener('keydown', onKeyDown);
+  (host || document.body).appendChild(overlay);
   chatSession = mountAgentChatSession({
     overlay,
     messagesEl,

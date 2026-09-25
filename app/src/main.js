@@ -7,6 +7,7 @@ import { spawn, execSync } from 'node:child_process';
 import { clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_PORT } from './backendConfig.js';
 import { ProjectAssets, YC_EXTENSION, isBundledProjectFile } from './projectAssets.js';
+import { createBackendLog } from './backendLog.js';
 const assetToken = crypto.randomBytes(32).toString('hex');
 const projectAssets = new ProjectAssets({
   decodeImage(data, width) {
@@ -120,6 +121,8 @@ ipcMain.handle('assets:resolve-paths', async (_event, rows) => {
  * Packaged: resources/backend/python-embed (python.exe on Windows, bin/python on macOS/Linux).
  */
 let pyProc = null;
+// The backend's output for the desktop Log tab (backendLog.js); created once the app is ready.
+let backendLog = null;
 
 // Dev: find repo root by walking up from __dirname until we see backend/main.py (this repo's backend).
 // Packaged: use resourcesPath.
@@ -302,6 +305,7 @@ function startPythonBackendInner() {
   if (!fsSync.existsSync(pythonExe)) {
     const msg = `Python backend not found.\n\nExpected: ${pythonExe}\n\nIf you installed from the setup, try uninstalling and reinstalling.`;
     console.error(msg);
+    backendLog?.note(msg.replace(/\n+/g, ' '));
     dialog.showErrorBox('Backend Error', msg);
     return;
   }
@@ -324,12 +328,16 @@ function startPythonBackendInner() {
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',
     },
-    stdio: 'inherit',
+    // Piped rather than inherited so the Log tab can show it; backendLog echoes it to the terminal in dev.
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  backendLog?.note(`Starting backend on port ${BACKEND_PORT}`);
+  backendLog?.attach(pyProc);
 
   pyProc.on('exit', (code) => {
     console.log('[python] exited with code', code);
+    backendLog?.note(`Backend exited with code ${code}`);
     pyProc = null;
   });
 }
@@ -517,6 +525,10 @@ ipcMain.handle('fs:write-file', async (_e, filePath, data, encoding) => {
   await fs.writeFile(filePath, buf, enc === 'base64' ? undefined : enc);
 });
 
+ipcMain.handle('backend-log:get', () => backendLog?.lines() || []);
+ipcMain.handle('backend-log:clear', () => { backendLog?.clear(); });
+ipcMain.handle('backend-log:open-folder', () => (backendLog ? shell.openPath(backendLog.dir) : ''));
+
 ipcMain.handle('shell:open-external', (_e, url) => {
   if (typeof url !== 'string' || !url.startsWith('https://openrouter.ai/')) return;
   shell.openExternal(url);
@@ -549,6 +561,14 @@ ipcMain.handle('window:is-maximized', (event) => {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  backendLog = createBackendLog({
+    dir: path.join(app.getPath('userData'), 'logs'),
+    tee: !app.isPackaged,
+    onLines: (lines) => {
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.send('backend-log:lines', lines);
+    },
+  });
+
   // Start backend first
   startPythonBackend();
 
