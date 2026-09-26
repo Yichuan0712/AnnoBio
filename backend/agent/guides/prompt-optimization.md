@@ -38,3 +38,19 @@ A Score chooses its review method (Settings holds the default):
   recommending a full cycle on a large Dataset, and suggest a Sampler subset while iterating.
 - After a cycle, report the metric change between versions and the rows that changed, then ask the user
   whether to continue, stop, or try something else.
+
+## Without ground truth
+
+The optimisers above only work from a Score, and a Score needs a ground-truth Dataset. When the prompt
+has none, do not silently rewrite it:
+- Tell the user, once, that these optimisers exist and what they need, then let them choose how to go on.
+- A small labelled set is enough to start: a Sampler draws 20-50 rows from the input Dataset, and the
+  user fills in the expected outputs, either in the Dataset window (it can add columns and edit cells) or
+  in a spreadsheet exported from it and imported back. Rows that cover the main kinds of failure matter
+  more than volume.
+- If the user already has labelled data, import it and build the Score on it.
+- You may draft expected outputs to speed up labelling, but say plainly that a person must check them
+  before they serve as ground truth: scoring a prompt against answers a model wrote grades the model
+  against itself.
+- A hand-written revision is still possible when the user wants one now. Say it is unverified, and
+  suggest scoring it once ground truth exists.

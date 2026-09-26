@@ -138,6 +138,9 @@ DEFAULT_SETTINGS = {
     # Used by the Agent window's chat. Blank = fall back to default_review_credential_id (see
     # agentChatSession.js's loadAgentCredential) so upgrading doesn't silently break existing chats.
     "default_agent_credential_id": "",
+    # The Agent model's context window in tokens; 0 = auto (the model registries, else
+    # AGENT_FALLBACK_CONTEXT_TOKENS). Sizes the chat history the Agent sends (/api/agent/context).
+    "agent_context_tokens": 0,
     # Registered review method id (backend/review_methods.py); blank = registry default. Per-node choice on a
     # Review-capable Score node (dataset.reviewMethod) overrides this.
     "default_review_method": "",
@@ -216,6 +219,7 @@ class SettingsPatch(BaseModel):
     default_run_credential_id: str | None = None
     default_review_credential_id: str | None = None
     default_agent_credential_id: str | None = None
+    agent_context_tokens: int | None = Field(default=None, ge=0, le=2_000_000, description="0 = auto")
     default_review_method: str | None = None
     run_max_tokens: int | None = Field(default=None, ge=256, le=131072)
     review_max_tokens: int | None = Field(default=None, ge=256, le=131072)
@@ -487,6 +491,35 @@ def _save_credentials(items: list[dict]) -> None:
     CREDENTIALS_FILE.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+# Several requests change credentials at once (opening Settings tests the OpenRouter credential while
+# a model is checked for tool calling), and each change used to write back the whole list it had
+# read before its slow model call, erasing whatever was saved meanwhile. Every change now goes
+# through _update_credentials, which re-reads, changes and writes under one lock; model calls
+# happen before it, never while holding it.
+_credentials_lock = threading.Lock()
+
+
+def _update_credentials(change) -> Any:
+    """Apply change(items) to the stored credentials list in place and save it; returns its result."""
+    with _credentials_lock:
+        items = _load_credentials()
+        result = change(items)
+        _save_credentials(items)
+        return result
+
+
+def _update_credential(credential_id: str, fields: dict) -> bool:
+    """Set fields on one stored credential; False when it no longer exists."""
+    def change(items: list[dict]) -> bool:
+        for item in items:
+            if item.get("id") == credential_id:
+                item.update(fields)
+                return True
+        return False
+
+    return _update_credentials(change)
+
+
 def _mask_key(key: str) -> str:
     if len(key) <= 8:
         return "****"
@@ -682,6 +715,36 @@ def _catalog_tools_hint(item: dict, catalog: dict[str, dict]) -> bool | None:
         return None
 
 
+def _credential_context_tokens(item: dict) -> int | None:
+    """The model's context window in tokens from the registries (OpenRouter's catalog, else
+    LiteLLM's), or None when neither knows the model, e.g. behind a custom endpoint."""
+    model = _credential_model(item)
+    if _credential_provider(item) == "openrouter":
+        from oauth_openrouter import get_catalog
+
+        # Credentials may store an "openrouter/" prefix, but it is also part of real ids such as
+        # "openrouter/auto", so try the model both ways.
+        ids = {model, model.removeprefix("openrouter/")}
+        try:
+            entry = next((m for m in get_catalog() if m["id"] in ids), None)
+        except Exception:
+            return None
+        value = entry.get("context_length") if entry else None
+        return int(value) if value else None
+    if _credential_base_url(item) and _credential_provider(item) not in DEFAULT_BASE_URLS_BY_PROVIDER:
+        return None
+    import litellm
+
+    from llm import _resolve_model_name
+
+    try:
+        info = litellm.get_model_info(_resolve_model_name(_credential_provider(item), model))
+    except Exception:
+        return None
+    value = info.get("max_input_tokens") or info.get("max_tokens")
+    return int(value) if value else None
+
+
 @app.get("/api/credentials/agent-hints")
 def credential_agent_hints():
     """{credential_id: True | False | None}: registry hints on tool calling for the Agent model picker."""
@@ -713,8 +776,10 @@ def agent_check_credential(credential_id: str):
         base_url=_credential_base_url(cred),
     )
     if result["ok"] is not None:
-        cred["agent_check"] = {**result, "model": _credential_model(cred), "checked_at": time.time()}
-        _save_credentials(items)
+        _update_credential(
+            credential_id,
+            {"agent_check": {**result, "model": _credential_model(cred), "checked_at": time.time()}},
+        )
     return result
 
 
@@ -750,7 +815,6 @@ async def add_credential(request: Request):
         raise HTTPException(status_code=400, detail="model is required")
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
-    items = _load_credentials()
     new_id = str(uuid.uuid4())
     new_item = {
         "id": new_id,
@@ -759,8 +823,7 @@ async def add_credential(request: Request):
         "base_url": base_url,
         "provider": provider,
     }
-    items.append(new_item)
-    _save_credentials(items)
+    _update_credentials(lambda items: items.append(new_item))
     return CredentialResponse(
         id=new_id,
         model=new_item["model"],
@@ -862,11 +925,10 @@ async def test_credential(credential_id: str):
     )
     # Persist the outcome either way -- a failed check must stick after reopening the app,
     # not silently revert to whatever provider/checkmark was last known good.
-    cred["last_check_ok"] = result["ok"]
-    cred["last_check_error"] = result["error"]
+    fields = {"last_check_ok": result["ok"], "last_check_error": result["error"]}
     if result["ok"] and result["provider"] != _credential_provider(cred):
-        cred["provider"] = result["provider"]
-    _save_credentials(items)
+        fields["provider"] = result["provider"]
+    _update_credential(credential_id, fields)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["error"] or "Verification failed")
     return result
@@ -945,6 +1007,7 @@ class AgentTurnRequest(BaseModel):
     messages: list[AgentMessage] = Field(..., min_length=1)
     tools: list[dict[str, Any]] = Field(default_factory=list, description="OpenAI-format function tools")
     workspace_summary: str = Field(default="", description="Workspace summary built by the renderer")
+    conversation_summary: str = Field(default="", description="Summary replacing the start of a long conversation")
 
 
 def _sse(event: dict[str, Any]) -> str:
@@ -958,7 +1021,7 @@ def agent_turn(body: AgentTurnRequest):
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
-    messages = [{"role": "system", "content": build_agent_system_prompt(body.workspace_summary)}]
+    messages = [{"role": "system", "content": build_agent_system_prompt(body.workspace_summary, body.conversation_summary)}]
     messages += [m.model_dump(exclude_none=True) for m in body.messages]
 
     def events():
@@ -999,6 +1062,31 @@ class AgentSourceSearchRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=500)
 
 
+AGENT_FALLBACK_CONTEXT_TOKENS = 32000
+
+
+@app.get("/api/agent/context")
+def agent_context(credential_id: str = ""):
+    """What one Agent request can hold, for the renderer to fit the chat history into
+    (app/src/agent/historyBudget.js): the context window (the Agent defaults setting, else the model
+    registries, else AGENT_FALLBACK_CONTEXT_TOKENS), the reply reserve, and the fixed system
+    prompt's size in estimated tokens. detected_tokens is what the registries report, for Settings."""
+    settings = _load_settings()
+    cred = next((item for item in _load_credentials() if item.get("id") == credential_id), None)
+    detected = _credential_context_tokens(cred) if cred else None
+    configured = int(settings.get("agent_context_tokens") or 0)
+    review_max_tokens = int(settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"])
+    return {
+        "context_tokens": configured or detected or AGENT_FALLBACK_CONTEXT_TOKENS,
+        "source": "setting" if configured else "model" if detected else "fallback",
+        "detected_tokens": detected,
+        "fallback_tokens": AGENT_FALLBACK_CONTEXT_TOKENS,
+        "reply_tokens": min(review_max_tokens, AGENT_MAX_TOKENS),
+        # ~4 characters per token for this English text.
+        "system_prompt_tokens": len(build_agent_system_prompt("")) // 4,
+    }
+
+
 @app.get("/api/agent/sources")
 def agent_sources():
     """External sources the Agent can import from: id kind, importable fields, keyword search support."""
@@ -1036,11 +1124,14 @@ def agent_guide(topic: str):
 @app.delete("/api/credentials/{credential_id}")
 def delete_credential(credential_id: str):
     """Delete a credential by id."""
-    items = _load_credentials()
-    new_items = [x for x in items if x.get("id") != credential_id]
-    if len(new_items) == len(items):
+    def change(items: list[dict]) -> bool:
+        kept = [x for x in items if x.get("id") != credential_id]
+        removed = len(kept) != len(items)
+        items[:] = kept
+        return removed
+
+    if not _update_credentials(change):
         raise HTTPException(status_code=404, detail="Credential not found!")
-    _save_credentials(new_items)
     return {"ok": True}
 
 

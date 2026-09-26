@@ -105,20 +105,20 @@ def handle_callback(state: str, code: str) -> HTMLResponse:
         sess["error"] = str(e)
         return _page("Connection failed", "Could not complete the OpenRouter connection. Go back to AnnoBio and try again.")
 
-    from main import _load_credentials, _save_credentials, _mask_key  # lazy: avoid circular import
+    from main import _update_credentials  # lazy: avoid circular import
 
-    items = _load_credentials()
     new_id = str(uuid.uuid4())
-    items.append(
-        {
-            "id": new_id,
-            "model": _DEFAULT_MODEL,
-            "api_key": key,
-            "base_url": "",
-            "provider": "openrouter",
-        }
+    _update_credentials(
+        lambda items: items.append(
+            {
+                "id": new_id,
+                "model": _DEFAULT_MODEL,
+                "api_key": key,
+                "base_url": "",
+                "provider": "openrouter",
+            }
+        )
     )
-    _save_credentials(items)
     sess["status"] = "done"
     sess["credential_id"] = new_id
     return _page("Connected", "AnnoBio is now connected to your OpenRouter account. You can close this tab.")
