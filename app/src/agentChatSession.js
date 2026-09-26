@@ -276,6 +276,19 @@ function createProposalNode({
   return cardEl;
 }
 
+/** Where the model's view of the conversation starts: the messages above reach it only as this summary. */
+function createSummaryDividerNode(text) {
+  const node = document.createElement('details');
+  node.className = 'agent-chat-summary';
+  const label = document.createElement('summary');
+  label.textContent = "Earlier messages were summarized to fit the model's context";
+  const body = document.createElement('div');
+  body.className = 'agent-chat-summary__text';
+  body.textContent = text;
+  node.append(label, body);
+  return node;
+}
+
 function createPendingNode({ text, status, onStop }) {
   const fragment = document.createDocumentFragment();
   if (text) fragment.appendChild(createAssistantTextNode(text));
@@ -500,6 +513,8 @@ export function mountAgentChatSession({
     const busy = conversation?.pending || sendInFlight;
     const pendingInteraction = busy ? null : findPendingInteraction(messages);
     const responses = new Map(messages.filter((m) => m.role === 'tool' && USER_TOOLS.has(m.name)).map((m) => [m.toolCallId, m]));
+    const summary = conversation?.contextSummary;
+    const summaryAt = summary?.text && summary.covered <= messages.length ? summary.covered : -1;
     let activity = [];
 
     function flushActivity() {
@@ -508,6 +523,10 @@ export function mountAgentChatSession({
     }
 
     messages.forEach((message, index) => {
+      if (index === summaryAt) {
+        flushActivity();
+        messagesEl.appendChild(createSummaryDividerNode(summary.text));
+      }
       if (message.role === 'tool') {
         // Answers and proposal outcomes show on their cards; a proposal sent back to the model to
         // fix never got a card, so that one stays in the activity list.
@@ -735,6 +754,12 @@ export function mountAgentChatSession({
         credentialId,
         runtime,
         workspaceSummary,
+        contextSummary: conversation.contextSummary || null,
+        onSummary: (summary) => {
+          conversation.contextSummary = summary;
+          conversation.updatedAt = Date.now();
+          notifyConversationUpdated(conversation);
+        },
         signal,
         onProgress: ({ status, text }) => {
           if (status != null && status !== conversation.pendingStatus) {
@@ -753,6 +778,7 @@ export function mountAgentChatSession({
     } catch (error) {
       if (signal.aborted || error?.name === 'AbortError') {
         messages.splice(turn.baseline);
+        if ((conversation.contextSummary?.covered || 0) > messages.length) delete conversation.contextSummary;
         conversation.unsentDraft = restoreText;
         notifyConversationDraftChanged(conversation);
         if (isActive(conversation) && restoreText) {
@@ -896,6 +922,8 @@ export function mountAgentChatSession({
     editingDraft = '';
     targetMessage.content = text;
     messages.splice(messageIndex + 1);
+    // A summary that covers the edited message describes a conversation that no longer exists.
+    if ((conversation.contextSummary?.covered || 0) > messageIndex) delete conversation.contextSummary;
     if (messageIndex === 0) {
       conversation.title = deriveConversationTitle(text);
       conversation.generatedTitle = true;

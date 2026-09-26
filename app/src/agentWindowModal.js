@@ -120,6 +120,15 @@ function mapMessageForStorage(message) {
   return out;
 }
 
+/** {contextSummary} when the stored summary (agent/historySummary.js) still fits the messages, else {}. */
+function normalizeContextSummary(summary, messageCount) {
+  const text = String(summary?.text || '').trim();
+  const covered = Number(summary?.covered);
+  return text && Number.isInteger(covered) && covered > 0 && covered <= messageCount
+    ? { contextSummary: { text, covered } }
+    : {};
+}
+
 function normalizeStoredChats(data) {
   if (Number(data?.format_version) !== CONVERSATIONS_FORMAT_VERSION) {
     return { conversations: [], activeChatId: '' };
@@ -140,6 +149,7 @@ function normalizeStoredChats(data) {
                 .filter((message) => message && typeof message === 'object')
                 .map((message) => mapMessageForStorage(message))
             : [],
+          ...normalizeContextSummary(chat.contextSummary, Array.isArray(chat.messages) ? chat.messages.length : 0),
         }))
     : [];
   const activeChatId = String(data?.activeConversationId || data?.activeChatId || '').trim();
@@ -168,6 +178,9 @@ function mergeRemoteConversationIntoLocal(local, remote) {
   local.unsentDraft = String(remote.unsentDraft || '');
   local.updatedAt = Math.max(lt, rt);
   local.messages = remote.messages.map((m) => mapMessageForStorage(m));
+  const { contextSummary } = normalizeContextSummary(remote.contextSummary, local.messages.length);
+  if (contextSummary) local.contextSummary = contextSummary;
+  else delete local.contextSummary;
   return true;
 }
 

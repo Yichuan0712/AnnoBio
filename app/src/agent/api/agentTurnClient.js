@@ -3,10 +3,11 @@ import { BACKEND_API_BASE } from '../../backendConfig.js';
 /**
  * One streamed model response from POST /api/agent/turn.
  * @param {{credentialId: string, messages: object[], tools: object[], workspaceSummary: string,
- *   signal?: AbortSignal, onText?: (delta: string) => void}} request messages are OpenAI-format
+ *   conversationSummary?: string, signal?: AbortSignal, onText?: (delta: string) => void}} request
+ *   messages are OpenAI-format; conversationSummary replaces the conversation's earliest messages
  * @returns {Promise<{text: string, toolCalls: {id: string, name: string, arguments: string}[], finishReason: string}>}
  */
-export async function streamAgentTurn({ credentialId, messages, tools, workspaceSummary, signal, onText }) {
+export async function streamAgentTurn({ credentialId, messages, tools, workspaceSummary, conversationSummary = '', signal, onText }) {
   const res = await fetch(`${BACKEND_API_BASE}/api/agent/turn`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -15,6 +16,7 @@ export async function streamAgentTurn({ credentialId, messages, tools, workspace
       messages,
       tools,
       workspace_summary: workspaceSummary,
+      conversation_summary: conversationSummary,
     }),
     signal,
   });
@@ -57,4 +59,17 @@ export async function streamAgentTurn({ credentialId, messages, tools, workspace
     }
   }
   return { text, toolCalls, finishReason };
+}
+
+/**
+ * What one Agent request can hold (GET /api/agent/context): {context_tokens, source, detected_tokens,
+ * reply_tokens, system_prompt_tokens}; see historyBudget.js. Null when the backend can't say.
+ */
+export async function fetchAgentContext(credentialId) {
+  try {
+    const res = await fetch(`${BACKEND_API_BASE}/api/agent/context?credential_id=${encodeURIComponent(credentialId || '')}`);
+    return res.ok ? await res.json() : null;
+  } catch (_) {
+    return null;
+  }
 }

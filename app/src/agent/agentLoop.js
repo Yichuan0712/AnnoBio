@@ -11,7 +11,7 @@
  * preview is the validated proposal or run request the card shows; answer/outcome record how the
  * user responded.
  */
-import { streamAgentTurn } from './api/agentTurnClient.js';
+import { fetchAgentContext, streamAgentTurn } from './api/agentTurnClient.js';
 import {
   AGENT_TOOL_DEFINITIONS,
   ASK_USER_TOOL,
@@ -21,9 +21,10 @@ import {
   describeToolCall,
   executeAgentTool,
 } from './tools/agentTools.js';
+import { historyTokenBudget, planHistory } from './historyBudget.js';
+import { summarizeHistory } from './historySummary.js';
 
 const MAX_TOOL_CALLS_PER_TURN = 30;
-const MAX_HISTORY_MESSAGES = 120;
 const MAX_TURN_MS = 5 * 60 * 1000;
 const BUDGET_EXHAUSTED = JSON.stringify({
   error: 'The tool budget for this message is used up. Answer now with the information you already have, and say what you could not check.',
@@ -53,14 +54,6 @@ export function toApiMessages(messages) {
     out.push({ role: m.role, content: m.content || '' });
   }
   return out;
-}
-
-/** The most recent messages, cut at a user message so no tool result loses its call. */
-function recentHistory(messages) {
-  if (messages.length <= MAX_HISTORY_MESSAGES) return messages;
-  let start = messages.length - MAX_HISTORY_MESSAGES;
-  while (start < messages.length - 1 && messages[start].role !== 'user') start += 1;
-  return messages.slice(start);
 }
 
 function parseArguments(raw) {
@@ -163,18 +156,44 @@ export function resolveRunRequest(messages, request, result) {
 /**
  * Continue the conversation until the model answers or asks the user something.
  * @param {{messages: object[], credentialId: string, runtime: object, workspaceSummary: string,
- *   signal?: AbortSignal, onProgress?: (p: {status?: string, text?: string}) => void,
- *   onMessage?: () => void}} options messages is mutated in place; onMessage fires after each append
+ *   contextSummary?: {text: string, covered: number}|null, signal?: AbortSignal,
+ *   onProgress?: (p: {status?: string, text?: string}) => void, onMessage?: () => void,
+ *   onSummary?: (summary: {text: string, covered: number}) => void}} options messages is mutated in
+ *   place; onMessage fires after each append; contextSummary is the conversation's summary so far,
+ *   and onSummary receives a new one to store on the conversation
  * @returns {Promise<'answered' | 'waiting'>} waiting: a question or proposal is open
  */
-export async function runAgentLoop({ messages, credentialId, runtime, workspaceSummary, signal, onProgress, onMessage }) {
+export async function runAgentLoop({ messages, credentialId, runtime, workspaceSummary, contextSummary = null, signal, onProgress, onMessage, onSummary }) {
   const startedAt = Date.now();
   let toolCallCount = 0;
   let budgetSpent = false;
   const progress = (p) => { if (onProgress) onProgress(p); };
+  // The workspace summary and tools are fixed for this loop, so the history's share is too.
+  const historyBudget = historyTokenBudget(await fetchAgentContext(credentialId), {
+    workspaceSummary,
+    tools: AGENT_TOOL_DEFINITIONS,
+  });
+  let summary = contextSummary;
 
   for (;;) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    // Earlier turns that no longer fit are condensed into the conversation's summary rather than
+    // dropped; if summarizing fails they are dropped, as planHistory already plans for.
+    let plan = planHistory(messages, historyBudget, summary);
+    if (plan.dropped > 0) {
+      progress({ status: 'Summarizing earlier messages...', text: '' });
+      const text = await summarizeHistory({
+        credentialId,
+        previousSummary: plan.summaryText,
+        messages: messages.slice(plan.cut - plan.dropped, plan.cut),
+        signal,
+      });
+      if (text) {
+        summary = { text, covered: plan.cut };
+        if (onSummary) onSummary(summary);
+        plan = planHistory(messages, historyBudget, summary);
+      }
+    }
     // Some models (Gemini Flash-Lite, for one) intermittently end a turn with neither text nor a
     // tool call; one retry usually gets a real reply.
     let text = '';
@@ -184,7 +203,8 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
       progress({ status: 'Thinking...', text: '' });
       ({ text, toolCalls } = await streamAgentTurn({
         credentialId,
-        messages: toApiMessages(recentHistory(messages)),
+        messages: toApiMessages(plan.messages),
+        conversationSummary: plan.summaryText,
         tools: AGENT_TOOL_DEFINITIONS,
         workspaceSummary,
         signal,

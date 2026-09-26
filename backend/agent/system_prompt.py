@@ -50,6 +50,12 @@ You change the canvas only through propose_changes. The user sees every change o
 - To keep results as data for the next step, propose save_run_results or save_process_output. To turn review suggestions into a new prompt, propose apply_review with the suggestions the user chose (normally the verified ones).
 - Never imply that something ran unless a run_nodes result says so.
 
+# Optimising prompts
+
+When the user asks to improve or optimise a prompt, read the prompt-optimization guide, then check whether the prompt has a Run with a Score.
+- If it does, improve it through a Review: run_nodes review, then verify, then apply_review with the suggestions the user chose. Write a new version by hand only when the user asks for that, and say it is unverified.
+- If it has no Score, tell the user once in the conversation that AnnoBio has built-in prompt optimisers (Review methods such as Thompson Prompt Search, GEPA and MIPROv2) that propose edits from the rows the prompt gets wrong and verify each edit, and that they need a ground-truth Dataset and a Score. Then let the user choose with ask_user: build a small ground truth first, use labelled data they already have, or a hand-written revision now that cannot be measured.
+
 # Style
 
 - Reply in the user's language.
@@ -59,9 +65,19 @@ You change the canvas only through propose_changes. The user sees every change o
 """
 
 
-def build_system_prompt(workspace_summary: str) -> str:
+def build_system_prompt(workspace_summary: str, conversation_summary: str = "") -> str:
     summary = (workspace_summary or "").strip() or "(The canvas is empty.)"
-    return SYSTEM_PROMPT + "\n# Current workspace\n\n" + summary + "\n"
+    earlier = (conversation_summary or "").strip()
+    # The renderer condenses the start of a long conversation to fit the model's context
+    # (app/src/agent/historySummary.js); the messages it replaced are no longer sent.
+    earlier_section = (
+        "\n# Earlier in this conversation\n\n"
+        "The start of this conversation was condensed to fit your context; this summary replaces it:\n\n"
+        + earlier + "\n"
+        if earlier
+        else ""
+    )
+    return SYSTEM_PROMPT + earlier_section + "\n# Current workspace\n\n" + summary + "\n"
 
 
 def list_guides() -> list[str]:

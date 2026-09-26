@@ -6,6 +6,8 @@
 import { showAlert, showConfirm } from './alertModal.js';
 import { selectPlaceholderLabel } from './displayTextNormalize.js';
 import { BACKEND_API_BASE, waitForBackend } from './backendConfig.js';
+import { fetchAgentContext } from './agent/api/agentTurnClient.js';
+import { mountPillSelect } from './pillSelect.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -23,6 +25,8 @@ const MODEL_SETTINGS_DEFAULTS = {
   default_run_credential_id: '',
   default_review_credential_id: '',
   default_agent_credential_id: '',
+  /** The Agent model's context window in tokens; 0 = auto (the model registries). */
+  agent_context_tokens: 0,
   run_max_tokens: 8192,
   review_max_tokens: 32768,
   run_max_retries: 2,
@@ -733,6 +737,7 @@ export function openSettingsModal() {
                   <div class="review-detail-tab-panels model-settings-tab-panels">
                     <div class="review-detail-tab-panel review-detail-tab-panel--active" id="settings-panel-credentials" role="tabpanel" aria-labelledby="settings-tab-credentials" data-panel="credentials">
                       <div class="defaults-page-scroll settings-credentials-tab-body">
+                        <p class="settings-tab-intro">A credential is a model AnnoBio can call: its model ID and the API key that pays for it. Add one through LiteLLM, which reaches most providers directly (OpenAI, Anthropic, Google, DeepSeek and more, or your own OpenAI compatible server through Base URL), or connect an OpenRouter account to use any model it offers with a single key. Added credentials appear in the list on the left, where Test checks that they work, and can then be chosen for Runs, Reviews and the Agent.</p>
                         <div id="model-settings-credentials-add" class="model-settings-credentials-add">
                           <div class="credentials-add-method-row">
                             <label class="dataset-meta-label" for="credentials-add-method-select">Add credential</label>
@@ -786,6 +791,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-run" role="tabpanel" aria-labelledby="settings-tab-run" data-panel="run">
                       <div class="defaults-page-scroll">
+                          <p class="settings-tab-intro">A Run sends a prompt to a model once for every row of its input dataset. These settings apply to all Runs: the model a Run uses when it has none of its own, the longest reply allowed for each row, how many times a failed row is retried, and how many rows are sent at the same time. Sending more rows at once finishes sooner but can hit the provider's rate limits.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-run-credential">Default model</label>
@@ -810,6 +816,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-review" role="tabpanel" aria-labelledby="settings-tab-review" data-panel="review">
                       <div class="defaults-page-scroll">
+                          <p class="settings-tab-intro">A Review studies the rows a Score marked as wrong, suggests edits to the prompt, and can check each edit on those rows. Here you choose the model that writes and checks the suggestions when a Score has none of its own, the optimisation method used unless a Score picks another, and how much work each Review does: the reply length, how many failed inputs it looks at, and the trials or iterations of the method. Larger numbers can find better edits but make more model calls. Debug mode adds Reset and Debug buttons to suggestion cards.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-review-credential">Default model</label>
@@ -872,6 +879,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-agent" role="tabpanel" aria-labelledby="settings-tab-agent" data-panel="agent">
                       <div class="defaults-page-scroll">
+                          <p class="settings-tab-intro">The Agent Assistant is the chat in the right panel. It reads your canvas, proposes changes for you to apply and starts jobs once you confirm them. It needs a model that supports tool calling, so choosing one runs a quick check; without a default it uses the Review model, and its replies follow Max tokens in Review defaults, up to 8,192. Context window sets how much of a long conversation is sent to the model each time; Auto reads the model's published limit.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-agent-credential">Default model</label>
@@ -881,6 +889,15 @@ export function openSettingsModal() {
                               <div class="settings-agent-model-status" id="settings-agent-model-status" aria-live="polite">
                                 <span class="settings-agent-model-status__text"></span>
                                 <button type="button" class="btn btn-secondary settings-agent-model-status__check" hidden>Check again</button>
+                              </div>
+                            </div>
+                          </div>
+                          <div class="defaults-row">
+                            <div class="defaults-field defaults-field--full">
+                              <label class="dataset-meta-label" for="settings-agent-context-tokens">Context window (tokens)</label>
+                              <input type="number" id="settings-agent-context-tokens" class="dataset-meta-input" min="4096" max="2000000" step="1000" placeholder="Auto" aria-describedby="settings-agent-context-hint" />
+                              <div class="settings-agent-model-status" id="settings-agent-context-hint" aria-live="polite">
+                                <span class="settings-agent-model-status__text"></span>
                               </div>
                             </div>
                           </div>
@@ -906,9 +923,13 @@ export function openSettingsModal() {
   const runCredSelect = overlay.querySelector('#settings-default-run-credential');
   const reviewCredSelect = overlay.querySelector('#settings-default-review-credential');
   const agentCredSelect = overlay.querySelector('#settings-default-agent-credential');
+  // Drawn with a pill per model saying whether it works with the Agent (pillSelect.js).
+  const agentModelPicker = agentCredSelect ? mountPillSelect(agentCredSelect) : null;
   const agentStatusEl = overlay.querySelector('#settings-agent-model-status');
   const agentStatusText = agentStatusEl?.querySelector('.settings-agent-model-status__text');
   const agentCheckBtn = agentStatusEl?.querySelector('.settings-agent-model-status__check');
+  const agentContextInp = overlay.querySelector('#settings-agent-context-tokens');
+  const agentContextHintText = overlay.querySelector('#settings-agent-context-hint .settings-agent-model-status__text');
   /** Credentials as last loaded, and registry hints on tool calling (/api/credentials/agent-hints). */
   let agentCredentials = [];
   let agentHints = {};
@@ -1034,24 +1055,29 @@ export function openSettingsModal() {
    * shows what a live check found (POST /api/credentials/{id}/agent-check, run when a model is
    * chosen), and until then only what the provider's model registry suggests.
    */
-  function agentModelLabel(c) {
-    const name = c.model || c.llm || c.id;
-    if (c.agent_check_ok === true) return `${name} — works with the Agent`;
-    if (c.agent_check_ok === false) return `${name} — cannot call tools`;
-    if (agentHints[c.id] === false) return `${name} — tool calling unlikely`;
-    return name;
+  /** The pill beside a model in the picker: [text, kind] or null. */
+  function agentModelPill(c) {
+    if (c.agent_check_ok === true) return ['Works with the Agent', 'ok'];
+    if (c.agent_check_ok === false) return ['Cannot call tools', 'error'];
+    if (agentHints[c.id] === false) return ['Tool calling unlikely', 'warning'];
+    return null;
   }
 
   function renderAgentCredentialOptions() {
     if (!agentCredSelect) return;
     const selected = agentCredSelect.value;
     agentCredSelect.innerHTML = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`
-      + agentCredentials.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(agentModelLabel(c))}</option>`).join('');
+      + agentCredentials.map((c) => {
+        const pill = agentModelPill(c);
+        const pillAttrs = pill ? ` data-pill="${escapeHtml(pill[0])}" data-pill-kind="${pill[1]}"` : '';
+        return `<option value="${escapeHtml(c.id)}"${pillAttrs}>${escapeHtml(c.model || c.llm || c.id)}</option>`;
+      }).join('');
     agentCredSelect.value = selected;
     renderAgentModelStatus();
   }
 
   function renderAgentModelStatus(checkError = '') {
+    agentModelPicker?.refresh();
     if (!agentStatusEl) return;
     const c = agentCredentials.find((item) => item.id === agentCredSelect.value);
     let text;
@@ -1115,9 +1141,26 @@ export function openSettingsModal() {
     renderAgentCredentialOptions();
   }
 
+  /** What Auto means for the selected model (GET /api/agent/context), and what the setting does. */
+  let agentContextHintRequest = 0;
+  async function renderAgentContextHint() {
+    if (!agentContextHintText) return;
+    const request = ++agentContextHintRequest;
+    const credentialId = (agentCredSelect?.value || '').trim();
+    const info = await fetchAgentContext(credentialId);
+    if (request !== agentContextHintRequest) return;
+    const fallback = (info?.fallback_tokens || 32000).toLocaleString();
+    let auto;
+    if (!credentialId) auto = `Auto uses the model's context window from the model registries (${fallback} if unknown).`;
+    else if (info?.detected_tokens) auto = `Auto: ${info.detected_tokens.toLocaleString()} tokens for this model.`;
+    else auto = `Auto: this model's context window is unknown, so ${fallback} tokens are assumed.`;
+    agentContextHintText.textContent = `${auto} When a conversation outgrows it, earlier tool results are shortened first, then the oldest messages are left out.`;
+  }
+
   agentCredSelect?.addEventListener('change', () => {
     const c = agentCredentials.find((item) => item.id === agentCredSelect.value);
     renderAgentModelStatus();
+    void renderAgentContextHint();
     // Choosing a model checks it once (one small model call); a known result is not re-checked.
     if (c && c.agent_check_ok == null) void runAgentModelCheck(c.id);
   });
@@ -1130,7 +1173,9 @@ export function openSettingsModal() {
     if (agentCredSelect) {
       agentCredSelect.value = settings.default_agent_credential_id || '';
       renderAgentModelStatus();
+      void renderAgentContextHint();
     }
+    if (agentContextInp) agentContextInp.value = settings.agent_context_tokens ? String(settings.agent_context_tokens) : '';
     if (reviewMethodDefaultSelect) {
       if (settings.default_review_method) {
         reviewMethodDefaultSelect.value = settings.default_review_method;
@@ -1238,12 +1283,16 @@ export function openSettingsModal() {
     const coproBreadth = Math.min(30, Math.max(2, Number.isNaN(coproBreadthParsed) ? MODEL_SETTINGS_DEFAULTS.copro_breadth : coproBreadthParsed));
     const coproDepthParsed = parseInt(coproDepthInp?.value, 10);
     const coproDepth = Math.min(10, Math.max(1, Number.isNaN(coproDepthParsed) ? MODEL_SETTINGS_DEFAULTS.copro_depth : coproDepthParsed));
+    // Blank means Auto (0); anything else is kept within what the input allows.
+    const agentContextParsed = parseInt(agentContextInp?.value, 10);
+    const agentContextTokens = Number.isNaN(agentContextParsed) ? 0 : Math.min(2000000, Math.max(4096, agentContextParsed));
     const simbaMaxStepsParsed = parseInt(simbaMaxStepsInp?.value, 10);
     const simbaMaxSteps = Math.min(40, Math.max(2, Number.isNaN(simbaMaxStepsParsed) ? MODEL_SETTINGS_DEFAULTS.simba_max_steps : simbaMaxStepsParsed));
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
       default_agent_credential_id: (agentCredSelect?.value || '').trim() || '',
+      agent_context_tokens: agentContextTokens,
       default_review_method: (reviewMethodDefaultSelect?.value || '').trim() || '',
       gepa_max_iterations: gepaMaxIterations,
       miprov2_num_trials: miprov2NumTrials,
