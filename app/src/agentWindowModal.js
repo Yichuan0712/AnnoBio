@@ -89,7 +89,7 @@ function sortChatsByRecent(chats) {
 }
 
 // Conversations saved before the tool-calling Agent (no format_version) are not loaded: their
-// messages carry none of the tool history the current loop needs. See AGENT_DESIGN.md.
+// messages carry none of the tool history the current loop needs. See docs/design/AGENT_DESIGN.md.
 const CONVERSATIONS_FORMAT_VERSION = 2;
 
 /** Keeps the fields agent/agentLoop.js stores on each message (tool calls, tool results). */
