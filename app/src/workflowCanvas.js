@@ -60,7 +60,7 @@ import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from 
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
 import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
-import { DATASET_BORDER_COLORS } from './workflowNodeColors.js';
+import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
 import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
@@ -127,6 +127,8 @@ const EDGE_TYPE_PROMPT_TO_RUN = 'prompt-to-run';
 const EDGE_TYPE_DATASET_TO_RUN = 'dataset-to-run';
 /** Read-only visual edge for a Dataset materialized from Run results. */
 const EDGE_TYPE_RUN_TO_DATASET = 'run-to-dataset';
+/** Read-only visual edge for the Dataset selected as a Score's ground truth. */
+const EDGE_TYPE_GROUND_TRUTH_TO_SCORE = 'ground-truth-to-score';
 /** Edge type for run → score (compare result with ground truth). */
 const EDGE_TYPE_RUN_TO_SCORE = 'run-to-score';
 /** Edge type for score → prompt review (LLM analyzes results and suggests prompt changes). */
@@ -1251,7 +1253,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         return {
           nodeId: datasetNode.dataset.nodeId,
           name: datasetNode.dataset.datasetName || 'Dataset',
-          color: DATASET_BORDER_COLORS[colorIndex],
+          color: datasetColorAt(colorIndex),
           content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
         };
       })
@@ -2311,7 +2313,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       line.setAttribute('data-derived', 'true');
       line.setAttribute('aria-label', edge.type === EDGE_TYPE_DATASET_TO_RUN
         ? 'Selected input dataset'
-        : 'Dataset saved from Run results');
+        : edge.type === EDGE_TYPE_GROUND_TRUTH_TO_SCORE
+          ? 'Selected ground truth dataset'
+          : 'Dataset saved from Run results');
     }
     edgeGroup.appendChild(line);
 
@@ -2354,6 +2358,13 @@ export function buildWorkflowCanvas(root, options = {}) {
         String(datasetNode.dataset.sourceRunNodeId || '').trim(),
         String(datasetNode.dataset.nodeId || '').trim(),
         EDGE_TYPE_RUN_TO_DATASET,
+      );
+    });
+    nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => {
+      add(
+        String(scoreNode.dataset.scoreGroundTruthId || '').trim(),
+        String(scoreNode.dataset.nodeId || '').trim(),
+        EDGE_TYPE_GROUND_TRUTH_TO_SCORE,
       );
     });
     return derived;
@@ -3116,7 +3127,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           const id = n.dataset.nodeId || '';
           const content = datasetContentByNodeId.get(id);
           const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
-          const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+          const color = datasetColorAt(colorIndex);
           return {
             nodeId: id,
             name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
@@ -4063,7 +4074,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         const wsNode = getNodeById(gtId);
         if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
           const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
-          const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+          const color = datasetColorAt(colorIndex);
           const bar = scoreNode.querySelector('.workflow-node__score-progress');
           if (bar) bar.style.background = color;
         }
@@ -4121,6 +4132,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   document.addEventListener('workflow:canvas-changed', () => {
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((sn) => syncScoreNodeProgressFromUpstreamRun(sn));
   });
+  document.addEventListener('workflow:score-ground-truth-changed', () => updateEdges());
 
   document.addEventListener('workflow:save-review-result', (e) => {
     const reviewNodeId = e.detail?.reviewNodeId;
@@ -4595,7 +4607,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         const wsNode = getNodeById(runNode.dataset.runWorkingSetId);
         if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
           const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
-          const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+          const color = datasetColorAt(colorIndex);
           runNode.style.borderColor = color;
           const progressBar = runNode.querySelector('.workflow-node__run-progress');
           if (progressBar) progressBar.style.background = color;
@@ -4609,7 +4621,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const wsNode = getNodeById(gtId);
       if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
         const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
-        const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+        const color = datasetColorAt(colorIndex);
         scoreNode.style.borderColor = color;
         const progressBar = scoreNode.querySelector('.workflow-node__score-progress');
         if (progressBar) progressBar.style.background = color;

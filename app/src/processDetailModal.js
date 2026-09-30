@@ -21,13 +21,6 @@ import { openProcessDatasetsDialog } from './processDatasetsDialog.js';
 const API_BASE = BACKEND_API_BASE;
 const PROCESS_POLL_INTERVAL_MS = 1200;
 const MAX_COMMENT_LINE_CHARS = 70;
-const FALLBACK_DEFAULT_CODE = `def process(df):
-    # df is this Process's primary Dataset.
-    # Return a DataFrame with the rows and columns you want to keep.
-    # Or return {"accepted": df_a, "needs_review": df_b} to create named branches.
-    return df
-`;
-
 function rowsHaveAssetCells(rows) {
   return (rows || []).some((row) => (row || []).some((cell) => isAssetCell(cell)));
 }
@@ -46,15 +39,34 @@ function wrapCommentList(prefix, continuationPrefix, items) {
   return lines.join('\n');
 }
 
+/** Sample code naming the primary Dataset's real columns. Comments must not spell a real df_<name>
+ * alias: referencedDatasetAliases scans comments too, so that would add a canvas dependency. */
 function buildDefaultCode(headers) {
-  const columns = (Array.isArray(headers) ? headers : []).map((header) => String(header ?? ''));
-  if (!columns.length) return FALLBACK_DEFAULT_CODE;
-  return `def process(df):
-${wrapCommentList('    # Columns: ', '    #   ', columns)}
-    # Return a DataFrame. Examples:
-    #   df["column"] = df["column"].astype(str).str.strip()
-    #   return df[df["column"].notna()]  # filter rows
-    #   return {"accepted": df[df["score"] >= 0.8], "rejected": df[df["score"] < 0.8]}
+  const columns = (Array.isArray(headers) ? headers : []).map((header) => String(header ?? '')).filter(Boolean);
+  const col = JSON.stringify(columns[0] || 'column');
+  const columnLines = columns.length
+    ? wrapCommentList('    # Columns: ', '    #   ', columns)
+    : '    # Columns: (none yet)';
+  return `import pandas as pd
+
+
+def process(df):
+    # df is this Process's input Dataset as a pandas DataFrame.
+${columnLines}
+    # Other canvas Datasets are available as df_<name> (see "View available
+    # datasets"); using one in this code links it to this Process on the canvas.
+    #
+    # Return one of:
+    #   1. One DataFrame -> one output Dataset
+    #        return df[df[${col}].notna()]
+    #   2. A dict of DataFrames -> one output Dataset per key (named branches)
+    #        mask = df[${col}].astype(str).str.len() > 0
+    #        return {"kept": df[mask], "empty": df[~mask]}
+    #
+    # Common steps:
+    #   df[${col}] = df[${col}].astype(str).str.strip()  # clean a column
+    #   df = df.drop_duplicates(subset=[${col}])  # remove duplicates
+    #   df = df.merge(df_<name>, on=${col}, how="left")  # join another Dataset
     return df
 `;
 }

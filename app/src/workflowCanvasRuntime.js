@@ -17,6 +17,7 @@ import { getCurrentProjectId } from './currentProject.js';
 import { imageCell } from './datasetContent.js';
 import { buildRunResultsTable } from './runResultsExport.js';
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettingsModal.js';
+import { datasetColorAt } from './workflowNodeColors.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {
   const {
@@ -34,7 +35,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     flattenScoreRules,
     runReviewStart,
     getScoreExportData,
-    DATASET_BORDER_COLORS,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
     getNodeById,
@@ -443,7 +443,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       const workingSetColorIndex = workingSetNode.dataset.datasetColorIndex != null
         ? parseInt(workingSetNode.dataset.datasetColorIndex, 10)
         : 0;
-      const workingSetColor = DATASET_BORDER_COLORS[workingSetColorIndex % DATASET_BORDER_COLORS.length];
+      const workingSetColor = datasetColorAt(workingSetColorIndex);
       node.style.borderColor = workingSetColor || '';
       const bar = node.querySelector('.workflow-node__run-progress');
       if (bar) bar.style.background = workingSetColor || bar.style.background;
@@ -976,7 +976,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         delete scoreNode.dataset.reviewCredentialId;
       }
       const colorIndex = groundTruthNode.dataset.datasetColorIndex != null ? parseInt(groundTruthNode.dataset.datasetColorIndex, 10) : 0;
-      const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+      const color = datasetColorAt(colorIndex);
       scoreNode.style.borderColor = color;
       const progressBar = scoreNode.querySelector('.workflow-node__score-progress');
       if (progressBar) progressBar.style.background = color;
