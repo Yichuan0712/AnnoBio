@@ -68,7 +68,7 @@ import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
 import { createWorkspacePanels } from './workspacePanels.js';
 import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
-import { iconLayoutPanel, iconLayoutSidebarRight, iconWorkflow } from './icons.js';
+import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight, iconWorkflow } from './icons.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { resolveDataframeProcessCode } from './processCode.js';
@@ -2318,17 +2318,13 @@ export function buildWorkflowCanvas(root, options = {}) {
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       label.setAttribute('class', 'workflow-edge-compare-label');
       label.setAttribute('transform', `translate(${geometry.labelPoint.x}, ${geometry.labelPoint.y})`);
-      const background = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      background.setAttribute('x', '-34');
-      background.setAttribute('y', '-12');
-      background.setAttribute('width', '68');
-      background.setAttribute('height', '24');
-      background.setAttribute('rx', '12');
-      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('dy', '0.35em');
-      text.textContent = 'Compare';
-      label.append(background, text);
+      const background = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      background.setAttribute('class', 'workflow-edge-compare-label__bg');
+      background.setAttribute('r', '12');
+      const icon = iconGitCompareArrows(14);
+      icon.setAttribute('x', '-7');
+      icon.setAttribute('y', '-7');
+      label.append(background, icon);
       edgeGroup.appendChild(label);
     }
   }
@@ -3018,7 +3014,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       `;
     } else if (isProcess) {
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create datasets</button>
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-process-name" role="menuitem">Edit name</button>
       `;
     } else {
@@ -3260,27 +3256,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         const samplerNodeId = node.dataset.nodeId || '';
         document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId } }));
       },
-      'process-this-dataset': () => {
-        if (node.dataset.nodeType !== 'dataset') return;
-        const left = (parseFloat(node.style.left) || 0) + (node.offsetWidth || 280) + NEW_NODE_OFFSET;
-        const top = parseFloat(node.style.top) || 0;
-        const processNode = createProcessNode({
-          left,
-          top,
-          title: 'Process',
-        });
-        if (processNode?.dataset?.nodeId) {
-          processNode.dataset.processPrimaryDatasetId = node.dataset.nodeId || '';
-          connections.push({
-            fromId: node.dataset.nodeId,
-            toId: processNode.dataset.nodeId,
-            type: EDGE_TYPE_DATASET_TO_PROCESS,
-          });
-          updateEdges();
-        }
-        updateContentSize();
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      },
+      'process-this-dataset': () => addProcessForDataset(node),
       'run-this-prompt': () => {
         const left = parseFloat(node.style.left) || 0;
         const top = parseFloat(node.style.top) || 0;
@@ -4016,6 +3992,33 @@ export function buildWorkflowCanvas(root, options = {}) {
       updateEdges();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
+  });
+
+  function addProcessForDataset(datasetNode) {
+    if (datasetNode?.dataset?.nodeType !== 'dataset') return;
+    const left = (parseFloat(datasetNode.style.left) || 0) + (datasetNode.offsetWidth || 280) + NEW_NODE_OFFSET;
+    const top = parseFloat(datasetNode.style.top) || 0;
+    const processNode = createProcessNode({
+      left,
+      top,
+      title: 'Process',
+    });
+    if (processNode?.dataset?.nodeId) {
+      processNode.dataset.processPrimaryDatasetId = datasetNode.dataset.nodeId || '';
+      connections.push({
+        fromId: datasetNode.dataset.nodeId,
+        toId: processNode.dataset.nodeId,
+        type: EDGE_TYPE_DATASET_TO_PROCESS,
+      });
+      updateEdges();
+    }
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  }
+
+  document.addEventListener('workflow:add-process-node', (e) => {
+    const sourceNodeId = e.detail?.sourceNodeId || '';
+    addProcessForDataset(sourceNodeId ? getNodeById(sourceNodeId) : null);
   });
 
   document.addEventListener('workflow:add-sampler-node', (e) => {

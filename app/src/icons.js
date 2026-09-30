@@ -61,6 +61,18 @@ export const iconMerge = (size) => svgIcon({
   ],
 });
 
+/** Lucide "git-compare-arrows" */
+export const iconGitCompareArrows = (size) => svgIcon({
+  size,
+  circles: [[5, 6, 3], [19, 18, 3]],
+  paths: [
+    'M12 6h5a2 2 0 0 1 2 2v7',
+    'm15 9-3-3 3-3',
+    'M12 18H7a2 2 0 0 1-2-2V9',
+    'm9 15 3 3-3 3',
+  ],
+});
+
 /** Lucide "copy" */
 export const iconCopy = (size) => svgIcon({
   size,
