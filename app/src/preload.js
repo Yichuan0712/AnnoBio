@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  platform: process.platform,
   importImages: (paths) => ipcRenderer.invoke('assets:import', paths),
   importPdfs: (paths) => ipcRenderer.invoke('assets:import-pdfs', paths),
   pruneUnusedAssets: (usedIds, options) => ipcRenderer.invoke('assets:prune-unused', usedIds, options),

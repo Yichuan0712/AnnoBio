@@ -15,6 +15,16 @@
   -webkit-app-region: drag;
 }
 
+/* Desktop app icon left of File, like VS Code's title bar. Still part of the drag region. */
+.top-bar-app-icon {
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  flex-shrink: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
 .top-bar-spacer {
   flex: 1;
   min-width: 0;
@@ -77,10 +87,26 @@
 }
 
 .top-bar-wordmark {
-  /* Matches the Hub's .brand (hub/templates/shared.css) — same size/weight/color and same brand
-     mark icon, so it reads as one continuous brand across both. Web-only; desktop never renders
-     this element (see topBar.js's buildWebTopBar). */
+  /* Same wordmark image and sizing as the Hub nav's .brand-logo (hub/templates/shared.css).
+     Web-only; desktop never renders this element (see topBar.js's buildWebTopBar). */
   display: flex;
+  align-items: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* logo_name.png has transparent padding on every side; the negative margins cancel it (and its
+   letters sit ~3px below the image's center), matching the Hub nav exactly. */
+.top-bar-wordmark .top-bar-logo-full {
+  display: block;
+  height: 52px;
+  width: auto;
+  margin: -13px -13px -7px -15px;
+  flex-shrink: 0;
+}
+
+.top-bar-logo-dark {
+  display: none;
   align-items: center;
   gap: 7px;
   font-size: 21px;
@@ -88,18 +114,17 @@
   letter-spacing: -0.01em;
   color: var(--text);
   white-space: nowrap;
-  text-decoration: none;
-  cursor: pointer;
-  transform: translateY(-2px);
 }
 
-.top-bar-wordmark svg {
-  width: 19px;
-  height: 19px;
-  color: var(--primary-btn-text, #2563eb);
+.top-bar-logo-dark .top-bar-logo {
+  height: 22px;
+  width: auto;
+  display: block;
   flex-shrink: 0;
-  transform: translateY(2px);
 }
+
+html.dark .top-bar-wordmark .top-bar-logo-full { display: none; }
+html.dark .top-bar-logo-dark { display: flex; }
 
 @media (max-width: 640px) {
   .top-bar-wordmark { display: none; }
@@ -235,13 +260,15 @@
 
 /* ---- Web: taller bar, scaled-up controls (see the .top-bar-web comment in topBar.js) ---- */
 html.top-bar-web {
-  --app-top-bar-height: 52px;
+  /* Same total height as the Hub's nav.top (hub/templates/shared.css), border included. */
+  --app-top-bar-height: 64px;
 }
 
 .top-bar--web {
-  /* Matches the Hub's nav.top side padding (hub/templates/shared.css) so the app's header reads
-     as the same bar continuing, not a narrower one nested inside it. */
-  padding: 0 24px;
+  /* Matches the Hub's nav.top (hub/templates/shared.css) so the app's header reads as the same
+     bar continuing: same side padding, and the same 4px more at the top than the bottom. */
+  box-sizing: border-box;
+  padding: 4px 24px 0;
 }
 
 .top-bar--web .top-bar-mark {
