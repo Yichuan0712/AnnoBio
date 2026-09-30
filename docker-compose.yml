@@ -60,6 +60,8 @@ services:
       - hub-data:/app/hub/data
       - /var/run/docker.sock:/var/run/docker.sock
       - ./app/dist:/app/frontend-dist:ro
+      # Brand logos, served at /images/* (hub/main.py looks for them next to the hub/ directory).
+      - ./images:/app/images:ro
     networks:
       - prompt-studio-net
 

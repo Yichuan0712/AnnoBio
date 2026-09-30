@@ -2,9 +2,9 @@
 
 # AnnoBio
 
-**Create and optimize your LLM-powered biomedical annotation pipeline.**
+**An app to build, run, and tune LLM pipelines for biomedical annotation.**
 
-Build a prompt pipeline on a visual canvas, run it across your datasets, score it against ground truth, and auto-tune it until it's ready, then share it with your team or move it to the desktop app.
+Classify documents, extract entities and fields, curate literature into structured records, and much more. Use it in your browser, or on Windows and macOS with the desktop app.
 
 ![Screenshot](images/screenshot.png)
 

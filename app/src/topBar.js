@@ -10,6 +10,7 @@ import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 import { openSettingsModal } from './settingsModal.js';
 import { openPythonSettingsModal } from './pythonSettingsModal.js';
 import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaximize.js';
+import logoIconUrl from '../../images/logo.png';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
@@ -23,8 +24,8 @@ export function buildTopBar(root, options) {
 }
 
 // ============================================================================================
-// Desktop — unchanged from the original File/Edit/Settings menu bar (Merge item added, nothing
-// else). Do not fold this into buildWebTopBar or add electronAPI branches to it.
+// Desktop — the original File/Edit/Settings menu bar (Merge item and, except on macOS, the app
+// icon left of File added, nothing else). Do not fold this into buildWebTopBar or add electronAPI branches to it.
 // ============================================================================================
 function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, onMergeProject, onUndo, onRedo, panelToggles }) {
   const bar = document.createElement('nav');
@@ -34,6 +35,15 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
   projectTitleEl.className = 'top-bar-project-title';
   projectTitleEl.textContent = 'AnnoBio';
   bar.appendChild(projectTitleEl);
+
+  // Windows/Linux title bars carry the app icon; macOS ones don't.
+  if (window.electronAPI.platform !== 'darwin') {
+    const appIcon = document.createElement('img');
+    appIcon.className = 'top-bar-app-icon';
+    appIcon.src = logoIconUrl;
+    appIcon.alt = '';
+    bar.appendChild(appIcon);
+  }
 
   const fileBtn = document.createElement('button');
   fileBtn.className = 'menu-item has-submenu';
@@ -314,14 +324,6 @@ const iconLlmChip = () => svgIcon({
   ],
 });
 
-// Brand mark — two nodes flowing into one, drawn in Lucide's own style (24x24, 2px stroke, round
-// caps/joins) to match every other icon here, but an original composition. Same markup as
-// hub/main.py's BRAND_MARK_SVG — one icon, everywhere "AnnoBio" appears.
-const iconBrandMark = () => svgIcon({
-  rects: [[2, 8.5, 7, 7, 1.5], [14, 2, 7, 7, 1.5], [14, 15, 7, 7, 1.5]],
-  paths: ['M9 12v-3a2 2 0 0 1 2-2h3', 'M9 12v3a2 2 0 0 0 2 2h3'],
-});
-
 function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onUndo, onRedo, onPublishToGallery, panelToggles }) {
   document.documentElement.classList.add('top-bar-web');
 
@@ -336,8 +338,22 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
   const brandLink = document.createElement('a');
   brandLink.className = 'top-bar-wordmark';
   brandLink.href = '/';
-  brandLink.appendChild(iconBrandMark());
-  brandLink.appendChild(document.createTextNode('AnnoBio'));
+  brandLink.setAttribute('aria-label', 'AnnoBio');
+  const brandWordmark = document.createElement('img');
+  brandWordmark.className = 'top-bar-logo-full';
+  brandWordmark.src = '/images/logo_name.png';
+  brandWordmark.alt = '';
+  brandLink.appendChild(brandWordmark);
+  // The wordmark's "Anno" is near-black, so dark mode shows the icon beside theme-colored text.
+  const brandDark = document.createElement('span');
+  brandDark.className = 'top-bar-logo-dark';
+  const brandIcon = document.createElement('img');
+  brandIcon.className = 'top-bar-logo';
+  brandIcon.src = '/images/logo.png';
+  brandIcon.alt = '';
+  brandDark.appendChild(brandIcon);
+  brandDark.appendChild(document.createTextNode('AnnoBio'));
+  brandLink.appendChild(brandDark);
   brand.appendChild(brandLink);
   bar.appendChild(brand);
 

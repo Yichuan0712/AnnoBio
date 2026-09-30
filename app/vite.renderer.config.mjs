@@ -7,6 +7,8 @@ export default defineConfig(({ command }) => ({
   // it has no landing page of its own to conflict with.
   base: command === 'build' ? '/app/' : '/',
   server: {
+    // The brand images live in the repo's images/ directory, one level above this Vite root.
+    fs: { allow: ['..'] },
     // Lets `vite dev` alone (no Electron, no Hub) exercise the web build against a directly
     // running `uvicorn main:app --port 8000` backend, matching backendConfig.js's relative
     // BACKEND_API_BASE for non-Electron origins.

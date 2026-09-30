@@ -47,7 +47,7 @@ nav.top {
   display: flex;
   align-items: center;
   gap: 28px;
-  padding: 16px 24px;
+  padding: 16px 24px 12px;
   background: var(--bg-bar);
   border-bottom: 1px solid var(--border);
   position: relative;
@@ -62,8 +62,12 @@ nav.top {
   border: 1px solid var(--border);
   border-radius: 0;
 }
-.brand { display: flex; align-items: center; gap: 7px; font-size: 21px; font-weight: 610; letter-spacing: -0.01em; text-decoration: none; color: var(--text); flex-shrink: 0; transform: translateY(-2px); }
-.brand-mark { width: 19px; height: 19px; color: var(--accent); flex-shrink: 0; transform: translateY(2px); }
+.brand { display: flex; align-items: center; text-decoration: none; color: var(--text); flex-shrink: 0; }
+/* logo_name.png has ~20% transparent padding on every side; the negative margins cancel it so
+   the visible wordmark is ~32px tall without making the nav taller or shifting it right. The
+   letters sit ~3px below the image's center at this size, so top/bottom are uneven to line them
+   up with the nav links. */
+.brand-logo { display: block; height: 52px; width: auto; margin: -13px -13px -7px -15px; }
 .nav-links { display: flex; align-items: center; gap: 4px; flex: 1; }
 .nav-link {
   padding: 7px 10px;

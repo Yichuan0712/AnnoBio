@@ -1090,8 +1090,9 @@ export function openSettingsModal() {
       text = `Could not check this model: ${checkError}`;
       state = 'warning';
     } else if (c.agent_check_ok === true) {
-      text = 'Works with the Agent: it called the test tool.';
-      state = 'ok';
+      // The picker's "Works with the Agent" pill already says it; no status line or re-check.
+      agentStatusEl.hidden = true;
+      return;
     } else if (c.agent_check_ok === false) {
       text = `Cannot drive the Agent: ${c.agent_check_detail || 'it does not call tools.'}`;
       state = 'error';
@@ -1099,6 +1100,7 @@ export function openSettingsModal() {
       const hint = agentHints[c.id];
       text = `Not checked yet. ${hint === true ? 'Its provider lists tool calling for it.' : hint === false ? 'Its provider does not list tool calling for it.' : 'There is no published information on its tool calling.'}`;
     }
+    agentStatusEl.hidden = false;
     agentStatusEl.dataset.state = state;
     agentStatusText.textContent = text;
     agentCheckBtn.hidden = !c || agentChecksInFlight.has(c.id);

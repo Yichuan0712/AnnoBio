@@ -81,20 +81,9 @@ def _require_admin(request: Request) -> dict | None:
     return user if user.get("is_admin") else None
 
 
-# Brand mark — two nodes flowing into one, drawn in Lucide's own style (24x24 grid, 2px stroke,
-# round caps/joins) since that's what every icon elsewhere on the site already uses, but an
-# original composition rather than reusing one of theirs verbatim. Same markup as app/src/topBar.js's
-# brand mark in the Workspace's own top bar — one icon, everywhere "AnnoBio" appears.
-BRAND_MARK_SVG = (
-    '<svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-    '<rect x="2" y="8.5" width="7" height="7" rx="1.5"/>'
-    '<rect x="14" y="2" width="7" height="7" rx="1.5"/>'
-    '<rect x="14" y="15" width="7" height="7" rx="1.5"/>'
-    '<path d="M9 12v-3a2 2 0 0 1 2-2h3"/>'
-    '<path d="M9 12v3a2 2 0 0 0 2 2h3"/>'
-    '</svg>'
-)
+# Wordmark (images/logo_name.png) replaces the old stroke icon plus "AnnoBio" text. The icon-only
+# file (images/logo.png) is the favicon. Both are served from the repo images/ directory.
+BRAND_LOGO = '<img class="brand-logo" src="/images/logo_name.png" alt="AnnoBio">'
 
 NAV_LINKS = [
     ("/", "Home"),
@@ -135,7 +124,7 @@ def render_nav(user: dict | None, active: str = "") -> str:
         )
     return (
         '<nav class="top">'
-        f'<a class="brand" href="/">{BRAND_MARK_SVG}AnnoBio</a>'
+        f'<a class="brand" href="/">{BRAND_LOGO}</a>'
         f'<div class="nav-links">{links_html}</div>'
         f'<div class="nav-actions">{actions_html}</div>'
         '</nav>'
@@ -264,12 +253,15 @@ _SIMPLE_FORM_CSS = """
     border: 1px solid var(--border); border-radius: var(--control-radius);
     background: var(--bg); color: var(--text); font-family: inherit;
   }
-  .simple-form .btn-submit {
-    width: 100%; padding: 8px 14px; font-size: 13px; font-family: inherit;
-    color: var(--accent); background: rgba(37, 99, 235, 0.22); border: 1px solid var(--accent);
-    border-radius: var(--control-radius); cursor: pointer;
+  .simple-form input:-webkit-autofill,
+  .simple-form input:-webkit-autofill:hover,
+  .simple-form input:-webkit-autofill:focus {
+    -webkit-text-fill-color: var(--text);
+    caret-color: var(--text);
+    box-shadow: 0 0 0 1000px var(--bg) inset;
+    border: 1px solid var(--border);
   }
-  .simple-form .btn-submit:hover { background: var(--hover); }
+  .simple-form .btn-submit { width: 100%; }
   .simple-form-footer { margin-top: 14px; font-size: 13px; color: var(--text-muted); }
   .error { background: rgba(200, 0, 0, 0.08); color: #b00020; font-size: 13px; padding: 8px 10px; border-radius: var(--control-radius); margin-bottom: 14px; }
 """
@@ -282,7 +274,7 @@ def forgot_password_page():
       <p class="page-sub">Enter your account email and we'll send you a link to set a new one.</p>
       <form method="post" action="/forgot-password" class="simple-form">
         <div class="field"><input name="email" type="email" placeholder="Email" required></div>
-        <button type="submit" class="btn-submit">Send reset link</button>
+        <button type="submit" class="btn btn-primary btn-submit">Send reset link</button>
       </form>
       <p class="simple-form-footer"><a class="link" href="/login">Back to log in</a></p>
     """
@@ -322,7 +314,7 @@ def _reset_password_form_html(token: str, error: str = "") -> str:
       <form method="post" action="/reset-password" class="simple-form">
         <input type="hidden" name="token" value="{escape(token)}">
         <div class="field"><input name="password" type="password" placeholder="New password (min 8 characters)" minlength="8" required></div>
-        <button type="submit" class="btn-submit">Set new password</button>
+        <button type="submit" class="btn btn-primary btn-submit">Set new password</button>
       </form>
     """
 
@@ -383,10 +375,10 @@ def download_page(request: Request):
     """Public page for the two desktop installers (built by .github/workflows/build-desktop.yml,
     hosted on Google Drive rather than served from the Hub itself)."""
     user = current_user(request)
-    browser_href = "/app" if user else "/register"
+    browser_href = "/app" if user else "/login"
     body = f"""
       <h1>Download AnnoBio</h1>
-      <p class="page-sub">The full Electron app: native file access, local project storage, works entirely offline.</p>
+      <p class="page-sub">The desktop app for Windows and macOS.</p>
       <div class="download-grid">
         <div class="download-card">
           <h3>Windows</h3>
@@ -421,9 +413,9 @@ def about_page(request: Request):
     body = """
       <h1>About AnnoBio</h1>
       <p class="page-sub">
-        Build, tune, and share LLM annotation pipelines for biomedical data. Design a pipeline on
-        a visual canvas, auto-optimize it against ground truth, then turn it into a demo to share
-        with your team, or move it to the desktop app.
+        AnnoBio is an app to build, run, and tune LLM pipelines for biomedical annotation: classify
+        documents, extract entities and fields, curate literature into structured records, and much
+        more, in your browser or on Windows and macOS.
       </p>
       <h2 class="about-heading">Contact</h2>
       <p class="page-sub about-contact-intro">For questions about AnnoBio data, methods, website feedback, or collaboration, please contact:</p>
@@ -865,7 +857,7 @@ def archive_list_page(request: Request):
         grid_html = f'<div class="archive-grid">{cards}</div>'
     body = f"""
       <h1>Gallery</h1>
-      <p class="page-sub">Projects the community has published. Browse freely, and add any of them to your own account to start from.</p>
+      <p class="page-sub">Pipelines other researchers have published, with their prompts, datasets, and scores. Open one to see how it was built, or add it to your account and build on it.</p>
       {grid_html}
     """
     return HTMLResponse(render_page(title="Gallery", user=user, active="/gallery", body=body, extra_css=ARCHIVE_CSS))
@@ -1112,6 +1104,7 @@ async def require_login(request: Request, call_next):
         path in ("/", "/login", "/logout", "/register", "/download", "/guide", "/about", "/gallery", "/forgot-password", "/reset-password")
         or path.startswith("/guide/images/")
         or path.startswith("/gallery-images/")
+        or path.startswith("/images/")
         or (path.startswith("/gallery/") and request.method == "GET")
     ):
         return await call_next(request)
@@ -1134,6 +1127,10 @@ async def api_proxy(request: Request, path: str):
 # request.session (which this middleware populates) to already exist by the time it runs.
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, session_cookie="ps_session")
 
+
+BRAND_IMAGES_DIR = Path(__file__).resolve().parent.parent / "images"
+if BRAND_IMAGES_DIR.is_dir():
+    app.mount("/images", StaticFiles(directory=BRAND_IMAGES_DIR), name="brand-images")
 
 if FRONTEND_DIST.is_dir():
     app.mount("/app", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
