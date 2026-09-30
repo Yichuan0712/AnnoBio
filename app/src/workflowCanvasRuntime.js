@@ -16,6 +16,7 @@ import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { imageCell } from './datasetContent.js';
 import { buildRunResultsTable } from './runResultsExport.js';
+import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettingsModal.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {
   const {
@@ -624,6 +625,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         samples,
         output_schema: outputSchema,
         run_node_id: normalizedRunNodeId,
+        settings_overrides: runSettingsOverrides(node),
     }, undefined, undefined, getCurrentProjectId());
     const data = await response.json().catch(() => ({}));
 
@@ -1464,6 +1466,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         output_fields: outputFields,
         output_schema: outputSchema,
         comparison_rows: comparisonRows,
+        review_method: (scoreNode.dataset.reviewMethod || '').trim() || undefined,
+        score_mapping: scoreNode.dataset.scoreMapping || undefined,
+        target_section_index: Number.isInteger(parseInt(scoreNode.dataset.gepaTargetSectionIndex, 10))
+          ? parseInt(scoreNode.dataset.gepaTargetSectionIndex, 10)
+          : undefined,
+        settings_overrides: reviewSettingsOverrides(scoreNode),
       },
     };
   }

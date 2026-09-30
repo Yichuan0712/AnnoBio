@@ -14,6 +14,7 @@ import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { cloneCell, displayCell } from './datasetContent.js';
 import { deriveOutputFields } from './runResultsExport.js';
+import { openRunSettingsModal, ensureRunNodeModel, runSettingsOverrides } from './nodeSettingsModal.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
@@ -178,11 +179,7 @@ export function openRunDetailModal({
             <div class="run-detail-llm-actions-row">
               <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
               <div class="run-detail-llm-actions-right">
-                <div class="run-detail-llm-row">
-                  <select id="run-detail-llm-select" class="run-detail-llm-select dataset-meta-input" aria-label="Select model">
-                    <option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>
-                  </select>
-                </div>
+                <button type="button" class="btn btn-secondary run-detail-settings-btn">Run settings</button>
                 <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
               </div>
             </div>
@@ -203,7 +200,7 @@ export function openRunDetailModal({
   const triggerColorEl = overlay.querySelector('#run-detail-ws-trigger-color');
   const triggerTextEl = overlay.querySelector('#run-detail-ws-trigger-text');
   const dropdownEl = overlay.querySelector('#run-detail-ws-dropdown');
-  const llmSelectEl = overlay.querySelector('#run-detail-llm-select');
+  const settingsBtn = overlay.querySelector('.run-detail-settings-btn');
   const inputsListEl = overlay.querySelector('#run-detail-inputs-list');
   const runBtn = overlay.querySelector('.run-detail-run-btn');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
@@ -284,7 +281,6 @@ export function openRunDetailModal({
     runBtn.textContent = 'Running, click to stop';
     runBtn.classList.remove('btn-primary');
     runBtn.classList.add('btn-secondary', 'btn-danger');
-    llmSelectEl.disabled = true;
     pickerEl.classList.add('run-detail-ws-picker--locked');
     pickerEl.setAttribute('aria-disabled', 'true');
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
@@ -292,7 +288,6 @@ export function openRunDetailModal({
   }
 
   function applyUnlock() {
-    llmSelectEl.disabled = false;
     pickerEl.classList.remove('run-detail-ws-picker--locked');
     pickerEl.removeAttribute('aria-disabled');
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = false; });
@@ -305,7 +300,6 @@ export function openRunDetailModal({
       runBtn.textContent = 'Run completed';
       runBtn.classList.remove('btn-primary', 'btn-danger');
       runBtn.classList.add('btn-secondary');
-      llmSelectEl.disabled = true;
       pickerEl.classList.add('run-detail-ws-picker--locked');
       pickerEl.setAttribute('aria-disabled', 'true');
       inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
@@ -319,7 +313,6 @@ export function openRunDetailModal({
     const { results } = getNodeResults();
     const isResumeState = results.length > 0;
     if (isResumeState) {
-      llmSelectEl.disabled = true;
       pickerEl.classList.add('run-detail-ws-picker--locked');
       pickerEl.setAttribute('aria-disabled', 'true');
       inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
@@ -331,7 +324,7 @@ export function openRunDetailModal({
     runBtn.classList.add('btn-primary');
     runBtn.textContent = isResumeState ? 'Resume' : 'Run';
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
-    runBtn.disabled = !(selectedNodeId && selectedCredentialId && allMapped);
+    runBtn.disabled = !(selectedNodeId && allMapped);
   }
 
   function getInputHeaders() {
@@ -829,29 +822,25 @@ export function openRunDetailModal({
   overlay.addEventListener('click', (e) => { if (!pickerEl.contains(e.target)) { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); } });
 
   (async () => {
-    llmSelectEl.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>`;
-    try {
-      const [list, settings] = await Promise.all([
-        fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
-        fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
-      ]);
-      (list || []).forEach((c) => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.model || c.llm || c.id; llmSelectEl.appendChild(o); });
-      if (!selectedCredentialId && settings) {
-        const defaultId = (settings.default_run_credential_id || '').trim();
-        if (defaultId && (list || []).some((c) => c.id === defaultId)) selectedCredentialId = defaultId;
-      }
-      if (selectedCredentialId) {
-        llmSelectEl.value = selectedCredentialId;
-        if (node) node.dataset.runCredentialId = selectedCredentialId;
-      }
-      refreshButton();
-    } catch (e) { console.error('Load credentials:', e); }
-  })();
-  llmSelectEl.addEventListener('change', () => {
-    selectedCredentialId = (llmSelectEl.value || '').trim();
-    if (node) node.dataset.runCredentialId = selectedCredentialId || '';
+    if (!node) return;
+    await ensureRunNodeModel(node);
+    selectedCredentialId = (node.dataset.runCredentialId || '').trim();
     refreshButton();
-  });
+  })();
+
+  function openSettings() {
+    if (!node) return Promise.resolve();
+    const modelLocked = isCompleted() || isRunning() || getNodeResults().results.length > 0;
+    return openRunSettingsModal({
+      node,
+      modelLocked,
+      onChange: () => {
+        selectedCredentialId = (node.dataset.runCredentialId || '').trim();
+        refreshButton();
+      },
+    });
+  }
+  settingsBtn.addEventListener('click', () => { void openSettings(); });
 
   runBtn.addEventListener('click', async () => {
     if (isCompleted()) return;
@@ -866,7 +855,11 @@ export function openRunDetailModal({
       refreshButton();
       return;
     }
-    if (!selectedNodeId || !selectedCredentialId) return;
+    if (!selectedNodeId) return;
+    if (!selectedCredentialId) {
+      await openSettings();
+      if (!selectedCredentialId) return;
+    }
 
     let content = getSubsetContent(selectedNodeId);
     try {
@@ -939,6 +932,7 @@ export function openRunDetailModal({
           samples,
           output_schema: outputSchema,
           run_node_id: nodeId || null,
+          settings_overrides: runSettingsOverrides(node),
       }, undefined, undefined, getCurrentProjectId());
       const data = await res.json().catch(() => ({}));
       if (res.status === 202) {

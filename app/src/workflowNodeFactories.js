@@ -1,4 +1,5 @@
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
+import { reviewSettingsOverrides } from './nodeSettingsModal.js';
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
   const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -899,6 +900,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           target_section_index: Number.isInteger(parseInt(node.dataset.gepaTargetSectionIndex, 10))
             ? parseInt(node.dataset.gepaTargetSectionIndex, 10)
             : undefined,
+          settings_overrides: reviewSettingsOverrides(node),
         };
       }
       openScoreDetailModal({

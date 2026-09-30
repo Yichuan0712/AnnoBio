@@ -69,6 +69,7 @@ import { createWorkspacePanels } from './workspacePanels.js';
 import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
 import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight, iconWorkflow } from './icons.js';
+import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettingsModal.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { resolveDataframeProcessCode } from './processCode.js';
@@ -4289,6 +4290,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           runWorkingSetId: (node.dataset.runWorkingSetId || '').trim() || undefined,
           runCredentialId: (node.dataset.runCredentialId || '').trim() || undefined,
           runInputToColumn: node.dataset.runInputToColumn || undefined,
+          runSettings: runSettingsOverrides(node),
           runResults,
           runOutputFields: node.dataset.runOutputFields || undefined,
           runCompleted: node.dataset.runCompleted || undefined,
@@ -4345,6 +4347,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           reviewCredentialId,
           reviewMethod,
           gepaTargetSectionIndex,
+          reviewSettings: reviewSettingsOverrides(node),
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (node.dataset.scoreOutputBracketCollapsed === '1') out.scoreOutputBracketCollapsed = true;
@@ -4475,6 +4478,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.runWorkingSetId) runNode.dataset.runWorkingSetId = n.runWorkingSetId;
         if (n.runCredentialId) runNode.dataset.runCredentialId = n.runCredentialId;
         if (n.runInputToColumn) runNode.dataset.runInputToColumn = n.runInputToColumn;
+        if (n.runSettings && typeof n.runSettings === 'object') runNode.dataset.runSettings = JSON.stringify(n.runSettings);
         if (n.runCompleted) runNode.dataset.runCompleted = n.runCompleted;
         if (n.runInputContent) runNode.dataset.runInputContent = n.runInputContent;
         if (n.runResults) {
@@ -4543,6 +4547,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (Number.isInteger(n.gepaTargetSectionIndex)) {
           scoreNode.dataset.gepaTargetSectionIndex = String(n.gepaTargetSectionIndex);
         }
+        if (n.reviewSettings && typeof n.reviewSettings === 'object') scoreNode.dataset.reviewSettings = JSON.stringify(n.reviewSettings);
         if (n.scoreOutputBracketCollapsed === true) scoreNode.dataset.scoreOutputBracketCollapsed = '1';
         if (n.scoreGtBracketCollapsed === true) scoreNode.dataset.scoreGtBracketCollapsed = '1';
         if (n.scoreTableRulesColumnFilter === true) scoreNode.dataset.scoreTableRulesColumnFilter = '1';
