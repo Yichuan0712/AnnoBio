@@ -42,7 +42,7 @@ _SEP = "=" * 60      # unified separator for LLM prompt/output logs
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from run_output_schema import (
     sanitize_field_name as _sanitize_field_name,
     build_output_model as _build_output_model,
@@ -285,6 +285,33 @@ class SettingsPatch(BaseModel):
     python_path: str | None = None
 
 
+# Settings a single Run node / Review-capable Score node may override for its own jobs (Run settings /
+# Review settings dialogs); anything else in a request's settings_overrides is rejected.
+RUN_SETTINGS_OVERRIDE_KEYS = frozenset({"run_max_tokens", "run_max_retries", "run_concurrency"})
+REVIEW_SETTINGS_OVERRIDE_KEYS = frozenset({
+    "review_max_tokens",
+    "review_max_failed_rows",
+    "gepa_max_iterations",
+    "miprov2_num_trials",
+    "bootstrap_fewshot_num_candidates",
+    "textgrad_num_steps",
+    "copro_breadth",
+    "copro_depth",
+    "simba_max_steps",
+})
+
+
+def _validate_settings_overrides(overrides: dict | None, allowed: frozenset) -> dict:
+    """Same ranges as SettingsPatch; None/missing keys mean "use the global setting"."""
+    if not overrides:
+        return {}
+    unknown = sorted(set(overrides) - allowed)
+    if unknown:
+        raise ValueError(f"Unsupported settings override: {', '.join(unknown)}")
+    patch = SettingsPatch(**overrides)
+    return {k: v for k, v in patch.model_dump().items() if k in allowed and v is not None}
+
+
 class CredentialResponse(BaseModel):
     id: str
     model: str
@@ -335,6 +362,12 @@ class RunRequest(BaseModel):
         return self
     output_schema: dict = Field(..., description="return_shape + fields: [{ key, type, description?, allow_none? }]")
     run_node_id: str | None = Field(default=None, description="Frontend Run node id for correlation when polling")
+    settings_overrides: dict | None = Field(default=None, description="Per-Run-node run_max_tokens / run_max_retries / run_concurrency")
+
+    @field_validator("settings_overrides")
+    @classmethod
+    def check_settings_overrides(cls, value):
+        return _validate_settings_overrides(value, RUN_SETTINGS_OVERRIDE_KEYS)
 
 
 class PipelineExportRequest(BaseModel):
@@ -395,6 +428,12 @@ class ReviewRequest(BaseModel):
     review_method: str | None = Field(default=None, description="Registered review method id (backend/review_methods.py); defaults to the legacy issue-analysis + suggested-changes pipeline")
     target_section_index: int | None = Field(default=None, description="0-based prompt_sections index a whole-section-rewrite method (e.g. gepa) should optimize; defaults to section 0 when omitted")
     score_mapping: str | None = Field(default=None, description="Serialized Score rule-tree bundle (scoreMappingBundle.js) from the upstream Score node; only methods that self-score candidates (e.g. gepa) need this")
+    settings_overrides: dict | None = Field(default=None, description="Per-Score-node Review settings (REVIEW_SETTINGS_OVERRIDE_KEYS)")
+
+    @field_validator("settings_overrides")
+    @classmethod
+    def check_settings_overrides(cls, value):
+        return _validate_settings_overrides(value, REVIEW_SETTINGS_OVERRIDE_KEYS)
 
     @model_validator(mode="after")
     def image_inputs_require_session(self):
@@ -1252,6 +1291,7 @@ def _do_run_work(
     prompts: list,
     output_schema: dict,
     project_session_id: str | None = None,
+    settings_overrides: dict | None = None,
 ) -> None:
     """Background worker: run prompts row by row. Stops when cancelled or when client has not polled for RUN_ABANDON_TIMEOUT_SEC."""
     try:
@@ -1307,7 +1347,7 @@ def _do_run_work(
             output_fields.append({"display": display, "key": name})
 
         total = len(prompts)
-        run_settings = _load_settings()
+        run_settings = {**_load_settings(), **(settings_overrides or {})}
         run_max_tokens = run_settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"]
         with _run_jobs_lock:
             _run_jobs[run_id]["total"] = total
@@ -1506,7 +1546,7 @@ def run_prompts(body: RunRequest):
     _persist_run_jobs()
     thread = threading.Thread(
         target=_do_run_work,
-        args=(run_id, body.credential_id, body.prompts if body.prompts is not None else body.samples, body.output_schema, body.project_session_id),
+        args=(run_id, body.credential_id, body.prompts if body.prompts is not None else body.samples, body.output_schema, body.project_session_id, body.settings_overrides),
         daemon=True,
     )
     thread.start()
@@ -2905,7 +2945,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
 
         from review_methods import get_review_method
 
-        st = _load_settings()
+        st = {**_load_settings(), **(body.settings_overrides or {})}
         review_method = get_review_method(_resolve_review_method_id(body.review_method, st))
 
         provider = _credential_provider(cred)

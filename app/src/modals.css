@@ -2545,10 +2545,9 @@
   line-height: 1.2;
 }
 
-/* Run / Score 详情：标签、下拉、主按钮的间距与下拉宽度（两处一致） */
+/* Run / Score 详情：设置按钮与主按钮的间距（两处一致） */
 .modal-panel--run-detail,
 .modal-panel--score-detail {
-  --detail-llm-select-width: 165px;
   --detail-llm-inline-gap: 12px;
 }
 
@@ -3324,16 +3323,6 @@
   overflow: hidden;
 }
 
-.score-detail-preview-title {
-  margin: 0;
-  padding: 12px 20px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
 .score-detail-preview-content {
   flex: 1 1 0;
   min-height: 0;
@@ -3406,30 +3395,10 @@
   flex-shrink: 0;
 }
 
-.score-detail-llm-row {
-  display: flex;
-  align-items: center;
-  gap: var(--detail-llm-inline-gap);
+/* Stays clickable while the Run panel is locked (only the model is frozen then). */
+.run-detail-settings-btn {
   flex-shrink: 0;
-}
-
-/* Run / Score footer：凭据下拉统一宽度 */
-.run-detail-llm-actions-row .run-detail-llm-select,
-.score-detail-llm-row .score-detail-llm-select {
-  width: var(--detail-llm-select-width);
-  min-width: min(var(--detail-llm-select-width), 100%);
-  max-width: 100%;
-  box-sizing: border-box;
-  flex: 0 0 auto;
-}
-
-.score-detail-llm-row .score-detail-review-method-select,
-.score-detail-llm-row .score-detail-target-section-select {
-  width: calc(var(--detail-llm-select-width) * 0.85);
-  min-width: min(calc(var(--detail-llm-select-width) * 0.85), 100%);
-  max-width: 100%;
-  box-sizing: border-box;
-  flex: 0 0 auto;
+  cursor: pointer;
 }
 
 /* Review detail modal: 高度同 Prompt 详情；宽度与 Run 详情展开态一致 */
@@ -4494,18 +4463,6 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   border-left: 2px solid var(--text-muted, rgba(0, 0, 0, 0.4)) !important;
 }
 
-/* Score 页脚模型选择框与 Review 按钮同高 */
-.score-detail-llm-row .score-detail-llm-select,
-.score-detail-llm-row .score-detail-review-method-select,
-.score-detail-llm-row .score-detail-target-section-select {
-  height: 36px;
-  min-height: 36px;
-  padding: 0 14px;
-  font-size: 13px;
-  border: 1px solid var(--border);
-  box-sizing: border-box;
-}
-
 .rule-editor-hint {
   margin: 0 0 8px;
   font-size: 12px;
@@ -5282,19 +5239,6 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
-}
-
-.run-detail-llm-select {
-  min-width: 0;
-}
-/* 锁定后 select 被 disabled，浏览器会改色；强制与未锁定时一致 */
-.run-detail-llm-select:disabled,
-.run-detail-main--locked .run-detail-llm-select {
-  background: var(--bg);
-  color: var(--text);
-  border-color: var(--border);
-  opacity: 1;
-  cursor: not-allowed;
 }
 
 .run-detail-main--locked {
@@ -8422,6 +8366,43 @@ button.btn.btn-danger:hover:not(:disabled) {
 /* Python settings modal: interpreter path + Browse/Test row */
 .modal-panel--python-settings {
   min-width: min(620px, 92vw);
+}
+
+/* Run settings / Review settings (nodeSettingsModal.js) */
+.modal-panel--node-settings {
+  width: min(560px, 92vw);
+}
+
+.node-settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  row-gap: 0.75rem;
+  column-gap: 1.5rem;
+  align-items: end;
+}
+
+.node-settings-field {
+  min-width: 0;
+}
+
+.node-settings-field[hidden] {
+  display: none;
+}
+
+.node-settings-field--full {
+  grid-column: 1 / -1;
+}
+
+.node-settings-field .dataset-meta-input {
+  width: 100%;
+  height: 40px;
+  box-sizing: border-box;
+}
+
+.node-settings-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .settings-python-path-row {

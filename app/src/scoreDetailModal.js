@@ -59,6 +59,7 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { prepareReviewBody, prepareAssets } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { displayCell, cloneCell, isAssetCell } from './datasetContent.js';
+import { openReviewSettingsModal, ensureScoreReviewDefaults } from './nodeSettingsModal.js';
 
 const API_BASE = BACKEND_API_BASE;
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -917,6 +918,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     review_method: payload.review_method || undefined,
     score_mapping: payload.score_mapping || undefined,
     target_section_index: Number.isInteger(payload.target_section_index) ? payload.target_section_index : undefined,
+    settings_overrides: payload.settings_overrides || undefined,
     prompt_sections: payload.prompt_sections,
     run_results: payload.run_results || [],
     output_fields: payload.output_fields || [],
@@ -1512,7 +1514,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           </div>
         </div>
         <div class="score-detail-preview-wrap">
-          <h3 class="run-detail-preview-title score-detail-preview-title">Results</h3>
+          <div class="run-detail-preview-header">
+            <h3 class="run-detail-preview-title">Results</h3>
+          </div>
           <div class="score-detail-preview-content">
             <div class="score-detail-results-card run-detail-results-card" id="score-detail-results-card">
               <div id="score-detail-results-body" class="score-detail-results-body-inner"></div>
@@ -1520,11 +1524,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <div class="score-detail-results-footer-row" id="score-detail-results-footer-row" hidden>
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
-                  <div class="score-detail-llm-row">
-                    <select id="score-detail-review-method-select" class="credentials-select score-detail-review-method-select" aria-label="Select review method" title="Review method: how suggestions are generated"></select>
-                    <select id="score-detail-target-section-select" class="credentials-select score-detail-target-section-select" aria-label="Section for GEPA to optimize" title="Which prompt section GEPA should evolve" hidden></select>
-                    <select id="score-detail-llm-select" class="credentials-select score-detail-llm-select" aria-label="Select model"></select>
-                  </div>
+                  <button type="button" class="btn btn-secondary score-detail-review-settings-btn">Review settings</button>
                   <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create a Review node and run analysis with the selected model">Review</button>
                   <button type="button" class="btn btn-secondary score-detail-review-payload-preview" id="score-detail-review-payload-preview" title="Temporary: preview Review payload by input (model output vs ground-truth tables per group). Does not start a Review job.">Debug</button>
                 </div>
@@ -1549,12 +1549,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const codeHostEl = overlay.querySelector('#score-detail-code-host');
   const codeResultsEl = overlay.querySelector('#score-detail-code-results');
   const codeRunBtn = overlay.querySelector('.score-detail-code-run-btn');
-  const llmSelect = overlay.querySelector('#score-detail-llm-select');
-  const reviewMethodSelect = overlay.querySelector('#score-detail-review-method-select');
-  const targetSectionSelect = overlay.querySelector('#score-detail-target-section-select');
-  /** Review methods that optimize one whole prompt section rather than emitting localized edits; only
-   * these need the "which section" picker (mirrors the per-method settings visibility in settingsModal.js). */
-  const REVIEW_METHODS_WITH_TARGET_SECTION = new Set(['gepa', 'miprov2', 'bootstrap_fewshot', 'textgrad', 'copro', 'simba']);
+  const reviewSettingsBtn = overlay.querySelector('.score-detail-review-settings-btn');
   const saveToWorkspaceBtn = overlay.querySelector('#score-detail-save-to-workspace');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
   const reviewPayloadPreviewBtn = overlay.querySelector('#score-detail-review-payload-preview');
@@ -3358,88 +3353,27 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       !payload || !payload.prompt_sections || payload.prompt_sections.length === 0 || !selectedNodeId;
     if (addPromptReviewBtn) addPromptReviewBtn.disabled = reviewDisabled;
     if (reviewPayloadPreviewBtn) reviewPayloadPreviewBtn.disabled = reviewDisabled;
-    await updateTargetSectionVisibility();
     await updateSaveToWorkspaceButton();
   }
 
-  async function loadReviewCredentials() {
-    try {
-      const [list, settings] = await Promise.all([
-        fetch(`${API_BASE}/api/credentials`).then((r) => r.ok ? r.json() : []),
-        fetch(`${API_BASE}/api/settings`).then((r) => r.ok ? r.json() : null),
-      ]);
-      llmSelect.innerHTML = `<option value="">${escapeHtml(selectPlaceholderLabel('Select model'))}</option>` + (list || []).map((c) => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.model || c.llm || '')}</option>`).join('');
-      let credentialId = (node?.dataset?.reviewCredentialId || '').trim();
-      if (!credentialId && settings) {
-        const defaultId = (settings.default_review_credential_id || '').trim();
-        if (defaultId && (list || []).some((c) => c.id === defaultId)) credentialId = defaultId;
-      }
-      if (reviewPayloadPreviewBtn) reviewPayloadPreviewBtn.hidden = !(settings?.debug_mode === true);
-      if (credentialId) {
-        llmSelect.value = credentialId;
-        if (node) node.dataset.reviewCredentialId = credentialId;
-      }
-    } catch (_) {}
+  async function loadReviewDefaults() {
+    if (!node) return;
+    const settings = await ensureScoreReviewDefaults(node);
+    if (reviewPayloadPreviewBtn) reviewPayloadPreviewBtn.hidden = !(settings?.debug_mode === true);
     void updateReviewButtonState();
   }
 
-  async function loadReviewMethods() {
-    if (!reviewMethodSelect) return;
-    try {
-      const [methodsRes, settingsRes] = await Promise.all([
-        fetch(`${API_BASE}/api/review/methods`),
-        fetch(`${API_BASE}/api/settings`),
-      ]);
-      const data = methodsRes.ok ? await methodsRes.json() : null;
-      const settings = settingsRes.ok ? await settingsRes.json() : null;
-      const methods = Array.isArray(data?.methods) ? data.methods : [];
-      if (methods.length <= 1) {
-        /* Nothing to choose between — don't show a picker with one option. */
-        reviewMethodSelect.hidden = true;
-        if (node && methods.length === 1) node.dataset.reviewMethod = methods[0].id;
-        return;
-      }
-      reviewMethodSelect.hidden = false;
-      reviewMethodSelect.innerHTML = methods
-        .map((m) => `<option value="${escapeAttr(m.id)}">${escapeHtml(m.label || m.id)}</option>`)
-        .join('');
-      let methodId = (node?.dataset?.reviewMethod || '').trim();
-      if (!methodId || !methods.some((m) => m.id === methodId)) {
-        const defaultId = (settings?.default_review_method || '').trim();
-        methodId = defaultId && methods.some((m) => m.id === defaultId) ? defaultId : methods[0].id;
-      }
-      reviewMethodSelect.value = methodId;
-      if (node) node.dataset.reviewMethod = methodId;
-    } catch (_) {}
-    await updateTargetSectionVisibility();
+  function openReviewSettings() {
+    if (!node) return Promise.resolve();
+    return openReviewSettingsModal({
+      node,
+      getPromptSections: async () => {
+        const payload = await Promise.resolve(getReviewPayload && getReviewPayload());
+        return Array.isArray(payload?.prompt_sections) ? payload.prompt_sections : [];
+      },
+    });
   }
-
-  /** Only methods in REVIEW_METHODS_WITH_TARGET_SECTION show this — the built-in method and any other
-   * localized-edit method have no use for "which section", since their edits target spans wherever the
-   * LLM finds them, not one section chosen up front. */
-  async function updateTargetSectionVisibility() {
-    if (!targetSectionSelect) return;
-    const wantsSection = REVIEW_METHODS_WITH_TARGET_SECTION.has((reviewMethodSelect?.value || '').trim());
-    if (!wantsSection) {
-      targetSectionSelect.hidden = true;
-      return;
-    }
-    const payload = await Promise.resolve(getReviewPayload && getReviewPayload());
-    const sections = Array.isArray(payload?.prompt_sections) ? payload.prompt_sections : [];
-    if (sections.length <= 1) {
-      /* Nothing to choose between — don't show a picker with one option. */
-      targetSectionSelect.hidden = true;
-      return;
-    }
-    targetSectionSelect.hidden = false;
-    targetSectionSelect.innerHTML = sections
-      .map((s, i) => `<option value="${i}">${escapeHtml((s?.name || '').trim() || `Section ${i + 1}`)}</option>`)
-      .join('');
-    const saved = parseInt(node?.dataset?.gepaTargetSectionIndex, 10);
-    const idx = Number.isInteger(saved) && saved >= 0 && saved < sections.length ? saved : 0;
-    targetSectionSelect.value = String(idx);
-    if (node) node.dataset.gepaTargetSectionIndex = String(idx);
-  }
+  reviewSettingsBtn.addEventListener('click', () => { void openReviewSettings(); });
 
   async function updateSaveToWorkspaceButton() {
     if (!saveToWorkspaceBtn) return;
@@ -3453,35 +3387,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     } catch (_) {
       saveToWorkspaceBtn.disabled = true;
     }
-  }
-
-  llmSelect.addEventListener('change', () => {
-    const v = (llmSelect.value || '').trim();
-    if (node) {
-      node.dataset.reviewCredentialId = v;
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    }
-  });
-
-  if (reviewMethodSelect) {
-    reviewMethodSelect.addEventListener('change', () => {
-      const v = (reviewMethodSelect.value || '').trim();
-      if (node) {
-        node.dataset.reviewMethod = v;
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      }
-      void updateTargetSectionVisibility();
-    });
-  }
-
-  if (targetSectionSelect) {
-    targetSectionSelect.addEventListener('change', () => {
-      const v = (targetSectionSelect.value || '').trim();
-      if (node) {
-        node.dataset.gepaTargetSectionIndex = v;
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      }
-    });
   }
 
   if (saveToWorkspaceBtn) {
@@ -3506,11 +3411,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   addPromptReviewBtn.addEventListener('click', async () => {
     if (!node?.dataset?.nodeId) return;
-    const credentialId = (llmSelect?.value || '').trim();
-    if (!credentialId) {
-      showAlert('Select a model for Review before starting.', { title: 'Review' });
-      return;
+    if (!(node.dataset.reviewCredentialId || '').trim()) {
+      await openReviewSettings();
     }
+    const credentialId = (node.dataset.reviewCredentialId || '').trim();
+    if (!credentialId) return;
     await runReviewFromScore({
       scoreNodeId: node.dataset.nodeId,
       getReviewPayload,
@@ -3710,8 +3615,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   syncRulesSectionVisibility();
   syncRulesTabUi();
   renderRules();
-  loadReviewCredentials();
-  loadReviewMethods();
+  void loadReviewDefaults();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
   if (selectedNodeId) {
