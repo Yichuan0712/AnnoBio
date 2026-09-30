@@ -164,6 +164,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
                   <button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button>
                   <button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button>
                   <button type="button" class="btn btn-primary working-dataset-sample">Sample</button>
+                  <button type="button" class="btn btn-primary working-dataset-process">Process with code</button>
                 </div>
               </div>
             </div>
@@ -188,6 +189,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   const deleteRowBtn = overlay.querySelector('.working-dataset-delete-row');
   const deleteColBtn = overlay.querySelector('.working-dataset-delete-col');
   const sampleBtn = overlay.querySelector('.working-dataset-sample');
+  const processBtn = overlay.querySelector('.working-dataset-process');
   const exportLocalBtn = overlay.querySelector('.working-dataset-export-local');
   const searchInp = overlay.querySelector('#wd-preview-search');
   const summaryEl = overlay.querySelector('.wd-summary');
@@ -1700,6 +1702,17 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     sampleBtn.addEventListener('click', () => {
       if (!node?.dataset?.nodeId) return;
       document.dispatchEvent(new CustomEvent('workflow:add-sampler-node', {
+        detail: { sourceNodeId: node.dataset.nodeId },
+      }));
+      close();
+    });
+  }
+
+  if (processBtn) {
+    processBtn.disabled = !node?.dataset?.nodeId;
+    processBtn.addEventListener('click', () => {
+      if (!node?.dataset?.nodeId) return;
+      document.dispatchEvent(new CustomEvent('workflow:add-process-node', {
         detail: { sourceNodeId: node.dataset.nodeId },
       }));
       close();
