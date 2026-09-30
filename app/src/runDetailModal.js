@@ -189,7 +189,9 @@ export function openRunDetailModal({
           </div>
         </div>
         <div class="run-detail-preview-wrap">
-          <h3 class="run-detail-preview-title">Results</h3>
+          <div class="run-detail-preview-header">
+            <h3 class="run-detail-preview-title">Results</h3>
+          </div>
           <div class="run-detail-preview-content"></div>
         </div>
       </div>
