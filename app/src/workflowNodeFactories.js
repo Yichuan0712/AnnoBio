@@ -1,5 +1,6 @@
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { reviewSettingsOverrides } from './nodeSettingsModal.js';
+import { datasetColorAt } from './workflowNodeColors.js';
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
   const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -272,7 +273,7 @@ export function createWorkflowNodeFactories(deps = {}) {
               const id = n.dataset.nodeId || '';
               const content = datasetContentByNodeId.get(id);
               const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
-              const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+              const color = datasetColorAt(colorIndex);
               return {
                 nodeId: id,
                 name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
@@ -425,7 +426,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (processOutputName) node.dataset.processOutputName = processOutputName;
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticDatasetColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
-    node.style.borderColor = DATASET_BORDER_COLORS[colorIndex];
+    node.style.borderColor = datasetColorAt(colorIndex);
     if (Array.isArray(headers) && Array.isArray(rows)) datasetContentByNodeId.set(nodeId, { headers, rows, columnTypes, rowIds });
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
@@ -556,7 +557,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         const id = n.dataset.nodeId || '';
         const content = datasetContentByNodeId.get(id);
         const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
-        const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+        const color = datasetColorAt(colorIndex);
         return {
           nodeId: id,
           name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
@@ -685,7 +686,7 @@ export function createWorkflowNodeFactories(deps = {}) {
             return {
               nodeId: datasetNode.dataset.nodeId,
               name: datasetNode.dataset.datasetName || 'Dataset',
-              color: DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length],
+              color: datasetColorAt(colorIndex),
               content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
             };
           })
@@ -778,7 +779,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         const id = n.dataset.nodeId || '';
         const content = datasetContentByNodeId.get(id);
         const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
-        const color = DATASET_BORDER_COLORS[colorIndex % DATASET_BORDER_COLORS.length];
+        const color = datasetColorAt(colorIndex);
         return {
           nodeId: id,
           name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',

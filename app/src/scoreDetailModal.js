@@ -67,15 +67,6 @@ const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 const MATCH_CODE_MAX_COMMENT_LINE_CHARS = 70;
 const MATCH_CODE_POLL_INTERVAL_MS = 1200;
 
-const MATCH_CODE_FALLBACK = `def match(input_row, output_row, gt_row):
-    # input_row: this run row's input columns, keyed by column name.
-    # output_row: this run row's model output fields, keyed by field name.
-    # gt_row: a candidate ground-truth row's columns, keyed by column name.
-    # Return a truthy value if this run row and ground-truth row should be paired
-    # and counted as a match; falsy otherwise.
-    return True
-`;
-
 /** Wraps a comma-separated list into comment-prefixed lines no longer than MATCH_CODE_MAX_COMMENT_LINE_CHARS. */
 function wrapMatchCommentList(prefix, continuationPrefix, items) {
   const lines = [];
@@ -93,22 +84,52 @@ function wrapMatchCommentList(prefix, continuationPrefix, items) {
   return lines.join('\n');
 }
 
-/** Builds sample code listing the run/ground-truth's actual columns, so the user can edit in place. */
+/** Builds sample code from the run/ground-truth's actual columns, so the user can edit in place.
+ * In code mode a True pair is scored as correct, so the sample must compare real fields rather
+ * than return True unconditionally (that would pair rows in order and score 100%). */
 function buildMatchDefaultCode(inputHeaders, outputKeys, gtHeaders) {
-  const inCols = (Array.isArray(inputHeaders) ? inputHeaders : []).map((h) => String(h ?? ''));
-  const outCols = (Array.isArray(outputKeys) ? outputKeys : []).map((h) => String(h ?? ''));
-  const gtCols = (Array.isArray(gtHeaders) ? gtHeaders : []).map((h) => String(h ?? ''));
-  if (inCols.length === 0 && outCols.length === 0 && gtCols.length === 0) return MATCH_CODE_FALLBACK;
-  const commentLines = [];
-  if (inCols.length) commentLines.push(wrapMatchCommentList('    # input_row columns: ', '    #   ', inCols));
-  if (outCols.length) commentLines.push(wrapMatchCommentList('    # output_row fields: ', '    #   ', outCols));
-  if (gtCols.length) commentLines.push(wrapMatchCommentList('    # gt_row columns: ', '    #   ', gtCols));
-  return `def match(input_row, output_row, gt_row):
-${commentLines.join('\n')}
-    # Return a truthy value if this run row and ground-truth row should be paired
-    # and counted as a match; falsy otherwise -- edit the comparison below to fit your task.
-    # return output_row.get("col name") == gt_row.get("col name")
-    return True
+  const clean = (list) => (Array.isArray(list) ? list : []).map((h) => String(h ?? '')).filter(Boolean);
+  const inCols = clean(inputHeaders);
+  const outCols = clean(outputKeys);
+  const gtCols = clean(gtHeaders);
+  const sharedAnswer = outCols.find((c) => gtCols.includes(c));
+  const outKey = JSON.stringify(sharedAnswer || outCols[0] || 'answer');
+  const gtKey = JSON.stringify(sharedAnswer || gtCols.find((c) => !inCols.includes(c)) || gtCols[0] || 'answer');
+  const sharedId = inCols.find((c) => gtCols.includes(c));
+  const commentLines = [
+    inCols.length ? wrapMatchCommentList('    # input_row columns: ', '    #   ', inCols) : '',
+    outCols.length ? wrapMatchCommentList('    # output_row fields: ', '    #   ', outCols) : '',
+    gtCols.length ? wrapMatchCommentList('    # gt_row columns: ', '    #   ', gtCols) : '',
+  ].filter(Boolean);
+  const idKey = JSON.stringify(sharedId || 'id');
+  const sameItemLines = sharedId
+    ? `    # Same item? Both sides have ${idKey}; drop this check if it isn't an ID.
+    if norm(input_row.get(${idKey})) != norm(gt_row.get(${idKey})):
+        return False
+`
+    : `    # If both sides share an ID column, check it first so rows pair correctly:
+    #   if norm(input_row.get(${idKey})) != norm(gt_row.get(${idKey})):
+    #       return False
+`;
+  return `def norm(value):
+    """Lower-case and collapse whitespace so formatting differences still match."""
+    return " ".join(str(value if value is not None else "").split()).lower()
+
+
+def match(input_row, output_row, gt_row):
+    # Called per (Run row, ground-truth row) pair, in order, until it returns
+    # True. A True pair is scored as correct; that ground-truth row is then
+    # not reused. input_row / output_row / gt_row are dicts keyed by name.
+${commentLines.length ? `${commentLines.join('\n')}\n` : ''}    #
+${sameItemLines}
+    # Is the model's answer right?
+    predicted = norm(output_row.get(${outKey}))
+    expected = norm(gt_row.get(${gtKey}))
+    # Other checks you can return instead:
+    #   return expected in predicted                            # contains
+    #   return abs(float(predicted) - float(expected)) < 0.01   # numeric
+    #   return set(predicted.split(";")) == set(expected.split(";"))  # same set
+    return predicted != "" and predicted == expected
 `;
 }
 
@@ -1614,7 +1635,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const outKeys0 = (outputFields0 || []).map((f) => f?.key || f?.display || '').filter(Boolean);
       return buildMatchDefaultCode(runWs0.headers, outKeys0, gtHeaders0);
     } catch (_) {
-      return MATCH_CODE_FALLBACK;
+      return buildMatchDefaultCode([], [], []);
     }
   })();
 
@@ -3528,6 +3549,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     selectedNodeId = id || '';
     if (node) {
       node.dataset.scoreGroundTruthId = selectedNodeId || '';
+      document.dispatchEvent(new CustomEvent('workflow:score-ground-truth-changed'));
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
     updateTriggerDisplay();

@@ -5365,6 +5365,12 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   background: transparent;
 }
 
+/* !important beats the inline display the pickers set on the trigger swatch. */
+:root[data-node-colors="off"] .run-detail-ws-trigger-color,
+:root[data-node-colors="off"] .run-detail-ws-option-color {
+  display: none !important;
+}
+
 .run-detail-ws-option-text {
   flex: 1;
   min-width: 0;
