@@ -1,5 +1,11 @@
 # Python Pipeline Export
 
+Implementation update (2026-10-01): export now compiles the selected route with
+`pipeline_compile.py`, then renders PipelineSpec through `pipeline_export_spec.py`.
+Linear and DAG code layouts share the compiler. The archive retains `route`/`graph`
+and adds a code-only `execution` spec to `pipeline.json`. Multi-input and Process-only
+export remain explicit capability limitations. See [PipelineSpec v1](PIPELINE_SPEC_V1.md).
+
 ## Goal
 
 Export the route currently selected in **Current Pipeline** as a standalone Python code project.
@@ -150,8 +156,8 @@ saved Run results and cached Process results are not exported as execution state
 
 ### Process
 
-- `row` mode preserves the user's `process(row)` function.
-- `df` mode preserves the user's `process(df)` function and adds `pandas` to requirements.
+- Current Process code uses `process(df)`; the compiler adapts legacy `process(row)` to that contract.
+- The archive preserves the normalized dataframe function and includes `pandas` in requirements.
 - The generated entry point imports and calls the function directly, without the subprocess wrapper
   used by the interactive app.
 
@@ -167,6 +173,8 @@ A selected Prompt version and its selected Run become one executable Prompt step
 - Provider, model, and optional base URL may be exported as non-secret defaults.
 - API keys and credential IDs are never exported. The README and `.env.example` describe the
   environment variables the user must set.
+- Per-Run max tokens, retries and concurrency are resolved during compilation. `--concurrency`
+  overrides them only when explicitly supplied; model/engine environment overrides retain their existing behavior.
 
 #### Duplicated and manually edited Prompts
 

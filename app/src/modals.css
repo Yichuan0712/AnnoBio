@@ -8643,6 +8643,79 @@ button.btn.btn-danger:hover:not(:disabled) {
   font-size: 12.5px; padding: 2px 4px; border: 1px solid var(--border);
   border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); font-family: inherit;
 }
+.pipeline-run-action,
+.pipeline-save-artifact { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
+.pipeline-run-validation {
+  margin-top: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-bar); color: var(--text-muted); font-size: 12px;
+}
+.pipeline-run-validation--error { border-color: rgba(192, 57, 43, 0.5); }
+.pipeline-run-validation--ok { border-color: rgba(16, 137, 62, 0.45); }
+.pipeline-run-validation ul { margin: 6px 0 0; padding-left: 18px; }
+.pipeline-validation-plan { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; color: var(--text-muted); }
+.pipeline-validation-plan span { overflow-wrap: anywhere; }
+.pipeline-run-diagnostic--error { color: #c0392b; }
+.pipeline-run-diagnostic--warning { color: #9a6700; }
+.pipeline-run-panel {
+  margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--bg-bar); min-width: 0;
+}
+.pipeline-run-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-muted); font-size: 12px; }
+.pipeline-run-summary code { margin-left: auto; color: var(--text-muted); }
+.pipeline-run-status,
+.pipeline-job-status {
+  display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 7px;
+  background: rgba(100, 116, 139, 0.14); color: var(--text-muted); font-size: 10.5px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.035em;
+}
+.pipeline-run-status--running,
+.pipeline-run-status--pending,
+.pipeline-job-status--running { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
+.pipeline-run-status--succeeded,
+.pipeline-job-status--succeeded { background: rgba(16, 137, 62, 0.14); color: #10893e; }
+.pipeline-run-status--failed,
+.pipeline-run-status--interrupted,
+.pipeline-job-status--failed,
+.pipeline-job-status--interrupted { background: rgba(192, 57, 43, 0.13); color: #c0392b; }
+.pipeline-run-status--cancelled,
+.pipeline-run-status--cancelling,
+.pipeline-job-status--cancelled,
+.pipeline-job-status--blocked { background: rgba(154, 103, 0, 0.14); color: #9a6700; }
+.pipeline-run-error,
+.pipeline-job-error { color: #c0392b; font-size: 12px; overflow-wrap: anywhere; }
+.pipeline-run-error { margin-top: 7px; }
+.pipeline-job-error { grid-column: 2 / -1; margin-top: 2px; }
+.pipeline-job-list { display: grid; gap: 5px; margin: 9px 0 0; padding: 0; list-style: none; }
+.pipeline-job-list li {
+  display: grid; grid-template-columns: auto minmax(90px, 0.7fr) minmax(140px, 1.4fr);
+  align-items: center; gap: 7px; min-width: 0; font-size: 12px;
+}
+.pipeline-job-list li > span:last-of-type { color: var(--text-muted); overflow-wrap: anywhere; }
+.pipeline-artifact-list { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; font-size: 11px; color: var(--text-muted); }
+.pipeline-artifact-chip {
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text);
+  padding: 3px 8px; font: inherit; cursor: pointer;
+}
+.pipeline-artifact-chip:hover { border-color: var(--accent); }
+.pipeline-artifact-chip span { color: var(--text-muted); margin-left: 3px; }
+.pipeline-artifact-chip--partial { border-style: dashed; color: #9a6700; }
+.pipeline-artifact-preview { margin-top: 10px; min-width: 0; }
+.pipeline-artifact-preview-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.pipeline-artifact-preview-header > span { color: var(--text-muted); }
+.pipeline-artifact-preview-header .pipeline-save-artifact { margin-left: auto; }
+.pipeline-artifact-table-wrap { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.pipeline-artifact-table { border-collapse: collapse; min-width: 100%; font-size: 11px; }
+.pipeline-artifact-table th,
+.pipeline-artifact-table td { padding: 5px 7px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.pipeline-artifact-table th { position: sticky; top: 0; background: var(--bg-bar); color: var(--text-muted); }
+.pipeline-artifact-preview-note,
+.pipeline-run-detached-note { margin: 6px 0 0; color: var(--text-muted); font-size: 11px; }
+.pipeline-overview-card--detached { border-top: 1px dashed var(--border); padding-top: 12px; }
+
+@media (max-width: 620px) {
+  .pipeline-job-list li { grid-template-columns: auto 1fr; }
+  .pipeline-job-list li > span:last-of-type { grid-column: 2; }
+}
 
 /* 右栏：结果表格 + 搜索 + 分页 + Save to workspace，全部复用 run-detail-results-* 系列
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */

@@ -9,3 +9,6 @@ Classify documents, extract entities and fields, curate literature into structur
 ![Screenshot](images/screenshot.png)
 
 </div>
+
+See [Running a Pipeline](docs/PIPELINE_GUIDE.md) for validation, whole-Pipeline execution,
+checkpoint recovery, revisions, Artifacts and Python export.
