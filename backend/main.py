@@ -69,6 +69,12 @@ from llm import (
     stream_chat_with_tools as llm_stream_chat_with_tools,
 )
 from pipeline_export import PipelineExportError, build_pipeline_archive
+from pipeline_runner import (
+    PipelineCompileFailure,
+    PipelineRunConflict,
+    PipelineRunner,
+    PipelineRunNotFound,
+)
 from provider_detect import detect_provider, verify_credential
 
 from asset_store import router as asset_router, resolve_content
@@ -131,6 +137,7 @@ CHEMBL_JOBS_FILE = DATA_DIR / "chembl_jobs.json"
 PROCESS_JOBS_FILE = DATA_DIR / "process_jobs.json"
 MATCH_JOBS_FILE = DATA_DIR / "match_jobs.json"
 PROCESS_DF_JOBS_FILE = DATA_DIR / "process_df_jobs.json"
+PIPELINE_RUNS_DIR = DATA_DIR / "pipeline_runs"
 
 DEFAULT_SETTINGS = {
     "default_run_credential_id": "",
@@ -376,6 +383,26 @@ class PipelineExportRequest(BaseModel):
     name: str = Field(default="pipeline", min_length=1, max_length=120)
     canvas_state: dict[str, Any]
     route: list[dict[str, Any]] = Field(..., min_length=1)
+    input_dataset_ids: list[str] | None = None
+
+
+class PipelineCompileRequest(BaseModel):
+    """A live canvas and one concrete Current Pipeline selection; compilation has no side effects."""
+
+    canvas_state: dict[str, Any]
+    route: list[dict[str, Any]] = Field(..., min_length=1)
+    input_dataset_ids: list[str] | None = None
+
+
+class PipelineStartRequest(PipelineCompileRequest):
+    project_id: str = Field(..., min_length=1, max_length=200)
+    project_session_id: str | None = None
+    request_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class PipelineResumeRequest(BaseModel):
+    project_id: str = Field(..., min_length=1, max_length=200)
+    project_session_id: str | None = None
 
 
 # ---------- Review (prompt analysis from score comparison) ----------
@@ -586,6 +613,47 @@ def _credential_base_url(item: dict) -> str:
     return DEFAULT_BASE_URLS_BY_PROVIDER.get(_credential_provider(item), "")
 
 
+def _pipeline_credential(credential_id: str) -> dict | None:
+    """Resolve one opaque credential binding at job start without copying its secret into a run."""
+    for item in _load_credentials():
+        if item.get("id") == credential_id:
+            return {
+                **item,
+                "model": _credential_model(item),
+                "provider": _credential_provider(item),
+                "base_url": _credential_base_url(item),
+            }
+    return None
+
+
+_pipeline_runner_lock = threading.Lock()
+_pipeline_runner_instance: PipelineRunner | None = None
+
+
+def _get_pipeline_runner() -> PipelineRunner:
+    global _pipeline_runner_instance
+    with _pipeline_runner_lock:
+        if _pipeline_runner_instance is None:
+            _pipeline_runner_instance = PipelineRunner(
+                PIPELINE_RUNS_DIR,
+                credential_resolver=_pipeline_credential,
+                settings_loader=_load_settings,
+            )
+        return _pipeline_runner_instance
+
+
+def _pipeline_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, PipelineRunNotFound):
+        return HTTPException(status_code=404, detail="Pipeline run not found.")
+    if isinstance(exc, PipelineRunConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, PipelineCompileFailure):
+        return HTTPException(status_code=400, detail={"message": str(exc), "diagnostics": exc.diagnostics})
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
+
+
 @app.get("/health")
 def health():
     """Health check."""
@@ -600,11 +668,13 @@ def export_python_pipeline(request: Request, body: PipelineExportRequest):
         filename, archive = build_pipeline_archive(
             canvas_state=body.canvas_state,
             route=body.route,
+            input_dataset_ids=body.input_dataset_ids,
             name=body.name,
             credentials=_load_credentials(),
             default_credential_id=str(settings.get("default_run_credential_id") or ""),
             run_max_tokens=int(settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"]),
             run_concurrency=int(settings.get("run_concurrency") or DEFAULT_SETTINGS["run_concurrency"]),
+            run_max_retries=int(settings.get("run_max_retries", DEFAULT_SETTINGS["run_max_retries"])),
             author_name=unquote(request.headers.get("X-AnnoBio-User-Name", "")),
         )
     except PipelineExportError as exc:
@@ -616,6 +686,94 @@ def export_python_pipeline(request: Request, body: PipelineExportRequest):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.post("/api/pipeline/compile")
+def compile_current_pipeline(body: PipelineCompileRequest):
+    """Compile and diagnose a concrete route without creating a run or executing user code."""
+    try:
+        return _get_pipeline_runner().compile(
+            canvas_state=body.canvas_state,
+            route=body.route,
+            input_dataset_ids=body.input_dataset_ids,
+        )
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
+
+
+@app.post("/api/pipeline/runs")
+def start_pipeline_run(body: PipelineStartRequest):
+    """Freeze the selected route and input tables, then execute it in a background worker."""
+    try:
+        result = _get_pipeline_runner().start(
+            project_id=body.project_id,
+            canvas_state=body.canvas_state,
+            route=body.route,
+            input_dataset_ids=body.input_dataset_ids,
+            project_session_id=body.project_session_id,
+            request_id=body.request_id,
+        )
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content=result)
+
+
+@app.post("/api/pipeline/runs/{run_id}/revisions")
+def revise_pipeline_run(run_id: str, body: PipelineStartRequest):
+    """Create a new immutable revision and reuse only fingerprint-matched successful checkpoints."""
+    try:
+        result = _get_pipeline_runner().revise(
+            body.project_id, run_id,
+            canvas_state=body.canvas_state,
+            route=body.route,
+            input_dataset_ids=body.input_dataset_ids,
+            project_session_id=body.project_session_id,
+            request_id=body.request_id,
+        )
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content=result)
+
+
+@app.get("/api/pipeline/runs/{run_id}")
+def get_pipeline_run(run_id: str, project_id: str):
+    try:
+        return _get_pipeline_runner().status(project_id, run_id)
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
+
+
+@app.post("/api/pipeline/runs/{run_id}/cancel")
+def cancel_pipeline_run(run_id: str, project_id: str):
+    try:
+        return _get_pipeline_runner().cancel(project_id, run_id)
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
+
+
+@app.post("/api/pipeline/runs/{run_id}/resume")
+def resume_pipeline_run(run_id: str, body: PipelineResumeRequest):
+    try:
+        result = _get_pipeline_runner().resume(
+            body.project_id, run_id, project_session_id=body.project_session_id,
+        )
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content=result)
+
+
+@app.get("/api/pipeline/runs/{run_id}/results")
+def get_pipeline_run_results(run_id: str, project_id: str, logical_id: str | None = None,
+                             include_partial: bool = True):
+    try:
+        return _get_pipeline_runner().results(
+            project_id, run_id, logical_id, include_partial=include_partial,
+        )
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
 
 
 @app.get("/api/debug/backend-info")

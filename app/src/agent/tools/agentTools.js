@@ -152,13 +152,14 @@ Operations ("op" plus the fields listed):
   ),
   tool(
     RUN_NODES_TOOL,
-    `Ask to run jobs that spend model calls or run code. The user sees each job with its row count, model and estimated cost, and starts or cancels them; the result reports what each job produced. Run one stage at a time, then report and ask before the next (for example run, then review, then verify).
+    `Ask to run jobs that spend model calls or run code. The user sees each job with its row count, model and estimated cost, and starts or cancels them; the result reports what each job produced. Run one stage at a time, then report and ask before the next (for example run, then review, then verify). Use pipeline only when the user explicitly asks to run the whole numbered Pipeline; its complete route is shown on one confirmation card.
 
 Jobs ("kind" plus):
 - run: node (a Run). Runs the rows it has not processed yet.
 - process: node (a Process). Runs its saved code and stores its output branches on the node.
 - review: score, name?. Adds a Review node to that score and runs it.
-- verify: review, suggestion_ids? (default: all not yet verified). Re-runs the prompt with each suggestion on the rows it targets.`,
+- verify: review, suggestion_ids? (default: all not yet verified). Re-runs the prompt with each suggestion on the rows it targets.
+- pipeline: pipeline (the 1-based Pipeline number in the workspace summary). Validates and runs the whole selected default route as one frozen PipelineRun.`,
     {
       summary: { type: 'string', description: 'One sentence for the user: what will run and why.' },
       jobs: {
@@ -167,8 +168,9 @@ Jobs ("kind" plus):
         items: {
           type: 'object',
           properties: {
-            kind: { type: 'string', enum: ['run', 'process', 'review', 'verify'] },
+            kind: { type: 'string', enum: ['run', 'process', 'review', 'verify', 'pipeline'] },
             node: { type: 'string' },
+            pipeline: { type: 'integer', minimum: 1 },
             score: { type: 'string' },
             review: { type: 'string' },
             suggestion_ids: { type: 'array', items: { type: 'string' } },

@@ -1,0 +1,756 @@
+"""Persistent, serial PipelineSpec v1 runner.
+
+Each run owns immutable compiler output and input artifacts under a project-scoped directory.
+Artifact JSON is atomically committed before run.json points at it, so a successful JobRun never
+references a half-written table.  The runner intentionally does not mutate canvas Dataset nodes.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import threading
+import uuid
+from typing import Any, Callable
+
+if __package__:
+    from .pipeline_compile import compile_pipeline
+    from .pipeline_runtime_adapters import (
+        PipelineJobCancelled,
+        PipelineJobError,
+        execute_llm_job,
+        execute_process_job,
+        normalize_table,
+    )
+else:
+    from pipeline_compile import compile_pipeline
+    from pipeline_runtime_adapters import (
+        PipelineJobCancelled,
+        PipelineJobError,
+        execute_llm_job,
+        execute_process_job,
+        normalize_table,
+    )
+
+
+RUN_FORMAT = "annobio.pipeline-run"
+RUN_FORMAT_VERSION = 1
+TERMINAL_STATES = {"succeeded", "failed", "cancelled", "interrupted"}
+_PROJECT_ID_RE = re.compile(r"^[^\x00-\x1f/\\]{1,200}$")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _json_bytes(value: Any) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str) + "\n").encode("utf-8")
+
+
+def _atomic_write(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    temporary.write_bytes(_json_bytes(payload))
+    os.replace(temporary, path)
+
+
+class PipelineCompileFailure(ValueError):
+    def __init__(self, diagnostics: list[dict]):
+        super().__init__("Pipeline compilation failed.")
+        self.diagnostics = diagnostics
+
+
+class PipelineRunNotFound(KeyError):
+    pass
+
+
+class PipelineRunConflict(RuntimeError):
+    pass
+
+
+class PipelineRunner:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        credential_resolver: Callable[[str], dict | None],
+        settings_loader: Callable[[], dict],
+        compiler: Callable[..., dict] = compile_pipeline,
+        llm_adapter: Callable[..., dict] = execute_llm_job,
+        process_adapter: Callable[..., dict] = execute_process_job,
+    ):
+        self.root = Path(root)
+        self.credential_resolver = credential_resolver
+        self.settings_loader = settings_loader
+        self.compiler = compiler
+        self.llm_adapter = llm_adapter
+        self.process_adapter = process_adapter
+        self._lock = threading.RLock()
+        self._threads: dict[str, threading.Thread] = {}
+        self._cancel_events: dict[str, threading.Event] = {}
+        self._processes: dict[str, subprocess.Popen] = {}
+        self._mark_abandoned_runs_interrupted()
+
+    @staticmethod
+    def validate_project_id(project_id: str) -> str:
+        value = str(project_id or "").strip()
+        if not _PROJECT_ID_RE.fullmatch(value) or value in {".", ".."}:
+            raise ValueError("project_id must be a stable, non-empty identifier (maximum 200 characters).")
+        return value
+
+    @staticmethod
+    def _project_key(project_id: str) -> str:
+        return hashlib.sha256(project_id.encode("utf-8")).hexdigest()
+
+    def _project_dir(self, project_id: str) -> Path:
+        return self.root / self._project_key(self.validate_project_id(project_id))
+
+    def _run_dir(self, project_id: str, run_id: str) -> Path:
+        if not re.fullmatch(r"[0-9a-f]{32}", str(run_id or "")):
+            raise PipelineRunNotFound(run_id)
+        return self._project_dir(project_id) / str(run_id)
+
+    def _run_file(self, project_id: str, run_id: str) -> Path:
+        return self._run_dir(project_id, run_id) / "run.json"
+
+    def _save_run(self, run: dict) -> None:
+        run["updated_at"] = _now()
+        _atomic_write(self._run_file(run["project_id"], run["run_id"]), run)
+
+    def _load_run(self, project_id: str, run_id: str) -> dict:
+        path = self._run_file(project_id, run_id)
+        try:
+            run = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+            raise PipelineRunNotFound(run_id) from exc
+        if run.get("project_id") != self.validate_project_id(project_id):
+            raise PipelineRunNotFound(run_id)
+        return run
+
+    def _artifact_path(self, run: dict, artifact_id: str) -> Path:
+        return self._run_dir(run["project_id"], run["run_id"]) / "artifacts" / f"{artifact_id}.json"
+
+    def _write_artifact(self, run: dict, logical_id: str, table: dict, *, producer: dict | None,
+                        valid: bool = True) -> dict:
+        table = normalize_table(table)
+        artifact_id = uuid.uuid4().hex
+        payload = {
+            "format": "annobio.pipeline-artifact", "format_version": 1,
+            "artifact_id": artifact_id, "run_id": run["run_id"], "logical_id": logical_id,
+            "producer": producer, "created_at": _now(), "table": table,
+        }
+        digest = hashlib.sha256(_json_bytes(payload)).hexdigest()
+        path = self._artifact_path(run, artifact_id)
+        _atomic_write(path, payload)
+        definition = next((item for item in run.get("spec", {}).get("artifacts", [])
+                           if item.get("id") == logical_id), {})
+        record = {
+            "artifact_id": artifact_id, "logical_id": logical_id,
+            "name": str(definition.get("name") or logical_id),
+            "producer": producer, "row_count": len(table["rows"]),
+            "schema": {"headers": table["headers"], "column_types": table["column_types"]},
+            "sha256": digest, "content_sha256": hashlib.sha256(_json_bytes(table)).hexdigest(),
+            "path": f"artifacts/{artifact_id}.json", "valid": bool(valid),
+        }
+        run.setdefault("artifacts", {})[logical_id] = record
+        return record
+
+    def _read_artifact(self, run: dict, logical_id: str, *, require_valid: bool = True) -> dict:
+        record = (run.get("artifacts") or {}).get(logical_id)
+        if not record or (require_valid and not record.get("valid")):
+            raise PipelineJobError(f'Artifact "{logical_id}" is unavailable.')
+        run_dir = self._run_dir(run["project_id"], run["run_id"]).resolve()
+        path = (run_dir / str(record.get("path") or "")).resolve()
+        if not path.is_relative_to(run_dir):
+            raise PipelineJobError(f'Artifact "{logical_id}" has an invalid storage reference.')
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PipelineJobError(f'Artifact "{logical_id}" cannot be read.') from exc
+        if hashlib.sha256(_json_bytes(payload)).hexdigest() != record.get("sha256"):
+            raise PipelineJobError(f'Artifact "{logical_id}" failed its integrity check.')
+        return normalize_table(payload.get("table"))
+
+    def _artifact_content_digest(self, run: dict, logical_id: str) -> str:
+        record = (run.get("artifacts") or {}).get(logical_id) or {}
+        digest = str(record.get("content_sha256") or "")
+        if digest:
+            return digest
+        return hashlib.sha256(_json_bytes(self._read_artifact(run, logical_id))).hexdigest()
+
+    def _job_fingerprint(self, run: dict, job: dict) -> str:
+        input_digests = {
+            alias: self._artifact_content_digest(run, logical_id)
+            for alias, logical_id in sorted((job.get("inputs") or {}).items())
+        }
+        execution = None
+        if job.get("type") == "llm":
+            execution = {
+                "credential_id": (run.get("credential_bindings") or {}).get(job["id"]),
+                "model": (run.get("execution_models") or {}).get(job["id"]),
+            }
+        payload = {"job": job, "inputs": input_digests, "execution": execution,
+                   "runtime": run.get("runtime") if job.get("type") == "process" else None}
+        return hashlib.sha256(_json_bytes(payload)).hexdigest()
+
+    def _find_request_run(self, project_id: str, request_id: str | None) -> dict | None:
+        if not request_id:
+            return None
+        project_dir = self._project_dir(project_id)
+        if not project_dir.is_dir():
+            return None
+        for path in project_dir.glob("*/run.json"):
+            try:
+                run = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, TypeError):
+                continue
+            if run.get("request_id") == request_id:
+                return run
+        return None
+
+    def compile(self, *, canvas_state: dict, route: list[dict], input_dataset_ids: list[str] | None,
+                mapping_policy: str = "strict") -> dict:
+        settings = self.settings_loader()
+        defaults = {key: settings.get(key) for key in ("run_max_tokens", "run_max_retries", "run_concurrency")}
+        return self.compiler(canvas_state=canvas_state, route=route, input_dataset_ids=input_dataset_ids,
+                             run_defaults=defaults, mapping_policy=mapping_policy)
+
+    @staticmethod
+    def _input_tables(canvas_state: dict, spec: dict) -> dict[str, dict]:
+        nodes = {str(node.get("nodeId")): node for node in (canvas_state.get("nodes") or [])
+                 if isinstance(node, dict)}
+        result = {}
+        for logical_id in spec["inputs"]:
+            node_id = logical_id.removeprefix("dataset:")
+            node = nodes.get(node_id)
+            if not node:
+                raise ValueError(f'Input Dataset "{node_id}" is missing from the canvas snapshot.')
+            result[logical_id] = normalize_table(node.get("datasetContent") or {})
+        return result
+
+    def start(self, *, project_id: str, canvas_state: dict, route: list[dict],
+              input_dataset_ids: list[str] | None, project_session_id: str | None = None,
+              request_id: str | None = None, parent_run_id: str | None = None) -> dict:
+        project_id = self.validate_project_id(project_id)
+        request_id = str(request_id or "").strip() or None
+        if request_id and (len(request_id) > 200 or not _PROJECT_ID_RE.fullmatch(request_id)):
+            raise ValueError("request_id must be a non-empty identifier (maximum 200 characters).")
+        with self._lock:
+            existing = self._find_request_run(project_id, request_id)
+            if existing:
+                return self.public_status(existing)
+            if parent_run_id:
+                parent = self._load_run(project_id, parent_run_id)
+                if parent.get("status") not in TERMINAL_STATES:
+                    raise PipelineRunConflict("An active Pipeline run cannot be used as a revision parent.")
+        compiled = self.compile(canvas_state=canvas_state, route=route,
+                                input_dataset_ids=input_dataset_ids, mapping_policy="strict")
+        if compiled.get("spec") is None:
+            raise PipelineCompileFailure(compiled.get("diagnostics") or [])
+        spec = compiled["spec"]
+        input_tables = self._input_tables(canvas_state, spec)
+        nodes = {str(node.get("nodeId")): node for node in (canvas_state.get("nodes") or [])
+                 if isinstance(node, dict)}
+        default_credential = str(self.settings_loader().get("default_run_credential_id") or "")
+        bindings: dict[str, str] = {}
+        resolved_credentials: dict[str, dict] = {}
+        execution_models: dict[str, dict] = {}
+        for job in spec["jobs"]:
+            if job["type"] != "llm":
+                continue
+            run_node_id = str(job["config"]["model_binding"]["run_node_id"])
+            credential_id = str((nodes.get(run_node_id) or {}).get("runCredentialId") or default_credential).strip()
+            if not credential_id:
+                raise ValueError(f'Run node "{run_node_id}" has no credential configured.')
+            credential = self.credential_resolver(credential_id)
+            if not credential:
+                raise ValueError(f'Credential "{credential_id}" was not found.')
+            bindings[job["id"]] = credential_id
+            resolved_credentials[job["id"]] = credential
+            execution_models[job["id"]] = {
+                "model": str(credential.get("model") or credential.get("llm") or ""),
+                "provider": str(credential.get("provider") or ""),
+                "base_url": str(credential.get("base_url") or ""),
+            }
+
+        artifact_defs = {item["id"]: item for item in spec["artifacts"]}
+        known_rows = {logical_id: len(table["rows"]) for logical_id, table in input_tables.items()}
+        plan_jobs = []
+        for job in spec["jobs"]:
+            input_ids = list(job["inputs"].values())
+            input_rows = known_rows.get(input_ids[0]) if len(input_ids) == 1 else None
+            source = (spec.get("source_map") or {}).get(job["id"]) or {}
+            item = {
+                "job_id": job["id"], "type": job["type"],
+                "name": str((source.get("names") or [job["id"]])[0]),
+                "depends_on": list(job.get("depends_on") or []),
+                "input_rows": input_rows,
+            }
+            if job["type"] == "llm":
+                credential = resolved_credentials[job["id"]]
+                item["model"] = {
+                    "credential_id": bindings[job["id"]],
+                    "model": str(credential.get("model") or credential.get("llm") or ""),
+                    "provider": str(credential.get("provider") or ""),
+                }
+                item["settings"] = deepcopy(job["config"].get("settings") or {})
+                item["estimated_calls"] = input_rows
+                output_rows = input_rows if job["config"]["output_schema"].get("return_shape") == "single" else None
+            else:
+                item["estimated_calls"] = None
+                output_rows = None
+            plan_jobs.append(item)
+            for logical_ids in job["outputs"].values():
+                for logical_id in logical_ids:
+                    if output_rows is not None:
+                        known_rows[logical_id] = output_rows
+                    else:
+                        known_rows.pop(logical_id, None)
+
+        plan = {
+            "inputs": [{
+                "logical_id": logical_id,
+                "name": str((artifact_defs.get(logical_id) or {}).get("name") or logical_id),
+                "row_count": len(input_tables[logical_id]["rows"]),
+            } for logical_id in spec["inputs"]],
+            "jobs": plan_jobs,
+            "outputs": list(spec["outputs"]),
+        }
+
+        run_id = uuid.uuid4().hex
+        created = _now()
+        run = {
+            "format": RUN_FORMAT, "format_version": RUN_FORMAT_VERSION,
+            "run_id": run_id, "project_id": project_id, "status": "pending",
+            "request_id": request_id, "parent_run_id": parent_run_id,
+            "revision": 1,
+            "created_at": created, "updated_at": created, "started_at": None, "finished_at": None,
+            "spec": deepcopy(spec), "diagnostics": compiled.get("diagnostics") or [],
+            "plan": plan,
+            "credential_bindings": bindings,
+            "execution_models": execution_models,
+            "runtime": {
+                "python_path": str(self.settings_loader().get("python_path") or "").strip() or sys.executable,
+            },
+            # Asset sessions contain no credentials. They are intentionally replaceable on resume;
+            # a browser project can mint a fresh session after a backend restart.
+            "project_session_id": project_session_id,
+            "jobs": [{
+                "job_id": job["id"], "type": job["type"], "status": "pending", "attempts": 0,
+                "started_at": None, "finished_at": None, "error": None, "artifacts": [],
+                "completed": 0, "total": None, "fingerprint": None,
+                "attempt_token": None, "row_checkpoints": {}, "reused_from": None,
+            } for job in spec["jobs"]],
+            "artifacts": {}, "error": None,
+        }
+        with self._lock:
+            existing = self._find_request_run(project_id, request_id)
+            if existing:
+                return self.public_status(existing)
+            for logical_id, table in input_tables.items():
+                self._write_artifact(run, logical_id, table, producer=None)
+            if parent_run_id:
+                parent = self._load_run(project_id, parent_run_id)
+                if parent.get("status") not in TERMINAL_STATES:
+                    raise PipelineRunConflict("An active Pipeline run cannot be used as a revision parent.")
+                run["revision"] = int(parent.get("revision") or 1) + 1
+                self._reuse_parent_jobs(run, parent)
+            self._save_run(run)
+            self._launch(run)
+        return self.public_status(run)
+
+    def revise(self, project_id: str, run_id: str, *, canvas_state: dict, route: list[dict],
+               input_dataset_ids: list[str] | None, project_session_id: str | None = None,
+               request_id: str | None = None) -> dict:
+        return self.start(
+            project_id=project_id, canvas_state=canvas_state, route=route,
+            input_dataset_ids=input_dataset_ids, project_session_id=project_session_id,
+            request_id=request_id, parent_run_id=run_id,
+        )
+
+    def _reuse_parent_jobs(self, run: dict, parent: dict) -> None:
+        """Copy valid unchanged checkpoints into a new revision; descendants naturally invalidate."""
+        parent_jobs = {state.get("job_id"): state for state in (parent.get("jobs") or [])}
+        jobs = {job["id"]: job for job in run["spec"]["jobs"]}
+        for state in run["jobs"]:
+            job = jobs[state["job_id"]]
+            try:
+                fingerprint = self._job_fingerprint(run, job)
+            except PipelineJobError:
+                continue
+            old_state = parent_jobs.get(job["id"]) or {}
+            old_fingerprint = old_state.get("fingerprint")
+            if not old_fingerprint:
+                try:
+                    old_job = next(item for item in parent["spec"]["jobs"] if item["id"] == job["id"])
+                    old_fingerprint = self._job_fingerprint(parent, old_job)
+                except (StopIteration, KeyError, PipelineJobError):
+                    old_fingerprint = None
+            if old_state.get("status") != "succeeded" or old_fingerprint != fingerprint:
+                continue
+            copied = []
+            try:
+                for port, logical_ids in job["outputs"].items():
+                    for logical_id in logical_ids:
+                        old_record = (parent.get("artifacts") or {}).get(logical_id) or {}
+                        if not old_record.get("valid"):
+                            raise PipelineJobError(f'Artifact "{logical_id}" is not reusable.')
+                        record = self._write_artifact(
+                            run, logical_id, self._read_artifact(parent, logical_id),
+                            producer={"job_id": job["id"], "port": port,
+                                      "reused_from_run_id": parent["run_id"]}, valid=True,
+                        )
+                        copied.append(record["artifact_id"])
+            except PipelineJobError:
+                for logical_ids in job["outputs"].values():
+                    for logical_id in logical_ids:
+                        record = (run.get("artifacts") or {}).get(logical_id)
+                        if (record or {}).get("artifact_id") in copied:
+                            run["artifacts"].pop(logical_id, None)
+                continue
+            state.update({
+                "status": "succeeded", "attempts": 0, "started_at": None, "finished_at": _now(),
+                "error": None, "artifacts": copied, "completed": old_state.get("total"),
+                "total": old_state.get("total"), "fingerprint": fingerprint,
+                "row_checkpoints": deepcopy(old_state.get("row_checkpoints") or {}),
+                "reused_from": {"run_id": parent["run_id"], "job_id": job["id"]},
+            })
+
+    def _launch(self, run: dict) -> None:
+        run_id = run["run_id"]
+        existing = self._threads.get(run_id)
+        if existing and existing.is_alive():
+            raise PipelineRunConflict("This Pipeline run is already active.")
+        event = threading.Event()
+        self._cancel_events[run_id] = event
+        thread = threading.Thread(target=self._execute, args=(run["project_id"], run_id, event), daemon=True)
+        self._threads[run_id] = thread
+        thread.start()
+
+    def _register_process(self, run_id: str, proc: subprocess.Popen) -> None:
+        with self._lock:
+            self._processes[run_id] = proc
+            event = self._cancel_events.get(run_id)
+            if event and event.is_set() and proc.poll() is None:
+                proc.kill()
+
+    def _execute(self, project_id: str, run_id: str, cancel_event: threading.Event) -> None:
+        try:
+            with self._lock:
+                run = self._load_run(project_id, run_id)
+                run["status"] = "running"
+                run["started_at"] = run.get("started_at") or _now()
+                run["finished_at"] = None
+                run["error"] = None
+                self._save_run(run)
+
+            jobs_by_id = {job["id"]: job for job in run["spec"]["jobs"]}
+            for job_state in run["jobs"]:
+                if job_state["status"] == "succeeded":
+                    continue
+                if cancel_event.is_set():
+                    raise PipelineJobCancelled("Cancelled")
+                job = jobs_by_id[job_state["job_id"]]
+                with self._lock:
+                    run = self._load_run(project_id, run_id)
+                    if cancel_event.is_set() or run.get("status") == "cancelling":
+                        raise PipelineJobCancelled("Cancelled")
+                    job_state = next(item for item in run["jobs"] if item["job_id"] == job["id"])
+                    attempt_token = uuid.uuid4().hex
+                    fingerprint = self._job_fingerprint(run, job)
+                    row_checkpoints = deepcopy(job_state.get("row_checkpoints") or {})
+                    completed_rows = sum(1 for item in row_checkpoints.values()
+                                         if item.get("status") == "succeeded")
+                    job_state.update({"status": "running", "started_at": _now(), "finished_at": None,
+                                      "error": None, "attempts": int(job_state.get("attempts") or 0) + 1,
+                                      "artifacts": [], "completed": completed_rows, "total": None,
+                                      "fingerprint": fingerprint, "attempt_token": attempt_token,
+                                      "reused_from": None})
+                    self._save_run(run)
+                try:
+                    inputs = {alias: self._read_artifact(run, logical_id)
+                              for alias, logical_id in job["inputs"].items()}
+                    if job["type"] == "llm":
+                        self._set_job_progress(project_id, run_id, job["id"], completed_rows,
+                                               len(inputs["data"]["rows"]), attempt_token)
+                        credential_id = run["credential_bindings"][job["id"]]
+                        credential = self.credential_resolver(credential_id)
+                        if not credential:
+                            raise PipelineJobError(f'Credential "{credential_id}" was not found.')
+                        credential = {**credential, **(run.get("execution_models", {}).get(job["id"]) or {})}
+                        result = self.llm_adapter(
+                            job, inputs["data"], credential, run.get("project_session_id"), cancel_event,
+                            progress_callback=lambda completed, total: self._set_job_progress(
+                                project_id, run_id, job["id"], completed, total, attempt_token,
+                            ),
+                            row_checkpoints=row_checkpoints,
+                            row_callback=lambda index, outputs, error: self._checkpoint_llm_row(
+                                project_id, run_id, job["id"], attempt_token, index, outputs, error,
+                            ),
+                        )
+                        output_tables = {"result": result["table"]}
+                    else:
+                        self._set_job_progress(project_id, run_id, job["id"], 0, 1, attempt_token)
+                        python_path = str((run.get("runtime") or {}).get("python_path") or sys.executable)
+                        output_tables = self.process_adapter(
+                            job, inputs, python_path, run.get("project_session_id"), cancel_event,
+                            register_proc=lambda proc: self._register_process(run_id, proc),
+                        )
+                        self._set_job_progress(project_id, run_id, job["id"], 1, 1, attempt_token)
+                    missing_ports = sorted(set(job["outputs"]) - set(output_tables))
+                    if missing_ports:
+                        raise PipelineJobError("Process did not return required output branch(es): " + ", ".join(missing_ports))
+                    with self._lock:
+                        run = self._load_run(project_id, run_id)
+                        state = next(item for item in run["jobs"] if item["job_id"] == job["id"])
+                        if (cancel_event.is_set() or run.get("status") == "cancelling"
+                                or state.get("attempt_token") != attempt_token):
+                            raise PipelineJobCancelled("Cancelled")
+                        for port, logical_ids in job["outputs"].items():
+                            for logical_id in logical_ids:
+                                record = self._write_artifact(
+                                    run, logical_id, output_tables[port],
+                                    producer={"job_id": job["id"], "port": port}, valid=True,
+                                )
+                                state["artifacts"].append(record["artifact_id"])
+                        state.update({"status": "succeeded", "finished_at": _now(), "error": None,
+                                      "attempt_token": None})
+                        self._save_run(run)  # checkpoint only after every artifact has been committed
+                except PipelineJobCancelled as exc:
+                    self._finish_job_error(project_id, run_id, job, exc, "cancelled", attempt_token)
+                    raise
+                except Exception as exc:
+                    self._finish_job_error(project_id, run_id, job, exc, "failed", attempt_token)
+                    raise
+
+            with self._lock:
+                run = self._load_run(project_id, run_id)
+                if cancel_event.is_set() or run.get("status") == "cancelling":
+                    raise PipelineJobCancelled("Cancelled")
+                run.update({"status": "succeeded", "finished_at": _now(), "error": None})
+                self._save_run(run)
+        except PipelineJobCancelled as exc:
+            with self._lock:
+                run = self._load_run(project_id, run_id)
+                run.update({"status": "cancelled", "finished_at": _now(), "error": str(exc)})
+                self._block_pending(run, "Pipeline was cancelled.")
+                self._save_run(run)
+        except Exception as exc:
+            with self._lock:
+                try:
+                    run = self._load_run(project_id, run_id)
+                    run.update({"status": "failed", "finished_at": _now(), "error": str(exc)})
+                    self._block_pending(run, "An earlier job failed.")
+                    self._save_run(run)
+                except PipelineRunNotFound:
+                    pass
+        finally:
+            with self._lock:
+                self._processes.pop(run_id, None)
+                self._cancel_events.pop(run_id, None)
+                self._threads.pop(run_id, None)
+
+    def _finish_job_error(self, project_id: str, run_id: str, job: dict, exc: Exception,
+                          status: str, attempt_token: str) -> None:
+        with self._lock:
+            run = self._load_run(project_id, run_id)
+            state = next(item for item in run["jobs"] if item["job_id"] == job["id"])
+            if state.get("attempt_token") != attempt_token:
+                return
+            partial = getattr(exc, "partial_table", None)
+            if partial is not None:
+                for port, logical_ids in job["outputs"].items():
+                    for logical_id in logical_ids:
+                        record = self._write_artifact(run, logical_id, partial,
+                            producer={"job_id": job["id"], "port": port}, valid=False)
+                        state["artifacts"].append(record["artifact_id"])
+            state.update({"status": status, "finished_at": _now(), "error": str(exc),
+                          "attempt_token": None})
+            self._save_run(run)
+
+    def _set_job_progress(self, project_id: str, run_id: str, job_id: str,
+                          completed: int, total: int, attempt_token: str | None = None) -> None:
+        with self._lock:
+            run = self._load_run(project_id, run_id)
+            state = next(item for item in run["jobs"] if item["job_id"] == job_id)
+            if attempt_token and state.get("attempt_token") != attempt_token:
+                return
+            state["completed"] = max(0, int(completed))
+            state["total"] = max(0, int(total))
+            self._save_run(run)
+
+    def _checkpoint_llm_row(self, project_id: str, run_id: str, job_id: str,
+                            attempt_token: str, index: int, outputs: list[dict],
+                            error: str | None) -> None:
+        with self._lock:
+            run = self._load_run(project_id, run_id)
+            state = next(item for item in run["jobs"] if item["job_id"] == job_id)
+            if state.get("attempt_token") != attempt_token or state.get("status") != "running":
+                return
+            cancelled = str(error or "").casefold() == "cancelled"
+            state.setdefault("row_checkpoints", {})[str(index)] = {
+                "status": "cancelled" if cancelled else ("failed" if error else "succeeded"),
+                "outputs": deepcopy(outputs), "error": error,
+            }
+            self._save_run(run)
+
+    @staticmethod
+    def _block_pending(run: dict, reason: str) -> None:
+        for state in run["jobs"]:
+            if state["status"] == "pending":
+                state.update({"status": "blocked", "finished_at": _now(), "error": reason})
+
+    def cancel(self, project_id: str, run_id: str) -> dict:
+        with self._lock:
+            run = self._load_run(project_id, run_id)
+            if run["status"] in TERMINAL_STATES:
+                return self.public_status(run)
+            run["status"] = "cancelling"
+            self._save_run(run)
+            self._cancel_events.setdefault(run_id, threading.Event()).set()
+            proc = self._processes.get(run_id)
+            if proc and proc.poll() is None:
+                proc.kill()
+            return self.public_status(run)
+
+    def resume(self, project_id: str, run_id: str, *, project_session_id: str | None = None) -> dict:
+        finishing_thread = None
+        with self._lock:
+            run = self._load_run(project_id, run_id)
+            if run["status"] in {"pending", "running", "cancelling"}:
+                return self.public_status(run)
+            if run["status"] not in {"failed", "cancelled", "interrupted"}:
+                raise PipelineRunConflict("Only failed, cancelled, or interrupted Pipeline runs can resume.")
+            finishing_thread = self._threads.get(run_id)
+        # A worker persists its terminal state immediately before leaving its finally block.  Let
+        # that tiny window close without holding our lock; otherwise the old worker cannot remove
+        # itself and a resume could leave a pending run with no replacement worker.
+        if finishing_thread and finishing_thread.is_alive():
+            finishing_thread.join(timeout=5)
+        with self._lock:
+            run = self._load_run(project_id, run_id)
+            if run["status"] in {"pending", "running", "cancelling"}:
+                return self.public_status(run)
+            still_finishing = self._threads.get(run_id)
+            if still_finishing and still_finishing.is_alive():
+                raise PipelineRunConflict("The previous Pipeline worker is still finishing; retry resume shortly.")
+            if run["status"] not in {"failed", "cancelled", "interrupted"}:
+                raise PipelineRunConflict("Only failed, cancelled, or interrupted Pipeline runs can resume.")
+            if project_session_id is not None:
+                run["project_session_id"] = project_session_id
+            self._prepare_resume(run)
+            run.update({"status": "pending", "finished_at": None, "error": None})
+            self._save_run(run)
+            self._launch(run)
+            return self.public_status(run)
+
+    def _prepare_resume(self, run: dict) -> None:
+        jobs = {job["id"]: job for job in run["spec"]["jobs"]}
+        available: set[str] = set()
+        for logical_id in run["spec"]["inputs"]:
+            try:
+                self._read_artifact(run, logical_id)
+                available.add(logical_id)
+            except PipelineJobError as exc:
+                raise PipelineRunConflict(
+                    f'Frozen input checkpoint "{logical_id}" is unavailable; start a new revision.'
+                ) from exc
+        for state in run["jobs"]:
+            job = jobs[state["job_id"]]
+            input_ids = set((job.get("inputs") or {}).values())
+            inputs_ready = input_ids.issubset(available)
+            fingerprint = None
+            if inputs_ready:
+                try:
+                    fingerprint = self._job_fingerprint(run, job)
+                except PipelineJobError:
+                    inputs_ready = False
+            outputs = [logical_id for ids in (job.get("outputs") or {}).values() for logical_id in ids]
+            checkpoint_valid = state.get("status") == "succeeded" and inputs_ready
+            if checkpoint_valid:
+                try:
+                    for logical_id in outputs:
+                        self._read_artifact(run, logical_id)
+                except PipelineJobError:
+                    checkpoint_valid = False
+            if checkpoint_valid:
+                state["fingerprint"] = fingerprint
+                available.update(outputs)
+                continue
+
+            preserve_rows = (job.get("type") == "llm" and inputs_ready
+                             and state.get("fingerprint") == fingerprint)
+            checkpoints = deepcopy(state.get("row_checkpoints") or {}) if preserve_rows else {}
+            checkpoints = {str(index): item for index, item in checkpoints.items()
+                           if item.get("status") == "succeeded"}
+            for logical_id in outputs:
+                run.setdefault("artifacts", {}).pop(logical_id, None)
+            state.update({
+                "status": "pending", "started_at": None, "finished_at": None, "error": None,
+                "artifacts": [], "completed": len(checkpoints), "total": state.get("total"),
+                "fingerprint": fingerprint, "attempt_token": None,
+                "row_checkpoints": checkpoints, "reused_from": None,
+            })
+
+    def status(self, project_id: str, run_id: str) -> dict:
+        with self._lock:
+            return self.public_status(self._load_run(project_id, run_id))
+
+    def results(self, project_id: str, run_id: str, logical_id: str | None = None,
+                *, include_partial: bool = True) -> dict:
+        with self._lock:
+            run = self._load_run(project_id, run_id)
+            ids = [logical_id] if logical_id else list(run["spec"]["outputs"])
+            outputs = []
+            for item in ids:
+                record = (run.get("artifacts") or {}).get(item)
+                if not record or (not include_partial and not record.get("valid")):
+                    continue
+                table = self._read_artifact(run, item, require_valid=not include_partial)
+                outputs.append({"logical_id": item, "artifact": deepcopy(record), "table": table})
+            return {"run_id": run_id, "project_id": run["project_id"], "status": run["status"],
+                    "outputs": outputs}
+
+    @staticmethod
+    def public_status(run: dict) -> dict:
+        artifacts = [{key: value for key, value in record.items() if key != "path"}
+                     for record in (run.get("artifacts") or {}).values()]
+        jobs = [{key: deepcopy(value) for key, value in state.items()
+                 if key not in {"attempt_token", "fingerprint", "row_checkpoints"}}
+                for state in (run.get("jobs") or [])]
+        return {
+            "run_id": run["run_id"], "project_id": run["project_id"], "status": run["status"],
+            "revision": int(run.get("revision") or 1), "parent_run_id": run.get("parent_run_id"),
+            "created_at": run["created_at"], "updated_at": run["updated_at"],
+            "started_at": run.get("started_at"), "finished_at": run.get("finished_at"),
+            "error": run.get("error"), "jobs": jobs,
+            "artifacts": artifacts, "outputs": list((run.get("spec") or {}).get("outputs") or []),
+            "plan": deepcopy(run.get("plan") or {}),
+            "diagnostics": deepcopy(run.get("diagnostics") or []),
+        }
+
+    def _mark_abandoned_runs_interrupted(self) -> None:
+        if not self.root.is_dir():
+            return
+        for path in self.root.glob("*/*/run.json"):
+            try:
+                run = json.loads(path.read_text(encoding="utf-8"))
+                if run.get("status") not in {"pending", "running", "cancelling"}:
+                    continue
+                run.update({"status": "interrupted", "finished_at": _now(),
+                            "updated_at": _now(),
+                            "error": "Backend stopped while this Pipeline was running."})
+                for state in run.get("jobs") or []:
+                    if state.get("status") == "running":
+                        state.update({"status": "interrupted", "finished_at": _now(),
+                                      "error": "Backend stopped during this job.",
+                                      "attempt_token": None})
+                _atomic_write(path, run)
+            except (OSError, json.JSONDecodeError, TypeError):
+                continue

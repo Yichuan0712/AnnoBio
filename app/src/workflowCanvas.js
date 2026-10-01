@@ -75,6 +75,7 @@ import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAsset
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { runProcessCode } from './processRunClient.js';
+import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -2827,6 +2828,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         extractInputFields: extractInputFieldsFromSections,
         applyCanvasState: applyAgentCanvasState,
         highlightNodes: highlightPipelineNodes,
+        getPipelineProjectId,
+        getAssetProjectId: getCurrentProjectId,
         startRunNode,
         stopRunNode,
         runProcessNode,
@@ -4847,6 +4850,11 @@ export function buildWorkflowCanvas(root, options = {}) {
       showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
         host: workspacePanels.pipelineHost,
         getCanvasState,
+        getPipelineProjectId,
+        getAssetProjectId: getCurrentProjectId,
+        saveArtifactAsDataset: ({ name, notes, headers, rows, columnTypes, rowIds }) => addDatasetNode({
+          name, notes, headers, rows, columnTypes, rowIds,
+        }),
         highlightCanvasNodes: highlightPipelineNodes,
         focusCanvasNodes: focusPipelineNodes,
       });

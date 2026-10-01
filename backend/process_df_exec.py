@@ -68,7 +68,13 @@ try:
     else:
         raise TypeError("process(df) must return a pandas DataFrame or {branch_name: DataFrame}")
     _out_rows = {name: json.loads(frame.to_json(orient="records")) for name, frame in _outputs.items()}
-    sys.stdout.write(json.dumps({"ok": True, "outputs": _out_rows}) + "\\n")
+    # Keep the legacy records response for existing Process-node callers. Pipeline artifacts also
+    # need explicit columns because an empty DataFrame still has a meaningful runtime schema.
+    _out_tables = {
+        name: {"headers": [str(column) for column in frame.columns], "rows": _out_rows[name]}
+        for name, frame in _outputs.items()
+    }
+    sys.stdout.write(json.dumps({"ok": True, "outputs": _out_rows, "output_tables": _out_tables}) + "\\n")
 except Exception as _e:
     sys.stdout.write(json.dumps({"ok": False, "error": str(_e)}) + "\\n")
 sys.stdout.flush()

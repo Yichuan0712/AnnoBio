@@ -5,6 +5,13 @@
  */
 import { showAlert } from './alertModal.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
+import { buildSelectedRoute, exportRoutePayload } from './pipelineRouteSelection.js';
+import {
+  cancelPipelineRun,
+  getPipelineResults,
+  getPipelineRun,
+  resumePipelineRun,
+} from './pipelineRunClient.js';
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -18,299 +25,6 @@ function renderPickerOrName(choiceId, options, selectedValue, title) {
     .map((option) => `<option value="${escapeHtml(option.value)}"${option.value === selectedValue ? ' selected' : ''}>${escapeHtml(option.label)}</option>`)
     .join('');
   return `<select class="pipeline-step-version-select" data-choice-id="${escapeHtml(choiceId)}" title="${escapeHtml(title)}">${optionsHtml}</select>`;
-}
-
-function promptRunOptions(step) {
-  const options = [];
-  for (const version of step?.versions || []) {
-    const runs = Array.isArray(version.runs)
-      ? version.runs
-      : (version.runNodeIds || []).map((runNodeId) => ({ runNodeId, runName: 'Run' }));
-    for (const run of runs) {
-      options.push({
-        value: run.runNodeId,
-        stepId: step.id,
-        promptNodeId: version.promptNodeId,
-        runNodeId: run.runNodeId,
-        promptName: version.promptName,
-        runName: run.runName || 'Run',
-        kind: 'prompt',
-      });
-    }
-  }
-  return options;
-}
-
-function chooseOption(choiceId, options, selectedByChoiceId, preferredValue = '') {
-  const stored = selectedByChoiceId.get(choiceId);
-  return options.find((option) => option.value === stored)
-    || options.find((option) => option.value === preferredValue)
-    || options[0]
-    || null;
-}
-
-/**
- * Resolves one route through the workflow graph. Choices are made at the node where paths diverge,
- * so shared prefixes and suffixes appear once instead of being repeated as Branch 1/2/3 rows.
- */
-function buildSelectedRoute(pipeline, selectedByChoiceId) {
-  const steps = Array.isArray(pipeline?.steps) ? pipeline.steps : [];
-  const stepById = new Map(steps.map((step) => [step.id, step]));
-  const outgoing = new Map(steps.map((step) => [step.id, []]));
-  const indegree = new Map(steps.map((step) => [step.id, 0]));
-  for (const edge of pipeline?.edges || []) {
-    if (!stepById.has(edge.from) || !stepById.has(edge.to)) continue;
-    if (!outgoing.get(edge.from).includes(edge.to)) outgoing.get(edge.from).push(edge.to);
-    indegree.set(edge.to, indegree.get(edge.to) + 1);
-  }
-
-  const route = [];
-  const visitedStepIds = new Set();
-  const selectedRunByStepId = new Map();
-
-  function buildDatasetStep(step) {
-    const producerRunId = selectedRunByStepId.get(step.producerStepId) || null;
-    const datasets = producerRunId
-      ? step.datasets.filter((dataset) => dataset.producerRunNodeId === producerRunId)
-      : step.datasets;
-    const options = datasets.map((dataset) => ({
-      value: dataset.datasetNodeId,
-      label: dataset.datasetName,
-      dataset,
-      stepId: step.id,
-    }));
-    const selected = chooseOption(step.id, options, selectedByChoiceId);
-    return selected ? {
-      kind: 'dataset', choiceId: step.id, options, selectedValue: selected.value, selectedOption: selected,
-    } : null;
-  }
-
-  function buildPromptStep(step, allowedRunIds = null) {
-    const restrictPromptRuns = allowedRunIds instanceof Set && allowedRunIds.size > 0;
-    const options = promptRunOptions(step)
-      .filter((option) => !restrictPromptRuns || allowedRunIds.has(option.runNodeId))
-      .map((option) => ({ ...option, label: option.promptName || 'Prompt' }));
-    const selected = chooseOption(step.id, options, selectedByChoiceId, step.defaultRunNodeId || '');
-    if (!selected) return null;
-    selectedRunByStepId.set(step.id, selected.runNodeId);
-    return {
-      kind: 'prompt', choiceId: step.id, options, selectedValue: selected.value, selectedOption: selected,
-    };
-  }
-
-  function buildProcessStep(step) {
-    const selected = {
-      value: `process:${step.processNodeId}`,
-      label: step.processName,
-      stepId: step.id,
-      processNodeId: step.processNodeId,
-      inputDatasets: Array.isArray(step.inputDatasets) ? step.inputDatasets : [],
-      kind: 'process',
-    };
-    return {
-      kind: 'process', choiceId: step.id, options: [selected], selectedValue: selected.value, selectedOption: selected,
-    };
-  }
-
-  function nextStepIdsForRouteStep(routeStep) {
-    const selected = routeStep?.selectedOption;
-    if (!selected) return [];
-    if (selected.dataset) return selected.dataset.consumerStepIds || [];
-    return (outgoing.get(selected.stepId) || []).filter((id) => stepById.has(id));
-  }
-
-  function findSharedJoin(startIds) {
-    const distancesFrom = (startId) => {
-      const distances = new Map([[startId, 0]]);
-      const queue = [startId];
-      while (queue.length) {
-        const current = queue.shift();
-        for (const next of outgoing.get(current) || []) {
-          if (distances.has(next)) continue;
-          distances.set(next, distances.get(current) + 1);
-          queue.push(next);
-        }
-      }
-      return distances;
-    };
-    const distanceMaps = startIds.map(distancesFrom);
-    const commonIds = [...distanceMaps[0].keys()].filter((id) => (
-      !startIds.includes(id) && distanceMaps.every((map) => map.has(id))
-    ));
-    commonIds.sort((a, b) => {
-      const aDistance = distanceMaps.reduce((sum, map) => sum + map.get(a), 0);
-      const bDistance = distanceMaps.reduce((sum, map) => sum + map.get(b), 0);
-      return aDistance - bDistance;
-    });
-    return commonIds[0] || '';
-  }
-
-  function buildBranchLane(startId, joinId) {
-    const lane = [];
-    const seen = new Set();
-    let currentId = startId;
-    let allowedRunIds = null;
-    while (currentId && currentId !== joinId && !seen.has(currentId) && lane.length < 100) {
-      seen.add(currentId);
-      const step = stepById.get(currentId);
-      if (!step) break;
-      const routeStep = step.kind === 'dataset'
-        ? buildDatasetStep(step)
-        : (step.kind === 'prompt' ? buildPromptStep(step, allowedRunIds) : buildProcessStep(step));
-      if (!routeStep) break;
-      lane.push(routeStep);
-      if (routeStep.kind === 'dataset') {
-        allowedRunIds = new Set(routeStep.selectedOption.dataset.consumerRunNodeIds || []);
-      } else {
-        allowedRunIds = null;
-      }
-      const nextIds = nextStepIdsForRouteStep(routeStep);
-      currentId = nextIds.includes(joinId) ? joinId : nextIds[0];
-    }
-    return lane;
-  }
-
-  function walk(candidateStepIds, allowedRunIds = null) {
-    if (route.length >= 200) return;
-    const candidateSteps = candidateStepIds
-      .map((id) => stepById.get(id))
-      .filter((step) => step && !visitedStepIds.has(step.id));
-    if (candidateSteps.length === 0) return;
-
-    if (candidateSteps.every((step) => step.kind === 'dataset') && candidateSteps.length > 1) {
-      const joinId = findSharedJoin(candidateSteps.map((step) => step.id));
-      if (joinId) {
-        const lanes = candidateSteps.map((step) => buildBranchLane(step.id, joinId)).filter((lane) => lane.length);
-        if (lanes.length > 1) {
-          route.push({ kind: 'branch', lanes });
-          for (const lane of lanes) {
-            for (const laneStep of lane) visitedStepIds.add(laneStep.selectedOption.stepId);
-          }
-          walk([joinId]);
-          return;
-        }
-      }
-    }
-
-    if (candidateSteps.every((step) => step.kind === 'dataset')) {
-      const choiceId = candidateSteps.length === 1
-        ? candidateSteps[0].id
-        : `dataset-choice:${candidateSteps.map((step) => step.id).sort().join('|')}`;
-      const options = [];
-      for (const step of candidateSteps) {
-        const producerRunId = selectedRunByStepId.get(step.producerStepId) || null;
-        const datasets = producerRunId
-          ? step.datasets.filter((dataset) => dataset.producerRunNodeId === producerRunId)
-          : step.datasets;
-        for (const dataset of datasets) {
-          options.push({
-            value: dataset.datasetNodeId,
-            label: dataset.datasetName,
-            dataset,
-            stepId: step.id,
-          });
-        }
-      }
-      const selected = chooseOption(choiceId, options, selectedByChoiceId);
-      if (!selected) return;
-      route.push({ kind: 'dataset', choiceId, options, selectedValue: selected.value, selectedOption: selected });
-      visitedStepIds.add(selected.stepId);
-      const consumerStepIds = selected.dataset.consumerStepIds
-        || stepById.get(selected.stepId)?.consumerStepIds
-        || [];
-      walk(consumerStepIds, new Set(selected.dataset.consumerRunNodeIds || []));
-      return;
-    }
-
-    const nextOptions = [];
-    const restrictPromptRuns = allowedRunIds instanceof Set && allowedRunIds.size > 0;
-    for (const step of candidateSteps) {
-      if (step.kind === 'prompt') {
-        for (const option of promptRunOptions(step)) {
-          if (!restrictPromptRuns || allowedRunIds.has(option.runNodeId)) nextOptions.push(option);
-        }
-      } else if (step.kind === 'process') {
-        nextOptions.push({
-          value: `process:${step.processNodeId}`,
-          label: step.processName,
-          stepId: step.id,
-          processNodeId: step.processNodeId,
-          inputDatasets: Array.isArray(step.inputDatasets) ? step.inputDatasets : [],
-          kind: 'process',
-        });
-      }
-    }
-    if (nextOptions.length === 0) return;
-
-    const choiceId = candidateSteps.length === 1
-      ? candidateSteps[0].id
-      : `step-choice:${candidateSteps.map((step) => step.id).sort().join('|')}`;
-    const firstPromptStep = candidateSteps.find((step) => step.kind === 'prompt');
-    const preferredValue = firstPromptStep?.defaultRunNodeId || '';
-    const selected = chooseOption(choiceId, nextOptions, selectedByChoiceId, preferredValue);
-    if (!selected) return;
-
-    const allPrompts = nextOptions.every((option) => option.kind === 'prompt');
-    const allProcesses = nextOptions.every((option) => option.kind === 'process');
-    const displayKind = allPrompts ? 'prompt' : (allProcesses ? 'process' : 'step');
-    const displayOptions = nextOptions.map((option) => ({
-      ...option,
-      label: allPrompts && nextOptions.length > 1
-        ? `${option.promptName} — ${option.runName}`
-        : option.label || option.promptName,
-    }));
-    route.push({
-      kind: displayKind,
-      choiceId,
-      options: displayOptions,
-      selectedValue: selected.value,
-      selectedOption: selected,
-    });
-    visitedStepIds.add(selected.stepId);
-    if (selected.kind === 'prompt') selectedRunByStepId.set(selected.stepId, selected.runNodeId);
-    const nextStepIds = (outgoing.get(selected.stepId) || [])
-      .filter((id) => stepById.get(id)?.kind === 'dataset');
-    walk(nextStepIds);
-  }
-
-  const sourceIds = steps.filter((step) => indegree.get(step.id) === 0).map((step) => step.id);
-  walk(sourceIds);
-  return route;
-}
-
-function exportRoutePayload(route) {
-  const exported = [];
-  const seen = new Set();
-  function add(item) {
-    const key = item.type === 'dataset' ? `dataset:${item.dataset_node_id}`
-      : item.type === 'process' ? `process:${item.process_node_id}`
-        : `prompt:${item.prompt_node_id}:${item.run_node_id}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      exported.push(item);
-    }
-  }
-  function visit(steps) {
-    for (const step of steps || []) {
-      if (step?.kind === 'branch') {
-        for (const lane of step.lanes || []) visit(lane);
-        continue;
-      }
-      const selected = step?.selectedOption;
-      if (selected?.dataset?.datasetNodeId) add({ type: 'dataset', dataset_node_id: selected.dataset.datasetNodeId });
-      if (selected?.kind === 'process') {
-        for (const input of selected.inputDatasets || []) {
-          if (input?.datasetNodeId) add({ type: 'dataset', dataset_node_id: input.datasetNodeId });
-        }
-        if (selected.processNodeId) add({ type: 'process', process_node_id: selected.processNodeId });
-      }
-      if (selected?.kind === 'prompt' && selected.promptNodeId && selected.runNodeId) {
-        add({ type: 'prompt', prompt_node_id: selected.promptNodeId, run_node_id: selected.runNodeId });
-      }
-    }
-  }
-  visit(route);
-  return exported;
 }
 
 function getCanvasNodeIds(step) {
@@ -413,7 +127,88 @@ function getPipelineViewId(pipeline, index) {
   return String(pipeline?.id || `pipeline-index-${index}`);
 }
 
-function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDatasets) {
+const ACTIVE_RUN_STATES = new Set(['pending', 'running', 'cancelling']);
+const RESUMABLE_RUN_STATES = new Set(['failed', 'cancelled', 'interrupted']);
+
+function displayValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value); } catch (_) { return String(value); }
+  }
+  return String(value);
+}
+
+function renderArtifactPreview(entry) {
+  const preview = entry?.preview;
+  if (!preview?.table) return '';
+  const headers = preview.table.headers || [];
+  const rows = preview.table.rows || [];
+  const visibleHeaders = headers.slice(0, 12);
+  const body = rows.slice(0, 20).map((row) => `<tr>${visibleHeaders.map((_, index) => `<td>${escapeHtml(displayValue(row?.[index]))}</td>`).join('')}</tr>`).join('');
+  const omitted = headers.length > visibleHeaders.length || rows.length > 20;
+  return `
+    <div class="pipeline-artifact-preview">
+      <div class="pipeline-artifact-preview-header">
+        <strong>${escapeHtml(preview.artifact?.name || preview.logical_id || 'Artifact')}</strong>
+        <span>${rows.length} row${rows.length === 1 ? '' : 's'}${preview.artifact?.valid === false ? ' · partial' : ''}</span>
+        <button type="button" class="btn btn-secondary pipeline-save-artifact" data-logical-id="${escapeHtml(preview.logical_id || '')}">Save as Dataset</button>
+      </div>
+      <div class="pipeline-artifact-table-wrap"><table class="pipeline-artifact-table">
+        <thead><tr>${visibleHeaders.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead>
+        <tbody>${body || `<tr><td colspan="${Math.max(1, visibleHeaders.length)}">Empty artifact</td></tr>`}</tbody>
+      </table></div>
+      ${omitted ? '<div class="pipeline-artifact-preview-note">Preview shows the first 20 rows and 12 columns.</div>' : ''}
+    </div>`;
+}
+
+function renderRunState(entry) {
+  const run = entry?.run;
+  if (!run) return '';
+  const jobs = new Map((run.jobs || []).map((job) => [job.job_id, job]));
+  const plan = run.plan || {};
+  const inputs = (plan.inputs || []).map((input) => `${input.name}: ${input.row_count} row${input.row_count === 1 ? '' : 's'}`).join(' · ');
+  const planJobs = (plan.jobs || []).map((job) => {
+    const state = jobs.get(job.job_id) || {};
+    const progress = state.total == null ? '' : ` · ${state.completed || 0}/${state.total}`;
+    const model = job.model?.model ? ` · ${job.model.model}` : '';
+    const calls = job.type === 'llm'
+      ? ` · calls ${job.estimated_calls == null ? 'unknown (dynamic upstream)' : job.estimated_calls}`
+      : '';
+    const reused = state.reused_from ? ' · reused checkpoint' : '';
+    return `<li><span class="pipeline-job-status pipeline-job-status--${escapeHtml(state.status || 'pending')}">${escapeHtml(state.status || 'pending')}</span><strong>${escapeHtml(job.name || job.job_id)}</strong><span>${escapeHtml(model + calls + progress + reused)}</span>${state.error ? `<div class="pipeline-job-error">${escapeHtml(state.error)}</div>` : ''}</li>`;
+  }).join('');
+  const artifacts = (run.artifacts || []).map((artifact) => `
+    <button type="button" class="pipeline-artifact-chip${artifact.valid === false ? ' pipeline-artifact-chip--partial' : ''}" data-logical-id="${escapeHtml(artifact.logical_id)}">
+      ${escapeHtml(artifact.name || artifact.logical_id)} <span>${artifact.row_count}</span>
+    </button>`).join('');
+  return `
+    <div class="pipeline-run-panel">
+      <div class="pipeline-run-summary">
+        <span class="pipeline-run-status pipeline-run-status--${escapeHtml(run.status)}">${escapeHtml(run.status)}</span>
+        <span>Revision ${escapeHtml(run.revision || 1)}</span>
+        <span>${escapeHtml(inputs || 'No input summary')}</span>
+        <code>${escapeHtml(String(run.run_id || '').slice(0, 8))}</code>
+      </div>
+      ${run.error ? `<div class="pipeline-run-error">${escapeHtml(run.error)}</div>` : ''}
+      <ol class="pipeline-job-list">${planJobs}</ol>
+      ${artifacts ? `<div class="pipeline-artifact-list"><span>Artifacts</span>${artifacts}</div>` : ''}
+      ${renderArtifactPreview(entry)}
+    </div>`;
+}
+
+function renderRunActions(entry, pipelineIndex) {
+  const status = entry?.run?.status;
+  const busy = !!entry?.busy;
+  if (ACTIVE_RUN_STATES.has(status)) {
+    return `<button type="button" class="btn btn-secondary pipeline-run-action" data-action="stop" data-pipeline-index="${pipelineIndex}"${busy ? ' disabled' : ''}>${status === 'cancelling' ? 'Stopping…' : 'Stop'}</button>`;
+  }
+  const resume = RESUMABLE_RUN_STATES.has(status)
+    ? `<button type="button" class="btn btn-secondary pipeline-run-action" data-action="resume" data-pipeline-index="${pipelineIndex}"${busy ? ' disabled' : ''}>Retry / Resume</button>`
+    : '';
+  return resume;
+}
+
+function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDatasets, entry) {
   const route = buildSelectedRoute(pipeline, selectedByChoiceId);
   const visibleRoute = getVisibleRoute(route, hideIntermediateDatasets);
   const steps = visibleRoute.reduce((html, step, routeIndex) => {
@@ -424,7 +219,7 @@ function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDat
     return html + arrow + renderRouteStep(step);
   }, '');
   return `
-    <div class="pipeline-overview-card" data-pipeline-index="${index}">
+    <div class="pipeline-overview-card" data-pipeline-index="${index}" data-pipeline-id="${escapeHtml(getPipelineViewId(pipeline, index))}">
       <div class="pipeline-overview-card-header">
         <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
         <div class="pipeline-overview-card-actions">
@@ -432,17 +227,28 @@ function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDat
             <input type="checkbox" class="rule-editor-checkbox pipeline-overview-data-toggle-input" data-pipeline-index="${index}"${hideIntermediateDatasets ? ' checked' : ''}>
             <span>Hide data nodes</span>
           </label>
+          ${renderRunActions(entry, index)}
           <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python Project</button>
         </div>
       </div>
       <ol class="pipeline-overview-steps">${steps}</ol>
+      ${renderRunState(entry)}
     </div>
   `;
 }
 
+function renderDetachedRun(pipelineId, entry) {
+  return `<div class="pipeline-overview-card pipeline-overview-card--detached" data-pipeline-index="-1" data-pipeline-id="${escapeHtml(pipelineId)}">
+    <div class="pipeline-overview-card-header"><h3 class="pipeline-overview-card-title">Frozen Pipeline snapshot</h3><div class="pipeline-overview-card-actions">${renderRunActions(entry, -1)}</div></div>
+    <p class="pipeline-run-detached-note">The canvas route changed or was removed. This run continues with its frozen plan and input snapshot.</p>
+    ${renderRunState(entry)}
+  </div>`;
+}
+
 /**
  * @param {Function|Array} pipelineSource a getter for live data, or a static array for callers
- * @param {{getCanvasState?: Function, highlightCanvasNodes?: Function}} options live canvas hooks
+ * @param {{getCanvasState?: Function, getPipelineProjectId?: Function, getAssetProjectId?: Function,
+ * saveArtifactAsDataset?: Function, highlightCanvasNodes?: Function}} options live canvas hooks
  */
 export function showPipelineOverviewModal(pipelineSource, options = {}) {
   const host = options.host || null;
@@ -460,10 +266,20 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     ? options.highlightCanvasNodes
     : () => {};
   let focusCanvasNodes = options.focusCanvasNodes || (() => {});
+  let getPipelineProjectId = typeof options.getPipelineProjectId === 'function'
+    ? options.getPipelineProjectId : async () => { throw new Error('No project is open.'); };
+  let getAssetProjectId = typeof options.getAssetProjectId === 'function'
+    ? options.getAssetProjectId : () => null;
+  let saveArtifactAsDataset = typeof options.saveArtifactAsDataset === 'function'
+    ? options.saveArtifactAsDataset : null;
   let pipelines = [];
   let pipelineSignature = '';
   let refreshFrame = 0;
+  let pollTimer = 0;
+  let attachedProjectId = '';
+  let destroyed = false;
   const showIntermediateDatasetsByPipelineId = new Map();
+  const runEntriesByPipelineId = new Map();
 
   const overlay = document.createElement('div');
   overlay.className = host ? 'workspace-dock pipeline-overview-overlay' : 'modal-overlay pipeline-overview-overlay';
@@ -490,6 +306,86 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   function clearCanvasHighlight() {
     highlightCanvasNodes([]);
   }
+  function storageKey(projectId) {
+    return `annobio.pipeline-runs.v1:${projectId}`;
+  }
+  function storedRuns(projectId) {
+    try {
+      const value = JSON.parse(localStorage.getItem(storageKey(projectId)) || '[]');
+      return Array.isArray(value) ? value : [];
+    } catch (_) {
+      return [];
+    }
+  }
+  function persistRuns() {
+    if (!attachedProjectId) return;
+    const records = Array.from(runEntriesByPipelineId.entries())
+      .filter(([, entry]) => entry?.run?.run_id)
+      .map(([pipelineId, entry]) => ({
+        pipeline_id: pipelineId,
+        run_id: entry.run.run_id,
+        needs_assets: entry.needsAssets === true,
+      }));
+    try { localStorage.setItem(storageKey(attachedProjectId), JSON.stringify(records)); } catch (_) {}
+  }
+  function stopPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = 0;
+  }
+  async function loadDefaultPreview(entry) {
+    if (!entry?.run || entry.preview || entry.run.status !== 'succeeded') return;
+    const data = await getPipelineResults(attachedProjectId, entry.run.run_id);
+    entry.preview = data.outputs?.[0] || null;
+  }
+  async function updateRunEntry(pipelineId, { render = true } = {}) {
+    const entry = runEntriesByPipelineId.get(pipelineId);
+    if (!entry?.run?.run_id || !attachedProjectId) return;
+    entry.run = await getPipelineRun(attachedProjectId, entry.run.run_id);
+    await loadDefaultPreview(entry).catch(() => {});
+    if (render && !destroyed) renderBody();
+    persistRuns();
+  }
+  async function pollRuns() {
+    const active = Array.from(runEntriesByPipelineId.entries())
+      .filter(([, entry]) => ACTIVE_RUN_STATES.has(entry?.run?.status));
+    if (!active.length) {
+      stopPolling();
+      return;
+    }
+    await Promise.all(active.map(([pipelineId]) => updateRunEntry(pipelineId, { render: false }).catch(() => {})));
+    if (!destroyed) renderBody();
+  }
+  function ensurePolling() {
+    if (pollTimer || !Array.from(runEntriesByPipelineId.values()).some((entry) => ACTIVE_RUN_STATES.has(entry?.run?.status))) return;
+    pollTimer = setInterval(() => pollRuns().catch(() => {}), 800);
+  }
+  async function syncProjectContext() {
+    let projectId;
+    try { projectId = await getPipelineProjectId(); } catch (_) { projectId = ''; }
+    if (destroyed || projectId === attachedProjectId) return;
+    stopPolling();
+    attachedProjectId = projectId;
+    runEntriesByPipelineId.clear();
+    if (!projectId) {
+      renderBody();
+      return;
+    }
+    for (const record of storedRuns(projectId)) {
+      if (!record?.pipeline_id || !record?.run_id) continue;
+      runEntriesByPipelineId.set(record.pipeline_id, {
+        run: { run_id: record.run_id, status: 'pending' },
+        needsAssets: record.needs_assets === true,
+        preview: null,
+      });
+    }
+    await Promise.all(Array.from(runEntriesByPipelineId.keys()).map(async (pipelineId) => {
+      try { await updateRunEntry(pipelineId, { render: false }); }
+      catch (_) { runEntriesByPipelineId.delete(pipelineId); }
+    }));
+    persistRuns();
+    ensurePolling();
+    if (!destroyed) renderBody();
+  }
   function highlightRouteStep(stepEl) {
     if (!stepEl) {
       clearCanvasHighlight();
@@ -505,15 +401,24 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   }
   function renderBody({ fitHeightToContent = false } = {}) {
     clearCanvasHighlight();
+    const visibleIds = new Set(pipelines.map((pipeline, index) => getPipelineViewId(pipeline, index)));
     const content = pipelines.length > 0
-      ? pipelines.map((pipeline, index) => renderPipeline(
+      ? pipelines.map((pipeline, index) => {
+        const pipelineId = getPipelineViewId(pipeline, index);
+        return renderPipeline(
         pipeline,
         index,
         selectedByChoiceId,
         showIntermediateDatasetsByPipelineId.get(getPipelineViewId(pipeline, index)) !== true,
-      )).join('')
+        runEntriesByPipelineId.get(pipelineId),
+      );
+      }).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
-    bodyEl.innerHTML = content;
+    const detached = Array.from(runEntriesByPipelineId.entries())
+      .filter(([pipelineId]) => !visibleIds.has(pipelineId))
+      .map(([pipelineId, entry]) => renderDetachedRun(pipelineId, entry))
+      .join('');
+    bodyEl.innerHTML = content + detached;
     if (fitHeightToContent && !overlay.classList.contains('modal-overlay--maximized')) {
       panelEl.style.removeProperty('height');
     }
@@ -522,10 +427,12 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (typeof nextSource === 'function') readPipelines = nextSource;
     const nextPipelines = readPipelines?.() || [];
     const nextSignature = JSON.stringify(nextPipelines);
-    if (nextSignature === pipelineSignature) return;
-    pipelines = nextPipelines;
-    pipelineSignature = nextSignature;
-    renderBody();
+    if (nextSignature !== pipelineSignature) {
+      pipelines = nextPipelines;
+      pipelineSignature = nextSignature;
+      renderBody();
+    }
+    syncProjectContext().catch(() => {});
   }
   function scheduleRefresh() {
     if (refreshFrame) cancelAnimationFrame(refreshFrame);
@@ -541,6 +448,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       highlightCanvasNodes = nextOptions.highlightCanvasNodes;
     }
     if (typeof nextOptions.focusCanvasNodes === 'function') focusCanvasNodes = nextOptions.focusCanvasNodes;
+    if (typeof nextOptions.getPipelineProjectId === 'function') getPipelineProjectId = nextOptions.getPipelineProjectId;
+    if (typeof nextOptions.getAssetProjectId === 'function') getAssetProjectId = nextOptions.getAssetProjectId;
+    if (typeof nextOptions.saveArtifactAsDataset === 'function') saveArtifactAsDataset = nextOptions.saveArtifactAsDataset;
+    syncProjectContext().catch(() => {});
   };
   refresh();
 
@@ -583,11 +494,92 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     clearCanvasHighlight();
   });
 
+  function selectedPipelineContext(button) {
+    const card = button.closest('.pipeline-overview-card');
+    const pipelineIndex = Number.parseInt(card?.dataset.pipelineIndex || '-1', 10);
+    const pipelineId = card?.dataset.pipelineId || '';
+    const pipeline = pipelineIndex >= 0 ? pipelines[pipelineIndex] : null;
+    const route = pipeline ? exportRoutePayload(buildSelectedRoute(pipeline, selectedByChoiceId)) : null;
+    return { card, pipelineIndex, pipelineId, pipeline, route };
+  }
+
   bodyEl.addEventListener('click', async (event) => {
     if (!event.target.closest('select, button, input, label')) {
       const step = event.target.closest('[data-canvas-node-ids]');
       if (step) focusCanvasNodes(JSON.parse(decodeURIComponent(step.dataset.canvasNodeIds)));
     }
+    const artifactButton = event.target.closest?.('.pipeline-artifact-chip');
+    if (artifactButton && !artifactButton.disabled) {
+      const context = selectedPipelineContext(artifactButton);
+      const entry = runEntriesByPipelineId.get(context.pipelineId);
+      if (!entry?.run?.run_id || !attachedProjectId) return;
+      artifactButton.disabled = true;
+      try {
+        const result = await getPipelineResults(attachedProjectId, entry.run.run_id, artifactButton.dataset.logicalId);
+        entry.preview = result.outputs?.[0] || null;
+        renderBody();
+      } catch (error) {
+        showAlert(error instanceof Error ? error.message : 'Could not load this artifact.', { title: 'Cannot load Artifact' });
+      }
+      return;
+    }
+
+    const saveButton = event.target.closest?.('.pipeline-save-artifact');
+    if (saveButton && !saveButton.disabled) {
+      const context = selectedPipelineContext(saveButton);
+      const entry = runEntriesByPipelineId.get(context.pipelineId);
+      const preview = entry?.preview;
+      if (!preview?.table || !saveArtifactAsDataset) return;
+      saveButton.disabled = true;
+      try {
+        await saveArtifactAsDataset({
+          name: preview.artifact?.name || 'Pipeline result',
+          notes: `Saved from Pipeline run ${entry.run.run_id}. Logical artifact: ${preview.logical_id}.`,
+          headers: preview.table.headers || [],
+          rows: preview.table.rows || [],
+          columnTypes: preview.table.column_types || [],
+          rowIds: preview.table.row_ids || [],
+        });
+      } catch (error) {
+        showAlert(error instanceof Error ? error.message : 'Could not save this artifact.', { title: 'Cannot save Artifact' });
+      } finally {
+        if (saveButton.isConnected) saveButton.disabled = false;
+      }
+      return;
+    }
+
+    const actionButton = event.target.closest?.('.pipeline-run-action');
+    if (actionButton && !actionButton.disabled) {
+      const context = selectedPipelineContext(actionButton);
+      const entry = runEntriesByPipelineId.get(context.pipelineId);
+      actionButton.disabled = true;
+      try {
+        if (actionButton.dataset.action === 'stop' && entry?.run?.run_id) {
+          entry.busy = true;
+          entry.run = await cancelPipelineRun(attachedProjectId, entry.run.run_id);
+          entry.busy = false;
+          ensurePolling();
+          renderBody();
+        } else if (actionButton.dataset.action === 'resume' && entry?.run?.run_id) {
+          entry.busy = true;
+          renderBody();
+          entry.run = await resumePipelineRun(
+            attachedProjectId, entry.run.run_id, getAssetProjectId(), entry.needsAssets,
+          );
+          entry.preview = null;
+          entry.busy = false;
+          persistRuns();
+          ensurePolling();
+          renderBody();
+        }
+      } catch (error) {
+        if (entry) entry.busy = false;
+        renderBody();
+        showAlert(error instanceof Error ? error.message : 'Pipeline action failed.', { title: 'Pipeline' });
+      }
+      return;
+    }
+
     const button = event.target.closest?.('.pipeline-overview-export');
     if (!button || button.disabled) return;
     const pipelineIndex = Number.parseInt(button.getAttribute('data-pipeline-index') || '', 10);
@@ -627,11 +619,14 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   });
 
   function destroy() {
+    destroyed = true;
     if (refreshFrame) cancelAnimationFrame(refreshFrame);
+    stopPolling();
     clearCanvasHighlight();
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('workflow:canvas-changed', scheduleRefresh);
+    document.removeEventListener('workflow:project-changed', onProjectChanged);
   }
   overlay.destroyPipelineOverview = destroy;
   function onKeyDown(event) {
@@ -640,6 +635,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   overlay.querySelector('.modal-close')?.addEventListener('click', destroy);
   if (!host) document.addEventListener('keydown', onKeyDown);
   document.addEventListener('workflow:canvas-changed', scheduleRefresh);
+  function onProjectChanged() {
+    syncProjectContext().catch(() => {});
+  }
+  document.addEventListener('workflow:project-changed', onProjectChanged);
 
   (host || document.body).appendChild(overlay);
 }
