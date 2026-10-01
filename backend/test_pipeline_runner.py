@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -224,8 +225,10 @@ class PipelineRunnerTests(unittest.TestCase):
         self.assertNotIn("row_checkpoints", failed["jobs"][0])
         run_path = next(Path(self.temp.name).glob(f"*/{started['run_id']}/run.json"))
         first = json.loads(run_path.read_text(encoding="utf-8"))["jobs"][0]
-        self.assertEqual(first["row_checkpoints"]["0"]["status"], "succeeded")
-        self.assertEqual(first["row_checkpoints"]["1"]["status"], "failed")
+        self.assertNotIn("row_checkpoints", first, "row results must not live in run.json")
+        rows = self.runner._row_checkpoints("rows", started["run_id"], "llm:r1", first["fingerprint"])
+        self.assertEqual(rows["0"]["status"], "succeeded")
+        self.assertEqual(rows["1"]["status"], "failed")
         self.runner.resume("rows", started["run_id"])
         done = self.wait("rows", started["run_id"])
         self.assertEqual(done["status"], "succeeded", done)
@@ -294,6 +297,9 @@ class PipelineRunnerTests(unittest.TestCase):
         persisted["jobs"][-1]["status"] = "running"
         persisted["jobs"][-1]["attempt_token"] = "abandoned"
         run_path.write_text(json.dumps(persisted), encoding="utf-8")
+        # A crash leaves the active marker that start/resume wrote; the finished run removed it.
+        marker = Path(self.temp.name) / "active" / f"{started['run_id']}.json"
+        marker.write_text(json.dumps({"project_id": "restart", "run_id": started["run_id"]}), encoding="utf-8")
         restarted = PipelineRunner(
             Path(self.temp.name), credential_resolver=self.runner.credential_resolver,
             settings_loader=lambda: dict(DEFAULTS), llm_adapter=self.runner.llm_adapter,
@@ -407,6 +413,86 @@ class PipelineRunnerTests(unittest.TestCase):
         self.assertTrue(output_records)
         self.assertTrue(all(item["valid"] is False for item in output_records))
 
+
+    def test_run_json_writes_do_not_grow_with_row_count(self):
+        def saves_for(rows, project_id):
+            state, route = serial_state([[f"row {index}"] for index in range(rows)])
+            state["nodes"] = state["nodes"][:4]
+            state["connections"] = [edge("p1", "r1", "prompt-to-run")]
+            original_save = self.runner._save_run
+            count = 0
+
+            def counting_save(run):
+                nonlocal count
+                count += 1
+                original_save(run)
+
+            with mock.patch.object(self.runner, "_save_run", counting_save):
+                started = self.runner.start(project_id=project_id, canvas_state=state, route=route[:3],
+                                            input_dataset_ids=["raw"])
+                finished = self.wait(project_id, started["run_id"])
+            self.assertEqual(finished["status"], "succeeded", finished)
+            self.assertEqual((finished["jobs"][0]["completed"], finished["jobs"][0]["total"]), (rows, rows))
+            run_path = next(Path(self.temp.name).glob(f"*/{started['run_id']}/run.json"))
+            self.assertNotIn("row ", run_path.read_text(encoding="utf-8").replace("row_ids", ""),
+                             "row outputs must stay out of run.json")
+            return count
+
+        self.assertEqual(saves_for(3, "few-rows"), saves_for(30, "many-rows"))
+
+    def test_status_reports_live_row_progress_without_rewriting_run_json(self):
+        second_row = threading.Event()
+        release = threading.Event()
+
+        def invoke(**kwargs):
+            if "beta" in kwargs["prompt"]:
+                second_row.set()
+                release.wait(5)
+            return {"answer": kwargs["prompt"]}, False, {}
+
+        def adapter(job, table, credential, session_id, cancel_event, **kwargs):
+            return execute_llm_job(job, table, credential, session_id, cancel_event, invoke=invoke, **kwargs)
+
+        self.runner.llm_adapter = adapter
+        state, route = serial_state([["alpha"], ["beta"]])
+        state["nodes"] = state["nodes"][:4]
+        state["connections"] = [edge("p1", "r1", "prompt-to-run")]
+        settings = dict(DEFAULTS, run_concurrency=1)
+        self.runner.settings_loader = lambda: dict(settings)
+        started = self.runner.start(project_id="live", canvas_state=state, route=route[:3],
+                                    input_dataset_ids=["raw"])
+        try:
+            self.assertTrue(second_row.wait(3), "second row did not start")
+            live = self.runner.status("live", started["run_id"])
+            self.assertEqual((live["jobs"][0]["completed"], live["jobs"][0]["total"]), (1, 2))
+            run_path = next(Path(self.temp.name).glob(f"*/{started['run_id']}/run.json"))
+            persisted = json.loads(run_path.read_text(encoding="utf-8"))["jobs"][0]
+            self.assertEqual(persisted["completed"], 0, "progress is not written to run.json per row")
+        finally:
+            release.set()
+        done = self.wait("live", started["run_id"])
+        self.assertEqual((done["jobs"][0]["completed"], done["jobs"][0]["total"]), (2, 2))
+
+    def test_request_lookup_and_startup_do_not_scan_run_history(self):
+        state, route = serial_state([["one"]])
+        for index in range(3):
+            older = self.runner.start(project_id="history", canvas_state=state, route=route,
+                                      input_dataset_ids=["raw"], request_id=f"older-{index}")
+            self.wait("history", older["run_id"])
+        with mock.patch.object(Path, "glob", side_effect=AssertionError("run history was scanned")):
+            first = self.runner.start(project_id="history", canvas_state=state, route=route,
+                                      input_dataset_ids=["raw"], request_id="new-request")
+            duplicate = self.runner.start(project_id="history", canvas_state=state, route=route,
+                                          input_dataset_ids=["raw"], request_id="new-request")
+        self.assertEqual(first["run_id"], duplicate["run_id"])
+        self.wait("history", first["run_id"])
+        self.assertEqual(list((Path(self.temp.name) / "active").glob("*.json")), [],
+                         "finished runs leave no active marker")
+        with mock.patch.object(Path, "glob", wraps=Path.glob, autospec=True) as globbed:
+            PipelineRunner(Path(self.temp.name), credential_resolver=self.runner.credential_resolver,
+                           settings_loader=lambda: dict(DEFAULTS))
+        self.assertEqual([call.args[1] for call in globbed.call_args_list], ["*.json"],
+                         "startup reads only the active markers")
 
 if __name__ == "__main__":
     unittest.main()

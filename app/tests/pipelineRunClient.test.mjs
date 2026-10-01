@@ -49,3 +49,22 @@ test('pipeline client uses compile/start/status/cancel/resume/results contracts'
   assert.deepEqual(JSON.parse(calls[5].options.body), { project_id: 'project-a' });
   assert.match(calls[6].url, /logical_id=dataset%3Aout/);
 });
+
+test('a start without a reusable request id is rejected before any request', async () => {
+  const originalFetch = globalThis.fetch;
+  let fetched = false;
+  globalThis.fetch = async () => { fetched = true; return { ok: true, json: async () => ({}) }; };
+  try {
+    await assert.rejects(
+      startCurrentPipeline({ projectId: 'project-a', assetProjectId: null, canvasState: state, route }),
+      /requestId/,
+    );
+    await assert.rejects(
+      reviseCurrentPipeline('run-a', { projectId: 'project-a', assetProjectId: null, canvasState: state, route, requestId: ' ' }),
+      /requestId/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(fetched, false);
+});
