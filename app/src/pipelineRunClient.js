@@ -41,12 +41,17 @@ export async function getPipelineModelContext() {
   return { credentials: Array.isArray(credentials) ? credentials : [], settings: settings || {} };
 }
 
-function newRequestId() {
+/** One id per user action. Pass the same id when that action is retried, so the backend returns the
+ * run it already started instead of starting a second one; a fresh id per call would defeat that. */
+export function newPipelineRequestId() {
   return globalThis.crypto?.randomUUID?.()
     || `pipeline-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 async function executionRequest({ projectId, assetProjectId, canvasState, route, requestId, path }) {
+  if (!String(requestId || '').trim()) {
+    throw new Error('A Pipeline start needs a requestId from newPipelineRequestId(), reused on retry.');
+  }
   let projectSessionId = null;
   if (pipelineInputHasAssets(canvasState, route)) {
     const prepared = await prepareAssets(assetProjectId);
@@ -55,7 +60,7 @@ async function executionRequest({ projectId, assetProjectId, canvasState, route,
   return jsonRequest(path, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(buildPipelineStartRequest({
-      projectId, projectSessionId, requestId: requestId || newRequestId(), canvasState, route,
+      projectId, projectSessionId, requestId, canvasState, route,
     })),
   });
 }

@@ -22,9 +22,14 @@ Runner 消费 `PipelineSpec v1`，串行执行其中的 LLM 与 Process job，�
 后端把项目 ID 做 SHA-256 后作为目录名：
 
 ```text
-backend/data/pipeline_runs/<project-id-sha256>/<run-id>/
-  run.json
-  artifacts/<artifact-instance-id>.json
+backend/data/pipeline_runs/
+  active/<run-id>.json                     # 仅活动运行（pending/running/cancelling）有标记
+  <project-id-sha256>/
+    requests/<request-id-sha256>.json      # request_id → run_id 索引
+    <run-id>/
+      run.json
+      artifacts/<artifact-instance-id>.json
+      row_checkpoints/<job-id-sha256>.jsonl
 ```
 
 这样既隔离项目，又不会把用户提供的路径直接用于文件系统寻址。状态/结果/取消/恢复都同时要求 `project_id + run_id`；使用另一个项目 ID 查询时返回不存在。
@@ -35,7 +40,14 @@ backend/data/pipeline_runs/<project-id-sha256>/<run-id>/
 
 ## 3. 持久化与 checkpoint
 
-`run.json` 保存 PipelineRun、JobRun、spec、凭据 ID 绑定和 artifact 元数据，不保存 API key。每个 artifact 保存逻辑位置、实际实例 ID、生产 job/端口、schema、行数和表内容。
+`run.json` 保存 PipelineRun、JobRun、spec、凭据 ID 绑定和 artifact 元数据，不保存 API key，也不保存任何行数据。每个 artifact 保存逻辑位置、实际实例 ID、生产 job/端口、schema、行数和表内容。
+
+`run.json` 只在 Job 或运行状态变化时重写，写入次数与行数无关：
+
+- LLM 每完成一行，只向该 Job 的 `row_checkpoints/*.jsonl` 追加一行（行号、状态、结构化输出、错误及 Job 指纹）。崩溃最多截断最后一行，读取时跳过。恢复只采用指纹与当前 Job 定义相同的记录，所以 Job 或其输入变化后不会误用旧行。
+- 行级进度只保存在内存中，状态接口会把它合并进返回结果；attempt 结束时才写入 `run.json`。后端重启后，进度按已有的行 checkpoint 重新计算。
+- `request_id` 通过 `requests/` 索引文件直接定位；后端启动时只检查 `active/` 中的标记。这两项的开销都不随运行历史增长。
+- Windows 上替换文件时，如果遇到扫描或索引程序的短暂占用，会有限次重试。
 
 提交顺序固定为：
 
