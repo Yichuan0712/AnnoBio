@@ -328,6 +328,16 @@ function getCanvasNodeIds(step) {
   return [];
 }
 
+function getHighlightCanvasNodeIds(step) {
+  if (step?.kind === 'branch') {
+    return (step.lanes || []).flatMap((lane) => lane.flatMap((laneStep) => getHighlightCanvasNodeIds(laneStep)));
+  }
+  if (step?.selectedOption?.kind === 'process' && step.selectedOption.processNodeId) {
+    return [step.selectedOption.processNodeId];
+  }
+  return getCanvasNodeIds(step);
+}
+
 function renderRouteChip(step) {
   if (step.kind === 'empty') {
     return '<span class="pipeline-overview-branch-chip pipeline-overview-branch-chip--empty"><span class="pipeline-step-empty">Do nothing</span></span>';
@@ -342,7 +352,8 @@ function renderRouteChip(step) {
       : (step.kind === 'prompt' ? 'Preview one concrete Prompt Run in this branch.' : 'Preview this Process path.'),
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
-  return `<span class="pipeline-overview-branch-chip" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind] || 'Step'}</span>${picker}</span>`;
+  const highlightCanvasNodeIds = encodeURIComponent(JSON.stringify(getHighlightCanvasNodeIds(step)));
+  return `<span class="pipeline-overview-branch-chip" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}" data-highlight-canvas-node-ids="${highlightCanvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind] || 'Step'}</span>${picker}</span>`;
 }
 
 function renderRouteStep(step) {
@@ -373,8 +384,9 @@ function renderRouteStep(step) {
     titles[step.kind],
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
+  const highlightCanvasNodeIds = encodeURIComponent(JSON.stringify(getHighlightCanvasNodeIds(step)));
   return `
-    <li class="pipeline-overview-step" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}">
+    <li class="pipeline-overview-step" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}" data-highlight-canvas-node-ids="${highlightCanvasNodeIds}">
       <span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind]}</span>
       ${picker}
     </li>
@@ -484,7 +496,8 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       return;
     }
     try {
-      const ids = JSON.parse(decodeURIComponent(stepEl.dataset.canvasNodeIds || ''));
+      const encodedIds = stepEl.dataset.highlightCanvasNodeIds || stepEl.dataset.canvasNodeIds || '';
+      const ids = JSON.parse(decodeURIComponent(encodedIds));
       highlightCanvasNodes(Array.isArray(ids) ? ids : []);
     } catch (_) {
       clearCanvasHighlight();
