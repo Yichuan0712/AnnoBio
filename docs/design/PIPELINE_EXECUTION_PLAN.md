@@ -2,7 +2,7 @@
 
 日期：2026-09-30。代码基线：`main` / `0b257f9`。
 
-状态：Phase 1（P1.1–P1.6）已实现并通过测试；Phase 2 及后续阶段待实现。开发分支：`feat/pipeline-execution`。
+状态：编译器、导出器和后端 Runner 已实现并通过测试。面板运行入口（P1.4）尚未提供，Agent 也不能启动整条 Pipeline，因此整条执行目前只能通过 API 使用。Phase 2 及后续阶段待实现。开发分支：`feat/pipeline-execution`。
 
 本文记录实施范围、执行语义、阶段顺序和验收标准。勾选表示实际完成并验证，不表示仅完成讨论。按里程碑逐步实施代码。
 
@@ -180,7 +180,7 @@ P1.2 实现记录（2026-10-01）：
 
 #### P1.4 Run Current Pipeline 与结果查看
 
-- [x] Current Pipeline 增加校验、Run、Stop、Retry/Resume 入口。
+- [ ] Current Pipeline 增加校验、Run、Stop、Retry/Resume 入口。
 - [x] 显示选中路线、输入数量、所用模型、整体和各 job 状态。
 - [x] 动态 Process/table 输出导致调用量未知时，明确显示未知，不给出虚假的精确成本。
 - [x] 预览中间/最终 artifact，并显式另存为工作区 Dataset。
@@ -188,11 +188,11 @@ P1.2 实现记录（2026-10-01）：
 
 验收：用户在 UI 中启动链路、查看结果并保存输出；执行中的路线与编译预览一致。
 
-实现（2026-10-01）：Current Pipeline 面板现在直接消费与导出器相同的路线选择和 compiler。`pipelineRunDefinition.js` 只把明确入口 Dataset 的行快照发送给 Runner，不会把画布中陈旧的中间 Dataset 当成本次输入；`pipelineRunClient.js` 接入 compile/start/status/cancel/resume/results API。面板显示校验诊断、输入行数、模型、调用量估计、整体/Job 状态和错误，并按 800 ms 轮询活动运行。运行成功后自动预览最终 artifact，也可以选择任意已产生的中间 artifact，并通过 “Save as Dataset” 显式创建新画布节点。
+实现（2026-10-01）：`pipelineRunDefinition.js` 只把明确入口 Dataset 的行快照发送给 Runner，不会把画布中陈旧的中间 Dataset 当成本次输入；`pipelineRunClient.js` 封装 compile/start/status/cancel/resume/results API。面板中保留了运行状态、artifact 预览和 “Save as Dataset” 的显示代码，但面板没有 Run 入口，这部分目前不可达。
 
-Runner 状态新增冻结的可展示执行计划：输入、依赖、模型快照、有效设置及调用量估计。单行形状的 LLM 可继续传播已知行数；经过 Process 或 table 形状后，下游调用量显示 `unknown`。模型快照不含 API key；实际调用和恢复仍按凭据 ID 解析当前 secret。
+Runner 状态新增冻结的可展示执行计划：输入、依赖、模型快照、有效设置及调用量估计。单行形状的 LLM 可继续传播已知行数；经过 Process 或 table 形状后，下游调用量记为未知（`null`）。模型快照不含 API key；实际调用和恢复仍按凭据 ID 解析当前 secret。
 
-页面刷新使用项目级本地索引重新附着后端 `run_id`。Web 复用项目 ID；桌面端使用规范化 `.yc` 绝对路径的 SHA-256 作为不暴露路径的稳定 owner，Save As 会获得新的运行历史归属。画布编辑不会改写状态区展示的冻结计划；若原 Pipeline 已不再被画布检测到，面板会保留只读的 “Frozen Pipeline snapshot” 卡片。清除浏览器本地存储会丢失自动附着指针，但不会删除后端运行记录；完整历史列表/清理 UI 仍未实现。
+运行归属：Web 复用项目 ID；桌面端使用规范化 `.yc` 绝对路径的 SHA-256 作为不暴露路径的稳定 owner，Save As 会获得新的运行历史归属。
 
 验证：12 项前端路线/请求/预览测试、23 项 Runner/API/Process/设置测试、42 项 compiler/导出器回归测试通过；Vite renderer 生产构建通过。测试使用 mock LLM，未调用付费模型。构建仍有原有的大 bundle 提示。
 
@@ -213,28 +213,26 @@ Runner 状态新增冻结的可展示执行计划：输入、依赖、模型快�
 
 start/revision 请求支持项目级 `request_id`：相同请求重放返回原 `run_id`。对 pending/running/cancelling 运行重复 Resume 直接返回当前状态，不创建第二个 worker。后端启动时把遗留的 pending/running/cancelling 运行标记为 `interrupted`；恢复前重新校验输入及成功 Artifact 的摘要，损坏的 Job 及后代会失效，冻结输入损坏则要求建立新 revision。
 
-Current Pipeline 的 “Run Again” 现在创建新 revision。Runner 使用输入内容、完整 Job 定义、模型绑定快照及 Process runtime 计算指纹，把父 revision 中匹配且完整的成功 Artifact 复制为新实例；第一个发生变化或缺少输入的 Job 及其后代重新执行。旧 revision 保持不可变。界面显示 revision 编号和 `reused checkpoint`。
+revisions API 创建新 revision。Runner 使用输入内容、完整 Job 定义、模型绑定快照及 Process runtime 计算指纹，把父 revision 中匹配且完整的成功 Artifact 复制为新实例；第一个发生变化或缺少输入的 Job 及其后代重新执行。旧 revision 保持不可变。
 
-生命周期：Web 页面刷新只重新附着运行，不停止后端；Web 后端重启和桌面应用退出后的再次启动都会把未完成运行呈现为 `interrupted`。桌面 owner 由规范化项目路径稳定派生，Save As 进入新 owner。含图片/PDF 的恢复需要客户端重新准备 asset session；源资源已删除、冻结输入损坏或凭据不存在时不会猜测替代项，而是保留 checkpoint 并显示原因。Process 可能有外部副作用，因此进程中断后的整 Job 重跑是 at-least-once，不承诺 exactly-once。
+生命周期：Web 后端重启和桌面应用退出后的再次启动都会把未完成运行标记为 `interrupted`。桌面 owner 由规范化项目路径稳定派生，Save As 进入新 owner。含图片/PDF 的恢复需要客户端重新准备 asset session；源资源已删除、冻结输入损坏或凭据不存在时不会猜测替代项，而是保留 checkpoint 并显示原因。Process 可能有外部副作用，因此进程中断后的整 Job 重跑是 at-least-once，不承诺 exactly-once。
 
 验证：新增行级失败续跑、重复 start/resume/revision、修改中间 Process 后的上游复用/后代失效、迟到 LLM 响应、模拟后端重启、缺失凭据以及桌面/Web owner 测试。29 项 Runner/API/Process/设置测试和 13 项前端测试通过；Vite renderer 生产构建通过，未调用付费模型。
 
 #### P1.6 现有静态分支及兼容验收
 
 - [x] Runner 支持 spec 已表达的分支与汇合，合流仅执行一次。
-- [x] 画布运行和导出使用同一组图样例验证语义一致性。
+- [x] Runner 和导出使用同一组图样例验证语义一致性。
 - [x] 保留单节点运行、手工保存 Dataset、旧项目打开和 Score/Review 工作方式。
-- [x] 更新用户 Guide 和 Agent 的读取能力；Agent 启动整条 Pipeline 沿用现有用户确认执行流程。
+- [x] 更新用户 Guide。
 
 实现（2026-10-01）：以 compiler/exporter 已使用的 `raw → split(left, right) → merge → LLM` 图作为共享验收夹具。Runner 按 spec 的拓扑顺序物化两个命名分支，merge 同时读取 `df` 与 `df_right`，且 Job/attempt 记录证明只调度一次；导出项目继续用同一图执行真实 pandas split/merge、mock LLM 和双最终工作表。画布路线选择测试覆盖两条 lane 保留并在共享 merge 处汇合。
 
-Agent 的 `run_nodes` 新增显式 `pipeline` Job。它只在用户要求运行整条编号 Pipeline 时使用默认具体路线，先调用 compiler，随后在原确认卡显示输入、各 Job、模型及已知/未知调用量；用户确认后调用同一 start/status/cancel API。存在会改变意图的路线备选时，Agent 指令要求先询问，不能暗自选择。用户说明见 [PIPELINE_GUIDE.md](../PIPELINE_GUIDE.md)，Agent 的 `pipeline-building` Guide 与系统契约同步更新。
+兼容边界：单 Run、单 Process、手工 Save to workspace、Score/Review/Sampler 的执行路径没有改成 Pipeline API；Pipeline Runner 是新增的独立执行路径。旧 `process(row)` 迁移、旧 Run 映射、原导出回归和 renderer 全量构建继续通过。Phase 1 只宣告已有单源静态命名分支/汇合闭环；多源导出的 CLI 输入绑定、纯 Process Pipeline 检测和 ensemble 仍属于 Phase 2。
 
-兼容边界：单 Run、单 Process、手工 Save to workspace、Score/Review/Sampler 的执行路径没有改成 Pipeline API；Pipeline 是新增的整体入口。旧 `process(row)` 迁移、旧 Run 映射、原导出回归和 renderer 全量构建继续通过。Phase 1 只宣告已有单源静态命名分支/汇合闭环；多源导出的 CLI 输入绑定、纯 Process Pipeline 检测和 ensemble 仍属于 Phase 2。
+验证：30 项 Runner/API/Process/设置测试、42 项 compiler/导出器测试和 13 项前端路线及运行测试通过；Vite renderer 生产构建通过。全部 LLM 测试使用 mock，未调用付费模型。构建仍有原有的大 bundle 提示。
 
-验证：30 项 Runner/API/Process/设置测试、42 项 compiler/导出器测试和 14 项前端路线、运行及 Agent 确认测试通过；Vite renderer 生产构建通过。全部 LLM 测试使用 mock，未调用付费模型。构建仍有原有的大 bundle 提示。
-
-Phase 1 完成标准：既有、可明确选择的无环业务路线能整体运行、追踪、取消、恢复及导出；不新增画布节点。该标准已于 2026-10-01 达成。
+Phase 1 完成标准：既有、可明确选择的无环业务路线能整体运行、追踪、取消、恢复及导出；不新增画布节点。
 
 ### Phase 2：扩大数据流能力
 

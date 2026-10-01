@@ -6,15 +6,6 @@
  */
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { displayCell } from '../../datasetContent.js';
-import { detectPipelines } from '../../pipelineDetection.js';
-import { buildSelectedRoute, exportRoutePayload } from '../../pipelineRouteSelection.js';
-import {
-  cancelPipelineRun,
-  compileCurrentPipeline,
-  getPipelineRun,
-  startCurrentPipeline,
-} from '../../pipelineRunClient.js';
-import { buildPipelineValidationPreview } from '../../pipelineRunDefinition.js';
 import {
   datasetContentOf,
   inspectWorkflowNode,
@@ -219,45 +210,6 @@ function previewVerify(job, ctx) {
   };
 }
 
-function routeNodeIds(route) {
-  return [...new Set((route || []).flatMap((step) => [
-    step.dataset_node_id, step.process_node_id, step.prompt_node_id, step.run_node_id,
-  ]).filter(Boolean))];
-}
-
-async function previewPipeline(job, ctx) {
-  const number = Number(job.pipeline);
-  if (!Number.isInteger(number) || number < 1) {
-    fail('pipeline must be the 1-based Pipeline number from the workspace summary.');
-  }
-  const pipeline = detectPipelines(ctx.state)[number - 1];
-  if (!pipeline) fail(`Pipeline ${number} does not exist on the current canvas.`);
-  const route = exportRoutePayload(buildSelectedRoute(pipeline, new Map()));
-  const compiled = await compileCurrentPipeline({ canvasState: ctx.state, route });
-  const errors = (compiled.diagnostics || []).filter((item) => item.severity === 'error');
-  if (!compiled.spec || errors.length) {
-    fail(errors.map((item) => item.message).join('; ') || `Pipeline ${number} is invalid.`);
-  }
-  const preview = buildPipelineValidationPreview(compiled, ctx.state, {
-    credentials: [...ctx.credentialsById.values()], settings: ctx.settings,
-  });
-  if (preview?.jobs.some((item) => item.type === 'llm' && item.model === 'model missing')) {
-    fail(`Pipeline ${number} has a Run without a usable model credential.`);
-  }
-  const llmJobs = (preview?.jobs || []).filter((item) => item.type === 'llm');
-  const callsKnown = llmJobs.every((item) => item.calls != null);
-  const calls = callsKnown ? llmJobs.reduce((sum, item) => sum + item.calls, 0) : null;
-  return {
-    kind: 'pipeline', title: `Run entire Pipeline ${number}`, nodeIds: routeNodeIds(route),
-    lines: [
-      `Input: ${preview?.inputLabel || 'none'}`,
-      ...(preview?.jobs || []).map((item) => `${item.name}${item.model ? ` · ${item.model}` : ''}${item.type === 'llm' ? ` · calls ${item.calls == null ? 'unknown' : item.calls}` : ''}`),
-      ...(compiled.diagnostics || []).filter((item) => item.severity === 'warning').map((item) => `Warning: ${item.message}`),
-    ],
-    usd: null, calls, priced: llmJobs.length === 0, route, pipelineNumber: number,
-  };
-}
-
 /**
  * @param {{jobs: object[]}} request the run_nodes arguments
  * @param {object} env getCanvasState, extractInputFields, credentialsById, getScoreComparisonRows
@@ -276,8 +228,7 @@ export async function previewRunRequest(request, env) {
         else if (kind === 'process') items.push(previewProcess(job, ctx));
         else if (kind === 'review') items.push(await previewReview(job, ctx));
         else if (kind === 'verify') items.push(previewVerify(job, ctx));
-        else if (kind === 'pipeline') items.push(await previewPipeline(job, ctx));
-        else fail(`kind must be run, process, review, verify or pipeline, not "${kind}".`);
+        else fail(`kind must be run, process, review or verify, not "${kind}".`);
       } catch (error) {
         if (error instanceof RunRequestError) throw new RunRequestError(`Job ${index + 1}: ${error.message}`);
         throw error;
@@ -289,7 +240,7 @@ export async function previewRunRequest(request, env) {
       ? 'No model calls, so no model cost.'
       : priced
       ? `Estimated cost: about ${formatUsd(usd)}`
-      : `Estimated cost: ${usd > 0 ? `at least ${formatUsd(usd)}; ` : ''}the rest cannot be priced in advance (dynamic Pipelines, reviews, verification, or models without OpenRouter pricing)`;
+      : `Estimated cost: ${usd > 0 ? `at least ${formatUsd(usd)}; ` : ''}the rest cannot be priced in advance (reviews, verification, or models without OpenRouter pricing)`;
     return { ok: true, items: items.map(({ kind, title, lines, nodeIds }) => ({ kind, title, lines, nodeIds })), total };
   } catch (error) {
     if (error instanceof RunRequestError) return { ok: false, error: error.message };
@@ -422,47 +373,6 @@ async function executeVerify(item, env, { onStatus }) {
   };
 }
 
-async function executePipeline(item, env, { signal, onStatus }) {
-  const projectId = await env.getPipelineProjectId();
-  let run = await startCurrentPipeline({
-    projectId,
-    assetProjectId: env.getAssetProjectId?.() || null,
-    canvasState: env.getCanvasState(),
-    route: item.route,
-  });
-  let stopRequested = false;
-  let stopDeadline = null;
-  const active = new Set(['pending', 'running', 'cancelling']);
-  while (active.has(run.status)) {
-    if (signal?.aborted && !stopRequested) {
-      stopRequested = true;
-      stopDeadline = Date.now() + STOP_WAIT_MS;
-      onStatus(`Stopping Pipeline ${item.pipelineNumber}...`);
-      run = await cancelPipelineRun(projectId, run.run_id);
-    } else {
-      const complete = (run.jobs || []).filter((state) => state.status === 'succeeded').length;
-      onStatus(`Pipeline ${item.pipelineNumber}: ${complete}/${(run.jobs || []).length} jobs complete...`);
-    }
-    if (stopRequested && Date.now() >= stopDeadline) break;
-    await sleep(stopRequested ? 500 : POLL_MS);
-    run = await getPipelineRun(projectId, run.run_id);
-  }
-  const artifacts = run.artifacts || [];
-  const outputIds = new Set(run.outputs || []);
-  const finalRows = artifacts.filter((artifact) => outputIds.has(artifact.logical_id))
-    .reduce((sum, artifact) => sum + Number(artifact.row_count || 0), 0);
-  if (stopRequested || run.status === 'cancelled' || run.status === 'cancelling') {
-    return { status: 'stopped', lines: [`Pipeline ${item.pipelineNumber}: ${run.status}; completed checkpoints were kept.`] };
-  }
-  if (run.status !== 'succeeded') {
-    return { status: 'failed', lines: [`Pipeline ${item.pipelineNumber} failed: ${run.error || run.status}`] };
-  }
-  return {
-    status: 'completed',
-    lines: [`Pipeline ${item.pipelineNumber}: revision ${run.revision || 1} succeeded; ${artifacts.length} artifacts, ${finalRows} final rows.`],
-  };
-}
-
 /**
  * Run the confirmed jobs in order. Stops at the first failure or when the user stops.
  * @returns {Promise<{status: 'completed' | 'failed' | 'stopped', results: string[]}>} the tool result
@@ -481,15 +391,13 @@ export async function executeRunRequest(request, env, { signal, onStatus = () =>
     if (job.kind === 'run') item = previewRun(job, ctx);
     else if (job.kind === 'process') item = previewProcess(job, ctx);
     else if (job.kind === 'review') item = await previewReview(job, ctx);
-    else if (job.kind === 'verify') item = previewVerify(job, ctx);
-    else item = await previewPipeline(job, ctx);
+    else item = previewVerify(job, ctx);
     let outcome;
     try {
       if (item.kind === 'run') outcome = await executeRun(item, env, { signal, onStatus });
       else if (item.kind === 'process') outcome = await executeProcess(item, env, { signal, onStatus });
       else if (item.kind === 'review') outcome = await executeReview(item, env, { signal, onStatus, job });
-      else if (item.kind === 'verify') outcome = await executeVerify(item, env, { onStatus });
-      else outcome = await executePipeline(item, env, { signal, onStatus });
+      else outcome = await executeVerify(item, env, { onStatus });
     } catch (error) {
       outcome = { status: 'failed', lines: [`${item.title} failed: ${error instanceof Error ? error.message : String(error)}`] };
     }

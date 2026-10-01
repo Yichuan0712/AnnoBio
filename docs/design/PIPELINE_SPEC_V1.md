@@ -1,6 +1,6 @@
 # PipelineSpec v1：编译契约
 
-状态：Phase 1 已完成；编译器、导出器、Runner、画布运行/恢复和静态分支兼容使用同一契约。编译器为 `backend/pipeline_compile.py`，消费者为 `backend/pipeline_export_spec.py` 与 `backend/pipeline_runner.py`。整体计划见 [PIPELINE_EXECUTION_PLAN.md](PIPELINE_EXECUTION_PLAN.md)。
+状态：Phase 1 已完成；编译器、导出器、Runner 和静态分支兼容使用同一契约。编译器为 `backend/pipeline_compile.py`，消费者为 `backend/pipeline_export_spec.py` 与 `backend/pipeline_runner.py`。整体计划见 [PIPELINE_EXECUTION_PLAN.md](PIPELINE_EXECUTION_PLAN.md)。
 
 ## 调用与结果
 
@@ -113,7 +113,7 @@ Process 只做 AST 解析、入口函数签名和 Dataset alias 检查，不执�
 
 输入 image/pdf 类型保留；输出列按画布契约标记 text。P1.3 live adapter 与原单节点路径一样保留结构化模型值，同时把物化输出列标记为 text；独立导出仍允许 pandas 暂存数值/list 原值并在 Excel 写出时序列化。两条路径的列名、展开行与空表语义已统一，但文件序列化层仍有表示差异。
 
-P1.2 已统一编译与导出的字段 key/display、列名和依赖。P1.3 live adapter 在消费 artifact 前验证实际列映射，验证 Process 返回 DataFrame/命名分支，保留空 DataFrame 的运行时列，并在输入构建时检查多模态资源。Current Pipeline Runner 使用本 spec；原有单节点运行路径为兼容旧工作流仍保持独立。
+P1.2 已统一编译与导出的字段 key/display、列名和依赖。P1.3 live adapter 在消费 artifact 前验证实际列映射，验证 Process 返回 DataFrame/命名分支，保留空 DataFrame 的运行时列，并在输入构建时检查多模态资源。Pipeline Runner 使用本 spec；原有单节点运行路径为兼容旧工作流仍保持独立。
 
 ## 导出消费者
 

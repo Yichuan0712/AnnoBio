@@ -1,6 +1,6 @@
 # Pipeline Runner v1
 
-日期：2026-10-01。状态：Phase 1 Runner、画布交互、可靠恢复及静态分支兼容验收已实现。
+日期：2026-10-01。状态：Phase 1 Runner、可靠恢复及静态分支兼容验收已在后端实现。目前没有用户入口：Current Pipeline 面板和 Agent 都不能启动整条 Pipeline，Runner 只通过 API 和测试使用。
 
 ## 1. 责任边界
 
@@ -85,12 +85,11 @@ resume body 包含 `project_id`，媒体恢复可增加新的 `project_session_i
 
 start 和 revisions body 可带 `request_id`。同一项目内重复提交相同 ID 会返回第一次创建的运行，不会启动第二个 worker。revisions 还包含当前画布、路线和输入；它创建新的不可变运行，并通过指纹复用父运行中仍有效的成功 checkpoint。Resume 始终使用原运行的冻结 spec/输入；对已在恢复中的运行重复调用是幂等查询。
 
-status/start/resume 的公开响应包含 `plan`，用于显示本次冻结的输入行数、Job 依赖、模型名称、有效设置和预计调用量。该响应不包含 API key。Process 或 table 输出会让后续行数依赖运行时结果，此时 `estimated_calls` 为 `null`，界面显示 `unknown`，不会伪造精确值。
+status/start/resume 的公开响应包含 `plan`，用于显示本次冻结的输入行数、Job 依赖、模型名称、有效设置和预计调用量。该响应不包含 API key。Process 或 table 输出会让后续行数依赖运行时结果，此时 `estimated_calls` 为 `null`，不会伪造精确值。
 
 ## 6. 当前限制
 
-- Current Pipeline 已有 Validate、Run、Stop、Retry/Resume、Job 状态、artifact 预览和 “Save as Dataset”。当前只在浏览器本地保存每条可见 Pipeline 的最近一次 `run_id` 指针，尚无完整运行历史列表、搜索或清理界面；清空本地存储不会删除后端记录，但会失去自动附着指针。
-- 刷新页面会重新附着；画布路线变化后以 “Frozen Pipeline snapshot” 保留运行状态。桌面项目文件移动/重命名后 owner 会变化，需要历史迁移功能才能自动找到旧运行。
+- 桌面项目文件移动/重命名后 owner 会变化，需要历史迁移功能才能自动找到旧运行。
 - Runner 已验收单源静态命名分支与汇合：一个 Process 可物化多个输出 Artifact，汇合 Job 等待全部输入并只执行一次。多源导出的 CLI 输入绑定、纯 Process Pipeline 检测、ensemble 和分支并发仍属于 Phase 2。
 - LLM 按成功输入行续跑；Process 在失败、取消或进程中断后按整个 Job 重跑。用户 Process 可能有外部副作用，因此只提供 at-least-once，不承诺 exactly-once。
 - 模型请求发出后不保证可由客户端撤回，Stop 也不保证避免已经发生的费用；晚到结果受 attempt token 和提交前状态检查保护。图片/PDF 的恢复仍需要客户端建立新的 asset session。
