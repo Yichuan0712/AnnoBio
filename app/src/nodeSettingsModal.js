@@ -14,7 +14,8 @@ import { selectPlaceholderLabel } from './displayTextNormalize.js';
 
 const API_BASE = BACKEND_API_BASE;
 
-const RUN_NUMBER_FIELDS = [
+/** Also the Agent's Run settings, so both edit the same keys within the same ranges. */
+export const RUN_NUMBER_FIELDS = [
   { key: 'run_max_tokens', label: 'Max tokens', min: 256, max: 131072 },
   { key: 'run_max_retries', label: 'Max retries on error', min: 0, max: 5 },
   { key: 'run_concurrency', label: 'Concurrency', min: 1, max: 10 },
