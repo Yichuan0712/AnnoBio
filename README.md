@@ -10,5 +10,5 @@ Classify documents, extract entities and fields, curate literature into structur
 
 </div>
 
-See [Running a Pipeline](docs/PIPELINE_GUIDE.md) for validation, whole-Pipeline execution,
-checkpoint recovery, revisions, Artifacts and Python export.
+See [Current Pipeline](docs/PIPELINE_GUIDE.md) for selecting a route and exporting it as a Python
+project.

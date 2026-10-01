@@ -2828,8 +2828,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         extractInputFields: extractInputFieldsFromSections,
         applyCanvasState: applyAgentCanvasState,
         highlightNodes: highlightPipelineNodes,
-        getPipelineProjectId,
-        getAssetProjectId: getCurrentProjectId,
         startRunNode,
         stopRunNode,
         runProcessNode,
