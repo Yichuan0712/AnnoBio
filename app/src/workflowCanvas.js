@@ -1318,6 +1318,25 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
+  const pendingRunHistoryRecords = new Map();
+  async function persistRunHistoryProgress(nodeId, status, results, outputFields) {
+    const record = pendingRunHistoryRecords.get(nodeId);
+    if (!record || !historySession?.projectId || canvasHistoryVersion !== 1) return;
+    const node = getNodeById(nodeId);
+    const progress = Number(node?.querySelector('.workflow-node__run-progress')?.getAttribute('aria-valuenow') || 0);
+    const updated = {
+      ...record, status, updatedAt: new Date().toISOString(),
+      results: {
+        runResults: results,
+        runInputContent: JSON.parse(node.dataset.runInputContent || 'null'),
+        runOutputFields: Array.isArray(outputFields) ? outputFields : [],
+        runProgress: progress,
+      },
+    };
+    await historySession.putRecord(updated);
+    if (status === 'completed' || status === 'stopped' || status === 'failed') pendingRunHistoryRecords.delete(nodeId);
+    else pendingRunHistoryRecords.set(nodeId, updated);
+  }
   /** Pending Review jobs: reviewNodeId -> reviewId. Poll backend and update Review node when done (like Run). */
   const pendingReviews = new Map();
   /** Review nodes currently streaming (UI progress); used for delete-confirm "cancel job" messaging. */
@@ -1366,7 +1385,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (nodeId && runId) pendingRuns.set(nodeId, runId);
   }
   function unregisterPendingRun(nodeId) {
-    if (nodeId) pendingRuns.delete(nodeId);
+    // History needs the terminal cancelled payload to persist the partial result and stop state.
+    if (nodeId && !(historySession?.projectId && canvasHistoryVersion === 1)) pendingRuns.delete(nodeId);
   }
   function setRunNodeProgress(node, completed, total) {
     const bar = node?.querySelector('.workflow-node__run-progress');
@@ -1502,6 +1522,7 @@ export function buildWorkflowCanvas(root, options = {}) {
               if (bar && !bar.style.background) bar.style.background = node.style.borderColor;
             }
             node.dataset.runResults = JSON.stringify(partialResults);
+            await persistRunHistoryProgress(nodeId, 'running', partialResults, outputFields);
             document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: partialResults, outputFields, isComplete: false } }));
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           }
@@ -1550,12 +1571,14 @@ export function buildWorkflowCanvas(root, options = {}) {
           setRunNodeProgress(node, inputRowsCompleted, total);
           if (data.status === 'done') node.dataset.runCompleted = '1';
           if (data.status === 'done' && data.error && results.length === 0) {
-            node.dataset.runResults = JSON.stringify([{ row_index: 0, output: null, error: data.error }]);
-            document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: [{ row_index: 0, output: null, error: data.error }], outputFields: [], isComplete: true } }));
+            results = [{ row_index: 0, output: null, error: data.error }];
+            outputFields = [];
+            node.dataset.runResults = JSON.stringify(results);
           } else {
             node.dataset.runResults = JSON.stringify(results);
-            document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results, outputFields, isComplete: true, cancelled: data.status === 'cancelled' } }));
           }
+          await persistRunHistoryProgress(nodeId, data.status === 'done' ? 'completed' : 'stopped', results, outputFields);
+          document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results, outputFields, isComplete: true, cancelled: data.status === 'cancelled' } }));
           pendingRuns.delete(nodeId);
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         }
@@ -2754,6 +2777,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     setReviewNodeProgress,
     registerPendingRun,
     pendingRuns,
+    pendingRunHistoryRecords,
+    getHistorySession: () => historySession?.projectId && canvasHistoryVersion === 1 ? historySession : null,
+    getCanvasState,
+    reconcileHistory,
     resolveRunCredentialId,
     resolveReviewCredentialId,
     pendingReviewNodeIds,
@@ -4233,6 +4260,9 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   let canvasHistoryVersion = null;
+  let historySession = null;
+  let historyRevision = 0;
+  document.addEventListener('workflow:canvas-changed', () => { historyRevision += 1; });
 
   function getCanvasState() {
     const nodeEls = Array.from(nodesLayer.querySelectorAll('.workflow-node'));
@@ -4444,6 +4474,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   function loadCanvasState(state) {
     const list = state?.nodes;
     if (!Array.isArray(list)) return;
+    historyRevision += 1;
     canvasHistoryVersion = state.historyVersion === 1 ? 1 : null;
     nodesLayer.innerHTML = '';
     nodeCount = 0;
@@ -4703,6 +4734,42 @@ export function buildWorkflowCanvas(root, options = {}) {
     document.addEventListener('workflow:canvas-changed', fn);
   }
 
+  function setHistorySession(session) { historySession = session; }
+
+  async function reconcileHistory() {
+    if (!historySession?.projectId || canvasHistoryVersion !== 1) return null;
+    const session = historySession;
+    const revision = historyRevision;
+    const resolved = await session.resolve(getCanvasState());
+    if (revision !== historyRevision || session !== historySession) return { stale: true };
+    for (const item of resolved.state.nodes) {
+      const live = getNodeById(item.nodeId);
+      if (!live) continue;
+      if (item.type === 'dataset' && (item.sourceRunNodeId || connections.some((edge) => edge.type === EDGE_TYPE_PROCESS_TO_DATASET && edge.toId === item.nodeId))) {
+        const current = datasetContentByNodeId.get(item.nodeId);
+        if (JSON.stringify(current) !== JSON.stringify(cloneDatasetContent(item.datasetContent))) {
+          datasetContentByNodeId.set(item.nodeId, item.datasetContent);
+        }
+      } else if (item.type === 'run') {
+        for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
+          if (item[key] == null) delete live.dataset[key];
+          else live.dataset[key] = item[key];
+        }
+        const progress = Number(item.runProgress || 0);
+        const bar = live.querySelector('.workflow-node__run-progress');
+        if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
+      } else if (item.type === 'process') {
+        if (item.dfResults == null) delete live.dataset.processDfResults;
+        else live.dataset.processDfResults = item.dfResults;
+        const progress = item.dfResults ? 100 : 0;
+        const bar = live.querySelector('.workflow-node__process-progress');
+        if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
+      }
+    }
+    document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
+    return resolved;
+  }
+
   /**
    * Replace the canvas with a state the Agent computed (agent/operations/changeSet.js) and the user
    * approved. One canvas-changed event follows the load, so the whole proposal is one undo step.
@@ -4741,12 +4808,28 @@ export function buildWorkflowCanvas(root, options = {}) {
    * its detail view does, so the node shows 100% and its branches can be saved as Datasets.
    */
   async function runProcessNode(nodeId, { signal, onStarted, timeoutMs } = {}) {
+    if (historySession?.projectId && canvasHistoryVersion === 1) {
+      let sync;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        sync = await reconcileHistory();
+        if (!sync?.stale) break;
+      }
+      if (sync?.stale) throw new Error('Canvas inputs changed while preparing Process history. Try again.');
+    }
     const processNode = getNodeById(nodeId);
     if (!processNode?.classList.contains('workflow-node--process')) throw new Error('Process node was not found.');
     const code = resolveDataframeProcessCode({ dfCode: processNode.dataset.processDfCode, code: processNode.dataset.processCode });
     if (!code) throw new Error('The Process has no code.');
     const { datasets, primaryDatasetId } = getProcessDatasets(processNode);
     const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
+    const required = new Set([
+      primaryDatasetId,
+      ...connections.filter((edge) => edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.toId === nodeId).map((edge) => edge.fromId),
+      ...referencedDatasetAliases(code, bindings),
+    ]);
+    const executionBindings = bindings.filter((binding) => required.has(binding.nodeId));
+    const session = historySession?.projectId && canvasHistoryVersion === 1 ? historySession : null;
+    let record = session ? (await session.reserve(getCanvasState(), nodeId)).record : null;
     const setProgress = (el, percent) => {
       const bar = el?.querySelector('.workflow-node__process-progress');
       if (!bar) return;
@@ -4754,16 +4837,45 @@ export function buildWorkflowCanvas(root, options = {}) {
       bar.setAttribute('aria-valuenow', String(percent));
     };
     setProgress(processNode, 0);
-    const { outputs, cancelled } = await runProcessCode({ code, bindings, signal, onStarted, timeoutMs });
+    let execution;
+    try {
+      execution = await runProcessCode({
+        code, bindings: session ? executionBindings : bindings, signal, timeoutMs,
+        onStarted: async (jobId) => {
+          if (record) {
+            record = { ...record, backendJobId: jobId, updatedAt: new Date().toISOString() };
+            await session.putRecord(record);
+          }
+          onStarted?.(jobId);
+        },
+      });
+    } catch (error) {
+      if (record) {
+        record = { ...record, status: 'failed', updatedAt: new Date().toISOString(), error: String(error?.message || error) };
+        await session.putRecord(record);
+      }
+      throw error;
+    }
+    const { outputs, cancelled } = execution;
     // The canvas may have been rebuilt while the job ran (an applied proposal); write to the live node.
     const liveNode = getNodeById(nodeId);
-    if (!liveNode) throw new Error('The Process node was removed while it ran.');
+    if (!liveNode) {
+      if (record) await session.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: 'The Process node was removed while it ran.' });
+      throw new Error('The Process node was removed while it ran.');
+    }
     const branchCount = Object.keys(outputs).length;
     const branchesText = `${branchCount} branch${branchCount === 1 ? '' : 'es'}`;
     liveNode.dataset.processDfResults = JSON.stringify({
       outputs,
       statusText: cancelled ? `Cancelled. ${branchesText} returned before stopping.` : `${branchesText} returned.`,
     });
+    if (record) {
+      record = {
+        ...record, status: cancelled ? 'stopped' : 'completed', updatedAt: new Date().toISOString(),
+        results: { dfResults: JSON.parse(liveNode.dataset.processDfResults) },
+      };
+      await session.putRecord(record);
+    }
     delete liveNode.dataset.processResults;
     setProgress(liveNode, 100);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -4928,6 +5040,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     importPreprintDataset,
     importChemblDataset,
     loadCanvasState,
+    setHistorySession,
+    reconcileHistory,
     setOnCanvasChange,
     setAgentWindowVisible,
     panelToggles,

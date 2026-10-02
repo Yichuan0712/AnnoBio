@@ -55,6 +55,10 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     setReviewNodeProgress,
     registerPendingRun,
     pendingRuns,
+    pendingRunHistoryRecords,
+    getHistorySession,
+    getCanvasState,
+    reconcileHistory,
     resolveRunCredentialId,
     resolveReviewCredentialId,
     pendingReviewNodeIds,
@@ -501,6 +505,16 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       };
     }
 
+    const historySession = getHistorySession?.();
+    if (historySession) {
+      let sync;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        sync = await reconcileHistory();
+        if (!sync?.stale) break;
+      }
+      if (sync?.stale) throw new Error('Canvas inputs changed while preparing Run history. Try again.');
+    }
+
     const connections = getConnectionsList();
     const promptEdge = connections.find((c) => c.toId === normalizedRunNodeId && c.type === 'prompt-to-run');
     const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
@@ -602,6 +616,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     let inputTypes = {};
     try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
     const samples = compileRows(templateText, headers, rowsToRun, runInputToColumn, inputTypes);
+    let historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId)).record : null;
+    if (historyRecord) pendingRunHistoryRecords.set(normalizedRunNodeId, historyRecord);
 
     node.dataset.runInputContent = JSON.stringify({ headers, columnTypes: content?.columnTypes || [], rowIds: content?.rowIds || [], rows });
     if (nextRowIndex === 0) {
@@ -620,21 +636,37 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
     emitCanvasChanged();
 
-    const response = await postRun({
-        credential_id: credentialId,
-        samples,
-        output_schema: outputSchema,
-        run_node_id: normalizedRunNodeId,
-        settings_overrides: runSettingsOverrides(node),
-    }, undefined, undefined, getCurrentProjectId());
-    const data = await response.json().catch(() => ({}));
+    let response;
+    let data;
+    try {
+      response = await postRun({
+          credential_id: credentialId,
+          samples,
+          output_schema: outputSchema,
+          run_node_id: normalizedRunNodeId,
+          settings_overrides: runSettingsOverrides(node),
+      }, undefined, undefined, getCurrentProjectId());
+      data = await response.json().catch(() => ({}));
+    } catch (error) {
+      if (historyRecord) {
+        historyRecord = { ...historyRecord, status: 'failed', updatedAt: new Date().toISOString(), error: String(error?.message || error) };
+        await historySession.putRecord(historyRecord);
+        pendingRunHistoryRecords.delete(normalizedRunNodeId);
+      }
+      throw error;
+    }
 
     if (response.status === 202) {
       const runId = String(data?.run_id || '').trim();
       if (!runId) {
         throw new Error('Run started but no run id was returned by the backend.');
       }
-      if (runId) registerPendingRun(normalizedRunNodeId, runId);
+      if (historyRecord) {
+        historyRecord = { ...historyRecord, backendJobId: runId, updatedAt: new Date().toISOString() };
+        await historySession.putRecord(historyRecord);
+        pendingRunHistoryRecords.set(normalizedRunNodeId, historyRecord);
+      }
+      registerPendingRun(normalizedRunNodeId, runId);
       return {
         started: true,
         waitRequired: true,
@@ -649,6 +681,11 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         delete node.dataset.runResumeStartIndex;
         delete node.dataset.runResumeExistingResults;
         delete node.dataset.runResumeTotalRows;
+      }
+      if (historyRecord) {
+        historyRecord = { ...historyRecord, status: 'failed', updatedAt: new Date().toISOString(), error: String(data?.detail || response.statusText || 'Request failed') };
+        await historySession.putRecord(historyRecord);
+        pendingRunHistoryRecords.delete(normalizedRunNodeId);
       }
       throw new Error(String(data?.detail || response.statusText || 'Request failed'));
     }
@@ -668,6 +705,14 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     node.dataset.runResults = JSON.stringify(results);
     node.dataset.runCompleted = '1';
     setRunNodeProgress(node, rows.length, rows.length);
+    if (historyRecord) {
+      historyRecord = {
+        ...historyRecord, status: 'completed', updatedAt: new Date().toISOString(),
+        results: { runResults: results, runInputContent: JSON.parse(node.dataset.runInputContent), runOutputFields: returnedOutputFields, runProgress: 100 },
+      };
+      await historySession.putRecord(historyRecord);
+      pendingRunHistoryRecords.delete(normalizedRunNodeId);
+    }
     emitRunResultsUpdated({
       nodeId: normalizedRunNodeId,
       results,
