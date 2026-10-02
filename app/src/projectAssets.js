@@ -5,6 +5,22 @@ import os from 'node:os';
 
 export const YC_EXTENSION = '.yc';
 const BUNDLE_VERSION = 1;
+const HISTORY_ID_RE = /^[0-9a-f]{32}$/;
+
+function emptyHistory() {
+  return { index: { version: 1, records: [] }, records: {} };
+}
+
+function historyOf(payload) {
+  const history = payload?.history;
+  if (history == null) return emptyHistory();
+  if (history?.index?.version !== 1 || !Array.isArray(history.index.records)
+    || !history.records || typeof history.records !== 'object' || Array.isArray(history.records)
+    || history.index.records.some((entry) => !HISTORY_ID_RE.test(entry?.id || '') || history.records[entry.id]?.id !== entry.id)) {
+    throw new Error('Project history is invalid.');
+  }
+  return history;
+}
 
 export const assetRootFor = (file) => file.slice(0, file.length - path.extname(file).length) + '.assets';
 export const isBundledProjectFile = (file) => path.extname(String(file || '')).toLowerCase() === YC_EXTENSION;
@@ -193,11 +209,25 @@ export class ProjectAssets {
       }
       targetState.assets = targetAssets;
 
+      const targetHistory = historyOf(targetPayload);
+      const sourceHistory = historyOf(sourcePayload);
+      const historyRecords = { ...targetHistory.records };
+      for (const [id, record] of Object.entries(sourceHistory.records)) {
+        if (historyRecords[id] && JSON.stringify(historyRecords[id]) !== JSON.stringify(record)) {
+          throw new Error(`History record ID conflicts during merge: ${id}`);
+        }
+        historyRecords[id] = record;
+      }
+      const historyEntries = targetHistory.index.records.slice();
+      const knownHistoryIds = new Set(historyEntries.map((entry) => entry.id));
+      historyEntries.push(...sourceHistory.index.records.filter((entry) => !knownHistoryIds.has(entry.id)));
+
       const payload = {
         bundleVersion: BUNDLE_VERSION,
         project: { ...targetState, schemaVersion: 2 },
         assetBlobs: targetBlobs,
         agentSession: targetPayload.agentSession || null,
+        history: { index: { version: 1, records: historyEntries }, records: historyRecords },
       };
       const temp = resolvedTarget + '.' + crypto.randomUUID() + '.tmp';
       await fs.writeFile(temp, JSON.stringify(payload, null, 2), 'utf8');
@@ -214,7 +244,7 @@ export class ProjectAssets {
     });
   }
 
-  async save(file, state) {
+  async save(file, state, { copySessionFromCurrent = false } = {}) {
     return this.enqueue(async () => {
       file = path.resolve(file);
       const newProject = !state.nodes?.length;
@@ -222,6 +252,9 @@ export class ProjectAssets {
 
       if (isBundledProjectFile(file)) {
         const existingBundle = await this.readBundlePayload(file);
+        const historySource = copySessionFromCurrent && !newProject && this.file && path.resolve(this.file) !== file
+          ? await this.readBundlePayload(this.file)
+          : existingBundle;
         const assetBlobs = {};
         for (const [id, asset] of Object.entries(assets)) {
           const data = await this.readAssetData(id, asset);
@@ -231,7 +264,8 @@ export class ProjectAssets {
           bundleVersion: BUNDLE_VERSION,
           project: { ...state, schemaVersion: 2, assets },
           assetBlobs,
-          agentSession: existingBundle?.agentSession || null,
+          agentSession: copySessionFromCurrent ? historySource?.agentSession || null : existingBundle?.agentSession || null,
+          history: newProject ? emptyHistory() : historyOf(historySource),
         };
         const temp = file + '.' + crypto.randomUUID() + '.tmp';
         await fs.writeFile(temp, JSON.stringify(payload, null, 2), 'utf8');
@@ -266,6 +300,64 @@ export class ProjectAssets {
       this.file = file;
       this.assets = assets;
       await this.setAssetRoot(assetRootFor(file), { temporary: false });
+    });
+  }
+
+  async loadHistoryIndex(file) {
+    return this.enqueue(async () => {
+      const payload = await this.readBundlePayload(path.resolve(file));
+      if (!payload?.project) throw new Error('Project file is missing or invalid.');
+      return historyOf(payload).index;
+    });
+  }
+
+  async loadHistoryRecord(file, recordId) {
+    return this.enqueue(async () => {
+      if (!HISTORY_ID_RE.test(recordId || '')) throw new Error('History record ID is invalid.');
+      const payload = await this.readBundlePayload(path.resolve(file));
+      if (!payload?.project) throw new Error('Project file is missing or invalid.');
+      const record = historyOf(payload).records[recordId];
+      if (!record) throw new Error('History record not found.');
+      return record;
+    });
+  }
+
+  async saveHistoryRecord(file, record) {
+    return this.enqueue(async () => {
+      const resolved = path.resolve(file);
+      if (!record || !HISTORY_ID_RE.test(record.id || '') || !record.nodeId || !record.signature
+        || !['run', 'process'].includes(record.kind)
+        || !['running', 'stopped', 'completed', 'failed'].includes(record.status)
+        || !record.inputs || typeof record.inputs !== 'object' || Array.isArray(record.inputs)) {
+        throw new Error('History record is invalid.');
+      }
+      const payload = await this.readBundlePayload(resolved);
+      if (!payload?.project) throw new Error('Project file is missing or invalid.');
+      const history = historyOf(payload);
+      const existing = history.records[record.id];
+      if (existing) {
+        for (const key of ['id', 'nodeId', 'kind', 'signature', 'inputs']) {
+          if (JSON.stringify(existing[key]) !== JSON.stringify(record[key])) throw new Error('History record inputs cannot change.');
+        }
+        if (existing.status === 'completed' && JSON.stringify(existing) !== JSON.stringify(record)) {
+          throw new Error('Completed history records cannot change.');
+        }
+      } else if (history.index.records.some((entry) => entry.nodeId === record.nodeId && entry.signature === record.signature)) {
+        throw new Error('This input already has a history record.');
+      }
+      const summary = Object.fromEntries(['id', 'nodeId', 'kind', 'signature', 'status', 'createdAt', 'updatedAt', 'summary', 'sourceRecordIds']
+        .map((key) => [key, record[key]]));
+      const next = {
+        ...payload,
+        history: {
+          index: { version: 1, records: history.index.records.filter((entry) => entry.id !== record.id).concat(summary) },
+          records: { ...history.records, [record.id]: record },
+        },
+      };
+      const temp = resolved + '.' + crypto.randomUUID() + '.tmp';
+      await fs.writeFile(temp, JSON.stringify(next, null, 2), 'utf8');
+      await replaceFile(temp, resolved);
+      return { ok: true };
     });
   }
 

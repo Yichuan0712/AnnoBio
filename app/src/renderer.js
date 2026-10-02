@@ -155,7 +155,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const path = await api.showSaveAsProjectDialog(currentProjectPath || undefined);
     if (!path) return;
     const state = canvasAPI.getCanvasState();
-    await api.saveProject(path, state);
+    await api.saveProject(path, state, { copySessionFromCurrent: true });
     setCurrentProject(path);
     updateWindowTitleFromPath(path);
     topBarAPI.setAddMenuEnabled(true);

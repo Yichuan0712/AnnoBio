@@ -436,8 +436,8 @@ ipcMain.handle('project:save-as-dialog', async (_e, defaultPath) => {
   return canceled ? null : filePath;
 });
 
-ipcMain.handle('project:save', async (_e, filePath, state) => {
-  await projectAssets.save(filePath, state);
+ipcMain.handle('project:save', async (_e, filePath, state, options) => {
+  await projectAssets.save(filePath, state, options);
 });
 
 ipcMain.handle('project:load', async (_e, filePath) => {
@@ -597,3 +597,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   stopPythonBackend();
 });
+
+ipcMain.handle('history:index', (_e, projectPath) => projectAssets.loadHistoryIndex(projectPath));
+ipcMain.handle('history:record', (_e, projectPath, recordId) => projectAssets.loadHistoryRecord(projectPath, recordId));
+ipcMain.handle('history:save-record', (_e, projectPath, record) => projectAssets.saveHistoryRecord(projectPath, record));
