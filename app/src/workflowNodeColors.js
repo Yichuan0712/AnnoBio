@@ -6,17 +6,20 @@ export const DATASET_BORDER_COLORS = [
   '#a16207', '#1d4ed8', '#9d174d', '#059669', '#7e22ce', '#c2410c',
 ];
 
-// Dataset color indexes are still assigned and saved while this is off; only the display is hidden.
-export const NODE_COLORS_ENABLED = false;
+// Dataset and Prompt nodes share this palette so adjacent nodes can receive distinct colors.
+export const NODE_COLORS_ENABLED = true;
 
-if (!NODE_COLORS_ENABLED && typeof document !== 'undefined') {
-  document.documentElement.dataset.nodeColors = 'off';
+if (typeof document !== 'undefined') {
+  if (NODE_COLORS_ENABLED) delete document.documentElement.dataset.nodeColors;
+  else document.documentElement.dataset.nodeColors = 'off';
 }
 
-/** Display color for a dataset color index, or '' while node colors are disabled. */
+/** Display color for a node color index, or '' while node colors are disabled. */
 export function datasetColorAt(colorIndex) {
   if (!NODE_COLORS_ENABLED) return '';
   const parsed = Number.parseInt(String(colorIndex ?? ''), 10);
   const index = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
   return DATASET_BORDER_COLORS[index % DATASET_BORDER_COLORS.length];
 }
+
+export const promptColorAt = datasetColorAt;
