@@ -4,6 +4,7 @@ import { planHistorySelection } from './runHistorySelection.js';
 import { captureHistoryInput, runningHistoryRecord } from './runHistoryCapture.js';
 import { analysisInputKeys } from './runAnalysisHistory.js';
 import { dependentHistoryIds } from './runHistoryDeletion.js';
+import { describeHistoryRecord } from './runHistoryPresentation.js';
 
 function hasLegacyOutput(node) {
   try {
@@ -145,6 +146,16 @@ export class RunHistorySession {
   entriesForNode(nodeId) {
     return this.index.records.filter((entry) => entry.nodeId === nodeId)
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  }
+
+  async displayEntriesForNode(nodeId) {
+    return Promise.all(this.entriesForNode(nodeId).map(async (entry) => {
+      const record = await this.storage.loadRecord(this.projectId, entry.id);
+      if (!record || record.id !== entry.id || record.nodeId !== nodeId) {
+        throw new Error(`History record is missing or invalid: ${entry.id}`);
+      }
+      return { ...entry, display: describeHistoryRecord(record) };
+    }));
   }
 
   async analysisRecord(nodeId, kind, signature) {

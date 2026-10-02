@@ -4905,7 +4905,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           if (!resolved?.stale) break;
         }
         if (resolved?.stale) throw new Error('Canvas changed while loading History. Try again.');
-        return { entries: historySession.entriesForNode(nodeId), currentId: resolved?.currentRecordIds?.[nodeId] || '' };
+        return { entries: await historySession.displayEntriesForNode(nodeId), currentId: resolved?.currentRecordIds?.[nodeId] || '' };
       },
       select: async (recordId, closeModal) => {
         const otherDetails = [...document.querySelectorAll('.modal-overlay')].filter((el) =>
