@@ -65,6 +65,12 @@ export async function runProcessCode({ code, bindings, signal, onStarted, timeou
   const jobId = started.job_id;
   const cancel = () => fetch(`${BACKEND_API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
   try { await onStarted?.(jobId); } catch (error) { await cancel(); throw error; }
+  return waitForProcessJob(jobId, { signal, timeoutMs });
+}
+
+/** Resume polling a Process job after reopening a project. */
+export async function waitForProcessJob(jobId, { signal, timeoutMs = MAX_WAIT_MS } = {}) {
+  const cancel = () => fetch(`${BACKEND_API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
   signal?.addEventListener('abort', cancel, { once: true });
   const startedAt = Date.now();
   try {

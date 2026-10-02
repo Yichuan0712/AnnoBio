@@ -74,8 +74,9 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
-import { runProcessCode } from './processRunClient.js';
+import { runProcessCode, waitForProcessJob } from './processRunClient.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
+import { analysisInputKeys } from './runAnalysisHistory.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -1477,6 +1478,15 @@ export function buildWorkflowCanvas(root, options = {}) {
         const data = await res.json().catch(() => ({}));
         const node = getNodeById(nodeId);
         if (!node) {
+          pendingRuns.delete(nodeId);
+          continue;
+        }
+        if (res.status === 404) {
+          const record = pendingRunHistoryRecords.get(nodeId);
+          if (record && historySession?.projectId && canvasHistoryVersion === 1) {
+            await historySession.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: 'The backend Run job is no longer available.' });
+            pendingRunHistoryRecords.delete(nodeId);
+          }
           pendingRuns.delete(nodeId);
           continue;
         }
@@ -4269,6 +4279,7 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   let canvasHistoryVersion = null;
   let historySession = null;
+  let historyAnalysisKeys = new Map();
   let historyRevision = 0;
   document.addEventListener('workflow:canvas-changed', () => { historyRevision += 1; });
 
@@ -4742,7 +4753,60 @@ export function buildWorkflowCanvas(root, options = {}) {
     document.addEventListener('workflow:canvas-changed', fn);
   }
 
-  function setHistorySession(session) { historySession = session; }
+  function setHistorySession(session) {
+    if (session !== historySession) {
+      pendingRuns.clear();
+      pendingRunHistoryRecords.clear();
+      pendingProcesses.clear();
+    }
+    historySession = session;
+    historyAnalysisKeys = new Map();
+  }
+
+  async function recoverHistoryJobs() {
+    const session = historySession;
+    if (!session?.projectId || canvasHistoryVersion !== 1) return;
+    const running = session.index.records.filter((entry) => entry.status === 'running' && ['run', 'process'].includes(entry.kind));
+    for (const entry of running) {
+      if (session !== historySession) return;
+      const record = await session.storage.loadRecord(session.projectId, entry.id);
+      if (!record || record.status !== 'running') continue;
+      const jobId = String(record.backendJobId || '').trim();
+      if (!jobId) {
+        await session.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: 'The app closed before the backend job ID was saved.' });
+        continue;
+      }
+      const node = getNodeById(record.nodeId);
+      if (!node) {
+        await session.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: 'The node for this job no longer exists.' });
+        continue;
+      }
+      if (entry.kind === 'run') {
+        pendingRunHistoryRecords.set(record.nodeId, record);
+        registerPendingRun(record.nodeId, jobId);
+        continue;
+      }
+      pendingProcesses.add(record.nodeId);
+      void (async () => {
+        try {
+          const { outputs, cancelled } = await waitForProcessJob(jobId, { timeoutMs: 0 });
+          const results = {
+            outputs,
+            statusText: cancelled ? 'Cancelled.' : `${Object.keys(outputs).length} branches returned.`,
+          };
+          await session.putRecord({ ...record, status: cancelled ? 'stopped' : 'completed', updatedAt: new Date().toISOString(), results: { dfResults: results } });
+          if (session === historySession) {
+            await reconcileHistory();
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          }
+        } catch (error) {
+          await session.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: String(error?.message || error) });
+        } finally {
+          pendingProcesses.delete(record.nodeId);
+        }
+      })();
+    }
+  }
 
   async function planHistorySelectionForCanvas(recordId) {
     if (!historySession?.projectId || canvasHistoryVersion !== 1) throw new Error('History is not available for this project.');
@@ -4789,7 +4853,55 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!historySession?.projectId || canvasHistoryVersion !== 1) return null;
     const session = historySession;
     const revision = historyRevision;
-    const resolved = await session.resolve(getCanvasState());
+    const before = getCanvasState();
+    const resolved = await session.resolve(before);
+    const initialKeys = await analysisInputKeys(resolved.state, resolved.currentRecordIds);
+    const priorKeys = historyAnalysisKeys;
+    for (const node of before.nodes) {
+      if (node.type !== 'score' && node.type !== 'promptReview') continue;
+      const scoreKey = priorKeys.get(`score:${node.nodeId}`);
+      if (node.type === 'score' && scoreKey && (
+        node.scoreMatchResult || node.scoreRowExcludedFromScoring
+        || await session.analysisRecord(node.nodeId, 'score', scoreKey.signature)
+      )) {
+        await session.saveAnalysis(node.nodeId, 'score', scoreKey, {
+          scoreMatchResult: node.scoreMatchResult || null,
+          scoreRowExcludedFromScoring: node.scoreRowExcludedFromScoring || {},
+        });
+      }
+      const reviewKey = priorKeys.get(`review:${node.nodeId}`);
+      if (reviewKey && (node.reviewResult || node.reviewProgress
+        || await session.analysisRecord(node.nodeId, 'review', reviewKey.signature))) {
+        await session.saveAnalysis(node.nodeId, 'review', reviewKey, {
+          reviewResult: node.reviewResult || null, reviewProgress: node.reviewProgress || 0,
+        });
+      }
+    }
+    for (const node of resolved.state.nodes) {
+      if (node.type !== 'score') continue;
+      const key = initialKeys.score.get(node.nodeId);
+      const saved = key ? await session.analysisRecord(node.nodeId, 'score', key.signature) : null;
+      if (saved) {
+        node.scoreMatchResult = saved.results?.scoreMatchResult || undefined;
+        node.scoreRowExcludedFromScoring = saved.results?.scoreRowExcludedFromScoring || {};
+      } else {
+        delete node.scoreMatchResult;
+        delete node.scoreRowExcludedFromScoring;
+      }
+    }
+    const reviewKeys = (await analysisInputKeys(resolved.state, resolved.currentRecordIds)).review;
+    for (const node of resolved.state.nodes) {
+      if (node.type !== 'score' && node.type !== 'promptReview') continue;
+      const key = reviewKeys.get(node.nodeId);
+      const saved = key ? await session.analysisRecord(node.nodeId, 'review', key.signature) : null;
+      if (saved) {
+        node.reviewResult = saved.results?.reviewResult || undefined;
+        if (node.type === 'promptReview') node.reviewProgress = saved.results?.reviewProgress || 0;
+      } else {
+        delete node.reviewResult;
+        if (node.type === 'promptReview') delete node.reviewProgress;
+      }
+    }
     if (revision !== historyRevision || session !== historySession) return { stale: true };
     for (const item of resolved.state.nodes) {
       const live = getNodeById(item.nodeId);
@@ -4813,8 +4925,24 @@ export function buildWorkflowCanvas(root, options = {}) {
         const progress = item.dfResults ? 100 : 0;
         const bar = live.querySelector('.workflow-node__process-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
+      } else if (item.type === 'score') {
+        if (item.scoreMatchResult == null) delete live.dataset.scoreMatchResult;
+        else live.dataset.scoreMatchResult = item.scoreMatchResult;
+        if (item.scoreRowExcludedFromScoring == null) delete live.dataset.scoreRowExcludedFromScoring;
+        else live.dataset.scoreRowExcludedFromScoring = JSON.stringify(item.scoreRowExcludedFromScoring);
+        if (item.reviewResult == null) delete live.dataset.reviewResult;
+        else live.dataset.reviewResult = item.reviewResult;
+        syncScoreNodeProgressFromUpstreamRun(live);
+      } else if (item.type === 'promptReview') {
+        if (item.reviewResult == null) delete live.dataset.reviewResult;
+        else live.dataset.reviewResult = item.reviewResult;
+        setReviewNodeProgress(live, Number(item.reviewProgress || 0));
       }
     }
+    historyAnalysisKeys = new Map([
+      ...[...initialKeys.score].map(([id, key]) => [`score:${id}`, key]),
+      ...[...reviewKeys].map(([id, key]) => [`review:${id}`, key]),
+    ]);
     document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
     return resolved;
   }
@@ -5100,6 +5228,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     importChemblDataset,
     loadCanvasState,
     setHistorySession,
+    recoverHistoryJobs,
     reconcileHistory,
     setOnCanvasChange,
     setAgentWindowVisible,

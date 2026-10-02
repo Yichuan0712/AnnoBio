@@ -327,7 +327,7 @@ export class ProjectAssets {
     return this.enqueue(async () => {
       const resolved = path.resolve(file);
       if (!record || !HISTORY_ID_RE.test(record.id || '') || !record.nodeId || !record.signature
-        || !['run', 'process'].includes(record.kind)
+        || !['run', 'process', 'score', 'review'].includes(record.kind)
         || !['running', 'stopped', 'completed', 'failed'].includes(record.status)
         || !record.inputs || typeof record.inputs !== 'object' || Array.isArray(record.inputs)) {
         throw new Error('History record is invalid.');
@@ -340,7 +340,7 @@ export class ProjectAssets {
         for (const key of ['id', 'nodeId', 'kind', 'signature', 'inputs']) {
           if (JSON.stringify(existing[key]) !== JSON.stringify(record[key])) throw new Error('History record inputs cannot change.');
         }
-        if (existing.status === 'completed' && JSON.stringify(existing) !== JSON.stringify(record)) {
+        if (existing.status === 'completed' && ['run', 'process'].includes(existing.kind) && JSON.stringify(existing) !== JSON.stringify(record)) {
           throw new Error('Completed history records cannot change.');
         }
       } else if (history.index.records.some((entry) => entry.nodeId === record.nodeId && entry.signature === record.signature)) {

@@ -45,6 +45,8 @@ import { setCurrentProjectId } from './currentProject.js';
 import { createUndoHistory } from './undoHistory.js';
 import { reportAppError } from './appErrors.js';
 import { pruneUnusedAssets as pruneUnusedAssetsWeb } from './webImageApi.js';
+import { RunHistorySession } from './runHistorySession.js';
+import { loadRunHistoryIndex, loadRunHistoryRecord, saveRunHistoryRecord } from './runHistoryStore.js';
 
 // Web has no "recent files" of its own the way the OS gives desktop one — without this, every
 // page refresh drops back to "Open a project" even though the project itself is untouched. Falls
@@ -98,6 +100,40 @@ window.addEventListener('DOMContentLoaded', () => {
       getCurrentProjectPath: () => currentProjectPath,
       isElectron,
     });
+    const historyStore = {
+      loadIndex: loadRunHistoryIndex,
+      loadRecord: loadRunHistoryRecord,
+      saveRecord: saveRunHistoryRecord,
+      saveCanvas: (projectId, state) => isElectron
+        ? window.electronAPI.saveProject(projectId, state)
+        : saveWebProject(projectId, state),
+    };
+    let historySession = null;
+    let historySync = Promise.resolve();
+    async function syncHistory(projectId) {
+      if (!historySession?.projectId || historySession.projectId !== projectId) return;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await canvasAPI.reconcileHistory();
+        if (!result?.stale) return;
+      }
+      throw new Error('Canvas changed while updating history. Try again.');
+    }
+    async function loadCanvasWithHistory(projectId, state) {
+      await historySync.catch(() => {});
+      historySession = new RunHistorySession(historyStore);
+      canvasAPI.setHistorySession(historySession);
+      try {
+        const opened = await historySession.open(projectId, state);
+        canvasAPI.loadCanvasState(opened.state);
+        await syncHistory(projectId);
+        await canvasAPI.recoverHistoryJobs();
+      } catch (error) {
+        historySession = null;
+        canvasAPI.setHistorySession(null);
+        canvasAPI.loadCanvasState(state);
+        showAlert(`History could not be loaded: ${error?.message || error}`, { title: 'Project history' });
+      }
+    }
 
   const APP_TITLE = 'AnnoBio';
   let currentProjectName = null;
@@ -120,10 +156,12 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!path) return;
     setCurrentProject(path);
     updateWindowTitleFromPath(path);
-    const state = canvasAPI.getCanvasState();
-    undoHistory.reset(state);
+    const state = { ...canvasAPI.getCanvasState() };
+    delete state.historyVersion;
     canvasAPI.clearSelection?.();
     await api.saveProject(path, state);
+    await loadCanvasWithHistory(path, state);
+    undoHistory.reset(canvasAPI.getCanvasState());
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
     topBarAPI.setMergeEnabled?.(true);
@@ -138,10 +176,10 @@ window.addEventListener('DOMContentLoaded', () => {
     const loaded = await api.loadProject(path);
     const state = loaded?.state || loaded;
     const resolvedPath = loaded?.resolvedPath || path;
-    canvasAPI.loadCanvasState(state);
+    setCurrentProject(resolvedPath);
+    await loadCanvasWithHistory(resolvedPath, state);
     undoHistory.reset(canvasAPI.getCanvasState());
     canvasAPI.clearSelection?.();
-    setCurrentProject(resolvedPath);
     updateWindowTitleFromPath(resolvedPath);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
@@ -157,6 +195,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const state = canvasAPI.getCanvasState();
     await api.saveProject(path, state, { copySessionFromCurrent: true });
     setCurrentProject(path);
+    await loadCanvasWithHistory(path, state);
     updateWindowTitleFromPath(path);
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
@@ -171,7 +210,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!sourcePath) return;
     try {
       const mergedState = await api.mergeProject(currentProjectPath, sourcePath);
-      canvasAPI.loadCanvasState(mergedState);
+      await loadCanvasWithHistory(currentProjectPath, mergedState);
       undoHistory.reset(canvasAPI.getCanvasState());
       canvasAPI.clearSelection?.();
     } catch (err) {
@@ -195,10 +234,10 @@ window.addEventListener('DOMContentLoaded', () => {
   const openProjectWeb = async ({ id, name }, { silent = false } = {}) => {
     try {
       const project = await loadWebProject(id);
-      canvasAPI.loadCanvasState(project.state || {});
+      setCurrentProject(id);
+      await loadCanvasWithHistory(id, project.state || {});
       undoHistory.reset(canvasAPI.getCanvasState());
       canvasAPI.clearSelection?.();
-      setCurrentProject(id);
       setStoredWebProjectId(id);
       updateWindowTitle(project.name || name);
       topBarAPI.setAddMenuEnabled(true);
@@ -221,7 +260,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
     if (!picked) return;
     if (picked.type === 'merged') {
-      canvasAPI.loadCanvasState(picked.state);
+      await loadCanvasWithHistory(currentProjectPath, picked.state);
       undoHistory.reset(canvasAPI.getCanvasState());
       canvasAPI.clearSelection?.();
       return;
@@ -280,6 +319,12 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   undoHistory.reset(canvasAPI.getCanvasState());
   canvasAPI.setOnCanvasChange(() => undoHistory.push(canvasAPI.getCanvasState()));
+  canvasAPI.setOnCanvasChange(() => {
+    const projectId = currentProjectPath;
+    if (!projectId || historySession?.projectId !== projectId) return;
+    historySync = historySync.catch(() => {}).then(() => syncHistory(projectId));
+    historySync.catch((error) => showError('Could not update project history', error));
+  });
 
   const topBarAPI = buildTopBar(root, {
     openAddPromptModal: isElectron ? () => openAddPromptModal(canvasAPI) : openAddPromptModalWeb,
@@ -350,12 +395,21 @@ window.addEventListener('DOMContentLoaded', () => {
     if (isElectron && !window.electronAPI?.saveProject) return;
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(async () => {
+      const projectId = currentProjectPath;
+      try {
+        await historySync;
+        await syncHistory(projectId);
+      } catch (err) {
+        showError('Could not update project history before saving', err);
+        return;
+      }
+      if (projectId !== currentProjectPath) return;
       const state = canvasAPI.getCanvasState();
       if (isElectron) {
-        await window.electronAPI.saveProject(currentProjectPath, state);
+        await window.electronAPI.saveProject(projectId, state);
       } else {
         try {
-          await saveWebProject(currentProjectPath, state);
+          await saveWebProject(projectId, state);
         } catch (err) {
           showAlert(err.message || 'Could not save project.', { title: 'Error' });
           return;
@@ -372,10 +426,10 @@ window.addEventListener('DOMContentLoaded', () => {
         const usedIds = canvasAPI.getUsedAssetIds?.() || [];
         const pruneResult = isElectron
           ? await window.electronAPI.pruneUnusedAssets(usedIds)
-          : await pruneUnusedAssetsWeb(currentProjectPath, usedIds);
+          : await pruneUnusedAssetsWeb(projectId, usedIds);
         if (pruneResult?.removed?.length) {
-          if (isElectron) await window.electronAPI.saveProject(currentProjectPath, state);
-          else await saveWebProject(currentProjectPath, state);
+          if (isElectron) await window.electronAPI.saveProject(projectId, state);
+          else await saveWebProject(projectId, state);
         }
       } catch (_) { /* best-effort — a failed sweep just tries again on the next save */ }
     }, 400);
