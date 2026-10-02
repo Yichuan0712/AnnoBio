@@ -48,6 +48,47 @@ test('legacy Run and Process results migrate through matching derived Datasets',
   assert.deepEqual(graph.nodes, [input, prompt, run, runDataset, process, processDataset]);
 });
 
+test('a completed zero-row Run and its empty Process output remain live history results', async () => {
+  const changed = structuredClone(graph);
+  const empty = { headers: ['text'], rows: [], columnTypes: ['text'], rowIds: [] };
+  Object.assign(changed.nodes.find((node) => node.nodeId === 'input'), { datasetContent: empty });
+  const runNode = changed.nodes.find((node) => node.nodeId === 'run');
+  runNode.runInputContent = JSON.stringify(empty);
+  runNode.runResults = '[]';
+  runNode.runCompleted = '1';
+  changed.nodes.find((node) => node.nodeId === 'run-dataset').datasetContent = {
+    ...buildRunResultsTable({ results: [], runContent: empty, schemaFields: prompt.outputFormat.fields }), rowIds: [],
+  };
+  changed.nodes.find((node) => node.nodeId === 'process').dfResults = JSON.stringify({ outputs: { result: { headers: ['answer'], rows: [] } } });
+  changed.nodes.find((node) => node.nodeId === 'process-dataset').datasetContent = { headers: ['answer'], rows: [], columnTypes: ['text'], rowIds: [] };
+  const migrated = await plan(changed);
+  assert.deepEqual(migrated.detachedDatasetIds, []);
+  assert.equal(migrated.records.length, 2);
+  const runRecord = migrated.records.find((record) => record.nodeId === 'run');
+  assert.equal(runRecord.status, 'completed');
+  assert.deepEqual(runRecord.results.runResults, []);
+  const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
+  const index = { records: migrated.records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) };
+  const resolved = await resolveHistoryCanvasState(migrated.state, { index, loadRecord: async (id) => records[id] });
+  assert.deepEqual(resolved.missingDatasetIds, []);
+  assert.deepEqual(resolved.missingResultNodeIds, []);
+  assert.deepEqual(Object.keys(resolved.currentRecordIds).sort(), ['process', 'run']);
+});
+
+test('legacy Process object cells match their saved text export', async () => {
+  const changed = structuredClone(graph);
+  changed.nodes.find((node) => node.nodeId === 'process').dfResults = JSON.stringify({ outputs: {
+    result: { headers: ['answer'], rows: [[[{ accession: 'P12345' }]]] },
+  } });
+  changed.nodes.find((node) => node.nodeId === 'process-dataset').datasetContent.rows = [['[object Object]']];
+  const migrated = await plan(changed);
+  assert.deepEqual(migrated.detachedDatasetIds, []);
+  const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
+  const index = { records: migrated.records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) };
+  const resolved = await resolveHistoryCanvasState(migrated.state, { index, loadRecord: async (id) => records[id] });
+  assert.deepEqual(resolved.state.nodes.find((node) => node.nodeId === 'process-dataset').datasetContent.rows, [['[object Object]']]);
+});
+
 test('mismatched legacy exports keep their content and visual pipeline links without live provenance', async () => {
   const changed = structuredClone(graph);
   changed.nodes.find((node) => node.nodeId === 'run-dataset').datasetContent.rows[0][0] = 'manual edit';
@@ -77,6 +118,7 @@ test('mismatched legacy exports keep their content and visual pipeline links wit
 test('missing upstream result detaches old export without inventing history', async () => {
   const changed = structuredClone(graph);
   changed.nodes.find((node) => node.nodeId === 'run').runResults = '[]';
+  changed.nodes.find((node) => node.nodeId === 'run').runCompleted = '';
   const result = await plan(changed);
   assert.deepEqual(result.detachedDatasetIds, ['run-dataset']);
   assert.deepEqual(result.records.map((record) => record.nodeId), ['process']);

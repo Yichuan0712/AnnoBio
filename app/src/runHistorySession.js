@@ -9,7 +9,7 @@ function hasLegacyOutput(node) {
   try {
     if (node.type === 'run') {
       const results = typeof node.runResults === 'string' ? JSON.parse(node.runResults) : node.runResults;
-      return Array.isArray(results) && results.length > 0;
+      return Array.isArray(results) && (results.length > 0 || node.runCompleted === '1' || node.runCompleted === true);
     }
     if (node.type === 'process') {
       const raw = node.dfResults || node.results;

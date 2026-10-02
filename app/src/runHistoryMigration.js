@@ -1,6 +1,7 @@
 import { canonicalJson, datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { buildRunResultsTable } from './runResultsExport.js';
+import { cloneCell } from './datasetContent.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
@@ -25,14 +26,14 @@ function sameTable(saved, output) {
   // Exported Dataset row IDs are allocated on creation, rather than copied from the result.
   // Older Process exports also did not carry column types.
   return canonicalJson({ headers: saved.headers, rows: saved.rows })
-    === canonicalJson({ headers: output.headers, rows: output.rows })
+    === canonicalJson({ headers: output.headers, rows: output.rows.map((row) => row.map(cloneCell)) })
     && (!Array.isArray(output.columnTypes) || !Array.isArray(saved.columnTypes)
       || canonicalJson(saved.columnTypes) === canonicalJson(output.columnTypes));
 }
 
 function runOutput(node, prompt) {
   const results = parsed(node?.runResults, []);
-  if (!Array.isArray(results) || !results.length) return null;
+  if (!Array.isArray(results) || (!results.length && node?.runCompleted !== '1' && node?.runCompleted !== true)) return null;
   const format = prompt?.outputFormat;
   return buildRunResultsTable({
     results,
@@ -59,7 +60,8 @@ export async function planLegacyHistoryMigration(state, {
   const nodes = new Map(next.nodes.map((node) => [nodeId(node), node]));
   const included = onlyNodeIds ? new Set(onlyNodeIds) : null;
   const resultNodes = next.nodes.filter((node) => (!included || included.has(nodeId(node))) && (
-    (node.type === 'run' && Array.isArray(parsed(node.runResults, [])) && parsed(node.runResults, []).length > 0)
+    (node.type === 'run' && Array.isArray(parsed(node.runResults, null))
+      && (parsed(node.runResults, []).length > 0 || node.runCompleted === '1' || node.runCompleted === true))
     || (node.type === 'process' && Object.keys(processOutputs(node)).length > 0)
   ));
   const existingByNode = new Map();
