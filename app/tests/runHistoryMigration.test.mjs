@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { planLegacyHistoryMigration } from '../src/runHistoryMigration.js';
 import { buildRunResultsTable } from '../src/runResultsExport.js';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
+import { planHistorySelection } from '../src/runHistorySelection.js';
 
 const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
 const prompt = { type: 'prompt', nodeId: 'prompt', name: 'Prompt', sections: [{ content: 'Say {{text}}' }], outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} };
@@ -117,5 +118,55 @@ test('matching index entry with a missing record fails instead of adopting stale
   await assert.rejects(
     resolveHistoryCanvasState(migrated.state, { index, loadRecord: async () => null }),
     /History record is missing or invalid/,
+  );
+});
+
+test('selecting a downstream record restores its ancestor inputs together', async () => {
+  const migrated = await plan(graph);
+  const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
+  const processRecord = migrated.records.find((record) => record.nodeId === 'process');
+  const changed = structuredClone(migrated.state);
+  changed.nodes.find((node) => node.nodeId === 'input').datasetContent.rows[0][0] = 'new input';
+  changed.nodes.find((node) => node.nodeId === 'prompt').sections[0].content = 'new prompt';
+  changed.nodes.find((node) => node.nodeId === 'process').dfCode = 'return df.head()';
+  const selected = await planHistorySelection(changed, processRecord.id, { loadRecord: async (id) => records[id] });
+  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'input').datasetContent.rows[0][0], 'hello');
+  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'prompt').sections[0].content, 'Say {{text}}');
+  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'process').dfCode, 'return df');
+  assert.deepEqual(new Set(Object.keys(selected.selectedRecordIds)), new Set(['run', 'process']));
+  assert.deepEqual(new Set(selected.affectedNodeIds).has('process-dataset'), true);
+});
+
+test('history selection rejects conflicting shared Dataset requirements atomically', async () => {
+  const migrated = await plan(graph);
+  const processRecord = structuredClone(migrated.records.find((record) => record.nodeId === 'process'));
+  const first = structuredClone(processRecord.inputs.bindings[0]);
+  delete first.sourceRecordId;
+  delete first.sourceNodeId;
+  delete first.branch;
+  const second = structuredClone(first);
+  second.content.rows[0][0] = 'other input';
+  processRecord.inputs.bindings = [first, second];
+  const before = structuredClone(migrated.state);
+  await assert.rejects(
+    planHistorySelection(before, processRecord.id, { loadRecord: async () => processRecord }),
+    /conflicts at dataset node run-dataset/,
+  );
+  assert.deepEqual(before, migrated.state);
+});
+
+test('history selection blocks a running affected descendant', async () => {
+  const migrated = await plan(graph);
+  const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
+  const processRecord = migrated.records.find((record) => record.nodeId === 'process');
+  const changed = structuredClone(migrated.state);
+  changed.nodes.find((node) => node.nodeId === 'input').datasetContent.rows[0][0] = 'new input';
+  await assert.rejects(
+    planHistorySelection(changed, processRecord.id, { loadRecord: async (id) => records[id], runningNodeIds: ['process'] }),
+    /while node process is running/,
+  );
+  await assert.rejects(
+    planHistorySelection(migrated.state, processRecord.id, { loadRecord: async (id) => records[id], runningNodeIds: ['process'] }),
+    /while node process is running/,
   );
 });
