@@ -40,6 +40,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     datasetContentByNodeId,
     openPromptDetailModal,
     openRunDetailModal,
+    startRunNode,
     openSamplerDetailModal,
     openDatasetDetailModal,
     openScoreDetailModal,
@@ -67,6 +68,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     isPromptNameAlreadyUsed,
     isRunNameAlreadyUsedForPrompt,
     openProcessDetailModal,
+    runProcessNode,
     toggleNodeSelection,
     isNodeSelected,
     clearSelection,
@@ -539,6 +541,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       openRunDetailModal({
         node,
+        startRunNode,
         getWorkingSets: () => workingSets,
         getPrompts: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'))
           .map((n) => ({ nodeId: n.dataset.nodeId || '', name: promptNameOf(n) || 'Prompt' })),
@@ -547,7 +550,6 @@ export function createWorkflowNodeFactories(deps = {}) {
         getPromptInputFields: () => extractInputFieldsFromSections(promptSectionsOf(currentPromptNode())),
         getSubsetContent,
         getPromptTemplate,
-        registerPendingRun,
         unregisterPendingRun,
         getPendingRunId: () => pendingRuns.get(node.dataset.nodeId) || null,
         getPromptName: () => promptNameOf(currentPromptNode()),
@@ -670,6 +672,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       openProcessDetailModal({
         node,
+        runProcessNode,
         getProcessDatasets,
         syncProcessDependencies,
         setPrimaryDataset: (datasetNodeId, code) => {

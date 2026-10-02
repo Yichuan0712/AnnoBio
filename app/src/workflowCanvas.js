@@ -2660,11 +2660,13 @@ export function buildWorkflowCanvas(root, options = {}) {
     datasetContentByNodeId,
     openPromptDetailModal,
     openRunDetailModal,
+    startRunNode: (options) => startRunNode(options),
     openSamplerDetailModal,
     openDatasetDetailModal,
     openScoreDetailModal,
     openReviewDetailModal,
     openProcessDetailModal,
+    runProcessNode: (nodeId, options) => runProcessNode(nodeId, options),
     showAlert,
     escapeHtml,
     extractInputFieldsFromSections,
@@ -4735,7 +4737,7 @@ export function buildWorkflowCanvas(root, options = {}) {
    * Run a Process node's saved code (the Agent's run_nodes) and store its output on the node the way
    * its detail view does, so the node shows 100% and its branches can be saved as Datasets.
    */
-  async function runProcessNode(nodeId, { signal } = {}) {
+  async function runProcessNode(nodeId, { signal, onStarted, timeoutMs } = {}) {
     const processNode = getNodeById(nodeId);
     if (!processNode?.classList.contains('workflow-node--process')) throw new Error('Process node was not found.');
     const code = resolveDataframeProcessCode({ dfCode: processNode.dataset.processDfCode, code: processNode.dataset.processCode });
@@ -4749,7 +4751,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       bar.setAttribute('aria-valuenow', String(percent));
     };
     setProgress(processNode, 0);
-    const { outputs, cancelled } = await runProcessCode({ code, bindings, signal });
+    const { outputs, cancelled } = await runProcessCode({ code, bindings, signal, onStarted, timeoutMs });
     // The canvas may have been rebuilt while the job ran (an applied proposal); write to the live node.
     const liveNode = getNodeById(nodeId);
     if (!liveNode) throw new Error('The Process node was removed while it ran.');
