@@ -69,7 +69,7 @@ import { createWorkspacePanels } from './workspacePanels.js';
 import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
 import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight, iconWorkflow } from './icons.js';
-import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettingsModal.js';
+import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { resolveDataframeProcessCode } from './processCode.js';
@@ -2965,7 +2965,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       } catch (_) {}
     }
     let scoreHasResults = false;
-    let scoreHasReviewLlm = false;
     if (isScore) {
       const runEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
       const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
@@ -2975,7 +2974,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           scoreHasResults = Array.isArray(rr) && rr.length > 0;
         } catch (_) {}
       }
-      scoreHasReviewLlm = (node.dataset.reviewCredentialId || '').trim() !== '';
     }
     let reviewHasResult = false;
     if (isPromptReview) {
@@ -3003,7 +3001,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const scoreHasGt = (node.dataset.scoreGroundTruthId || '').trim() !== '';
       const canSaveToWorkspace = scoreHasResults && scoreHasGt;
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem" ${scoreHasReviewLlm && scoreHasResults && scoreHasGt ? '' : 'disabled'}>Review</button>
+        <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem" ${scoreHasResults && scoreHasGt ? '' : 'disabled'}>Review</button>
         <button type="button" class="workflow-node-context-item" data-action="score-save-to-workspace" role="menuitem" ${canSaveToWorkspace ? '' : 'disabled'}>Save results to workspace</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>
       `;
@@ -3223,11 +3221,18 @@ export function buildWorkflowCanvas(root, options = {}) {
             output_fields: outputFields,
             output_schema,
             comparison_rows,
+            // Same request as the Score window's Review button.
+            review_method: (scoreNode.dataset.reviewMethod || '').trim() || undefined,
+            score_mapping: scoreNode.dataset.scoreMapping || undefined,
+            target_section_index: Number.isInteger(parseInt(scoreNode.dataset.gepaTargetSectionIndex, 10))
+              ? parseInt(scoreNode.dataset.gepaTargetSectionIndex, 10)
+              : undefined,
+            settings_overrides: reviewSettingsOverrides(scoreNode),
           };
         }
-        const credentialId = (scoreNode.dataset.reviewCredentialId || '').trim();
+        const credentialId = await resolveReviewCredentialId(scoreNode);
         if (!credentialId) {
-          showAlert('Select a Review model on the Score node (open Score detail → Results footer) or in project settings.', { title: 'Review' });
+          showAlert('No Review model: set a default Review model in Settings.', { title: 'Review' });
           return;
         }
         const started = await runReviewFromScore({

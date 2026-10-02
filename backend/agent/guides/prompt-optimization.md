@@ -21,7 +21,7 @@ not attributable to the prompt.
 
 ## Review methods
 
-A Score chooses its review method (Settings holds the default):
+Reviews use the review method set in Settings → Review defaults:
 - Thompson Prompt Search (the default): issue analysis followed by targeted sentence-level edits.
 - GEPA: reflective evolution of the prompt across candidates.
 - MIPROv2: optimises instructions together with few-shot examples.

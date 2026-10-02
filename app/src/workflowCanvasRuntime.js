@@ -16,7 +16,7 @@ import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { imageCell } from './datasetContent.js';
 import { buildRunResultsTable } from './runResultsExport.js';
-import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettingsModal.js';
+import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt } from './workflowNodeColors.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {

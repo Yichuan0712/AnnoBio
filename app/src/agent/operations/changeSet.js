@@ -8,7 +8,6 @@
  * "$name" ref given when adding them.
  */
 import { normalizeDatasetContent } from '../../datasetContent.js';
-import { RUN_NUMBER_FIELDS } from '../../nodeSettingsModal.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
 import { buildRunResultsTable } from '../../runResultsExport.js';
@@ -94,7 +93,7 @@ function outputText(output) {
  * @param {object} state getCanvasState() output
  * @param {object[]} operations
  * @param {{extractInputFields: Function, sources?: object, imported?: Map<number, {headers: string[], rows: string[][]}>,
- *   credentialIds?: Set<string>, now?: () => string}} ctx imported holds rows fetched for import
+ *   now?: () => string}} ctx imported holds rows fetched for import
  *   operations (by operation index); without it an import becomes an empty placeholder table.
  * @returns {{state: object, items: object[], refs: Record<string, string>, warnings: string[], nodeIds: string[]}}
  */
@@ -268,41 +267,6 @@ export function planChangeSet(state, operations, ctx) {
       if (col.type !== input.type) fail(`Prompt input "${input.name}" is ${input.type} but column "${column}" is ${col.type}.`);
     }
     return normalized;
-  }
-
-  function validateCredential(id) {
-    const value = clean(id);
-    if (value && ctx.credentialIds && !ctx.credentialIds.has(value)) fail(`credential_id "${value}" is not a saved credential.`);
-    return value;
-  }
-
-  /** Same rules as the Run settings dialog: only the given keys change, null restores the default. */
-  function nextRunSettings(current, settings) {
-    if (settings === null) return {};
-    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
-      fail(`settings must be an object with any of: ${RUN_NUMBER_FIELDS.map((f) => f.key).join(', ')}.`);
-    }
-    const fields = new Map(RUN_NUMBER_FIELDS.map((f) => [f.key, f]));
-    const unknown = Object.keys(settings).filter((key) => !fields.has(key));
-    if (unknown.length) fail(`settings cannot set ${unknown.join(', ')}. Settable: ${[...fields.keys()].join(', ')}.`);
-    const result = { ...(current && typeof current === 'object' ? current : {}) };
-    for (const [key, raw] of Object.entries(settings)) {
-      const field = fields.get(key);
-      if (raw == null || (typeof raw === 'string' && !raw.trim())) { // blank means default, as in the dialog
-        delete result[key];
-        continue;
-      }
-      const value = typeof raw === 'string' ? Number(raw.trim()) : raw;
-      if (!Number.isInteger(value) || value < field.min || value > field.max) {
-        fail(`settings.${key} must be a whole number from ${field.min} to ${field.max}, or null for the default.`);
-      }
-      result[key] = value;
-    }
-    return result;
-  }
-
-  function runSettingsText(settings) {
-    return RUN_NUMBER_FIELDS.map((f) => `${f.label} ${settings?.[f.key] ?? 'default'}`).join(', ');
   }
 
   function matchFlags(match) {
@@ -596,15 +560,14 @@ export function planChangeSet(state, operations, ctx) {
       const prompt = resolve(op.prompt, 'prompt', ['prompt']);
       const dataset = resolve(op.input_dataset, 'input_dataset', ['dataset']);
       const mapping = validateMapping(prompt, dataset, op.input_mapping);
-      const credentialId = validateCredential(op.credential_id);
-      const settings = op.settings != null ? nextRunSettings({}, op.settings) : {};
+      // Like the user, the Agent has no per-Run model or settings: Runs use Settings → Run defaults.
+      if (op.credential_id != null || op.settings != null) fail('A Run uses the default Run model and settings from Settings; credential_id and settings cannot be set per Run.');
       const runsOfPrompt = new Set(next.connections.filter((c) => c.type === 'prompt-to-run' && c.fromId === prompt.nodeId).map((c) => c.toId));
       const name = uniqueName(clean(op.name) || 'Run', takenNames('run', (n) => runsOfPrompt.has(n.nodeId)));
       const node = addNode({
         type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name,
         runWorkingSetId: dataset.nodeId, runInputToColumn: JSON.stringify(mapping),
-        ...(credentialId ? { runCredentialId: credentialId } : {}),
-        ...(Object.keys(settings).length ? { runSettings: settings } : {}), nodeOrigin: 'agent',
+        nodeOrigin: 'agent',
       });
       connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
       registerRef(op, node.nodeId);
@@ -613,8 +576,7 @@ export function planChangeSet(state, operations, ctx) {
         lines: [
           `Prompt "${nodeTitle(prompt)}" on "${nodeTitle(dataset)}"`,
           `Mapping: ${Object.entries(mapping).map(([k, v]) => `${k} ← ${v}`).join(', ') || '(no inputs)'}`,
-          credentialId ? 'Model: chosen credential' : 'Model: the default Run credential',
-          ...(Object.keys(settings).length ? [`Settings: ${runSettingsText(settings)}`] : []),
+          'Model and settings: Settings → Run defaults',
           'Not started: it runs when you start it.',
         ],
       };
@@ -639,7 +601,7 @@ export function planChangeSet(state, operations, ctx) {
         node.scoreMapping = bundle.mapping;
         lines = bundle.lines;
       }
-      if (clean(op.review_method)) node.reviewMethod = clean(op.review_method);
+      if (op.review_method != null) fail('A Review uses the review method from Settings → Review defaults; review_method cannot be set per Score.');
       connect(run.nodeId, node.nodeId, 'run-to-score');
       registerRef(op, node.nodeId);
       return { kind: 'add', type: 'score', title: `New score "${name}"`, nodeIds: [node.nodeId],
@@ -660,8 +622,8 @@ export function planChangeSet(state, operations, ctx) {
         prompt: ['name', 'note', 'sections', 'section_edits', 'input_types', 'output'],
         dataset: ['name', 'note', 'columns', 'rows'],
         process: ['name', 'code', 'primary_input'],
-        run: ['name', 'input_dataset', 'input_mapping', 'credential_id', 'settings'],
-        score: ['name', 'ground_truth', 'pairing', 'comparison', 'combine', 'match_code', 'review_method'],
+        run: ['name', 'input_dataset', 'input_mapping'],
+        score: ['name', 'ground_truth', 'pairing', 'comparison', 'combine', 'match_code'],
         sampler: ['name'],
         promptReview: ['name'],
       }[node.type] || [];
@@ -733,23 +695,6 @@ export function planChangeSet(state, operations, ctx) {
           lines.push(`Input "${nodeTitle(dataset)}"; mapping: ${Object.entries(mapping).map(([k, v]) => `${k} ← ${v}`).join(', ')}`);
           if (runResultsExist(node)) lines.push('Its existing results were produced with the old input.');
         }
-        if ('credential_id' in set) {
-          const id = validateCredential(set.credential_id);
-          // The Run settings dialog locks the model once a run has results; so does the Agent.
-          const hasResults = runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1';
-          if (hasResults && id !== clean(node.runCredentialId)) {
-            fail(`Run "${before}" already has results, so its model cannot change. Add a new run (add_run) for another model.`);
-          }
-          if (id) node.runCredentialId = id;
-          else delete node.runCredentialId;
-          lines.push(id ? 'Use the chosen credential' : 'Use the default Run credential');
-        }
-        if ('settings' in set) {
-          const settings = nextRunSettings(node.runSettings, set.settings);
-          if (Object.keys(settings).length) node.runSettings = settings;
-          else delete node.runSettings;
-          lines.push(`Settings: ${runSettingsText(settings)}`);
-        }
       }
 
       if (node.type === 'score') {
@@ -778,10 +723,6 @@ export function planChangeSet(state, operations, ctx) {
           node.scoreMapping = bundle.mapping;
           delete node.scoreActiveMatchMode;
           lines.push(...bundle.lines);
-        }
-        if ('review_method' in set) {
-          node.reviewMethod = clean(set.review_method) || undefined;
-          lines.push(`Review method: ${node.reviewMethod || 'default'}`);
         }
         if (['ground_truth', 'match_code', 'pairing', 'comparison', 'combine'].some((k) => k in set) && node.reviewResult) {
           lines.push('Its saved comparison is recomputed from the new settings.');
