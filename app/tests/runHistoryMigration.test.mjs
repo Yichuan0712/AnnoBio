@@ -108,10 +108,26 @@ test('current input signatures restore matching results and clear downstream aft
   assert.deepEqual(new Set(noMatch.missingDatasetIds), new Set(['run-dataset', 'process-dataset']));
   assert.equal(noMatch.state.nodes.find((node) => node.nodeId === 'run').runResults, undefined);
   assert.deepEqual(noMatch.state.nodes.find((node) => node.nodeId === 'process-dataset').datasetContent.rows, []);
+  assert.equal(noMatch.state.nodes.find((node) => node.nodeId === 'run-dataset').resultMissing, true);
+  assert.equal(noMatch.state.nodes.find((node) => node.nodeId === 'process-dataset').resultMissing, true);
 
   const restored = await resolve(migrated.state);
   assert.equal(restored.state.nodes.find((node) => node.nodeId === 'run').runCompleted, '1');
   assert.deepEqual(restored.state.nodes.find((node) => node.nodeId === 'process-dataset').datasetContent.rows, [['processed']]);
+  assert.equal(restored.state.nodes.find((node) => node.nodeId === 'process-dataset').resultMissing, undefined);
+});
+
+test('a completed Run with zero rows produces a valid empty Dataset', async () => {
+  const migrated = await plan(graph);
+  const runRecord = migrated.records.find((record) => record.kind === 'run');
+  runRecord.results.runResults = [];
+  const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
+  const index = { records: migrated.records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) };
+  const resolved = await resolveHistoryCanvasState(migrated.state, { index, loadRecord: async (id) => records[id] });
+  const derived = resolved.state.nodes.find((node) => node.nodeId === 'run-dataset');
+  assert.deepEqual(derived.datasetContent.rows, []);
+  assert.equal(derived.resultMissing, undefined);
+  assert.ok(derived.datasetContent.headers.length > 0);
 });
 
 test('matching index entry with a missing record fails instead of adopting stale canvas results', async () => {

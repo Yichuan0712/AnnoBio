@@ -526,6 +526,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (!workingSetId) {
       throw new Error('This run node has no selected input dataset.');
     }
+    if (getNodeById(workingSetId)?.dataset?.resultMissing === '1') {
+      throw new Error('The selected input Dataset has no current result. Run its upstream node first.');
+    }
     let existingResults = [];
     try {
       existingResults = JSON.parse(node.dataset.runResults || '[]');
@@ -673,14 +676,23 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (response.status === 202) {
       const runId = String(data?.run_id || '').trim();
       if (!runId) {
+        if (historyRecord) {
+          await historySession.putRecord({ ...historyRecord, status: 'failed', updatedAt: new Date().toISOString(), error: 'Backend did not return a Run job ID.' });
+          pendingRunHistoryRecords.delete(normalizedRunNodeId);
+        }
         throw new Error('Run started but no run id was returned by the backend.');
       }
+      registerPendingRun(normalizedRunNodeId, runId);
       if (historyRecord) {
         historyRecord = { ...historyRecord, backendJobId: runId, updatedAt: new Date().toISOString() };
-        await historySession.putRecord(historyRecord);
+        try {
+          await historySession.putRecord(historyRecord);
+        } catch (error) {
+          await fetch(`${RUN_API_BASE}/api/run/cancel/${runId}`, { method: 'POST' }).catch(() => {});
+          throw new Error(`Run was stopped because its history job ID could not be saved: ${error?.message || error}`);
+        }
         pendingRunHistoryRecords.set(normalizedRunNodeId, historyRecord);
       }
-      registerPendingRun(normalizedRunNodeId, runId);
       return {
         started: true,
         waitRequired: true,

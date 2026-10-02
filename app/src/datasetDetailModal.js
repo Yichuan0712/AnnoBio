@@ -66,7 +66,7 @@ function candidateMatchKeys(value) {
   return Array.from(keys).filter(Boolean);
 }
 
-export function openDatasetDetailModal({ node, getContent, saveContent, readOnly = false }) {
+export function openDatasetDetailModal({ node, getContent, saveContent, readOnly = false, missingResult = false }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-working-dataset-node-id="${CSS.escape(nodeId)}"]`)
@@ -115,6 +115,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.classList.toggle('working-dataset-readonly', readOnly);
+  overlay.classList.toggle('working-dataset-missing', missingResult);
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'working-dataset-detail-title');
   if (nodeId) overlay.dataset.workingDatasetNodeId = nodeId;
@@ -127,6 +128,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
       <div class="modal-body prompt-detail-body working-dataset-detail-body">
         <div class="prompt-detail-side prompt-preview-wrap dataset-detail-preview-side">
           <div class="prompt-detail-side-scroll">
+            ${missingResult ? '<p class="working-dataset-missing-message">No current result. Select matching upstream History or run the upstream node.</p>' : ''}
             <div class="working-dataset-detail-card">
               <div class="dataset-detail-preview-search-wrap working-dataset-search-wrap">
                 <span class="dataset-detail-preview-summary wd-summary" aria-live="polite">${headers.length} columns, ${rows.length.toLocaleString()} rows</span>
@@ -1723,6 +1725,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
 
   if (exportLocalBtn) {
     exportLocalBtn.addEventListener('click', async () => {
+      if (missingResult) return;
       const defaultBase = sanitizeFilename(name);
       const api = window.electronAPI;
       const filters = [

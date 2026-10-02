@@ -45,6 +45,25 @@ test('start freezes rows only for explicit inputs and never sends stale intermed
   assert.deepEqual(state, before);
 });
 
+test('compile rejects a derived Dataset with no current result when used as an input boundary', () => {
+  const { state, route } = fixture();
+  const out = state.nodes.find((node) => node.nodeId === 'out');
+  out.resultMissing = true;
+  out.datasetContent = { headers: [], rows: [] };
+  assert.doesNotThrow(() => buildPipelineCompileRequest({ canvasState: state, route }));
+  const boundaryRoute = [{ type: 'dataset', dataset_node_id: 'out' }];
+  assert.throws(() => buildPipelineCompileRequest({ canvasState: state, route: boundaryRoute }), /no current result/);
+});
+
+test('an ordinary empty Dataset remains a valid input', () => {
+  const state = { nodes: [{ type: 'dataset', nodeId: 'empty', name: 'Empty',
+    datasetContent: { headers: ['text'], rows: [] } }], connections: [] };
+  const route = [{ type: 'dataset', dataset_node_id: 'empty' }];
+  const request = buildPipelineCompileRequest({ canvasState: state, route });
+  assert.deepEqual(request.input_dataset_ids, ['empty']);
+  assert.deepEqual(request.canvas_state.nodes[0].datasetContent.rows, []);
+});
+
 test('compile and start share the same selected graph and asset detection', () => {
   const { state, route } = fixture();
   const compiled = buildPipelineCompileRequest({ canvasState: state, route });

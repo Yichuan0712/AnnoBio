@@ -14,7 +14,7 @@ function parsed(value, fallback) {
 
 function runTable(record) {
   const results = parsed(record?.results?.runResults, []);
-  if (!Array.isArray(results) || !results.length) return null;
+  if (!Array.isArray(results) || (!results.length && record?.status !== 'completed')) return null;
   const format = record.inputs?.prompt?.outputFormat;
   return buildRunResultsTable({
     results,
@@ -96,9 +96,11 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
       const table = source && (runSourceId ? runTable(source) : processTable(source, branch));
       if (!table) {
         dataset.datasetContent = emptyTable();
+        dataset.resultMissing = true;
         if (!missingDatasetIds.includes(id)) missingDatasetIds.push(id);
         return null;
       }
+      delete dataset.resultMissing;
       dataset.datasetContent = {
         headers: copy(table.headers), rows: copy(table.rows),
         columnTypes: copy(table.columnTypes || []),
@@ -109,6 +111,7 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
         sourceRecordId: source.id,
       };
     }
+    delete dataset.resultMissing;
     const content = dataset.datasetContent || dataset.subsetContent;
     return content ? { signature: await datasetSignature({ nodeId: id, content }) } : null;
   }
