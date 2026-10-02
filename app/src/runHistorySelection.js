@@ -111,6 +111,10 @@ export async function planHistorySelection(state, recordId, { loadRecord, runnin
   }
   for (const [id, source] of datasetSources) {
     const node = nodes.get(id);
+    // A legacy snapshot keeps its visual lineage; it is still an independent input table.
+    if (!source && next.connections.some((edge) => (
+      edge.toId === id && ['run-to-dataset-snapshot', 'process-to-dataset-snapshot'].includes(edge.type)
+    ))) continue;
     const oldSource = node.sourceRunNodeId || next.connections.find((edge) => edge.type === 'process-to-dataset' && edge.toId === id)?.fromId;
     const newSource = source?.nodeId || '';
     if (oldSource !== newSource && !changedNodeIds.includes(id)) changedNodeIds.push(id);

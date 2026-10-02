@@ -140,6 +140,8 @@ const EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT = 'prompt-review-to-prompt';
 const EDGE_TYPE_DATASET_TO_PROCESS = 'dataset-to-process';
 /** Edge type for process → dataset (exporting Process results creates a connected dataset). */
 const EDGE_TYPE_PROCESS_TO_DATASET = 'process-to-dataset';
+const EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT = 'run-to-dataset-snapshot';
+const EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT = 'process-to-dataset-snapshot';
 
 const DEFAULT_SCORE_MATCH_FLAGS = {
   semanticAlign: false,
@@ -2372,6 +2374,12 @@ export function buildWorkflowCanvas(root, options = {}) {
     line.setAttribute('class', 'workflow-edge-line');
     line.setAttribute('stroke', 'var(--text-muted)');
     line.setAttribute('stroke-width', '2');
+    if (edge.type === EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT || edge.type === EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT) {
+      line.setAttribute('stroke-dasharray', '5 4');
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = 'Saved Dataset snapshot; its content does not follow upstream History.';
+      edgeGroup.appendChild(title);
+    }
     line.setAttribute('marker-end', 'url(#workflow-arrow)');
     line.setAttribute('pointer-events', 'none');
     if (edge.derived) {
@@ -3610,7 +3618,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           rows,
         });
         if (newNode?.dataset?.nodeId) {
-          connections.filter((c) => c.toId === node.dataset.nodeId && c.type !== EDGE_TYPE_PROCESS_TO_DATASET).forEach((c) => {
+          connections.filter((c) => c.toId === node.dataset.nodeId
+            && ![EDGE_TYPE_PROCESS_TO_DATASET, EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT, EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT].includes(c.type)).forEach((c) => {
             connections.push({ fromId: c.fromId, toId: newNode.dataset.nodeId, type: c.type });
           });
           updateEdges();

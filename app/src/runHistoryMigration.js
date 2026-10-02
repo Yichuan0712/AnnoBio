@@ -219,12 +219,18 @@ export async function planLegacyHistoryMigration(state, {
   }
   for (const datasetId of detachedDatasetIds) {
     const dataset = nodes.get(datasetId);
-    delete dataset.sourceRunNodeId;
-    delete dataset.processOutputName;
+    if (dataset.sourceRunNodeId) {
+      // Keep the old visual lineage without claiming that the saved table is the Run's live result.
+      next.connections = next.connections.filter((edge) => !(edge.type === 'process-to-dataset' && edge.toId === datasetId));
+      if (nodes.has(dataset.sourceRunNodeId)) next.connections.push({
+        type: 'run-to-dataset-snapshot', fromId: dataset.sourceRunNodeId, toId: datasetId,
+      });
+      delete dataset.sourceRunNodeId;
+    } else {
+      const edge = next.connections.find((item) => item.type === 'process-to-dataset' && item.toId === datasetId);
+      if (edge) edge.type = 'process-to-dataset-snapshot';
+    }
   }
-  next.connections = next.connections.filter((edge) => !(
-    edge.type === 'process-to-dataset' && detachedDatasetIds.includes(edge.toId)
-  ));
   next.historyVersion = 1;
   return { state: next, records: [...records.values()], detachedDatasetIds, unmigratedNodeIds };
 }
