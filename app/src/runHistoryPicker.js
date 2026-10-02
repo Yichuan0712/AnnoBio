@@ -79,14 +79,16 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
         }
         const description = document.createElement('span');
         description.className = 'modal-history-popup__summary';
-        description.textContent = item.display.title || 'Saved result';
+        description.textContent = item.display.title || '';
         const input = document.createElement('span');
         input.className = 'modal-history-popup__fact';
         input.textContent = item.display.input || 'Input details unavailable';
         const output = document.createElement('span');
         output.className = 'modal-history-popup__fact';
         output.textContent = item.display.output || 'Result details unavailable';
-        row.append(top, description, input, output);
+        row.append(top);
+        if (description.textContent) row.appendChild(description);
+        row.append(input, output);
         if (item.display.meta) {
           const detail = document.createElement('small');
           detail.textContent = item.display.meta;

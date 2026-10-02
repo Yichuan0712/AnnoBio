@@ -148,13 +148,13 @@ export class RunHistorySession {
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   }
 
-  async displayEntriesForNode(nodeId) {
+  async displayEntriesForNode(nodeId, canvasState) {
     return Promise.all(this.entriesForNode(nodeId).map(async (entry) => {
       const record = await this.storage.loadRecord(this.projectId, entry.id);
       if (!record || record.id !== entry.id || record.nodeId !== nodeId) {
         throw new Error(`History record is missing or invalid: ${entry.id}`);
       }
-      return { ...entry, display: describeHistoryRecord(record) };
+      return { ...entry, display: describeHistoryRecord(record, canvasState) };
     }));
   }
 
