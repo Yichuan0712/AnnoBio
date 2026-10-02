@@ -49,7 +49,7 @@ export const AGENT_TOOL_DEFINITIONS = [
   ),
   tool(
     'inspect_node',
-    'Full configuration of one node: prompt sections, inputs and output schema; dataset columns and a preview; process code, inputs, aliases and outputs; run mapping, model and progress; score rules and metrics; review suggestions with verification results; plus its connections and any configuration problems.',
+    'Full configuration of one node: prompt sections, inputs and output schema; dataset columns and a preview; process code, inputs, aliases and outputs; run mapping, model and progress; score rules and metrics; review suggestions with verification results; plus its connections and any configuration problems. Run and Process nodes also include saved History records with readable input/output descriptions and currentHistoryRecordId.',
     { node_id: NODE_ID },
     ['node_id'],
   ),

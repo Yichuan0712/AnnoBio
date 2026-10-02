@@ -148,6 +148,13 @@ function datasetProducer(node, canvasState, nodeLookup) {
       return { kind: 'process output', branch: String(node.processOutputName || 'result'), ...linkedNode(processNode) };
     }
   }
+  const snapshot = safeArray(canvasState?.connections).find((c) =>
+    (c?.type === 'run-to-dataset-snapshot' || c?.type === 'process-to-dataset-snapshot')
+    && normalizeNodeId(c.toId) === id);
+  if (snapshot) {
+    const source = nodeLookup.get(normalizeNodeId(snapshot.fromId));
+    if (source) return { kind: snapshot.type === 'run-to-dataset-snapshot' ? 'saved run snapshot' : 'saved process snapshot', ...linkedNode(source) };
+  }
   if (node?.samplerNodeId) {
     const sampler = nodeLookup.get(normalizeNodeId(node.samplerNodeId));
     if (sampler) return { kind: 'sample', ...linkedNode(sampler) };

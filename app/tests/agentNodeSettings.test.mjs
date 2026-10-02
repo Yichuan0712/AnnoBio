@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { inspectWorkflowNode } from '../src/agent/canvas/workflowNodeInspector.js';
+import { buildWorkspaceSummary } from '../src/agent/context/workspaceSummary.js';
 import { ChangeSetError, planChangeSet } from '../src/agent/operations/changeSet.js';
 
 const extractInputFields = (sections) => [...new Set(sections
@@ -45,4 +46,16 @@ test('the Agent cannot choose a review method on a Score', () => {
 test('inspect_node does not report per-Run settings', () => {
   const inspected = inspectWorkflowNode(canvas(), 'r', { extractInputFields });
   assert.equal('settings' in inspected.details, false);
+});
+
+test('Agent identifies legacy saved Dataset snapshots as snapshots', async () => {
+  const state = canvas();
+  state.nodes.push({ type: 'dataset', nodeId: 'snapshot', name: 'Saved results',
+    datasetContent: { headers: ['answer'], rows: [['A']] } });
+  state.connections.push({ fromId: 'r', toId: 'snapshot', type: 'run-to-dataset-snapshot' });
+  const inspected = inspectWorkflowNode(state, 'snapshot');
+  assert.equal(inspected.details.producedBy.kind, 'saved run snapshot');
+  assert.equal(inspected.details.producedBy.nodeId, 'r');
+  const summary = await buildWorkspaceSummary(state, { extractInputFields });
+  assert.match(summary, /saved snapshot of run "Run"/);
 });

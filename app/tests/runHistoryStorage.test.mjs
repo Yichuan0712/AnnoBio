@@ -41,14 +41,21 @@ test('desktop .yc canvas save, Save As and merge retain history', async () => {
     const copy = path.join(root, 'copy.yc');
     const source = path.join(root, 'source.yc');
     const assets = newAssets();
-    const state = { nodes: [{ nodeId: 'run-1', type: 'run' }], connections: [] };
+    const state = { historyVersion: 1, nodes: [{ nodeId: 'run-1', type: 'run' },
+      { nodeId: 'dataset-1', type: 'dataset' }],
+    connections: [{ fromId: 'run-1', toId: 'dataset-1', type: 'run-to-dataset-snapshot' }] };
     await assets.save(original, state);
     const first = record('run-1', 'signature-1');
     await assets.saveHistoryRecord(original, first);
+    const agentSession = { format_version: 2, activeConversationId: 'chat-1', conversations: [{ id: 'chat-1', messages: [] }] };
+    await assets.saveAgentSession(original, agentSession);
     await assets.save(original, state);
     assert.deepEqual(await assets.loadHistoryRecord(original, first.id), first);
     await assets.save(copy, state, { copySessionFromCurrent: true });
     assert.deepEqual(await assets.loadHistoryRecord(copy, first.id), first);
+    assert.deepEqual(await assets.loadAgentSession(copy), agentSession);
+    assert.deepEqual((await assets.load(copy)).connections, state.connections);
+    assert.equal((await assets.load(copy)).historyVersion, 1);
 
     const sourceAssets = newAssets();
     await sourceAssets.save(source, { nodes: [{ nodeId: 'run-2', type: 'run' }], connections: [] });

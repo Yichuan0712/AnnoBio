@@ -66,10 +66,15 @@ function datasetLine(node, lookup, canvasState) {
   let source = '';
   const run = node.sourceRunNodeId ? lookup.get(node.sourceRunNodeId) : null;
   const processEdge = (canvasState.connections || []).find((c) => c.type === 'process-to-dataset' && c.toId === node.nodeId);
+  const snapshotEdge = (canvasState.connections || []).find((c) =>
+    (c.type === 'run-to-dataset-snapshot' || c.type === 'process-to-dataset-snapshot') && c.toId === node.nodeId);
   const sampler = node.samplerNodeId ? lookup.get(node.samplerNodeId) : null;
   if (run) source = `; results of run ${quote(nodeTitle(run))}`;
   else if (processEdge && lookup.get(processEdge.fromId)) {
     source = `; output ${quote(node.processOutputName || 'result')} of process ${quote(nodeTitle(lookup.get(processEdge.fromId)))}`;
+  } else if (snapshotEdge && lookup.get(snapshotEdge.fromId)) {
+    const kind = snapshotEdge.type === 'run-to-dataset-snapshot' ? 'run' : 'process';
+    source = `; saved snapshot of ${kind} ${quote(nodeTitle(lookup.get(snapshotEdge.fromId)))}`;
   } else if (sampler) source = `; sampled by ${quote(nodeTitle(sampler))}`;
   return `- ${ref(node)}: ${content.rows.length} rows; columns: ${columns || '(none)'}${source}`;
 }
