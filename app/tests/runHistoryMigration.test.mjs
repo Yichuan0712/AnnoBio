@@ -7,6 +7,7 @@ import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { planHistorySelection } from '../src/runHistorySelection.js';
 import { RunHistorySession } from '../src/runHistorySession.js';
 import { captureHistoryInput, runningHistoryRecord } from '../src/runHistoryCapture.js';
+import { detectPipelines } from '../src/pipelineDetection.js';
 
 const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
 const prompt = { type: 'prompt', nodeId: 'prompt', name: 'Prompt', sections: [{ content: 'Say {{text}}' }], outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} };
@@ -47,7 +48,7 @@ test('legacy Run and Process results migrate through matching derived Datasets',
   assert.deepEqual(graph.nodes, [input, prompt, run, runDataset, process, processDataset]);
 });
 
-test('mismatched legacy static exports keep their content and lose provenance', async () => {
+test('mismatched legacy exports keep their content and visual pipeline links without live provenance', async () => {
   const changed = structuredClone(graph);
   changed.nodes.find((node) => node.nodeId === 'run-dataset').datasetContent.rows[0][0] = 'manual edit';
   changed.nodes.find((node) => node.nodeId === 'process-dataset').datasetContent.rows[0][0] = 'older result';
@@ -60,6 +61,17 @@ test('mismatched legacy static exports keep their content and lose provenance', 
   assert.equal(savedRunDataset.sourceRunNodeId, undefined);
   assert.equal(savedRunDataset.datasetContent.rows[0][0], 'manual edit');
   assert.equal(result.state.connections.some((edge) => edge.type === 'process-to-dataset'), false);
+  assert.equal(result.state.connections.some((edge) => edge.type === 'run-to-dataset-snapshot' && edge.toId === 'run-dataset'), true);
+  assert.equal(result.state.connections.some((edge) => edge.type === 'process-to-dataset-snapshot' && edge.toId === 'process-dataset'), true);
+  assert.equal(detectPipelines(result.state).length, 1);
+  const records = Object.fromEntries(result.records.map((record) => [record.id, record]));
+  const index = { records: result.records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) };
+  const resolved = await resolveHistoryCanvasState(result.state, { index, loadRecord: async (id) => records[id] });
+  assert.deepEqual(Object.keys(resolved.currentRecordIds).sort(), ['process', 'run']);
+  assert.equal(resolved.state.nodes.find((node) => node.nodeId === 'run-dataset').datasetContent.rows[0][0], 'manual edit');
+  const selected = await planHistorySelection(result.state, processRecord.id, { loadRecord: async (id) => records[id] });
+  assert.equal(selected.state.connections.some((edge) => edge.type === 'run-to-dataset-snapshot'), true);
+  assert.equal(selected.state.connections.some((edge) => edge.type === 'process-to-dataset-snapshot'), true);
 });
 
 test('missing upstream result detaches old export without inventing history', async () => {

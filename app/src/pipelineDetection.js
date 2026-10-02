@@ -16,7 +16,8 @@
  * How a Dataset attaches to the steps around it:
  *  - Produced by: either `dataset.sourceRunNodeId` (a Dataset materialized from a Run's results via
  *    "Save to workspace" — see workflowCanvasRuntime.js's saveRunResultsToWorkspace), or a
- *    `process-to-dataset` connection.
+ *    `process-to-dataset` connection. Legacy snapshot edges also preserve the visible path,
+ *    although their saved tables are independent inputs when the pipeline runs.
  *  - Consumed by: either a Run's own `runWorkingSetId` field, or a `dataset-to-process` connection.
  *
  * Only datasets that actually take part get a step; ones sitting unattached on the canvas don't.
@@ -214,7 +215,14 @@ export function detectPipelines(canvasState) {
     datasetProducerRunId.set(ds.nodeId, ds.sourceRunNodeId);
   }
   for (const c of connections) {
-    if (c.type !== 'process-to-dataset') continue;
+    if (c.type !== 'run-to-dataset-snapshot') continue;
+    const producer = runNodeToStep.get(c.fromId);
+    if (!producer) continue;
+    datasetProducerStepId.set(c.toId, producer.id);
+    datasetProducerRunId.set(c.toId, c.fromId);
+  }
+  for (const c of connections) {
+    if (c.type !== 'process-to-dataset' && c.type !== 'process-to-dataset-snapshot') continue;
     const producer = processNodeToStep.get(c.fromId);
     // A Process has no versions, so nothing to narrow by — it gets a step id but no Run id.
     if (producer) datasetProducerStepId.set(c.toId, producer.id);
