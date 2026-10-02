@@ -101,7 +101,8 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
       }
       dataset.datasetContent = {
         headers: copy(table.headers), rows: copy(table.rows),
-        columnTypes: copy(table.columnTypes || []), rowIds: copy(table.rowIds || []),
+        columnTypes: copy(table.columnTypes || []),
+        rowIds: table.rows.map((_, index) => table.rowIds?.[index] || `${source.id}:${branch}:${index}`),
       };
       return {
         signature: await datasetSignature({ nodeId: id, sourceRecordId: source.id, branch }),
