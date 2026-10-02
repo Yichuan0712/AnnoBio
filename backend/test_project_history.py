@@ -46,7 +46,13 @@ class ProjectHistoryTest(unittest.TestCase):
     def test_canvas_save_copy_and_bundle_round_trip_keep_history(self):
         item = record()
         self.save(item)
-        project_store.save_project(self.project_id, project_store.ProjectSave(state={"nodes": [{"nodeId": "run-1"}]}))
+        state = {"historyVersion": 1, "nodes": [{"nodeId": "run-1"}, {"nodeId": "dataset-1"}],
+                 "connections": [{"fromId": "run-1", "toId": "dataset-1", "type": "run-to-dataset-snapshot"}]}
+        project_store.save_project(self.project_id, project_store.ProjectSave(state=state))
+        session = project_store.AgentConversationsSave(
+            format_version=2, activeConversationId="chat-1", conversations=[{"id": "chat-1", "messages": []}]
+        )
+        project_store.save_agent_conversations(self.project_id, session)
         copied = project_store.duplicate_project(self.project_id)["id"]
         self.assertEqual(project_store.get_history_record(copied, item["id"]), item)
 
@@ -54,6 +60,9 @@ class ProjectHistoryTest(unittest.TestCase):
         imported = asyncio.run(project_store.import_yc(UploadFile(file=io.BytesIO(bundle), filename="history.yc")))["id"]
         self.assertEqual(project_store.get_history_record(imported, item["id"]), item)
         self.assertEqual(len(project_store.get_history_index(imported)["records"]), 1)
+        self.assertEqual(project_store.get_project(imported)["state"]["connections"], state["connections"])
+        self.assertEqual(project_store.get_project(imported)["state"]["historyVersion"], 1)
+        self.assertEqual(project_store.get_agent_conversations(imported), session.model_dump())
 
     def test_signature_is_unique_and_completed_record_is_immutable(self):
         item = record()

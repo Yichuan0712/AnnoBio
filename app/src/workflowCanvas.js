@@ -5216,7 +5216,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       extractInputFields: extractInputFieldsFromSections,
     });
     if (result?.found && (result.type === 'run' || result.type === 'process') && history && !history.stale) {
-      result.history = historySession.entriesForNode(nodeId);
+      result.history = await historySession.displayEntriesForNode(nodeId, getCanvasState());
       result.currentHistoryRecordId = history.currentRecordIds?.[nodeId] || null;
     }
     if (!result?.found || result.type !== 'score') return result;
