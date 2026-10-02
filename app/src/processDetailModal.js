@@ -15,6 +15,7 @@ import { cloneCell, normalizeDatasetContent, isAssetCell } from './datasetConten
 import { prepareAssets } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { resolveDataframeProcessCode } from './processCode.js';
+import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
 import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 import { openProcessDatasetsDialog } from './processDatasetsDialog.js';
 
@@ -118,9 +119,10 @@ function restoreResults(node, ...keys) {
 }
 
 /**
- * @param {{ node: HTMLElement, getProcessDatasets: () => { datasets: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, syncProcessDependencies?: (code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
+ * @param {{ node: HTMLElement, getProcessDatasets: () => { datasets: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, syncProcessDependencies?: (code: string) => void, setPrimaryDataset?: (datasetNodeId: string, code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
+ *   setPrimaryDataset: the Process picks its df Dataset in this window, like a Run picks its Prompt
  */
-export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDependencies, getUniqueDatasetExportName }) {
+export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -136,7 +138,7 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
     const datasets = Array.isArray(raw.datasets) ? raw.datasets.filter((dataset) => dataset?.nodeId && dataset?.content) : [];
     const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === raw.primaryDatasetId)
       ? raw.primaryDatasetId
-      : (datasets[0]?.nodeId || '');
+      : '';
     return { bindings: buildProcessDatasetBindings(datasets, primaryDatasetId), primaryDatasetId };
   };
   const initialDatasets = readDatasets();
@@ -158,10 +160,16 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
       </div>
       <div class="modal-body run-detail-body modal-body--run">
         <div class="run-detail-main">
-          <p class="run-detail-main-label">Python code</p>
+          <p class="run-detail-main-label">Code setup</p>
+          <div class="dataset-meta-wrap process-input-wrap">
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="process-primary-picker">Input dataset</label>
+              ${nodePickerHtml({ id: 'process-primary-picker', placeholder: 'Select input dataset', ariaLabel: 'Select input dataset' })}
+            </div>
+          </div>
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
-          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is this Process's Dataset. Referencing another alias automatically creates its canvas dependency. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
+          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the Input dataset. Referencing another alias automatically creates its canvas dependency. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
           <button type="button" class="process-dataset-bindings-toggle" aria-haspopup="dialog">View available datasets</button>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
@@ -194,6 +202,25 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   });
   const editorView = new EditorView({ doc: initialCode, extensions: [basicSetup, python()], parent: editorHost });
   const getCode = () => editorView.state.doc.toString();
+
+  // Same picker as a Run window's Input dataset.
+  const primaryPicker = bindNodePicker(overlay.querySelector('#process-primary-picker'), {
+    placeholder: 'Select input dataset',
+    getOptions: () => readDatasets().bindings.map(({ nodeId, name, color }) => ({ nodeId, name, color })),
+    getValue: () => readDatasets().primaryDatasetId,
+    onSelect: (datasetNodeId) => {
+      const previousDefault = buildDefaultCode(readDatasets().bindings.find((binding) => binding.primary)?.content?.headers || []);
+      const code = getCode();
+      setPrimaryDataset?.(datasetNodeId, code);
+      // Untouched sample code follows the new Dataset's columns; edited code is left alone.
+      if (code === previousDefault) {
+        const nextDefault = buildDefaultCode(readDatasets().bindings.find((binding) => binding.primary)?.content?.headers || []);
+        editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: nextDefault } });
+      }
+    },
+    isLocked: () => running,
+    closeWithin: overlay,
+  });
   let running = false;
   let currentJobId = null;
   let lastResults = restoreResults(node, 'processDfResults', 'processResults');
@@ -283,6 +310,7 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
 
   function setRunningUi(isRunning) {
     running = isRunning;
+    primaryPicker.setLocked(isRunning);
     runBtn.textContent = isRunning ? 'Running, click to stop' : 'Run';
     runBtn.classList.toggle('btn-danger', isRunning);
     if (saveBtnEl) saveBtnEl.disabled = isRunning || !lastResults;
@@ -340,7 +368,8 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
     const primary = bindings.find((binding) => binding.primary);
     const { headers = [], rows = [] } = primary?.content || {};
     if (!primary) {
-      showPlaceholder('Connect a primary Dataset before running.');
+      showPlaceholder('Choose an Input dataset before running.');
+      primaryPicker.focus();
       return;
     }
     let pythonPath = '';
@@ -403,7 +432,7 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
-  attachModalPaneCycle({ overlay, bothLabel: 'Show both panels', leftOnlyLabel: 'Show code panel only', rightOnlyLabel: 'Show results panel only' });
+  attachModalPaneCycle({ overlay, bothLabel: 'Show both panels', leftOnlyLabel: 'Show code setup panel only', rightOnlyLabel: 'Show results panel only' });
   refreshResults();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);

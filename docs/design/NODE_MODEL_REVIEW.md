@@ -18,6 +18,7 @@
 | 3 | Dataset 一身多职，副本不知道自己过期 | 取舍 | 待讨论 |
 | 4 | Score 替 Review 存配置 | 取舍 | 不实施：改为去掉节点级设置，一律用 Settings 默认值（`507eba1`） |
 | 5 | Run 的"模型"其实是一条凭据 | 取舍 | 待讨论 |
+| 6 | Run / Process 只能从上游节点新建，输入定死 | 取舍 | 解绑已实施（未提交）；History 待讨论 |
 
 ## 1. 撤销与运行结果
 
@@ -187,6 +188,33 @@
 
 - 非 OpenRouter 服务商的模型列表从哪里来？
 - `GET /api/credentials/{id}` 是否还需要返回明文 key？
+
+## 6. Run / Process 与上游节点解绑
+
+### 现状（改动前）
+
+- Run 只能从 Prompt 新建，Prompt 在创建时定死，窗口里只能选 Dataset。
+- Process 只能从 Dataset 新建，主输入 `df` 也在创建时定死，窗口里不能换。想把同一段代码用到另一份数据上，只能新建 Process 再复制代码。
+
+### 已实施（2026-10-01，未提交）
+
+- **新建入口**：顶栏的新建菜单（桌面版 Edit 菜单、网页版左侧图标）加了"新建 Run"和"新建 Process"，新建后直接打开窗口。从 Prompt / Dataset 的右键菜单、Prompt 窗口的 Run 按钮、Dataset 窗口新建时，仍然预填对应节点。
+- **Run 窗口**：先选 Input prompt，再选 Input dataset，然后做列映射。换 Prompt 时，列映射只保留新 Prompt 也有的输入。Run 有结果后，Prompt、Dataset 和映射一起锁定。没选 Prompt 时 Run 按钮不可用。Prompt 窗口的 Run 按钮改为新建节点后走同一个打开入口，去掉了原来复制的一套窗口打开代码。
+- **Process 窗口**："Code setup" 标题下、代码编辑器上方是 Input dataset 选择器（即 `df`），排法和 Score 窗口"Scoring setup"下的 Ground truth dataset 一样。切换后重建依赖连线；如果代码还是没改过的示例，就按新 Dataset 的列重新生成。不再自动选第一个 Dataset。
+- **外观一致**：Run 的 Input prompt 和 Process 的 Input dataset 选择器使用 `app/src/nodePicker.js`，标记和样式与 Run 窗口原有的 input Dataset 选择器相同。
+- **存储不变**：Run 的 Prompt 仍记录为 `prompt-to-run` 连线，Process 的 `df` 仍是 `primaryDatasetId`，所以 Pipeline 检测、编译器、Score 等读取方都不用改。
+- **Agent 同步**：
+  - `update` 可以修改 Run 的 `prompt`；换 Prompt 时沿用共有输入的映射，缺的映射会报错。
+  - Run 有结果后，`prompt`、`input_dataset`、`input_mapping` 都不能再改，和窗口的锁定一致。这一条修正了原来 Agent 能改有结果的 Run 的输入、用户却不能改的不一致。
+  - 系统提示里对 Run / Process 的描述已同步更新。
+- **验证**：新增 `app/tests/agentRunPrompt.test.mjs`，前端 27 项测试通过，renderer 构建通过。另用 jsdom 驱动真实画布，验证了单独新建、从 Prompt / Dataset 预填、Prompt 窗口的 Run 按钮、有结果后锁定，以及 Process 选 Dataset 后的连线和示例代码。没有在真实浏览器里点过。
+
+### 待讨论：History
+
+在 Run / Process 窗口右上角加 History，切换以前的运行记录。动手前要先定：
+- 每条记录不可修改，再次运行就新增一条；节点有一条"当前记录"，下游跟着它。切换时 Score 重新计算，Review 保留它分析的那条，保存出去的 Dataset 标为过期。
+- 记录存在哪里，每个节点保留多少条。记录不应全部进入项目文件，否则会放大 §1 的序列化开销。
+- "复用整条 pipeline"更适合用 Pipeline 层面的运行入口（P1.4）来做，节点级 History 解决的是复用单个 Run / Process。
 
 ## 建议顺序
 

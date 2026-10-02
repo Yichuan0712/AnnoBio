@@ -14,7 +14,7 @@ import logoIconUrl from '../../images/logo.png';
 
 /**
  * @param {HTMLElement} root - App root (#app or body)
- * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, onMergeProject?: () => void, onUndo?: () => void, onRedo?: () => void, onPublishToGallery?: () => void, panelToggles?: HTMLElement }} options
+ * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, addRunNode?: () => void, addProcessNode?: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, onMergeProject?: () => void, onUndo?: () => void, onRedo?: () => void, onPublishToGallery?: () => void, panelToggles?: HTMLElement }} options
  *   panelToggles: the canvas's Current Pipeline / Agent Assistant toggles (workflowCanvas.js), placed
  *   at the right end — before the window controls on desktop, before the account avatar on web.
  * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void, setMergeEnabled: (enabled: boolean) => void, setProjectTitle: (title: string) => void, setUndoRedoEnabled: (canUndo: boolean, canRedo: boolean) => void, setPublishEnabled?: (enabled: boolean) => void }}
@@ -27,7 +27,7 @@ export function buildTopBar(root, options) {
 // Desktop — the original File/Edit/Settings menu bar (Merge item and, except on macOS, the app
 // icon left of File added, nothing else). Do not fold this into buildWebTopBar or add electronAPI branches to it.
 // ============================================================================================
-function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onSaveAsProject, onMergeProject, onUndo, onRedo, panelToggles }) {
+function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunNode, addProcessNode, onNewProject, onOpenProject, onSaveAsProject, onMergeProject, onUndo, onRedo, panelToggles }) {
   const bar = document.createElement('nav');
   bar.className = 'top-bar';
 
@@ -78,6 +78,8 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
     <div class="menu-separator"></div>
     <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt...</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new dataset...</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-run" disabled>Create new run</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-process" disabled>Create new process</button>
   `;
   const undoOpt = editDrop.querySelector('[data-action="undo"]');
   const redoOpt = editDrop.querySelector('[data-action="redo"]');
@@ -95,12 +97,27 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, onN
     e.stopPropagation();
     if (!createDatasetOpt.disabled) openAddDatasetModal();
   });
+  // A Run or Process picks its Prompt / Dataset in its own window, so it can start on its own.
+  const createRunOpt = editDrop.querySelector('[data-action="new-run"]');
+  const createProcessOpt = editDrop.querySelector('[data-action="new-process"]');
+  createRunOpt.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!createRunOpt.disabled) addRunNode?.();
+  });
+  createProcessOpt.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!createProcessOpt.disabled) addProcessNode?.();
+  });
   editBtn.appendChild(editDrop);
   bar.appendChild(editBtn);
 
   function setAddMenuEnabled(enabled) {
     createPromptOpt.disabled = !enabled;
     createDatasetOpt.disabled = !enabled;
+    createRunOpt.disabled = !enabled;
+    createProcessOpt.disabled = !enabled;
   }
 
   const settingsBtn = document.createElement('button');
@@ -303,6 +320,10 @@ const iconNewDataset = () => svgIcon({
   paths: ['M3 5V19A9 3 0 0 0 21 19V5', 'M3 12A9 3 0 0 0 21 12'],
 });
 
+// Run = Lucide's "play", matching the triangle on a Run node; Process = Lucide's "code".
+const iconNewRun = () => svgIcon({ paths: ['M6 3v18l15-9z'] });
+const iconNewProcess = () => svgIcon({ paths: ['m16 18 6-6-6-6', 'm8 6-6 6 6 6'] });
+
 // Publish to Gallery = Lucide's "cloud-upload" (official path data) — reads as "send this up
 // to a shared place" rather than the globe's general "public/web" or the megaphone's "announce".
 const iconCloudUpload = () => svgIcon({
@@ -324,7 +345,7 @@ const iconLlmChip = () => svgIcon({
   ],
 });
 
-function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewProject, onOpenProject, onUndo, onRedo, onPublishToGallery, panelToggles }) {
+function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunNode, addProcessNode, onNewProject, onOpenProject, onUndo, onRedo, onPublishToGallery, panelToggles }) {
   document.documentElement.classList.add('top-bar-web');
 
   const bar = document.createElement('nav');
@@ -432,6 +453,11 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, onNewPr
     onClick: () => openAddDatasetModal(),
   });
   rail.appendChild(newDatasetBtn.wrap);
+
+  const newRunBtn = iconButton({ icon: iconNewRun, label: 'Create new run', onClick: () => addRunNode?.() });
+  rail.appendChild(newRunBtn.wrap);
+  const newProcessBtn = iconButton({ icon: iconNewProcess, label: 'Create new process', onClick: () => addProcessNode?.() });
+  rail.appendChild(newProcessBtn.wrap);
 
   // Publish to Gallery — disabled until a project is open (unlike New Prompt/Dataset, publishing
   // has nothing to do with an empty/no project, so there's no "create one first" fallback here).

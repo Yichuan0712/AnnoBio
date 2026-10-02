@@ -257,6 +257,14 @@ window.addEventListener('DOMContentLoaded', () => {
   const openAddDatasetModalWeb = async () => {
     if (await ensureWebProjectOpen()) openAddDatasetModal(canvasAPI);
   };
+  // A new Run or Process opens its window, where it picks its Prompt / Dataset.
+  const addNodeAndOpen = (eventName) => document.dispatchEvent(new CustomEvent(eventName, { detail: { open: true } }));
+  const addRunNode = async () => {
+    if (isElectron || await ensureWebProjectOpen()) addNodeAndOpen('workflow:add-run-node');
+  };
+  const addProcessNode = async () => {
+    if (isElectron || await ensureWebProjectOpen()) addNodeAndOpen('workflow:add-process-node');
+  };
   const onPublishToGalleryWeb = async () => {
     if (!currentProjectPath) return;
     await publishCurrentProjectToGallery(currentProjectPath, currentProjectName || 'Untitled Project');
@@ -276,6 +284,8 @@ window.addEventListener('DOMContentLoaded', () => {
   const topBarAPI = buildTopBar(root, {
     openAddPromptModal: isElectron ? () => openAddPromptModal(canvasAPI) : openAddPromptModalWeb,
     openAddDatasetModal: isElectron ? () => openAddDatasetModal(canvasAPI) : openAddDatasetModalWeb,
+    addRunNode,
+    addProcessNode,
     onNewProject,
     onOpenProject,
     onSaveAsProject,

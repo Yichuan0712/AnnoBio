@@ -263,65 +263,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           }
           updateContentSize();
           emitCanvasChanged();
-          if (runNode?.dataset?.nodeId) {
-            let sections = [];
-            try {
-              sections = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
-            } catch (_) {}
-            const promptInputFields = extractInputFieldsFromSections(Array.isArray(sections) ? sections : []);
-            const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
-              const id = n.dataset.nodeId || '';
-              const content = datasetContentByNodeId.get(id);
-              const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
-              const color = datasetColorAt(colorIndex);
-              return {
-                nodeId: id,
-                name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
-                headers: content?.headers ? content.headers.slice() : [],
-                color,
-              };
-            });
-            function getSubsetContent(nodeId) {
-              const c = datasetContentByNodeId.get(nodeId);
-              return c || { headers: [], columnTypes: [], rowIds: [], rows: [] };
-            }
-            function getPromptTemplate() {
-              let sec = [];
-              try {
-                sec = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
-              } catch (_) {}
-              let fields = [];
-              try {
-                fields = JSON.parse(node.dataset.promptOutputFormat || '[]');
-              } catch (_) {}
-              const returnShape = node.dataset.promptOutputReturnShape || 'single';
-              let inputTypes = {};
-              try { inputTypes = JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) {}
-              return { sections: sec, inputTypes, outputSchema: { return_shape: returnShape, fields } };
-            }
-            openRunDetailModal({
-              node: runNode,
-              getWorkingSets: () => workingSets,
-              getPromptInputFields: () => promptInputFields,
-              getSubsetContent,
-              getPromptTemplate,
-              registerPendingRun,
-              unregisterPendingRun,
-              getPendingRunId: () => pendingRuns.get(runNode.dataset.nodeId) || null,
-              getPromptName: () => (node.dataset.promptName || '').trim() || (node.querySelector('.workflow-node__title')?.textContent?.trim() || ''),
-              getUniqueDatasetExportName: findUniqueDatasetExportName,
-              isRunNameAlreadyUsedForPrompt,
-              onWorkingSetChange: onRunWorkingSetChange,
-              getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
-                try {
-                  const raw = n.dataset.runInputToColumn;
-                  if (!raw) return null;
-                  const o = JSON.parse(raw);
-                  return typeof o === 'object' && o !== null ? o : null;
-                } catch (_) { return null; }
-              }).filter(Boolean),
-            });
-          }
+          runNode?.click();
         },
       });
     });
@@ -542,17 +484,22 @@ export function createWorkflowNodeFactories(deps = {}) {
       e.preventDefault();
       e.stopPropagation();
       const runNodeId = node.dataset.nodeId;
-      const promptEdge = getConnectionsList().find((c) => c.toId === runNodeId && c.type === 'prompt-to-run');
-      let sections = [];
-      if (promptEdge) {
-        const promptNode = getNodeById(promptEdge.fromId);
-        if (promptNode) {
-          try {
-            sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
-          } catch (_) {}
+      // A Run picks its Prompt in its window; the prompt-to-run connection records that choice,
+      // so the Prompt is looked up on every call rather than fixed when the window opens.
+      const currentPromptNode = () => {
+        const edge = getConnectionsList().find((c) => c.toId === runNodeId && c.type === 'prompt-to-run');
+        return edge ? getNodeById(edge.fromId) : null;
+      };
+      const promptNameOf = (promptNode) => (promptNode?.dataset?.promptName || '').trim()
+        || (promptNode?.querySelector?.('.workflow-node__title')?.textContent?.trim() || '');
+      function promptSectionsOf(promptNode) {
+        try {
+          const sections = JSON.parse(promptNode?.dataset?.promptSections || promptNode?.dataset?.promptFields || '[]');
+          return Array.isArray(sections) ? sections : [];
+        } catch (_) {
+          return [];
         }
       }
-      const promptInputFields = extractInputFieldsFromSections(Array.isArray(sections) ? sections : []);
       const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
         const id = n.dataset.nodeId || '';
         const content = datasetContentByNodeId.get(id);
@@ -565,17 +512,13 @@ export function createWorkflowNodeFactories(deps = {}) {
           color,
         };
       });
-      const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
       function getSubsetContent(nodeId) {
         const c = datasetContentByNodeId.get(nodeId);
         return c || { headers: [], columnTypes: [], rowIds: [], rows: [] };
       }
       function getPromptTemplate() {
+        const promptNode = currentPromptNode();
         if (!promptNode) return { sections: [], outputSchema: { return_shape: 'single', fields: [] } };
-        let sec = [];
-        try {
-          sec = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
-        } catch (_) {}
         let fields = [];
         try {
           fields = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
@@ -583,21 +526,31 @@ export function createWorkflowNodeFactories(deps = {}) {
         const returnShape = promptNode.dataset.promptOutputReturnShape || 'single';
         let inputTypes = {};
         try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
-        return { sections: sec, inputTypes, outputSchema: { return_shape: returnShape, fields } };
+        return { sections: promptSectionsOf(promptNode), inputTypes, outputSchema: { return_shape: returnShape, fields } };
+      }
+      function selectPrompt(promptNodeId) {
+        const connections = getConnectionsList();
+        for (let index = connections.length - 1; index >= 0; index -= 1) {
+          if (connections[index].toId === runNodeId && connections[index].type === 'prompt-to-run') connections.splice(index, 1);
+        }
+        if (promptNodeId) connections.push({ fromId: promptNodeId, toId: runNodeId, type: 'prompt-to-run' });
+        updateEdges();
+        emitCanvasChanged();
       }
       openRunDetailModal({
         node,
         getWorkingSets: () => workingSets,
-        getPromptInputFields: () => promptInputFields,
+        getPrompts: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'))
+          .map((n) => ({ nodeId: n.dataset.nodeId || '', name: promptNameOf(n) || 'Prompt' })),
+        getPromptId: () => currentPromptNode()?.dataset?.nodeId || '',
+        selectPrompt,
+        getPromptInputFields: () => extractInputFieldsFromSections(promptSectionsOf(currentPromptNode())),
         getSubsetContent,
         getPromptTemplate,
         registerPendingRun,
         unregisterPendingRun,
         getPendingRunId: () => pendingRuns.get(node.dataset.nodeId) || null,
-        getPromptName: () => {
-          if (!promptNode) return '';
-          return (promptNode.dataset.promptName || '').trim() || (promptNode.querySelector('.workflow-node__title')?.textContent?.trim() || '');
-        },
+        getPromptName: () => promptNameOf(currentPromptNode()),
         getUniqueDatasetExportName: findUniqueDatasetExportName,
         isRunNameAlreadyUsedForPrompt,
         onWorkingSetChange: onRunWorkingSetChange,
@@ -696,7 +649,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         ));
         const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === node.dataset.processPrimaryDatasetId)
           ? node.dataset.processPrimaryDatasetId
-          : (incoming?.fromId || datasets[0]?.nodeId || '');
+          : (incoming?.fromId || '');
         if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
         return { datasets, primaryDatasetId };
       }
@@ -719,6 +672,11 @@ export function createWorkflowNodeFactories(deps = {}) {
         node,
         getProcessDatasets,
         syncProcessDependencies,
+        setPrimaryDataset: (datasetNodeId, code) => {
+          if (datasetNodeId) node.dataset.processPrimaryDatasetId = datasetNodeId;
+          else delete node.dataset.processPrimaryDatasetId;
+          syncProcessDependencies(code);
+        },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
       });
     });
