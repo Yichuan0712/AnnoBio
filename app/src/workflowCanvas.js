@@ -5255,16 +5255,14 @@ export function buildWorkflowCanvas(root, options = {}) {
   let panelVisibility = { pipeline: false, agent: false };
   let appErrorCount = 0;
   function syncPanelButtons() {
-    const errorNote = appErrorCount ? ` (${appErrorCount} error${appErrorCount === 1 ? '' : 's'})` : '';
     for (const [button, visible, label] of [
-      [currentPipelineBtn, panelVisibility.pipeline, 'Current Pipeline'],
-      [agentAssistantBtn, panelVisibility.agent, 'Agent Assistant'],
+      [currentPipelineBtn, panelVisibility.pipeline, isElectron ? 'Panel' : 'Current Pipeline'],
+      [agentAssistantBtn, panelVisibility.agent, isElectron ? 'Agent Sidebar' : 'Agent Assistant'],
     ]) {
       button.classList.toggle('is-open', visible);
       button.setAttribute('aria-expanded', String(visible));
-      const name = isElectron ? `${visible ? 'Collapse' : 'Open'} ${label}${button === currentPipelineBtn ? errorNote : ''}` : label;
-      button.setAttribute('aria-label', name);
-      button.title = name;
+      button.setAttribute('aria-label', label);
+      button.title = label;
     }
     panelErrorBadge.hidden = !appErrorCount;
     panelErrorBadge.textContent = appErrorCount > 99 ? '99+' : String(appErrorCount);
