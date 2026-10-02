@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import os from 'node:os';
+import { collectHistoryAssetIds } from './runHistoryAssets.js';
 
 export const YC_EXTENSION = '.yc';
 const BUNDLE_VERSION = 1;
@@ -347,6 +348,7 @@ export class ProjectAssets {
       }
       const summary = Object.fromEntries(['id', 'nodeId', 'kind', 'signature', 'status', 'createdAt', 'updatedAt', 'summary', 'sourceRecordIds']
         .map((key) => [key, record[key]]));
+      summary.assetIds = collectHistoryAssetIds(record);
       const next = {
         ...payload,
         history: {
@@ -470,6 +472,14 @@ export class ProjectAssets {
     return this.enqueue(async () => {
       if (!this.file) throw new Error('Create or open a project first.');
       const used = new Set(usedIds || []);
+      if (isBundledProjectFile(this.file)) {
+        const payload = await this.readBundlePayload(this.file);
+        for (const entry of historyOf(payload).index.records) {
+          const ids = Array.isArray(entry.assetIds)
+            ? entry.assetIds : collectHistoryAssetIds(historyOf(payload).records[entry.id]);
+          ids.forEach((id) => used.add(id));
+        }
+      }
       const unused = Object.entries(this.assets).filter(([id]) => !used.has(id));
       if (unused.length === 0) return { removed: [], freedBytes: 0 };
       if (dryRun) {
