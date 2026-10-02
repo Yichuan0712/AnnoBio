@@ -63,8 +63,8 @@ export async function runProcessCode({ code, bindings, signal, onStarted, timeou
   const started = await start.json().catch(() => ({}));
   if (!start.ok) throw new Error(typeof started.detail === 'string' ? started.detail : 'The Process could not be started.');
   const jobId = started.job_id;
-  onStarted?.(jobId);
   const cancel = () => fetch(`${BACKEND_API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
+  try { await onStarted?.(jobId); } catch (error) { await cancel(); throw error; }
   signal?.addEventListener('abort', cancel, { once: true });
   const startedAt = Date.now();
   try {
