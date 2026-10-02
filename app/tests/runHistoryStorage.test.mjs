@@ -89,3 +89,21 @@ test('desktop asset pruning retains cells referenced only by history', async () 
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('desktop history deletion removes exactly the confirmed dependency closure', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'annobio-history-delete-'));
+  try {
+    const file = path.join(root, 'project.yc');
+    const assets = newAssets();
+    await assets.save(file, { nodes: [], connections: [] });
+    const upstream = record('run-1', 'a');
+    const child = { ...record('process-1', 'b'), kind: 'process', sourceRecordIds: [upstream.id] };
+    await assets.saveHistoryRecord(file, upstream);
+    await assets.saveHistoryRecord(file, child);
+    await assert.rejects(assets.deleteHistoryRecords(file, upstream.id, [upstream.id]), /changed/);
+    await assets.deleteHistoryRecords(file, upstream.id, [upstream.id, child.id]);
+    assert.equal((await assets.loadHistoryIndex(file)).records.length, 0);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

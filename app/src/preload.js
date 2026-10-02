@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadRunHistoryIndex: (projectPath) => ipcRenderer.invoke('history:index', projectPath),
   loadRunHistoryRecord: (projectPath, recordId) => ipcRenderer.invoke('history:record', projectPath, recordId),
   saveRunHistoryRecord: (projectPath, record) => ipcRenderer.invoke('history:save-record', projectPath, record),
+  deleteRunHistoryRecords: (projectPath, recordId, expectedIds) => ipcRenderer.invoke('history:delete-records', projectPath, recordId, expectedIds),
   showSaveFileDialog: (opts) => ipcRenderer.invoke('dialog:show-save', opts),
   showPickPythonDialog: () => ipcRenderer.invoke('dialog:pick-python'),
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('fs:write-file', filePath, data, encoding),

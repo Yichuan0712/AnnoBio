@@ -3,6 +3,7 @@ import { resolveHistoryCanvasState } from './runHistoryResolver.js';
 import { planHistorySelection } from './runHistorySelection.js';
 import { captureHistoryInput, runningHistoryRecord } from './runHistoryCapture.js';
 import { analysisInputKeys } from './runAnalysisHistory.js';
+import { dependentHistoryIds } from './runHistoryDeletion.js';
 
 function hasLegacyOutput(node) {
   try {
@@ -22,8 +23,8 @@ function hasLegacyOutput(node) {
 
 /** Project-scoped history orchestration. Storage and canvas saving are injected for web/desktop. */
 export class RunHistorySession {
-  constructor({ loadIndex, loadRecord, saveRecord, saveCanvas, createId, now }) {
-    this.storage = { loadIndex, loadRecord, saveRecord, saveCanvas };
+  constructor({ loadIndex, loadRecord, saveRecord, deleteRecords, saveCanvas, createId, now }) {
+    this.storage = { loadIndex, loadRecord, saveRecord, deleteRecords, saveCanvas };
     this.createId = createId;
     this.now = now;
     this.projectId = null;
@@ -130,6 +131,9 @@ export class RunHistorySession {
       if (existing.status === 'completed') throw new Error('Run completed for these inputs. Change an input or select History.');
       if (existing.status === 'running') throw new Error('These inputs already have a running job.');
       const record = { ...existing, status: 'running', updatedAt: this.now?.() || new Date().toISOString() };
+      delete record.backendJobId;
+      delete record.error;
+      if (capture.kind === 'process') record.results = { dfResults: null };
       await this.putRecord(record);
       return { record, mode: capture.kind === 'run' ? 'resume' : 'restart' };
     }
@@ -163,5 +167,41 @@ export class RunHistorySession {
       };
     await this.putRecord(record);
     return record;
+  }
+
+  async planDelete(recordId, state, { runningNodeIds = [] } = {}) {
+    if (!this.projectId) throw new Error('Open a project before using history.');
+    const records = await Promise.all(this.index.records.map((entry) => this.storage.loadRecord(this.projectId, entry.id)));
+    if (records.some((record) => !record)) throw new Error('A history record is missing.');
+    if (!['run', 'process'].includes(records.find((record) => record.id === recordId)?.kind)) {
+      throw new Error('Select a Run or Process history record to delete.');
+    }
+    const ids = dependentHistoryIds(records, recordId);
+    const removed = new Set(ids);
+    const affected = records.filter((record) => removed.has(record.id));
+    if (affected.some((record) => record.status === 'running' || runningNodeIds.includes(record.nodeId))) {
+      throw new Error('A dependent history record is running. Stop it before deleting.');
+    }
+    const resolved = await this.resolve(state);
+    if (Object.values(resolved.currentRecordIds).some((id) => removed.has(id))) {
+      throw new Error('The current result depends on this record. Select another result before deleting.');
+    }
+    const analysis = await analysisInputKeys(resolved.state, resolved.currentRecordIds);
+    if (affected.some((record) => record.kind === 'score' && analysis.score.get(record.nodeId)?.signature === record.signature
+      || record.kind === 'review' && analysis.review.get(record.nodeId)?.signature === record.signature)) {
+      throw new Error('The current analysis depends on this record. Select another result before deleting.');
+    }
+    return { ids, records: affected };
+  }
+
+  async delete(recordId, state, options = {}, expectedIds = null) {
+    const plan = await this.planDelete(recordId, state, options);
+    if (expectedIds && (plan.ids.length !== expectedIds.length || plan.ids.some((id) => !expectedIds.includes(id)))) {
+      throw new Error('History changed. Review the deletion again.');
+    }
+    if (!this.storage.deleteRecords) throw new Error('History deletion is unavailable.');
+    await this.storage.deleteRecords(this.projectId, recordId, plan.ids);
+    this.index = await this.storage.loadIndex(this.projectId);
+    return plan;
   }
 }

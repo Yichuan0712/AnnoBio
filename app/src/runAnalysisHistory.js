@@ -24,10 +24,13 @@ export async function analysisInputKeys(state, currentRecordIds) {
     if (sourceId) {
       const sourceRecordId = currentRecordIds[sourceId];
       if (!sourceRecordId) return null;
-      return datasetSignature({ nodeId: id, sourceRecordId, branch: runSourceId ? 'result' : String(dataset.processOutputName || 'result') });
+      return {
+        signature: await datasetSignature({ nodeId: id, sourceRecordId, branch: runSourceId ? 'result' : String(dataset.processOutputName || 'result') }),
+        sourceRecordId,
+      };
     }
     const content = dataset.datasetContent || dataset.subsetContent;
-    return content ? datasetSignature({ nodeId: id, content }) : null;
+    return content ? { signature: await datasetSignature({ nodeId: id, content }) } : null;
   }
 
   for (const node of nodes.values()) {
@@ -36,14 +39,15 @@ export async function analysisInputKeys(state, currentRecordIds) {
     const runId = edges.find((edge) => edge.type === 'run-to-score' && edge.toId === id)?.fromId;
     const runRecordId = currentRecordIds[runId];
     const groundTruthId = String(node.scoreGroundTruthId || '');
-    const groundTruthSignature = groundTruthId ? await currentDatasetSignature(groundTruthId) : null;
-    if (!runRecordId || !groundTruthSignature) continue;
+    const groundTruth = groundTruthId ? await currentDatasetSignature(groundTruthId) : null;
+    if (!runRecordId || !groundTruth) continue;
     const inputs = {
-      runRecordId, groundTruthId, groundTruthSignature,
+      runRecordId, groundTruthId, groundTruthSignature: groundTruth.signature,
       mapping: parsed(node.scoreMapping, {}),
       matchCode: String(node.scoreMatchCode || ''),
       activeMatchMode: String(node.scoreActiveMatchMode || 'rules'),
     };
+    if (groundTruth.sourceRecordId) inputs.groundTruthSourceRecordId = groundTruth.sourceRecordId;
     score.set(id, { signature: await sha256Signature({ kind: 'score', ...inputs }), inputs });
   }
 
@@ -52,6 +56,7 @@ export async function analysisInputKeys(state, currentRecordIds) {
     const scoreNode = nodes.get(scoreId);
     if (!parent || !scoreNode) return null;
     const inputs = {
+      scoreNodeId: scoreId,
       scoreSignature: parent.signature,
       exclusions: parsed(scoreNode.scoreRowExcludedFromScoring, {}),
       reviewMethod: String(scoreNode.reviewMethod || ''),

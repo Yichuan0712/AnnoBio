@@ -820,6 +820,7 @@ export function openRunDetailModal({
   if (history) attachRunHistoryPicker({
     overlay, loadEntries: history.loadEntries,
     onSelect: (recordId) => history.select(recordId, closeModal),
+    onDelete: history.delete,
     isDisabled: isRunning,
   });
 

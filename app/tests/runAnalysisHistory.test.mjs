@@ -46,3 +46,11 @@ test('Score and Review have no current analysis key without a Run result', async
   assert.equal(keys.score.size, 0);
   assert.equal(keys.review.size, 0);
 });
+
+test('Score analysis records the source record of a derived ground truth', async () => {
+  const base = state();
+  base.nodes.find((node) => node.nodeId === 'gt').sourceRunNodeId = 'gt-run';
+  const keys = await analysisInputKeys(base, { run: 'answer-run', 'gt-run': 'truth-run' });
+  assert.equal(keys.score.get('score').inputs.groundTruthSourceRecordId, 'truth-run');
+  assert.equal(keys.review.get('review').inputs.scoreNodeId, 'score');
+});
