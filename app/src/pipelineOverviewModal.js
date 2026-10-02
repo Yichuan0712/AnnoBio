@@ -1,7 +1,8 @@
 /**
- * "Current Pipeline" panel. A connected workflow is shown as one selectable route: when several
- * Prompts consume the same Dataset, or one Run produced several Dataset exports, the corresponding
- * chip becomes a picker and the remainder of the row follows that choice.
+ * "Current Pipeline" panel. A connected workflow is shown as one selectable route of Run prompt and
+ * Process data steps; Datasets are not shown. Where several Runs or Processes could come next, that
+ * chip becomes a picker and the remainder of the row follows the choice. Branches are drawn only
+ * for a Process's named outputs and for the Datasets one Process merges.
  */
 import { showAlert } from './alertModal.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
@@ -12,6 +13,8 @@ import {
   getPipelineRun,
   resumePipelineRun,
 } from './pipelineRunClient.js';
+
+const STEP_LABELS = { prompt: 'Run prompt', process: 'Process data', step: 'Step' };
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -27,6 +30,7 @@ function renderPickerOrName(choiceId, options, selectedValue, title) {
   return `<select class="pipeline-step-version-select" data-choice-id="${escapeHtml(choiceId)}" title="${escapeHtml(title)}">${optionsHtml}</select>`;
 }
 
+/** The canvas nodes a step stands for: a Run prompt is its Prompt, Run and input Dataset; Process data is its Process and input Datasets. */
 function getCanvasNodeIds(step) {
   if (step?.kind === 'branch') {
     return (step.lanes || []).flatMap((lane) => lane.flatMap((laneStep) => getCanvasNodeIds(laneStep)));
@@ -34,7 +38,7 @@ function getCanvasNodeIds(step) {
   const selected = step.selectedOption;
   if (selected?.dataset?.datasetNodeId) return [selected.dataset.datasetNodeId];
   if (selected?.kind === 'prompt') {
-    return [selected.promptNodeId, selected.runNodeId].filter(Boolean);
+    return [selected.promptNodeId, selected.runNodeId, selected.inputDatasetNodeId].filter(Boolean);
   }
   if (selected?.kind === 'process' && selected.processNodeId) {
     return [selected.processNodeId, ...(selected.inputDatasets || []).map((input) => input.datasetNodeId)].filter(Boolean);
@@ -42,55 +46,46 @@ function getCanvasNodeIds(step) {
   return [];
 }
 
-function getHighlightCanvasNodeIds(step) {
-  if (step?.kind === 'branch') {
-    return (step.lanes || []).flatMap((lane) => lane.flatMap((laneStep) => getHighlightCanvasNodeIds(laneStep)));
-  }
-  if (step?.selectedOption?.kind === 'process' && step.selectedOption.processNodeId) {
-    return [step.selectedOption.processNodeId];
-  }
-  return getCanvasNodeIds(step);
+function renderBranchLanes(step) {
+  return (step.lanes || []).map((lane, laneIndex) => `
+      <div class="pipeline-overview-branch-lane">
+        <span class="pipeline-overview-branch-index">BRANCH ${laneIndex + 1}</span>
+        ${lane.map(renderRouteChip).join('<span class="pipeline-overview-branch-arrow" aria-hidden="true">→</span>')}
+      </div>
+    `).join('');
 }
 
 function renderRouteChip(step) {
   if (step.kind === 'empty') {
     return '<span class="pipeline-overview-branch-chip pipeline-overview-branch-chip--empty"><span class="pipeline-step-empty">Do nothing</span></span>';
   }
-  const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', step: 'Step' };
+  // A Process with named outputs inside a branch forks it again.
+  if (step.kind === 'branch') {
+    return `<div class="pipeline-overview-branch pipeline-overview-branch--nested"><div class="pipeline-overview-branch-lanes">${renderBranchLanes(step)}</div></div>`;
+  }
   const picker = renderPickerOrName(
     step.choiceId,
     step.options,
     step.selectedValue,
-    step.kind === 'dataset'
-      ? 'Preview one of the datasets in this branch.'
-      : (step.kind === 'prompt' ? 'Preview one concrete Prompt Run in this branch.' : 'Preview this Process path.'),
+    step.kind === 'prompt' ? 'Preview one concrete Prompt Run in this branch.' : 'Preview this Process path.',
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
-  const highlightCanvasNodeIds = encodeURIComponent(JSON.stringify(getHighlightCanvasNodeIds(step)));
-  return `<span class="pipeline-overview-branch-chip" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}" data-highlight-canvas-node-ids="${highlightCanvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind] || 'Step'}</span>${picker}</span>`;
+  return `<span class="pipeline-overview-branch-chip" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${STEP_LABELS[step.kind] || 'Step'}</span>${picker}</span>`;
 }
 
 function renderRouteStep(step) {
   if (step.kind === 'branch') {
-    const lanes = (step.lanes || []).map((lane) => `
-      <div class="pipeline-overview-branch-lane">
-        <span class="pipeline-overview-branch-index">BRANCH ${step.lanes.indexOf(lane) + 1}</span>
-        ${lane.map(renderRouteChip).join('<span class="pipeline-overview-branch-arrow" aria-hidden="true">→</span>')}
-      </div>
-    `).join('');
     return `
       <li class="pipeline-overview-branch">
-        <div class="pipeline-overview-branch-lanes">${lanes}</div>
+        <div class="pipeline-overview-branch-lanes">${renderBranchLanes(step)}</div>
       </li>
     `;
   }
   const titles = {
-    dataset: 'Preview one of the datasets available at this point in the route.',
     prompt: 'Preview one concrete Prompt Run and follow its connected output.',
     process: 'Preview one Process path.',
     step: 'Preview one of the connected next steps.',
   };
-  const labels = { dataset: 'Dataset', prompt: 'Prompt', process: 'Process', step: 'Step' };
   const picker = renderPickerOrName(
     step.choiceId,
     step.options,
@@ -98,29 +93,26 @@ function renderRouteStep(step) {
     titles[step.kind],
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
-  const highlightCanvasNodeIds = encodeURIComponent(JSON.stringify(getHighlightCanvasNodeIds(step)));
   return `
-    <li class="pipeline-overview-step" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}" data-highlight-canvas-node-ids="${highlightCanvasNodeIds}">
-      <span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${labels[step.kind]}</span>
+    <li class="pipeline-overview-step" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}">
+      <span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${STEP_LABELS[step.kind]}</span>
       ${picker}
     </li>
   `;
 }
 
-function getVisibleRoute(route, hideIntermediateDatasets) {
-  if (!hideIntermediateDatasets) return route;
-  return route
-    .filter((step) => step.kind !== 'dataset')
-    .map((step) => {
-      if (step.kind !== 'branch') return step;
-      return {
-        ...step,
-        lanes: (step.lanes || []).map((lane) => {
-          const visibleLane = lane.filter((laneStep) => laneStep.kind !== 'dataset');
-          return visibleLane.length ? visibleLane : [{ kind: 'empty' }];
-        }),
-      };
-    });
+/**
+ * The route without its Datasets: a Run prompt or Process data chip stands for the Datasets it reads.
+ * A branch whose lanes hold only Datasets says nothing the merging Process does not, so it is dropped.
+ */
+function getVisibleRoute(route) {
+  return route.flatMap((step) => {
+    if (step.kind === 'dataset') return [];
+    if (step.kind !== 'branch') return [step];
+    const lanes = (step.lanes || []).map(getVisibleRoute);
+    if (lanes.every((lane) => lane.length === 0)) return [];
+    return [{ ...step, lanes: lanes.map((lane) => (lane.length ? lane : [{ kind: 'empty' }])) }];
+  });
 }
 
 function getPipelineViewId(pipeline, index) {
@@ -208,9 +200,9 @@ function renderRunActions(entry, pipelineIndex) {
   return resume;
 }
 
-function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDatasets, entry) {
+function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
   const route = buildSelectedRoute(pipeline, selectedByChoiceId);
-  const visibleRoute = getVisibleRoute(route, hideIntermediateDatasets);
+  const visibleRoute = getVisibleRoute(route);
   const steps = visibleRoute.reduce((html, step, routeIndex) => {
     // Keep the route connectors on both sides of a branch block. The block itself takes a full
     // row, so flex wrapping never bends a connector through its interior.
@@ -223,10 +215,6 @@ function renderPipeline(pipeline, index, selectedByChoiceId, hideIntermediateDat
       <div class="pipeline-overview-card-header">
         <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
         <div class="pipeline-overview-card-actions">
-          <label class="rule-editor-checkbox-label pipeline-overview-data-checkbox">
-            <input type="checkbox" class="rule-editor-checkbox pipeline-overview-data-toggle-input" data-pipeline-index="${index}"${hideIntermediateDatasets ? ' checked' : ''}>
-            <span>Hide data nodes</span>
-          </label>
           ${renderRunActions(entry, index)}
           <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python Project</button>
         </div>
@@ -278,7 +266,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   let pollTimer = 0;
   let attachedProjectId = '';
   let destroyed = false;
-  const showIntermediateDatasetsByPipelineId = new Map();
   const runEntriesByPipelineId = new Map();
 
   const overlay = document.createElement('div');
@@ -301,7 +288,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     </div>
   `;
 
-  const panelEl = overlay.querySelector('.modal-panel--pipeline-overview');
   const bodyEl = overlay.querySelector('.pipeline-overview-body');
   function clearCanvasHighlight() {
     highlightCanvasNodes([]);
@@ -392,26 +378,20 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       return;
     }
     try {
-      const encodedIds = stepEl.dataset.highlightCanvasNodeIds || stepEl.dataset.canvasNodeIds || '';
+      const encodedIds = stepEl.dataset.canvasNodeIds || '';
       const ids = JSON.parse(decodeURIComponent(encodedIds));
       highlightCanvasNodes(Array.isArray(ids) ? ids : []);
     } catch (_) {
       clearCanvasHighlight();
     }
   }
-  function renderBody({ fitHeightToContent = false } = {}) {
+  function renderBody() {
     clearCanvasHighlight();
     const visibleIds = new Set(pipelines.map((pipeline, index) => getPipelineViewId(pipeline, index)));
     const content = pipelines.length > 0
       ? pipelines.map((pipeline, index) => {
         const pipelineId = getPipelineViewId(pipeline, index);
-        return renderPipeline(
-        pipeline,
-        index,
-        selectedByChoiceId,
-        showIntermediateDatasetsByPipelineId.get(getPipelineViewId(pipeline, index)) !== true,
-        runEntriesByPipelineId.get(pipelineId),
-      );
+        return renderPipeline(pipeline, index, selectedByChoiceId, runEntriesByPipelineId.get(pipelineId));
       }).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
     const detached = Array.from(runEntriesByPipelineId.entries())
@@ -419,9 +399,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       .map(([pipelineId, entry]) => renderDetachedRun(pipelineId, entry))
       .join('');
     bodyEl.innerHTML = content + detached;
-    if (fitHeightToContent && !overlay.classList.contains('modal-overlay--maximized')) {
-      panelEl.style.removeProperty('height');
-    }
   }
   function refresh(nextSource) {
     if (typeof nextSource === 'function') readPipelines = nextSource;
@@ -456,19 +433,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   refresh();
 
   bodyEl.addEventListener('change', (event) => {
-    const dataToggle = event.target.closest?.('.pipeline-overview-data-toggle-input');
-    if (dataToggle) {
-      const pipelineIndex = Number.parseInt(dataToggle.getAttribute('data-pipeline-index') || '', 10);
-      const pipeline = pipelines[pipelineIndex];
-      if (pipeline) {
-        showIntermediateDatasetsByPipelineId.set(
-          getPipelineViewId(pipeline, pipelineIndex),
-          !dataToggle.checked,
-        );
-        renderBody({ fitHeightToContent: true });
-      }
-      return;
-    }
     const select = event.target.closest?.('.pipeline-step-version-select');
     if (!select) return;
     selectedByChoiceId.set(select.getAttribute('data-choice-id'), select.value);
