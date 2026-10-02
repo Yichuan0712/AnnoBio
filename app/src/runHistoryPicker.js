@@ -1,15 +1,12 @@
 import { iconHistory } from './icons.js';
+import { historyStatusLabel } from './runHistoryPresentation.js';
 
-function formatEntry(entry, index, currentId) {
-  const when = entry.createdAt ? new Date(entry.createdAt).toLocaleString() : 'Unknown time';
-  const summary = entry.summary || {};
-  const title = entry.kind === 'run'
-    ? [summary.promptName, ...(summary.datasetNames || [])].filter(Boolean).join(' · ')
-    : [summary.codeLine, ...(summary.datasetNames || [])].filter(Boolean).join(' · ');
-  const count = summary.rowCount != null ? `${summary.rowCount} rows` : (summary.branchCount != null ? `${summary.branchCount} branches` : '');
-  const errors = summary.errorCount ? `${summary.errorCount} error rows` : '';
-  const model = summary.model || '';
-  return { number: `#${index + 1}`, when, title, detail: [count, entry.status || '', errors, model].filter(Boolean).join(' · '), current: entry.id === currentId };
+function formatEntry(entry, currentId) {
+  const date = entry.createdAt ? new Date(entry.createdAt) : null;
+  const when = date && !Number.isNaN(date.getTime())
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+    : 'Date unavailable';
+  return { when, status: historyStatusLabel(entry.status), display: entry.display || {}, current: entry.id === currentId };
 }
 
 /** Add History immediately before the pane toggle in a Run/Process window. */
@@ -44,6 +41,10 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
     heading.className = 'modal-history-popup__heading';
     heading.textContent = 'History';
     popup.appendChild(heading);
+    const hint = document.createElement('p');
+    hint.className = 'modal-history-popup__hint';
+    hint.textContent = 'Choose a result to restore its saved inputs and output.';
+    popup.appendChild(hint);
     try {
       const { entries = [], currentId = '' } = await loadEntries();
       if (!entries.length) {
@@ -52,22 +53,45 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
         empty.textContent = 'No history yet.';
         popup.appendChild(empty);
       }
-      entries.forEach((entry, index) => {
-        const item = formatEntry(entry, index, currentId);
+      entries.forEach((entry) => {
+        const item = formatEntry(entry, currentId);
         const container = document.createElement('div');
         container.className = 'modal-history-popup__row';
+        container.classList.toggle('is-current', item.current);
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'modal-history-popup__item';
         row.disabled = item.current || isDisabled();
         row.setAttribute('aria-current', item.current ? 'true' : 'false');
+        const top = document.createElement('span');
+        top.className = 'modal-history-popup__top';
         const title = document.createElement('strong');
-        title.textContent = `${item.current ? '✓ ' : ''}${item.number} · ${item.when}`;
+        title.textContent = item.when;
+        const status = document.createElement('span');
+        status.className = 'modal-history-popup__status';
+        status.textContent = item.status;
+        top.append(title, status);
+        if (item.current) {
+          const current = document.createElement('span');
+          current.className = 'modal-history-popup__current';
+          current.textContent = 'Current result';
+          top.appendChild(current);
+        }
         const description = document.createElement('span');
-        description.textContent = item.title || 'Saved inputs';
-        const detail = document.createElement('small');
-        detail.textContent = item.detail;
-        row.append(title, description, detail);
+        description.className = 'modal-history-popup__summary';
+        description.textContent = item.display.title || 'Saved result';
+        const input = document.createElement('span');
+        input.className = 'modal-history-popup__fact';
+        input.textContent = item.display.input || 'Input details unavailable';
+        const output = document.createElement('span');
+        output.className = 'modal-history-popup__fact';
+        output.textContent = item.display.output || 'Result details unavailable';
+        row.append(top, description, input, output);
+        if (item.display.meta) {
+          const detail = document.createElement('small');
+          detail.textContent = item.display.meta;
+          row.appendChild(detail);
+        }
         row.addEventListener('click', async () => {
           if (isDisabled()) return;
           row.disabled = true;
