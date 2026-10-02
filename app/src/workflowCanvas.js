@@ -4232,6 +4232,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     }).catch(() => {});
   });
 
+  let canvasHistoryVersion = null;
+
   function getCanvasState() {
     const nodeEls = Array.from(nodesLayer.querySelectorAll('.workflow-node'));
     const nodes = nodeEls.map((node) => {
@@ -4436,12 +4438,13 @@ export function buildWorkflowCanvas(root, options = {}) {
         nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
       };
     });
-    return { version: 2, nodes, connections: connections.slice() };
+    return { version: 2, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), nodes, connections: connections.slice() };
   }
 
   function loadCanvasState(state) {
     const list = state?.nodes;
     if (!Array.isArray(list)) return;
+    canvasHistoryVersion = state.historyVersion === 1 ? 1 : null;
     nodesLayer.innerHTML = '';
     nodeCount = 0;
     const createdNodes = [];

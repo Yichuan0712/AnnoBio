@@ -5,6 +5,7 @@ import { planLegacyHistoryMigration } from '../src/runHistoryMigration.js';
 import { buildRunResultsTable } from '../src/runResultsExport.js';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { planHistorySelection } from '../src/runHistorySelection.js';
+import { RunHistorySession } from '../src/runHistorySession.js';
 
 const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
 const prompt = { type: 'prompt', nodeId: 'prompt', name: 'Prompt', sections: [{ content: 'Say {{text}}' }], outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} };
@@ -169,4 +170,32 @@ test('history selection blocks a running affected descendant', async () => {
     planHistorySelection(migrated.state, processRecord.id, { loadRecord: async (id) => records[id], runningNodeIds: ['process'] }),
     /while node process is running/,
   );
+});
+
+test('legacy migration resumes safely after records were saved but canvas save failed', async () => {
+  const records = new Map();
+  let failCanvasSave = true;
+  let savedCanvas = null;
+  let saves = 0;
+  const storage = {
+    loadIndex: async () => ({ version: 1, records: [...records.values()].map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) }),
+    loadRecord: async (_projectId, id) => records.get(id),
+    saveRecord: async (_projectId, record) => { saves += 1; records.set(record.id, record); },
+    saveCanvas: async (_projectId, state) => {
+      if (failCanvasSave) throw new Error('disk full');
+      savedCanvas = state;
+    },
+  };
+  const first = new RunHistorySession({ ...storage, createId: (() => { let id = 0; return () => String(++id).padStart(32, '0'); })(), now: () => '2026-10-01T00:00:00Z' });
+  await assert.rejects(first.open('project', graph), /disk full/);
+  assert.equal(records.size, 2);
+  assert.equal(saves, 2);
+
+  failCanvasSave = false;
+  const resumed = new RunHistorySession({ ...storage, createId: () => 'f'.repeat(32), now: () => '2026-10-02T00:00:00Z' });
+  const opened = await resumed.open('project', graph);
+  assert.equal(saves, 2);
+  assert.equal(savedCanvas.historyVersion, 1);
+  assert.deepEqual(opened.missingResultNodeIds, []);
+  assert.deepEqual(Object.keys(opened.currentRecordIds).sort(), ['process', 'run']);
 });
