@@ -7,6 +7,8 @@ each project instead lives as its own directory under DATA_DIR/projects/<id>/:
 
   projects/<id>/project.json        canvas state + asset metadata + agent session
   projects/<id>/assets/originals/*  actual image bytes, one file per sha256
+  projects/<id>/history/index.json  small Run/Process history index
+  projects/<id>/history/<id>.json   one result record per file
 
 Keeping images as plain files (rather than re-embedding them as base64 inside project.json,
 as the desktop format does) is what makes browser multipart upload and per-image preview cheap;
@@ -60,6 +62,61 @@ def _project_file(project_id: str) -> Path:
 
 def _assets_root(project_id: str) -> Path:
     return _project_path(project_id) / "assets"
+
+
+def _history_root(project_id: str) -> Path:
+    return _project_path(project_id) / "history"
+
+
+def _history_record_file(project_id: str, record_id: str) -> Path:
+    if not _ID_RE.fullmatch(record_id or ""):
+        raise HTTPException(404, "History record not found.")
+    return _history_root(project_id) / f"{record_id}.json"
+
+
+def _empty_history_index() -> dict:
+    return {"version": 1, "records": []}
+
+
+def _read_history_index(project_id: str) -> dict:
+    path = _history_root(project_id) / "index.json"
+    try:
+        index = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return _empty_history_index()
+    if not isinstance(index, dict) or index.get("version") != 1 or not isinstance(index.get("records"), list):
+        raise HTTPException(409, "Project history index is invalid.")
+    return index
+
+
+def _read_history_bundle(project_id: str) -> dict:
+    index = _read_history_index(project_id)
+    records = {}
+    for entry in index["records"]:
+        record_id = entry.get("id") if isinstance(entry, dict) else None
+        path = _history_record_file(project_id, record_id)
+        try:
+            records[record_id] = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise HTTPException(409, f"History record is missing: {record_id}")
+    return {"index": index, "records": records}
+
+
+def _write_history_bundle(project_id: str, history: dict) -> None:
+    if not isinstance(history, dict):
+        raise HTTPException(400, "Project history is invalid.")
+    index = history.get("index") or _empty_history_index()
+    records = history.get("records") or {}
+    if not isinstance(index, dict) or index.get("version") != 1 or not isinstance(index.get("records"), list) or not isinstance(records, dict):
+        raise HTTPException(400, "Project history is invalid.")
+    for entry in index["records"]:
+        record_id = entry.get("id") if isinstance(entry, dict) else None
+        if not isinstance(record_id, str) or not isinstance(records.get(record_id), dict):
+            raise HTTPException(400, "Project history record is missing or invalid.")
+        if records[record_id].get("id") != record_id:
+            raise HTTPException(400, "Project history record ID does not match its index.")
+        _atomic_write_json(_history_record_file(project_id, record_id), records[record_id])
+    _atomic_write_json(_history_root(project_id) / "index.json", index)
 
 
 def _thumbnail_file(project_id: str) -> Path:
@@ -120,6 +177,10 @@ class AgentConversationsSave(BaseModel):
     format_version: int | None = None
     activeConversationId: str = ""
     conversations: list[dict[str, Any]] = []
+
+
+class HistoryRecordSave(BaseModel):
+    record: dict[str, Any]
 
 
 class DatasetExport(BaseModel):
@@ -257,6 +318,9 @@ def duplicate_project(project_id: str):
             dst_file = target_root / asset["path"]
             dst_file.parent.mkdir(parents=True, exist_ok=True)
             dst_file.write_bytes(src_file.read_bytes())
+        source_history = _history_root(project_id)
+        if source_history.is_dir():
+            shutil.copytree(source_history, _history_root(new_id))
         name = (data.get("meta") or {}).get("name") or "Untitled Project"
         new_data = {
             "meta": {"name": f"{name} (copy)", "createdAt": now, "updatedAt": now},
@@ -321,6 +385,18 @@ def merge_project(target_id: str, source_id: str):
 
         target_data["state"] = target_state
         target_data["assets"] = target_assets
+        target_history = _read_history_bundle(target_id)
+        source_history = _read_history_bundle(source_id)
+        merged_records = dict(target_history["records"])
+        for record_id, record in source_history["records"].items():
+            if record_id in merged_records and merged_records[record_id] != record:
+                raise HTTPException(409, f"History record ID conflicts during merge: {record_id}")
+            merged_records[record_id] = record
+        merged_entries = list(target_history["index"]["records"])
+        known_ids = {entry["id"] for entry in merged_entries}
+        merged_entries.extend(entry for entry in source_history["index"]["records"] if entry["id"] not in known_ids)
+        if merged_entries:
+            _write_history_bundle(target_id, {"index": {"version": 1, "records": merged_entries}, "records": merged_records})
         target_data.setdefault("meta", {})["updatedAt"] = time.time()
         _atomic_write_json(_project_file(target_id), target_data)
 
@@ -509,6 +585,53 @@ def save_agent_conversations(project_id: str, body: AgentConversationsSave):
     return {"ok": True}
 
 
+@router.get("/{project_id}/history")
+def get_history_index(project_id: str):
+    _read_project(project_id)
+    return _read_history_index(project_id)
+
+
+@router.get("/{project_id}/history/{record_id}")
+def get_history_record(project_id: str, record_id: str):
+    _read_project(project_id)
+    try:
+        return json.loads(_history_record_file(project_id, record_id).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise HTTPException(404, "History record not found.")
+
+
+@router.put("/{project_id}/history/{record_id}")
+def save_history_record(project_id: str, record_id: str, body: HistoryRecordSave):
+    record = dict(body.record)
+    if not _ID_RE.fullmatch(record_id or "") or record.get("id") != record_id:
+        raise HTTPException(400, "History record ID is invalid.")
+    if record.get("kind") not in ("run", "process") or record.get("status") not in ("running", "stopped", "completed", "failed"):
+        raise HTTPException(400, "History record kind or status is invalid.")
+    if not isinstance(record.get("nodeId"), str) or not record["nodeId"] or not isinstance(record.get("signature"), str) or not record["signature"]:
+        raise HTTPException(400, "History record node or signature is missing.")
+    if not isinstance(record.get("inputs"), dict):
+        raise HTTPException(400, "History record inputs are invalid.")
+    with _lock:
+        _read_project(project_id)
+        index = _read_history_index(project_id)
+        path = _history_record_file(project_id, record_id)
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+        if existing:
+            for key in ("id", "nodeId", "kind", "signature", "inputs"):
+                if record.get(key) != existing.get(key):
+                    raise HTTPException(409, "History record inputs cannot change.")
+            if existing.get("status") == "completed" and record != existing:
+                raise HTTPException(409, "Completed history records cannot change.")
+        elif any(entry.get("nodeId") == record["nodeId"] and entry.get("signature") == record["signature"] for entry in index["records"]):
+            raise HTTPException(409, "This input already has a history record.")
+        summary = {key: record.get(key) for key in ("id", "nodeId", "kind", "signature", "status", "createdAt", "updatedAt", "summary", "sourceRecordIds")}
+        entries = [entry for entry in index["records"] if entry.get("id") != record_id]
+        entries.append(summary)
+        _atomic_write_json(path, record)
+        _atomic_write_json(_history_root(project_id) / "index.json", {"version": 1, "records": entries})
+    return {"ok": True}
+
+
 @router.post("/{project_id}/export/dataset")
 def export_dataset(project_id: str, body: DatasetExport):
     data = _read_project(project_id)
@@ -568,6 +691,7 @@ def export_yc(project_id: str):
         "project": {**(data.get("state") or {}), "schemaVersion": 2, "assets": assets},
         "assetBlobs": asset_blobs,
         "agentSession": data.get("agentSession"),
+        "history": _read_history_bundle(project_id),
     }
     name = (data.get("meta") or {}).get("name") or "project"
     body = json.dumps(payload, indent=2).encode("utf-8")
@@ -610,4 +734,6 @@ async def import_yc(file: UploadFile = File(...)):
             "agentSession": payload.get("agentSession"),
         }
         _atomic_write_json(_project_file(project_id), data)
+        if payload.get("history"):
+            _write_history_bundle(project_id, payload["history"])
     return {"id": project_id}
