@@ -930,7 +930,7 @@ def _requirements() -> str:
     return """# Python 3.10+ runtime dependencies.
 # Add packages imported by your processor modules below.
 pandas>=2.0,<4
-openpyxl>=3.1,<4
+openpyxl>=3.1.5,<4
 python-dotenv>=1.0,<2
 litellm>=1.83,<2
 httpx>=0.24,<1
