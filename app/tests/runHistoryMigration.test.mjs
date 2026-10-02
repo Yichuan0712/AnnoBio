@@ -6,6 +6,7 @@ import { buildRunResultsTable } from '../src/runResultsExport.js';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { planHistorySelection } from '../src/runHistorySelection.js';
 import { RunHistorySession } from '../src/runHistorySession.js';
+import { captureHistoryInput, runningHistoryRecord } from '../src/runHistoryCapture.js';
 
 const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
 const prompt = { type: 'prompt', nodeId: 'prompt', name: 'Prompt', sections: [{ content: 'Say {{text}}' }], outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} };
@@ -198,4 +199,55 @@ test('legacy migration resumes safely after records were saved but canvas save f
   assert.equal(savedCanvas.historyVersion, 1);
   assert.deepEqual(opened.missingResultNodeIds, []);
   assert.deepEqual(Object.keys(opened.currentRecordIds).sort(), ['process', 'run']);
+});
+
+test('new execution captures current upstream record IDs and a frozen input snapshot', async () => {
+  const migrated = await plan(graph);
+  const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
+  const index = { records: migrated.records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) };
+  const capture = await captureHistoryInput(migrated.state, 'process', { index, loadRecord: async (id) => records[id] });
+  const upstream = migrated.records.find((record) => record.nodeId === 'run');
+  assert.deepEqual(capture.sourceRecordIds, [upstream.id]);
+  assert.equal(capture.inputs.bindings[0].sourceRecordId, upstream.id);
+  const item = runningHistoryRecord(capture, { createId: () => 'f'.repeat(32), now: () => '2026-10-01T00:00:00Z' });
+  assert.equal(item.status, 'running');
+  assert.equal(item.id, 'f'.repeat(32));
+  migrated.state.nodes.find((node) => node.nodeId === 'run-dataset').datasetContent.rows[0][0] = 'changed';
+  assert.notEqual(capture.inputs.bindings[0].content.rows[0][0], 'changed');
+});
+
+test('capture blocks a Process whose derived input has no current result', async () => {
+  const migrated = await plan(graph);
+  const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
+  const index = { records: migrated.records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) };
+  const changed = structuredClone(migrated.state);
+  changed.nodes.find((node) => node.nodeId === 'input').datasetContent.rows[0][0] = 'different';
+  await assert.rejects(
+    captureHistoryInput(changed, 'process', { index, loadRecord: async (id) => records[id] }),
+    /Input Dataset has no current result/,
+  );
+});
+
+test('reservation rejects completed input and creates exactly one new signature', async () => {
+  const migrated = await plan(graph);
+  const records = new Map(migrated.records.map((record) => [record.id, record]));
+  const storage = {
+    loadIndex: async () => ({ version: 1, records: [...records.values()].map(({ id, nodeId, kind, signature, status }) => ({ id, nodeId, kind, signature, status })) }),
+    loadRecord: async (_project, id) => records.get(id),
+    saveRecord: async (_project, record) => {
+      if ([...records.values()].some((item) => item.id !== record.id && item.nodeId === record.nodeId && item.signature === record.signature)) throw new Error('duplicate');
+      records.set(record.id, record);
+    },
+    saveCanvas: async () => {},
+  };
+  const session = new RunHistorySession({ ...storage, createId: () => 'f'.repeat(32), now: () => '2026-10-02T00:00:00Z' });
+  await session.open('project', migrated.state);
+  await assert.rejects(session.reserve(migrated.state, 'run'), /Run completed for these inputs/);
+  const changed = structuredClone(migrated.state);
+  changed.nodes.find((node) => node.nodeId === 'input').datasetContent.rows[0][0] = 'another input';
+  const reserved = await session.reserve(changed, 'run');
+  assert.equal(reserved.mode, 'new');
+  assert.equal(reserved.record.status, 'running');
+  assert.equal(records.size, 3);
+  await assert.rejects(session.reserve(changed, 'run'), /already have a running job/);
 });

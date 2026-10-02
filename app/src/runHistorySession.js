@@ -1,6 +1,7 @@
 import { planLegacyHistoryMigration } from './runHistoryMigration.js';
 import { resolveHistoryCanvasState } from './runHistoryResolver.js';
 import { planHistorySelection } from './runHistorySelection.js';
+import { captureHistoryInput, runningHistoryRecord } from './runHistoryCapture.js';
 
 /** Project-scoped history orchestration. Storage and canvas saving are injected for web/desktop. */
 export class RunHistorySession {
@@ -66,6 +67,32 @@ export class RunHistorySession {
     if (!this.projectId) throw new Error('Open a project before using history.');
     await this.storage.saveRecord(this.projectId, record);
     this.index = await this.storage.loadIndex(this.projectId);
+  }
+
+  async capture(state, nodeId) {
+    if (!this.projectId) throw new Error('Open a project before using history.');
+    return captureHistoryInput(state, nodeId, {
+      index: this.index,
+      loadRecord: (id) => this.storage.loadRecord(this.projectId, id),
+    });
+  }
+
+  /** Reserve a unique input signature before submitting a backend job. */
+  async reserve(state, nodeId) {
+    const capture = await this.capture(state, nodeId);
+    const entry = this.index.records.find((item) => item.nodeId === nodeId && item.signature === capture.signature);
+    if (entry) {
+      const existing = await this.storage.loadRecord(this.projectId, entry.id);
+      if (!existing || existing.signature !== capture.signature) throw new Error('History record is missing or invalid.');
+      if (existing.status === 'completed') throw new Error('Run completed for these inputs. Change an input or select History.');
+      if (existing.status === 'running') throw new Error('These inputs already have a running job.');
+      const record = { ...existing, status: 'running', updatedAt: this.now?.() || new Date().toISOString() };
+      await this.putRecord(record);
+      return { record, mode: capture.kind === 'run' ? 'resume' : 'restart' };
+    }
+    const record = runningHistoryRecord(capture, { createId: this.createId, now: this.now });
+    await this.putRecord(record);
+    return { record, mode: 'new' };
   }
 
   entriesForNode(nodeId) {
