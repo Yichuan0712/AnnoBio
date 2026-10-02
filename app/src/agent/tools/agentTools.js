@@ -121,7 +121,8 @@ Operations ("op" plus the fields listed):
 - save_run_results: ref, run, name?. Saves a run's results (input columns plus output fields) as a dataset.
 - save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a dataset.
 - apply_review: ref, review, suggestion_ids, name?. Creates a new prompt from the review's prompt with those suggestions applied.
-- update: node, set {field: value}. prompt: name, note, section_edits or sections, input_types, output. dataset: name, note, columns, rows (text-only datasets). process: name, code, primary_input. run: name, prompt, input_dataset, input_mapping (not once the run has results; a new prompt needs an input_mapping for its inputs). score: name, ground_truth, comparison (+ pairing, combine), match_code. sampler, review: name.
+- update: node, set {field: value}. prompt: name, note, section_edits or sections, input_types, output. dataset: name, note, columns, rows (text-only ordinary datasets). process: name, code, primary_input. run: name, prompt, input_dataset, input_mapping (with History enabled, changing these inputs selects a different result or a new run). score: name, ground_truth, comparison (+ pairing, combine), match_code. sampler, review: name.
+- select_history: record_id. Restore that Run or Process record and its ancestor inputs. Use it alone in a proposal; the user sees and approves the affected nodes.
 - remove: node.`,
     {
       summary: { type: 'string', description: 'One sentence for the user: what this proposal does and why.' },
@@ -131,7 +132,7 @@ Operations ("op" plus the fields listed):
         items: {
           type: 'object',
           properties: {
-            op: { type: 'string', enum: ['add_dataset', 'import_dataset', 'add_sampler', 'add_process', 'add_prompt', 'add_prompt_version', 'add_run', 'add_score', 'save_run_results', 'save_process_output', 'apply_review', 'update', 'remove'] },
+            op: { type: 'string', enum: ['add_dataset', 'import_dataset', 'add_sampler', 'add_process', 'add_prompt', 'add_prompt_version', 'add_run', 'add_score', 'save_run_results', 'save_process_output', 'apply_review', 'update', 'select_history', 'remove'] },
           },
           required: ['op'],
           additionalProperties: true,

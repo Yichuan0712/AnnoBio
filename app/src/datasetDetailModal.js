@@ -66,7 +66,7 @@ function candidateMatchKeys(value) {
   return Array.from(keys).filter(Boolean);
 }
 
-export function openDatasetDetailModal({ node, getContent, saveContent }) {
+export function openDatasetDetailModal({ node, getContent, saveContent, readOnly = false }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-working-dataset-node-id="${CSS.escape(nodeId)}"]`)
@@ -114,6 +114,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
+  overlay.classList.toggle('working-dataset-readonly', readOnly);
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'working-dataset-detail-title');
   if (nodeId) overlay.dataset.workingDatasetNodeId = nodeId;
@@ -1642,6 +1643,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
     if (nextBtn) nextBtn.disabled = currentPage >= totalPages;
     updateSummary();
     updateDeleteButtons();
+    if (readOnly) overlay.querySelectorAll('.wd-header-inp, .wd-cell-textarea, .wd-cell-inp').forEach((input) => { input.readOnly = true; });
   }
 
   addRowBtn.addEventListener('click', () => {
@@ -1834,6 +1836,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent }) {
   });
 
   function persistContent() {
+    if (readOnly) return;
     saveContent({ headers, columnTypes, rowIds, rows });
   }
 

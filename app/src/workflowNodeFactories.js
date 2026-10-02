@@ -59,6 +59,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     registerPendingRun,
     unregisterPendingRun,
     pendingRuns,
+    getHistoryForNode,
     pendingReviews,
     pendingReviewNodeIds,
     unregisterPendingReview,
@@ -406,10 +407,15 @@ export function createWorkflowNodeFactories(deps = {}) {
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
+      const historySourceId = node.dataset.sourceRunNodeId || getConnectionsList().find((edge) =>
+        edge.type === 'process-to-dataset' && edge.toId === node.dataset.nodeId)?.fromId;
+      const readOnly = !!getHistoryForNode?.(historySourceId);
       openDatasetDetailModal({
         node,
         getContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
+        readOnly,
         saveContent: (content) => {
+          if (readOnly) return;
           datasetContentByNodeId.set(node.dataset.nodeId, content);
           emitCanvasChanged();
         },
@@ -564,6 +570,7 @@ export function createWorkflowNodeFactories(deps = {}) {
             return typeof o === 'object' && o !== null ? o : null;
           } catch (_) { return null; }
         }).filter(Boolean),
+        history: getHistoryForNode?.(runNodeId),
       });
     });
 
@@ -681,6 +688,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           syncProcessDependencies(code);
         },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
+        history: getHistoryForNode?.(processNodeId),
       });
     });
 

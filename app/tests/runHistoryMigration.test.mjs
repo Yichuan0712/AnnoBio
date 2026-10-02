@@ -251,3 +251,31 @@ test('reservation rejects completed input and creates exactly one new signature'
   assert.equal(records.size, 3);
   await assert.rejects(session.reserve(changed, 'run'), /already have a running job/);
 });
+
+test('opening a merged old canvas migrates only its unrecorded result nodes', async () => {
+  const migrated = await plan(graph);
+  const incoming = structuredClone(graph);
+  incoming.nodes.forEach((node) => {
+    node.nodeId = `new-${node.nodeId}`;
+    if (node.runWorkingSetId) node.runWorkingSetId = `new-${node.runWorkingSetId}`;
+    if (node.primaryDatasetId) node.primaryDatasetId = `new-${node.primaryDatasetId}`;
+    if (node.sourceRunNodeId) node.sourceRunNodeId = `new-${node.sourceRunNodeId}`;
+  });
+  incoming.connections.forEach((edge) => { edge.fromId = `new-${edge.fromId}`; edge.toId = `new-${edge.toId}`; });
+  const merged = { historyVersion: 1, nodes: [...migrated.state.nodes, ...incoming.nodes], connections: [...migrated.state.connections, ...incoming.connections] };
+  const records = new Map(migrated.records.map((record) => [record.id, record]));
+  let nextId = 100;
+  let savedCanvas = null;
+  const session = new RunHistorySession({
+    loadIndex: async () => ({ version: 1, records: [...records.values()].map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) }),
+    loadRecord: async (_project, id) => records.get(id),
+    saveRecord: async (_project, record) => { records.set(record.id, record); },
+    saveCanvas: async (_project, state) => { savedCanvas = state; },
+    createId: () => String(++nextId).padStart(32, '0'), now: () => '2026-10-02T00:00:00Z',
+  });
+  const opened = await session.open('project', merged);
+  assert.equal(records.size, 4);
+  assert.ok(savedCanvas);
+  assert.deepEqual(new Set(Object.keys(opened.currentRecordIds)), new Set(['run', 'process', 'new-run', 'new-process']));
+  assert.equal(opened.migration.detachedDatasetIds.length, 0);
+});

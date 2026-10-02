@@ -3,6 +3,22 @@ import { resolveHistoryCanvasState } from './runHistoryResolver.js';
 import { planHistorySelection } from './runHistorySelection.js';
 import { captureHistoryInput, runningHistoryRecord } from './runHistoryCapture.js';
 
+function hasLegacyOutput(node) {
+  try {
+    if (node.type === 'run') {
+      const results = typeof node.runResults === 'string' ? JSON.parse(node.runResults) : node.runResults;
+      return Array.isArray(results) && results.length > 0;
+    }
+    if (node.type === 'process') {
+      const raw = node.dfResults || node.results;
+      const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return !!result && (Object.keys(result.outputs || {}).length > 0
+        || (Array.isArray(result.headers) && Array.isArray(result.rows)));
+    }
+  } catch (_) {}
+  return false;
+}
+
 /** Project-scoped history orchestration. Storage and canvas saving are injected for web/desktop. */
 export class RunHistorySession {
   constructor({ loadIndex, loadRecord, saveRecord, saveCanvas, createId, now }) {
@@ -19,11 +35,18 @@ export class RunHistorySession {
     this.index = await this.storage.loadIndex(projectId);
     let canvas = state;
     let migration = null;
-    if (state?.historyVersion !== 1) {
+    const initialMigration = state?.historyVersion !== 1;
+    const recordedNodeIds = new Set(this.index.records.map((entry) => entry.nodeId));
+    const unrecordedResultIds = initialMigration ? null : (state?.nodes || []).filter((node) =>
+      !recordedNodeIds.has(node.nodeId) && hasLegacyOutput(node)).map((node) => node.nodeId);
+    if (initialMigration || unrecordedResultIds.length) {
+      const sourceRecordIds = initialMigration ? {} : (await this.resolve(state)).currentRecordIds;
       migration = await planLegacyHistoryMigration(state, {
         createId: this.createId,
         now: this.now,
-        existingEntries: this.index.records,
+        existingEntries: initialMigration ? this.index.records : [],
+        onlyNodeIds: unrecordedResultIds,
+        sourceRecordIds,
       });
       if (migration.unmigratedNodeIds.length) {
         throw new Error(`Cannot migrate saved results for nodes: ${migration.unmigratedNodeIds.join(', ')}`);

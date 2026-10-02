@@ -50,12 +50,15 @@ export async function planLegacyHistoryMigration(state, {
   createId = () => globalThis.crypto.randomUUID().replaceAll('-', ''),
   now = () => new Date().toISOString(),
   existingEntries = [],
+  onlyNodeIds = null,
+  sourceRecordIds = {},
 } = {}) {
   const next = copy(state || {});
   next.nodes = Array.isArray(next.nodes) ? next.nodes : [];
   next.connections = Array.isArray(next.connections) ? next.connections : [];
   const nodes = new Map(next.nodes.map((node) => [nodeId(node), node]));
-  const resultNodes = next.nodes.filter((node) => (
+  const included = onlyNodeIds ? new Set(onlyNodeIds) : null;
+  const resultNodes = next.nodes.filter((node) => (!included || included.has(nodeId(node))) && (
     (node.type === 'run' && Array.isArray(parsed(node.runResults, [])) && parsed(node.runResults, []).length > 0)
     || (node.type === 'process' && Object.keys(processOutputs(node)).length > 0)
   ));
@@ -67,13 +70,16 @@ export async function planLegacyHistoryMigration(state, {
     }
     existingByNode.set(entry.nodeId, entry.id);
   }
-  const ids = new Map(resultNodes.map((node) => [nodeId(node), existingByNode.get(nodeId(node)) || createId()]));
+  const ids = new Map(Object.entries(sourceRecordIds));
+  resultNodes.forEach((node) => ids.set(nodeId(node), existingByNode.get(nodeId(node)) || createId()));
+  const resultNodeIds = new Set(resultNodes.map(nodeId));
   const promptForRun = (runId) => {
     const edge = next.connections.find((item) => item.type === 'prompt-to-run' && item.toId === runId);
     const prompt = nodes.get(edge?.fromId);
     return prompt?.type === 'prompt' ? prompt : null;
   };
   const candidateSources = new Map();
+  const invalidExistingSources = new Set();
   const detachedDatasetIds = [];
   for (const dataset of next.nodes.filter((node) => node.type === 'dataset')) {
     const id = nodeId(dataset);
@@ -94,8 +100,13 @@ export async function planLegacyHistoryMigration(state, {
     if (!sourceId) continue;
     if (ids.has(sourceId) && sameTable(dataset.datasetContent || dataset.subsetContent, output)) {
       candidateSources.set(id, { sourceId, branch });
-    } else {
+    } else if (sourceRecordIds[sourceId]) {
+      invalidExistingSources.add(id);
+    } else if (!included || resultNodeIds.has(sourceId)) {
       detachedDatasetIds.push(id);
+    } else {
+      // An existing history-backed Dataset with no current result stays derived and unavailable.
+      invalidExistingSources.add(id);
     }
   }
 
@@ -103,6 +114,7 @@ export async function planLegacyHistoryMigration(state, {
   const visiting = new Set();
   const unmigratedNodeIds = [];
   async function resolveDataset(datasetId) {
+    if (invalidExistingSources.has(datasetId)) throw new Error(`Input Dataset has no matching source result: ${datasetId}`);
     const dataset = nodes.get(datasetId);
     const content = dataset?.datasetContent || dataset?.subsetContent;
     if (!dataset || dataset.type !== 'dataset' || !content) {
@@ -131,6 +143,7 @@ export async function planLegacyHistoryMigration(state, {
   async function resolveRecord(id) {
     if (records.has(id)) return records.get(id);
     if (!ids.has(id)) return null;
+    if (!resultNodeIds.has(id)) return { id: ids.get(id), nodeId: id };
     if (visiting.has(id)) throw new Error(`History dependency cycle at ${id}`);
     const node = nodes.get(id);
     visiting.add(id);

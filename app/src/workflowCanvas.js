@@ -1318,6 +1318,7 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
+  const pendingProcesses = new Set();
   const pendingRunHistoryRecords = new Map();
   async function persistRunHistoryProgress(nodeId, status, results, outputFields) {
     const record = pendingRunHistoryRecords.get(nodeId);
@@ -2704,6 +2705,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     registerPendingRun,
     unregisterPendingRun,
     pendingRuns,
+    getHistoryForNode,
     pendingReviews,
     pendingReviewNodeIds,
     unregisterPendingReview,
@@ -2856,6 +2858,12 @@ export function buildWorkflowCanvas(root, options = {}) {
         getSelectedNodeIds: () => [...selectedNodeIds],
         extractInputFields: extractInputFieldsFromSections,
         applyCanvasState: applyAgentCanvasState,
+        previewHistorySelection: planHistorySelectionForCanvas,
+        applyHistorySelection: async (recordId) => {
+          const plan = await planHistorySelectionForCanvas(recordId);
+          applyAgentCanvasState(plan.state, { highlightNodeIds: plan.changedNodeIds });
+          return plan;
+        },
         highlightNodes: highlightPipelineNodes,
         startRunNode,
         stopRunNode,
@@ -4736,6 +4744,47 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function setHistorySession(session) { historySession = session; }
 
+  async function planHistorySelectionForCanvas(recordId) {
+    if (!historySession?.projectId || canvasHistoryVersion !== 1) throw new Error('History is not available for this project.');
+    return historySession.select(recordId, getCanvasState(), {
+      runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses],
+    });
+  }
+
+  function getHistoryForNode(nodeId) {
+    if (!historySession?.projectId || canvasHistoryVersion !== 1) return null;
+    return {
+      reconcile: reconcileHistory,
+      loadEntries: async () => {
+        let resolved;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          resolved = await reconcileHistory();
+          if (!resolved?.stale) break;
+        }
+        if (resolved?.stale) throw new Error('Canvas changed while loading History. Try again.');
+        return { entries: historySession.entriesForNode(nodeId), currentId: resolved?.currentRecordIds?.[nodeId] || '' };
+      },
+      select: async (recordId, closeModal) => {
+        const otherDetails = [...document.querySelectorAll('.modal-overlay')].filter((el) =>
+          el.querySelector('.modal-panel--run-detail, .modal-panel--process'));
+        if (otherDetails.length > 1) throw new Error('Close other Run or Process windows before switching History.');
+        const plan = await planHistorySelectionForCanvas(recordId);
+        const changed = plan.changedNodeIds.map((id) => {
+          const node = getNodeById(id);
+          return (node?.dataset?.datasetName || node?.dataset?.promptName || node?.dataset?.runName || node?.dataset?.processName || id);
+        });
+        if (changed.length) {
+          const message = `Switch to this history record and restore inputs on: ${changed.slice(0, 10).join(', ')}${changed.length > 10 ? `, and ${changed.length - 10} more` : ''}?`;
+          if (!await showConfirm(message, { title: 'Switch History', confirmText: 'Switch' })) return;
+        }
+        closeModal?.();
+        loadCanvasState(plan.state);
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        getNodeById(nodeId)?.click();
+      },
+    };
+  }
+
   async function reconcileHistory() {
     if (!historySession?.projectId || canvasHistoryVersion !== 1) return null;
     const session = historySession;
@@ -4830,6 +4879,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const executionBindings = bindings.filter((binding) => required.has(binding.nodeId));
     const session = historySession?.projectId && canvasHistoryVersion === 1 ? historySession : null;
     let record = session ? (await session.reserve(getCanvasState(), nodeId)).record : null;
+    if (session) pendingProcesses.add(nodeId);
     const setProgress = (el, percent) => {
       const bar = el?.querySelector('.workflow-node__process-progress');
       if (!bar) return;
@@ -4850,6 +4900,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         },
       });
     } catch (error) {
+      pendingProcesses.delete(nodeId);
       if (record) {
         record = { ...record, status: 'failed', updatedAt: new Date().toISOString(), error: String(error?.message || error) };
         await session.putRecord(record);
@@ -4860,6 +4911,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     // The canvas may have been rebuilt while the job ran (an applied proposal); write to the live node.
     const liveNode = getNodeById(nodeId);
     if (!liveNode) {
+      pendingProcesses.delete(nodeId);
       if (record) await session.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: 'The Process node was removed while it ran.' });
       throw new Error('The Process node was removed while it ran.');
     }
@@ -4876,6 +4928,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       };
       await session.putRecord(record);
     }
+    pendingProcesses.delete(nodeId);
     delete liveNode.dataset.processResults;
     setProgress(liveNode, 100);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -4920,10 +4973,16 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** The Agent's view of one node (agent/canvas/workflowNodeInspector.js) with live Score metrics. */
   async function inspectNode(nodeId, options = {}) {
+    const history = historySession?.projectId && canvasHistoryVersion === 1
+      ? await reconcileHistory() : null;
     const result = inspectWorkflowNode(getCanvasState(), nodeId, {
       ...options,
       extractInputFields: extractInputFieldsFromSections,
     });
+    if (result?.found && (result.type === 'run' || result.type === 'process') && history && !history.stale) {
+      result.history = historySession.entriesForNode(nodeId);
+      result.currentHistoryRecordId = history.currentRecordIds?.[nodeId] || null;
+    }
     if (!result?.found || result.type !== 'score') return result;
     return enrichInspectScoreResultWithComparisonRows(result, await getScoreComparisonRows(nodeId));
   }
