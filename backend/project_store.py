@@ -78,6 +78,23 @@ def _empty_history_index() -> dict:
     return {"version": 1, "records": []}
 
 
+def _history_asset_ids(value) -> set[str]:
+    ids: set[str] = set()
+
+    def visit(item):
+        if isinstance(item, dict):
+            if item.get("kind") in ("images", "pdf") and isinstance(item.get("assetIds"), list):
+                ids.update(asset_id for asset_id in item["assetIds"] if isinstance(asset_id, str))
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return ids
+
+
 def _read_history_index(project_id: str) -> dict:
     path = _history_root(project_id) / "index.json"
     try:
@@ -512,6 +529,11 @@ def prune_unused_assets(project_id: str, body: AssetPruneRequest):
     used = set(body.usedIds or [])
     with _lock:
         data = _read_project(project_id)
+        for entry in _read_history_index(project_id)["records"]:
+            ids = entry.get("assetIds")
+            if not isinstance(ids, list):
+                ids = _history_asset_ids(json.loads(_history_record_file(project_id, entry["id"]).read_text(encoding="utf-8")))
+            used.update(ids)
         assets = data.get("assets") or {}
         unused = {aid: a for aid, a in assets.items() if aid not in used}
         if not unused:
@@ -625,6 +647,7 @@ def save_history_record(project_id: str, record_id: str, body: HistoryRecordSave
         elif any(entry.get("nodeId") == record["nodeId"] and entry.get("signature") == record["signature"] for entry in index["records"]):
             raise HTTPException(409, "This input already has a history record.")
         summary = {key: record.get(key) for key in ("id", "nodeId", "kind", "signature", "status", "createdAt", "updatedAt", "summary", "sourceRecordIds")}
+        summary["assetIds"] = sorted(_history_asset_ids(record))
         entries = [entry for entry in index["records"] if entry.get("id") != record_id]
         entries.append(summary)
         _atomic_write_json(path, record)

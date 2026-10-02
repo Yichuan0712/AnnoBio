@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import { ProjectAssets } from '../src/projectAssets.js';
 import { datasetSignature, processInputSignature, runInputSignature } from '../src/runHistorySignature.js';
+import { collectHistoryAssetIds } from '../src/runHistoryAssets.js';
 
 const newAssets = () => new ProjectAssets({ decodeImage: () => {}, registerSession: () => {} });
 const record = (nodeId, signature) => ({
@@ -55,6 +56,35 @@ test('desktop .yc canvas save, Save As and merge retain history', async () => {
     await sourceAssets.saveHistoryRecord(source, second);
     await assets.merge(copy, source);
     assert.deepEqual(new Set((await assets.loadHistoryIndex(copy)).records.map((entry) => entry.id)), new Set([first.id, second.id]));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('desktop asset pruning retains cells referenced only by history', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'annobio-history-assets-test-'));
+  try {
+    const file = path.join(root, 'assets.yc');
+    const referenced = 'sha256:referenced';
+    const orphan = 'sha256:orphan';
+    const item = record('run-1', 'signature-1');
+    item.inputs = { dataset: { content: { rows: [[{ kind: 'images', assetIds: [referenced] }]] } } };
+    const payload = {
+      bundleVersion: 1, project: { schemaVersion: 2, nodes: [], assets: {} }, assetBlobs: {},
+      history: { index: { version: 1, records: [{ id: item.id }] }, records: { [item.id]: item } },
+    };
+    await fs.writeFile(file, JSON.stringify(payload));
+    const assets = newAssets();
+    assets.file = file;
+    assets.assets = {
+      [referenced]: { name: 'old.png', bytes: 10 }, [orphan]: { name: 'orphan.png', bytes: 20 },
+    };
+    assert.deepEqual(collectHistoryAssetIds(item), [referenced]);
+    const preview = await assets.pruneUnusedAssets([], { dryRun: true });
+    assert.deepEqual(preview.removed.map((entry) => entry.id), [orphan]);
+    await assets.pruneUnusedAssets([]);
+    assert.ok(assets.assets[referenced]);
+    assert.equal(assets.assets[orphan], undefined);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

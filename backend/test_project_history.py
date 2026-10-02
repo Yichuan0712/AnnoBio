@@ -77,6 +77,26 @@ class ProjectHistoryTest(unittest.TestCase):
         ids = {entry["id"] for entry in project_store.get_history_index(self.project_id)["records"]}
         self.assertEqual(ids, {first["id"], second["id"]})
 
+    def test_asset_prune_retains_history_only_cells(self):
+        item = record()
+        item["inputs"] = {"dataset": {"content": {"rows": [[{"kind": "pdf", "assetIds": ["kept"]}]]}}}
+        self.save(item)
+        project = project_store._read_project(self.project_id)
+        project["assets"] = {
+            "kept": {"path": "originals/kept.pdf", "name": "kept.pdf", "bytes": 10},
+            "orphan": {"path": "originals/orphan.pdf", "name": "orphan.pdf", "bytes": 20},
+        }
+        project_store._atomic_write_json(project_store._project_file(self.project_id), project)
+        preview = project_store.prune_unused_assets(
+            self.project_id, project_store.AssetPruneRequest(usedIds=[], dryRun=True)
+        )
+        self.assertEqual([entry["id"] for entry in preview["removed"]], ["orphan"])
+        result = project_store.prune_unused_assets(
+            self.project_id, project_store.AssetPruneRequest(usedIds=[], dryRun=False)
+        )
+        self.assertEqual([entry["id"] for entry in result["removed"]], ["orphan"])
+        self.assertIn("kept", project_store._read_project(self.project_id)["assets"])
+
 
 if __name__ == "__main__":
     unittest.main()
