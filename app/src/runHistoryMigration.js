@@ -49,6 +49,7 @@ function runOutput(node, prompt) {
 export async function planLegacyHistoryMigration(state, {
   createId = () => globalThis.crypto.randomUUID().replaceAll('-', ''),
   now = () => new Date().toISOString(),
+  existingEntries = [],
 } = {}) {
   const next = copy(state || {});
   next.nodes = Array.isArray(next.nodes) ? next.nodes : [];
@@ -58,7 +59,15 @@ export async function planLegacyHistoryMigration(state, {
     (node.type === 'run' && Array.isArray(parsed(node.runResults, [])) && parsed(node.runResults, []).length > 0)
     || (node.type === 'process' && Object.keys(processOutputs(node)).length > 0)
   ));
-  const ids = new Map(resultNodes.map((node) => [nodeId(node), createId()]));
+  const existingByNode = new Map();
+  for (const entry of existingEntries) {
+    if (!entry?.nodeId || !entry?.id) continue;
+    if (existingByNode.has(entry.nodeId) && existingByNode.get(entry.nodeId) !== entry.id) {
+      throw new Error(`Cannot resume legacy migration with multiple records for node ${entry.nodeId}.`);
+    }
+    existingByNode.set(entry.nodeId, entry.id);
+  }
+  const ids = new Map(resultNodes.map((node) => [nodeId(node), existingByNode.get(nodeId(node)) || createId()]));
   const promptForRun = (runId) => {
     const edge = next.connections.find((item) => item.type === 'prompt-to-run' && item.toId === runId);
     const prompt = nodes.get(edge?.fromId);
@@ -203,5 +212,6 @@ export async function planLegacyHistoryMigration(state, {
   next.connections = next.connections.filter((edge) => !(
     edge.type === 'process-to-dataset' && detachedDatasetIds.includes(edge.toId)
   ));
+  next.historyVersion = 1;
   return { state: next, records: [...records.values()], detachedDatasetIds, unmigratedNodeIds };
 }
