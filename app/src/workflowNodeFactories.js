@@ -1,6 +1,6 @@
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { reviewSettingsOverrides } from './nodeSettings.js';
-import { datasetColorAt } from './workflowNodeColors.js';
+import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
   const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -54,7 +54,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     resolveRunCredentialId,
     DATASET_BORDER_COLORS,
     normalizeDatasetColorIndex,
-    chooseAutomaticDatasetColorIndex,
+    chooseAutomaticNodeColorIndex,
     hasSampledDatasets,
     registerPendingRun,
     unregisterPendingRun,
@@ -178,7 +178,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     };
   }
 
-  function createPromptNode({ name = '', note = '', sections = [], outputFormat, inputTypes, left, top, nodeId: givenNodeId }) {
+  function createPromptNode({ name = '', note = '', sections = [], outputFormat, inputTypes, left, top, nodeId: givenNodeId, colorIndex: givenColorIndex }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Prompt';
     const node = document.createElement('div');
@@ -189,6 +189,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     node.dataset.promptSections = JSON.stringify(sections);
     node.dataset.promptName = name;
     node.dataset.promptNote = note;
+    const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
+    node.dataset.promptColorIndex = String(colorIndex);
+    node.style.borderColor = promptColorAt(colorIndex);
     node.dataset.promptInputTypes = JSON.stringify(inputTypes && typeof inputTypes === 'object' ? inputTypes : {});
     let ofList = outputFormat?.fields ?? (Array.isArray(outputFormat) ? outputFormat : []);
     if (!ofList.length && outputFormat?.columns?.length) {
@@ -367,7 +370,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     // Links a Dataset saved from Run results to its current History record.
     if (sourceRunNodeId) node.dataset.sourceRunNodeId = sourceRunNodeId;
     if (processOutputName) node.dataset.processOutputName = processOutputName;
-    const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticDatasetColorIndex();
+    const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = datasetColorAt(colorIndex);
     if (Array.isArray(headers) && Array.isArray(rows)) datasetContentByNodeId.set(nodeId, { headers, rows, columnTypes, rowIds });
