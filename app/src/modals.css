@@ -189,8 +189,12 @@
 .modal-history-popup__row { display: flex; align-items: center; border-top: 1px solid var(--border); }
 .modal-history-popup__row.is-current { background: var(--hover); }
 .modal-history-popup__row .modal-history-popup__item { min-width: 0; flex: 1; }
-.modal-history-popup__delete { border: 0; background: transparent; color: var(--danger, #b42318); cursor: pointer; padding: 8px; }
-.modal-history-popup__delete:disabled { opacity: .4; cursor: default; }
+.modal-history-popup__row .modal-history-popup__delete {
+  flex-shrink: 0;
+  margin: 0 8px;
+  padding: 5px 10px;
+  line-height: 1.2;
+}
 
 .working-dataset-readonly .working-dataset-link-images,
 .working-dataset-readonly .working-dataset-link-pdf,

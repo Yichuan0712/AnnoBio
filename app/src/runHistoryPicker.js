@@ -110,7 +110,7 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
         if (onDelete) {
           const remove = document.createElement('button');
           remove.type = 'button';
-          remove.className = 'modal-history-popup__delete';
+          remove.className = 'btn btn-danger modal-history-popup__delete';
           remove.textContent = 'Delete';
           remove.title = item.current ? 'Select another result before deleting this record' : 'Delete this record and dependent history';
           remove.disabled = item.current || isDisabled();
