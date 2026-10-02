@@ -11,20 +11,13 @@ import { python } from '@codemirror/lang-python';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { createRowResultsPanel } from './rowResultsTable.js';
-import { cloneCell, normalizeDatasetContent, isAssetCell } from './datasetContent.js';
-import { prepareAssets } from './runClient.js';
-import { getCurrentProjectId } from './currentProject.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
 import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 import { openProcessDatasetsDialog } from './processDatasetsDialog.js';
 
 const API_BASE = BACKEND_API_BASE;
-const PROCESS_POLL_INTERVAL_MS = 1200;
 const MAX_COMMENT_LINE_CHARS = 70;
-function rowsHaveAssetCells(rows) {
-  return (rows || []).some((row) => (row || []).some((cell) => isAssetCell(cell)));
-}
 
 function wrapCommentList(prefix, continuationPrefix, items) {
   const lines = [];
@@ -72,18 +65,6 @@ ${columnLines}
 `;
 }
 
-function rowsFromDicts(rowDicts) {
-  const outputKeys = [];
-  (rowDicts || []).forEach((row) => {
-    if (!row || typeof row !== 'object') return;
-    Object.keys(row).forEach((key) => { if (!outputKeys.includes(key)) outputKeys.push(key); });
-  });
-  const rows = (rowDicts || []).map((row) => outputKeys.map((key) => (
-    row && typeof row === 'object' ? cloneCell(row[key]) : ''
-  )));
-  return normalizeDatasetContent({ headers: outputKeys, rows });
-}
-
 function escapeHtml(value) {
   const div = document.createElement('div');
   div.textContent = value ?? '';
@@ -122,7 +103,7 @@ function restoreResults(node, ...keys) {
  * @param {{ node: HTMLElement, getProcessDatasets: () => { datasets: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, syncProcessDependencies?: (code: string) => void, setPrimaryDataset?: (datasetNodeId: string, code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
  *   setPrimaryDataset: the Process picks its df Dataset in this window, like a Run picks its Prompt
  */
-export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName }) {
+export function openProcessDetailModal({ node, runProcessNode, getProcessDatasets, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -226,7 +207,6 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
   let lastResults = restoreResults(node, 'processDfResults', 'processResults');
   let activeBranchName = '';
   let saveBtnEl = null;
-  const progressBar = node?.querySelector?.('.workflow-node__process-progress') || null;
 
   const resultsPanel = createRowResultsPanel({
     container: resultsContent,
@@ -301,13 +281,6 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
     });
   }
 
-  function setNodeProgress(completed, total) {
-    if (!progressBar) return;
-    const percent = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
-    progressBar.style.width = `${percent}%`;
-    progressBar.setAttribute('aria-valuenow', String(percent));
-  }
-
   function setRunningUi(isRunning) {
     running = isRunning;
     primaryPicker.setLocked(isRunning);
@@ -316,100 +289,48 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
     if (saveBtnEl) saveBtnEl.disabled = isRunning || !lastResults;
   }
 
-  function persistResults(results) {
-    if (!node?.dataset) return;
-    if (results) node.dataset.processDfResults = JSON.stringify(results);
-    else delete node.dataset.processDfResults;
-    delete node.dataset.processResults;
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-  }
-
-  async function pollJob(jobId) {
-    if (currentJobId !== jobId) return;
-    let data;
-    try {
-      const response = await fetch(`${API_BASE}/api/process/df/run/result/${jobId}`);
-      data = await response.json().catch(() => ({}));
-      if (!response.ok && response.status !== 202) throw new Error(data.detail || 'Failed to fetch results');
-    } catch (error) {
-      if (currentJobId !== jobId) return;
-      setRunningUi(false);
-      showPlaceholder(error?.message || 'Network error while checking progress.');
-      return;
-    }
-    if (currentJobId !== jobId) return;
-    if (data.status === 'running') {
-      setTimeout(() => pollJob(jobId), PROCESS_POLL_INTERVAL_MS);
-      return;
-    }
-    setRunningUi(false);
-    if (data.error) {
-      showPlaceholder(data.error);
-      return;
-    }
-    const outputs = {};
-    Object.entries(data.outputs || {}).forEach(([branchName, rowDicts]) => {
-      const { headers, rows } = rowsFromDicts(rowDicts);
-      outputs[branchName] = { headers, rows };
-    });
-    setNodeProgress(1, 1);
-    const branchCount = Object.keys(outputs).length;
-    const statusText = data.status === 'cancelled'
-      ? `Cancelled. ${branchCount} branch${branchCount === 1 ? '' : 'es'} returned before stopping.`
-      : `${branchCount} branch${branchCount === 1 ? '' : 'es'} returned.`;
-    lastResults = branchCount ? { outputs, statusText } : null;
-    persistResults(lastResults);
-    if (lastResults) refreshResults();
-    else showPlaceholder('No rows returned.');
-  }
-
   async function startRun() {
     const { bindings } = readDatasets();
     const primary = bindings.find((binding) => binding.primary);
-    const { headers = [], rows = [] } = primary?.content || {};
     if (!primary) {
       showPlaceholder('Choose an Input dataset before running.');
       primaryPicker.focus();
       return;
     }
-    let pythonPath = '';
-    try {
-      const response = await fetch(`${API_BASE}/api/settings`);
-      const settings = response.ok ? await response.json() : null;
-      pythonPath = String(settings?.python_path || '').trim();
-    } catch (_) {}
-    if (!pythonPath) {
-      showPlaceholder('Set a Python interpreter path in Settings → Python first.');
-      return;
-    }
+    node.dataset.processDfCode = getCode();
+    node.dataset.processActiveMode = 'df';
+    delete node.dataset.processCode;
+    syncProcessDependencies?.(getCode());
     setRunningUi(true);
-    setNodeProgress(0, rows.length);
     showPlaceholder('Running…');
     try {
-      const allRows = bindings.flatMap((binding) => binding.content?.rows || []);
-      const session = rowsHaveAssetCells(allRows) ? await prepareAssets(getCurrentProjectId()) : {};
-      const inputDatasets = Object.fromEntries(bindings.map((binding) => [binding.alias, binding.content]));
-      const response = await fetch(`${API_BASE}/api/process/df/run`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ python_path: pythonPath, code: getCode(), headers, rows, input_datasets: inputDatasets, primary_dataset_id: 'df', ...session }),
+      await runProcessNode(nodeId, {
+        timeoutMs: 0,
+        onStarted: (jobId) => {
+          currentJobId = jobId;
+          if (cancelRequested) cancelJob(jobId);
+        },
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setRunningUi(false);
-        showPlaceholder(typeof data.detail === 'string' ? data.detail : 'Failed to start.');
-        return;
+      lastResults = restoreResults(node, 'processDfResults', 'processResults');
+      if (overlay.isConnected) {
+        if (lastResults) refreshResults();
+        else showPlaceholder('No rows returned.');
       }
-      currentJobId = data.job_id;
-      pollJob(currentJobId);
     } catch (error) {
-      setRunningUi(false);
-      showPlaceholder(error?.message || 'Network error.');
+      if (overlay.isConnected) showPlaceholder(error?.message || 'Process failed.');
+    } finally {
+      currentJobId = null;
+      cancelRequested = false;
+      if (overlay.isConnected) setRunningUi(false);
     }
   }
 
+  const cancelJob = (jobId) => fetch(`${API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
+  let cancelRequested = false;
   runBtn.addEventListener('click', () => {
     if (running) {
-      if (currentJobId) fetch(`${API_BASE}/api/process/df/run/cancel/${currentJobId}`, { method: 'POST' }).catch(() => {});
+      cancelRequested = true;
+      if (currentJobId) cancelJob(currentJobId);
       return;
     }
     void startRun();
@@ -424,8 +345,10 @@ export function openProcessDetailModal({ node, getProcessDatasets, syncProcessDe
       syncProcessDependencies?.(getCode());
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
-    if (running && currentJobId) fetch(`${API_BASE}/api/process/df/run/cancel/${currentJobId}`, { method: 'POST' }).catch(() => {});
-    currentJobId = null;
+    if (running) {
+      cancelRequested = true;
+      if (currentJobId) cancelJob(currentJobId);
+    }
     editorView.destroy();
     overlay.remove();
     document.body.style.overflow = '';

@@ -5,17 +5,14 @@
  * input_row_index 统一 0-based，展示时 +1
  */
 
-import { getNextRowIndex, mergeResumeResults, embedInputRow, processApiResults, markEmptyOutputAsError } from './runResumeUtils.js';
+import { markEmptyOutputAsError } from './runResumeUtils.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
-import { compileRows } from './runInputBuilder.js';
-import { postRun } from './runClient.js';
-import { getCurrentProjectId } from './currentProject.js';
 import { cloneCell, displayCell } from './datasetContent.js';
 import { deriveOutputFields } from './runResultsExport.js';
-import { ensureRunNodeModel, runSettingsOverrides } from './nodeSettings.js';
+import { ensureRunNodeModel } from './nodeSettings.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
@@ -97,6 +94,7 @@ export { deriveOutputFields };
 
 export function openRunDetailModal({
   node,
+  startRunNode,
   getWorkingSets = () => [],
   getPrompts = () => [],
   getPromptId = () => '',
@@ -104,7 +102,6 @@ export function openRunDetailModal({
   getPromptInputFields = () => [],
   getSubsetContent = () => ({ headers: [], rows: [] }),
   getPromptTemplate = () => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }),
-  registerPendingRun = () => {},
   unregisterPendingRun = () => {},
   getPendingRunId = () => null,
   getPromptName = () => '',
@@ -271,34 +268,6 @@ export function openRunDetailModal({
 
   function isCompleted() { return node?.dataset?.runCompleted === '1'; }
   function isRunning() { return !!(runId || resultsState.status === 'generating'); }
-
-  function setNodeProgressBar(completed, total) {
-    const bar = node?.querySelector('.workflow-node__run-progress');
-    if (!bar) return;
-    const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
-    bar.style.width = pct + '%';
-    bar.setAttribute('aria-valuenow', String(pct));
-  }
-
-  function writeNodeRunState({ results, completed, total, runCompleted }) {
-    if (!node) return;
-    try {
-      if (results != null) node.dataset.runResults = JSON.stringify(results);
-      if (runCompleted !== undefined) node.dataset.runCompleted = runCompleted ? '1' : '';
-    } catch (_) {}
-    if (results != null) {
-      let arr = results;
-      if (!Array.isArray(arr)) {
-        try {
-          arr = JSON.parse(node.dataset.runResults || '[]');
-        } catch (_) {
-          arr = [];
-        }
-      }
-      document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results: Array.isArray(arr) ? arr : [] } }));
-    }
-    if (completed != null && total != null) setNodeProgressBar(completed, total);
-  }
 
   function applyRunningLock() {
     runBtn.disabled = false;
@@ -887,123 +856,23 @@ export function openRunDetailModal({
     }
     formErrorEl.hidden = true;
 
-    let content = getSubsetContent(selectedNodeId);
-    try {
-      const savedResults = JSON.parse(node?.dataset?.runResults || '[]');
-      if (Array.isArray(savedResults) && savedResults.length > 0 && node?.dataset?.runInputContent) {
-        content = JSON.parse(node.dataset.runInputContent);
-      }
-    } catch (_) {}
-    const template = getPromptTemplate();
-    const headers = content?.headers || [];
-    const rows = content?.rows || [];
-
-    if (rows.length === 0) {
-      showResults([], [], 'complete', 'Dataset has no rows.');
-      return;
-    }
-    const templateText = (template.sections || []).map((s) => (s.content || '').trim()).filter(Boolean).join('\n\n');
-    if (!templateText) {
-      showResults([], [], 'complete', 'Prompt has no content.');
-      return;
-    }
-    const outputSchema = { return_shape: template.outputSchema?.return_shape || 'single', fields: (template.outputSchema?.fields || []).map((f) => ({ key: f.key, type: f.type || 'str', description: f.description, allow_none: f.allowNone ?? f.allow_none ?? false })) };
-    if (!outputSchema.fields.length) {
-      showResults([], [], 'complete', 'Prompt output schema has no fields.');
-      return;
-    }
-
     const { results: existingResults, outputFields: existingFields } = getNodeResults();
-    const nextRowIndex = getNextRowIndex(existingResults, rows.length);
-    const rowsToRun = rows.slice(nextRowIndex);
-
-    if (rowsToRun.length === 0) {
-      if (node && existingResults.length > 0) writeNodeRunState({ results: existingResults, completed: rows.length, total: rows.length, runCompleted: true });
-      showResults(existingResults, existingFields, 'complete', 'All rows already completed.');
-      refreshButton();
-      return;
-    }
-
-    const unmapped = inputFields.filter((name) => !(inputToColumn[name] || '').trim());
-    if (unmapped.length > 0) {
-      showResults([], [], 'complete', `Please map all prompt inputs. Unmapped: ${unmapped.join(', ')}`);
-      return;
-    }
-
-    const samples = compileRows(templateText, headers, rowsToRun, inputToColumn, template.inputTypes || {});
-
-    const isResume = nextRowIndex > 0 && existingResults.length > 0;
-    if (node) {
-      node.dataset.runInputContent = JSON.stringify({ headers, columnTypes: content?.columnTypes || [], rowIds: content?.rowIds || [], rows });
-      if (nextRowIndex === 0) {
-        if (existingResults.length === 0) writeNodeRunState({ results: [], completed: 0, total: rows.length, runCompleted: false });
-        const bar = node.querySelector('.workflow-node__run-progress');
-        if (bar) bar.style.width = '0%';
-        delete node.dataset.runResumeStartIndex;
-        delete node.dataset.runResumeExistingResults;
-        delete node.dataset.runResumeTotalRows;
-      } else {
-        node.dataset.runResumeStartIndex = String(nextRowIndex);
-        node.dataset.runResumeExistingResults = node.dataset.runResults || '[]';
-        node.dataset.runResumeTotalRows = String(rows.length);
-      }
-    }
-
-    showResults(existingResults, existingFields, 'generating', isResume ? 'Resuming…' : 'Running…');
+    showResults(existingResults, existingFields, 'generating', existingResults.length ? 'Resuming…' : 'Running…');
     applyRunningLock();
 
     try {
-      const res = await postRun({
-          credential_id: selectedCredentialId,
-          samples,
-          output_schema: outputSchema,
-          run_node_id: nodeId || null,
-          settings_overrides: runSettingsOverrides(node),
-      }, undefined, undefined, getCurrentProjectId());
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 202) {
-        runId = data.run_id || null;
-        if (runId && nodeId) registerPendingRun(nodeId, runId);
-        refreshButton();
-        return;
+      const started = await startRunNode({ runNodeId: nodeId });
+      runId = started.runId || null;
+      if (started.alreadyComplete) {
+        const { results, outputFields } = getNodeResults();
+        showResults(results, outputFields, 'complete', 'All rows already completed.');
+      } else if (started.completed) {
+        const { results, outputFields } = getNodeResults();
+        showResults(results, outputFields, 'complete');
       }
-      if (!res.ok) {
-        runId = null;
-        resultsState.status = 'complete';
-        if (isResume && node) {
-          delete node.dataset.runResumeStartIndex;
-          delete node.dataset.runResumeExistingResults;
-          delete node.dataset.runResumeTotalRows;
-        }
-        rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(data.detail || res.statusText || 'Request failed')}</p>`;
-        refreshButton();
-        return;
-      }
-      let results = data.results || [];
-      const outputFields = data.output_fields || [];
-      const runContent = { headers, rows };
-      if (isResume) {
-        results = mergeResumeResults(existingResults, results, nextRowIndex, runContent);
-      } else {
-        results = processApiResults(results, runContent);
-      }
-      results = markEmptyOutputAsError(results);
-      runId = null;
-      if (node && isResume) {
-        delete node.dataset.runResumeStartIndex;
-        delete node.dataset.runResumeExistingResults;
-        delete node.dataset.runResumeTotalRows;
-      }
-      writeNodeRunState({ results, completed: rows.length, total: rows.length, runCompleted: true });
-      showResults(results, outputFields, 'complete');
     } catch (e) {
       runId = null;
       resultsState.status = 'complete';
-      if (isResume && node) {
-        delete node.dataset.runResumeStartIndex;
-        delete node.dataset.runResumeExistingResults;
-        delete node.dataset.runResumeTotalRows;
-      }
       rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(String(e.message || e))}</p>`;
     }
     refreshButton();

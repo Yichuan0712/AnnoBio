@@ -36,11 +36,11 @@ async function readPythonPath() {
 
 /**
  * @param {{code: string, bindings: {alias: string, primary: boolean, content: {headers: string[], rows: any[][]}}[],
- *   signal?: AbortSignal}} options
+ *   signal?: AbortSignal, onStarted?: (jobId: string) => void, timeoutMs?: number}} options
  * @returns {Promise<{outputs: Record<string, {headers: string[], rows: any[][]}>, cancelled: boolean}>}
  *   throws with the Process error (traceback text) when the code fails
  */
-export async function runProcessCode({ code, bindings, signal }) {
+export async function runProcessCode({ code, bindings, signal, onStarted, timeoutMs = MAX_WAIT_MS }) {
   const primary = bindings.find((binding) => binding.primary);
   if (!primary) throw new Error('The Process has no primary Dataset.');
   const pythonPath = await readPythonPath();
@@ -63,13 +63,14 @@ export async function runProcessCode({ code, bindings, signal }) {
   const started = await start.json().catch(() => ({}));
   if (!start.ok) throw new Error(typeof started.detail === 'string' ? started.detail : 'The Process could not be started.');
   const jobId = started.job_id;
+  onStarted?.(jobId);
   const cancel = () => fetch(`${BACKEND_API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
   signal?.addEventListener('abort', cancel, { once: true });
   const startedAt = Date.now();
   try {
     for (;;) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      if (Date.now() - startedAt > MAX_WAIT_MS) {
+      if (timeoutMs > 0 && Date.now() - startedAt > timeoutMs) {
         cancel();
         throw new Error('The Process took longer than 5 minutes and was stopped.');
       }
