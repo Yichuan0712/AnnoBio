@@ -1,3 +1,5 @@
+import { assertPipelineInputsAvailable } from './pipelineInputAvailability.js';
+
 function selectedNodeIds(route) {
   const ids = new Set();
   for (const item of route || []) {
@@ -21,6 +23,7 @@ export function exportCanvasDefinition(canvasState, route) {
           name: node.name,
           sourceRunNodeId: node.sourceRunNodeId,
           processOutputName: node.processOutputName,
+          resultMissing: !!node.resultMissing,
           datasetContent: {
             headers: node.datasetContent?.headers || [],
             columnTypes: node.datasetContent?.columnTypes || [],
@@ -81,6 +84,7 @@ export function exportCanvasDefinition(canvasState, route) {
 
 /** The first displayed Dataset explicitly supplies the starting data snapshot. */
 export function buildPipelineExportRequest({ name, canvasState, route }) {
+  assertPipelineInputsAvailable(canvasState, route);
   const first = route?.[0];
   return {
     name,

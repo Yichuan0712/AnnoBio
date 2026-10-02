@@ -31,3 +31,10 @@ test('omitted dependencies and conflicting producers remain visible to the compi
   assert.deepEqual(req.canvas_state.connections, edges.slice(0, 3));
   assert.deepEqual(req.input_dataset_ids, []);
 });
+
+test('Python export rejects a missing result used as its starting Dataset', () => {
+  const state = { nodes: [{ type: 'dataset', nodeId: 'derived', name: 'Derived', resultMissing: true,
+    datasetContent: { headers: [], rows: [] } }], connections: [] };
+  assert.throws(() => buildPipelineExportRequest({ name: 'Bad', canvasState: state,
+    route: [{ type: 'dataset', dataset_node_id: 'derived' }] }), /no current result/);
+});

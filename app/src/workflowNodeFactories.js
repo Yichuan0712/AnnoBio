@@ -364,9 +364,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (notes !== undefined && notes !== null) node.dataset.datasetNote = String(notes);
     node.dataset.nodeType = 'dataset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
-    // Provenance only — not a live wire like samplerNodeId (which drives sampled-dataset naming/
-    // regeneration). Set when this dataset was materialized from a Run's results (see
-    // saveRunResultsToWorkspace); purely informational, nothing reads it to affect execution.
+    // Links a Dataset saved from Run results to its current History record.
     if (sourceRunNodeId) node.dataset.sourceRunNodeId = sourceRunNodeId;
     if (processOutputName) node.dataset.processOutputName = processOutputName;
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticDatasetColorIndex();
@@ -414,6 +412,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         node,
         getContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
         readOnly,
+        missingResult: node.dataset.resultMissing === '1',
         saveContent: (content) => {
           if (readOnly) return;
           datasetContentByNodeId.set(node.dataset.nodeId, content);
@@ -818,11 +817,14 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       function getGroundTruthContent(wsNodeId) {
         const c = datasetContentByNodeId.get(wsNodeId || '');
+        if (getNodeById(wsNodeId)?.dataset?.resultMissing === '1') return { headers: [], rows: [], missingResult: true };
         if (!c) return { headers: [], rows: [] };
         return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
       }
       async function getReviewPayload() {
         if (!promptNode || !runNode || !node) return null;
+        const gtId = String(node.dataset.scoreGroundTruthId || '').trim();
+        if (gtId && getNodeById(gtId)?.dataset?.resultMissing === '1') return null;
         let sections = [];
         try {
           sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');

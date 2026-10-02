@@ -1,26 +1,7 @@
 import { isAssetCell } from './datasetContent.js';
 import { exportCanvasDefinition } from './pipelineExportDefinition.js';
-
-export function pipelineInputDatasetIds(route, canvasState = null) {
-  if (!canvasState) {
-    const first = route?.[0];
-    return first?.type === 'dataset' && first.dataset_node_id ? [first.dataset_node_id] : [];
-  }
-  const selectedRuns = new Set((route || []).map((item) => item?.run_node_id).filter(Boolean));
-  const selectedProcesses = new Set((route || []).map((item) => item?.process_node_id).filter(Boolean));
-  const nodes = new Map((canvasState.nodes || []).map((node) => [node?.nodeId, node]));
-  const producedByProcess = new Set((canvasState.connections || [])
-    .filter((edge) => edge?.type === 'process-to-dataset' && selectedProcesses.has(edge.fromId))
-    .map((edge) => edge.toId));
-  return (route || [])
-    .filter((item) => item?.type === 'dataset' && item.dataset_node_id)
-    .map((item) => item.dataset_node_id)
-    .filter((id, index, ids) => ids.indexOf(id) === index)
-    .filter((id) => {
-      const sourceRun = nodes.get(id)?.sourceRunNodeId;
-      return !producedByProcess.has(id) && !(sourceRun && selectedRuns.has(sourceRun));
-    });
-}
+import { pipelineInputDatasetIds, assertPipelineInputsAvailable } from './pipelineInputAvailability.js';
+export { pipelineInputDatasetIds } from './pipelineInputAvailability.js';
 
 function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -28,6 +9,7 @@ function cloneJson(value) {
 
 /** Compile/start payload: selected executable definition plus rows only for explicit inputs. */
 export function pipelineRunCanvasDefinition(canvasState, route) {
+  assertPipelineInputsAvailable(canvasState, route);
   const definition = exportCanvasDefinition(canvasState, route);
   const inputIds = new Set(pipelineInputDatasetIds(route, canvasState));
   const sourceById = new Map((canvasState?.nodes || []).map((node) => [node?.nodeId, node]));

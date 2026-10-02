@@ -584,3 +584,11 @@
 .workflow-node-context-item:last-child {
   border-radius: 0;
 }
+.workflow-node--dataset[data-result-missing="1"] .workflow-node__body::before {
+  content: 'No current result';
+  display: block;
+  color: var(--danger, #b42318);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}

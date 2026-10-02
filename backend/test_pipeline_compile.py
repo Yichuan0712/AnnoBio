@@ -92,6 +92,12 @@ class PipelineCompileTests(unittest.TestCase):
         state["nodes"][1]["sections"][0]["content"] = "changed"
         self.assertEqual(spec["jobs"][0]["config"]["sections"][0]["content"], "Read {text}")
 
+    def test_missing_result_input_boundary_is_rejected(self):
+        state = simple()
+        state["nodes"][0]["resultMissing"] = True
+        state["nodes"][0]["datasetContent"] = {"headers": [], "rows": []}
+        self.error(state, "MISSING_RESULT", input_dataset_ids=["raw"])
+
     def test_graph_order_does_not_depend_on_canvas_or_route_order(self):
         state = branched()
         expected = self.compile(state)

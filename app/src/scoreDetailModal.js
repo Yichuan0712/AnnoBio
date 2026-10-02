@@ -1679,6 +1679,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       return null;
     }
   })();
+  let lastHistoryMatchRaw = node?.dataset?.scoreMatchResult || '';
+  function refreshHistoryMatchResult() {
+    if (!overlay.isConnected) return;
+    const raw = node?.dataset?.scoreMatchResult || '';
+    if (raw === lastHistoryMatchRaw) return;
+    lastHistoryMatchRaw = raw;
+    try { lastCodeMatchResult = raw ? JSON.parse(raw) : null; } catch (_) { lastCodeMatchResult = null; }
+    void renderResults();
+    void updateSaveToWorkspaceButton();
+  }
+  document.addEventListener('workflow:history-resolved', refreshHistoryMatchResult);
 
   function persistLastCodeMatchResult() {
     if (!node?.dataset) return;
@@ -1771,6 +1782,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const runWs = getRunWorkingSetContent();
     const { results: rawResults, outputFields } = getRunResults();
     const gtContent = getGroundTruthContent(selectedNodeId);
+    if (gtContent.missingResult) {
+      showCodeResultsPlaceholder('Ground truth Dataset has no current result. Run its upstream node first.');
+      return;
+    }
     const results = (rawResults || []).filter((r) => isValidRunOutputForScoreRow(r, outputFields));
     if (results.length === 0) {
       showCodeResultsPlaceholder('No run results to match.');
@@ -2557,6 +2572,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const { results: rawResults, outputFields } = getRunResults();
     const runWs = getRunWorkingSetContent();
     const rawGtContent = getGroundTruthContent(selectedNodeId);
+    if (rawGtContent.missingResult) {
+      resultsBody.innerHTML = '<p class="score-detail-placeholder">Ground truth Dataset has no current result. Run its upstream node first.</p>';
+      if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
+      return;
+    }
 
     const gtColsUsed = isCodeMode ? (rawGtContent.headers || []).slice() : buildScoreTableGtColumns(rulesFlat, rawGtContent);
 
@@ -3607,6 +3627,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   });
 
   function close() {
+    document.removeEventListener('workflow:history-resolved', refreshHistoryMatchResult);
     if (node && node.dataset) node.dataset.scoreMatchCode = getMatchCode();
     overlay.remove();
     document.body.style.overflow = '';
@@ -3780,6 +3801,7 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
   const { results: rawResults, outputFields } = getRunResults();
   const runWs = getRunWorkingSetContent();
   const rawGtContent = getGroundTruthContent(selectedNodeId);
+  if (rawGtContent.missingResult) return null;
   const gtColsUsed = buildScoreTableGtColumns(rulesFlat, rawGtContent);
 
   const resultsForScore = (rawResults || []).filter((r) => r);
