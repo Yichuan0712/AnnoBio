@@ -601,3 +601,4 @@ app.on('before-quit', () => {
 ipcMain.handle('history:index', (_e, projectPath) => projectAssets.loadHistoryIndex(projectPath));
 ipcMain.handle('history:record', (_e, projectPath, recordId) => projectAssets.loadHistoryRecord(projectPath, recordId));
 ipcMain.handle('history:save-record', (_e, projectPath, record) => projectAssets.saveHistoryRecord(projectPath, record));
+ipcMain.handle('history:delete-records', (_e, projectPath, recordId, expectedIds) => projectAssets.deleteHistoryRecords(projectPath, recordId, expectedIds));

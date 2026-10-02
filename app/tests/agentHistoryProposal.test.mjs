@@ -24,3 +24,18 @@ test('Agent select_history cannot be mixed with another proposal operation', asy
   assert.equal(preview.ok, false);
   assert.match(preview.error, /must be the only operation/);
 });
+
+test('Agent delete_history previews the cascade and applies only after approval', async () => {
+  const calls = [];
+  const workspace = {
+    previewHistoryDeletion: async (id) => { calls.push(`preview:${id}`); return { records: [{ nodeId: 'run' }, { nodeId: 'process' }] }; },
+    applyHistoryDeletion: async (id) => { calls.push(`apply:${id}`); return { records: [{ nodeId: 'run' }, { nodeId: 'process' }] }; },
+  };
+  const proposal = { operations: [{ op: 'delete_history', record_id: 'old-run' }] };
+  const preview = await previewProposal(proposal, workspace);
+  assert.equal(preview.ok, true);
+  assert.match(preview.items[0].lines[0], /2 history records/);
+  const applied = await applyProposal(proposal, workspace);
+  assert.equal(applied.status, 'applied');
+  assert.deepEqual(calls, ['preview:old-run', 'apply:old-run']);
+});

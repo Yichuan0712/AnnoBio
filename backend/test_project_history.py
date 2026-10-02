@@ -107,6 +107,30 @@ class ProjectHistoryTest(unittest.TestCase):
         self.save(updated)
         self.assertEqual(project_store.get_history_record(self.project_id, item["id"])["results"], updated["results"])
 
+    def test_delete_history_requires_exact_cascade_and_releases_assets(self):
+        upstream = record()
+        upstream["inputs"] = {"dataset": {"content": {"rows": [[{"kind": "pdf", "assetIds": ["old-asset"]}]]}}}
+        dependent = record(node_id="process-1", signature="process-signature")
+        dependent["kind"] = "process"
+        dependent["sourceRecordIds"] = [upstream["id"]]
+        independent = record(node_id="run-2", signature="other-signature")
+        for item in (upstream, dependent, independent):
+            self.save(item)
+        body = project_store.HistoryDelete(record_id=upstream["id"], expected_ids=[upstream["id"]])
+        with self.assertRaises(HTTPException) as mismatch:
+            project_store.delete_history_records(self.project_id, body)
+        self.assertEqual(mismatch.exception.status_code, 409)
+        project = project_store._read_project(self.project_id)
+        project["assets"] = {"old-asset": {"path": "originals/old.pdf", "name": "old.pdf", "bytes": 10}}
+        project_store._atomic_write_json(project_store._project_file(self.project_id), project)
+        result = project_store.delete_history_records(self.project_id, project_store.HistoryDelete(
+            record_id=upstream["id"], expected_ids=[upstream["id"], dependent["id"]]
+        ))
+        self.assertEqual(set(result["removed"]), {upstream["id"], dependent["id"]})
+        self.assertEqual([item["id"] for item in project_store.get_history_index(self.project_id)["records"]], [independent["id"]])
+        prune = project_store.prune_unused_assets(self.project_id, project_store.AssetPruneRequest(usedIds=[], dryRun=True))
+        self.assertEqual([item["id"] for item in prune["removed"]], ["old-asset"])
+
 
 if __name__ == "__main__":
     unittest.main()

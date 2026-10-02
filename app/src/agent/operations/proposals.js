@@ -61,10 +61,17 @@ async function fetchSourceRows(source, ids, fields, signal) {
  */
 export async function previewProposal(proposal, workspace) {
   try {
-    const historyOperations = (proposal?.operations || []).filter((op) => op?.op === 'select_history');
+    const historyOperations = (proposal?.operations || []).filter((op) => ['select_history', 'delete_history'].includes(op?.op));
     if (historyOperations.length) {
-      if (proposal.operations.length !== 1 || !historyOperations[0].record_id) throw new Error('select_history must be the only operation and needs record_id.');
-      const plan = await workspace.previewHistorySelection(historyOperations[0].record_id);
+      const op = historyOperations[0];
+      if (proposal.operations.length !== 1 || !op.record_id) throw new Error(`${op.op} must be the only operation and needs record_id.`);
+      if (op.op === 'delete_history') {
+        const plan = await workspace.previewHistoryDeletion(op.record_id);
+        return { ok: true, items: [{ kind: 'remove', type: 'history', title: 'Delete saved history',
+          nodeIds: [...new Set(plan.records.map((record) => record.nodeId))],
+          lines: [`Delete ${plan.records.length} history record${plan.records.length === 1 ? '' : 's'}, including dependent results.`, 'This cannot be undone.'], diffs: [] }], warnings: [] };
+      }
+      const plan = await workspace.previewHistorySelection(op.record_id);
       return { ok: true, items: [{ kind: 'update', type: 'history', title: 'Select saved Run or Process history',
         nodeIds: plan.changedNodeIds, lines: [`Restore inputs on ${plan.changedNodeIds.length} nodes.`, `Affected pipeline nodes: ${plan.affectedNodeIds.length}.`], diffs: [] }], warnings: [] };
     }
@@ -94,6 +101,11 @@ export async function applyProposal(proposal, workspace, { signal, onStatus } = 
     if (operations.length !== 1 || !operations[0].record_id) throw new Error('select_history must be the only operation and needs record_id.');
     const plan = await workspace.applyHistorySelection(operations[0].record_id);
     return { status: 'applied', changes: [`Selected history record ${operations[0].record_id}`], affectedNodeIds: plan.affectedNodeIds };
+  }
+  if (operations.some((op) => op?.op === 'delete_history')) {
+    if (operations.length !== 1 || !operations[0].record_id) throw new Error('delete_history must be the only operation and needs record_id.');
+    const plan = await workspace.applyHistoryDeletion(operations[0].record_id);
+    return { status: 'applied', changes: [`Deleted ${plan.records.length} history records`], affectedNodeIds: [...new Set(plan.records.map((record) => record.nodeId))] };
   }
   const sources = await loadSources();
   const imported = new Map();

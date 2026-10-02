@@ -200,6 +200,34 @@ class HistoryRecordSave(BaseModel):
     record: dict[str, Any]
 
 
+class HistoryDelete(BaseModel):
+    record_id: str
+    expected_ids: list[str]
+
+
+def _dependent_history_ids(records: dict[str, dict], root_id: str) -> set[str]:
+    if root_id not in records:
+        raise HTTPException(404, "History record not found.")
+    removed = {root_id}
+    while True:
+        removed_scores = [records[id] for id in removed if records[id].get("kind") == "score"]
+        new = set()
+        for record_id, record in records.items():
+            inputs = record.get("inputs") or {}
+            if record_id in removed:
+                continue
+            if (removed.intersection(record.get("sourceRecordIds") or [])
+                    or (record.get("kind") == "score" and (inputs.get("runRecordId") in removed or inputs.get("groundTruthSourceRecordId") in removed))
+                    or (record.get("kind") == "review" and any(
+                        score.get("signature") == inputs.get("scoreSignature")
+                        and (not inputs.get("scoreNodeId") or score.get("nodeId") == inputs.get("scoreNodeId"))
+                        for score in removed_scores))):
+                new.add(record_id)
+        if not new:
+            return removed
+        removed.update(new)
+
+
 class DatasetExport(BaseModel):
     headers: list[str]
     columnTypes: list[str] = []
@@ -653,6 +681,23 @@ def save_history_record(project_id: str, record_id: str, body: HistoryRecordSave
         _atomic_write_json(path, record)
         _atomic_write_json(_history_root(project_id) / "index.json", {"version": 1, "records": entries})
     return {"ok": True}
+
+
+@router.post("/{project_id}/history/delete")
+def delete_history_records(project_id: str, body: HistoryDelete):
+    with _lock:
+        _read_project(project_id)
+        bundle = _read_history_bundle(project_id)
+        removed = _dependent_history_ids(bundle["records"], body.record_id)
+        if removed != set(body.expected_ids) or len(body.expected_ids) != len(removed):
+            raise HTTPException(409, "History changed. Review the deletion again.")
+        if any(bundle["records"][id].get("status") == "running" for id in removed):
+            raise HTTPException(409, "A dependent history record is running.")
+        entries = [entry for entry in bundle["index"]["records"] if entry["id"] not in removed]
+        _atomic_write_json(_history_root(project_id) / "index.json", {"version": 1, "records": entries})
+        for record_id in removed:
+            _history_record_file(project_id, record_id).unlink(missing_ok=True)
+    return {"removed": sorted(removed)}
 
 
 @router.post("/{project_id}/export/dataset")

@@ -37,3 +37,13 @@ export async function saveRunHistoryRecord(projectId, record) {
     body: JSON.stringify({ record }),
   }));
 }
+
+export async function deleteRunHistoryRecords(projectId, recordId, expectedIds) {
+  const desktop = desktopApi();
+  if (desktop) return desktop.deleteRunHistoryRecords(projectId, recordId, expectedIds);
+  return readJson(await fetch(`${historyUrl(projectId)}/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ record_id: recordId, expected_ids: expectedIds }),
+  }));
+}

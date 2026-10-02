@@ -9,7 +9,7 @@ function formatEntry(entry, index, currentId) {
 }
 
 /** Add History immediately before the pane toggle in a Run/Process window. */
-export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, isDisabled = () => false }) {
+export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelete, isDisabled = () => false }) {
   const panel = overlay.querySelector('.modal-panel');
   const actions = overlay.querySelector('.modal-header-actions');
   if (!panel || !actions || !loadEntries || !onSelect) return { close() {} };
@@ -48,6 +48,8 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, isDisab
       }
       entries.forEach((entry, index) => {
         const item = formatEntry(entry, index, currentId);
+        const container = document.createElement('div');
+        container.className = 'modal-history-popup__row';
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'modal-history-popup__item';
@@ -71,7 +73,30 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, isDisab
             popup.appendChild(message);
           }
         });
-        popup.appendChild(row);
+        container.appendChild(row);
+        if (onDelete) {
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'modal-history-popup__delete';
+          remove.textContent = 'Delete';
+          remove.title = item.current ? 'Select another result before deleting this record' : 'Delete this record and dependent history';
+          remove.disabled = item.current || isDisabled();
+          remove.addEventListener('click', async () => {
+            remove.disabled = true;
+            try {
+              const deleted = await onDelete(entry.id);
+              if (deleted) await open(); else remove.disabled = item.current || isDisabled();
+            } catch (error) {
+              remove.disabled = false;
+              const message = document.createElement('p');
+              message.className = 'modal-history-popup__error';
+              message.textContent = String(error?.message || error);
+              popup.appendChild(message);
+            }
+          });
+          container.appendChild(remove);
+        }
+        popup.appendChild(container);
       });
     } catch (error) {
       const message = document.createElement('p');

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { collectHistoryAssetIds } from './runHistoryAssets.js';
+import { dependentHistoryIds } from './runHistoryDeletion.js';
 
 export const YC_EXTENSION = '.yc';
 const BUNDLE_VERSION = 1;
@@ -360,6 +361,33 @@ export class ProjectAssets {
       await fs.writeFile(temp, JSON.stringify(next, null, 2), 'utf8');
       await replaceFile(temp, resolved);
       return { ok: true };
+    });
+  }
+
+  async deleteHistoryRecords(file, recordId, expectedIds) {
+    return this.enqueue(async () => {
+      const resolved = path.resolve(file);
+      const payload = await this.readBundlePayload(resolved);
+      if (!payload?.project) throw new Error('Project file is missing or invalid.');
+      const history = historyOf(payload);
+      const removed = dependentHistoryIds(Object.values(history.records), recordId);
+      if (removed.length !== expectedIds?.length || removed.some((id) => !expectedIds.includes(id))) {
+        throw new Error('History changed. Review the deletion again.');
+      }
+      if (removed.some((id) => history.records[id].status === 'running')) throw new Error('A dependent history record is running.');
+      const removedSet = new Set(removed);
+      const records = Object.fromEntries(Object.entries(history.records).filter(([id]) => !removedSet.has(id)));
+      const next = {
+        ...payload,
+        history: {
+          index: { version: 1, records: history.index.records.filter((entry) => !removedSet.has(entry.id)) },
+          records,
+        },
+      };
+      const temp = resolved + '.' + crypto.randomUUID() + '.tmp';
+      await fs.writeFile(temp, JSON.stringify(next, null, 2), 'utf8');
+      await replaceFile(temp, resolved);
+      return { removed };
     });
   }
 

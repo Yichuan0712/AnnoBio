@@ -2852,6 +2852,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   let panelProjectPath = '';
   let agentMountGeneration = 0;
   let pendingAgentMount = false;
+  const agentHistoryDeletionPreviews = new Map();
   function mountAgentPanel() {
     if (pendingAgentMount || workspacePanels.agentHost.querySelector('.agent-window-overlay')) return;
     pendingAgentMount = true;
@@ -2872,6 +2873,22 @@ export function buildWorkflowCanvas(root, options = {}) {
         applyHistorySelection: async (recordId) => {
           const plan = await planHistorySelectionForCanvas(recordId);
           applyAgentCanvasState(plan.state, { highlightNodeIds: plan.changedNodeIds });
+          return plan;
+        },
+        previewHistoryDeletion: async (recordId) => {
+          const session = historySession;
+          if (!session?.projectId || canvasHistoryVersion !== 1) throw new Error('History is not available for this project.');
+          const plan = await session.planDelete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses] });
+          agentHistoryDeletionPreviews.set(recordId, { projectId: session.projectId, ids: plan.ids });
+          return plan;
+        },
+        applyHistoryDeletion: async (recordId) => {
+          const session = historySession;
+          const preview = agentHistoryDeletionPreviews.get(recordId);
+          if (!session?.projectId || !preview || preview.projectId !== session.projectId) throw new Error('Preview this history deletion again.');
+          const plan = await session.delete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses] }, preview.ids);
+          agentHistoryDeletionPreviews.delete(recordId);
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           return plan;
         },
         highlightNodes: highlightPipelineNodes,
@@ -4845,6 +4862,27 @@ export function buildWorkflowCanvas(root, options = {}) {
         loadCanvasState(plan.state);
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         getNodeById(nodeId)?.click();
+      },
+      delete: async (recordId) => {
+        let resolved;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          resolved = await reconcileHistory();
+          if (!resolved?.stale) break;
+        }
+        if (resolved?.stale) throw new Error('Canvas changed while preparing deletion. Try again.');
+        const options = { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses] };
+        const plan = await historySession.planDelete(recordId, getCanvasState(), options);
+        const count = plan.records.length;
+        const descendants = count > 1 ? ` This also deletes ${count - 1} dependent record${count === 2 ? '' : 's'}.` : '';
+        const names = [...new Set(plan.records.map((record) => record.nodeId))];
+        const affected = ` Affected nodes: ${names.slice(0, 8).join(', ')}${names.length > 8 ? `, and ${names.length - 8} more` : ''}.`;
+        const approved = await showConfirm(`Delete this history record?${descendants}${affected} This cannot be undone.`, {
+          title: 'Delete History', confirmText: `Delete ${count} record${count === 1 ? '' : 's'}`,
+        });
+        if (!approved) return false;
+        await historySession.delete(recordId, getCanvasState(), options, plan.ids);
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+        return true;
       },
     };
   }

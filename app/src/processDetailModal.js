@@ -396,6 +396,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
   if (history) attachRunHistoryPicker({
     overlay, loadEntries: history.loadEntries,
     onSelect: (recordId) => history.select(recordId, () => close({ discard: true })),
+    onDelete: history.delete,
     isDisabled: () => running,
   });
   refreshResults();

@@ -159,6 +159,10 @@
 .modal-history-popup__item span,
 .modal-history-popup__item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal-history-popup__item small { color: var(--text-muted); }
+.modal-history-popup__row { display: flex; align-items: center; }
+.modal-history-popup__row .modal-history-popup__item { min-width: 0; flex: 1; }
+.modal-history-popup__delete { border: 0; background: transparent; color: var(--danger, #b42318); cursor: pointer; padding: 8px; }
+.modal-history-popup__delete:disabled { opacity: .4; cursor: default; }
 
 .working-dataset-readonly .working-dataset-link-images,
 .working-dataset-readonly .working-dataset-link-pdf,

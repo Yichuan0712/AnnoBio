@@ -46,7 +46,7 @@ import { createUndoHistory } from './undoHistory.js';
 import { reportAppError } from './appErrors.js';
 import { pruneUnusedAssets as pruneUnusedAssetsWeb } from './webImageApi.js';
 import { RunHistorySession } from './runHistorySession.js';
-import { loadRunHistoryIndex, loadRunHistoryRecord, saveRunHistoryRecord } from './runHistoryStore.js';
+import { loadRunHistoryIndex, loadRunHistoryRecord, saveRunHistoryRecord, deleteRunHistoryRecords } from './runHistoryStore.js';
 
 // Web has no "recent files" of its own the way the OS gives desktop one — without this, every
 // page refresh drops back to "Open a project" even though the project itself is untouched. Falls
@@ -104,6 +104,7 @@ window.addEventListener('DOMContentLoaded', () => {
       loadIndex: loadRunHistoryIndex,
       loadRecord: loadRunHistoryRecord,
       saveRecord: saveRunHistoryRecord,
+      deleteRecords: deleteRunHistoryRecords,
       saveCanvas: (projectId, state) => isElectron
         ? window.electronAPI.saveProject(projectId, state)
         : saveWebProject(projectId, state),
