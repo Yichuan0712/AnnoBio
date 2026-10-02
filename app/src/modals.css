@@ -8328,6 +8328,10 @@ button.btn.btn-danger:hover:not(:disabled) {
 
 /* 左栏：复用 run-detail-main 的外框/标题栏/底部按钮位（margin-top: auto），
    中间可编辑区用 process-editor-mid 撑满剩余高度 */
+.process-input-wrap {
+  flex-shrink: 0;
+}
+
 .process-editor-mid {
   flex: 1;
   min-height: 0;

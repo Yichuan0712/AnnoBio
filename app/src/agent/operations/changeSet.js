@@ -622,7 +622,7 @@ export function planChangeSet(state, operations, ctx) {
         prompt: ['name', 'note', 'sections', 'section_edits', 'input_types', 'output'],
         dataset: ['name', 'note', 'columns', 'rows'],
         process: ['name', 'code', 'primary_input'],
-        run: ['name', 'input_dataset', 'input_mapping'],
+        run: ['name', 'prompt', 'input_dataset', 'input_mapping'],
         score: ['name', 'ground_truth', 'pairing', 'comparison', 'combine', 'match_code'],
         sampler: ['name'],
         promptReview: ['name'],
@@ -684,16 +684,31 @@ export function planChangeSet(state, operations, ctx) {
 
       if (node.type === 'run') {
         if (node.runPending) fail(`Run "${before}" is running; stop it before changing it.`);
-        if ('input_dataset' in set || 'input_mapping' in set) {
-          const prompt = resolve(next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === node.nodeId)?.fromId, 'the run\'s prompt', ['prompt']);
+        if ('prompt' in set || 'input_dataset' in set || 'input_mapping' in set) {
+          // Like the Run window: a Run picks its Prompt and Dataset, and both lock once it has results.
+          if (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1') {
+            fail(`Run "${before}" already has results, so its prompt, input and mapping are fixed. Add a new run (add_run) instead.`);
+          }
+          const currentPromptId = next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === node.nodeId)?.fromId;
+          const prompt = 'prompt' in set
+            ? resolve(set.prompt, 'prompt', ['prompt'])
+            : resolve(currentPromptId, 'the run\'s prompt', ['prompt']);
           const dataset = 'input_dataset' in set
             ? resolve(set.input_dataset, 'input_dataset', ['dataset'])
             : resolve(node.runWorkingSetId, 'the run\'s input dataset', ['dataset']);
-          const mapping = validateMapping(prompt, dataset, set.input_mapping ?? parseJson(node.runInputToColumn, {}));
+          // A new Prompt keeps only the old mapping for inputs it shares, as the Run window does.
+          const promptInputNames = new Set(promptInputs(prompt, ctx.extractInputFields).map((input) => input.name));
+          const keptMapping = Object.fromEntries(Object.entries(parseJson(node.runInputToColumn, {}))
+            .filter(([name]) => prompt.nodeId === currentPromptId || promptInputNames.has(name)));
+          const mapping = validateMapping(prompt, dataset, set.input_mapping ?? keptMapping);
+          if (prompt.nodeId !== currentPromptId) {
+            disconnectWhere((c) => c.type === 'prompt-to-run' && c.toId === node.nodeId);
+            connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
+            lines.push(`Prompt "${nodeTitle(prompt)}"`);
+          }
           node.runWorkingSetId = dataset.nodeId;
           node.runInputToColumn = JSON.stringify(mapping);
           lines.push(`Input "${nodeTitle(dataset)}"; mapping: ${Object.entries(mapping).map(([k, v]) => `${k} ← ${v}`).join(', ')}`);
-          if (runResultsExist(node)) lines.push('Its existing results were produced with the old input.');
         }
       }
 

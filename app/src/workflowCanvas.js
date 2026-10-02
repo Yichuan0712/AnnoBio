@@ -1264,7 +1264,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     ));
     const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === processNode?.dataset?.processPrimaryDatasetId)
       ? processNode.dataset.processPrimaryDatasetId
-      : (incoming?.fromId || datasets[0]?.nodeId || '');
+      : (incoming?.fromId || '');
     if (primaryDatasetId && processNode?.dataset) processNode.dataset.processPrimaryDatasetId = primaryDatasetId;
     return { datasets, primaryDatasetId };
   }
@@ -3274,27 +3274,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         const samplerNodeId = node.dataset.nodeId || '';
         document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId } }));
       },
-      'process-this-dataset': () => addProcessForDataset(node),
-      'run-this-prompt': () => {
-        const left = parseFloat(node.style.left) || 0;
-        const top = parseFloat(node.style.top) || 0;
-        const width = node.offsetWidth || 280;
-        const runNode = createRunNode({
-          left: left + width + NEW_NODE_OFFSET,
-          top,
-          title: 'Run',
-        });
-        if (runNode?.dataset?.nodeId) {
-          connections.push({
-            fromId: node.dataset.nodeId,
-            toId: runNode.dataset.nodeId,
-            type: EDGE_TYPE_PROMPT_TO_RUN,
-          });
-          updateEdges();
-        }
-        updateContentSize();
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      },
+      'process-this-dataset': () => newProcessNode({ datasetNode: node }),
+      'run-this-prompt': () => newRunNode({ promptNode: node }),
       duplicate: () => {
         const newNode = duplicateNode(false);
         if (newNode) {
@@ -4012,16 +3993,25 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
   });
 
-  function addProcessForDataset(datasetNode) {
-    if (datasetNode?.dataset?.nodeType !== 'dataset') return;
-    const left = (parseFloat(datasetNode.style.left) || 0) + (datasetNode.offsetWidth || 280) + NEW_NODE_OFFSET;
-    const top = parseFloat(datasetNode.style.top) || 0;
-    const processNode = createProcessNode({
-      left,
-      top,
-      title: 'Process',
-    });
-    if (processNode?.dataset?.nodeId) {
+  /** Where a node created on its own (not from a source node) appears: the visible top left. */
+  function visibleNodePosition() {
+    return { left: scrollWrapper.scrollLeft + 40, top: scrollWrapper.scrollTop + 40 };
+  }
+  function besideNode(sourceNode) {
+    return {
+      left: (parseFloat(sourceNode.style.left) || 0) + (sourceNode.offsetWidth || 280) + NEW_NODE_OFFSET,
+      top: parseFloat(sourceNode.style.top) || 0,
+    };
+  }
+
+  /**
+   * Adds a Process. A Process picks its df Dataset in its window; started from a Dataset, it
+   * begins with that one. `open` opens its window, as when it is added from the top bar.
+   */
+  function newProcessNode({ datasetNode = null, open = false } = {}) {
+    const fromDataset = datasetNode?.dataset?.nodeType === 'dataset';
+    const processNode = createProcessNode({ ...(fromDataset ? besideNode(datasetNode) : visibleNodePosition()), title: 'Process' });
+    if (processNode?.dataset?.nodeId && fromDataset) {
       processNode.dataset.processPrimaryDatasetId = datasetNode.dataset.nodeId || '';
       connections.push({
         fromId: datasetNode.dataset.nodeId,
@@ -4032,11 +4022,35 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
     updateContentSize();
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    if (open) processNode?.click();
+    return processNode;
+  }
+
+  /** Adds a Run. A Run picks its Prompt and Dataset in its window; started from a Prompt, it begins with that one. */
+  function newRunNode({ promptNode = null, open = false } = {}) {
+    const fromPrompt = promptNode?.dataset?.nodeType === 'prompt' || promptNode?.classList?.contains('workflow-node--prompt');
+    const runNode = createRunNode({ ...(fromPrompt ? besideNode(promptNode) : visibleNodePosition()), title: 'Run' });
+    if (runNode?.dataset?.nodeId && fromPrompt) {
+      connections.push({
+        fromId: promptNode.dataset.nodeId,
+        toId: runNode.dataset.nodeId,
+        type: EDGE_TYPE_PROMPT_TO_RUN,
+      });
+      updateEdges();
+    }
+    updateContentSize();
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    if (open) runNode?.click();
+    return runNode;
   }
 
   document.addEventListener('workflow:add-process-node', (e) => {
     const sourceNodeId = e.detail?.sourceNodeId || '';
-    addProcessForDataset(sourceNodeId ? getNodeById(sourceNodeId) : null);
+    newProcessNode({ datasetNode: sourceNodeId ? getNodeById(sourceNodeId) : null, open: e.detail?.open === true });
+  });
+  document.addEventListener('workflow:add-run-node', (e) => {
+    const promptNodeId = e.detail?.promptNodeId || '';
+    newRunNode({ promptNode: promptNodeId ? getNodeById(promptNodeId) : null, open: e.detail?.open === true });
   });
 
   document.addEventListener('workflow:add-sampler-node', (e) => {

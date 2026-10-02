@@ -7,6 +7,7 @@
 
 import { getNextRowIndex, mergeResumeResults, embedInputRow, processApiResults, markEmptyOutputAsError } from './runResumeUtils.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
+import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { compileRows } from './runInputBuilder.js';
@@ -97,6 +98,9 @@ export { deriveOutputFields };
 export function openRunDetailModal({
   node,
   getWorkingSets = () => [],
+  getPrompts = () => [],
+  getPromptId = () => '',
+  selectPrompt = () => {},
   getPromptInputFields = () => [],
   getSubsetContent = () => ({ headers: [], rows: [] }),
   getPromptTemplate = () => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }),
@@ -117,7 +121,7 @@ export function openRunDetailModal({
     }
   });
 
-  const inputFields = getPromptInputFields();
+  let inputFields = getPromptInputFields();
   let selectedNodeId = (node?.dataset?.runWorkingSetId || '').trim();
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
   const runName = (node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent?.trim() || 'Run').trim() || 'Run';
@@ -158,6 +162,10 @@ export function openRunDetailModal({
         <div class="run-detail-main">
           <p class="run-detail-main-label">Run settings</p>
           <div class="dataset-meta-wrap run-detail-meta-wrap">
+            <div class="dataset-meta-field">
+              <label class="dataset-meta-label" for="run-detail-prompt-picker">Input prompt</label>
+              ${nodePickerHtml({ id: 'run-detail-prompt-picker', placeholder: 'Select input prompt', ariaLabel: 'Select input prompt' })}
+            </div>
             <div class="dataset-meta-field">
               <label class="dataset-meta-label" for="run-detail-ws-picker">Input dataset</label>
               <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select input dataset">
@@ -201,6 +209,23 @@ export function openRunDetailModal({
   const dropdownEl = overlay.querySelector('#run-detail-ws-dropdown');
   const formErrorEl = overlay.querySelector('#run-detail-form-error');
   const inputsListEl = overlay.querySelector('#run-detail-inputs-list');
+  // Same picker as the Input dataset below it; it locks with the Dataset once the Run has results.
+  const promptPicker = bindNodePicker(overlay.querySelector('#run-detail-prompt-picker'), {
+    placeholder: 'Select input prompt',
+    getOptions: getPrompts,
+    getValue: getPromptId,
+    onSelect: (promptNodeId) => {
+      selectPrompt(promptNodeId);
+      inputFields = getPromptInputFields();
+      // Keep only the mapping for the new Prompt's inputs; the column memory refills matching names.
+      inputToColumn = Object.fromEntries(Object.entries(inputToColumn).filter(([name]) => inputFields.includes(name)));
+      if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
+      renderInputMappings();
+      refreshButton();
+    },
+    isLocked: () => isCompleted() || isRunning() || getNodeResults().results.length > 0,
+    closeWithin: overlay,
+  });
   const runBtn = overlay.querySelector('.run-detail-run-btn');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
   const workingSets = getWorkingSets();
@@ -282,11 +307,13 @@ export function openRunDetailModal({
     runBtn.classList.add('btn-secondary', 'btn-danger');
     pickerEl.classList.add('run-detail-ws-picker--locked');
     pickerEl.setAttribute('aria-disabled', 'true');
+    promptPicker.setLocked(true);
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
     overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
   }
 
   function applyUnlock() {
+    promptPicker.setLocked(false);
     pickerEl.classList.remove('run-detail-ws-picker--locked');
     pickerEl.removeAttribute('aria-disabled');
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = false; });
@@ -301,6 +328,7 @@ export function openRunDetailModal({
       runBtn.classList.add('btn-secondary');
       pickerEl.classList.add('run-detail-ws-picker--locked');
       pickerEl.setAttribute('aria-disabled', 'true');
+      promptPicker.setLocked(true);
       inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
       overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
       return;
@@ -314,6 +342,7 @@ export function openRunDetailModal({
     if (isResumeState) {
       pickerEl.classList.add('run-detail-ws-picker--locked');
       pickerEl.setAttribute('aria-disabled', 'true');
+      promptPicker.setLocked(true);
       inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
       overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
     } else {
@@ -323,8 +352,9 @@ export function openRunDetailModal({
     runBtn.classList.add('btn-primary');
     runBtn.textContent = isResumeState ? 'Resume' : 'Run';
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
-    runBtn.disabled = !(selectedNodeId && allMapped);
+    runBtn.disabled = !(getPromptId() && selectedNodeId && allMapped);
   }
+
 
   function getInputHeaders() {
     if (node?.dataset?.runInputContent) {
@@ -728,7 +758,11 @@ export function openRunDetailModal({
     const inputTypes = getPromptTemplate()?.inputTypes || {};
     const headerSet = new Set(headers);
     inputsListEl.innerHTML = '';
-    if (inputFields.length === 0) { inputsListEl.innerHTML = '<p class="run-detail-placeholder">No prompt inputs.</p>'; refreshButton(); return; }
+    if (inputFields.length === 0) {
+      inputsListEl.innerHTML = `<p class="run-detail-placeholder">${getPromptId() ? 'No prompt inputs.' : 'Choose an Input prompt first.'}</p>`;
+      refreshButton();
+      return;
+    }
     inputFields.forEach((inputName) => {
       let col = inputToColumn[inputName] || '';
       const expected = inputTypes[inputName];
