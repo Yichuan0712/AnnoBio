@@ -627,7 +627,7 @@ def save_history_record(project_id: str, record_id: str, body: HistoryRecordSave
     record = dict(body.record)
     if not _ID_RE.fullmatch(record_id or "") or record.get("id") != record_id:
         raise HTTPException(400, "History record ID is invalid.")
-    if record.get("kind") not in ("run", "process") or record.get("status") not in ("running", "stopped", "completed", "failed"):
+    if record.get("kind") not in ("run", "process", "score", "review") or record.get("status") not in ("running", "stopped", "completed", "failed"):
         raise HTTPException(400, "History record kind or status is invalid.")
     if not isinstance(record.get("nodeId"), str) or not record["nodeId"] or not isinstance(record.get("signature"), str) or not record["signature"]:
         raise HTTPException(400, "History record node or signature is missing.")
@@ -642,7 +642,7 @@ def save_history_record(project_id: str, record_id: str, body: HistoryRecordSave
             for key in ("id", "nodeId", "kind", "signature", "inputs"):
                 if record.get(key) != existing.get(key):
                     raise HTTPException(409, "History record inputs cannot change.")
-            if existing.get("status") == "completed" and record != existing:
+            if existing.get("status") == "completed" and existing.get("kind") in ("run", "process") and record != existing:
                 raise HTTPException(409, "Completed history records cannot change.")
         elif any(entry.get("nodeId") == record["nodeId"] and entry.get("signature") == record["signature"] for entry in index["records"]):
             raise HTTPException(409, "This input already has a history record.")

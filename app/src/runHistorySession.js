@@ -2,6 +2,7 @@ import { planLegacyHistoryMigration } from './runHistoryMigration.js';
 import { resolveHistoryCanvasState } from './runHistoryResolver.js';
 import { planHistorySelection } from './runHistorySelection.js';
 import { captureHistoryInput, runningHistoryRecord } from './runHistoryCapture.js';
+import { analysisInputKeys } from './runAnalysisHistory.js';
 
 function hasLegacyOutput(node) {
   try {
@@ -62,9 +63,28 @@ export class RunHistorySession {
           await this.storage.saveRecord(projectId, record);
         }
       }
+      this.index = await this.storage.loadIndex(projectId);
+      if (initialMigration) {
+        const resolved = await this.resolve(migration.state);
+        const keys = await analysisInputKeys(resolved.state, resolved.currentRecordIds);
+        for (const node of migration.state.nodes || []) {
+          const scoreKey = keys.score.get(node.nodeId);
+          if (node.type === 'score' && scoreKey && (node.scoreMatchResult || node.scoreRowExcludedFromScoring)) {
+            await this.saveAnalysis(node.nodeId, 'score', scoreKey, {
+              scoreMatchResult: node.scoreMatchResult || null,
+              scoreRowExcludedFromScoring: node.scoreRowExcludedFromScoring || {},
+            });
+          }
+          const reviewKey = keys.review.get(node.nodeId);
+          if (reviewKey && (node.reviewResult || node.reviewProgress)) {
+            await this.saveAnalysis(node.nodeId, 'review', reviewKey, {
+              reviewResult: node.reviewResult || null, reviewProgress: node.reviewProgress || 0,
+            });
+          }
+        }
+      }
       await this.storage.saveCanvas(projectId, migration.state);
       canvas = migration.state;
-      this.index = await this.storage.loadIndex(projectId);
     }
     return { ...(await this.resolve(canvas)), migration };
   }
@@ -121,5 +141,27 @@ export class RunHistorySession {
   entriesForNode(nodeId) {
     return this.index.records.filter((entry) => entry.nodeId === nodeId)
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  }
+
+  async analysisRecord(nodeId, kind, signature) {
+    if (!signature) return null;
+    const entry = this.index.records.find((item) => item.nodeId === nodeId && item.kind === kind && item.signature === signature);
+    return entry ? this.storage.loadRecord(this.projectId, entry.id) : null;
+  }
+
+  async saveAnalysis(nodeId, kind, key, results) {
+    if (!this.projectId || !['score', 'review'].includes(kind) || !key?.signature) return null;
+    const previous = await this.analysisRecord(nodeId, kind, key.signature);
+    if (previous && JSON.stringify(previous.results) === JSON.stringify(results)) return previous;
+    const at = this.now?.() || new Date().toISOString();
+    const record = previous
+      ? { ...previous, results, updatedAt: at }
+      : {
+        id: this.createId?.() || globalThis.crypto.randomUUID().replaceAll('-', ''),
+        nodeId, kind, signature: key.signature, status: 'completed',
+        createdAt: at, updatedAt: at, inputs: key.inputs, results,
+      };
+    await this.putRecord(record);
+    return record;
   }
 }

@@ -97,6 +97,16 @@ class ProjectHistoryTest(unittest.TestCase):
         self.assertEqual([entry["id"] for entry in result["removed"]], ["orphan"])
         self.assertIn("kept", project_store._read_project(self.project_id)["assets"])
 
+    def test_score_analysis_can_update_under_same_input_signature(self):
+        item = record(node_id="score-1", signature="score-signature")
+        item["kind"] = "score"
+        item["inputs"] = {"runRecordId": "run-record-1"}
+        item["results"] = {"scoreMatchResult": "old"}
+        self.save(item)
+        updated = {**item, "results": {"scoreMatchResult": "new"}}
+        self.save(updated)
+        self.assertEqual(project_store.get_history_record(self.project_id, item["id"])["results"], updated["results"])
+
 
 if __name__ == "__main__":
     unittest.main()

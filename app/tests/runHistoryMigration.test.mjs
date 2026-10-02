@@ -279,3 +279,28 @@ test('opening a merged old canvas migrates only its unrecorded result nodes', as
   assert.deepEqual(new Set(Object.keys(opened.currentRecordIds)), new Set(['run', 'process', 'new-run', 'new-process']));
   assert.equal(opened.migration.detachedDatasetIds.length, 0);
 });
+
+test('first open archives legacy Score and Review caches under their input signatures', async () => {
+  const old = structuredClone(graph);
+  old.nodes.push({
+    type: 'score', nodeId: 'score', scoreGroundTruthId: 'input',
+    scoreMapping: {}, scoreMatchResult: '{"matched":true}',
+    scoreRowExcludedFromScoring: { 0: true }, reviewResult: '{"reviewed":true}',
+  });
+  old.connections.push({ type: 'run-to-score', fromId: 'run', toId: 'score' });
+  const records = new Map();
+  let nextId = 0;
+  const session = new RunHistorySession({
+    loadIndex: async () => ({ version: 1, records: [...records.values()].map(({ id, nodeId, kind, signature, status }) => ({ id, nodeId, kind, signature, status })) }),
+    loadRecord: async (_project, id) => records.get(id),
+    saveRecord: async (_project, record) => { records.set(record.id, record); },
+    saveCanvas: async () => {},
+    createId: () => String(++nextId).padStart(32, '0'), now: () => '2026-10-02T00:00:00Z',
+  });
+  await session.open('project', old);
+  const score = [...records.values()].find((item) => item.kind === 'score');
+  const review = [...records.values()].find((item) => item.kind === 'review');
+  assert.equal(score.results.scoreMatchResult, '{"matched":true}');
+  assert.equal(review.results.reviewResult, '{"reviewed":true}');
+  assert.equal(score.inputs.runRecordId, [...records.values()].find((item) => item.kind === 'run').id);
+});
