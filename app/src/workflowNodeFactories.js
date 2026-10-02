@@ -1,5 +1,5 @@
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
-import { reviewSettingsOverrides } from './nodeSettingsModal.js';
+import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt } from './workflowNodeColors.js';
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';

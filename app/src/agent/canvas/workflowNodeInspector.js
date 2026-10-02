@@ -5,7 +5,6 @@
  */
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 import { displayCell, normalizeDatasetContent } from '../../datasetContent.js';
-import { RUN_NUMBER_FIELDS } from '../../nodeSettingsModal.js';
 
 export const MAX_ROWS_PER_READ = 50;
 
@@ -298,7 +297,6 @@ function inspectRun(node, ctx, options) {
       inputDataset: linkedNode(dataset),
       inputMapping: mapping,
       model: credentialLabel(node.runCredentialId, options),
-      settings: Object.fromEntries(RUN_NUMBER_FIELDS.map((f) => [f.key, node.runSettings?.[f.key] ?? 'default'])),
       status: runStatus(node, results, inputRowCount),
       progressPercent: Number(node.runProgress) || (node.runCompleted ? 100 : 0),
       inputRows: inputRowCount,

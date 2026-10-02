@@ -59,7 +59,7 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { prepareReviewBody, prepareAssets } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { displayCell, cloneCell, isAssetCell } from './datasetContent.js';
-import { openReviewSettingsModal, ensureScoreReviewDefaults } from './nodeSettingsModal.js';
+import { ensureScoreReviewDefaults } from './nodeSettings.js';
 
 const API_BASE = BACKEND_API_BASE;
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -1545,7 +1545,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <div class="score-detail-results-footer-row" id="score-detail-results-footer-row" hidden>
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
-                  <button type="button" class="btn btn-secondary score-detail-review-settings-btn">Review settings</button>
                   <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create a Review node and run analysis with the selected model">Review</button>
                   <button type="button" class="btn btn-secondary score-detail-review-payload-preview" id="score-detail-review-payload-preview" title="Temporary: preview Review payload by input (model output vs ground-truth tables per group). Does not start a Review job.">Debug</button>
                 </div>
@@ -1570,7 +1569,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   const codeHostEl = overlay.querySelector('#score-detail-code-host');
   const codeResultsEl = overlay.querySelector('#score-detail-code-results');
   const codeRunBtn = overlay.querySelector('.score-detail-code-run-btn');
-  const reviewSettingsBtn = overlay.querySelector('.score-detail-review-settings-btn');
   const saveToWorkspaceBtn = overlay.querySelector('#score-detail-save-to-workspace');
   const addPromptReviewBtn = overlay.querySelector('#score-detail-add-prompt-review');
   const reviewPayloadPreviewBtn = overlay.querySelector('#score-detail-review-payload-preview');
@@ -3384,17 +3382,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     void updateReviewButtonState();
   }
 
-  function openReviewSettings() {
-    if (!node) return Promise.resolve();
-    return openReviewSettingsModal({
-      node,
-      getPromptSections: async () => {
-        const payload = await Promise.resolve(getReviewPayload && getReviewPayload());
-        return Array.isArray(payload?.prompt_sections) ? payload.prompt_sections : [];
-      },
-    });
-  }
-  reviewSettingsBtn.addEventListener('click', () => { void openReviewSettings(); });
 
   async function updateSaveToWorkspaceButton() {
     if (!saveToWorkspaceBtn) return;
@@ -3432,11 +3419,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   addPromptReviewBtn.addEventListener('click', async () => {
     if (!node?.dataset?.nodeId) return;
-    if (!(node.dataset.reviewCredentialId || '').trim()) {
-      await openReviewSettings();
-    }
+    if (!(node.dataset.reviewCredentialId || '').trim()) await ensureScoreReviewDefaults(node);
     const credentialId = (node.dataset.reviewCredentialId || '').trim();
-    if (!credentialId) return;
+    if (!credentialId) {
+      showAlert('No Review model: set a default Review model in Settings.', { title: 'Review' });
+      return;
+    }
     await runReviewFromScore({
       scoreNodeId: node.dataset.nodeId,
       getReviewPayload,

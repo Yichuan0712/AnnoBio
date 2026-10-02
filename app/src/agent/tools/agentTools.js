@@ -8,11 +8,8 @@ import { nodeTitle, readNodeRows, traceRunRow } from '../canvas/workflowNodeInsp
 import { loadSources } from '../operations/proposals.js';
 import { previewTableRows } from '../execution/runJobs.js';
 import { runProcessCode } from '../../processRunClient.js';
-import { RUN_NUMBER_FIELDS } from '../../nodeSettingsModal.js';
 
 const MAX_TOOL_RESULT_CHARS = 24000;
-// The Run settings dialog's fields, so the Agent sets the same keys within the same ranges.
-const RUN_SETTINGS_DOC = RUN_NUMBER_FIELDS.map((f) => `${f.key} ${f.min}-${f.max}`).join(', ');
 
 export const ASK_USER_TOOL = 'ask_user';
 export const PROPOSE_CHANGES_TOOL = 'propose_changes';
@@ -119,12 +116,12 @@ Operations ("op" plus the fields listed):
 - add_process: ref, name, primary_input (dataset, df in the code), code defining process(df); other datasets are df_<alias> (see inspect_node on a process, or the process-code guide). Not run until the user runs it.
 - add_prompt: ref, name, note?, sections [{name, content}] with {variable} inputs, input_types? {variable: text | image | pdf}, output {return_shape: single | table, fields [{key, type: str | float | list_str | list_float, description, examples?}]}.
 - add_prompt_version: ref, prompt (source), name?, and what to change: section_edits [{name, content}] (replaces those sections by name, appends new names, keeps the rest) or sections (the complete new list), input_types, output (only what changes: {return_shape} alone keeps the fields), note. Everything else is copied. Prefer this over editing a prompt that already has runs.
-- add_run: ref, prompt, input_dataset, input_mapping {prompt input: column}, credential_id? (default: the default Run credential), settings? {${RUN_SETTINGS_DOC}} (whole numbers; any key left out uses Settings → Run defaults), name?. Not started until the user starts it.
-- add_score: ref, run, ground_truth (dataset), comparison [{field (prompt output key), ground_truth_columns, match?}], pairing? [{run_input_column (or "#" for row number), ground_truth_columns, match?}] to decide which ground-truth row belongs to which run row, combine? (all | any), review_method?; or match_code defining match(input_row, output_row, gt_row) instead of rules. match: {ignore_case, ignore_symbols, ignore_whitespace, contains, semantic, embedding, rxnorm, mesh: booleans; numeric: exact | abs | rel | decimals, tolerance, decimals}.
+- add_run: ref, prompt, input_dataset, input_mapping {prompt input: column}, name?. It uses the model and settings in Settings → Run defaults. Not started until the user starts it.
+- add_score: ref, run, ground_truth (dataset), comparison [{field (prompt output key), ground_truth_columns, match?}], pairing? [{run_input_column (or "#" for row number), ground_truth_columns, match?}] to decide which ground-truth row belongs to which run row, combine? (all | any); or match_code defining match(input_row, output_row, gt_row) instead of rules. match: {ignore_case, ignore_symbols, ignore_whitespace, contains, semantic, embedding, rxnorm, mesh: booleans; numeric: exact | abs | rel | decimals, tolerance, decimals}.
 - save_run_results: ref, run, name?. Saves a run's results (input columns plus output fields) as a dataset.
 - save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a dataset.
 - apply_review: ref, review, suggestion_ids, name?. Creates a new prompt from the review's prompt with those suggestions applied.
-- update: node, set {field: value}. prompt: name, note, section_edits or sections, input_types, output. dataset: name, note, columns, rows (text-only datasets). process: name, code, primary_input. run: name, input_dataset, input_mapping, credential_id (not once the run has results), settings (only the keys given change; a key set to null, or settings: null, goes back to the default). score: name, ground_truth, comparison (+ pairing, combine), match_code, review_method. sampler, review: name.
+- update: node, set {field: value}. prompt: name, note, section_edits or sections, input_types, output. dataset: name, note, columns, rows (text-only datasets). process: name, code, primary_input. run: name, input_dataset, input_mapping. score: name, ground_truth, comparison (+ pairing, combine), match_code. sampler, review: name.
 - remove: node.`,
     {
       summary: { type: 'string', description: 'One sentence for the user: what this proposal does and why.' },

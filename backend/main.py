@@ -148,8 +148,8 @@ DEFAULT_SETTINGS = {
     # The Agent model's context window in tokens; 0 = auto (the model registries, else
     # AGENT_FALLBACK_CONTEXT_TOKENS). Sizes the chat history the Agent sends (/api/agent/context).
     "agent_context_tokens": 0,
-    # Registered review method id (backend/review_methods.py); blank = registry default. Per-node choice on a
-    # Review-capable Score node (dataset.reviewMethod) overrides this.
+    # Registered review method id (backend/review_methods.py); blank = registry default. There is no
+    # per-node choice; a method an older project saved on a Score node (dataset.reviewMethod) still wins.
     "default_review_method": "",
     "run_max_tokens": 8192,
     "review_max_tokens": 32768,

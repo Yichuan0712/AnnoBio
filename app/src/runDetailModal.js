@@ -14,7 +14,7 @@ import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { cloneCell, displayCell } from './datasetContent.js';
 import { deriveOutputFields } from './runResultsExport.js';
-import { openRunSettingsModal, ensureRunNodeModel, runSettingsOverrides } from './nodeSettingsModal.js';
+import { ensureRunNodeModel, runSettingsOverrides } from './nodeSettings.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
@@ -179,7 +179,6 @@ export function openRunDetailModal({
             <div class="run-detail-llm-actions-row">
               <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
               <div class="run-detail-llm-actions-right">
-                <button type="button" class="btn btn-secondary run-detail-settings-btn">Run settings</button>
                 <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
               </div>
             </div>
@@ -200,7 +199,7 @@ export function openRunDetailModal({
   const triggerColorEl = overlay.querySelector('#run-detail-ws-trigger-color');
   const triggerTextEl = overlay.querySelector('#run-detail-ws-trigger-text');
   const dropdownEl = overlay.querySelector('#run-detail-ws-dropdown');
-  const settingsBtn = overlay.querySelector('.run-detail-settings-btn');
+  const formErrorEl = overlay.querySelector('#run-detail-form-error');
   const inputsListEl = overlay.querySelector('#run-detail-inputs-list');
   const runBtn = overlay.querySelector('.run-detail-run-btn');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
@@ -828,19 +827,6 @@ export function openRunDetailModal({
     refreshButton();
   })();
 
-  function openSettings() {
-    if (!node) return Promise.resolve();
-    const modelLocked = isCompleted() || isRunning() || getNodeResults().results.length > 0;
-    return openRunSettingsModal({
-      node,
-      modelLocked,
-      onChange: () => {
-        selectedCredentialId = (node.dataset.runCredentialId || '').trim();
-        refreshButton();
-      },
-    });
-  }
-  settingsBtn.addEventListener('click', () => { void openSettings(); });
 
   runBtn.addEventListener('click', async () => {
     if (isCompleted()) return;
@@ -857,9 +843,15 @@ export function openRunDetailModal({
     }
     if (!selectedNodeId) return;
     if (!selectedCredentialId) {
-      await openSettings();
-      if (!selectedCredentialId) return;
+      await ensureRunNodeModel(node);
+      selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
     }
+    if (!selectedCredentialId) {
+      formErrorEl.textContent = 'No Run model: set a default Run model in Settings.';
+      formErrorEl.hidden = false;
+      return;
+    }
+    formErrorEl.hidden = true;
 
     let content = getSubsetContent(selectedNodeId);
     try {

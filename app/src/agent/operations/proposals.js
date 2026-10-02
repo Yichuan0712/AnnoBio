@@ -54,13 +54,9 @@ async function fetchSourceRows(source, ids, fields, signal) {
   }
 }
 
-function credentialIdSet(credentialsById) {
-  return credentialsById ? new Set(credentialsById.keys()) : undefined;
-}
-
 /**
  * @param {{operations: object[]}} proposal the propose_changes arguments
- * @param {{getCanvasState: Function, extractInputFields: Function, credentialsById?: Map}} workspace
+ * @param {{getCanvasState: Function, extractInputFields: Function}} workspace
  * @returns {Promise<{ok: true, items: object[], warnings: string[]} | {ok: false, error: string}>}
  */
 export async function previewProposal(proposal, workspace) {
@@ -69,7 +65,6 @@ export async function previewProposal(proposal, workspace) {
     const plan = planChangeSet(workspace.getCanvasState(), proposal?.operations, {
       extractInputFields: workspace.extractInputFields,
       sources,
-      credentialIds: credentialIdSet(workspace.credentialsById),
     });
     return {
       ok: true,
@@ -99,7 +94,6 @@ export async function applyProposal(proposal, workspace, { signal, onStatus } = 
     extractInputFields: workspace.extractInputFields,
     sources,
     imported,
-    credentialIds: credentialIdSet(workspace.credentialsById),
   });
   workspace.applyCanvasState(plan.state, { highlightNodeIds: plan.nodeIds });
   const byId = new Map(plan.state.nodes.map((n) => [n.nodeId, n]));
