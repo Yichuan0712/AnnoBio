@@ -13,6 +13,7 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { cloneCell, displayCell } from './datasetContent.js';
 import { deriveOutputFields } from './runResultsExport.js';
 import { ensureRunNodeModel } from './nodeSettings.js';
+import { attachRunHistoryPicker } from './runHistoryPicker.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
@@ -109,6 +110,7 @@ export function openRunDetailModal({
   isRunNameAlreadyUsedForPrompt = () => false,
   getRunMappingsFromCanvas,
   onWorkingSetChange = () => {},
+  history = null,
 }) {
   (getRunMappingsFromCanvas?.() || []).forEach((parsed) => {
     if (parsed && typeof parsed === 'object') {
@@ -123,6 +125,7 @@ export function openRunDetailModal({
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
   const runName = (node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent?.trim() || 'Run').trim() || 'Run';
   const nodeId = node?.dataset?.nodeId || '';
+  const historyMode = !!history;
 
   let runId = getPendingRunId() || null;
   const resultsState = {
@@ -220,7 +223,7 @@ export function openRunDetailModal({
       renderInputMappings();
       refreshButton();
     },
-    isLocked: () => isCompleted() || isRunning() || getNodeResults().results.length > 0,
+    isLocked: () => isRunning() || (!historyMode && (isCompleted() || getNodeResults().results.length > 0)),
     closeWithin: overlay,
   });
   const runBtn = overlay.querySelector('.run-detail-run-btn');
@@ -295,11 +298,14 @@ export function openRunDetailModal({
       runBtn.textContent = 'Run completed';
       runBtn.classList.remove('btn-primary', 'btn-danger');
       runBtn.classList.add('btn-secondary');
-      pickerEl.classList.add('run-detail-ws-picker--locked');
-      pickerEl.setAttribute('aria-disabled', 'true');
-      promptPicker.setLocked(true);
-      inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
-      overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
+      if (historyMode) applyUnlock();
+      else {
+        pickerEl.classList.add('run-detail-ws-picker--locked');
+        pickerEl.setAttribute('aria-disabled', 'true');
+        promptPicker.setLocked(true);
+        inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
+        overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
+      }
       return;
     }
     if (isRunning()) {
@@ -308,7 +314,7 @@ export function openRunDetailModal({
     }
     const { results } = getNodeResults();
     const isResumeState = results.length > 0;
-    if (isResumeState) {
+    if (isResumeState && !historyMode) {
       pickerEl.classList.add('run-detail-ws-picker--locked');
       pickerEl.setAttribute('aria-disabled', 'true');
       promptPicker.setLocked(true);
@@ -791,11 +797,19 @@ export function openRunDetailModal({
 
   function closeModal() {
     document.removeEventListener('workflow:run-results-updated', onRunResultsUpdated);
+    document.removeEventListener('workflow:history-resolved', onHistoryResolved);
     overlay.remove();
     document.body.style.overflow = '';
   }
 
   document.addEventListener('workflow:run-results-updated', onRunResultsUpdated);
+  function onHistoryResolved() {
+    if (!historyMode || isRunning() || !overlay.isConnected) return;
+    const { results, outputFields } = getNodeResults();
+    showResults(results, outputFields, isCompleted() ? 'complete' : (results.length ? 'incomplete' : 'complete'));
+    refreshButton();
+  }
+  if (historyMode) document.addEventListener('workflow:history-resolved', onHistoryResolved);
   overlay.querySelector('.modal-close').addEventListener('click', closeModal);
   attachModalPaneCycle({
     overlay,
@@ -803,9 +817,14 @@ export function openRunDetailModal({
     leftOnlyLabel: 'Show run settings panel only',
     rightOnlyLabel: 'Show results panel only',
   });
+  if (history) attachRunHistoryPicker({
+    overlay, loadEntries: history.loadEntries,
+    onSelect: (recordId) => history.select(recordId, closeModal),
+    isDisabled: isRunning,
+  });
 
   function isDatasetMappingLocked() {
-    return isCompleted() || isRunning() || (getNodeResults().results.length > 0);
+    return isRunning() || (!historyMode && (isCompleted() || getNodeResults().results.length > 0));
   }
   triggerEl.addEventListener('click', (e) => {
     e.preventDefault();
@@ -832,6 +851,7 @@ export function openRunDetailModal({
 
 
   runBtn.addEventListener('click', async () => {
+    if (historyMode) await history.reconcile?.();
     if (isCompleted()) return;
     if (runId) {
       try {

@@ -7,6 +7,7 @@
  */
 
 import { EditorView, basicSetup } from 'codemirror';
+import { Compartment } from '@codemirror/state';
 import { python } from '@codemirror/lang-python';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
@@ -15,6 +16,7 @@ import { resolveDataframeProcessCode } from './processCode.js';
 import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
 import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 import { openProcessDatasetsDialog } from './processDatasetsDialog.js';
+import { attachRunHistoryPicker } from './runHistoryPicker.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_COMMENT_LINE_CHARS = 70;
@@ -103,7 +105,7 @@ function restoreResults(node, ...keys) {
  * @param {{ node: HTMLElement, getProcessDatasets: () => { datasets: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, syncProcessDependencies?: (code: string) => void, setPrimaryDataset?: (datasetNodeId: string, code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
  *   setPrimaryDataset: the Process picks its df Dataset in this window, like a Run picks its Prompt
  */
-export function openProcessDetailModal({ node, runProcessNode, getProcessDatasets, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName }) {
+export function openProcessDetailModal({ node, runProcessNode, getProcessDatasets, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName, history = null }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -181,8 +183,23 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
     closeDatasetsDialog?.();
     closeDatasetsDialog = openProcessDatasetsDialog(readDatasets().bindings);
   });
-  const editorView = new EditorView({ doc: initialCode, extensions: [basicSetup, python()], parent: editorHost });
+  const editable = new Compartment();
+  const editorView = new EditorView({
+    doc: initialCode,
+    extensions: [basicSetup, python(), editable.of(EditorView.editable.of(true)), EditorView.updateListener.of((update) => {
+      if (!update.docChanged || !history) return;
+      node.dataset.processDfCode = update.state.doc.toString();
+      scheduleHistoryRefresh();
+    })],
+    parent: editorHost,
+  });
   const getCode = () => editorView.state.doc.toString();
+  if (history) node.dataset.processDfCode = getCode();
+  let historyRefreshTimer = null;
+  function scheduleHistoryRefresh() {
+    clearTimeout(historyRefreshTimer);
+    historyRefreshTimer = setTimeout(() => { void refreshHistoryState(); }, 150);
+  }
 
   // Same picker as a Run window's Input dataset.
   const primaryPicker = bindNodePicker(overlay.querySelector('#process-primary-picker'), {
@@ -198,6 +215,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
         const nextDefault = buildDefaultCode(readDatasets().bindings.find((binding) => binding.primary)?.content?.headers || []);
         editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: nextDefault } });
       }
+      if (history) scheduleHistoryRefresh();
     },
     isLocked: () => running,
     closeWithin: overlay,
@@ -284,9 +302,24 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
   function setRunningUi(isRunning) {
     running = isRunning;
     primaryPicker.setLocked(isRunning);
+    editorView.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!isRunning)) });
     runBtn.textContent = isRunning ? 'Running, click to stop' : 'Run';
     runBtn.classList.toggle('btn-danger', isRunning);
     if (saveBtnEl) saveBtnEl.disabled = isRunning || !lastResults;
+  }
+
+  async function refreshHistoryState() {
+    if (!history || running || !overlay.isConnected) return;
+    try {
+      const { entries, currentId } = await history.loadEntries();
+      const current = entries.find((entry) => entry.id === currentId);
+      if (!overlay.isConnected || running) return;
+      runBtn.disabled = current?.status === 'completed';
+      runBtn.textContent = current?.status === 'completed' ? 'Run completed'
+        : current?.status === 'stopped' || current?.status === 'failed' ? 'Restart' : 'Run';
+      lastResults = restoreResults(node, 'processDfResults', 'processResults');
+      refreshResults();
+    } catch (_) { /* startRun reports storage errors when used */ }
   }
 
   async function startRun() {
@@ -321,7 +354,10 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
     } finally {
       currentJobId = null;
       cancelRequested = false;
-      if (overlay.isConnected) setRunningUi(false);
+      if (overlay.isConnected) {
+        setRunningUi(false);
+        if (history) void refreshHistoryState();
+      }
     }
   }
 
@@ -336,9 +372,10 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
     void startRun();
   });
 
-  function close() {
+  function close({ discard = false } = {}) {
+    clearTimeout(historyRefreshTimer);
     closeDatasetsDialog?.();
-    if (node?.dataset) {
+    if (!discard && node?.dataset) {
       node.dataset.processDfCode = getCode();
       node.dataset.processActiveMode = 'df';
       delete node.dataset.processCode;
@@ -356,7 +393,13 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
   attachModalPaneCycle({ overlay, bothLabel: 'Show both panels', leftOnlyLabel: 'Show code setup panel only', rightOnlyLabel: 'Show results panel only' });
+  if (history) attachRunHistoryPicker({
+    overlay, loadEntries: history.loadEntries,
+    onSelect: (recordId) => history.select(recordId, () => close({ discard: true })),
+    isDisabled: () => running,
+  });
   refreshResults();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
+  if (history) void refreshHistoryState();
 }

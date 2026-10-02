@@ -664,6 +664,10 @@ export function planChangeSet(state, operations, ctx) {
       }
 
       if (node.type === 'dataset' && ('columns' in set || 'rows' in set)) {
+        if (next.historyVersion === 1 && (node.sourceRunNodeId
+          || next.connections.some((edge) => edge.type === 'process-to-dataset' && edge.toId === node.nodeId))) {
+          fail('This Dataset follows a Run or Process result and is read-only. Duplicate it to edit a separate copy.');
+        }
         if (datasetColumns(node).some((c) => c.type !== 'text')) fail('Datasets with image or pdf columns cannot be rewritten here; edit them in the dataset view.');
         const current = normalizeDatasetContent(node.datasetContent || { headers: [], rows: [] });
         const { headers, rows } = normalizeTable({ columns: set.columns ?? current.headers, rows: set.rows ?? current.rows });
@@ -686,7 +690,7 @@ export function planChangeSet(state, operations, ctx) {
         if (node.runPending) fail(`Run "${before}" is running; stop it before changing it.`);
         if ('prompt' in set || 'input_dataset' in set || 'input_mapping' in set) {
           // Like the Run window: a Run picks its Prompt and Dataset, and both lock once it has results.
-          if (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1') {
+          if (next.historyVersion !== 1 && (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1')) {
             fail(`Run "${before}" already has results, so its prompt, input and mapping are fixed. Add a new run (add_run) instead.`);
           }
           const currentPromptId = next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === node.nodeId)?.fromId;

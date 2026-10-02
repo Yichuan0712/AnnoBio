@@ -114,6 +114,64 @@
   display: block;
 }
 
+.modal-history-button {
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  padding: 5px 9px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.modal-history-button:hover { color: var(--text); background: var(--hover); }
+.modal-history-popup {
+  position: absolute;
+  z-index: 5;
+  top: 52px;
+  right: 44px;
+  width: min(350px, 82vw);
+  max-height: min(440px, 65vh);
+  overflow: auto;
+  padding: 8px;
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+.modal-history-popup[hidden] { display: none; }
+.modal-history-popup__heading { padding: 5px 8px 9px; font-weight: 600; }
+.modal-history-popup__empty,
+.modal-history-popup__error { margin: 8px; color: var(--text-muted); font-size: 12px; }
+.modal-history-popup__error { color: var(--danger, #b42318); }
+.modal-history-popup__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.modal-history-popup__item:hover:not(:disabled) { background: var(--hover); }
+.modal-history-popup__item:disabled { cursor: default; opacity: .72; }
+.modal-history-popup__item span,
+.modal-history-popup__item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-history-popup__item small { color: var(--text-muted); }
+
+.working-dataset-readonly .working-dataset-link-images,
+.working-dataset-readonly .working-dataset-link-pdf,
+.working-dataset-readonly .working-dataset-add-row,
+.working-dataset-readonly .working-dataset-add-col,
+.working-dataset-readonly .working-dataset-delete-row,
+.working-dataset-readonly .working-dataset-delete-col,
+.working-dataset-readonly .wd-header-batch-btn,
+.working-dataset-readonly .wd-image-import-btn,
+.working-dataset-readonly .wd-pdf-import-btn,
+.working-dataset-readonly .wd-image-thumb-remove,
+.working-dataset-readonly .wd-pdf-chip-remove { display: none; }
+
 .modal-overlay--maximized {
   inset: var(--app-top-bar-height) 0 0 0;
   align-items: stretch;

@@ -61,6 +61,13 @@ async function fetchSourceRows(source, ids, fields, signal) {
  */
 export async function previewProposal(proposal, workspace) {
   try {
+    const historyOperations = (proposal?.operations || []).filter((op) => op?.op === 'select_history');
+    if (historyOperations.length) {
+      if (proposal.operations.length !== 1 || !historyOperations[0].record_id) throw new Error('select_history must be the only operation and needs record_id.');
+      const plan = await workspace.previewHistorySelection(historyOperations[0].record_id);
+      return { ok: true, items: [{ kind: 'update', type: 'history', title: 'Select saved Run or Process history',
+        nodeIds: plan.changedNodeIds, lines: [`Restore inputs on ${plan.changedNodeIds.length} nodes.`, `Affected pipeline nodes: ${plan.affectedNodeIds.length}.`], diffs: [] }], warnings: [] };
+    }
     const sources = await loadSources();
     const plan = planChangeSet(workspace.getCanvasState(), proposal?.operations, {
       extractInputFields: workspace.extractInputFields,
@@ -82,8 +89,13 @@ export async function previewProposal(proposal, workspace) {
  * @returns {Promise<object>} the tool result the Agent sees
  */
 export async function applyProposal(proposal, workspace, { signal, onStatus } = {}) {
-  const sources = await loadSources();
   const operations = Array.isArray(proposal?.operations) ? proposal.operations : [];
+  if (operations.some((op) => op?.op === 'select_history')) {
+    if (operations.length !== 1 || !operations[0].record_id) throw new Error('select_history must be the only operation and needs record_id.');
+    const plan = await workspace.applyHistorySelection(operations[0].record_id);
+    return { status: 'applied', changes: [`Selected history record ${operations[0].record_id}`], affectedNodeIds: plan.affectedNodeIds };
+  }
+  const sources = await loadSources();
   const imported = new Map();
   for (const [index, op] of operations.entries()) {
     if (op?.op !== 'import_dataset') continue;
