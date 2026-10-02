@@ -542,9 +542,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
     const headers = Array.isArray(content?.headers) ? content.headers.slice() : [];
     const rows = Array.isArray(content?.rows) ? content.rows.map((row) => (Array.isArray(row) ? row.slice() : [])) : [];
-    if (rows.length === 0) {
-      throw new Error('Dataset has no rows.');
-    }
 
     let sections = [];
     try {
@@ -586,6 +583,27 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const unmapped = inputFields.filter((name) => !String(runInputToColumn[name] || '').trim());
     if (unmapped.length > 0) {
       throw new Error(`Please map all prompt inputs. Unmapped: ${unmapped.join(', ')}`);
+    }
+
+    if (rows.length === 0) {
+      // There are no model calls to make, but the empty Run is still a completed result for
+      // this exact input and must be addressable by downstream History and Process nodes.
+      const historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId)).record : null;
+      const runInputContent = { headers, columnTypes: content?.columnTypes || [], rowIds: content?.rowIds || [], rows: [] };
+      if (historyRecord) await historySession.putRecord({
+        ...historyRecord, status: 'completed', updatedAt: new Date().toISOString(),
+        results: { runResults: [], runInputContent, runOutputFields: [], runProgress: 100 },
+        summary: { ...historyRecord.summary, rowCount: 0, errorCount: 0 },
+      });
+      node.dataset.runInputContent = JSON.stringify(runInputContent);
+      node.dataset.runResults = '[]';
+      node.dataset.runOutputFields = '[]';
+      node.dataset.runCompleted = '1';
+      node.dataset.runProgress = '100';
+      setRunNodeProgress(node, 1, 1);
+      emitRunResultsUpdated({ nodeId: normalizedRunNodeId, results: [], isComplete: true });
+      emitCanvasChanged();
+      return { started: true, completed: true, waitRequired: false, runNodeId: normalizedRunNodeId, runId: null, resultsCount: 0 };
     }
 
     const credentialId = await resolveRunCredentialId(node);

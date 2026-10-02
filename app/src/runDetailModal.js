@@ -866,11 +866,12 @@ export function openRunDetailModal({
       return;
     }
     if (!selectedNodeId) return;
-    if (!selectedCredentialId) {
+    const emptyInput = getSubsetContent(selectedNodeId)?.rows?.length === 0;
+    if (!selectedCredentialId && !emptyInput) {
       await ensureRunNodeModel(node);
       selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
     }
-    if (!selectedCredentialId) {
+    if (!selectedCredentialId && !emptyInput) {
       formErrorEl.textContent = 'No Run model: set a default Run model in Settings.';
       formErrorEl.hidden = false;
       return;

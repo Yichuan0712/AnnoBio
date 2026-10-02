@@ -1,6 +1,7 @@
 import { datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { buildRunResultsTable } from './runResultsExport.js';
+import { cloneCell } from './datasetContent.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -102,7 +103,7 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
       }
       delete dataset.resultMissing;
       dataset.datasetContent = {
-        headers: copy(table.headers), rows: copy(table.rows),
+        headers: copy(table.headers), rows: table.rows.map((row) => row.map(cloneCell)),
         columnTypes: copy(table.columnTypes || []),
         rowIds: table.rows.map((_, index) => table.rowIds?.[index] || `${source.id}:${branch}:${index}`),
       };
