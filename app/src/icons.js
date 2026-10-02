@@ -142,6 +142,16 @@ export const iconWorkflow = (size) => svgIcon({
   paths: ['M7 11v4a2 2 0 0 0 2 2h4'],
 });
 
+/** Lucide "history" — a clock with a return arrow. */
+export const iconHistory = (size) => svgIcon({
+  size,
+  paths: [
+    'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8',
+    'M12 7v5l4 2',
+  ],
+  polylines: ['3 3 3 8 8 8'],
+});
+
 /** Lucide "file-plus" — shared by "batch import PDFs" and "import (one) PDF": the PDF equivalent
  * of iconImageAdd, a plus badge to read as "add" rather than just "here's a file". */
 export const iconFileAdd = (size) => svgIcon({

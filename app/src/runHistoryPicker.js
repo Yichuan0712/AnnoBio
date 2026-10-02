@@ -1,3 +1,5 @@
+import { iconHistory } from './icons.js';
+
 function formatEntry(entry, index, currentId) {
   const when = entry.createdAt ? new Date(entry.createdAt).toLocaleString() : 'Unknown time';
   const summary = entry.summary || {};
@@ -18,7 +20,7 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'modal-history-button';
-  button.textContent = 'History';
+  button.append(iconHistory(14), document.createTextNode('History'));
   button.setAttribute('aria-haspopup', 'dialog');
   button.setAttribute('aria-expanded', 'false');
   actions.insertBefore(button, actions.querySelector('.modal-pane-toggle') || actions.firstChild);

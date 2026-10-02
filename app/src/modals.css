@@ -115,6 +115,9 @@
 }
 
 .modal-history-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 0;
   background: none;
   color: var(--text-muted);
@@ -123,6 +126,7 @@
   font: inherit;
   font-size: 12px;
 }
+.modal-history-button svg { display: block; flex-shrink: 0; }
 .modal-history-button:hover { color: var(--text); background: var(--hover); }
 .modal-history-popup {
   position: absolute;

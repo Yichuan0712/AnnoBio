@@ -5,7 +5,7 @@
  * input_row_index 统一 0-based，展示时 +1
  */
 
-import { markEmptyOutputAsError } from './runResumeUtils.js';
+import { embedInputRow, markEmptyOutputAsError } from './runResumeUtils.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
