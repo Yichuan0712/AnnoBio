@@ -5256,8 +5256,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   let appErrorCount = 0;
   function syncPanelButtons() {
     for (const [button, visible, label] of [
-      [currentPipelineBtn, panelVisibility.pipeline, isElectron ? 'Panel' : 'Current Pipeline'],
-      [agentAssistantBtn, panelVisibility.agent, isElectron ? 'Agent Sidebar' : 'Agent Assistant'],
+      [currentPipelineBtn, panelVisibility.pipeline, isElectron ? 'Toggle Panel' : 'Current Pipeline'],
+      [agentAssistantBtn, panelVisibility.agent, isElectron ? 'Toggle Agent Side Bar' : 'Agent Assistant'],
     ]) {
       button.classList.toggle('is-open', visible);
       button.setAttribute('aria-expanded', String(visible));
