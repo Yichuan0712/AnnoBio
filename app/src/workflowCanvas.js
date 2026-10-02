@@ -5257,13 +5257,14 @@ export function buildWorkflowCanvas(root, options = {}) {
   function syncPanelButtons() {
     const errorNote = appErrorCount ? ` (${appErrorCount} error${appErrorCount === 1 ? '' : 's'})` : '';
     for (const [button, visible, label] of [
-      [currentPipelineBtn, panelVisibility.pipeline, `Current Pipeline${errorNote}`],
+      [currentPipelineBtn, panelVisibility.pipeline, 'Current Pipeline'],
       [agentAssistantBtn, panelVisibility.agent, 'Agent Assistant'],
     ]) {
       button.classList.toggle('is-open', visible);
       button.setAttribute('aria-expanded', String(visible));
-      button.setAttribute('aria-label', `${visible ? 'Collapse' : 'Open'} ${label}`);
-      button.title = `${visible ? 'Collapse' : 'Open'} ${label}`;
+      const name = isElectron ? `${visible ? 'Collapse' : 'Open'} ${label}${button === currentPipelineBtn ? errorNote : ''}` : label;
+      button.setAttribute('aria-label', name);
+      button.title = name;
     }
     panelErrorBadge.hidden = !appErrorCount;
     panelErrorBadge.textContent = appErrorCount > 99 ? '99+' : String(appErrorCount);
