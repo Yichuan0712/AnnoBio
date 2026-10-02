@@ -617,6 +617,20 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
     const samples = compileRows(templateText, headers, rowsToRun, runInputToColumn, inputTypes);
     let historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId)).record : null;
+    if (historyRecord) {
+      let model = credentialId;
+      try {
+        const response = await fetch(`${RUN_API_BASE}/api/credentials`);
+        const credentials = response.ok ? await response.json() : [];
+        const selected = Array.isArray(credentials) ? credentials.find((item) => item.id === credentialId) : null;
+        model = selected?.model || selected?.llm || credentialId;
+      } catch (_) { /* the credential ID still identifies the model if its label is unavailable */ }
+      historyRecord = {
+        ...historyRecord, credentialId, model,
+        summary: { ...historyRecord.summary, model },
+      };
+      await historySession.putRecord(historyRecord);
+    }
     if (historyRecord) pendingRunHistoryRecords.set(normalizedRunNodeId, historyRecord);
 
     node.dataset.runInputContent = JSON.stringify({ headers, columnTypes: content?.columnTypes || [], rowIds: content?.rowIds || [], rows });
@@ -708,6 +722,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (historyRecord) {
       historyRecord = {
         ...historyRecord, status: 'completed', updatedAt: new Date().toISOString(),
+        summary: { ...historyRecord.summary, errorCount: results.filter((item) => item?.error).length },
         results: { runResults: results, runInputContent: JSON.parse(node.dataset.runInputContent), runOutputFields: returnedOutputFields, runProgress: 100 },
       };
       await historySession.putRecord(historyRecord);

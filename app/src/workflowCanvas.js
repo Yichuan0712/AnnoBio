@@ -1328,6 +1328,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const progress = Number(node?.querySelector('.workflow-node__run-progress')?.getAttribute('aria-valuenow') || 0);
     const updated = {
       ...record, status, updatedAt: new Date().toISOString(),
+      summary: { ...record.summary, errorCount: results.filter((item) => item?.error).length },
       results: {
         runResults: results,
         runInputContent: JSON.parse(node.dataset.runInputContent || 'null'),
@@ -4811,7 +4812,10 @@ export function buildWorkflowCanvas(root, options = {}) {
             outputs,
             statusText: cancelled ? 'Cancelled.' : `${Object.keys(outputs).length} branches returned.`,
           };
-          await session.putRecord({ ...record, status: cancelled ? 'stopped' : 'completed', updatedAt: new Date().toISOString(), results: { dfResults: results } });
+          await session.putRecord({
+            ...record, status: cancelled ? 'stopped' : 'completed', updatedAt: new Date().toISOString(),
+            summary: { ...record.summary, branchCount: Object.keys(outputs).length }, results: { dfResults: results },
+          });
           if (session === historySession) {
             await reconcileHistory();
             document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -5090,6 +5094,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (record) {
       record = {
         ...record, status: cancelled ? 'stopped' : 'completed', updatedAt: new Date().toISOString(),
+        summary: { ...record.summary, branchCount },
         results: { dfResults: JSON.parse(liveNode.dataset.processDfResults) },
       };
       await session.putRecord(record);

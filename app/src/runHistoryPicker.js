@@ -5,7 +5,9 @@ function formatEntry(entry, index, currentId) {
     ? [summary.promptName, ...(summary.datasetNames || [])].filter(Boolean).join(' · ')
     : [summary.codeLine, ...(summary.datasetNames || [])].filter(Boolean).join(' · ');
   const count = summary.rowCount != null ? `${summary.rowCount} rows` : (summary.branchCount != null ? `${summary.branchCount} branches` : '');
-  return { number: `#${index + 1}`, when, title, detail: [count, entry.status || ''].filter(Boolean).join(' · '), current: entry.id === currentId };
+  const errors = summary.errorCount ? `${summary.errorCount} error rows` : '';
+  const model = summary.model || '';
+  return { number: `#${index + 1}`, when, title, detail: [count, entry.status || '', errors, model].filter(Boolean).join(' · '), current: entry.id === currentId };
 }
 
 /** Add History immediately before the pane toggle in a Run/Process window. */
