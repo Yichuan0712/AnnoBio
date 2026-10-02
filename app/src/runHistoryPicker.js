@@ -69,6 +69,7 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
         title.textContent = item.when;
         const status = document.createElement('span');
         status.className = 'modal-history-popup__status';
+        if (entry.status === 'completed') status.classList.add('modal-history-popup__status--completed');
         status.textContent = item.status;
         top.append(title, status);
         if (item.current) {
