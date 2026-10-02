@@ -267,6 +267,7 @@ window.addEventListener('DOMContentLoaded', () => {
   let notifyUndoRedo = () => {};
   const undoHistory = createUndoHistory({
     loadCanvasState: (state) => canvasAPI.loadCanvasState(state),
+    getCanvasState: () => canvasAPI.getCanvasState(),
     onChange: (info) => notifyUndoRedo(info),
   });
   undoHistory.reset(canvasAPI.getCanvasState());
