@@ -167,8 +167,7 @@
 .modal-history-popup__top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
 .modal-history-popup__status { color: var(--text-muted); font-size: 12px; }
 .modal-history-popup__current { color: var(--accent, #4677d5); font-size: 12px; font-weight: 600; }
-.modal-history-popup__summary { font-weight: 600; }
-.modal-history-popup__fact { font-size: 12px; }
+.modal-history-popup__fact { font-size: 12px; font-weight: 400; font-family: inherit; }
 .modal-history-popup__row { display: flex; align-items: center; border-top: 1px solid var(--border); }
 .modal-history-popup__row.is-current { background: var(--hover); }
 .modal-history-popup__row .modal-history-popup__item { min-width: 0; flex: 1; }

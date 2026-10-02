@@ -78,7 +78,7 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
           top.appendChild(current);
         }
         const description = document.createElement('span');
-        description.className = 'modal-history-popup__summary';
+        description.className = 'modal-history-popup__fact';
         description.textContent = item.display.title || '';
         const input = document.createElement('span');
         input.className = 'modal-history-popup__fact';
