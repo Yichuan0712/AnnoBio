@@ -37,10 +37,11 @@ exported pipeline.
 ## Current Pipeline and alternatives
 
 The Current Pipeline panel (toolbar button beside Agent Assistant) lists each pipeline as one route.
-Where a slot has alternatives, such as several prompt versions with Runs, several Runs of one version,
-or several saved result Datasets, the panel shows a picker. Hovering a step highlights its nodes on the
-canvas. Intermediate Datasets can be hidden to shorten the route. The selected route is what export
-uses.
+Its steps are "Run prompt" and "Process data"; Datasets are not shown. Where a step has alternatives,
+such as several prompt versions with Runs, several Runs of one Prompt (also on different Datasets), or
+several Processes reading the same output, the panel shows a picker on that step. Branches come only
+from a Process: its named outputs, or the Datasets one Process merges. Hovering a step highlights its
+Prompt, Run or Process and the Datasets it reads. The selected route is what export uses.
 
 ## Advising on a design
 

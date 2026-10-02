@@ -12,6 +12,7 @@ function promptRunOptions(step) {
         stepId: step.id,
         promptNodeId: version.promptNodeId,
         runNodeId: run.runNodeId,
+        inputDatasetNodeId: run.inputDatasetNodeId || '',
         promptName: version.promptName,
         runName: run.runName || 'Run',
         kind: 'prompt',
@@ -30,8 +31,9 @@ function chooseOption(choiceId, options, selectedByChoiceId, preferredValue = ''
 }
 
 /**
- * Resolves one route through the workflow graph. Choices are made at the node where paths diverge,
- * so shared prefixes and suffixes appear once instead of being repeated as Branch 1/2/3 rows.
+ * Resolves one route through the workflow graph. Choices are made on the Prompt or Process step
+ * where paths diverge, so shared prefixes and suffixes appear once instead of being repeated as
+ * Branch 1/2/3 rows. A branch is a Process's named outputs, or the Datasets one Process merges.
  */
 export function buildSelectedRoute(pipeline, selectedByChoiceId) {
   const steps = Array.isArray(pipeline?.steps) ? pipeline.steps : [];
@@ -48,57 +50,27 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
   const visitedStepIds = new Set();
   const selectedRunByStepId = new Map();
 
-  function buildDatasetStep(step) {
+  /** The Datasets of a slot, narrowed to the ones the selected Run upstream produced. */
+  function datasetOptions(step) {
     const producerRunId = selectedRunByStepId.get(step.producerStepId) || null;
     const datasets = producerRunId
       ? step.datasets.filter((dataset) => dataset.producerRunNodeId === producerRunId)
       : step.datasets;
-    const options = datasets.map((dataset) => ({
+    return datasets.map((dataset) => ({
       value: dataset.datasetNodeId,
       label: dataset.datasetName,
       dataset,
       stepId: step.id,
     }));
-    const selected = chooseOption(step.id, options, selectedByChoiceId);
-    return selected ? {
-      kind: 'dataset', choiceId: step.id, options, selectedValue: selected.value, selectedOption: selected,
-    } : null;
   }
 
-  function buildPromptStep(step, allowedRunIds = null) {
-    const restrictPromptRuns = allowedRunIds instanceof Set && allowedRunIds.size > 0;
-    const options = promptRunOptions(step)
-      .filter((option) => !restrictPromptRuns || allowedRunIds.has(option.runNodeId))
-      .map((option) => ({ ...option, label: option.promptName || 'Prompt' }));
-    const selected = chooseOption(step.id, options, selectedByChoiceId, step.defaultRunNodeId || '');
-    if (!selected) return null;
-    selectedRunByStepId.set(step.id, selected.runNodeId);
-    return {
-      kind: 'prompt', choiceId: step.id, options, selectedValue: selected.value, selectedOption: selected,
-    };
+  function datasetFeeds(dataset, selected) {
+    if (selected?.kind === 'prompt') return (dataset.consumerRunNodeIds || []).includes(selected.runNodeId);
+    if (selected?.kind === 'process') return (dataset.consumerStepIds || []).includes(selected.stepId);
+    return false;
   }
 
-  function buildProcessStep(step) {
-    const selected = {
-      value: `process:${step.processNodeId}`,
-      label: step.processName,
-      stepId: step.id,
-      processNodeId: step.processNodeId,
-      inputDatasets: Array.isArray(step.inputDatasets) ? step.inputDatasets : [],
-      kind: 'process',
-    };
-    return {
-      kind: 'process', choiceId: step.id, options: [selected], selectedValue: selected.value, selectedOption: selected,
-    };
-  }
-
-  function nextStepIdsForRouteStep(routeStep) {
-    const selected = routeStep?.selectedOption;
-    if (!selected) return [];
-    if (selected.dataset) return selected.dataset.consumerStepIds || [];
-    return (outgoing.get(selected.stepId) || []).filter((id) => stepById.has(id));
-  }
-
+  /** The nearest Process every start step reaches: where their branches merge. */
   function findSharedJoin(startIds) {
     const distancesFrom = (startId) => {
       const distances = new Map([[startId, 0]]);
@@ -115,7 +87,7 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
     };
     const distanceMaps = startIds.map(distancesFrom);
     const commonIds = [...distanceMaps[0].keys()].filter((id) => (
-      !startIds.includes(id) && distanceMaps.every((map) => map.has(id))
+      !startIds.includes(id) && stepById.get(id)?.kind === 'process' && distanceMaps.every((map) => map.has(id))
     ));
     commonIds.sort((a, b) => {
       const aDistance = distanceMaps.reduce((sum, map) => sum + map.get(a), 0);
@@ -125,33 +97,21 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
     return commonIds[0] || '';
   }
 
-  function buildBranchLane(startId, joinId) {
-    const lane = [];
-    const seen = new Set();
-    let currentId = startId;
-    let allowedRunIds = null;
-    while (currentId && currentId !== joinId && !seen.has(currentId) && lane.length < 100) {
-      seen.add(currentId);
-      const step = stepById.get(currentId);
-      if (!step) break;
-      const routeStep = step.kind === 'dataset'
-        ? buildDatasetStep(step)
-        : (step.kind === 'prompt' ? buildPromptStep(step, allowedRunIds) : buildProcessStep(step));
-      if (!routeStep) break;
-      lane.push(routeStep);
-      if (routeStep.kind === 'dataset') {
-        allowedRunIds = new Set(routeStep.selectedOption.dataset.consumerRunNodeIds || []);
-      } else {
-        allowedRunIds = null;
-      }
-      const nextIds = nextStepIdsForRouteStep(routeStep);
-      currentId = nextIds.includes(joinId) ? joinId : nextIds[0];
-    }
-    return lane;
+  /** Named outputs of one Process: the only place a route forks. */
+  function isProcessFork(datasetSteps) {
+    const producerStepId = datasetSteps[0]?.producerStepId || '';
+    return producerStepId.startsWith('process:')
+      && datasetSteps.every((step) => step.producerStepId === producerStepId && step.id.includes(':branch:'));
   }
 
-  function walk(candidateStepIds, allowedRunIds = null) {
-    if (route.length >= 200) return;
+  /**
+   * Appends the route from the candidate steps to `out`, stopping before `stopId` (a branch's merge
+   * point). A branch comes only from a Process: its named outputs fork, and Datasets one Process
+   * reads merge. Any other choice between Datasets is made on the step that reads them.
+   */
+  function walk(candidateStepIds, allowedRunIds = null, out = route, stopId = '') {
+    if (out.length >= 200) return;
+    if (stopId && candidateStepIds.includes(stopId)) return;
     const candidateSteps = candidateStepIds
       .map((id) => stepById.get(id))
       .filter((step) => step && !visitedStepIds.has(step.id));
@@ -159,46 +119,43 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
 
     if (candidateSteps.every((step) => step.kind === 'dataset') && candidateSteps.length > 1) {
       const joinId = findSharedJoin(candidateSteps.map((step) => step.id));
-      if (joinId) {
-        const lanes = candidateSteps.map((step) => buildBranchLane(step.id, joinId)).filter((lane) => lane.length);
+      if (joinId || isProcessFork(candidateSteps)) {
+        const lanes = candidateSteps.map((step) => {
+          const lane = [];
+          walk([step.id], null, lane, joinId);
+          return lane;
+        }).filter((lane) => lane.length);
         if (lanes.length > 1) {
-          route.push({ kind: 'branch', lanes });
-          for (const lane of lanes) {
-            for (const laneStep of lane) visitedStepIds.add(laneStep.selectedOption.stepId);
-          }
-          walk([joinId]);
+          out.push({ kind: 'branch', lanes });
+          if (joinId) walk([joinId], null, out, stopId);
           return;
         }
       }
     }
 
     if (candidateSteps.every((step) => step.kind === 'dataset')) {
+      const options = candidateSteps.flatMap(datasetOptions);
+      if (options.length === 0) return;
       const choiceId = candidateSteps.length === 1
         ? candidateSteps[0].id
         : `dataset-choice:${candidateSteps.map((step) => step.id).sort().join('|')}`;
-      const options = [];
-      for (const step of candidateSteps) {
-        const producerRunId = selectedRunByStepId.get(step.producerStepId) || null;
-        const datasets = producerRunId
-          ? step.datasets.filter((dataset) => dataset.producerRunNodeId === producerRunId)
-          : step.datasets;
-        for (const dataset of datasets) {
-          options.push({
-            value: dataset.datasetNodeId,
-            label: dataset.datasetName,
-            dataset,
-            stepId: step.id,
-          });
-        }
+      const datasetStep = { kind: 'dataset', choiceId, options, selectedValue: options[0].value, selectedOption: options[0] };
+      out.push(datasetStep);
+      for (const option of options) visitedStepIds.add(option.stepId);
+      const consumerStepIds = [...new Set(options.flatMap((option) => (
+        option.dataset.consumerStepIds || stepById.get(option.stepId)?.consumerStepIds || []
+      )))];
+      const consumerRunIds = new Set(options.flatMap((option) => option.dataset.consumerRunNodeIds || []));
+      const nextIndex = out.length;
+      walk(consumerStepIds, consumerRunIds, out, stopId);
+      // Of several Datasets, the route uses the one the chosen next step reads.
+      const used = options.length > 1
+        ? options.find((option) => datasetFeeds(option.dataset, out[nextIndex]?.selectedOption))
+        : null;
+      if (used) {
+        datasetStep.selectedValue = used.value;
+        datasetStep.selectedOption = used;
       }
-      const selected = chooseOption(choiceId, options, selectedByChoiceId);
-      if (!selected) return;
-      route.push({ kind: 'dataset', choiceId, options, selectedValue: selected.value, selectedOption: selected });
-      visitedStepIds.add(selected.stepId);
-      const consumerStepIds = selected.dataset.consumerStepIds
-        || stepById.get(selected.stepId)?.consumerStepIds
-        || [];
-      walk(consumerStepIds, new Set(selected.dataset.consumerRunNodeIds || []));
       return;
     }
 
@@ -239,7 +196,7 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
         ? `${option.promptName} — ${option.runName}`
         : option.label || option.promptName,
     }));
-    route.push({
+    out.push({
       kind: displayKind,
       choiceId,
       options: displayOptions,
@@ -250,7 +207,7 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
     if (selected.kind === 'prompt') selectedRunByStepId.set(selected.stepId, selected.runNodeId);
     const nextStepIds = (outgoing.get(selected.stepId) || [])
       .filter((id) => stepById.get(id)?.kind === 'dataset');
-    walk(nextStepIds);
+    walk(nextStepIds, null, out, stopId);
   }
 
   const sourceIds = steps.filter((step) => indegree.get(step.id) === 0).map((step) => step.id);

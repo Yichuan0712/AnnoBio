@@ -8559,7 +8559,6 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-overview-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
 .pipeline-overview-card-title { font-size: 14px; margin: 0; }
 .pipeline-overview-card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
-.pipeline-overview-data-checkbox { color: var(--text-muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
 .pipeline-overview-export { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 .pipeline-overview-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; margin: 0; padding: 0; list-style: none; }
 .pipeline-overview-step {
@@ -8585,6 +8584,7 @@ button.btn.btn-danger:hover:not(:disabled) {
   border: 1px solid var(--border); border-radius: var(--control-radius, 6px); background: var(--bg-bar);
 }
 .pipeline-overview-branch-lanes { display: grid; gap: 6px; min-width: 0; }
+.pipeline-overview-branch--nested { padding: 6px 8px; background: var(--bg); }
 .pipeline-overview-branch-lane { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; max-width: 100%; }
 .pipeline-overview-branch-index {
   flex: 0 0 70px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;

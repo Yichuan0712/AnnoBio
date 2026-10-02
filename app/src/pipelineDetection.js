@@ -118,7 +118,7 @@ function topoSort(ids, localEdges) {
  * @param {{nodes: object[], connections: {fromId:string,toId:string,type:string}[]}} canvasState
  * @returns {Array<{id: string, steps: Array<
  *   {id: string, kind: 'prompt', versions: Array<{promptNodeId: string, promptName: string,
- *      runs: Array<{runNodeId: string, runName: string}>, runNodeIds: string[]}>,
+ *      runs: Array<{runNodeId: string, runName: string, inputDatasetNodeId: string}>, runNodeIds: string[]}>,
  *      defaultVersionIndex: number, defaultRunNodeId: string}
  *   | {id: string, kind: 'process', processNodeId: string, processName: string}
  *   | {id: string, kind: 'dataset', producerStepId: string|null, consumerStepIds: string[],
@@ -161,6 +161,7 @@ export function detectPipelines(canvasState) {
           runs: runNodeIds.map((runNodeId) => ({
             runNodeId,
             runName: nodeById.get(runNodeId)?.runName || 'Run',
+            inputDatasetNodeId: nodeById.get(runNodeId)?.runWorkingSetId || '',
           })),
           // Kept for callers that only need membership in the selected Prompt version.
           runNodeIds,
