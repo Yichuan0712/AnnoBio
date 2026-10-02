@@ -32,6 +32,7 @@ function copyBackend(src, dest) {
 module.exports = {
   packagerConfig: {
     asar: true,
+    icon: path.join(__dirname, 'assets', 'icon'),
     // electron-packager names the packaged output dir `${name}-${platform}-${arch}`,
     // and infers `name` from package.json's `productName` ("AnnoBio") when this
     // isn't set - producing `out/AnnoBio-win32-x64`. The `dist`/`dist:mac` npm
