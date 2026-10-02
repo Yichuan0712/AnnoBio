@@ -420,6 +420,7 @@ def about_page(request: Request):
       <h2 class="about-heading">Contact</h2>
       <p class="page-sub about-contact-intro">For questions about AnnoBio data, methods, website feedback, or collaboration, please contact:</p>
       <p class="about-contact-line">Yichuan Zhang (<a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a>)</p>
+      <p class="about-contact-line">Duolin Wang (<a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>)</p>
     """
     extra_css = """
       .about-heading { font-size: 18px; margin: 32px 0 12px; }
