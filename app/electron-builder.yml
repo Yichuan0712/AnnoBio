@@ -5,6 +5,7 @@ productName: AnnoBio
 directories:
   output: dist
 win:
+  icon: assets/icon.ico
   target:
     - target: nsis
       arch:
@@ -26,6 +27,7 @@ nsis:
   # needed here since we don't set perMachine and don't ship electron-updater.
   packElevateHelper: false
 mac:
+  icon: assets/icon.icns
   # arch intentionally omitted: CI builds one arch per job (see
   # .github/workflows/build-desktop.yml) and passes --x64/--arm64 on the CLI;
   # listing both archs here made electron-builder try to build both from a

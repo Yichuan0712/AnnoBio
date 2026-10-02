@@ -1,11 +1,12 @@
 import { defineConfig } from 'vite';
 
 // https://vitejs.dev/config
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command, forgeConfigSelf }) => ({
   // The Hub (hub/main.py) serves this build's output under /app (root "/" is its own public
   // landing page), so built asset URLs need that prefix. `vite dev` still serves at root, since
   // it has no landing page of its own to conflict with.
-  base: command === 'build' ? '/app/' : '/',
+  // Forge loads the same renderer over file://, where absolute /app URLs cannot resolve.
+  base: forgeConfigSelf ? './' : (command === 'build' ? '/app/' : '/'),
   server: {
     // The brand images live in the repo's images/ directory, one level above this Vite root.
     fs: { allow: ['..'] },

@@ -20,14 +20,16 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'modal-history-button';
-  button.append(iconHistory(14), document.createTextNode('History'));
+  button.append(iconHistory(16));
+  button.setAttribute('aria-label', 'History');
+  button.title = 'History';
   button.setAttribute('aria-haspopup', 'dialog');
   button.setAttribute('aria-expanded', 'false');
   actions.insertBefore(button, actions.querySelector('.modal-pane-toggle') || actions.firstChild);
   const popup = document.createElement('div');
   popup.className = 'modal-history-popup';
   popup.setAttribute('role', 'dialog');
-  popup.setAttribute('aria-label', 'Run history');
+  popup.setAttribute('aria-label', 'History');
   popup.hidden = true;
   panel.appendChild(popup);
 
@@ -47,7 +49,7 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
       if (!entries.length) {
         const empty = document.createElement('p');
         empty.className = 'modal-history-popup__empty';
-        empty.textContent = 'No previous runs.';
+        empty.textContent = 'No history yet.';
         popup.appendChild(empty);
       }
       entries.forEach((entry, index) => {
