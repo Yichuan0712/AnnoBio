@@ -1,11 +1,11 @@
 /**
  * The bottom panel's Prompt Optimization tab: each Prompt version family (promptOptimization.js) as a
  * table of versions with the Precision / Recall / F1 of the Scores that evaluated them (the same
- * numbers as the Score window's banner), so each round of changes can be compared with the last.
+ * numbers as the Score window's banner), so each round of changes can be compared.
  * Click a row to find its Prompt, Run and Score on the canvas.
  */
 import './promptOptimizationPanel.css';
-import { buildPromptFamilies, f1ChangeFromParent } from './promptOptimization.js';
+import { buildPromptFamilies } from './promptOptimization.js';
 import { buildFullScoreMetricsFromComparisonRows } from './agent/canvas/scoreComparisonPrf.js';
 
 function escapeHtml(value) {
@@ -13,13 +13,6 @@ function escapeHtml(value) {
 }
 
 const percent = (value) => (Number.isFinite(value) ? `${value.toFixed(1)}%` : '—');
-
-function changeCell(value) {
-  if (!Number.isFinite(value)) return '<td class="prompt-optimization__num">—</td>';
-  const kind = value > 0 ? 'up' : value < 0 ? 'down' : 'same';
-  const text = `${value > 0 ? '+' : value < 0 ? '−' : '±'}${Math.abs(value).toFixed(1)} pts`;
-  return `<td class="prompt-optimization__num prompt-optimization__change--${kind}">${text}</td>`;
-}
 
 /**
  * @param {HTMLElement} container the tab's container (workspacePanels.tabHost)
@@ -35,7 +28,6 @@ export function mountPromptOptimizationPanel(container, { getCanvasState, getSco
 
   function familyHtml(family, metrics, pending) {
     const byPrompt = new Map(family.versions.map((version) => [version.promptId, version]));
-    const change = pending ? new Map() : f1ChangeFromParent(family, metrics);
     const rows = [];
     for (const version of family.versions) {
       const parentName = byPrompt.get(version.parentId)?.name || '';
@@ -57,17 +49,16 @@ export function mountPromptOptimizationPanel(container, { getCanvasState, getSco
           <td class="prompt-optimization__num">${score ? metric('precision') : ''}</td>
           <td class="prompt-optimization__num">${score ? metric('recall') : ''}</td>
           <td class="prompt-optimization__num prompt-optimization__f1">${score ? metric('f1') : ''}</td>
-          ${score ? changeCell(change.get(score.scoreId)) : '<td class="prompt-optimization__num"></td>'}
         </tr>`);
       });
     }
     return `<section class="prompt-optimization__family">
-      <h3 class="prompt-optimization__title">${escapeHtml(family.versions[0]?.name || 'Prompt')}</h3>
+      <div class="prompt-optimization__header"><h3 class="prompt-optimization__title">${escapeHtml(family.versions[0]?.name || 'Prompt')}</h3></div>
       <table class="prompt-optimization__table">
         <thead><tr>
           <th>Version</th><th>From</th><th>Run</th><th>Score</th><th>Ground truth</th>
           <th class="prompt-optimization__num">Precision</th><th class="prompt-optimization__num">Recall</th>
-          <th class="prompt-optimization__num">F1</th><th class="prompt-optimization__num" title="Compared with the parent version on the same ground truth">F1 change</th>
+          <th class="prompt-optimization__num">F1</th>
         </tr></thead>
         <tbody>${rows.join('')}</tbody>
       </table>
