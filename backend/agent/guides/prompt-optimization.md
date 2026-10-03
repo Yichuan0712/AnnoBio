@@ -19,6 +19,17 @@ Prompts are improved from evidence, not by rewriting them blind:
 Always compare versions on the same input Dataset and the same Score rules; otherwise the difference is
 not attributable to the prompt.
 
+## Comparing versions
+
+The Prompt Optimization tab of the bottom panel shows each prompt's versions as a tree. A version
+made by applying a Review, or added as a new version, sits under the version it came from; the From
+column says which ("Review ... of ...", "New version of ..."). Each row is one Score of one Run, with
+the ground truth it used and its precision, recall and F1. Clicking a row finds that Prompt, Run and
+Score on the canvas. **Export Excel** saves the table, tree included.
+
+The workspace summary gives the same version links, and each Score line gives the same precision,
+recall and F1 as the table. Compare versions from those numbers rather than estimating.
+
 ## Review methods
 
 Reviews use the review method set in Settings → Review defaults:

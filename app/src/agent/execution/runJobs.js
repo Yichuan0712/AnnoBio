@@ -6,6 +6,7 @@
  */
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { displayCell } from '../../datasetContent.js';
+import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
   datasetContentOf,
   inspectWorkflowNode,
@@ -277,7 +278,7 @@ async function scoreSummaries(env, runNodeId) {
   for (const id of scores) {
     const inspection = await env.inspectNode(id);
     const m = inspection?.details?.metrics;
-    if (m) out.push(`Score "${inspection.title}": ${m.matchedRows}/${m.totalRows} rows matched (${Math.round(m.passRate * 1000) / 10}%)`);
+    if (m) out.push(`Score "${inspection.title}": ${formatScoreMetrics(m)}`);
   }
   return out;
 }

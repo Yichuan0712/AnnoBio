@@ -213,6 +213,20 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
   return route;
 }
 
+/**
+ * The route without its Datasets: a Run prompt or Process data chip stands for the Datasets it reads.
+ * A branch whose lanes hold only Datasets says nothing the merging Process does not, so it is dropped.
+ */
+export function getVisibleRoute(route) {
+  return route.flatMap((step) => {
+    if (step.kind === 'dataset') return [];
+    if (step.kind !== 'branch') return [step];
+    const lanes = (step.lanes || []).map(getVisibleRoute);
+    if (lanes.every((lane) => lane.length === 0)) return [];
+    return [{ ...step, lanes: lanes.map((lane) => (lane.length ? lane : [{ kind: 'empty' }])) }];
+  });
+}
+
 export function exportRoutePayload(route) {
   const exported = [];
   const seen = new Set();
