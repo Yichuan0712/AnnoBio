@@ -149,6 +149,53 @@ assert tables['out-a'].equals(tables['out-b'])
             result = subprocess.run([sys.executable, "-c", script], cwd=root, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def run_exported(self, archive, script):
+        with tempfile.TemporaryDirectory(prefix="annobio-process-only-") as folder:
+            with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+                bundle.extractall(folder)
+            result = subprocess.run([sys.executable, "-c", script], cwd=Path(folder) / "compiled",
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_process_only_route_exports_without_llm_engine(self):
+        state = {"nodes": [dataset("raw"), process("clean", "raw", dfCode="def process(df):\n    out = df.copy()\n    out['text'] = out['text'].str.upper()\n    return out\n"),
+                           dataset("cleaned")],
+                 "connections": [edge("raw", "clean", "dataset-to-process"), edge("clean", "cleaned", "process-to-dataset")]}
+        files = self.files(self.build(state)[1])
+        self.assertFalse(any(path.startswith(("engine/", "prompt/")) for path in files))
+        self.assertNotIn(".env.example", files)
+        self.assertNotIn("litellm", files["requirements.txt"])
+        self.assertNotIn("engine", files["main.py"].split("def main", 1)[1])
+        manifest = json.loads(files["pipeline.json"])
+        self.assertEqual((manifest["engines"], manifest["default_engine"]), ([], None))
+        self.run_exported(self.build(state)[1], '''
+import sys
+import pandas as pd
+import main
+pd.DataFrame([{'text': 'a'}, {'text': 'b'}]).to_excel('input.xlsx', sheet_name='Input', index=False)
+sys.argv = ['main.py', '--input', 'input.xlsx', '--output', 'output.xlsx']
+assert main.main() == 0
+assert pd.read_excel('output.xlsx')['text'].tolist() == ['A', 'B']
+''')
+
+    def test_process_only_branched_route_executes(self):
+        state = branched()
+        state["nodes"] = [n for n in state["nodes"] if n["type"] not in {"prompt", "run"}]
+        state["connections"] = [e for e in state["connections"] if e["type"] != "prompt-to-run"]
+        state["nodes"][1]["dfCode"] = "def process(df):\n    return {'left': df, 'right': df.rename(columns={'text': 'other'})}\n"
+        state["nodes"][4]["dfCode"] = "def process(df):\n    out = df.copy()\n    out['text'] = out['text'] + ':' + df_right['other']\n    return out\n"
+        _, archive = self.build(state)
+        self.assertNotIn("engine/__init__.py", self.files(archive))
+        self.run_exported(archive, '''
+import sys
+import pandas as pd
+import main
+pd.DataFrame([{'text': 'a'}]).to_excel('input.xlsx', sheet_name='Input', index=False)
+sys.argv = ['main.py', '--input', 'input.xlsx', '--output', 'output.xlsx']
+assert main.main() == 0
+assert pd.read_excel('output.xlsx', sheet_name=None)['merged']['text'].tolist() == ['a:a']
+''')
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -49,7 +49,7 @@ function describePipelineStep(step, lookup) {
 
 function pipelineLines(canvasState, lookup) {
   const pipelines = detectPipelines(canvasState);
-  if (!pipelines.length) return ['No pipelines yet (a pipeline needs at least one Prompt with a Run).'];
+  if (!pipelines.length) return ['No pipelines yet (a pipeline needs at least one Prompt with a Run, or a Process).'];
   const lines = [];
   pipelines.forEach((pipeline, index) => {
     lines.push(`Pipeline ${index + 1}:`);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPromptFamilies } from '../src/promptOptimization.js';
+import { buildPromptFamilies, familySheetRows } from '../src/promptOptimization.js';
 
 // v1 → Run 1 → Score 1 → Review → v2 (applied), v2 → v3 (new version), and an unrelated duplicate.
 const canvas = () => ({
@@ -41,6 +41,32 @@ test('versions made by Review apply and by Add new version form one family, pare
   assert.deepEqual(family.versions[1].runs[0].scores.map((s) => [s.scoreId, s.groundTruthName]), [['s2', 'Labels'], ['s2-other', 'Other labels']]);
   // The duplicate has no versions and no Run, so it has nothing to show.
   assert.equal(families.some((f) => f.rootId === 'copy'), false);
+});
+
+test('tree prefixes draw the version hierarchy in characters', () => {
+  const state = canvas();
+  state.nodes.push({ type: 'prompt', nodeId: 'v2b', name: 'Classify v2b' }, { type: 'prompt', nodeId: 'v1b', name: 'Classify v1b' });
+  state.connections.push({ type: 'prompt-to-prompt', fromId: 'v2', toId: 'v2b' }, { type: 'prompt-to-prompt', fromId: 'v1', toId: 'v1b' });
+  const [family] = buildPromptFamilies(state);
+  assert.deepEqual(family.versions.map((v) => [v.promptId, v.treePrefix, v.treeContinuation]), [
+    ['v1', '', '│'],
+    ['v1b', '├─ ', '│'],
+    ['v2', '└─ ', '   │'],
+    ['v3', '   ├─ ', '   │'],
+    ['v2b', '   └─ ', ''],
+  ]);
+});
+
+test('Excel rows keep the tree in the Version text and metrics as fractions', () => {
+  const [family] = buildPromptFamilies(canvas());
+  const metrics = new Map([['s1', { precision: 50, recall: 100, f1: 75 }], ['s2', null]]);
+  assert.deepEqual(familySheetRows(family, metrics), [
+    ['Version', 'From', 'Run', 'Score', 'Ground truth', 'Precision', 'Recall', 'F1'],
+    ['Classify', '', 'Run 1', 'Score 1', 'Labels', 0.5, 1, 0.75],
+    ['└─ Classify v2', 'Review "Review 1" of Classify', 'Run 2', 'Score 2', 'Labels', '', '', ''],
+    ['   │', '', 'Run 2', 'Score 2b', 'Other labels', '', '', ''],
+    ['   └─ Classify v3', 'New version of Classify v2', 'Not run', '', '', '', '', ''],
+  ]);
 });
 
 test('a single Prompt with a Run is shown as its own family', () => {

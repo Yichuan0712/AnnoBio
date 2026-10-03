@@ -7,8 +7,9 @@
  *
  * A "pipeline" here is a graph of Prompt (+ the Run that executes it), Process and Dataset steps.
  * Most pipelines read as a linear sequence, but a Process may also receive several Dataset inputs
- * and form an explicit merge point. At least one Prompt is required: a graph of only datasets and
- * processes is data prep, not a pipeline.
+ * and form an explicit merge point. A pipeline needs at least one Prompt Run or Process; a graph of
+ * Datasets alone is not one. Where one Dataset feeds both Prompt Runs and Processes, each kind starts
+ * its own pipeline (see splitByConsumerKind).
  * Score/PromptReview stay out: they're evaluation/tuning scaffolding, not part of "the thing that
  * produces output" this is meant to describe. See the AnnoBio canvas→code-export planning
  * discussion this was built for.
@@ -330,19 +331,88 @@ export function detectPipelines(canvasState) {
     components.push(component);
   }
 
-  // A component only counts as a pipeline if a Prompt runs somewhere in it: a bare
-  // dataset -> process -> dataset chain is data prep, not the thing that produces output.
-  // Numbering happens after this filter so the kept pipelines stay 1..n with no gaps.
   return components
-    .filter((componentIds) => componentIds.some((id) => stepById.get(id)?.kind === STEP_KIND.PROMPT))
-    .map((componentIds, index) => {
+    .flatMap((componentIds) => {
       const idSet = new Set(componentIds);
       const localEdges = stepEdges.filter((e) => idSet.has(e.from) && idSet.has(e.to));
       const order = topoSort(componentIds, localEdges);
+      return splitByConsumerKind(order.map((id) => stepById.get(id)), localEdges);
+    })
+    .map((pipeline, index) => ({ id: `pipeline-${index + 1}`, ...pipeline }));
+}
+
+const MAX_PIPELINES_PER_COMPONENT = 32;
+
+/**
+ * A Dataset read by both Prompt Runs and Processes starts different pipelines rather than one with a
+ * mixed choice: running a Prompt and transforming data are different jobs, not versions of one step.
+ * Each variant keeps one consumer kind at that Dataset and drops whatever only the other kind reached.
+ * A Process needs all of its inputs, so losing any input drops it; a Prompt step stays while any of
+ * its Runs still has an input.
+ */
+function splitByConsumerKind(orderedSteps, edges) {
+  const results = [];
+  const seen = new Set();
+  const queue = [{ steps: orderedSteps, edges }];
+  while (queue.length > 0 && results.length < MAX_PIPELINES_PER_COMPONENT) {
+    const variant = queue.shift();
+    const stepById = new Map(variant.steps.map((step) => [step.id, step]));
+    const mixed = variant.steps.find((step) => step.kind === STEP_KIND.DATASET
+      && new Set(step.consumerStepIds.map((id) => stepById.get(id)?.kind).filter(Boolean)).size > 1);
+    if (!mixed) {
+      if (!variant.steps.some((step) => step.kind !== STEP_KIND.DATASET)) continue;
+      const signature = variant.steps.map((step) => step.id).join('|');
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      results.push(variant);
+      continue;
+    }
+    for (const kind of [STEP_KIND.PROMPT, STEP_KIND.PROCESS]) {
+      const cut = new Set(mixed.consumerStepIds.filter((id) => stepById.get(id)?.kind !== kind));
+      queue.push(pruneVariant(variant, mixed.id, cut, kind));
+    }
+  }
+  return results;
+}
+
+function pruneVariant({ steps, edges }, datasetStepId, cutConsumerIds, keptKind) {
+  const isCut = (e) => e.from === datasetStepId && cutConsumerIds.has(e.to);
+  const dropped = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const step of steps) {
+      if (dropped.has(step.id)) continue;
+      const incoming = edges.filter((e) => e.to === step.id);
+      const liveIncoming = incoming.filter((e) => !isCut(e) && !dropped.has(e.from));
+      const outgoing = edges.filter((e) => e.from === step.id);
+      const liveOutgoing = outgoing.filter((e) => !isCut(e) && !dropped.has(e.to));
+      const lostInput = step.kind === STEP_KIND.PROCESS
+        ? liveIncoming.length < incoming.length
+        : incoming.length > 0 && liveIncoming.length === 0;
+      const orphanSource = incoming.length === 0 && outgoing.length > 0 && liveOutgoing.length === 0;
+      if (lostInput || orphanSource) {
+        dropped.add(step.id);
+        changed = true;
+      }
+    }
+  }
+  const keep = (id) => !dropped.has(id) && !cutConsumerIds.has(id);
+  return {
+    steps: steps.filter((step) => !dropped.has(step.id)).map((step) => {
+      if (step.kind !== STEP_KIND.DATASET) return step;
+      const atCut = step.id === datasetStepId;
+      const keepHere = (id) => (atCut ? keep(id) : !dropped.has(id));
       return {
-        id: `pipeline-${index + 1}`,
-        steps: order.map((id) => stepById.get(id)),
-        edges: localEdges,
+        ...step,
+        consumerStepIds: step.consumerStepIds.filter(keepHere),
+        datasets: step.datasets.map((dataset) => ({
+          ...dataset,
+          consumerStepIds: dataset.consumerStepIds.filter(keepHere),
+          consumerRunNodeIds: atCut && keptKind === STEP_KIND.PROCESS ? [] : dataset.consumerRunNodeIds,
+        })),
       };
-    });
+    }),
+    edges: edges.filter((e) => !isCut(e) && !dropped.has(e.from) && !dropped.has(e.to)),
+  };
 }

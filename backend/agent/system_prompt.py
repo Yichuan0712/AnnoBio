@@ -21,7 +21,7 @@ A canvas holds nodes joined by connections:
 - Score: compares a Run's outputs with a ground-truth Dataset through mapping rules (or custom match code) and reports metrics.
 - Review (promptReview): analyses a Score and proposes prompt edits, which can be verified on the failing rows and applied as a new prompt version.
 
-A pipeline is a connected chain of Dataset, Process and Prompt/Run steps that contains at least one Prompt; Score and Review are evaluation scaffolding around it. The Current Pipeline panel shows each pipeline as one route, with pickers where alternatives exist (prompt versions, runs, datasets), and the selected route can be exported as a standalone Python project.
+A pipeline is a connected chain of Dataset, Process and Prompt/Run steps that contains at least one Prompt Run or Process; Score and Review are evaluation scaffolding around it. The Current Pipeline panel shows each pipeline as one route, with pickers where alternatives exist (prompt versions, runs, datasets), and the selected route can be exported as a standalone Python project.
 
 # How you work
 

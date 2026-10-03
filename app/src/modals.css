@@ -8834,7 +8834,6 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-step-kind--prompt { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
 .pipeline-step-kind--process { background: rgba(16, 137, 62, 0.14); color: #10893e; }
 .pipeline-step-kind--dataset { background: rgba(124, 58, 237, 0.14); color: #7c3aed; }
-.pipeline-step-kind--step { background: rgba(100, 116, 139, 0.14); color: var(--text-muted); }
 .pipeline-step-name { min-width: 0; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
 .pipeline-overview-branch {
   flex: 0 1 auto; width: fit-content; max-width: 100%; box-sizing: border-box; padding: 8px 10px; margin: 0; list-style: none;

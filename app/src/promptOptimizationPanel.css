@@ -12,7 +12,8 @@
    tall as its Export button. */
 .prompt-optimization__family { margin-bottom: 18px; }
 .prompt-optimization__family:last-child { margin-bottom: 0; }
-.prompt-optimization__header { display: flex; align-items: center; min-height: 27.6px; margin-bottom: 10px; }
+.prompt-optimization__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 27.6px; margin-bottom: 10px; }
+.prompt-optimization__export { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 .prompt-optimization__title { margin: 0; font-size: 12px; font-weight: 700; color: var(--text-muted); }
 .prompt-optimization__table {
   width: 100%;
@@ -40,6 +41,12 @@
 .prompt-optimization__row:hover td { background: var(--hover); }
 .prompt-optimization__row:focus-visible { outline: 2px solid var(--primary-btn-text); outline-offset: -2px; }
 .prompt-optimization__version { font-weight: 600; }
+.prompt-optimization__tree {
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 400;
+  color: var(--text-muted);
+}
 .prompt-optimization__muted { color: var(--text-muted); }
 .prompt-optimization__num { text-align: right !important; font-variant-numeric: tabular-nums; }
 .prompt-optimization__f1 { font-weight: 600; }

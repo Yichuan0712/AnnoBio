@@ -187,17 +187,15 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
     const selected = chooseOption(choiceId, nextOptions, selectedByChoiceId, preferredValue);
     if (!selected) return;
 
-    const allPrompts = nextOptions.every((option) => option.kind === 'prompt');
-    const allProcesses = nextOptions.every((option) => option.kind === 'process');
-    const displayKind = allPrompts ? 'prompt' : (allProcesses ? 'process' : 'step');
+    const promptOptionCount = nextOptions.filter((option) => option.kind === 'prompt').length;
     const displayOptions = nextOptions.map((option) => ({
       ...option,
-      label: allPrompts && nextOptions.length > 1
+      label: option.kind === 'prompt' && promptOptionCount > 1
         ? `${option.promptName} — ${option.runName}`
         : option.label || option.promptName,
     }));
     out.push({
-      kind: displayKind,
+      kind: selected.kind,
       choiceId,
       options: displayOptions,
       selectedValue: selected.value,
