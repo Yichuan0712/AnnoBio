@@ -84,6 +84,8 @@ export async function planLegacyHistoryMigration(state, {
   const invalidExistingSources = new Set();
   const detachedDatasetIds = [];
   for (const dataset of next.nodes.filter((node) => node.type === 'dataset')) {
+    // A saved copy is an ordinary table that keeps its pipeline link (datasetHistorySource.js).
+    if (dataset.savedCopy) continue;
     const id = nodeId(dataset);
     let sourceId = String(dataset.sourceRunNodeId || '');
     let branch = 'result';

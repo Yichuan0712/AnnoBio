@@ -79,6 +79,7 @@ export async function previewProposal(proposal, workspace) {
     const plan = planChangeSet(workspace.getCanvasState(), proposal?.operations, {
       extractInputFields: workspace.extractInputFields,
       sources,
+      contentLocks: await workspace.getContentLocks?.(),
     });
     return {
       ok: true,
@@ -118,6 +119,7 @@ export async function applyProposal(proposal, workspace, { signal, onStatus } = 
     extractInputFields: workspace.extractInputFields,
     sources,
     imported,
+    contentLocks: await workspace.getContentLocks?.(),
   });
   workspace.applyCanvasState(plan.state, { highlightNodeIds: plan.nodeIds });
   const byId = new Map(plan.state.nodes.map((n) => [n.nodeId, n]));

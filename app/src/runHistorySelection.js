@@ -1,5 +1,5 @@
 import { canonicalJson } from './runHistorySignature.js';
-import { readHistoryEdits, withHistoryEdit } from './datasetHistoryEdits.js';
+import { datasetHistorySource } from './datasetHistorySource.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -51,10 +51,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, runnin
       if (!dataset.sourceNodeId || !dataset.branch) throw new Error(`History Dataset source is incomplete: ${dataset.nodeId}`);
       const sourceRecord = await visitRecord(dataset.sourceRecordId);
       if (sourceRecord.nodeId !== dataset.sourceNodeId) throw new Error(`History Dataset source does not match: ${dataset.nodeId}`);
-      demandSource(dataset, {
-        kind: sourceRecord.kind, nodeId: sourceRecord.nodeId, branch: dataset.branch,
-        recordId: sourceRecord.id, edited: !!dataset.edited,
-      });
+      demandSource(dataset, { kind: sourceRecord.kind, nodeId: sourceRecord.nodeId, branch: dataset.branch });
     } else {
       demandSource(dataset, null);
     }
@@ -117,24 +114,20 @@ export async function planHistorySelection(state, recordId, { loadRecord, runnin
   }
   for (const [id, source] of datasetSources) {
     const node = nodes.get(id);
-    // A legacy snapshot keeps its visual lineage; it is still an independent input table.
-    if (!source && next.connections.some((edge) => (
+    // A saved copy (datasetHistorySource.js) or a legacy snapshot keeps its pipeline link; it is still an
+    // independent input table, so only its content is restored.
+    if (!source && (node.savedCopy || next.connections.some((edge) => (
       edge.toId === id && ['run-to-dataset-snapshot', 'process-to-dataset-snapshot'].includes(edge.type)
-    ))) continue;
-    const oldSource = node.sourceRunNodeId || next.connections.find((edge) => edge.type === 'process-to-dataset' && edge.toId === id)?.fromId;
+    )))) continue;
+    const oldSource = datasetHistorySource(node, next.connections)?.sourceId || '';
     const newSource = source?.nodeId || '';
     if (oldSource !== newSource && !changedNodeIds.includes(id)) changedNodeIds.push(id);
+    // A record made while this output still followed History restores that, too.
+    if (source) delete node.savedCopy;
     node.sourceRunNodeId = source?.kind === 'run' ? source.nodeId : '';
     node.processOutputName = source?.kind === 'process' ? source.branch : '';
     next.connections = next.connections.filter((edge) => !(edge.type === 'process-to-dataset' && edge.toId === id));
     if (source?.kind === 'process') next.connections.push({ type: 'process-to-dataset', fromId: source.nodeId, toId: id });
-    if (source) {
-      // Restore the manual edit (or its absence) that the selected record's input was made with.
-      const edits = withHistoryEdit(node.historyEdits, source.recordId, source.branch, source.edited ? node.datasetContent : null);
-      if (canonicalJson(edits) !== canonicalJson(readHistoryEdits(node.historyEdits)) && !changedNodeIds.includes(id)) changedNodeIds.push(id);
-      if (Object.keys(edits).length) node.historyEdits = edits;
-      else delete node.historyEdits;
-    }
   }
   for (const [id, promptId] of promptEdges) {
     const oldPromptId = next.connections.find((edge) => edge.type === 'prompt-to-run' && edge.toId === id)?.fromId;

@@ -69,12 +69,13 @@ import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
 import { createWorkspacePanels } from './workspacePanels.js';
 import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
-import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight, iconWorkflow } from './icons.js';
+import { mountPromptOptimizationPanel } from './promptOptimizationPanel.js';
+import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight } from './icons.js';
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { openDatasetDiffModal } from './datasetDiffModal.js';
-import { readHistoryEdits } from './datasetHistoryEdits.js';
+import { datasetHistorySource } from './datasetHistorySource.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { runProcessCode, waitForProcessJob } from './processRunClient.js';
@@ -2816,6 +2817,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     unregisterPendingRun,
     pendingRuns,
     getHistoryForNode,
+    isContentLocked,
     pendingReviews,
     pendingReviewNodeIds,
     registerPendingReview,
@@ -2936,13 +2938,9 @@ export function buildWorkflowCanvas(root, options = {}) {
   `;
   const [currentPipelineBtn, agentAssistantBtn] = panelToggles.querySelectorAll('.top-bar-panel-toggle');
   const [pipelineToggleIcon, agentToggleIcon] = panelToggles.querySelectorAll('.top-bar-panel-toggle__icon');
-  // Desktop's title bar gets VS Code-style layout icons that show each panel's state (redrawn in
-  // syncPanelButtons); the web top bar keeps the Pipeline / ✦ icons, with state shown by color.
-  if (!isElectron) {
-    pipelineToggleIcon.appendChild(iconWorkflow(16));
-    agentToggleIcon.textContent = '✦';
-    agentToggleIcon.classList.add('top-bar-panel-toggle__sparkle');
-  }
+  // Desktop and web share VS Code-style layout icons that show each panel's state (redrawn in
+  // syncPanelButtons); the web top bar only draws them larger.
+  const panelToggleIconSize = isElectron ? undefined : 18;
   // Uncaught errors land in the bottom panel's Errors tab (desktop); this keeps them noticeable
   // while that panel is collapsed or showing another tab.
   const panelErrorBadge = document.createElement('span');
@@ -2971,6 +2969,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         getSelectedNodeIds: () => [...selectedNodeIds],
         extractInputFields: extractInputFieldsFromSections,
         applyCanvasState: applyAgentCanvasState,
+        getContentLocks: () => (historySession?.projectId && canvasHistoryVersion === 1
+          ? historySession.contentLocks(getCanvasState()) : new Map()),
         previewHistorySelection: planHistorySelectionForCanvas,
         applyHistorySelection: async (recordId) => {
           const plan = await planHistorySelectionForCanvas(recordId);
@@ -3192,6 +3192,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     } else if (isProcess) {
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create dataset</button>
+        <button type="button" class="workflow-node-context-item" data-action="duplicate-process" role="menuitem">Duplicate this process</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-process-name" role="menuitem">Edit name</button>
       `;
     } else {
@@ -3446,15 +3447,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       },
       'process-this-dataset': () => newProcessNode({ datasetNode: node }),
       'run-this-prompt': () => newRunNode({ promptNode: node }),
+      // A duplicate is a standalone node: no connections are copied (same for Datasets and Processes).
       duplicate: () => {
-        const newNode = duplicateNode(false);
-        if (newNode) {
-          connections.filter((c) => c.toId === node.dataset.nodeId).forEach((c) => {
-            connections.push({ fromId: c.fromId, toId: newNode.dataset.nodeId, type: c.type });
-          });
-          updateEdges();
-          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-        }
+        duplicateNode(false);
       },
       'new-version': () => {
         const newNode = duplicateNode(true);
@@ -3608,6 +3603,23 @@ export function buildWorkflowCanvas(root, options = {}) {
           },
         });
       },
+      // Same code, no inputs and no results: a standalone copy, which is how locked code is changed (contentLocks.js).
+      'duplicate-process': () => {
+        if (node.dataset.nodeType !== 'process') return;
+        const base = (node.dataset.processName || 'Process').replace(/\s*\(Copy \d+\)$/, '').trim() || 'Process';
+        const usedNames = new Set(Array.from(nodesLayer.querySelectorAll('.workflow-node--process'))
+          .map((item) => (item.dataset.processName || '').trim()));
+        let copyNumber = 1;
+        while (usedNames.has(`${base} (Copy ${copyNumber})`)) copyNumber += 1;
+        createProcessNode({
+          left: parseFloat(node.style.left) || 0,
+          top: (parseFloat(node.style.top) || 0) + (node.offsetHeight || 80) + NEW_NODE_OFFSET,
+          title: `${base} (Copy ${copyNumber})`,
+          dfCode: resolveDataframeProcessCode({ dfCode: node.dataset.processDfCode, code: node.dataset.processCode }),
+        });
+        updateContentSize();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      },
       'edit-process-name': () => {
         if (node.dataset.nodeType !== 'process') return;
         openEditNodeNameModal(node, {
@@ -3669,25 +3681,17 @@ export function buildWorkflowCanvas(root, options = {}) {
         const content = datasetContentByNodeId.get(node.dataset.nodeId);
         const headers = content?.headers ? content.headers.slice() : [];
         const rows = content?.rows ? content.rows.map((r) => r.slice()) : [];
-        const samplerNodeId = node.dataset.samplerNodeId || '';
-        const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
+        const samplerNode = node.dataset.samplerNodeId ? getNodeById(node.dataset.samplerNodeId) : null;
         const notes = (node.dataset.datasetNote ?? node.dataset.subsetNote ?? '').trim() || formatSamplerDescription(samplerNode);
-        const newNode = createDatasetNode({
+        // Standalone copy: no incoming connections, and not counted as the Sampler's output.
+        createDatasetNode({
           name: newName,
           notes,
           left,
           top: top + height + NEW_NODE_OFFSET,
-          samplerNodeId,
           headers,
           rows,
         });
-        if (newNode?.dataset?.nodeId) {
-          connections.filter((c) => c.toId === node.dataset.nodeId
-            && ![EDGE_TYPE_PROCESS_TO_DATASET, EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT, EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT].includes(c.type)).forEach((c) => {
-            connections.push({ fromId: c.fromId, toId: newNode.dataset.nodeId, type: c.type });
-          });
-          updateEdges();
-        }
         updateContentSize();
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       },
@@ -4146,6 +4150,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       samplerNodeId: samplerNodeId || '',
       sourceRunNodeId: runNodeId || '',
       processOutputName,
+      // A saved Run / Process output is a copy: editable until used, never rewritten by History.
+      savedCopy: !!(runNodeId || processNode),
       colorIndex: detailColorIndex,
       headers: datasetHeaders,
       rows: datasetRows,
@@ -4448,8 +4454,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           samplerNodeId: node.dataset.samplerNodeId || '',
           sourceRunNodeId: node.dataset.sourceRunNodeId || '',
           processOutputName: node.dataset.processOutputName || '',
+          savedCopy: node.dataset.savedCopy === '1' || undefined,
           resultMissing: node.dataset.resultMissing === '1' || undefined,
-          historyEdits: node.dataset.historyEdits ? readHistoryEdits(node.dataset.historyEdits) : undefined,
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
           datasetContent: content ? cloneDatasetContent(content) : undefined,
           nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
@@ -4667,6 +4673,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           samplerNodeId: n.samplerNodeId || '',
           sourceRunNodeId: n.sourceRunNodeId || '',
           processOutputName: n.processOutputName || '',
+          savedCopy: n.savedCopy === true,
           colorIndex: n.colorIndex,
           headers: content?.headers,
           rows: content?.rows,
@@ -4674,8 +4681,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           rowIds: content?.rowIds,
         });
         if (n.resultMissing) node.dataset.resultMissing = '1';
-        const historyEdits = readHistoryEdits(n.historyEdits);
-        if (Object.keys(historyEdits).length) node.dataset.historyEdits = JSON.stringify(historyEdits);
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         createdNodes.push(node);
       } else if (n.type === 'sampler') {
@@ -4994,6 +4999,12 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
+  /** Whether a Prompt, Dataset or Process node's content is locked because it produced a result (contentLocks.js). */
+  async function isContentLocked(nodeId) {
+    if (!nodeId || !historySession?.projectId || canvasHistoryVersion !== 1) return false;
+    return !!(await historySession.contentLocks(getCanvasState())).get(nodeId)?.length;
+  }
+
   function getHistoryForNode(nodeId) {
     // No node means no History; a plain Dataset passes no source and must stay editable.
     if (!nodeId || !historySession?.projectId || canvasHistoryVersion !== 1) return null;
@@ -5092,14 +5103,12 @@ export function buildWorkflowCanvas(root, options = {}) {
       const inputDataset = resolved.state.nodes.find((entry) => entry.nodeId === item.runWorkingSetId && entry.type === 'dataset');
       if (inputDataset) {
         const datasetNode = getNodeById(inputDataset.nodeId);
-        if (inputDataset.sourceRunNodeId || connections.some((edge) => edge.type === EDGE_TYPE_PROCESS_TO_DATASET && edge.toId === inputDataset.nodeId)) {
+        if (datasetHistorySource(inputDataset, connections)) {
           datasetContentByNodeId.set(inputDataset.nodeId, cloneDatasetContent(inputDataset.datasetContent));
         }
         if (datasetNode) {
           if (inputDataset.resultMissing) datasetNode.dataset.resultMissing = '1';
           else delete datasetNode.dataset.resultMissing;
-          if (inputDataset.historyEdited) datasetNode.dataset.historyEdited = '1';
-          else delete datasetNode.dataset.historyEdited;
         }
       }
       for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
@@ -5173,18 +5182,21 @@ export function buildWorkflowCanvas(root, options = {}) {
       }
     }
     if (revision !== historyRevision || session !== historySession) return { stale: true };
+    const streamingReviewIds = new Set([...pendingReviews.keys(), ...pendingReviewNodeIds]);
     for (const item of resolved.state.nodes) {
       const live = getNodeById(item.nodeId);
       if (!live) continue;
-      if (item.type === 'dataset' && (item.sourceRunNodeId || connections.some((edge) => edge.type === EDGE_TYPE_PROCESS_TO_DATASET && edge.toId === item.nodeId))) {
-        const current = datasetContentByNodeId.get(item.nodeId);
-        if (JSON.stringify(current) !== JSON.stringify(cloneDatasetContent(item.datasetContent))) {
-          datasetContentByNodeId.set(item.nodeId, item.datasetContent);
+      if (item.type === 'dataset') {
+        // Only a Dataset that still follows a History record gets its content rewritten; a saved copy
+        // keeps its own table (datasetHistorySource.js).
+        if (datasetHistorySource(item, connections)) {
+          const current = datasetContentByNodeId.get(item.nodeId);
+          if (JSON.stringify(current) !== JSON.stringify(cloneDatasetContent(item.datasetContent))) {
+            datasetContentByNodeId.set(item.nodeId, item.datasetContent);
+          }
         }
         if (item.resultMissing) live.dataset.resultMissing = '1';
         else delete live.dataset.resultMissing;
-        if (item.historyEdited) live.dataset.historyEdited = '1';
-        else delete live.dataset.historyEdited;
       } else if (item.type === 'run') {
         for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
           if (item[key] == null) delete live.dataset[key];
@@ -5216,6 +5228,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         else live.dataset.reviewResult = item.reviewResult;
         syncScoreNodeProgressFromUpstreamRun(live);
       } else if (item.type === 'promptReview') {
+        // The poller rebuilds a running Review from the live node; replacing it here would drop the
+        // prompt sections and comparison rows saved at start, leaving an empty Review window.
+        if (streamingReviewIds.has(item.nodeId)) continue;
         if (item.reviewResult == null) delete live.dataset.reviewResult;
         else live.dataset.reviewResult = item.reviewResult;
         setReviewNodeProgress(live, Number(item.reviewProgress || 0));
@@ -5232,6 +5247,10 @@ export function buildWorkflowCanvas(root, options = {}) {
       ...[...initialKeys.score].map(([id, key]) => [`score:${id}`, key]),
       ...[...reviewKeys].map(([id, key]) => [`review:${id}`, key]),
     ]);
+    // A running Review keeps the key it started with, so its result is saved under the inputs it was made from.
+    for (const id of streamingReviewIds) {
+      if (priorKeys?.has(`review:${id}`)) historyAnalysisKeys.set(`review:${id}`, priorKeys.get(`review:${id}`));
+    }
     historyAnalysisKeysInitialized = true;
     document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
     return resolved;
@@ -5449,10 +5468,13 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   let panelVisibility = { pipeline: false, agent: false };
   let appErrorCount = 0;
+  let optimizationVisible = false;
+  let optimizationPanel = null;
   function syncPanelButtons() {
+    // Same on desktop and web; only desktop's bottom panel adds the Log and Errors tabs (and errors badge).
     for (const [button, visible, label] of [
-      [currentPipelineBtn, panelVisibility.pipeline, isElectron ? 'Toggle Panel' : 'Current Pipeline'],
-      [agentAssistantBtn, panelVisibility.agent, isElectron ? 'Toggle Agent Side Bar' : 'Agent Assistant'],
+      [currentPipelineBtn, panelVisibility.pipeline, 'Toggle Panel'],
+      [agentAssistantBtn, panelVisibility.agent, 'Toggle Agent Side Bar'],
     ]) {
       button.classList.toggle('is-open', visible);
       button.setAttribute('aria-expanded', String(visible));
@@ -5461,10 +5483,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
     panelErrorBadge.hidden = !appErrorCount;
     panelErrorBadge.textContent = appErrorCount > 99 ? '99+' : String(appErrorCount);
-    if (isElectron) {
-      pipelineToggleIcon.replaceChildren(iconLayoutPanel(panelVisibility.pipeline));
-      agentToggleIcon.replaceChildren(iconLayoutSidebarRight(panelVisibility.agent));
-    }
+    pipelineToggleIcon.replaceChildren(iconLayoutPanel(panelVisibility.pipeline, panelToggleIconSize));
+    agentToggleIcon.replaceChildren(iconLayoutSidebarRight(panelVisibility.agent, panelToggleIconSize));
   }
   const workspacePanels = createWorkspacePanels(root, canvas, ({ pipeline, agent, tab }) => {
     panelVisibility = { pipeline, agent };
@@ -5484,13 +5504,30 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
     if (agent) mountAgentPanel();
     if (!pipeline || tab !== 'pipeline') highlightPipelineNodes([]);
+    optimizationVisible = pipeline && tab === 'optimization';
+    if (optimizationVisible) void optimizationPanel?.refresh();
   }, {
     bottomTabs: [
       { id: 'pipeline', label: 'Current Pipeline' },
+      { id: 'optimization', label: 'Prompt Optimization' },
       ...(isElectron ? [{ id: 'log', label: 'Log' }, { id: 'errors', label: 'Errors' }] : []),
     ],
     onCollapse: () => currentPipelineBtn.focus(),
   });
+  optimizationPanel = mountPromptOptimizationPanel(workspacePanels.tabHost('optimization'), {
+    getCanvasState,
+    getScoreComparisonRows,
+    focusNodes: focusPipelineNodes,
+  });
+  // Recomputed only while the tab is showing; Score metrics follow Run results and History.
+  let optimizationRefreshTimer = null;
+  const scheduleOptimizationRefresh = () => {
+    if (!optimizationVisible) return;
+    clearTimeout(optimizationRefreshTimer);
+    optimizationRefreshTimer = setTimeout(() => { void optimizationPanel.refresh(); }, 400);
+  };
+  document.addEventListener('workflow:canvas-changed', scheduleOptimizationRefresh);
+  document.addEventListener('workflow:history-resolved', scheduleOptimizationRefresh);
   if (isElectron) {
     mountBackendLogPanel(workspacePanels.tabHost('log'));
     mountErrorsPanel(workspacePanels.tabHost('errors'));

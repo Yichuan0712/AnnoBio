@@ -15,7 +15,7 @@ import logoIconUrl from '../../images/logo.png';
 /**
  * @param {HTMLElement} root - App root (#app or body)
  * @param {{ openAddPromptModal: () => void, openAddDatasetModal: () => void, addRunNode?: () => void, addProcessNode?: () => void, onNewProject: () => void, onOpenProject: () => void, onSaveAsProject: () => void, onMergeProject?: () => void, onUndo?: () => void, onRedo?: () => void, onPublishToGallery?: () => void, panelToggles?: HTMLElement }} options
- *   panelToggles: the canvas's Current Pipeline / Agent Assistant toggles (workflowCanvas.js), placed
+ *   panelToggles: the canvas's bottom panel / Agent side bar toggles (workflowCanvas.js), placed
  *   at the right end — before the window controls on desktop, before the account avatar on web.
  * @returns {{ setAddMenuEnabled: (enabled: boolean) => void, setSaveAsEnabled: (enabled: boolean) => void, setMergeEnabled: (enabled: boolean) => void, setProjectTitle: (title: string) => void, setUndoRedoEnabled: (canUndo: boolean, canRedo: boolean) => void, setPublishEnabled?: (enabled: boolean) => void }}
  */

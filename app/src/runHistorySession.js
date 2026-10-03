@@ -5,6 +5,7 @@ import { captureHistoryInput, runningHistoryRecord } from './runHistoryCapture.j
 import { analysisInputKeys } from './runAnalysisHistory.js';
 import { dependentHistoryIds } from './runHistoryDeletion.js';
 import { describeHistoryRecord } from './runHistoryPresentation.js';
+import { contentLocks, recordInputRefs } from './contentLocks.js';
 
 function hasLegacyOutput(node) {
   try {
@@ -111,7 +112,22 @@ export class RunHistorySession {
   async putRecord(record) {
     if (!this.projectId) throw new Error('Open a project before using history.');
     await this.storage.saveRecord(this.projectId, record);
+    this.inputRefs?.set(record.id, recordInputRefs(record));
     this.index = await this.storage.loadIndex(this.projectId);
+  }
+
+  /** Locked Prompt / Dataset / Process nodes (contentLocks.js). Each record is loaded at most once per session. */
+  async contentLocks(canvasState) {
+    if (!this.projectId) return new Map();
+    this.inputRefs ??= new Map();
+    const refs = [];
+    for (const entry of this.index.records) {
+      if (!this.inputRefs.has(entry.id)) {
+        this.inputRefs.set(entry.id, recordInputRefs(await this.storage.loadRecord(this.projectId, entry.id)));
+      }
+      refs.push(this.inputRefs.get(entry.id));
+    }
+    return contentLocks(refs, canvasState);
   }
 
   async capture(state, nodeId) {

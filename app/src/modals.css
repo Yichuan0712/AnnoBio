@@ -186,7 +186,6 @@
   background: color-mix(in srgb, var(--accent, #4677d5) 12%, transparent);
 }
 .modal-history-popup__fact { font-size: 12px; font-weight: 400; font-family: inherit; }
-.modal-history-popup__edited { color: var(--primary-btn-text); font-weight: 600; }
 .modal-history-popup__row { display: flex; align-items: center; border-top: 1px solid var(--border); }
 .modal-history-popup__row.is-current { background: var(--hover); }
 .modal-history-popup__row .modal-history-popup__item { min-width: 0; flex: 1; }
@@ -9095,11 +9094,3 @@ button.btn.btn-danger:hover:not(:disabled) {
   font-size: 13px;
 }
 .working-dataset-missing .working-dataset-export-local { display: none; }
-.working-dataset-history-message {
-  margin: 8px 12px;
-  color: var(--text-muted);
-  font-size: 13px;
-}
-.working-dataset-history-restore {
-  margin-left: 8px;
-}

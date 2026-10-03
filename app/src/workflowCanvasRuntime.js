@@ -871,6 +871,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       ensureUniqueName: requestedName ? ensureUniqueName : false,
       agentCreated: true,
       sourceRunNodeId: normalizedRunNodeId,
+      savedCopy: true,
     });
     return {
       ...created,
@@ -2008,6 +2009,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     top,
     samplerNodeId = '',
     sourceRunNodeId = '',
+    processOutputName = '',
+    savedCopy = false,
     colorIndex,
     ensureUniqueName = true,
     agentCreated = false,
@@ -2023,6 +2026,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       top,
       samplerNodeId: String(samplerNodeId || '').trim(),
       sourceRunNodeId: String(sourceRunNodeId || '').trim(),
+      processOutputName: String(processOutputName || '').trim(),
+      savedCopy,
       colorIndex,
       headers,
       rows,
