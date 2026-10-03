@@ -69,8 +69,9 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
         raise render.PipelineExportError("Unsupported compiled PipelineSpec version.")
     if len(spec["inputs"]) != 1:
         raise render.PipelineExportError("Python export currently needs exactly one starting Dataset. The compiled graph is valid, but multi-input export is not yet supported.")
-    if not any(j["type"] == "llm" for j in spec["jobs"]):
-        raise render.PipelineExportError("Python export currently requires at least one Prompt Run; pure Process export is not yet supported.")
+    if not spec["jobs"]:
+        raise render.PipelineExportError("Python export needs at least one Process or Prompt Run.")
+    uses_llm = any(j["type"] == "llm" for j in spec["jobs"])
     metadata = render.ExportMetadata.create(author_name, generated_at)
     root = render._slug(name, "pipeline")
     artifacts = {a["id"]: a for a in spec["artifacts"]}
@@ -134,13 +135,13 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
         route_steps.extend(dataset_step(aid) for group in job["outputs"].values() for aid in group)
 
     outputs = [{"id": data_id[aid], "name": artifacts[aid]["name"]} for aid in spec["outputs"]]
-    first_model = next(j["config"]["model"] for j in portable["jobs"] if j["type"] == "llm")
-    engine = first_model["engine"]
+    first_model = next((j["config"]["model"] for j in portable["jobs"] if j["type"] == "llm"), None)
+    engine = first_model["engine"] if first_model else None
     columns = [c["name"] for c in input_schema["columns"]]
     manifest = {"format": render.FORMAT_NAME, "format_version": render.FORMAT_VERSION,
         "name": root, "entrypoint": "main.py", "generated_at": metadata.generated_at,
         "authors": {"workflow": metadata.workflow_author, "exported_project": "AnnoBio"},
-        "input": {"format": "xlsx", **input_schema}, "engines": ["litellm", "openrouter"],
+        "input": {"format": "xlsx", **input_schema}, "engines": ["litellm", "openrouter"] if uses_llm else [],
         "default_engine": engine, "output": {"format": "xlsx"}, "execution": portable}
     if linear:
         manifest["route"] = route_steps
@@ -149,20 +150,27 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
         manifest["graph"] = {"steps": steps, "terminal_datasets": outputs}
         manifest["output"]["worksheets"] = outputs
         main = _dag_main(executable, data_id[first["id"]], columns, outputs, 4, metadata)
+    if not uses_llm:
+        main = render._without_llm(main)
     files.extend([
         render.ExportedFile("pipeline.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"),
         render.ExportedFile("main.py", main),
         render.ExportedFile("DATA.md", render._data_markdown(first["name"], input_schema)),
-        render.ExportedFile("README.md", render._readme(root, engine, metadata)),
-        render.ExportedFile("requirements.txt", render._requirements()),
-        render.ExportedFile(".env.example", render._env_example(engine, first_model["model"], first_model["base_url"])),
+        render.ExportedFile("requirements.txt", render._requirements(uses_llm)),
         render.ExportedFile("processor/__init__.py", render._package_init("User-authored Process modules.", metadata)),
-        render.ExportedFile("prompt/__init__.py", render._package_init("User-authored Prompt modules.", metadata)),
-        render.ExportedFile("engine/__init__.py", render._engine_init_module(engine, metadata)),
-        render.ExportedFile("engine/base.py", render._engine_base_module(metadata)),
-        render.ExportedFile("engine/litellm_engine.py", render._litellm_engine_module(metadata)),
-        render.ExportedFile("engine/openrouter_engine.py", render._openrouter_engine_module(metadata)),
     ])
+    if uses_llm:
+        files.extend([
+            render.ExportedFile("README.md", render._readme(root, engine, metadata)),
+            render.ExportedFile(".env.example", render._env_example(engine, first_model["model"], first_model["base_url"])),
+            render.ExportedFile("prompt/__init__.py", render._package_init("User-authored Prompt modules.", metadata)),
+            render.ExportedFile("engine/__init__.py", render._engine_init_module(engine, metadata)),
+            render.ExportedFile("engine/base.py", render._engine_base_module(metadata)),
+            render.ExportedFile("engine/litellm_engine.py", render._litellm_engine_module(metadata)),
+            render.ExportedFile("engine/openrouter_engine.py", render._openrouter_engine_module(metadata)),
+        ])
+    else:
+        files.append(render.ExportedFile("README.md", render._process_only_readme(root, metadata)))
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for file in sorted(files, key=lambda f: f.path):

@@ -1,7 +1,7 @@
 # Building a pipeline
 
 A pipeline turns input tables into annotated output. It is a chain of Dataset, Process and Prompt/Run
-steps with at least one Prompt. Score and Review sit beside it for evaluation and are not part of the
+steps with at least one Prompt Run or Process. Score and Review sit beside it for evaluation and are not part of the
 exported pipeline.
 
 ## Choosing the step type
@@ -40,7 +40,8 @@ The Current Pipeline panel (toolbar button beside Agent Assistant) lists each pi
 Its steps are "Run prompt" and "Process data"; Datasets are not shown. Where a step has alternatives,
 such as several prompt versions with Runs, several Runs of one Prompt (also on different Datasets), or
 several Processes reading the same output, the panel shows a picker on that step. Branches come only
-from a Process: its named outputs, or the Datasets one Process merges. Hovering a step highlights its
+from a Process: its named outputs, or the Datasets one Process merges. A Dataset read by both Prompt
+Runs and Processes starts separate pipelines, one per step type, rather than a mixed picker. Hovering a step highlights its
 Prompt, Run or Process and the Datasets it reads. The selected route is what export uses.
 
 ## Advising on a design

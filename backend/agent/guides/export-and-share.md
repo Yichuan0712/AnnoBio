@@ -15,8 +15,9 @@ The Current Pipeline panel exports the selected route as a standalone Python pro
 
 Only the route selected in the panel is exported. Alternatives visible on the canvas but not selected
 (other prompt versions, other Runs, other Dataset branches) are left out, as are Score and Review nodes.
-A route exports only if it starts with a Dataset and contains at least one Prompt Run, every Prompt has
-content and at least one output field, and every Process defines `process(df)`.
+A route exports only if it starts with a Dataset and contains at least one Process or Prompt Run, every
+Prompt has content and at least one output field, and every Process defines `process(df)`. A route of
+only Processes exports without `prompt/`, `engine/` or `.env.example`, and needs no API key.
 
 ## Gallery (web)
 

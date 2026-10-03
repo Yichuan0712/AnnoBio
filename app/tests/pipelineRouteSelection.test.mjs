@@ -41,6 +41,35 @@ test('shared source Prompts remain alternatives, not an inferred ensemble', () =
   assert.deepEqual(route.filter(s => s.type === 'prompt'), [{ type: 'prompt', prompt_node_id: 'p2', run_node_id: 'r2' }]);
 });
 
+const flattenRoute = (route) => route.flatMap((step) => (step.kind === 'branch' ? step.lanes.flatMap(flattenRoute) : [step]));
+const routeKinds = (pipeline) => flattenRoute(buildSelectedRoute(pipeline, new Map()))
+  .filter((step) => step.kind !== 'dataset')
+  .map((step) => `${step.kind}:${step.options.map((o) => o.label).join('/')}`);
+
+test('a Dataset read by both Runs and Processes starts one pipeline per step type', () => {
+  const state = {
+    nodes: [node('dataset', 'raw'), node('prompt', 'p'), node('process', 'clean'), node('process', 'trim'),
+      node('run', 'r1', { runWorkingSetId: 'raw', runName: 'Run A' }), node('run', 'r2', { runWorkingSetId: 'raw', runName: 'Run B' })],
+    connections: [edge('p', 'r1', 'prompt-to-run'), edge('p', 'r2', 'prompt-to-run'),
+      edge('raw', 'clean', 'dataset-to-process'), edge('raw', 'trim', 'dataset-to-process')],
+  };
+  const pipelines = detectPipelines(state);
+  assert.deepEqual(pipelines.map((p) => p.id), ['pipeline-1', 'pipeline-2']);
+  assert.deepEqual(pipelines.map(routeKinds), [['prompt:p — Run A/p — Run B'], ['process:clean/trim']]);
+});
+
+test('splitting drops a merging Process from the Prompt pipeline and keeps shared upstream in both', () => {
+  const state = {
+    nodes: [node('dataset', 'raw'), node('process', 'prep'), node('dataset', 'clean'), node('dataset', 'lookup'),
+      node('prompt', 'p'), node('run', 'r', { runWorkingSetId: 'clean' }), node('process', 'join')],
+    connections: [edge('raw', 'prep', 'dataset-to-process'), edge('prep', 'clean', 'process-to-dataset'),
+      edge('p', 'r', 'prompt-to-run'), edge('clean', 'join', 'dataset-to-process'), edge('lookup', 'join', 'dataset-to-process')],
+  };
+  const pipelines = detectPipelines(state);
+  assert.deepEqual(pipelines.map(routeKinds), [['process:prep', 'prompt:p'], ['process:prep', 'process:join']]);
+  assert.ok(!pipelines[0].steps.some((step) => step.datasets?.some((d) => d.datasetNodeId === 'lookup')));
+});
+
 test('named branches preserve both lanes and merge once', () => {
   const state = {
     nodes: [node('dataset', 'raw'), node('process', 'split'),

@@ -14,7 +14,7 @@ import {
   resumePipelineRun,
 } from './pipelineRunClient.js';
 
-const STEP_LABELS = { prompt: 'Run prompt', process: 'Process data', step: 'Step' };
+const STEP_LABELS = { prompt: 'Run prompt', process: 'Process data' };
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -24,9 +24,11 @@ function escapeHtml(str) {
 
 function renderPickerOrName(choiceId, options, selectedValue, title) {
   if (options.length === 1) return `<span class="pipeline-step-name">${escapeHtml(options[0].label)}</span>`;
-  const optionsHtml = options
-    .map((option) => `<option value="${escapeHtml(option.value)}"${option.value === selectedValue ? ' selected' : ''}>${escapeHtml(option.label)}</option>`)
-    .join('');
+  const renderOption = (option) => `<option value="${escapeHtml(option.value)}"${option.value === selectedValue ? ' selected' : ''}>${escapeHtml(option.label)}</option>`;
+  const kinds = [...new Set(options.map((option) => option.kind))];
+  const optionsHtml = kinds.length > 1
+    ? kinds.map((kind) => `<optgroup label="${escapeHtml(STEP_LABELS[kind] || kind)}">${options.filter((option) => option.kind === kind).map(renderOption).join('')}</optgroup>`).join('')
+    : options.map(renderOption).join('');
   return `<select class="pipeline-step-version-select" data-choice-id="${escapeHtml(choiceId)}" title="${escapeHtml(title)}">${optionsHtml}</select>`;
 }
 
@@ -70,7 +72,7 @@ function renderRouteChip(step) {
     step.kind === 'prompt' ? 'Preview one concrete Prompt Run in this branch.' : 'Preview this Process path.',
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
-  return `<span class="pipeline-overview-branch-chip" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${STEP_LABELS[step.kind] || 'Step'}</span>${picker}</span>`;
+  return `<span class="pipeline-overview-branch-chip" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${STEP_LABELS[step.kind]}</span>${picker}</span>`;
 }
 
 function renderRouteStep(step) {
@@ -84,7 +86,6 @@ function renderRouteStep(step) {
   const titles = {
     prompt: 'Preview one concrete Prompt Run and follow its connected output.',
     process: 'Preview one Process path.',
-    step: 'Preview one of the connected next steps.',
   };
   const picker = renderPickerOrName(
     step.choiceId,
@@ -276,7 +277,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   else overlay.setAttribute('aria-labelledby', 'pipeline-overview-title');
 
   const selectedByChoiceId = new Map();
-  const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt that has a Run.';
+  const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt with a Run, or a Process.';
 
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--pipeline-overview">
@@ -559,8 +560,11 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     try {
       const promptName = route.find((step) => step.selectedOption?.kind === 'prompt')
         ?.selectedOption?.promptName;
+      const processName = route.find((step) => step.selectedOption?.kind === 'process')
+        ?.selectedOption?.label;
+      const stepName = promptName || processName;
       await exportPythonPipeline({
-        name: promptName ? `${promptName} pipeline` : `pipeline-${pipelineIndex + 1}`,
+        name: stepName ? `${stepName} pipeline` : `pipeline-${pipelineIndex + 1}`,
         canvasState: getCanvasState(),
         route: exportRoutePayload(route),
       });

@@ -387,8 +387,8 @@ class _Compiler:
             if not job["outputs"]:
                 if job["type"] == "process":
                     nid = self.source_map[jid]["node_ids"][0]
-                    self.report("MISSING_PROCESS_OUTPUT", nid, "outputs", "Save/select a Process output branch to define its output contract.")
-                    continue
+                    self.report("RUNTIME_PROCESS_CONTRACT", nid, "outputs",
+                                "No output Dataset is saved; the Process must return one DataFrame, validated after execution.", "warning")
                 aid = f"output:{jid}:result"
                 job["outputs"] = {"result": [aid]}
                 self.artifacts[aid] = {"id": aid, "name": "Result", "producer": {"job_id": jid, "port": "result"},
