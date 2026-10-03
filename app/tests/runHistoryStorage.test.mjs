@@ -68,6 +68,24 @@ test('desktop .yc canvas save, Save As and merge retain history', async () => {
   }
 });
 
+test('desktop history keeps repeated Run attempts with the same input signature', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'annobio-history-rerun-test-'));
+  try {
+    const file = path.join(root, 'rerun.yc');
+    const assets = newAssets();
+    await assets.save(file, { historyVersion: 1, nodes: [{ nodeId: 'run-1', type: 'run' }], connections: [] });
+    const first = record('run-1', 'same-signature');
+    const second = record('run-1', 'same-signature');
+    await assets.saveHistoryRecord(file, first);
+    await assets.saveHistoryRecord(file, second);
+    assert.deepEqual((await assets.loadHistoryIndex(file)).records.map((entry) => entry.id), [first.id, second.id]);
+    assert.deepEqual(await assets.loadHistoryRecord(file, first.id), first);
+    assert.deepEqual(await assets.loadHistoryRecord(file, second.id), second);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('desktop asset pruning retains cells referenced only by history', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'annobio-history-assets-test-'));
   try {

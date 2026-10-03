@@ -268,6 +268,9 @@ function inspectProcess(node, ctx) {
         rowCount: branch.rows.length,
         columns: branch.headers.map(String),
       })),
+      status: node.processPending === true ? 'running'
+        : node.processResumable === true ? 'interrupted; ready to resume'
+          : Object.keys(outputs).length ? 'completed' : 'not run yet',
       savedAsDatasets: savedDatasets,
     },
     diagnostics,
@@ -278,6 +281,7 @@ function runStatus(node, results, inputRowCount) {
   if (node.runPending === true) return 'running';
   const completed = node.runCompleted === true || node.runCompleted === '1';
   if (completed) return 'completed';
+  if (node.runResumable === true) return 'interrupted; ready to resume';
   return results.length ? 'stopped before finishing' : 'not run yet';
 }
 
@@ -414,6 +418,7 @@ function inspectScore(node, ctx) {
       matching: usesCode ? 'custom match code' : `${ruleCount} mapping rule${ruleCount === 1 ? '' : 's'}`,
       rules: usesCode ? undefined : { pairing: rules.pairing, comparison: rules.comparison },
       matchCode: usesCode ? String(node.scoreMatchCode || '') : undefined,
+      executionStatus: usesCode && node.scoreMatchInterrupted === true ? 'interrupted; ready to resume' : undefined,
       reviewMethod: node.reviewMethod || 'default',
       excludedRows: node.scoreRowExcludedFromScoring ?? undefined,
       metrics: basicScoreMetrics(comparisonRows),
@@ -456,7 +461,9 @@ function inspectReview(node, ctx) {
   return {
     details: {
       score,
-      status: node.reviewPending === true ? `running (${Number(node.reviewProgress) || 0}%)` : (suggestions.length || reviewResult.summary ? 'finished' : 'not run yet'),
+      status: node.reviewPending === true ? `running (${Number(node.reviewProgress) || 0}%)`
+        : node.reviewInterrupted === true || reviewResult.streamComplete === false ? 'interrupted; ready to resume'
+          : (suggestions.length || reviewResult.summary ? 'finished' : 'not run yet'),
       summary: String(reviewResult.summary || ''),
       suggestions: suggestions.map((s) => summarizeSuggestion(s, reviewResult)),
       createdPromptVersions: neighbors(ctx.canvasState, ctx.nodeLookup, ctx.nodeId, 'downstream')

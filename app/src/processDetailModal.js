@@ -17,6 +17,7 @@ import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
 import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 import { openProcessDatasetsDialog } from './processDatasetsDialog.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
+import { executionIdleLabel } from './executionResumeState.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_COMMENT_LINE_CHARS = 70;
@@ -222,6 +223,8 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
   });
   let running = false;
   let currentJobId = null;
+  let currentHistoryStatus = '';
+  let completedActionHovered = false;
   let lastResults = restoreResults(node, 'processDfResults', 'processResults');
   let activeBranchName = '';
   let saveBtnEl = null;
@@ -303,7 +306,10 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
     running = isRunning;
     primaryPicker.setLocked(isRunning);
     editorView.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!isRunning)) });
-    runBtn.textContent = isRunning ? 'Running, click to stop' : 'Run';
+    runBtn.textContent = isRunning ? 'Running, click to stop'
+      : currentHistoryStatus === 'completed'
+        ? (completedActionHovered ? 'Run again' : 'Run completed')
+        : executionIdleLabel({ interrupted: node?.dataset?.processResumable === '1' });
     runBtn.classList.toggle('btn-danger', isRunning);
     if (saveBtnEl) saveBtnEl.disabled = isRunning || !lastResults;
   }
@@ -314,13 +320,30 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
       const { entries, currentId } = await history.loadEntries();
       const current = entries.find((entry) => entry.id === currentId);
       if (!overlay.isConnected || running) return;
-      runBtn.disabled = current?.status === 'completed';
-      runBtn.textContent = current?.status === 'completed' ? 'Run completed'
-        : current?.status === 'stopped' || current?.status === 'failed' ? 'Restart' : 'Run';
+      currentHistoryStatus = current?.status || '';
+      runBtn.disabled = current?.status === 'running';
+      runBtn.textContent = current?.status === 'running' ? 'Runningâ€¦'
+        : current?.status === 'completed' ? (completedActionHovered ? 'Run again' : 'Run completed') : executionIdleLabel({
+        interrupted: current?.status === 'stopped',
+        failed: current?.status === 'failed',
+      });
       lastResults = restoreResults(node, 'processDfResults', 'processResults');
       refreshResults();
     } catch (_) { /* startRun reports storage errors when used */ }
   }
+
+  const showCompletedAction = () => {
+    completedActionHovered = true;
+    if (!running && currentHistoryStatus === 'completed') runBtn.textContent = 'Run again';
+  };
+  const hideCompletedAction = () => {
+    completedActionHovered = false;
+    if (!running && currentHistoryStatus === 'completed') runBtn.textContent = 'Run completed';
+  };
+  runBtn.addEventListener('mouseenter', showCompletedAction);
+  runBtn.addEventListener('mouseleave', hideCompletedAction);
+  runBtn.addEventListener('focus', showCompletedAction);
+  runBtn.addEventListener('blur', hideCompletedAction);
 
   async function startRun() {
     const { bindings } = readDatasets();
@@ -400,6 +423,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
     isDisabled: () => running,
   });
   refreshResults();
+  if (node?.dataset?.processResumable === '1') runBtn.textContent = 'Resume';
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
   if (history) void refreshHistoryState();

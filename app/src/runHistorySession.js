@@ -122,15 +122,25 @@ export class RunHistorySession {
     });
   }
 
-  /** Reserve a unique input signature before submitting a backend job. */
+  /** Reserve an execution record before submitting a backend job. Completed inputs create a new attempt. */
   async reserve(state, nodeId) {
     const capture = await this.capture(state, nodeId);
-    const entry = this.index.records.find((item) => item.nodeId === nodeId && item.signature === capture.signature);
+    const node = (state?.nodes || []).find((item) => String(item?.nodeId || item?.id || '') === String(nodeId));
+    const matching = this.index.records.filter((item) => item.nodeId === nodeId && item.signature === capture.signature);
+    const preferredId = String(node?.historyRecordId || '');
+    const entry = matching.find((item) => item.id === preferredId) || matching.at(-1);
+    if (matching.some((item) => item.status === 'running') && entry?.status !== 'running') {
+      throw new Error('These inputs already have a running job.');
+    }
     if (entry) {
       const existing = await this.storage.loadRecord(this.projectId, entry.id);
       if (!existing || existing.signature !== capture.signature) throw new Error('History record is missing or invalid.');
-      if (existing.status === 'completed') throw new Error('Run completed for these inputs. Change an input or select History.');
       if (existing.status === 'running') throw new Error('These inputs already have a running job.');
+      if (existing.status === 'completed') {
+        const record = runningHistoryRecord(capture, { createId: this.createId, now: this.now });
+        await this.putRecord(record);
+        return { record, mode: 'rerun' };
+      }
       const record = { ...existing, status: 'running', updatedAt: this.now?.() || new Date().toISOString() };
       delete record.backendJobId;
       delete record.error;
@@ -144,8 +154,10 @@ export class RunHistorySession {
   }
 
   entriesForNode(nodeId) {
+    const order = new Map(this.index.records.map((entry, index) => [entry.id, index]));
     return this.index.records.filter((entry) => entry.nodeId === nodeId)
-      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+        || (order.get(b.id) || 0) - (order.get(a.id) || 0));
   }
 
   async displayEntriesForNode(nodeId, canvasState) {

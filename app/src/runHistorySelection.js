@@ -80,6 +80,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, runnin
         await visitDataset(dataset);
         demand(record.nodeId, 'run', {
           runWorkingSetId: dataset.nodeId, runInputToColumn: JSON.stringify(record.inputs.mapping || {}),
+          historyRecordId: record.id,
         });
         promptEdges.set(record.nodeId, prompt.nodeId);
       } else {
@@ -91,6 +92,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, runnin
         demand(record.nodeId, 'process', {
           dfCode: String(record.inputs.code || ''), primaryDatasetId: record.inputs.primaryDatasetId,
           datasetAliases: JSON.stringify(Object.fromEntries(bindings.map((binding) => [binding.nodeId, binding.alias]))),
+          historyRecordId: record.id,
         });
         processInputs.set(record.nodeId, bindings.map((binding) => binding.nodeId));
       }

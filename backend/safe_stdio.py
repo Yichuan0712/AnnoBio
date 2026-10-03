@@ -36,16 +36,21 @@ def safe_print(s: str, *, file=None, flush: bool = False) -> None:
 
     try:
         print(s, file=stream, flush=flush)
-    except UnicodeEncodeError:
+        return
+    except Exception:
+        # Logging must never break the job that is being logged. On Windows an orphaned
+        # Electron pipe can raise OSError(22) here after its owning process exits.
+        pass
+
+    try:
         enc = getattr(stream, "encoding", None) or "utf-8"
         data = line.encode(enc, errors="replace")
         buf = getattr(stream, "buffer", None)
         if buf is not None:
             buf.write(data)
         else:
-            try:
-                stream.write(data.decode(enc, errors="replace"))
-            except Exception:
-                stream.write(line.encode("ascii", errors="replace").decode("ascii"))
+            stream.write(data.decode(enc, errors="replace"))
         if flush:
             stream.flush()
+    except Exception:
+        pass

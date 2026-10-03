@@ -9,6 +9,20 @@ import { BACKEND_PORT } from './backendConfig.js';
 import { ProjectAssets, YC_EXTENSION, isBundledProjectFile } from './projectAssets.js';
 import { createBackendLog } from './backendLog.js';
 const assetToken = crypto.randomBytes(32).toString('hex');
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
+
 const projectAssets = new ProjectAssets({
   decodeImage(data, width) {
     let img = nativeImage.createFromBuffer(data);
@@ -262,7 +276,7 @@ function killProcessOnPort(port) {
   try {
     if (process.platform === 'win32') {
       const out = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
-      const lines = out.split(/\r?\n/).filter((s) => s.trim());
+      const lines = out.split(/\r?\n/).filter((s) => /\bLISTENING\b/i.test(s));
       const pids = new Set();
       for (const line of lines) {
         const m = line.match(/\s+(\d+)\s*$/);
@@ -311,10 +325,10 @@ function startPythonBackendInner() {
   }
 
   // -X utf8: force UTF-8 stdio on Windows so prompts with U+2011 etc. never raise UnicodeEncodeError in the backend.
+  // Keep one backend process in development too. Uvicorn's reloader leaves a supervisor and a
+  // worker behind on Windows, can interrupt an active Run when source files change, and makes
+  // several processes contend for the fixed API port after repeated app launches.
   const args = ['-X', 'utf8', '-m', 'uvicorn', 'main:app', '--port', String(BACKEND_PORT)];
-  if (!app.isPackaged) {
-    args.push('--reload');
-  }
 
   const mainPy = path.join(cwd, 'main.py');
   console.log('[python] backend cwd=', cwd);
@@ -561,7 +575,7 @@ ipcMain.handle('window:is-maximized', (event) => {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+if (gotSingleInstanceLock) app.whenReady().then(() => {
   backendLog = createBackendLog({
     dir: path.join(app.getPath('userData'), 'logs'),
     tee: !app.isPackaged,

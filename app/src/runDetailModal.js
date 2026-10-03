@@ -14,6 +14,7 @@ import { cloneCell, displayCell } from './datasetContent.js';
 import { deriveOutputFields } from './runResultsExport.js';
 import { ensureRunNodeModel } from './nodeSettings.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
+import { executionIdleLabel } from './executionResumeState.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
@@ -203,7 +204,7 @@ export function openRunDetailModal({
   `;
 
   const pickerEl = overlay.querySelector('#run-detail-ws-picker');
-  const triggerEl = overlay.querySelector('.run-detail-ws-trigger');
+  const triggerEl = pickerEl.querySelector('.run-detail-ws-trigger');
   const triggerColorEl = overlay.querySelector('#run-detail-ws-trigger-color');
   const triggerTextEl = overlay.querySelector('#run-detail-ws-trigger-text');
   const dropdownEl = overlay.querySelector('#run-detail-ws-dropdown');
@@ -227,6 +228,7 @@ export function openRunDetailModal({
     closeWithin: overlay,
   });
   const runBtn = overlay.querySelector('.run-detail-run-btn');
+  let completedActionHovered = false;
   const rightCol = overlay.querySelector('.run-detail-preview-content');
   const workingSets = getWorkingSets();
 
@@ -294,8 +296,8 @@ export function openRunDetailModal({
 
   function refreshButton() {
     if (isCompleted()) {
-      runBtn.disabled = true;
-      runBtn.textContent = 'Run completed';
+      runBtn.disabled = !historyMode;
+      runBtn.textContent = completedActionHovered && historyMode ? 'Run again' : 'Run completed';
       runBtn.classList.remove('btn-primary', 'btn-danger');
       runBtn.classList.add('btn-secondary');
       if (historyMode) applyUnlock();
@@ -313,7 +315,7 @@ export function openRunDetailModal({
       return;
     }
     const { results } = getNodeResults();
-    const isResumeState = results.length > 0;
+    const isResumeState = results.length > 0 || node?.dataset?.runResumable === '1';
     if (isResumeState && !historyMode) {
       pickerEl.classList.add('run-detail-ws-picker--locked');
       pickerEl.setAttribute('aria-disabled', 'true');
@@ -325,10 +327,23 @@ export function openRunDetailModal({
     }
     runBtn.classList.remove('btn-secondary', 'btn-danger');
     runBtn.classList.add('btn-primary');
-    runBtn.textContent = isResumeState ? 'Resume' : 'Run';
+    runBtn.textContent = executionIdleLabel({ interrupted: node?.dataset?.runResumable === '1', hasPartial: results.length > 0 });
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
     runBtn.disabled = !(getPromptId() && selectedNodeId && allMapped);
   }
+
+  const showCompletedAction = () => {
+    completedActionHovered = true;
+    if (isCompleted() && historyMode && !isRunning()) runBtn.textContent = 'Run again';
+  };
+  const hideCompletedAction = () => {
+    completedActionHovered = false;
+    if (isCompleted() && historyMode && !isRunning()) runBtn.textContent = 'Run completed';
+  };
+  runBtn.addEventListener('mouseenter', showCompletedAction);
+  runBtn.addEventListener('mouseleave', hideCompletedAction);
+  runBtn.addEventListener('focus', showCompletedAction);
+  runBtn.addEventListener('blur', hideCompletedAction);
 
 
   function getInputHeaders() {
@@ -678,6 +693,7 @@ export function openRunDetailModal({
       node.dataset.runWorkingSetId = selectedNodeId || '';
       const bar = node.querySelector('.workflow-node__run-progress');
       if (bar) bar.style.background = ws?.color || bar.style.background;
+      document.dispatchEvent(new CustomEvent('workflow:refresh-node-colors'));
     }
   }
 
@@ -771,9 +787,13 @@ export function openRunDetailModal({
 
   function onRunResultsUpdated(e) {
     if (e.detail?.nodeId !== nodeId) return;
-    let { results, outputFields, isComplete, cancelled } = e.detail;
+    let { results, outputFields, isComplete, cancelled, error } = e.detail;
     if (isComplete) runId = null;
     if (isComplete && !cancelled && node) node.dataset.runCompleted = '1';
+    if (cancelled && error) {
+      formErrorEl.textContent = String(error);
+      formErrorEl.hidden = false;
+    }
     if (!Array.isArray(results)) return;
     if (!Array.isArray(outputFields) || outputFields.length === 0) outputFields = getNodeResults().outputFields;
     if (outputFields.length === 0 && results.length > 0 && results[0].output && typeof results[0].output === 'object') {
@@ -852,8 +872,13 @@ export function openRunDetailModal({
 
 
   runBtn.addEventListener('click', async () => {
-    if (historyMode) await history.reconcile?.();
-    if (isCompleted()) return;
+    try {
+      if (historyMode) await history.reconcile?.();
+    } catch (error) {
+      formErrorEl.textContent = String(error?.message || error);
+      formErrorEl.hidden = false;
+      return;
+    }
     if (runId) {
       try {
         await fetch(`${API_BASE}/api/run/cancel/${runId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
@@ -878,8 +903,9 @@ export function openRunDetailModal({
     }
     formErrorEl.hidden = true;
 
+    const runAgain = isCompleted();
     const { results: existingResults, outputFields: existingFields } = getNodeResults();
-    showResults(existingResults, existingFields, 'generating', existingResults.length ? 'Resuming…' : 'Running…');
+    showResults(runAgain ? [] : existingResults, runAgain ? [] : existingFields, 'generating', runAgain ? 'Running…' : (existingResults.length ? 'Resuming…' : 'Running…'));
     applyRunningLock();
 
     try {
@@ -895,7 +921,10 @@ export function openRunDetailModal({
     } catch (e) {
       runId = null;
       resultsState.status = 'complete';
-      rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(String(e.message || e))}</p>`;
+      const message = String(e?.message || e);
+      formErrorEl.textContent = message;
+      formErrorEl.hidden = false;
+      rightCol.innerHTML = `<p class="run-detail-error">${escapeHtml(message)}</p>`;
     }
     refreshButton();
   });

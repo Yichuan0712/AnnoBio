@@ -61,6 +61,7 @@ import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
 import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
+import { dependencyColorSources, dependentNodeVisualColors } from './workflowDependencyColors.js';
 import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
@@ -76,7 +77,7 @@ import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { runProcessCode, waitForProcessJob } from './processRunClient.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
-import { analysisInputKeys } from './runAnalysisHistory.js';
+import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -1500,7 +1501,13 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (res.status === 404) {
           const record = pendingRunHistoryRecords.get(nodeId);
           if (record && historySession?.projectId && canvasHistoryVersion === 1) {
-            await historySession.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: 'The backend Run job is no longer available.' });
+            await historySession.putRecord({
+              ...record,
+              status: 'stopped',
+              updatedAt: new Date().toISOString(),
+              error: 'The Run was interrupted when the app closed. Resume to process the remaining rows.',
+            });
+            node.dataset.runResumable = '1';
             pendingRunHistoryRecords.delete(nodeId);
           }
           pendingRuns.delete(nodeId);
@@ -1610,9 +1617,17 @@ export function buildWorkflowCanvas(root, options = {}) {
             outputFields = deriveOutputFields(results, schemaFields);
           }
           const total = totalRows || data.total || countCompletedInputRows(results);
-          const inputRowsCompleted = (data.status === 'done' || data.status === 'cancelled') ? total : (totalRows ?? data.completed ?? data.total ?? countCompletedInputRows(results));
+          const inputRowsCompleted = data.status === 'done'
+            ? total
+            : Math.min(total, startIndex + (data.completed ?? countCompletedInputRows(results)));
           setRunNodeProgress(node, inputRowsCompleted, total);
-          if (data.status === 'done') node.dataset.runCompleted = '1';
+          if (data.status === 'done') {
+            node.dataset.runCompleted = '1';
+            delete node.dataset.runResumable;
+          } else {
+            delete node.dataset.runCompleted;
+            node.dataset.runResumable = '1';
+          }
           if (data.status === 'done' && data.error && results.length === 0) {
             results = [{ row_index: 0, output: null, error: data.error }];
             outputFields = [];
@@ -1621,7 +1636,7 @@ export function buildWorkflowCanvas(root, options = {}) {
             node.dataset.runResults = JSON.stringify(results);
           }
           await persistRunHistoryProgress(nodeId, data.status === 'done' ? 'completed' : 'stopped', results, outputFields);
-          document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results, outputFields, isComplete: true, cancelled: data.status === 'cancelled' } }));
+          document.dispatchEvent(new CustomEvent('workflow:run-results-updated', { detail: { nodeId, results, outputFields, isComplete: true, cancelled: data.status === 'cancelled', error: data.error || '' } }));
           pendingRuns.delete(nodeId);
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         }
@@ -2446,6 +2461,27 @@ export function buildWorkflowCanvas(root, options = {}) {
     return derived;
   }
 
+  function syncNodeDependencyColors() {
+    const nodeById = new Map(Array.from(nodesLayer.querySelectorAll('.workflow-node'))
+      .map((node) => [node.dataset.nodeId, node]));
+    nodeById.forEach((node) => {
+      if (!['sampler', 'process', 'run', 'score', 'promptReview'].includes(node.dataset.nodeType)) return;
+      const { datasetIds, promptId } = dependencyColorSources(node, nodeById, connections);
+      const dataColors = datasetIds.map((id) => nodeById.get(id))
+        .filter((sourceNode) => sourceNode?.classList.contains('workflow-node--dataset'))
+        .map((sourceNode) => datasetColorAt(normalizeDatasetColorIndex(sourceNode.dataset.datasetColorIndex) ?? 0))
+        .filter(Boolean);
+      const promptNode = nodeById.get(promptId);
+      const promptColor = promptNode?.classList.contains('workflow-node--prompt')
+        ? datasetColorAt(normalizeDatasetColorIndex(promptNode.dataset.promptColorIndex) ?? 0)
+        : '';
+      const { borderColor, dataColor } = dependentNodeVisualColors(dataColors, promptColor);
+      node.style.borderColor = borderColor;
+      const progressBar = node.querySelector('.workflow-node__run-progress, .workflow-node__score-progress, .workflow-node__review-progress, .workflow-node__process-progress');
+      if (progressBar) progressBar.style.background = dataColor || '';
+    });
+  }
+
   function updateEdges() {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('pointer-events', 'none');
@@ -2749,6 +2785,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     formatResultOutputColumnLabel,
     buildReviewComparisonRows,
     resolveRunCredentialId,
+    resolveReviewCredentialId,
+    runReviewStart,
     DATASET_BORDER_COLORS,
     normalizeDatasetColorIndex,
     chooseAutomaticNodeColorIndex,
@@ -2759,6 +2797,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     getHistoryForNode,
     pendingReviews,
     pendingReviewNodeIds,
+    registerPendingReview,
     unregisterPendingReview,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
@@ -2834,6 +2873,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     getHistorySession: () => historySession?.projectId && canvasHistoryVersion === 1 ? historySession : null,
     getCanvasState,
     reconcileHistory,
+    reconcileRunHistory,
     resolveRunCredentialId,
     resolveReviewCredentialId,
     pendingReviewNodeIds,
@@ -4237,13 +4277,25 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   document.addEventListener('workflow:review-stream-started', (e) => {
     const id = e.detail?.reviewNodeId;
-    if (id) pendingReviewNodeIds.add(id);
+    if (id) {
+      pendingReviewNodeIds.add(id);
+      const node = getNodeById(id);
+      if (node) delete node.dataset.reviewInterrupted;
+    }
   });
   document.addEventListener('workflow:review-stream-ended', (e) => {
     const id = e.detail?.reviewNodeId;
     if (id) {
       pendingReviewNodeIds.delete(id);
       unregisterPendingReview(id);
+      const node = getNodeById(id);
+      if (node) {
+        let complete = false;
+        try { complete = JSON.parse(node.dataset.reviewResult || '{}')?.streamComplete === true; } catch (_) {}
+        if (complete) delete node.dataset.reviewInterrupted;
+        else node.dataset.reviewInterrupted = '1';
+      }
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     }
   });
 
@@ -4266,7 +4318,9 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   document.addEventListener('workflow:canvas-changed', () => {
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((sn) => syncScoreNodeProgressFromUpstreamRun(sn));
+    syncNodeDependencyColors();
   });
+  document.addEventListener('workflow:refresh-node-colors', syncNodeDependencyColors);
   document.addEventListener('workflow:score-ground-truth-changed', () => updateEdges());
 
   document.addEventListener('workflow:save-review-result', (e) => {
@@ -4348,6 +4402,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   let canvasHistoryVersion = null;
   let historySession = null;
   let historyAnalysisKeys = new Map();
+  let historyAnalysisKeysInitialized = false;
   let historyRevision = 0;
   document.addEventListener('workflow:canvas-changed', () => { historyRevision += 1; });
 
@@ -4413,6 +4468,9 @@ export function buildWorkflowCanvas(root, options = {}) {
           primaryDatasetId: node.dataset.processPrimaryDatasetId || undefined,
           datasetAliases: node.dataset.processDatasetAliases || undefined,
           dfResults: node.dataset.processDfResults || node.dataset.processResults || undefined,
+          processPending: pendingProcesses.has(nodeId),
+          processResumable: node.dataset.processResumable === '1' || undefined,
+          historyRecordId: node.dataset.historyRecordId || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         return out;
@@ -4450,6 +4508,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           runCompleted: node.dataset.runCompleted || undefined,
           runInputContent: node.dataset.runInputContent || undefined,
           runPending: pendingRuns.has(nodeId),
+          runResumable: node.dataset.runResumable === '1' || undefined,
+          historyRecordId: node.dataset.historyRecordId || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (pct <= 0 && node.dataset.runResults && node.dataset.runInputContent) {
@@ -4510,6 +4570,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if ((node.dataset.scoreMatchCode || '').trim()) out.scoreMatchCode = node.dataset.scoreMatchCode;
         if (node.dataset.scoreActiveMatchMode === 'code') out.scoreActiveMatchMode = 'code';
         if ((node.dataset.scoreMatchResult || '').trim()) out.scoreMatchResult = node.dataset.scoreMatchResult;
+        if (node.dataset.scoreMatchInterrupted === '1') out.scoreMatchInterrupted = true;
         return out;
       }
       if (node.classList.contains('workflow-node--prompt-review')) {
@@ -4528,6 +4589,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (pct > 0) out.reviewProgress = pct;
         if (pendingReviews.has(nodeId) || pendingReviewNodeIds.has(nodeId)) out.reviewPending = true;
+        if (node.dataset.reviewInterrupted === '1') out.reviewInterrupted = true;
         return out;
       }
       let sections = [];
@@ -4619,6 +4681,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         if (n.dfResults || n.results) node.dataset.processDfResults = n.dfResults || n.results;
+        if (n.historyRecordId) node.dataset.historyRecordId = n.historyRecordId;
+        if (n.processPending === true || n.processResumable === true) node.dataset.processResumable = '1';
         if (n.results || n.dfResults) {
           const bar = node.querySelector('.workflow-node__process-progress');
           if (bar) { bar.style.width = '100%'; bar.setAttribute('aria-valuenow', '100'); }
@@ -4638,6 +4702,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.runInputToColumn) runNode.dataset.runInputToColumn = n.runInputToColumn;
         if (n.runSettings && typeof n.runSettings === 'object') runNode.dataset.runSettings = JSON.stringify(n.runSettings);
         if (n.runCompleted) runNode.dataset.runCompleted = n.runCompleted;
+        if (n.historyRecordId) runNode.dataset.historyRecordId = n.historyRecordId;
+        if (n.runResumable === true || n.runPending === true) runNode.dataset.runResumable = '1';
         if (n.runInputContent) runNode.dataset.runInputContent = n.runInputContent;
         if (n.runResults) {
           let results = [];
@@ -4716,6 +4782,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.scoreMatchResult && typeof n.scoreMatchResult === 'string') {
           scoreNode.dataset.scoreMatchResult = n.scoreMatchResult;
         }
+        if (n.scoreMatchInterrupted === true) scoreNode.dataset.scoreMatchInterrupted = '1';
         createdNodes.push(scoreNode);
       } else if (n.type === 'promptReview') {
         const promptReviewNode = createPromptReviewNode({
@@ -4731,6 +4798,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.reviewProgress != null && n.reviewProgress >= 0 && n.reviewProgress <= 100) {
           setReviewNodeProgress(promptReviewNode, n.reviewProgress);
         }
+        if (n.reviewPending === true || n.reviewInterrupted === true) promptReviewNode.dataset.reviewInterrupted = '1';
         createdNodes.push(promptReviewNode);
       } else {
         const node = createPromptNode({
@@ -4746,32 +4814,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         createdNodes.push(node);
-      }
-    });
-    // Apply Run node border color and progress bar color from selected working set (so it shows when loading from JSON)
-    createdNodes.forEach((runNode) => {
-      if (runNode.classList.contains('workflow-node--run') && runNode.dataset.runWorkingSetId) {
-        const wsNode = getNodeById(runNode.dataset.runWorkingSetId);
-        if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
-          const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
-          const color = datasetColorAt(colorIndex);
-          runNode.style.borderColor = color;
-          const progressBar = runNode.querySelector('.workflow-node__run-progress');
-          if (progressBar) progressBar.style.background = color;
-        }
-      }
-    });
-    // Apply Score node border color from selected ground truth working set (so it shows when loading from JSON)
-    nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => {
-      const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
-      if (!gtId) return;
-      const wsNode = getNodeById(gtId);
-      if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
-        const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
-        const color = datasetColorAt(colorIndex);
-        scoreNode.style.borderColor = color;
-        const progressBar = scoreNode.querySelector('.workflow-node__score-progress');
-        if (progressBar) progressBar.style.background = color;
       }
     });
     // Refresh dataset node description: sampler desc or dataset notes (always show body)
@@ -4817,6 +4859,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     }).filter(Boolean).filter((c) => getNodeById(c.fromId) && getNodeById(c.toId));
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => syncScoreNodeProgressFromUpstreamRun(scoreNode));
     updateContentSize();
+    syncNodeDependencyColors();
     updateEdges();
     root.querySelector('.pipeline-overview-overlay')?.refreshPipelineOverview?.();
   }
@@ -4833,6 +4876,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
     historySession = session;
     historyAnalysisKeys = new Map();
+    historyAnalysisKeysInitialized = false;
   }
 
   async function recoverHistoryJobs() {
@@ -4846,7 +4890,14 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (!record || record.status !== 'running') continue;
       const jobId = String(record.backendJobId || '').trim();
       if (!jobId) {
-        await session.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: 'The app closed before the backend job ID was saved.' });
+        await session.putRecord({ ...record, status: 'stopped', updatedAt: new Date().toISOString(), error: 'The app closed before the backend job ID was saved. Resume to run it again.' });
+        const live = getNodeById(record.nodeId);
+        if (live) {
+          if (entry.kind === 'run') live.dataset.runResumable = '1';
+          else live.dataset.processResumable = '1';
+        }
+        await reconcileHistory();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
         continue;
       }
       const node = getNodeById(record.nodeId);
@@ -4883,10 +4934,27 @@ export function buildWorkflowCanvas(root, options = {}) {
           }
         } catch (error) {
           try {
-            await session.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: String(error?.message || error) });
+            const unavailable = Number(error?.status) === 404;
+            await session.putRecord({
+              ...record,
+              status: unavailable ? 'stopped' : 'failed',
+              updatedAt: new Date().toISOString(),
+              error: unavailable
+                ? 'The Process was interrupted when the app closed. Resume to run it again.'
+                : String(error?.message || error),
+            });
+            if (unavailable && session === historySession) {
+              const live = getNodeById(record.nodeId);
+              if (live) live.dataset.processResumable = '1';
+              await reconcileHistory();
+              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+            }
           } catch (saveError) { console.error('Could not save recovered Process failure', saveError); }
         } finally {
-          if (session === historySession) pendingProcesses.delete(record.nodeId);
+          if (session === historySession) {
+            pendingProcesses.delete(record.nodeId);
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          }
         }
       })();
     }
@@ -4902,7 +4970,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   function getHistoryForNode(nodeId) {
     if (!historySession?.projectId || canvasHistoryVersion !== 1) return null;
     return {
-      reconcile: reconcileHistory,
+      reconcile: () => getNodeById(nodeId)?.classList.contains('workflow-node--run')
+        ? reconcileRunHistory(nodeId) : reconcileHistory(),
       loadEntries: async () => {
         let resolved;
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -4958,6 +5027,69 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   async function reconcileHistory() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const result = await reconcileHistoryOnce();
+      if (!result?.stale) return result;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return { stale: true };
+  }
+
+  function runHistoryInputKey(state, nodeId) {
+    const run = state.nodes.find((item) => item.nodeId === nodeId);
+    const promptEdge = state.connections.find((edge) => edge.type === EDGE_TYPE_PROMPT_TO_RUN && edge.toId === nodeId);
+    const prompt = state.nodes.find((item) => item.nodeId === promptEdge?.fromId);
+    const dataset = state.nodes.find((item) => item.nodeId === run?.runWorkingSetId);
+    return JSON.stringify({
+      runWorkingSetId: run?.runWorkingSetId, mapping: run?.runInputToColumn,
+      settings: run?.runSettings, credential: run?.runCredentialId,
+      historyRecordId: run?.historyRecordId,
+      promptId: promptEdge?.fromId, prompt,
+      dataset, datasetProducer: state.connections.find((edge) => edge.type === EDGE_TYPE_PROCESS_TO_DATASET && edge.toId === dataset?.nodeId),
+    });
+  }
+
+  async function reconcileRunHistory(nodeId) {
+    const session = historySession;
+    if (!session?.projectId || canvasHistoryVersion !== 1) return null;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const before = getCanvasState();
+      const inputKey = runHistoryInputKey(before, nodeId);
+      const resolved = await session.resolve(before);
+      if (session !== historySession) return null;
+      if (inputKey !== runHistoryInputKey(getCanvasState(), nodeId)) continue;
+      const item = resolved.state.nodes.find((entry) => entry.nodeId === nodeId && entry.type === 'run');
+      const live = getNodeById(nodeId);
+      if (!item || !live) return null;
+      const inputDataset = resolved.state.nodes.find((entry) => entry.nodeId === item.runWorkingSetId && entry.type === 'dataset');
+      if (inputDataset) {
+        const datasetNode = getNodeById(inputDataset.nodeId);
+        if (inputDataset.sourceRunNodeId || connections.some((edge) => edge.type === EDGE_TYPE_PROCESS_TO_DATASET && edge.toId === inputDataset.nodeId)) {
+          datasetContentByNodeId.set(inputDataset.nodeId, cloneDatasetContent(inputDataset.datasetContent));
+        }
+        if (datasetNode) {
+          if (inputDataset.resultMissing) datasetNode.dataset.resultMissing = '1';
+          else delete datasetNode.dataset.resultMissing;
+        }
+      }
+      for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
+        if (item[key] == null) delete live.dataset[key];
+        else live.dataset[key] = item[key];
+      }
+      if (item.runResumable) live.dataset.runResumable = '1';
+      else delete live.dataset.runResumable;
+      if (item.historyRecordId) live.dataset.historyRecordId = item.historyRecordId;
+      else delete live.dataset.historyRecordId;
+      const progress = Number(item.runProgress || 0);
+      const bar = live.querySelector('.workflow-node__run-progress');
+      if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
+      document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
+      return resolved;
+    }
+    throw new Error('Run inputs changed while preparing history. Try again.');
+  }
+
+  async function reconcileHistoryOnce() {
     if (!historySession?.projectId || canvasHistoryVersion !== 1) return null;
     const session = historySession;
     const revision = historyRevision;
@@ -4967,7 +5099,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const priorKeys = historyAnalysisKeys;
     for (const node of before.nodes) {
       if (node.type !== 'score' && node.type !== 'promptReview') continue;
-      const scoreKey = priorKeys.get(`score:${node.nodeId}`);
+      const scoreKey = analysisKeyForSave(priorKeys, initialKeys, 'score', node.nodeId, historyAnalysisKeysInitialized);
       if (node.type === 'score' && scoreKey && (
         node.scoreMatchResult || node.scoreRowExcludedFromScoring
         || await session.analysisRecord(node.nodeId, 'score', scoreKey.signature)
@@ -4977,7 +5109,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           scoreRowExcludedFromScoring: node.scoreRowExcludedFromScoring || {},
         });
       }
-      const reviewKey = priorKeys.get(`review:${node.nodeId}`);
+      const reviewKey = analysisKeyForSave(priorKeys, initialKeys, 'review', node.nodeId, historyAnalysisKeysInitialized);
       if (reviewKey && (node.reviewResult || node.reviewProgress
         || await session.analysisRecord(node.nodeId, 'review', reviewKey.signature))) {
         await session.saveAnalysis(node.nodeId, 'review', reviewKey, {
@@ -5027,12 +5159,20 @@ export function buildWorkflowCanvas(root, options = {}) {
           else live.dataset[key] = item[key];
         }
         const progress = Number(item.runProgress || 0);
+        if (item.runResumable) live.dataset.runResumable = '1';
+        else delete live.dataset.runResumable;
+        if (item.historyRecordId) live.dataset.historyRecordId = item.historyRecordId;
+        else delete live.dataset.historyRecordId;
         const bar = live.querySelector('.workflow-node__run-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
       } else if (item.type === 'process') {
         if (item.dfResults == null) delete live.dataset.processDfResults;
         else live.dataset.processDfResults = item.dfResults;
         const progress = item.dfResults ? 100 : 0;
+        if (item.processResumable) live.dataset.processResumable = '1';
+        else delete live.dataset.processResumable;
+        if (item.historyRecordId) live.dataset.historyRecordId = item.historyRecordId;
+        else delete live.dataset.historyRecordId;
         const bar = live.querySelector('.workflow-node__process-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
       } else if (item.type === 'score') {
@@ -5047,12 +5187,20 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (item.reviewResult == null) delete live.dataset.reviewResult;
         else live.dataset.reviewResult = item.reviewResult;
         setReviewNodeProgress(live, Number(item.reviewProgress || 0));
+        if (item.reviewInterrupted || item.reviewPending) live.dataset.reviewInterrupted = '1';
+        else {
+          let incomplete = false;
+          try { incomplete = JSON.parse(item.reviewResult || '{}')?.streamComplete === false; } catch (_) {}
+          if (incomplete) live.dataset.reviewInterrupted = '1';
+          else delete live.dataset.reviewInterrupted;
+        }
       }
     }
     historyAnalysisKeys = new Map([
       ...[...initialKeys.score].map(([id, key]) => [`score:${id}`, key]),
       ...[...reviewKeys].map(([id, key]) => [`review:${id}`, key]),
     ]);
+    historyAnalysisKeysInitialized = true;
     document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
     return resolved;
   }
@@ -5119,7 +5267,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (missingInput) throw new Error(`Input Dataset "${missingInput.name}" has no current result.`);
     const session = historySession?.projectId && canvasHistoryVersion === 1 ? historySession : null;
     let record = session ? (await session.reserve(getCanvasState(), nodeId)).record : null;
+    if (record) {
+      processNode.dataset.historyRecordId = record.id;
+      delete processNode.dataset.processDfResults;
+      delete processNode.dataset.processResults;
+      await reconcileHistory();
+    }
     if (session) pendingProcesses.add(nodeId);
+    delete processNode.dataset.processResumable;
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     const setProgress = (el, percent) => {
       const bar = el?.querySelector('.workflow-node__process-progress');
       if (!bar) return;
@@ -5169,6 +5325,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       };
       await session.putRecord(record);
     }
+    if (cancelled) liveNode.dataset.processResumable = '1';
+    else delete liveNode.dataset.processResumable;
     pendingProcesses.delete(nodeId);
     delete liveNode.dataset.processResults;
     setProgress(liveNode, 100);

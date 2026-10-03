@@ -672,7 +672,9 @@ def save_history_record(project_id: str, record_id: str, body: HistoryRecordSave
                     raise HTTPException(409, "History record inputs cannot change.")
             if existing.get("status") == "completed" and existing.get("kind") in ("run", "process") and record != existing:
                 raise HTTPException(409, "Completed history records cannot change.")
-        elif any(entry.get("nodeId") == record["nodeId"] and entry.get("signature") == record["signature"] for entry in index["records"]):
+        elif record.get("kind") not in ("run", "process") and any(
+                entry.get("nodeId") == record["nodeId"] and entry.get("signature") == record["signature"]
+                for entry in index["records"]):
             raise HTTPException(409, "This input already has a history record.")
         summary = {key: record.get(key) for key in ("id", "nodeId", "kind", "signature", "status", "createdAt", "updatedAt", "summary", "sourceRecordIds")}
         summary["assetIds"] = sorted(_history_asset_ids(record))

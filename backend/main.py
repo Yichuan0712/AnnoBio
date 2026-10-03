@@ -1420,7 +1420,7 @@ def _persist_run_jobs() -> None:
 
 
 def _load_run_jobs() -> None:
-    """Load persisted run jobs on startup. Do not load _run_last_activity (client is gone)."""
+    """Load persisted results; workers from the previous process cannot resume."""
     if not RUN_JOBS_FILE.exists():
         return
     try:
@@ -1428,12 +1428,23 @@ def _load_run_jobs() -> None:
         data = json.loads(raw)
         jobs = data.get("jobs") or {}
         by_node = data.get("by_node") or {}
+        interrupted = False
+        for run_id, job in jobs.items():
+            if job.get("status") == "running":
+                jobs[run_id] = {
+                    **job,
+                    "status": "cancelled",
+                    "error": "Run interrupted because the backend restarted. Resume to process remaining rows.",
+                }
+                interrupted = True
         with _run_jobs_lock:
             _run_jobs.clear()
             _run_jobs.update(jobs)
             _run_jobs_by_node.clear()
             _run_jobs_by_node.update(by_node)
             _run_last_activity.clear()
+        if interrupted:
+            _persist_run_jobs()
     except (OSError, json.JSONDecodeError) as e:
         _safe_print(f"[Run] load persisted jobs failed: {e}", file=sys.stderr)
 
@@ -1752,6 +1763,7 @@ def get_run_result(run_id: str):
             "output_fields": output_fields,
             "completed": completed,
             "total": total,
+            "error": job_error,
         }
     if job_error:
         return {"status": "done", "error": job_error, "results": None, "output_fields": None}
@@ -1929,6 +1941,7 @@ def get_run_result_by_node(run_node_id: str):
             "output_fields": output_fields,
             "completed": completed,
             "total": total,
+            "error": job_error,
         }
     if job_error:
         return {"run_id": run_id, "status": "done", "error": job_error, "results": None, "output_fields": None}

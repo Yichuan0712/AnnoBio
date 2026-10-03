@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { analysisInputKeys } from '../src/runAnalysisHistory.js';
+import { analysisInputKeys, analysisKeyForSave } from '../src/runAnalysisHistory.js';
 
 const state = () => ({
   nodes: [
@@ -53,4 +53,29 @@ test('Score analysis records the source record of a derived ground truth', async
   const keys = await analysisInputKeys(base, { run: 'answer-run', 'gt-run': 'truth-run' });
   assert.equal(keys.score.get('score').inputs.groundTruthSourceRecordId, 'truth-run');
   assert.equal(keys.review.get('review').inputs.scoreNodeId, 'score');
+});
+
+test('new Review result is saved under its current signature on the first History sync', () => {
+  const currentReviewKey = { signature: 'review-current' };
+  const currentKeys = { review: new Map([['new-review', currentReviewKey]]) };
+  assert.equal(
+    analysisKeyForSave(new Map(), currentKeys, 'review', 'new-review'),
+    currentReviewKey,
+  );
+});
+
+test('initial History sync does not attach a stale cache to current inputs', () => {
+  const currentKeys = { review: new Map([['saved-review', { signature: 'current-inputs' }]]) };
+  assert.equal(
+    analysisKeyForSave(new Map(), currentKeys, 'review', 'saved-review', false),
+    null,
+  );
+});
+
+test('existing analysis result stays with its prior signature after inputs change', () => {
+  const priorScoreKey = { signature: 'score-before-edit' };
+  const currentScoreKey = { signature: 'score-after-edit' };
+  const priorKeys = new Map([['score:score', priorScoreKey]]);
+  const currentKeys = { score: new Map([['score', currentScoreKey]]) };
+  assert.equal(analysisKeyForSave(priorKeys, currentKeys, 'score', 'score'), priorScoreKey);
 });

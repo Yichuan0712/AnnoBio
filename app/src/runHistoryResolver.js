@@ -34,10 +34,12 @@ function processTable(record, branch) {
 
 function clearResult(node) {
   if (node.type === 'run') {
-    for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted', 'runProgress', 'runPending']) delete node[key];
+    for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted', 'runProgress', 'runPending', 'runResumable']) delete node[key];
   } else if (node.type === 'process') {
     delete node.dfResults;
     delete node.results;
+    delete node.processPending;
+    delete node.processResumable;
   }
 }
 
@@ -50,9 +52,12 @@ function applyResult(node, record) {
     node.runProgress = result.runProgress || (record.status === 'completed' ? 100 : 0);
     node.runCompleted = record.status === 'completed' ? '1' : undefined;
     node.runPending = record.status === 'running';
+    node.runResumable = record.status === 'stopped';
   } else {
     node.dfResults = result.dfResults == null ? undefined : JSON.stringify(result.dfResults);
     delete node.results;
+    node.processPending = record.status === 'running';
+    node.processResumable = record.status === 'stopped';
   }
 }
 
@@ -66,7 +71,14 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   next.connections = Array.isArray(next.connections) ? next.connections : [];
   const nodes = new Map(next.nodes.map((node) => [nodeId(node), node]));
   const indexEntries = Array.isArray(index?.records) ? index.records : [];
-  const bySignature = new Map(indexEntries.map((entry) => [`${entry.nodeId}\u0000${entry.signature}`, entry]));
+  const bySignature = new Map();
+  const byId = new Map();
+  for (const entry of indexEntries) {
+    const key = `${entry.nodeId}\u0000${entry.signature}`;
+    if (!bySignature.has(key)) bySignature.set(key, []);
+    bySignature.get(key).push(entry);
+    byId.set(entry.id, entry);
+  }
   const currentRecordIds = {};
   const missingDatasetIds = [];
   const missingResultNodeIds = [];
@@ -75,7 +87,11 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   const visiting = new Set();
 
   async function recordFor(node, signature) {
-    const entry = bySignature.get(`${nodeId(node)}\u0000${signature}`);
+    const key = `${nodeId(node)}\u0000${signature}`;
+    const candidates = bySignature.get(key) || [];
+    const preferred = byId.get(String(node.historyRecordId || ''));
+    const entry = preferred?.nodeId === nodeId(node) && preferred?.signature === signature
+      ? preferred : candidates.at(-1);
     if (!entry || entry.kind !== node.type) return null;
     if (!recordCache.has(entry.id)) recordCache.set(entry.id, Promise.resolve(loadRecord(entry.id)));
     const record = await recordCache.get(entry.id);
@@ -160,9 +176,11 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
       const record = signature ? await recordFor(node, signature) : null;
       if (record) {
         applyResult(node, record);
+        node.historyRecordId = record.id;
         currentRecordIds[id] = record.id;
       } else {
         clearResult(node);
+        delete node.historyRecordId;
         missingResultNodeIds.push(id);
       }
       resolvedNodes.set(id, record);

@@ -25,6 +25,7 @@ import { compileReviewInputs } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { displayCell, isAssetCell } from './datasetContent.js';
+import { reviewNeedsResume } from './executionResumeState.js';
 import {
   ensureReviewResultIds,
   ensureSuggestionObjectId,
@@ -2215,7 +2216,7 @@ function buildReviewResultUI(overlay, options) {
 }
 
 /** Review node modal: show saved result (sections + suggestions) or empty state. */
-export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, getIsReviewStreaming }) {
+export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, onResumeReview, getIsReviewStreaming }) {
    const saved = getReviewResult ? getReviewResult() : null;
   const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
   const title = `Review: ${reviewName}`;
@@ -2247,6 +2248,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="review-detail-panel-analysis" id="review-detail-tab-analysis" data-tab="analysis">Issue analysis</button>
               <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="review-detail-panel-suggestions" id="review-detail-tab-suggestions" data-tab="suggestions">Suggested changes</button>
             </div>
+            <button type="button" class="btn btn-primary review-detail-resume-btn" hidden>Resume</button>
           </div>
           <div class="review-detail-preview-content">
             <div class="review-detail-tab-panels">
@@ -2276,6 +2278,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 
   const promptWrap = overlay.querySelector('.review-detail-prompt-wrap');
   const suggestionsEl = overlay.querySelector('#review-detail-suggestions');
+  const resumeBtn = overlay.querySelector('.review-detail-resume-btn');
 
   const reviewNodeId = node?.dataset?.nodeId || '';
   const baseOptions = {
@@ -2299,6 +2302,19 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
     buildReviewResultUI(overlay, baseOptions);
   }
 
+  function syncResumeButton(data = (typeof getReviewResult === 'function' ? getReviewResult() : saved)) {
+    if (!resumeBtn) return;
+    const streaming = typeof getIsReviewStreaming === 'function' && getIsReviewStreaming();
+    const resumable = reviewNeedsResume({
+      result: data,
+      interrupted: node?.dataset?.reviewInterrupted === '1',
+      streaming,
+    });
+    resumeBtn.hidden = !resumable || typeof onResumeReview !== 'function';
+    resumeBtn.disabled = false;
+    resumeBtn.textContent = 'Resume';
+  }
+
   function onSaveReviewResult(e) {
     if (e.detail?.reviewNodeId !== reviewNodeId) return;
     const detailData = e.detail?.data;
@@ -2309,7 +2325,13 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
       if (!data || typeof data !== 'object') return;
       // 流水线已结束时必须整页 refresh（Issue analysis / 建议列表）；reconcile 只合并已有卡片，不会重建 row_diagnostics。
       refreshFromSaved(data);
+      syncResumeButton(data);
     });
+  }
+
+  function onReviewStreamEnded(e) {
+    if (e.detail?.reviewNodeId !== reviewNodeId) return;
+    queueMicrotask(() => syncResumeButton());
   }
 
   if (hasResult) {
@@ -2333,7 +2355,21 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 
   if (reviewNodeId) {
     document.addEventListener('workflow:save-review-result', onSaveReviewResult);
+    document.addEventListener('workflow:review-stream-ended', onReviewStreamEnded);
   }
+
+  resumeBtn?.addEventListener('click', async () => {
+    resumeBtn.disabled = true;
+    resumeBtn.textContent = 'Startingâ€¦';
+    try {
+      const started = await onResumeReview?.();
+      if (started) resumeBtn.hidden = true;
+      else syncResumeButton();
+    } catch (_) {
+      syncResumeButton();
+    }
+  });
+  syncResumeButton(saved);
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
   attachModalPaneCycle({
@@ -2345,6 +2381,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 
   function close() {
     if (reviewNodeId) document.removeEventListener('workflow:save-review-result', onSaveReviewResult);
+    if (reviewNodeId) document.removeEventListener('workflow:review-stream-ended', onReviewStreamEnded);
     delete overlay._reviewDetailReconcile;
     overlay.remove();
     document.body.style.overflow = '';
