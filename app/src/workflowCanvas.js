@@ -2470,6 +2470,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     const nodeById = new Map(Array.from(nodesLayer.querySelectorAll('.workflow-node'))
       .map((node) => [node.dataset.nodeId, node]));
     nodeById.forEach((node) => {
+      if (node.classList.contains('workflow-node--dataset')) {
+        node.style.borderColor = datasetColorAt(normalizeDatasetColorIndex(node.dataset.datasetColorIndex) ?? 0);
+      } else if (node.classList.contains('workflow-node--prompt')) {
+        node.style.borderColor = datasetColorAt(normalizeDatasetColorIndex(node.dataset.promptColorIndex) ?? 0);
+      }
       if (!['sampler', 'process', 'run', 'score', 'promptReview'].includes(node.dataset.nodeType)) return;
       const { datasetIds, promptId } = dependencyColorSources(node, nodeById, connections);
       const dataColors = datasetIds.map((id) => nodeById.get(id))

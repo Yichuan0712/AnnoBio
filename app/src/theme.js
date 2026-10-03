@@ -34,4 +34,6 @@ export function setTheme(mode) {
   }
   // 高对比模式已注释（index.css 中 html.high-contrast 已注释），此处不再 add('high-contrast')
   localStorage.setItem(THEME_KEY, normalized);
+  // Node borders are painted from the active theme, so an open canvas has to repaint them.
+  document.dispatchEvent(new CustomEvent('workflow:refresh-node-colors'));
 }

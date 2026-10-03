@@ -17,27 +17,38 @@
   --diff-added-text: #15803d;
   --primary-btn-bg: rgba(37, 99, 235, 0.22);
   --primary-btn-text: #2563eb;
+  --accent: #2563eb;
+  --status-success: #10893e;
+  --status-danger: #c0392b;
+  --status-warning: #9a6700;
+  --status-dataset: #7c3aed;
   --control-radius: 3px;
 }
 
-/* Dark: 以中性灰为主，仅极少量冷色，避免发蓝 */
+/* Dark: 以中性灰为主，仅极少量冷色，避免发蓝。
+   画布、面板和边框拉开一档，次要文字和状态色提亮，否则在深底上会糊成一片。 */
 html.dark {
-  --bg: #1b1c1e;
-  --bg-bar: #252628;
-  --bg-canvas: #171819;
-  --grid-color: rgba(255, 255, 255, 0.038);
-  --text: #eaeaea;
-  --text-muted: #98989e;
-  --border: #3f4146;
-  --node-border: #4b4d52;
-  --hover: #2d2f34;
-  --shadow: rgba(0, 0, 0, 0.34);
+  --bg: #222326;
+  --bg-bar: #2e3036;
+  --bg-canvas: #16181b;
+  --grid-color: rgba(255, 255, 255, 0.075);
+  --text: #f3f4f6;
+  --text-muted: #b7b8be;
+  --border: #6d6f76;
+  --node-border: #8b8d94;
+  --hover: #3a3c43;
+  --shadow: rgba(0, 0, 0, 0.45);
   --diff-removed-bg: rgba(248, 113, 113, 0.25);
   --diff-removed-text: #fca5a5;
   --diff-added-bg: rgba(74, 222, 128, 0.22);
   --diff-added-text: #86efac;
   --primary-btn-bg: rgba(147, 197, 253, 0.32);
   --primary-btn-text: #93c5fd;
+  --accent: #93c5fd;
+  --status-success: #4ade80;
+  --status-danger: #fca5a5;
+  --status-warning: #fbbf24;
+  --status-dataset: #c4b5fd;
   --control-radius: 3px;
 }
 
