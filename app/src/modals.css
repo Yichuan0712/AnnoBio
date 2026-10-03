@@ -8831,9 +8831,9 @@ button.btn.btn-danger:hover:not(:disabled) {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
   padding: 1px 6px; border-radius: 999px;
 }
-.pipeline-step-kind--prompt { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
-.pipeline-step-kind--process { background: rgba(16, 137, 62, 0.14); color: #10893e; }
-.pipeline-step-kind--dataset { background: rgba(124, 58, 237, 0.14); color: #7c3aed; }
+.pipeline-step-kind--prompt { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.pipeline-step-kind--process { background: color-mix(in srgb, var(--status-success) 16%, transparent); color: var(--status-success); }
+.pipeline-step-kind--dataset { background: color-mix(in srgb, var(--status-dataset) 16%, transparent); color: var(--status-dataset); }
 .pipeline-step-name { min-width: 0; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
 .pipeline-overview-branch {
   flex: 0 1 auto; width: fit-content; max-width: 100%; box-sizing: border-box; padding: 8px 10px; margin: 0; list-style: none;
@@ -8871,8 +8871,8 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-run-validation ul { margin: 6px 0 0; padding-left: 18px; }
 .pipeline-validation-plan { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; color: var(--text-muted); }
 .pipeline-validation-plan span { overflow-wrap: anywhere; }
-.pipeline-run-diagnostic--error { color: #c0392b; }
-.pipeline-run-diagnostic--warning { color: #9a6700; }
+.pipeline-run-diagnostic--error { color: var(--status-danger); }
+.pipeline-run-diagnostic--warning { color: var(--status-warning); }
 .pipeline-run-panel {
   margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 7px;
   background: var(--bg-bar); min-width: 0;
@@ -8889,17 +8889,17 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-run-status--pending,
 .pipeline-job-status--running { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
 .pipeline-run-status--succeeded,
-.pipeline-job-status--succeeded { background: rgba(16, 137, 62, 0.14); color: #10893e; }
+.pipeline-job-status--succeeded { background: color-mix(in srgb, var(--status-success) 16%, transparent); color: var(--status-success); }
 .pipeline-run-status--failed,
 .pipeline-run-status--interrupted,
 .pipeline-job-status--failed,
-.pipeline-job-status--interrupted { background: rgba(192, 57, 43, 0.13); color: #c0392b; }
+.pipeline-job-status--interrupted { background: color-mix(in srgb, var(--status-danger) 16%, transparent); color: var(--status-danger); }
 .pipeline-run-status--cancelled,
 .pipeline-run-status--cancelling,
 .pipeline-job-status--cancelled,
-.pipeline-job-status--blocked { background: rgba(154, 103, 0, 0.14); color: #9a6700; }
+.pipeline-job-status--blocked { background: color-mix(in srgb, var(--status-warning) 16%, transparent); color: var(--status-warning); }
 .pipeline-run-error,
-.pipeline-job-error { color: #c0392b; font-size: 12px; overflow-wrap: anywhere; }
+.pipeline-job-error { color: var(--status-danger); font-size: 12px; overflow-wrap: anywhere; }
 .pipeline-run-error { margin-top: 7px; }
 .pipeline-job-error { grid-column: 2 / -1; margin-top: 2px; }
 .pipeline-job-list { display: grid; gap: 5px; margin: 9px 0 0; padding: 0; list-style: none; }
@@ -8915,7 +8915,7 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 .pipeline-artifact-chip:hover { border-color: var(--accent); }
 .pipeline-artifact-chip span { color: var(--text-muted); margin-left: 3px; }
-.pipeline-artifact-chip--partial { border-style: dashed; color: #9a6700; }
+.pipeline-artifact-chip--partial { border-style: dashed; color: var(--status-warning); }
 .pipeline-artifact-preview { margin-top: 10px; min-width: 0; }
 .pipeline-artifact-preview-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; font-size: 12px; }
 .pipeline-artifact-preview-header > span { color: var(--text-muted); }
