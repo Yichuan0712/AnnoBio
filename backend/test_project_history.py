@@ -64,17 +64,28 @@ class ProjectHistoryTest(unittest.TestCase):
         self.assertEqual(project_store.get_project(imported)["state"]["historyVersion"], 1)
         self.assertEqual(project_store.get_agent_conversations(imported), session.model_dump())
 
-    def test_signature_is_unique_and_completed_record_is_immutable(self):
+    def test_run_signature_can_repeat_while_completed_record_stays_immutable(self):
         item = record()
         self.save(item)
-        with self.assertRaises(HTTPException) as duplicate:
-            self.save(record())
-        self.assertEqual(duplicate.exception.status_code, 409)
+        repeated = record()
+        self.save(repeated)
+        self.assertEqual(
+            [entry["id"] for entry in project_store.get_history_index(self.project_id)["records"]],
+            [item["id"], repeated["id"]],
+        )
 
         changed = {**item, "results": [{"output": "different"}]}
         with self.assertRaises(HTTPException) as frozen:
             self.save(changed)
         self.assertEqual(frozen.exception.status_code, 409)
+
+        score = record(node_id="score-1", signature="score-signature")
+        score["kind"] = "score"
+        self.save(score)
+        duplicate_score = {**score, "id": uuid.uuid4().hex}
+        with self.assertRaises(HTTPException) as duplicate:
+            self.save(duplicate_score)
+        self.assertEqual(duplicate.exception.status_code, 409)
 
     def test_merge_keeps_both_history_records(self):
         first = record()

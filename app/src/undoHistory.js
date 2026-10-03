@@ -21,10 +21,10 @@
 const MAX_HISTORY = 50;
 
 const VOLATILE_FIELDS_BY_TYPE = {
-  run: ['runResults', 'runCompleted', 'runPending', 'runProgress', 'runInputContent', 'runOutputBracketCollapsed'],
-  score: ['reviewResult', 'scoreMatchResult', 'scoreOutputBracketCollapsed', 'scoreGtBracketCollapsed', 'scoreTableRulesColumnFilter'],
-  promptReview: ['reviewResult', 'reviewProgress', 'reviewPending'],
-  process: ['results', 'dfResults'],
+  run: ['runResults', 'runCompleted', 'runPending', 'runResumable', 'runProgress', 'runInputContent', 'runOutputBracketCollapsed', 'historyRecordId'],
+  score: ['reviewResult', 'scoreMatchResult', 'scoreMatchInterrupted', 'scoreOutputBracketCollapsed', 'scoreGtBracketCollapsed', 'scoreTableRulesColumnFilter'],
+  promptReview: ['reviewResult', 'reviewProgress', 'reviewPending', 'reviewInterrupted'],
+  process: ['results', 'dfResults', 'processPending', 'processResumable', 'historyRecordId'],
 };
 
 function stripVolatileFields(state) {

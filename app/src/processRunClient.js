@@ -82,7 +82,11 @@ export async function waitForProcessJob(jobId, { signal, timeoutMs = MAX_WAIT_MS
       }
       const res = await fetch(`${BACKEND_API_BASE}/api/process/df/run/result/${jobId}`, { signal });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok && res.status !== 202) throw new Error(data.detail || 'Could not read the Process result.');
+      if (!res.ok && res.status !== 202) {
+        const error = new Error(data.detail || 'Could not read the Process result.');
+        error.status = res.status;
+        throw error;
+      }
       if (data.status === 'running') {
         await new Promise((resolve) => { setTimeout(resolve, POLL_MS); });
         continue;

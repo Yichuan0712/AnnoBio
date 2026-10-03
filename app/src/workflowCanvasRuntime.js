@@ -59,6 +59,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     getHistorySession,
     getCanvasState,
     reconcileHistory,
+    reconcileRunHistory,
     resolveRunCredentialId,
     resolveReviewCredentialId,
     pendingReviewNodeIds,
@@ -507,13 +508,10 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
     const historySession = getHistorySession?.();
     if (historySession) {
-      let sync;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        sync = await reconcileHistory();
-        if (!sync?.stale) break;
-      }
-      if (sync?.stale) throw new Error('Canvas inputs changed while preparing Run history. Try again.');
+      const sync = await reconcileRunHistory(normalizedRunNodeId);
+      if (!sync) throw new Error('Project changed while preparing Run history. Try again.');
     }
+    const rerunCompleted = !!historySession && node.dataset.runCompleted === '1';
 
     const connections = getConnectionsList();
     const promptEdge = connections.find((c) => c.toId === normalizedRunNodeId && c.type === 'prompt-to-run');
@@ -530,11 +528,13 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       throw new Error('The selected input Dataset has no current result. Run its upstream node first.');
     }
     let existingResults = [];
-    try {
-      existingResults = JSON.parse(node.dataset.runResults || '[]');
-      if (!Array.isArray(existingResults)) existingResults = [];
-    } catch (_) {
-      existingResults = [];
+    if (!rerunCompleted) {
+      try {
+        existingResults = JSON.parse(node.dataset.runResults || '[]');
+        if (!Array.isArray(existingResults)) existingResults = [];
+      } catch (_) {
+        existingResults = [];
+      }
     }
     let content = datasetContentByNodeId.get(workingSetId);
     if (existingResults.length > 0 && node.dataset.runInputContent) {
@@ -589,6 +589,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       // There are no model calls to make, but the empty Run is still a completed result for
       // this exact input and must be addressable by downstream History and Process nodes.
       const historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId)).record : null;
+      if (historyRecord) node.dataset.historyRecordId = historyRecord.id;
       const runInputContent = { headers, columnTypes: content?.columnTypes || [], rowIds: content?.rowIds || [], rows: [] };
       if (historyRecord) await historySession.putRecord({
         ...historyRecord, status: 'completed', updatedAt: new Date().toISOString(),
@@ -599,6 +600,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       node.dataset.runResults = '[]';
       node.dataset.runOutputFields = '[]';
       node.dataset.runCompleted = '1';
+      delete node.dataset.runResumable;
       node.dataset.runProgress = '100';
       setRunNodeProgress(node, 1, 1);
       emitRunResultsUpdated({ nodeId: normalizedRunNodeId, results: [], isComplete: true });
@@ -616,6 +618,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (rowsToRun.length === 0) {
       if (existingResults.length > 0) {
         node.dataset.runCompleted = '1';
+        delete node.dataset.runResumable;
         setRunNodeProgress(node, rows.length, rows.length);
         emitRunResultsUpdated({
           nodeId: normalizedRunNodeId,
@@ -638,6 +641,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
     const samples = compileRows(templateText, headers, rowsToRun, runInputToColumn, inputTypes);
     let historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId)).record : null;
+    if (historyRecord) node.dataset.historyRecordId = historyRecord.id;
     if (historyRecord) {
       let model = credentialId;
       try {
@@ -654,7 +658,17 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
     if (historyRecord) pendingRunHistoryRecords.set(normalizedRunNodeId, historyRecord);
 
+    if (rerunCompleted) {
+      node.dataset.runResults = '[]';
+      node.dataset.runOutputFields = '[]';
+      delete node.dataset.runCompleted;
+      delete node.dataset.runInputContent;
+      setRunNodeProgress(node, 0, rows.length);
+      if (historySession) await reconcileHistory();
+    }
+
     node.dataset.runInputContent = JSON.stringify({ headers, columnTypes: content?.columnTypes || [], rowIds: content?.rowIds || [], rows });
+    delete node.dataset.runResumable;
     if (nextRowIndex === 0) {
       if (existingResults.length === 0) {
         node.dataset.runResults = JSON.stringify([]);
@@ -748,6 +762,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     results = markEmptyOutputAsError(results);
     node.dataset.runResults = JSON.stringify(results);
     node.dataset.runCompleted = '1';
+    delete node.dataset.runResumable;
     setRunNodeProgress(node, rows.length, rows.length);
     if (historyRecord) {
       historyRecord = {

@@ -344,7 +344,8 @@ export class ProjectAssets {
         if (existing.status === 'completed' && ['run', 'process'].includes(existing.kind) && JSON.stringify(existing) !== JSON.stringify(record)) {
           throw new Error('Completed history records cannot change.');
         }
-      } else if (history.index.records.some((entry) => entry.nodeId === record.nodeId && entry.signature === record.signature)) {
+      } else if (!['run', 'process'].includes(record.kind)
+        && history.index.records.some((entry) => entry.nodeId === record.nodeId && entry.signature === record.signature)) {
         throw new Error('This input already has a history record.');
       }
       const summary = Object.fromEntries(['id', 'nodeId', 'kind', 'signature', 'status', 'createdAt', 'updatedAt', 'summary', 'sourceRecordIds']

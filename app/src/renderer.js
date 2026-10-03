@@ -111,13 +111,37 @@ window.addEventListener('DOMContentLoaded', () => {
     };
     let historySession = null;
     let historySync = Promise.resolve();
+    let historySyncActive = false;
+    let historySyncRequestedProjectId = null;
+    let canvasChangeVersion = 0;
+    const waitForHistoryChangeToSettle = () => new Promise((resolve) => setTimeout(resolve, 150));
     async function syncHistory(projectId) {
-      if (!historySession?.projectId || historySession.projectId !== projectId) return;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < 3 && historySession?.projectId === projectId && currentProjectPath === projectId; attempt += 1) {
         const result = await canvasAPI.reconcileHistory();
         if (!result?.stale) return;
+        await waitForHistoryChangeToSettle();
       }
-      throw new Error('Canvas changed while updating history. Try again.');
+      if (historySession?.projectId === projectId && currentProjectPath === projectId) {
+        throw new Error('History inputs kept changing. Try again after the current edits finish.');
+      }
+    }
+    function queueHistorySync(projectId) {
+      historySyncRequestedProjectId = projectId;
+      if (historySyncActive) return;
+      historySyncActive = true;
+      historySync = (async () => {
+        while (historySyncRequestedProjectId) {
+          const nextProjectId = historySyncRequestedProjectId;
+          historySyncRequestedProjectId = null;
+          await waitForHistoryChangeToSettle();
+          await syncHistory(nextProjectId);
+        }
+      })().finally(() => {
+        historySyncActive = false;
+        if (historySyncRequestedProjectId) queueHistorySync(historySyncRequestedProjectId);
+      });
+      // Autosave reports a failed sync; attach a handler now so it is never unhandled.
+      historySync.catch(() => {});
     }
     async function loadCanvasWithHistory(projectId, state) {
       await historySync.catch(() => {});
@@ -321,10 +345,10 @@ window.addEventListener('DOMContentLoaded', () => {
   undoHistory.reset(canvasAPI.getCanvasState());
   canvasAPI.setOnCanvasChange(() => undoHistory.push(canvasAPI.getCanvasState()));
   canvasAPI.setOnCanvasChange(() => {
+    canvasChangeVersion += 1;
     const projectId = currentProjectPath;
     if (!projectId || historySession?.projectId !== projectId) return;
-    historySync = historySync.catch(() => {}).then(() => syncHistory(projectId));
-    historySync.catch((error) => showError('Could not update project history', error));
+    queueHistorySync(projectId);
   });
 
   const topBarAPI = buildTopBar(root, {
@@ -397,14 +421,18 @@ window.addEventListener('DOMContentLoaded', () => {
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(async () => {
       const projectId = currentProjectPath;
+      const changeVersion = canvasChangeVersion;
       try {
-        await historySync;
-        await syncHistory(projectId);
+        let pendingSync;
+        do {
+          pendingSync = historySync;
+          await pendingSync;
+        } while (pendingSync !== historySync);
       } catch (err) {
         showError('Could not update project history before saving', err);
         return;
       }
-      if (projectId !== currentProjectPath) return;
+      if (projectId !== currentProjectPath || changeVersion !== canvasChangeVersion) return;
       const state = canvasAPI.getCanvasState();
       if (isElectron) {
         await window.electronAPI.saveProject(projectId, state);

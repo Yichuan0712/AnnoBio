@@ -2,6 +2,19 @@ import { datasetSignature, sha256Signature } from './runHistorySignature.js';
 
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
 
+/**
+ * Pick the signature under which an analysis result must be saved before History resolves.
+ * Existing nodes keep their previously resolved signature so an input edit cannot attach an old
+ * result to the new inputs. A newly created Score or Review has no previous entry yet, so use the
+ * signature from the just-resolved canvas; otherwise its first result would be discarded.
+ */
+export function analysisKeyForSave(priorKeys, currentKeys, kind, id, allowCurrent = true) {
+  const previous = priorKeys?.get?.(`${kind}:${id}`);
+  if (previous) return previous;
+  if (!allowCurrent) return null;
+  return currentKeys?.[kind]?.get?.(id) || null;
+}
+
 function parsed(value, fallback) {
   if (value == null || value === '') return fallback;
   if (typeof value !== 'string') return value;

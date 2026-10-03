@@ -8,6 +8,7 @@ import { python } from '@codemirror/lang-python';
 import { showAlert } from './alertModal.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
+import { executionIdleLabel } from './executionResumeState.js';
 import { extractInputFieldsFromSections } from './promptDetailModal.js';
 import { computeGreedyRunToGtPairing, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import {
@@ -977,6 +978,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
         promptSections: sectionsCopy,
         promptFullText: promptFullText || '',
         workingSections: workingSectionsInitial,
+        streamComplete: false,
         reviewProgress: 0,
         run_results: body.run_results || [],
         comparison_rows: body.comparison_rows || [],
@@ -1654,9 +1656,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   function setCodeRunningUi(isRunning) {
     codeRunning = isRunning;
     if (!codeRunBtn) return;
-    codeRunBtn.textContent = isRunning ? 'Running, click to stop' : 'Run';
+    codeRunBtn.textContent = isRunning ? 'Running, click to stop'
+      : executionIdleLabel({ interrupted: node?.dataset?.scoreMatchInterrupted === '1' });
     codeRunBtn.classList.toggle('btn-danger', isRunning);
   }
+  setCodeRunningUi(false);
 
   const codeMatchProgressBar = node?.querySelector?.('.workflow-node__score-progress') || null;
   function setCodeMatchNodeProgress(completed, total) {
@@ -1744,6 +1748,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (!res.ok && res.status !== 202) throw new Error(data.detail || 'Failed to fetch results');
     } catch (e) {
       if (codeCurrentJobId !== jobId) return;
+      codeCurrentJobId = null;
       setCodeRunningUi(false);
       showCodeResultsPlaceholder((e && e.message) || 'Network error while checking progress.');
       return;
@@ -1756,11 +1761,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       return;
     }
     setCodeMatchNodeProgress((data.results || []).length, total2);
-    setCodeRunningUi(false);
     if (data.error) {
+      codeCurrentJobId = null;
+      setCodeRunningUi(false);
       showCodeResultsPlaceholder(data.error);
       return;
     }
+    if (data.status === 'cancelled' || codeCancelled) node.dataset.scoreMatchInterrupted = '1';
+    else delete node.dataset.scoreMatchInterrupted;
+    codeCurrentJobId = null;
+    setCodeRunningUi(false);
     showCodeResultsPlaceholder('');
     lastCodeMatchResult = {
       runRowIndices,
@@ -1835,6 +1845,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         return;
       }
       codeCurrentJobId = data.job_id;
+      if (node?.dataset) node.dataset.scoreMatchInterrupted = '1';
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     } catch (e) {
       setCodeRunningUi(false);
       showCodeResultsPlaceholder((e && e.message) || 'Network error.');
@@ -1865,6 +1877,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       node.style.borderColor = ws && ws.color ? ws.color : '';
       const bar = node.querySelector('.workflow-node__score-progress');
       if (bar) bar.style.background = ws && ws.color ? ws.color : '';
+      document.dispatchEvent(new CustomEvent('workflow:refresh-node-colors'));
     }
   }
 

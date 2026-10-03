@@ -52,6 +52,8 @@ export function createWorkflowNodeFactories(deps = {}) {
     formatResultOutputColumnLabel,
     buildReviewComparisonRows,
     resolveRunCredentialId,
+    resolveReviewCredentialId,
+    runReviewStart,
     DATASET_BORDER_COLORS,
     normalizeDatasetColorIndex,
     chooseAutomaticNodeColorIndex,
@@ -62,6 +64,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     getHistoryForNode,
     pendingReviews,
     pendingReviewNodeIds,
+    registerPendingReview,
     unregisterPendingReview,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
@@ -1056,12 +1059,35 @@ export function createWorkflowNodeFactories(deps = {}) {
           detail: { sections, afterReviewNodeId: node.dataset.nodeId },
         }));
       }
+      async function onResumeReview() {
+        try {
+          if (!scoreNode) throw new Error('This Review is no longer connected to a Score node.');
+          const payload = await getPayload();
+          if (!payload?.prompt_sections?.length) {
+            throw new Error('Could not rebuild the Review input. Check the upstream Prompt, Run, Score, and ground truth.');
+          }
+          const credentialId = await resolveReviewCredentialId(scoreNode);
+          if (!credentialId) throw new Error('No Review model: set a default Review model in Settings.');
+          scoreNode.dataset.reviewCredentialId = credentialId;
+          await runReviewStart({
+            reviewNodeId: node.dataset.nodeId,
+            payload,
+            credentialId,
+            registerPendingReview,
+          });
+          return pendingReviews.has(node.dataset.nodeId) || pendingReviewNodeIds.has(node.dataset.nodeId);
+        } catch (error) {
+          showAlert(String(error?.message || error), { title: 'Review' });
+          return false;
+        }
+      }
       openReviewDetailModal({
         node,
         getPayload,
         getReviewResult,
         updateReviewResult,
         onExportNewPrompt,
+        onResumeReview,
         getIsReviewStreaming: () => pendingReviewNodeIds.has(node.dataset.nodeId),
       });
     });

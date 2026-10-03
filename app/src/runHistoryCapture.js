@@ -43,7 +43,6 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
     const prompt = nodes.get(promptEdge?.fromId);
     if (!prompt || prompt.type !== 'prompt') throw new Error('Run has no input Prompt.');
     const dataset = await snapshotDataset(String(target.runWorkingSetId || ''));
-    if (!dataset.content.rows.length) throw new Error('Dataset has no rows.');
     const promptSnapshot = {
       nodeId: nodeId(prompt), name: prompt.name || '', sections: copy(prompt.sections || prompt.fields || []),
       outputFormat: copy(prompt.outputFormat || { returnShape: 'single', fields: [] }),

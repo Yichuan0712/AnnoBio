@@ -48,6 +48,15 @@ test('legacy Run and Process results migrate through matching derived Datasets',
   assert.deepEqual(graph.nodes, [input, prompt, run, runDataset, process, processDataset]);
 });
 
+test('stopped Run and Process records restore an explicit Resume state', async () => {
+  const migrated = await plan(graph);
+  const records = Object.fromEntries(migrated.records.map((record) => [record.id, { ...record, status: 'stopped' }]));
+  const index = { records: Object.values(records).map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) };
+  const resolved = await resolveHistoryCanvasState(migrated.state, { index, loadRecord: async (id) => records[id] });
+  assert.equal(resolved.state.nodes.find((node) => node.nodeId === 'run').runResumable, true);
+  assert.equal(resolved.state.nodes.find((node) => node.nodeId === 'process').processResumable, true);
+});
+
 test('a completed zero-row Run and its empty Process output remain live history results', async () => {
   const changed = structuredClone(graph);
   const empty = { headers: ['text'], rows: [], columnTypes: ['text'], rowIds: [] };
@@ -61,6 +70,8 @@ test('a completed zero-row Run and its empty Process output remain live history 
   };
   changed.nodes.find((node) => node.nodeId === 'process').dfResults = JSON.stringify({ outputs: { result: { headers: ['answer'], rows: [] } } });
   changed.nodes.find((node) => node.nodeId === 'process-dataset').datasetContent = { headers: ['answer'], rows: [], columnTypes: ['text'], rowIds: [] };
+  const captured = await captureHistoryInput(changed, 'run', { index: { records: [] }, loadRecord: async () => null });
+  assert.deepEqual(captured.inputs.dataset.content.rows, []);
   const migrated = await plan(changed);
   assert.deepEqual(migrated.detachedDatasetIds, []);
   assert.equal(migrated.records.length, 2);
@@ -298,27 +309,37 @@ test('capture blocks a Process whose derived input has no current result', async
   );
 });
 
-test('reservation rejects completed input and creates exactly one new signature', async () => {
+test('completed inputs create a new attempt and History can select either identical-input result', async () => {
   const migrated = await plan(graph);
   const records = new Map(migrated.records.map((record) => [record.id, record]));
+  let nextId = 900;
   const storage = {
     loadIndex: async () => ({ version: 1, records: [...records.values()].map(({ id, nodeId, kind, signature, status }) => ({ id, nodeId, kind, signature, status })) }),
     loadRecord: async (_project, id) => records.get(id),
-    saveRecord: async (_project, record) => {
-      if ([...records.values()].some((item) => item.id !== record.id && item.nodeId === record.nodeId && item.signature === record.signature)) throw new Error('duplicate');
-      records.set(record.id, record);
-    },
+    saveRecord: async (_project, record) => { records.set(record.id, record); },
     saveCanvas: async () => {},
   };
-  const session = new RunHistorySession({ ...storage, createId: () => 'f'.repeat(32), now: () => '2026-10-02T00:00:00Z' });
+  const session = new RunHistorySession({ ...storage, createId: () => String(++nextId).padStart(32, '0'), now: () => '2026-10-02T00:00:00Z' });
   await session.open('project', migrated.state);
-  await assert.rejects(session.reserve(migrated.state, 'run'), /Run completed for these inputs/);
+  const previous = migrated.records.find((record) => record.nodeId === 'run');
+  const rerun = await session.reserve(migrated.state, 'run');
+  assert.equal(rerun.mode, 'rerun');
+  assert.notEqual(rerun.record.id, previous.id);
+  assert.equal(rerun.record.signature, previous.signature);
+  assert.equal(records.size, 3);
+  await session.putRecord({ ...rerun.record, status: 'completed', results: previous.results });
+  const latest = await session.resolve(migrated.state);
+  assert.equal(latest.currentRecordIds.run, rerun.record.id);
+  const selected = await session.select(previous.id, migrated.state);
+  assert.equal(selected.currentRecordIds.run, previous.id);
+  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'run').historyRecordId, previous.id);
+
   const changed = structuredClone(migrated.state);
   changed.nodes.find((node) => node.nodeId === 'input').datasetContent.rows[0][0] = 'another input';
   const reserved = await session.reserve(changed, 'run');
   assert.equal(reserved.mode, 'new');
   assert.equal(reserved.record.status, 'running');
-  assert.equal(records.size, 3);
+  assert.equal(records.size, 4);
   await assert.rejects(session.reserve(changed, 'run'), /already have a running job/);
 });
 

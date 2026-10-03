@@ -9,6 +9,3 @@ Classify documents, extract entities and fields, curate literature into structur
 ![Screenshot](images/screenshot.png)
 
 </div>
-
-See [Current Pipeline](docs/PIPELINE_GUIDE.md) for selecting a route and exporting it as a Python
-project.
