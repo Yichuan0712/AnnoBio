@@ -1,6 +1,8 @@
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
+import { normalizeDatasetContent } from './datasetContent.js';
+import { historyEditFor, withHistoryEdit } from './datasetHistoryEdits.js';
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
   const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -81,6 +83,21 @@ export function createWorkflowNodeFactories(deps = {}) {
 
   function getConnectionsList() {
     return Array.isArray(getConnections?.()) ? getConnections() : [];
+  }
+
+  /** Run or Process whose current History result this Dataset shows, if any. */
+  function datasetHistorySourceId(node) {
+    return node.dataset.sourceRunNodeId || getConnectionsList().find((edge) =>
+      edge.type === 'process-to-dataset' && edge.toId === node.dataset.nodeId)?.fromId || '';
+  }
+
+  /** The upstream record and branch a manual edit of this Dataset is stored under (datasetHistoryEdits.js). */
+  function datasetHistoryEditTarget(node) {
+    const sourceId = datasetHistorySourceId(node);
+    return {
+      recordId: getNodeById(sourceId)?.dataset.historyRecordId || '',
+      branch: node.dataset.sourceRunNodeId ? 'result' : (node.dataset.processOutputName || 'result'),
+    };
   }
 
   function onRunWorkingSetChange() {
@@ -411,17 +428,49 @@ export function createWorkflowNodeFactories(deps = {}) {
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
-      const historySourceId = node.dataset.sourceRunNodeId || getConnectionsList().find((edge) =>
-        edge.type === 'process-to-dataset' && edge.toId === node.dataset.nodeId)?.fromId;
-      const readOnly = !!getHistoryForNode?.(historySourceId);
+      const historySourceId = datasetHistorySourceId(node);
+      const followsHistory = !!getHistoryForNode?.(historySourceId);
+      const sourceNode = followsHistory ? getNodeById(historySourceId) : null;
+      const sourceKind = node.dataset.sourceRunNodeId ? 'Run' : 'Process';
+      const sourceName = (sourceNode?.dataset.runName || sourceNode?.dataset.processName || '').trim();
+      const sourceLabel = sourceName ? `${sourceKind} "${sourceName}"` : `its ${sourceKind}`;
+      const missingResult = node.dataset.resultMissing === '1';
+      const editTarget = datasetHistoryEditTarget(node);
+      const edited = followsHistory && !!historyEditFor(node.dataset.historyEdits, editTarget.recordId, editTarget.branch);
+      let historyNotice = '';
+      if (followsHistory && !missingResult) {
+        historyNotice = edited
+          ? `Edited manually. The History of ${sourceLabel} marks this result as edited and keeps its original output.`
+          : `Shows the current History result of ${sourceLabel}. Manual edits stay with this result and are marked in its History.`;
+      }
       openDatasetDetailModal({
         node,
         getContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
-        readOnly,
-        missingResult: node.dataset.resultMissing === '1',
+        missingResult,
+        // A History-linked Dataset without a current result has nothing to edit or attach an edit to.
+        readOnly: followsHistory && (missingResult || !editTarget.recordId),
+        historyNotice,
+        restoreHistoryLabel: edited ? `Restore ${sourceKind} result` : '',
+        onRestoreHistoryResult: edited ? () => {
+          const { recordId, branch } = datasetHistoryEditTarget(node);
+          const edits = withHistoryEdit(node.dataset.historyEdits, recordId, branch, null);
+          if (Object.keys(edits).length) node.dataset.historyEdits = JSON.stringify(edits);
+          else delete node.dataset.historyEdits;
+          emitCanvasChanged();
+        } : undefined,
         saveContent: (content) => {
-          if (readOnly) return;
-          datasetContentByNodeId.set(node.dataset.nodeId, content);
+          const id = node.dataset.nodeId;
+          const { recordId, branch } = datasetHistoryEditTarget(node);
+          // Keep the edit with the upstream record it was made on; History write-back then shows it
+          // instead of the original output. The editor also saves on close, so only store real changes.
+          if (followsHistory && recordId && JSON.stringify(normalizeDatasetContent(content))
+            !== JSON.stringify(datasetContentByNodeId.get(id) || null)) {
+            node.dataset.historyEdits = JSON.stringify(
+              withHistoryEdit(node.dataset.historyEdits, recordId, branch, normalizeDatasetContent(content)),
+            );
+            node.dataset.historyEdited = '1';
+          }
+          datasetContentByNodeId.set(id, content);
           emitCanvasChanged();
         },
       });

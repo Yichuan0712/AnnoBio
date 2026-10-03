@@ -2,6 +2,7 @@ import { datasetSignature, processInputSignature, runInputSignature } from './ru
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { buildRunResultsTable } from './runResultsExport.js';
 import { cloneCell } from './datasetContent.js';
+import { historyEditFor } from './datasetHistoryEdits.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -114,17 +115,25 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
       if (!table) {
         dataset.datasetContent = emptyTable();
         dataset.resultMissing = true;
+        delete dataset.historyEdited;
         if (!missingDatasetIds.includes(id)) missingDatasetIds.push(id);
         return null;
       }
       delete dataset.resultMissing;
-      dataset.datasetContent = {
-        headers: copy(table.headers), rows: table.rows.map((row) => row.map(cloneCell)),
-        columnTypes: copy(table.columnTypes || []),
-        rowIds: table.rows.map((_, index) => table.rowIds?.[index] || `${source.id}:${branch}:${index}`),
-      };
+      const edited = historyEditFor(dataset.historyEdits, source.id, branch);
+      if (edited) {
+        dataset.datasetContent = copy(edited);
+        dataset.historyEdited = true;
+      } else {
+        delete dataset.historyEdited;
+        dataset.datasetContent = {
+          headers: copy(table.headers), rows: table.rows.map((row) => row.map(cloneCell)),
+          columnTypes: copy(table.columnTypes || []),
+          rowIds: table.rows.map((_, index) => table.rowIds?.[index] || `${source.id}:${branch}:${index}`),
+        };
+      }
       return {
-        signature: await datasetSignature({ nodeId: id, sourceRecordId: source.id, branch }),
+        signature: await datasetSignature({ nodeId: id, sourceRecordId: source.id, branch, editedContent: edited }),
         sourceRecordId: source.id,
       };
     }

@@ -1,4 +1,5 @@
 import { canonicalJson } from './runHistorySignature.js';
+import { readHistoryEdits, withHistoryEdit } from './datasetHistoryEdits.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -50,7 +51,10 @@ export async function planHistorySelection(state, recordId, { loadRecord, runnin
       if (!dataset.sourceNodeId || !dataset.branch) throw new Error(`History Dataset source is incomplete: ${dataset.nodeId}`);
       const sourceRecord = await visitRecord(dataset.sourceRecordId);
       if (sourceRecord.nodeId !== dataset.sourceNodeId) throw new Error(`History Dataset source does not match: ${dataset.nodeId}`);
-      demandSource(dataset, { kind: sourceRecord.kind, nodeId: sourceRecord.nodeId, branch: dataset.branch });
+      demandSource(dataset, {
+        kind: sourceRecord.kind, nodeId: sourceRecord.nodeId, branch: dataset.branch,
+        recordId: sourceRecord.id, edited: !!dataset.edited,
+      });
     } else {
       demandSource(dataset, null);
     }
@@ -124,6 +128,13 @@ export async function planHistorySelection(state, recordId, { loadRecord, runnin
     node.processOutputName = source?.kind === 'process' ? source.branch : '';
     next.connections = next.connections.filter((edge) => !(edge.type === 'process-to-dataset' && edge.toId === id));
     if (source?.kind === 'process') next.connections.push({ type: 'process-to-dataset', fromId: source.nodeId, toId: id });
+    if (source) {
+      // Restore the manual edit (or its absence) that the selected record's input was made with.
+      const edits = withHistoryEdit(node.historyEdits, source.recordId, source.branch, source.edited ? node.datasetContent : null);
+      if (canonicalJson(edits) !== canonicalJson(readHistoryEdits(node.historyEdits)) && !changedNodeIds.includes(id)) changedNodeIds.push(id);
+      if (Object.keys(edits).length) node.historyEdits = edits;
+      else delete node.historyEdits;
+    }
   }
   for (const [id, promptId] of promptEdges) {
     const oldPromptId = next.connections.find((edge) => edge.type === 'prompt-to-run' && edge.toId === id)?.fromId;

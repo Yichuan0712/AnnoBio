@@ -18,22 +18,29 @@ export async function sha256Signature(value) {
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-export async function datasetSignature({ nodeId, content, sourceRecordId = '', branch = '' }) {
+/** The Dataset fields an input signature covers; History also uses it to tell whether an input was edited. */
+export const signedTable = (content) => ({
+  headers: content.headers || [],
+  columnTypes: content.columnTypes || [],
+  rowIds: content.rowIds || [],
+  rows: content.rows || [],
+});
+
+/**
+ * @param {object} [editedContent] manual edit of a derived Dataset (datasetHistoryEdits.js); an edit
+ *   changes the input like editing a raw Dataset does, while unedited derived signatures stay as before.
+ */
+export async function datasetSignature({ nodeId, content, sourceRecordId = '', branch = '', editedContent = null }) {
   if (!nodeId) throw new Error('Dataset node ID is required for history.');
   if (sourceRecordId) {
     if (!branch) throw new Error('Derived Dataset branch is required for history.');
-    return sha256Signature({ kind: 'derived-dataset', nodeId, sourceRecordId, branch });
+    return sha256Signature({
+      kind: 'derived-dataset', nodeId, sourceRecordId, branch,
+      edited: editedContent ? signedTable(editedContent) : undefined,
+    });
   }
   if (!content) throw new Error('Dataset has no current result.');
-  return sha256Signature({
-    kind: 'dataset', nodeId,
-    content: {
-      headers: content.headers || [],
-      columnTypes: content.columnTypes || [],
-      rowIds: content.rowIds || [],
-      rows: content.rows || [],
-    },
-  });
+  return sha256Signature({ kind: 'dataset', nodeId, content: signedTable(content) });
 }
 
 export async function runInputSignature({ promptNodeId, prompt, datasetNodeId, datasetSignature: dataSignature, mapping }) {

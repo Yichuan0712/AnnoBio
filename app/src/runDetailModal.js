@@ -228,7 +228,6 @@ export function openRunDetailModal({
     closeWithin: overlay,
   });
   const runBtn = overlay.querySelector('.run-detail-run-btn');
-  let completedActionHovered = false;
   const rightCol = overlay.querySelector('.run-detail-preview-content');
   const workingSets = getWorkingSets();
 
@@ -297,7 +296,7 @@ export function openRunDetailModal({
   function refreshButton() {
     if (isCompleted()) {
       runBtn.disabled = !historyMode;
-      runBtn.textContent = completedActionHovered && historyMode ? 'Run again' : 'Run completed';
+      runBtn.textContent = 'Run again';
       runBtn.classList.remove('btn-primary', 'btn-danger');
       runBtn.classList.add('btn-secondary');
       if (historyMode) applyUnlock();
@@ -331,20 +330,6 @@ export function openRunDetailModal({
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
     runBtn.disabled = !(getPromptId() && selectedNodeId && allMapped);
   }
-
-  const showCompletedAction = () => {
-    completedActionHovered = true;
-    if (isCompleted() && historyMode && !isRunning()) runBtn.textContent = 'Run again';
-  };
-  const hideCompletedAction = () => {
-    completedActionHovered = false;
-    if (isCompleted() && historyMode && !isRunning()) runBtn.textContent = 'Run completed';
-  };
-  runBtn.addEventListener('mouseenter', showCompletedAction);
-  runBtn.addEventListener('mouseleave', hideCompletedAction);
-  runBtn.addEventListener('focus', showCompletedAction);
-  runBtn.addEventListener('blur', hideCompletedAction);
-
 
   function getInputHeaders() {
     if (node?.dataset?.runInputContent) {

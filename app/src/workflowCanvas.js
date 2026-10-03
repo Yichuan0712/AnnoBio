@@ -73,6 +73,8 @@ import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight, iconWork
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
+import { openDatasetDiffModal } from './datasetDiffModal.js';
+import { readHistoryEdits } from './datasetHistoryEdits.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { runProcessCode, waitForProcessJob } from './processRunClient.js';
@@ -2364,9 +2366,11 @@ export function buildWorkflowCanvas(root, options = {}) {
       : (isRunOrScore ? RUN_NODE_FALLBACK_HEIGHT : h2);
     const endY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
     const geometry = getEdgeGeometry(startX, startY, endX, endY, fromNode, toNode, nodeBoxes);
+    const isDatasetVersionEdge = edge.type === EDGE_TYPE_DATASET_TO_DATASET;
     const canCompare = !edge.derived && (
-      edge.type === EDGE_TYPE_PROMPT_TO_PROMPT || edge.type === EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT
+      edge.type === EDGE_TYPE_PROMPT_TO_PROMPT || edge.type === EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT || isDatasetVersionEdge
     );
+    const compareLabel = isDatasetVersionEdge ? 'Compare dataset versions' : 'Compare prompt versions';
     const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     edgeGroup.setAttribute('class', canCompare ? 'workflow-edge workflow-edge--compare' : 'workflow-edge');
     edgeGroup.setAttribute('data-edge-type', edge.type || '');
@@ -2376,9 +2380,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (canCompare) {
       edgeGroup.setAttribute('role', 'button');
       edgeGroup.setAttribute('tabindex', '0');
-      edgeGroup.setAttribute('aria-label', 'Compare prompt versions');
+      edgeGroup.setAttribute('aria-label', compareLabel);
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      title.textContent = 'Compare prompt versions';
+      title.textContent = compareLabel;
       edgeGroup.appendChild(title);
       const hitLine = createEdgeShape(geometry);
       hitLine.setAttribute('stroke', 'transparent');
@@ -2655,6 +2659,21 @@ export function buildWorkflowCanvas(root, options = {}) {
     openPromptDiffModal(fromData, toData, fromName, toName);
   }
 
+  function openDatasetEdgeDetailModal(edge) {
+    const contentOf = (node) => (node && node.dataset.resultMissing !== '1'
+      ? datasetContentByNodeId.get(node.dataset.nodeId) || null
+      : null);
+    const nameOf = (node) => (node?.dataset.datasetName || node?.dataset.subsetName || '').trim() || 'Dataset';
+    const fromNode = getNodeById(edge.fromId);
+    const toNode = getNodeById(edge.toId);
+    openDatasetDiffModal({
+      before: contentOf(fromNode),
+      after: contentOf(toNode),
+      fromName: nameOf(fromNode),
+      toName: nameOf(toNode),
+    });
+  }
+
   function onEdgesLayerClick(e) {
     const edgeGroup = e.target.closest?.('.workflow-edge--compare');
     if (!edgeGroup) return;
@@ -2666,6 +2685,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       openEdgeDetailModal(edge);
     } else if (edge.type === EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT) {
       openReviewToPromptEdgeDetailModal(edge);
+    } else if (edge.type === EDGE_TYPE_DATASET_TO_DATASET) {
+      openDatasetEdgeDetailModal(edge);
     }
   }
 
@@ -3690,6 +3711,9 @@ export function buildWorkflowCanvas(root, options = {}) {
           samplerNodeId,
           headers,
           rows,
+          columnTypes: content?.columnTypes,
+          // Shared row IDs let the version-edge diff line rows up across edits.
+          rowIds: content?.rowIds,
         });
         if (newNode?.dataset?.nodeId) {
           connections.push({
@@ -4425,6 +4449,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           sourceRunNodeId: node.dataset.sourceRunNodeId || '',
           processOutputName: node.dataset.processOutputName || '',
           resultMissing: node.dataset.resultMissing === '1' || undefined,
+          historyEdits: node.dataset.historyEdits ? readHistoryEdits(node.dataset.historyEdits) : undefined,
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
           datasetContent: content ? cloneDatasetContent(content) : undefined,
           nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
@@ -4649,6 +4674,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           rowIds: content?.rowIds,
         });
         if (n.resultMissing) node.dataset.resultMissing = '1';
+        const historyEdits = readHistoryEdits(n.historyEdits);
+        if (Object.keys(historyEdits).length) node.dataset.historyEdits = JSON.stringify(historyEdits);
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         createdNodes.push(node);
       } else if (n.type === 'sampler') {
@@ -4968,7 +4995,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   function getHistoryForNode(nodeId) {
-    if (!historySession?.projectId || canvasHistoryVersion !== 1) return null;
+    // No node means no History; a plain Dataset passes no source and must stay editable.
+    if (!nodeId || !historySession?.projectId || canvasHistoryVersion !== 1) return null;
     return {
       reconcile: () => getNodeById(nodeId)?.classList.contains('workflow-node--run')
         ? reconcileRunHistory(nodeId) : reconcileHistory(),
@@ -5070,6 +5098,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (datasetNode) {
           if (inputDataset.resultMissing) datasetNode.dataset.resultMissing = '1';
           else delete datasetNode.dataset.resultMissing;
+          if (inputDataset.historyEdited) datasetNode.dataset.historyEdited = '1';
+          else delete datasetNode.dataset.historyEdited;
         }
       }
       for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
@@ -5153,6 +5183,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         }
         if (item.resultMissing) live.dataset.resultMissing = '1';
         else delete live.dataset.resultMissing;
+        if (item.historyEdited) live.dataset.historyEdited = '1';
+        else delete live.dataset.historyEdited;
       } else if (item.type === 'run') {
         for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
           if (item[key] == null) delete live.dataset[key];

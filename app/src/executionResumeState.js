@@ -1,6 +1,6 @@
 /** Shared labels for canvas nodes whose work can be restarted after interruption. */
 export function executionIdleLabel({ completed = false, interrupted = false, hasPartial = false, failed = false } = {}) {
-  if (completed) return 'Run completed';
+  if (completed) return 'Run again';
   if (interrupted || hasPartial) return 'Resume';
   if (failed) return 'Retry';
   return 'Run';

@@ -66,7 +66,10 @@ function candidateMatchKeys(value) {
   return Array.from(keys).filter(Boolean);
 }
 
-export function openDatasetDetailModal({ node, getContent, saveContent, readOnly = false, missingResult = false }) {
+export function openDatasetDetailModal({
+  node, getContent, saveContent, readOnly = false, missingResult = false,
+  historyNotice = '', restoreHistoryLabel = '', onRestoreHistoryResult = null,
+}) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-working-dataset-node-id="${CSS.escape(nodeId)}"]`)
@@ -129,6 +132,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
         <div class="prompt-detail-side prompt-preview-wrap dataset-detail-preview-side">
           <div class="prompt-detail-side-scroll">
             ${missingResult ? '<p class="working-dataset-missing-message">No current result. Select matching upstream History or run the upstream node.</p>' : ''}
+            ${historyNotice ? `<p class="working-dataset-history-message">${escapeHtml(historyNotice)}${onRestoreHistoryResult ? ` <button type="button" class="btn btn-secondary working-dataset-history-restore">${escapeHtml(restoreHistoryLabel || 'Restore result')}</button>` : ''}</p>` : ''}
             <div class="working-dataset-detail-card">
               <div class="dataset-detail-preview-search-wrap working-dataset-search-wrap">
                 <span class="dataset-detail-preview-summary wd-summary" aria-live="polite">${headers.length} columns, ${rows.length.toLocaleString()} rows</span>
@@ -1795,7 +1799,12 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     deleteColBtn.disabled = headers.length <= 1 || !hasColSelected;
   }
 
-  overlay.querySelector('.modal-close').addEventListener('click', close);
+  overlay.querySelector('.modal-close').addEventListener('click', () => close());
+  // Dropping the manual edit must not save the edited table again on the way out.
+  overlay.querySelector('.working-dataset-history-restore')?.addEventListener('click', () => {
+    onRestoreHistoryResult?.();
+    close({ persist: false });
+  });
 
   if (searchInp) {
     searchInp.addEventListener('input', () => {
@@ -1843,8 +1852,8 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     saveContent({ headers, columnTypes, rowIds, rows });
   }
 
-  function close() {
-    persistContent();
+  function close({ persist = true } = {}) {
+    if (persist) persistContent();
     closeAddColumnMenu();
     resizeObserver?.disconnect();
     if (layoutFrame) cancelAnimationFrame(layoutFrame);
