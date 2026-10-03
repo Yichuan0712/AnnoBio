@@ -3641,7 +3641,12 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   function close() {
     document.removeEventListener('workflow:history-resolved', refreshHistoryMatchResult);
-    if (node && node.dataset) node.dataset.scoreMatchCode = getMatchCode();
+    // With no saved code the editor shows generated sample code. Writing that back untouched would change
+    // the Score's History key (and wipe a running Review's result) although nothing was edited.
+    const matchCode = getMatchCode();
+    if (node && node.dataset && (matchCodeSaved || matchCode !== matchCodeInitial || activePanelMode === 'code')) {
+      node.dataset.scoreMatchCode = matchCode;
+    }
     overlay.remove();
     document.body.style.overflow = '';
   }

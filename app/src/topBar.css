@@ -350,7 +350,6 @@ html.top-bar-web {
 .top-bar-panel-toggle__icon { display: inline-flex; }
 .top-bar-panel-toggle:focus-visible { outline: 2px solid var(--primary-btn-text, #2563eb); outline-offset: -2px; }
 .top-bar-panel-toggle svg { display: block; }
-.top-bar-panel-toggle__sparkle { font-size: 15px; line-height: 1; }
 /* Count of uncaught errors in the bottom panel's Errors tab (desktop, appErrors.js). */
 .top-bar-panel-toggle__badge {
   position: absolute;
@@ -373,10 +372,8 @@ html.top-bar-web {
 .top-bar--web .top-bar-panel-toggles { gap: 4px; margin-right: 0; }
 .top-bar--web .top-bar-panel-toggle { color: var(--text-muted); }
 .top-bar--web .top-bar-panel-toggle:hover { color: var(--text); }
-.top-bar--web .top-bar-panel-toggle.is-open { color: var(--primary-btn-text, #2563eb); }
 .top-bar--web .top-bar-panel-toggle { width: 36px; height: 36px; border-radius: 7px; }
 .top-bar--web .top-bar-panel-toggle svg { width: 18px; height: 18px; }
-.top-bar--web .top-bar-panel-toggle__sparkle { font-size: 18px; }
 
 .top-bar-window-controls {
   -webkit-app-region: no-drag;

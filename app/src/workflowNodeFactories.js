@@ -2,7 +2,6 @@ import { buildProcessDatasetBindings, referencedDatasetAliases } from './process
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 import { normalizeDatasetContent } from './datasetContent.js';
-import { historyEditFor, withHistoryEdit } from './datasetHistoryEdits.js';
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
   const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -64,6 +63,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     unregisterPendingRun,
     pendingRuns,
     getHistoryForNode,
+    isContentLocked,
     pendingReviews,
     pendingReviewNodeIds,
     registerPendingReview,
@@ -85,19 +85,10 @@ export function createWorkflowNodeFactories(deps = {}) {
     return Array.isArray(getConnections?.()) ? getConnections() : [];
   }
 
-  /** Run or Process whose current History result this Dataset shows, if any. */
+  /** Run or Process that produced this Dataset, if any (whether or not History still rewrites it). */
   function datasetHistorySourceId(node) {
     return node.dataset.sourceRunNodeId || getConnectionsList().find((edge) =>
       edge.type === 'process-to-dataset' && edge.toId === node.dataset.nodeId)?.fromId || '';
-  }
-
-  /** The upstream record and branch a manual edit of this Dataset is stored under (datasetHistoryEdits.js). */
-  function datasetHistoryEditTarget(node) {
-    const sourceId = datasetHistorySourceId(node);
-    return {
-      recordId: getNodeById(sourceId)?.dataset.historyRecordId || '',
-      branch: node.dataset.sourceRunNodeId ? 'result' : (node.dataset.processOutputName || 'result'),
-    };
   }
 
   function onRunWorkingSetChange() {
@@ -254,7 +245,7 @@ export function createWorkflowNodeFactories(deps = {}) {
 
     const dragState = attachDrag(node);
 
-    node.addEventListener('click', (e) => {
+    node.addEventListener('click', async (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
       if (e.ctrlKey || e.shiftKey) return; // handled as a selection toggle on pointerdown, not a click
       if (dragState.wasDrag()) return;
@@ -264,12 +255,14 @@ export function createWorkflowNodeFactories(deps = {}) {
       try {
         sectionsData = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
       } catch (_) {}
+      const locked = !!(await isContentLocked?.(node.dataset.nodeId));
       openPromptDetailModal({
         name: node.dataset.promptName || '',
         note: node.dataset.promptNote || '',
         sections: sectionsData,
         node,
         isPromptNameAlreadyUsed,
+        locked,
         onRunPrompt: () => {
           const currentLeft = parseFloat(node.style.left) || 0;
           const currentTop = parseFloat(node.style.top) || 0;
@@ -371,7 +364,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sourceRunNodeId = '', processOutputName = '', colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sourceRunNodeId = '', processOutputName = '', savedCopy = false, colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -387,9 +380,11 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (notes !== undefined && notes !== null) node.dataset.datasetNote = String(notes);
     node.dataset.nodeType = 'dataset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
-    // Links a Dataset saved from Run results to its current History record.
+    // Links a Dataset saved from Run results to its Run (pipelines chain through it).
     if (sourceRunNodeId) node.dataset.sourceRunNodeId = sourceRunNodeId;
     if (processOutputName) node.dataset.processOutputName = processOutputName;
+    // A saved Run / Process output: keeps its pipeline link, but History never rewrites it (datasetHistorySource.js).
+    if (savedCopy) node.dataset.savedCopy = '1';
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = datasetColorAt(colorIndex);
@@ -422,53 +417,26 @@ export function createWorkflowNodeFactories(deps = {}) {
 
     const dragState = attachDrag(node);
 
-    node.addEventListener('click', (e) => {
+    node.addEventListener('click', async (e) => {
       if (e.target.closest('.workflow-node__delete')) return;
       if (e.ctrlKey || e.shiftKey) return; // handled as a selection toggle on pointerdown, not a click
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
-      const historySourceId = datasetHistorySourceId(node);
-      const followsHistory = !!getHistoryForNode?.(historySourceId);
-      const sourceNode = followsHistory ? getNodeById(historySourceId) : null;
-      const sourceKind = node.dataset.sourceRunNodeId ? 'Run' : 'Process';
-      const sourceName = (sourceNode?.dataset.runName || sourceNode?.dataset.processName || '').trim();
-      const sourceLabel = sourceName ? `${sourceKind} "${sourceName}"` : `its ${sourceKind}`;
-      const missingResult = node.dataset.resultMissing === '1';
-      const editTarget = datasetHistoryEditTarget(node);
-      const edited = followsHistory && !!historyEditFor(node.dataset.historyEdits, editTarget.recordId, editTarget.branch);
-      let historyNotice = '';
-      if (followsHistory && !missingResult) {
-        historyNotice = edited
-          ? `Edited manually. The History of ${sourceLabel} marks this result as edited and keeps its original output.`
-          : `Shows the current History result of ${sourceLabel}. Manual edits stay with this result and are marked in its History.`;
-      }
+      // Content locks once it has produced a result (contentLocks.js); until then it can be edited.
+      const readOnly = !!(await isContentLocked?.(node.dataset.nodeId));
       openDatasetDetailModal({
         node,
         getContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
-        missingResult,
-        // A History-linked Dataset without a current result has nothing to edit or attach an edit to.
-        readOnly: followsHistory && (missingResult || !editTarget.recordId),
-        historyNotice,
-        restoreHistoryLabel: edited ? `Restore ${sourceKind} result` : '',
-        onRestoreHistoryResult: edited ? () => {
-          const { recordId, branch } = datasetHistoryEditTarget(node);
-          const edits = withHistoryEdit(node.dataset.historyEdits, recordId, branch, null);
-          if (Object.keys(edits).length) node.dataset.historyEdits = JSON.stringify(edits);
-          else delete node.dataset.historyEdits;
-          emitCanvasChanged();
-        } : undefined,
+        missingResult: node.dataset.resultMissing === '1',
+        readOnly,
         saveContent: (content) => {
           const id = node.dataset.nodeId;
-          const { recordId, branch } = datasetHistoryEditTarget(node);
-          // Keep the edit with the upstream record it was made on; History write-back then shows it
-          // instead of the original output. The editor also saves on close, so only store real changes.
-          if (followsHistory && recordId && JSON.stringify(normalizeDatasetContent(content))
-            !== JSON.stringify(datasetContentByNodeId.get(id) || null)) {
-            node.dataset.historyEdits = JSON.stringify(
-              withHistoryEdit(node.dataset.historyEdits, recordId, branch, normalizeDatasetContent(content)),
-            );
-            node.dataset.historyEdited = '1';
+          // An older Run / Process output still follows History; its first real edit makes it a saved copy
+          // (datasetHistorySource.js) so History stops rewriting it. The editor also saves on close.
+          if (node.dataset.savedCopy !== '1' && getHistoryForNode?.(datasetHistorySourceId(node))
+            && JSON.stringify(normalizeDatasetContent(content)) !== JSON.stringify(datasetContentByNodeId.get(id) || null)) {
+            node.dataset.savedCopy = '1';
           }
           datasetContentByNodeId.set(id, content);
           emitCanvasChanged();
@@ -604,7 +572,11 @@ export function createWorkflowNodeFactories(deps = {}) {
         startRunNode,
         getWorkingSets: () => workingSets,
         getPrompts: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'))
-          .map((n) => ({ nodeId: n.dataset.nodeId || '', name: promptNameOf(n) || 'Prompt' })),
+          .map((n) => ({
+            nodeId: n.dataset.nodeId || '',
+            name: promptNameOf(n) || 'Prompt',
+            color: promptColorAt(normalizeDatasetColorIndex(n.dataset.promptColorIndex) ?? 0),
+          })),
         getPromptId: () => currentPromptNode()?.dataset?.nodeId || '',
         selectPrompt,
         getPromptInputFields: () => extractInputFieldsFromSections(promptSectionsOf(currentPromptNode())),

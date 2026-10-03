@@ -8,6 +8,7 @@
  * "$name" ref given when adding them.
  */
 import { normalizeDatasetContent } from '../../datasetContent.js';
+import { datasetHistorySource } from '../../datasetHistorySource.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
 import { buildRunResultsTable } from '../../runResultsExport.js';
@@ -644,11 +645,17 @@ export function planChangeSet(state, operations, ctx) {
         lines.push('Update the note');
       }
 
+      // Content that has produced results is locked (contentLocks.js), as in the node windows.
+      const contentKeys = { prompt: ['sections', 'section_edits', 'input_types', 'output'], dataset: ['columns', 'rows'] }[node.type] || [];
+      if (ctx.contentLocks?.get(node.nodeId)?.length && contentKeys.some((k) => k in set)) {
+        const remedy = {
+          prompt: 'Use add_prompt_version to change a new version.',
+          dataset: 'Add a new dataset (add_dataset) with the changed table instead.',
+        }[node.type];
+        fail(`${node.type[0].toUpperCase()}${node.type.slice(1)} "${before}" has produced results, so its content is locked. ${remedy}`);
+      }
+
       if (node.type === 'prompt') {
-        const hasRuns = next.connections.some((c) => c.type === 'prompt-to-run' && c.fromId === node.nodeId);
-        if (hasRuns && ['sections', 'section_edits', 'output', 'input_types'].some((k) => k in set)) {
-          warnings.push(`Prompt "${before}" already has runs; editing it in place means those results no longer match its text. A new version (add_prompt_version) keeps them comparable.`);
-        }
         if ('sections' in set || 'section_edits' in set) {
           const sections = nextSections(node.sections, set);
           diffs.push({ label: 'Sections', before: sectionsText(node.sections), after: sectionsText(sections) });
@@ -664,9 +671,10 @@ export function planChangeSet(state, operations, ctx) {
       }
 
       if (node.type === 'dataset' && ('columns' in set || 'rows' in set)) {
-        if (next.historyVersion === 1 && (node.sourceRunNodeId
-          || next.connections.some((edge) => edge.type === 'process-to-dataset' && edge.toId === node.nodeId))) {
-          fail('This Dataset follows a Run or Process result and is read-only. Duplicate it to edit a separate copy.');
+        // Like the dataset window: an older output that still follows History becomes a saved copy when edited.
+        if (next.historyVersion === 1 && datasetHistorySource(node, next.connections)) {
+          node.savedCopy = true;
+          lines.push('Becomes a saved copy: History no longer replaces its table.');
         }
         if (datasetColumns(node).some((c) => c.type !== 'text')) fail('Datasets with image or pdf columns cannot be rewritten here; edit them in the dataset view.');
         const current = normalizeDatasetContent(node.datasetContent || { headers: [], rows: [] });
@@ -775,6 +783,8 @@ export function planChangeSet(state, operations, ctx) {
         name,
         note: String(op.note ?? `Exported from ${promptName} ${nodeTitle(run)}.\n${completed ? 'Run completed.' : 'Run incomplete.'}`),
         sourceRunNodeId: run.nodeId,
+        // A saved output is a copy, as in the UI: History never rewrites it (datasetHistorySource.js).
+        savedCopy: true,
         datasetContent: normalizeDatasetContent(table),
         nodeOrigin: 'agent',
       });
@@ -802,6 +812,7 @@ export function planChangeSet(state, operations, ctx) {
         name,
         note: String(op.note ?? `Branch "${branch}" exported from Process "${title}".`),
         processOutputName: branch,
+        savedCopy: true,
         datasetContent: content,
         nodeOrigin: 'agent',
       });

@@ -670,6 +670,7 @@ export function mountAgentChatSession({
       getCanvasState: workspace.getCanvasState,
       extractInputFields: workspace.extractInputFields,
       applyCanvasState: workspace.applyCanvasState,
+      getContentLocks: workspace.getContentLocks,
       credentialsById,
     };
     const runWorkspace = {

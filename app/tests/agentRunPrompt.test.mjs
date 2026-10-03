@@ -37,11 +37,14 @@ test('a Run with results keeps its Prompt, input and mapping, as in the Run wind
   assert.throws(() => plan(canvas({ runCompleted: '1' }), { input_dataset: 'raw' }), /already has results/);
 });
 
-test('a history-enabled Run can switch inputs, while a derived Dataset stays read-only', () => {
+test('a history-enabled Run can switch inputs; editing an output that follows History makes it a saved copy', () => {
   const state = canvas({ runResults: JSON.stringify([{ input_row_index: 0, output: { a: 'x' } }]), runCompleted: '1' });
   state.historyVersion = 1;
   const changed = plan(state, { prompt: 'p2', input_mapping: { title: 'title' } });
   assert.deepEqual(promptOf(changed.state), ['p2']);
   state.nodes.find((node) => node.nodeId === 'raw').sourceRunNodeId = 'another-run';
-  assert.throws(() => planChangeSet(state, [{ op: 'update', node: 'raw', set: { rows: [['changed', 'A']] } }], { extractInputFields }), /read-only/);
+  const edited = planChangeSet(state, [{ op: 'update', node: 'raw', set: { rows: [['changed', 'A']] } }], { extractInputFields });
+  const raw = edited.state.nodes.find((node) => node.nodeId === 'raw');
+  assert.equal(raw.savedCopy, true);
+  assert.equal(raw.sourceRunNodeId, 'another-run');
 });

@@ -2,7 +2,7 @@ import { datasetSignature, processInputSignature, runInputSignature } from './ru
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { buildRunResultsTable } from './runResultsExport.js';
 import { cloneCell } from './datasetContent.js';
-import { historyEditFor } from './datasetHistoryEdits.js';
+import { datasetHistorySource } from './datasetHistorySource.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -105,35 +105,25 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   async function resolveDataset(id) {
     const dataset = nodes.get(id);
     if (!dataset || dataset.type !== 'dataset') return null;
-    const runSourceId = String(dataset.sourceRunNodeId || '');
-    const processEdge = !runSourceId && next.connections.find((edge) => edge.type === 'process-to-dataset' && edge.toId === id);
-    const sourceId = runSourceId || processEdge?.fromId;
-    if (sourceId) {
-      const branch = runSourceId ? 'result' : String(dataset.processOutputName || 'result');
+    const link = datasetHistorySource(dataset, next.connections);
+    if (link) {
+      const { sourceId, branch } = link;
       const source = await resolveNode(sourceId);
-      const table = source && (runSourceId ? runTable(source) : processTable(source, branch));
+      const table = source && (link.kind === 'run' ? runTable(source) : processTable(source, branch));
       if (!table) {
         dataset.datasetContent = emptyTable();
         dataset.resultMissing = true;
-        delete dataset.historyEdited;
         if (!missingDatasetIds.includes(id)) missingDatasetIds.push(id);
         return null;
       }
       delete dataset.resultMissing;
-      const edited = historyEditFor(dataset.historyEdits, source.id, branch);
-      if (edited) {
-        dataset.datasetContent = copy(edited);
-        dataset.historyEdited = true;
-      } else {
-        delete dataset.historyEdited;
-        dataset.datasetContent = {
-          headers: copy(table.headers), rows: table.rows.map((row) => row.map(cloneCell)),
-          columnTypes: copy(table.columnTypes || []),
-          rowIds: table.rows.map((_, index) => table.rowIds?.[index] || `${source.id}:${branch}:${index}`),
-        };
-      }
+      dataset.datasetContent = {
+        headers: copy(table.headers), rows: table.rows.map((row) => row.map(cloneCell)),
+        columnTypes: copy(table.columnTypes || []),
+        rowIds: table.rows.map((_, index) => table.rowIds?.[index] || `${source.id}:${branch}:${index}`),
+      };
       return {
-        signature: await datasetSignature({ nodeId: id, sourceRecordId: source.id, branch, editedContent: edited }),
+        signature: await datasetSignature({ nodeId: id, sourceRecordId: source.id, branch }),
         sourceRecordId: source.id,
       };
     }

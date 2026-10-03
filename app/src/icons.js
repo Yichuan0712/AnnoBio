@@ -165,7 +165,7 @@ export const iconFileAdd = (size) => svgIcon({
 });
 
 /**
- * VS Code-style layout icons for the desktop title bar's panel toggles (workflowCanvas.js): a window
+ * VS Code-style layout icons for the top bar's panel toggles on desktop and web (workflowCanvas.js): a window
  * frame whose bottom / right region is filled while that panel is open and only outlined while it
  * is hidden, so the icon itself shows the state. Drawn on the 12-unit grid of modalMaximize.js's
  * window-control icons, at the same rendered line weight, so they sit together in the title bar.
@@ -191,7 +191,7 @@ function layoutIcon(region, open, size = 12) {
   return svg;
 }
 
-/** The bottom panel (Current Pipeline / Log / Errors). */
+/** The bottom panel (Current Pipeline, Prompt Optimization; plus Log / Errors on desktop). */
 export const iconLayoutPanel = (open, size) => layoutIcon('bottom', open, size);
 
 /** The right panel (Agent Assistant). */

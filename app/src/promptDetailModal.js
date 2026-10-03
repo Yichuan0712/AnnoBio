@@ -314,7 +314,8 @@ function hasPromptExportBlockingOverlayOpen() {
   return false;
 }
 
-export function openPromptDetailModal({ name = '', note = '', sections = [], node: sourceNode = null, isPromptNameAlreadyUsed, onRunPrompt }) {
+/** @param {{ locked?: boolean }} options locked: content produced a result (contentLocks.js); hides both Edit buttons. */
+export function openPromptDetailModal({ name = '', note = '', sections = [], node: sourceNode = null, isPromptNameAlreadyUsed, onRunPrompt, locked = false }) {
   const displayName = (name && name.trim()) ? name.trim() : 'Prompt';
   const noteTrimmed = (note || '').trim();
   const sectionsViewHtml = sectionsToViewHtml(sections);
@@ -352,7 +353,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
                 <div class="prompt-detail-schema-view">${schemaViewHtml}</div>
                 <div class="prompt-detail-schema-footer">
                   <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
-                  <button type="button" class="btn btn-secondary prompt-detail-schema-btn-edit">Edit</button>
+                  ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-schema-btn-edit">Edit</button>'}
                 </div>
               </div>
             </div>
@@ -369,7 +370,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
               <div class="prompt-actions">
                 <button type="button" class="btn btn-secondary prompt-detail-export-local">Save to local</button>
                 <div class="prompt-actions__trailing">
-                  <button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>
+                  ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>'}
                   <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Run</button>
                 </div>
               </div>
