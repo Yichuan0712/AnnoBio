@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPromptFamilies, f1ChangeFromParent } from '../src/promptOptimization.js';
+import { buildPromptFamilies } from '../src/promptOptimization.js';
 
 // v1 → Run 1 → Score 1 → Review → v2 (applied), v2 → v3 (new version), and an unrelated duplicate.
 const canvas = () => ({
@@ -49,13 +49,4 @@ test('a single Prompt with a Run is shown as its own family', () => {
   state.nodes.push({ type: 'run', nodeId: 'r-copy', runName: 'Run copy' });
   const families = buildPromptFamilies(state);
   assert.deepEqual(families.map((f) => f.rootId), ['v1', 'copy']);
-});
-
-test('F1 change compares a version with its parent on the same ground truth only', () => {
-  const [family] = buildPromptFamilies(canvas());
-  const metrics = new Map([['s1', { f1: 60 }], ['s2', { f1: 75.5 }], ['s2-other', { f1: 90 }]]);
-  const change = f1ChangeFromParent(family, metrics);
-  assert.equal(change.get('s2'), 15.5);
-  assert.equal(change.has('s2-other'), false);
-  assert.equal(change.has('s1'), false);
 });

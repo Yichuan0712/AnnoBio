@@ -2,14 +2,18 @@
 .prompt-optimization {
   height: 100%;
   overflow: auto;
-  padding: 10px 18px 14px;
+  padding: 14px 18px;
   box-sizing: border-box;
   font-size: 12px;
   color: var(--text);
 }
 .prompt-optimization__empty { margin: 4px 0; color: var(--text-muted); }
-.prompt-optimization__family + .prompt-optimization__family { margin-top: 16px; }
-.prompt-optimization__title { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+/* Titles and spacing match the docked Current Pipeline cards ("Pipeline 1"), whose header row is as
+   tall as its Export button. */
+.prompt-optimization__family { margin-bottom: 18px; }
+.prompt-optimization__family:last-child { margin-bottom: 0; }
+.prompt-optimization__header { display: flex; align-items: center; min-height: 27.6px; margin-bottom: 10px; }
+.prompt-optimization__title { margin: 0; font-size: 12px; font-weight: 700; color: var(--text-muted); }
 .prompt-optimization__table {
   width: 100%;
   border-collapse: separate;
@@ -39,6 +43,3 @@
 .prompt-optimization__muted { color: var(--text-muted); }
 .prompt-optimization__num { text-align: right !important; font-variant-numeric: tabular-nums; }
 .prompt-optimization__f1 { font-weight: 600; }
-.prompt-optimization__change--up { color: var(--diff-added-text); }
-.prompt-optimization__change--down { color: var(--diff-removed-text); }
-.prompt-optimization__change--same { color: var(--text-muted); }

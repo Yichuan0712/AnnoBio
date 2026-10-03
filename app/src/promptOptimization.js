@@ -99,29 +99,3 @@ export function buildPromptFamilies(canvasState) {
   }
   return families;
 }
-
-/**
- * Change in F1 from the parent version, scored against the same ground truth (other ground truths
- * are not comparable). Uses the parent's first such Score that has metrics.
- * @param {ReturnType<typeof buildPromptFamilies>[number]} family
- * @param {Map<string, { f1: number } | null>} metricsByScoreId
- * @returns {Map<string, number>} scoreId → F1 change in percentage points
- */
-export function f1ChangeFromParent(family, metricsByScoreId) {
-  const byPrompt = new Map(family.versions.map((version) => [version.promptId, version]));
-  const change = new Map();
-  for (const version of family.versions) {
-    const parent = byPrompt.get(version.parentId);
-    if (!parent) continue;
-    for (const run of version.runs) {
-      for (const score of run.scores) {
-        const own = metricsByScoreId.get(score.scoreId);
-        if (!own || !Number.isFinite(own.f1)) continue;
-        const parentScore = parent.runs.flatMap((item) => item.scores)
-          .find((item) => item.groundTruthId === score.groundTruthId && Number.isFinite(metricsByScoreId.get(item.scoreId)?.f1));
-        if (parentScore) change.set(score.scoreId, Number((own.f1 - metricsByScoreId.get(parentScore.scoreId).f1).toFixed(4)));
-      }
-    }
-  }
-  return change;
-}
