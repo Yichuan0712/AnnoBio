@@ -48,6 +48,34 @@ test('inspect_node does not report per-Run settings', () => {
   assert.equal('settings' in inspected.details, false);
 });
 
+test('the summary lists pipelines as the Current Pipeline panel shows them', async () => {
+  const node = (type, nodeId, extra = {}) => ({ type, nodeId, name: nodeId, ...extra });
+  const edge = (fromId, toId, type) => ({ fromId, toId, type });
+  const state = {
+    nodes: [node('dataset', 'raw', { datasetContent: { headers: ['text'], rows: [['a']] } }),
+      node('prompt', 'p'), node('prompt', 'p2'), node('process', 'clean'), node('process', 'trim'),
+      node('run', 'r1', { runName: 'Run A', runWorkingSetId: 'raw' }), node('run', 'r2', { runName: 'Run B', runWorkingSetId: 'raw' })],
+    connections: [edge('p', 'p2', 'prompt-to-prompt'), edge('p', 'r1', 'prompt-to-run'), edge('p2', 'r2', 'prompt-to-run'),
+      edge('raw', 'clean', 'dataset-to-process'), edge('raw', 'trim', 'dataset-to-process')],
+  };
+  const summary = await buildWorkspaceSummary(state, { extractInputFields });
+  const pipelines = summary.split('\n\n')[0];
+  assert.doesNotMatch(pipelines, /Dataset/);
+  assert.match(pipelines, /Pipeline 1:\n {2}1\. Run prompt, a picker with 2 choices: "p2" \[p2\] by run "Run B" \[r2\] on "raw" \(default\); "p" \[p\] by run "Run A"/);
+  assert.match(pipelines, /Pipeline 2:\n {2}1\. Process data, a picker with 2 choices: "clean" \[clean\] reading "raw" \(default\); "trim"/);
+  assert.match(summary, /"p2" \[p2\]: .*; new version of "p"/);
+});
+
+test('the summary names a version made by applying a Review', async () => {
+  const state = canvas();
+  state.nodes.push({ type: 'promptReview', nodeId: 'rev', promptReviewName: 'Review 1' },
+    { type: 'prompt', nodeId: 'p2', name: 'Extract v2', sections: [], outputFormat: { fields: [] } });
+  state.connections.push({ fromId: 's', toId: 'rev', type: 'score-to-prompt-review' },
+    { fromId: 'rev', toId: 'p2', type: 'prompt-review-to-prompt' });
+  const summary = await buildWorkspaceSummary(state, { extractInputFields });
+  assert.match(summary, /"Extract v2" \[p2\]: .*; made by applying Review "Review 1" of "Extract"/);
+});
+
 test('Agent identifies legacy saved Dataset snapshots as snapshots', async () => {
   const state = canvas();
   state.nodes.push({ type: 'dataset', nodeId: 'snapshot', name: 'Saved results',

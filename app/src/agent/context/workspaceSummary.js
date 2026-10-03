@@ -1,9 +1,14 @@
 /**
  * Compact plain-text description of the canvas for the Agent's system prompt: pipelines as the
- * Current Pipeline panel sees them, then every node with the few facts needed to decide what to
- * inspect next. Details (prompt text, code, rows) are left to the read tools.
+ * Current Pipeline panel shows them (Run prompt and Process data steps, pickers, branches; its
+ * default choices, since the user's picks live only in the panel), then every node with the few
+ * facts needed to decide what to inspect next. Details (prompt text, code, rows) are left to the
+ * read tools.
  */
 import { detectPipelines } from '../../pipelineDetection.js';
+import { buildSelectedRoute, getVisibleRoute } from '../../pipelineRouteSelection.js';
+import { buildPromptFamilies } from '../../promptOptimization.js';
+import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
   buildNodeLookup,
   datasetContentOf,
@@ -25,26 +30,43 @@ function linkRef(linked, missing) {
   return linked ? `${quote(linked.title)} [${linked.nodeId}]` : missing;
 }
 
-function describePipelineStep(step, lookup) {
-  if (step.kind === 'prompt') {
-    const versions = step.versions.map((v) => {
-      const runs = v.runs.map((r) => `${quote(r.runName)} [${r.runNodeId}]`).join(', ');
-      return `${quote(v.promptName)} run by ${runs}`;
-    });
-    return versions.length > 1
-      ? `Prompt versions (latest last): ${versions.join('; ')}`
-      : `Prompt ${versions[0]}`;
+const STEP_LABELS = { prompt: 'Run prompt', process: 'Process data' };
+
+function describeRouteOption(option, lookup) {
+  if (option.kind === 'prompt') {
+    const input = lookup.get(option.inputDatasetNodeId);
+    return `${quote(option.promptName)} [${option.promptNodeId}] by run ${quote(option.runName)} [${option.runNodeId}]`
+      + ` on ${input ? quote(nodeTitle(input)) : '(no input dataset)'}`;
   }
-  if (step.kind === 'process') {
-    const inputs = step.inputDatasets.map((d) => quote(d.datasetName)).join(' + ');
-    return `Process ${quote(step.processName)}${inputs ? ` reading ${inputs}` : ''}`;
-  }
-  const names = step.datasets.map((d) => {
-    const node = lookup.get(d.datasetNodeId);
-    const branch = String(node?.processOutputName || '').trim();
-    return `${quote(d.datasetName)} [${d.datasetNodeId}]${branch ? ` (branch ${branch})` : ''}`;
+  const inputs = (option.inputDatasets || []).map((d) => quote(d.datasetName)).join(' + ');
+  return `${quote(option.label)} [${option.processNodeId}]${inputs ? ` reading ${inputs}` : ''}`;
+}
+
+/** One step as the Current Pipeline panel shows it: the default choice first, then the alternatives. */
+function describeRouteStep(step, lookup) {
+  const options = [step.selectedOption, ...step.options.filter((option) => option.value !== step.selectedValue)];
+  const label = STEP_LABELS[step.kind];
+  if (options.length === 1) return `${label}: ${describeRouteOption(options[0], lookup)}`;
+  return `${label}, a picker with ${options.length} choices: `
+    + options.map((option, i) => `${describeRouteOption(option, lookup)}${i === 0 ? ' (default)' : ''}`).join('; ');
+}
+
+function routeLines(route, lookup, indent) {
+  const lines = [];
+  route.forEach((step, i) => {
+    if (step.kind === 'empty') {
+      lines.push(`${indent}${i + 1}. (nothing)`);
+    } else if (step.kind === 'branch') {
+      lines.push(`${indent}${i + 1}. Branches:`);
+      step.lanes.forEach((lane, laneIndex) => {
+        lines.push(`${indent}   Branch ${laneIndex + 1}:`);
+        lines.push(...routeLines(lane, lookup, `${indent}     `));
+      });
+    } else {
+      lines.push(`${indent}${i + 1}. ${describeRouteStep(step, lookup)}`);
+    }
   });
-  return names.length > 1 ? `Dataset, one of: ${names.join(', ')}` : `Dataset ${names[0]}`;
+  return lines;
 }
 
 function pipelineLines(canvasState, lookup) {
@@ -53,7 +75,7 @@ function pipelineLines(canvasState, lookup) {
   const lines = [];
   pipelines.forEach((pipeline, index) => {
     lines.push(`Pipeline ${index + 1}:`);
-    pipeline.steps.forEach((step, i) => lines.push(`  ${i + 1}. ${describePipelineStep(step, lookup)}`));
+    lines.push(...routeLines(getVisibleRoute(buildSelectedRoute(pipeline, new Map())), lookup, '  '));
   });
   return lines;
 }
@@ -79,18 +101,18 @@ function datasetLine(node, lookup, canvasState) {
   return `- ${ref(node)}: ${content.rows.length} rows; columns: ${columns || '(none)'}${source}`;
 }
 
-function promptLine(node, lookup, canvasState, extractInputFields) {
+function promptLine(node, lookup, versionsById, extractInputFields) {
   const inputTypes = node.inputTypes && typeof node.inputTypes === 'object' ? node.inputTypes : {};
   const inputs = typeof extractInputFields === 'function'
     ? extractInputFields(node.sections || []).map((name) => (inputTypes[name] && inputTypes[name] !== 'text' ? `${name} (${inputTypes[name]})` : name))
     : [];
   const fields = (node.outputFormat?.fields || []).map((f) => f.key).filter(Boolean);
   const shape = node.outputFormat?.returnShape === 'table' ? 'table' : 'single';
-  const previous = (canvasState.connections || [])
-    .filter((c) => c.type === 'prompt-to-prompt' && c.toId === node.nodeId)
-    .map((c) => lookup.get(c.fromId))
-    .filter(Boolean);
-  const version = previous.length ? `; new version of ${previous.map((p) => quote(nodeTitle(p))).join(', ')}` : '';
+  const link = versionsById.get(node.nodeId);
+  const parent = link?.parentId ? lookup.get(link.parentId) : null;
+  let version = '';
+  if (parent && link.via === 'review') version = `; made by applying Review ${quote(link.reviewName)} of ${quote(nodeTitle(parent))}`;
+  else if (parent) version = `; new version of ${quote(nodeTitle(parent))}`;
   return `- ${ref(node)}: inputs ${inputs.join(', ') || '(none)'}; outputs (${shape}) ${fields.join(', ') || '(none)'}${version}`;
 }
 
@@ -121,9 +143,7 @@ function samplerLine(node, lookup) {
 
 function scoreLine(node, inspection) {
   const d = inspection.details;
-  const metrics = d.metrics
-    ? `; ${d.metrics.matchedRows}/${d.metrics.totalRows} rows matched (${Math.round(d.metrics.passRate * 1000) / 10}%)`
-    : '; not computed yet';
+  const metrics = d.metrics ? `; ${formatScoreMetrics(d.metrics)}` : '; not computed yet';
   return `- ${ref(node)}: run ${linkRef(d.run, '(none)')} vs ground truth ${linkRef(d.groundTruth, '(none)')}; ${d.matching}${metrics}`;
 }
 
@@ -163,6 +183,8 @@ export async function buildWorkspaceSummary(canvasState, options = {}) {
     ? options.inspectNode(node.nodeId)
     : inspectWorkflowNode(canvasState, node.nodeId, inspectOptions));
 
+  const versionsById = new Map(buildPromptFamilies(canvasState)
+    .flatMap((family) => family.versions.map((version) => [version.promptId, version])));
   const lines = ['Pipelines:', ...pipelineLines(canvasState, lookup), ''];
   for (const [type, heading] of SECTION_ORDER) {
     const group = nodes.filter((n) => n.type === type);
@@ -170,7 +192,7 @@ export async function buildWorkspaceSummary(canvasState, options = {}) {
     lines.push(`${heading}:`);
     for (const node of group) {
       if (type === 'dataset') lines.push(datasetLine(node, lookup, canvasState));
-      else if (type === 'prompt') lines.push(promptLine(node, lookup, canvasState, options.extractInputFields));
+      else if (type === 'prompt') lines.push(promptLine(node, lookup, versionsById, options.extractInputFields));
       else if (type === 'sampler') lines.push(samplerLine(node, lookup));
       else {
         const inspection = await inspect(node);

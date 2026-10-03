@@ -36,13 +36,23 @@ exported pipeline.
 
 ## Current Pipeline and alternatives
 
-The Current Pipeline panel (toolbar button beside Agent Assistant) lists each pipeline as one route.
-Its steps are "Run prompt" and "Process data"; Datasets are not shown. Where a step has alternatives,
-such as several prompt versions with Runs, several Runs of one Prompt (also on different Datasets), or
-several Processes reading the same output, the panel shows a picker on that step. Branches come only
-from a Process: its named outputs, or the Datasets one Process merges. A Dataset read by both Prompt
-Runs and Processes starts separate pipelines, one per step type, rather than a mixed picker. Hovering a step highlights its
-Prompt, Run or Process and the Datasets it reads. The selected route is what export uses.
+The Current Pipeline tab of the bottom panel (opened with the toolbar button beside Agent Assistant)
+lists each pipeline as one route. Its steps are "Run prompt" and "Process data"; Datasets are not
+shown. Where a step has alternatives, such as several prompt versions with Runs, several Runs of one
+Prompt (also on different Datasets), or several Processes reading the same Dataset, the panel shows a
+picker on that step, and the rest of the route follows the choice. Branches come only from a Process:
+its named outputs, or the Datasets one Process merges.
+
+A pipeline needs at least one Prompt with a Run, or a Process; a pipeline of only Processes is valid.
+A Dataset read by both Prompt Runs and Processes starts separate pipelines, one per step type, rather
+than a mixed picker. Hovering a step highlights its Prompt, Run or Process and the Datasets it reads;
+clicking it finds them on the canvas. The chosen route is what Export Python Project uses.
+
+The workspace summary describes the same routes with the panel's default choices. Only the user can
+change a picker; if the choice matters, ask which one they selected.
+
+The panel has no button to run a whole pipeline. Run it stage by stage: run each Process and Run in
+route order, and save the outputs a later step reads.
 
 ## Advising on a design
 

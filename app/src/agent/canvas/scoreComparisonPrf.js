@@ -64,6 +64,14 @@ export function mergeScoreMetricsWithPrf(metrics, comparisonRows) {
   return { ...metrics, ...prf };
 }
 
+/** One line for the Agent, with the precision / recall / F1 the Prompt Optimization tab shows. */
+export function formatScoreMetrics(metrics) {
+  const percent = (value) => `${Math.round(value * 10) / 10}%`;
+  const matched = `${metrics.matchedRows}/${metrics.totalRows} rows matched (${percent(metrics.passRate * 100)})`;
+  if (![metrics.precision, metrics.recall, metrics.f1].every(Number.isFinite)) return matched;
+  return `${matched}; precision ${percent(metrics.precision)}, recall ${percent(metrics.recall)}, F1 ${percent(metrics.f1)}`;
+}
+
 /** passRate + row counts + precision / recall / f1 (same bases as inspect / snapshot). */
 export function buildFullScoreMetricsFromComparisonRows(comparisonRows) {
   const rows = safeArray(comparisonRows);
