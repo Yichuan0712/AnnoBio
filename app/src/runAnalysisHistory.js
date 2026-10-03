@@ -1,4 +1,5 @@
 import { datasetSignature, sha256Signature } from './runHistorySignature.js';
+import { historyEditFor } from './datasetHistoryEdits.js';
 
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
 
@@ -37,8 +38,11 @@ export async function analysisInputKeys(state, currentRecordIds) {
     if (sourceId) {
       const sourceRecordId = currentRecordIds[sourceId];
       if (!sourceRecordId) return null;
+      const branch = runSourceId ? 'result' : String(dataset.processOutputName || 'result');
       return {
-        signature: await datasetSignature({ nodeId: id, sourceRecordId, branch: runSourceId ? 'result' : String(dataset.processOutputName || 'result') }),
+        signature: await datasetSignature({
+          nodeId: id, sourceRecordId, branch, editedContent: historyEditFor(dataset.historyEdits, sourceRecordId, branch),
+        }),
         sourceRecordId,
       };
     }

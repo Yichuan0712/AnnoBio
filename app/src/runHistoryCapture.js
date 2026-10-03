@@ -1,6 +1,7 @@
 import { datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { resolveHistoryCanvasState } from './runHistoryResolver.js';
+import { historyEditFor } from './datasetHistoryEdits.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -31,10 +32,12 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
     const sourceRecordId = sourceNodeId ? resolved.currentRecordIds[sourceNodeId] : null;
     const branch = runSourceId ? 'result' : String(dataset.processOutputName || 'result');
     if (sourceNodeId && !sourceRecordId) throw new Error(`Input Dataset has no current source record: ${id}`);
-    const signature = await datasetSignature({ nodeId: id, content, sourceRecordId, branch });
+    const editedContent = historyEditFor(dataset.historyEdits, sourceRecordId, branch);
+    const signature = await datasetSignature({ nodeId: id, content, sourceRecordId, branch, editedContent });
     return {
       nodeId: id, name: dataset.name || '', content: copy(content), signature,
       ...(sourceRecordId ? { sourceNodeId, sourceRecordId, branch } : {}),
+      ...(editedContent ? { edited: true } : {}),
     };
   }
 

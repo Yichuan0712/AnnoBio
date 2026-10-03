@@ -1,60 +1,18 @@
 /**
  * Score mapping persistence: v2 bundle `{ v: 2, input, output }` with two rule trees.
  * Legacy single tree / array is migrated to output-only; input is an empty group.
- * Self-contained (no import from scoreDetailModal) to avoid circular deps.
+ * No import from scoreDetailModal, to avoid circular deps; match flags come from scoreMatchPrimitives
+ * so every flag the rule editor saves (incl. rxnormMatch / meshMatch) survives a reload.
  */
 
+import {
+  DEFAULT_MATCH_FLAGS,
+  canonicalizeMatchFlags,
+  migrateLegacyMatchType,
+  legacyMatchTypeWasContains,
+} from './scoreMatchPrimitives.js';
+
 export const SCORE_MAPPING_BUNDLE_V = 2;
-
-const DEFAULT_MATCH_FLAGS = {
-  semanticAlign: false,
-  embeddingSimilarity: false,
-  contains: false,
-  ignoreCase: false,
-  ignoreSymbols: false,
-  ignoreWhitespace: false,
-  numericMode: 'exact',
-  numericAbsEpsilon: 0,
-  numericRelEpsilon: 0,
-  numericDecimalPlaces: 2,
-};
-
-function migrateLegacyMatchType(matchType) {
-  if (matchType === 'contains' || matchType === 'gt-contains-run') return 'exact';
-  return matchType || 'exact';
-}
-
-function legacyMatchTypeWasContains(matchType) {
-  return matchType === 'contains' || matchType === 'gt-contains-run';
-}
-
-function canonicalizeMatchFlags(f) {
-  const merged = { ...DEFAULT_MATCH_FLAGS, ...(f && typeof f === 'object' ? f : {}) };
-  const mode = ['exact', 'abs', 'rel', 'decimals'].includes(merged.numericMode) ? merged.numericMode : 'exact';
-  let absE = Number(merged.numericAbsEpsilon);
-  if (!Number.isFinite(absE) || absE < 0) absE = 0;
-  let relE = Number(merged.numericRelEpsilon);
-  if (!Number.isFinite(relE) || relE < 0) relE = 0;
-  let dec = Math.floor(Number(merged.numericDecimalPlaces));
-  if (!Number.isFinite(dec)) dec = 2;
-  dec = Math.max(0, Math.min(20, dec));
-  let embeddingSimilarity = !!merged.embeddingSimilarity;
-  let semanticAlign = !!merged.semanticAlign;
-  if (embeddingSimilarity && semanticAlign) semanticAlign = false;
-  const softString = embeddingSimilarity || semanticAlign;
-  return {
-    semanticAlign,
-    embeddingSimilarity,
-    contains: softString ? false : !!merged.contains,
-    ignoreCase: softString ? false : !!merged.ignoreCase,
-    ignoreSymbols: softString ? false : !!merged.ignoreSymbols,
-    ignoreWhitespace: softString ? false : !!merged.ignoreWhitespace,
-    numericMode: mode,
-    numericAbsEpsilon: absE,
-    numericRelEpsilon: relE,
-    numericDecimalPlaces: dec,
-  };
-}
 
 function normalizeScoreMappingToRules(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return [];

@@ -61,8 +61,8 @@
       {
         "type": "dataset",
         "nodeId": "sentiment_v2_sampled",
-        "left": 760,
-        "top": 180,
+        "left": 752,
+        "top": 172,
         "name": "03 Two sampled examples",
         "note": "Preloaded with two rows so Process and Run can be tested immediately.",
         "samplerNodeId": "sentiment_v2_sampler",
@@ -98,8 +98,8 @@
       {
         "type": "process",
         "nodeId": "sentiment_v2_process",
-        "left": 1100,
-        "top": 180,
+        "left": 1111.43,
+        "top": 140,
         "name": "04 Clean text",
         "dfCode": "def process(df):\n    out = df.copy()\n    out[\"text\"] = out[\"text\"].astype(str).str.strip()\n    out[\"expected\"] = out[\"expected\"].astype(str).str.strip().str.lower()\n    return out",
         "activeMode": "df",
@@ -110,8 +110,8 @@
       {
         "type": "prompt",
         "nodeId": "sentiment_v2_prompt",
-        "left": 1100,
-        "top": 520,
+        "left": 741.867,
+        "top": 521.333,
         "name": "05 Classify sentiment",
         "note": "Classify one sentence as positive, negative, or neutral.",
         "colorIndex": 5,
@@ -176,7 +176,7 @@
             "children": [
               {
                 "type": "rule",
-                "outputKey": "text",
+                "outputKey": "[text]",
                 "gtColumns": [
                   "text"
                 ],
@@ -184,6 +184,8 @@
                 "matchFlags": {
                   "semanticAlign": false,
                   "embeddingSimilarity": false,
+                  "rxnormMatch": false,
+                  "meshMatch": false,
                   "contains": false,
                   "ignoreCase": false,
                   "ignoreSymbols": false,
@@ -210,6 +212,8 @@
                 "matchFlags": {
                   "semanticAlign": false,
                   "embeddingSimilarity": false,
+                  "rxnormMatch": false,
+                  "meshMatch": false,
                   "contains": false,
                   "ignoreCase": true,
                   "ignoreSymbols": false,
@@ -235,27 +239,10 @@
         "promptReviewName": "08 Review errors"
       },
       {
-        "type": "run",
-        "nodeId": "n_1790988257734_438952796",
-        "left": 1448.15,
-        "top": 628.225,
-        "runName": "Run",
-        "runWorkingSetId": "sentiment_v2_sampled",
-        "runCredentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
-        "runInputToColumn": "{\"text\":\"text\"}",
-        "runResults": "[{\"row_index\":0,\"input_row_index\":0,\"output\":{\"label\":\"positive\"},\"error\":null,\"input_row\":[\"I love this little app.\",\"positive\"]},{\"row_index\":1,\"input_row_index\":1,\"output\":{\"label\":\"negative\"},\"error\":null,\"input_row\":[\"The update broke my workflow.\",\"negative\"]}]",
-        "runOutputFields": "[{\"display\":\"label\",\"key\":\"label\"}]",
-        "runCompleted": "1",
-        "runInputContent": "{\"schemaVersion\":2,\"headers\":[\"text\",\"expected\"],\"columnTypes\":[\"text\",\"text\"],\"rowIds\":[\"sentiment-v2-row-1\",\"sentiment-v2-row-2\"],\"rows\":[[\"I love this little app.\",\"positive\"],[\"The update broke my workflow.\",\"negative\"]]}",
-        "runPending": false,
-        "historyRecordId": "653f23916abd4b1e9fa784fd4fc3226d",
-        "runProgress": 100
-      },
-      {
         "type": "dataset",
         "nodeId": "n_1790988655032_579223199",
-        "left": 348.8,
-        "top": 40,
+        "left": 515.467,
+        "top": 25.3333,
         "name": "05 Classify sentiment 06 Classify two rows",
         "note": "Exported from 05 Classify sentiment 06 Classify two rows.\nRun completed.",
         "samplerNodeId": "",
@@ -352,9 +339,7 @@
         "nodeId": "n_1790992471077_836810480",
         "left": 2034.8,
         "top": 668,
-        "promptReviewName": "Review",
-        "reviewResult": "{\"summary\":\"Phase 1: analyzing 1 input group(s) with failures (cap 1 failed input(s) by settings; 2 unmatched comparison row(s) in scope); each prompt includes every comparison row for that input (matched + unmatched). Phase 1.5: if more than 5 Phase-1 issues, cluster related issues (one LLM call; fallback: group by category hint); if ≤5 issues, one cluster per issue (no clustering LLM). Phase 2: one prompt-edit per cluster (sequential; one merged edit fixes all cases in the cluster); duplicate spans across clusters are deduped once.\",\"suggestions\":[{\"name\":\"Prompt edit\",\"phase1_addresses\":[\"No output generated\"],\"old_sentence\":\"Return exactly one label: positive, negative, or neutral. Do not include an explanation.\",\"new_sentence\":\"Return exactly one label: positive, negative, or neutral. You must provide one of these labels and nothing else.\",\"reason\":\"The model failed to produce any output. This edit reinforces the instruction to always return one of the specified labels, preventing empty output.\",\"target_score_row_indices\":[0,2],\"row_indices\":[0,2],\"issue_cluster_index\":0,\"issue_cluster_label\":\"no-output\",\"source\":\"pipeline\",\"suggestion_id\":1,\"applied\":true}],\"data_refinement\":[],\"row_diagnostics\":[{\"input_index\":1,\"row_indices\":[0,2],\"card_title\":\"No output generated\",\"issue_summary\":\"The model did not return any output for the input sentence, while the expected output was 'positive'.\",\"rough_modification_opinion\":\"Ensure the model always returns one of the specified labels (positive, negative, or neutral) by reinforcing the requirement for an output.\",\"problem_category_hint\":\"no-output\",\"gt_suspect_note\":\"\"}],\"promptSections\":[{\"name\":\"Task\",\"content\":\"Classify the sentiment of this sentence: {text}\"},{\"name\":\"Rules\",\"content\":\"Return exactly one label: positive, negative, or neutral. Do not include an explanation.\"}],\"promptFullText\":\"## Task\\n\\nClassify the sentiment of this sentence: {text}\\n\\n## Rules\\n\\nReturn exactly one label: positive, negative, or neutral. Do not include an explanation.\",\"workingSections\":[{\"name\":\"Task\",\"content\":\"Classify the sentiment of this sentence: {text}\"},{\"name\":\"Rules\",\"content\":\"Return exactly one label: positive, negative, or neutral. You must provide one of these labels and nothing else.\"}],\"streamComplete\":true,\"reviewProgress\":100,\"run_results\":[{\"row_index\":0,\"input_row_index\":0,\"output\":null,\"error\":\"litellm.AuthenticationError: AuthenticationError: OpenrouterException - {\\\"error\\\":{\\\"message\\\":\\\"User not found.\\\",\\\"code\\\":401}}\",\"input_row\":[\"I love this little app.\",\"positive\"]},{\"row_index\":1,\"input_row_index\":1,\"output\":null,\"error\":\"litellm.AuthenticationError: AuthenticationError: OpenrouterException - {\\\"error\\\":{\\\"message\\\":\\\"User not found.\\\",\\\"code\\\":401}}\",\"input_row\":[\"The update broke my workflow.\",\"negative\"]}],\"comparison_rows\":[{\"row_index\":0,\"input_row_index\":0,\"matched\":false,\"run_output\":{},\"expected\":\"—\",\"ground_truth_output\":{},\"comparison_types\":null,\"row_input\":{\"text\":\"I love this little app.\"},\"gt_only\":false,\"source_gt_row_index\":null,\"score_table_row\":1},{\"row_index\":1,\"input_row_index\":1,\"matched\":false,\"run_output\":{},\"expected\":\"—\",\"ground_truth_output\":{},\"comparison_types\":null,\"row_input\":{\"text\":\"The update broke my workflow.\"},\"gt_only\":false,\"source_gt_row_index\":null,\"score_table_row\":2},{\"row_index\":2,\"input_row_index\":0,\"matched\":false,\"run_output\":{},\"expected\":\"text: I love this little app.; label: positive\",\"ground_truth_output\":{\"text\":\"I love this little app.\",\"label\":\"positive\"},\"comparison_types\":[\"text: String match\",\"label: String match (Ignore case, Ignore whitespace)\"],\"row_input\":{\"text\":\"I love this little app.\"},\"gt_only\":true,\"source_gt_row_index\":0,\"score_table_row\":3},{\"row_index\":3,\"input_row_index\":1,\"matched\":false,\"run_output\":{},\"expected\":\"text: The update broke my workflow.; label: negative\",\"ground_truth_output\":{\"text\":\"The update broke my workflow.\",\"label\":\"negative\"},\"comparison_types\":[\"text: String match\",\"label: String match (Ignore case, Ignore whitespace)\"],\"row_input\":{\"text\":\"The update broke my workflow.\"},\"gt_only\":true,\"source_gt_row_index\":1,\"score_table_row\":4},{\"row_index\":4,\"input_row_index\":null,\"matched\":false,\"run_output\":{},\"expected\":\"text: The meeting starts at noon.; label: neutral\",\"ground_truth_output\":{\"text\":\"The meeting starts at noon.\",\"label\":\"neutral\"},\"comparison_types\":[\"text: String match\",\"label: String match (Ignore case, Ignore whitespace)\"],\"row_input\":null,\"gt_only\":true,\"source_gt_row_index\":2,\"score_table_row\":5}],\"review_suggestion_seq_next\":2,\"diagnosisComplete\":true,\"stage_log\":[],\"review_method_id\":\"issue_analysis_suggestions\",\"review_stages\":[{\"id\":\"analysis\",\"label\":\"Issue analysis\"},{\"id\":\"suggestions\",\"label\":\"Suggested changes\"}],\"supports_segment_optimization\":true,\"design_suggestions\":[]}",
-        "reviewProgress": 100
+        "promptReviewName": "Review"
       },
       {
         "type": "prompt",
@@ -372,6 +357,227 @@
           {
             "name": "Rules",
             "content": "Return exactly one label: positive, negative, or neutral. You must provide one of these labels and nothing else."
+          }
+        ],
+        "outputFormat": {
+          "returnShape": "single",
+          "fields": [
+            {
+              "key": "label",
+              "type": "str",
+              "description": "One of positive, negative, or neutral.",
+              "examples": [
+                "positive"
+              ]
+            }
+          ]
+        },
+        "inputTypes": {}
+      },
+      {
+        "type": "run",
+        "nodeId": "n_1790992772310_232620552",
+        "left": 1386.8,
+        "top": 599.2,
+        "runName": "Run",
+        "runWorkingSetId": "sentiment_v2_sampled",
+        "runCredentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+        "runInputToColumn": "{\"text\":\"text\"}",
+        "runResults": "[{\"row_index\":0,\"input_row_index\":0,\"output\":{\"label\":\"positive\"},\"error\":null,\"input_row\":[\"I love this little app.\",\"positive\"]},{\"row_index\":1,\"input_row_index\":1,\"output\":{\"label\":\"negative\"},\"error\":null,\"input_row\":[\"The update broke my workflow.\",\"negative\"]}]",
+        "runOutputFields": "[{\"display\":\"label\",\"key\":\"label\"}]",
+        "runCompleted": "1",
+        "runInputContent": "{\"schemaVersion\":2,\"headers\":[\"text\",\"expected\"],\"columnTypes\":[\"text\",\"text\"],\"rowIds\":[\"sentiment-v2-row-1\",\"sentiment-v2-row-2\"],\"rows\":[[\"I love this little app.\",\"positive\"],[\"The update broke my workflow.\",\"negative\"]]}",
+        "runPending": false,
+        "historyRecordId": "c0e94ac3a75a4116a46df35f6983e708",
+        "runProgress": 100
+      },
+      {
+        "type": "score",
+        "nodeId": "n_1790992784294_436819691",
+        "left": 1588.8,
+        "top": 599.2,
+        "scoreName": "Score",
+        "scoreGroundTruthId": "sentiment_v2_source",
+        "scoreMapping": {
+          "v": 2,
+          "input": {
+            "type": "group",
+            "ops": [],
+            "children": [
+              {
+                "type": "rule",
+                "outputKey": "[text]",
+                "gtColumns": [
+                  "text"
+                ],
+                "matchType": "exact",
+                "matchFlags": {
+                  "semanticAlign": false,
+                  "embeddingSimilarity": false,
+                  "rxnormMatch": false,
+                  "meshMatch": false,
+                  "contains": false,
+                  "ignoreCase": false,
+                  "ignoreSymbols": false,
+                  "ignoreWhitespace": false,
+                  "numericMode": "exact",
+                  "numericAbsEpsilon": 0,
+                  "numericRelEpsilon": 0,
+                  "numericDecimalPlaces": 2
+                }
+              }
+            ]
+          },
+          "output": {
+            "type": "group",
+            "ops": [],
+            "children": [
+              {
+                "type": "rule",
+                "outputKey": "label",
+                "gtColumns": [
+                  "expected"
+                ],
+                "matchType": "exact",
+                "matchFlags": {
+                  "semanticAlign": false,
+                  "embeddingSimilarity": false,
+                  "rxnormMatch": false,
+                  "meshMatch": false,
+                  "contains": false,
+                  "ignoreCase": true,
+                  "ignoreSymbols": false,
+                  "ignoreWhitespace": true,
+                  "numericMode": "exact",
+                  "numericAbsEpsilon": 0,
+                  "numericRelEpsilon": 0,
+                  "numericDecimalPlaces": 2
+                }
+              }
+            ]
+          }
+        },
+        "reviewCredentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+        "reviewMethod": "issue_analysis_suggestions",
+        "scoreMatchCode": "def norm(value):\n    \"\"\"Lower-case and collapse whitespace so formatting differences still match.\"\"\"\n    return \" \".join(str(value if value is not None else \"\").split()).lower()\n\n\ndef match(input_row, output_row, gt_row):\n    # Called per (Run row, ground-truth row) pair, in order, until it returns\n    # True. A True pair is scored as correct; that ground-truth row is then\n    # not reused. input_row / output_row / gt_row are dicts keyed by name.\n    # input_row columns: text, expected\n    # output_row fields: label\n    # gt_row columns: text, expected\n    #\n    # Same item? Both sides have \"text\"; drop this check if it isn't an ID.\n    if norm(input_row.get(\"text\")) != norm(gt_row.get(\"text\")):\n        return False\n\n    # Is the model's answer right?\n    predicted = norm(output_row.get(\"label\"))\n    expected = norm(gt_row.get(\"text\"))\n    # Other checks you can return instead:\n    #   return expected in predicted                            # contains\n    #   return abs(float(predicted) - float(expected)) < 0.01   # numeric\n    #   return set(predicted.split(\";\")) == set(expected.split(\";\"))  # same set\n    return predicted != \"\" and predicted == expected\n"
+      },
+      {
+        "type": "run",
+        "nodeId": "n_1790993305151_798780867",
+        "left": 1358.8,
+        "top": 768,
+        "runName": "Run",
+        "runWorkingSetId": "sentiment_v2_sampled",
+        "runCredentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+        "runInputToColumn": "{\"text\":\"text\"}",
+        "runResults": "[{\"row_index\":0,\"input_row_index\":0,\"output\":{\"label\":\"positive\"},\"error\":null,\"input_row\":[\"I love this little app.\",\"positive\"]},{\"row_index\":1,\"input_row_index\":1,\"output\":{\"label\":\"negative\"},\"error\":null,\"input_row\":[\"The update broke my workflow.\",\"negative\"]}]",
+        "runOutputFields": "[{\"display\":\"label\",\"key\":\"label\"}]",
+        "runCompleted": "1",
+        "runInputContent": "{\"headers\":[\"text\",\"expected\"],\"columnTypes\":[\"text\",\"text\"],\"rowIds\":[\"sentiment-v2-row-1\",\"sentiment-v2-row-2\"],\"rows\":[[\"I love this little app.\",\"positive\"],[\"The update broke my workflow.\",\"negative\"]]}",
+        "runPending": false,
+        "historyRecordId": "0804108da1ae45ac8a7430cb96fad823",
+        "runProgress": 100
+      },
+      {
+        "type": "score",
+        "nodeId": "n_1790993318752_769313697",
+        "left": 1612,
+        "top": 720,
+        "scoreName": "Score",
+        "scoreGroundTruthId": "sentiment_v2_source",
+        "scoreMapping": {
+          "v": 2,
+          "input": {
+            "type": "group",
+            "ops": [],
+            "children": [
+              {
+                "type": "rule",
+                "outputKey": "[text]",
+                "gtColumns": [
+                  "text"
+                ],
+                "matchType": "exact",
+                "matchFlags": {
+                  "semanticAlign": false,
+                  "embeddingSimilarity": false,
+                  "rxnormMatch": false,
+                  "meshMatch": false,
+                  "contains": false,
+                  "ignoreCase": false,
+                  "ignoreSymbols": false,
+                  "ignoreWhitespace": false,
+                  "numericMode": "exact",
+                  "numericAbsEpsilon": 0,
+                  "numericRelEpsilon": 0,
+                  "numericDecimalPlaces": 2
+                }
+              }
+            ]
+          },
+          "output": {
+            "type": "group",
+            "ops": [],
+            "children": [
+              {
+                "type": "rule",
+                "outputKey": "label",
+                "gtColumns": [
+                  "expected"
+                ],
+                "matchType": "exact",
+                "matchFlags": {
+                  "semanticAlign": false,
+                  "embeddingSimilarity": false,
+                  "rxnormMatch": false,
+                  "meshMatch": false,
+                  "contains": false,
+                  "ignoreCase": true,
+                  "ignoreSymbols": false,
+                  "ignoreWhitespace": true,
+                  "numericMode": "exact",
+                  "numericAbsEpsilon": 0,
+                  "numericRelEpsilon": 0,
+                  "numericDecimalPlaces": 2
+                }
+              }
+            ]
+          }
+        },
+        "reviewCredentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+        "reviewMethod": "issue_analysis_suggestions",
+        "scoreMatchCode": "def norm(value):\n    \"\"\"Lower-case and collapse whitespace so formatting differences still match.\"\"\"\n    return \" \".join(str(value if value is not None else \"\").split()).lower()\n\n\ndef match(input_row, output_row, gt_row):\n    # Called per (Run row, ground-truth row) pair, in order, until it returns\n    # True. A True pair is scored as correct; that ground-truth row is then\n    # not reused. input_row / output_row / gt_row are dicts keyed by name.\n    # input_row columns: text, expected\n    # output_row fields: label\n    #\n    # If both sides share an ID column, check it first so rows pair correctly:\n    #   if norm(input_row.get(\"id\")) != norm(gt_row.get(\"id\")):\n    #       return False\n\n    # Is the model's answer right?\n    predicted = norm(output_row.get(\"label\"))\n    expected = norm(gt_row.get(\"answer\"))\n    # Other checks you can return instead:\n    #   return expected in predicted                            # contains\n    #   return abs(float(predicted) - float(expected)) < 0.01   # numeric\n    #   return set(predicted.split(\";\")) == set(expected.split(\";\"))  # same set\n    return predicted != \"\" and predicted == expected\n"
+      },
+      {
+        "type": "promptReview",
+        "nodeId": "n_1790993343479_987584794",
+        "left": 1838,
+        "top": 735.188,
+        "promptReviewName": "Review"
+      },
+      {
+        "type": "promptReview",
+        "nodeId": "n_1790993357945_972045956",
+        "left": 1837.2,
+        "top": 784,
+        "promptReviewName": "Review"
+      },
+      {
+        "type": "prompt",
+        "nodeId": "n_1790993369432_467280680",
+        "left": 2070.4,
+        "top": 771.4,
+        "name": "05 Classify sentiment v4",
+        "note": "Exported from Review.",
+        "colorIndex": 4,
+        "sections": [
+          {
+            "name": "Task",
+            "content": "Classify the sentiment of this sentence: {text}"
+          },
+          {
+            "name": "Rules",
+            "content": "Return exactly one label: positive, negative, or neutral. You must return one of these labels, even if you are unsure. Do not include an explanation."
           }
         ],
         "outputFormat": {
@@ -422,11 +628,6 @@
         "type": "score-to-prompt-review"
       },
       {
-        "fromId": "sentiment_v2_prompt",
-        "toId": "n_1790988257734_438952796",
-        "type": "prompt-to-run"
-      },
-      {
         "fromId": "sentiment_v2_score",
         "toId": "n_1790988836784_12103043",
         "type": "score-to-prompt-review"
@@ -450,6 +651,41 @@
         "fromId": "n_1790992471077_836810480",
         "toId": "n_1790992494702_548810386",
         "type": "prompt-review-to-prompt"
+      },
+      {
+        "fromId": "sentiment_v2_prompt",
+        "toId": "n_1790992772310_232620552",
+        "type": "prompt-to-run"
+      },
+      {
+        "fromId": "n_1790992772310_232620552",
+        "toId": "n_1790992784294_436819691",
+        "type": "run-to-score"
+      },
+      {
+        "fromId": "n_1790993305151_798780867",
+        "toId": "n_1790993318752_769313697",
+        "type": "run-to-score"
+      },
+      {
+        "fromId": "n_1790993318752_769313697",
+        "toId": "n_1790993343479_987584794",
+        "type": "score-to-prompt-review"
+      },
+      {
+        "fromId": "n_1790993318752_769313697",
+        "toId": "n_1790993357945_972045956",
+        "type": "score-to-prompt-review"
+      },
+      {
+        "fromId": "n_1790993357945_972045956",
+        "toId": "n_1790993369432_467280680",
+        "type": "prompt-review-to-prompt"
+      },
+      {
+        "fromId": "sentiment_v2_prompt",
+        "toId": "n_1790993305151_798780867",
+        "type": "prompt-to-run"
       }
     ],
     "schemaVersion": 2,
@@ -569,6 +805,106 @@
           "status": "completed",
           "createdAt": "2026-10-03T01:54:31.232Z",
           "updatedAt": "2026-10-03T01:54:53.826Z",
+          "assetIds": []
+        },
+        {
+          "id": "91ce1bde4f6e4e6482c8860a5cc6ddec",
+          "nodeId": "n_1790992729470_531179361",
+          "kind": "run",
+          "signature": "sha256:2fd9aedc640543a386a19d9457cae606739ee15145b0e2259b26d3e134c154ff",
+          "status": "completed",
+          "createdAt": "2026-10-03T01:58:57.332Z",
+          "updatedAt": "2026-10-03T01:59:01.035Z",
+          "summary": {
+            "promptName": "05 Classify sentiment",
+            "datasetNames": [
+              "01 Sentiment examples"
+            ],
+            "rowCount": 3,
+            "model": "gemini-2.5-flash-lite",
+            "errorCount": 0
+          },
+          "sourceRecordIds": [],
+          "assetIds": []
+        },
+        {
+          "id": "c0e94ac3a75a4116a46df35f6983e708",
+          "nodeId": "n_1790992772310_232620552",
+          "kind": "run",
+          "signature": "sha256:4ef59b3b910aed3391af617fcb28cbd331f171318450b6941911107a36e3c14d",
+          "status": "completed",
+          "createdAt": "2026-10-03T01:59:37.851Z",
+          "updatedAt": "2026-10-03T01:59:41.046Z",
+          "summary": {
+            "promptName": "05 Classify sentiment",
+            "datasetNames": [
+              "03 Two sampled examples"
+            ],
+            "rowCount": 2,
+            "model": "gemini-2.5-flash-lite",
+            "errorCount": 0
+          },
+          "sourceRecordIds": [],
+          "assetIds": []
+        },
+        {
+          "id": "0804108da1ae45ac8a7430cb96fad823",
+          "nodeId": "n_1790993305151_798780867",
+          "kind": "run",
+          "signature": "sha256:4ef59b3b910aed3391af617fcb28cbd331f171318450b6941911107a36e3c14d",
+          "status": "completed",
+          "createdAt": "2026-10-03T02:08:32.873Z",
+          "updatedAt": "2026-10-03T02:08:35.012Z",
+          "summary": {
+            "promptName": "05 Classify sentiment",
+            "datasetNames": [
+              "03 Two sampled examples"
+            ],
+            "rowCount": 2,
+            "model": "gemini-2.5-flash-lite",
+            "errorCount": 0
+          },
+          "sourceRecordIds": [],
+          "assetIds": []
+        },
+        {
+          "id": "6fa367ba43ab4b85994ba85a65a96e70",
+          "nodeId": "n_1790993322792_821664909",
+          "kind": "review",
+          "signature": "sha256:9099d2ba845ed8ab8d59ff4549b74c1756be910c8a13d6b431200c8b3d754951",
+          "status": "completed",
+          "createdAt": "2026-10-03T02:08:42.948Z",
+          "updatedAt": "2026-10-03T02:08:45.175Z",
+          "assetIds": []
+        },
+        {
+          "id": "d8656674de67409f810d7c76f88191db",
+          "nodeId": "n_1790993322792_821664909",
+          "kind": "review",
+          "signature": "sha256:af259cf5a2c8ce5fef9d7a62fecd479208178b36b3d4a9e731c7e87c82bafe1e",
+          "status": "completed",
+          "createdAt": "2026-10-03T02:08:47.164Z",
+          "updatedAt": "2026-10-03T02:08:47.164Z",
+          "assetIds": []
+        },
+        {
+          "id": "f915ecbf1f9f436d9bffbbef49f33bb7",
+          "nodeId": "n_1790993343479_987584794",
+          "kind": "review",
+          "signature": "sha256:af259cf5a2c8ce5fef9d7a62fecd479208178b36b3d4a9e731c7e87c82bafe1e",
+          "status": "completed",
+          "createdAt": "2026-10-03T02:09:03.645Z",
+          "updatedAt": "2026-10-03T02:59:42.671Z",
+          "assetIds": []
+        },
+        {
+          "id": "dea894c66b5c4309954f59c269d63a35",
+          "nodeId": "n_1790993357945_972045956",
+          "kind": "review",
+          "signature": "sha256:af259cf5a2c8ce5fef9d7a62fecd479208178b36b3d4a9e731c7e87c82bafe1e",
+          "status": "completed",
+          "createdAt": "2026-10-03T02:09:18.104Z",
+          "updatedAt": "2026-10-03T02:59:42.681Z",
           "assetIds": []
         }
       ]
@@ -1224,6 +1560,556 @@
         "results": {
           "reviewResult": "{\"summary\":\"Phase 1: analyzing 1 input group(s) with failures (cap 1 failed input(s) by settings; 2 unmatched comparison row(s) in scope); each prompt includes every comparison row for that input (matched + unmatched). Phase 1.5: if more than 5 Phase-1 issues, cluster related issues (one LLM call; fallback: group by category hint); if ≤5 issues, one cluster per issue (no clustering LLM). Phase 2: one prompt-edit per cluster (sequential; one merged edit fixes all cases in the cluster); duplicate spans across clusters are deduped once.\",\"suggestions\":[{\"name\":\"Prompt edit\",\"phase1_addresses\":[\"No output generated\"],\"old_sentence\":\"Return exactly one label: positive, negative, or neutral. Do not include an explanation.\",\"new_sentence\":\"Return exactly one label: positive, negative, or neutral. You must provide one of these labels and nothing else.\",\"reason\":\"The model failed to produce any output. This edit reinforces the instruction to always return one of the specified labels, preventing empty output.\",\"target_score_row_indices\":[0,2],\"row_indices\":[0,2],\"issue_cluster_index\":0,\"issue_cluster_label\":\"no-output\",\"source\":\"pipeline\",\"suggestion_id\":1,\"applied\":true}],\"data_refinement\":[],\"row_diagnostics\":[{\"input_index\":1,\"row_indices\":[0,2],\"card_title\":\"No output generated\",\"issue_summary\":\"The model did not return any output for the input sentence, while the expected output was 'positive'.\",\"rough_modification_opinion\":\"Ensure the model always returns one of the specified labels (positive, negative, or neutral) by reinforcing the requirement for an output.\",\"problem_category_hint\":\"no-output\",\"gt_suspect_note\":\"\"}],\"promptSections\":[{\"name\":\"Task\",\"content\":\"Classify the sentiment of this sentence: {text}\"},{\"name\":\"Rules\",\"content\":\"Return exactly one label: positive, negative, or neutral. Do not include an explanation.\"}],\"promptFullText\":\"## Task\\n\\nClassify the sentiment of this sentence: {text}\\n\\n## Rules\\n\\nReturn exactly one label: positive, negative, or neutral. Do not include an explanation.\",\"workingSections\":[{\"name\":\"Task\",\"content\":\"Classify the sentiment of this sentence: {text}\"},{\"name\":\"Rules\",\"content\":\"Return exactly one label: positive, negative, or neutral. You must provide one of these labels and nothing else.\"}],\"streamComplete\":true,\"reviewProgress\":100,\"run_results\":[{\"row_index\":0,\"input_row_index\":0,\"output\":null,\"error\":\"litellm.AuthenticationError: AuthenticationError: OpenrouterException - {\\\"error\\\":{\\\"message\\\":\\\"User not found.\\\",\\\"code\\\":401}}\",\"input_row\":[\"I love this little app.\",\"positive\"]},{\"row_index\":1,\"input_row_index\":1,\"output\":null,\"error\":\"litellm.AuthenticationError: AuthenticationError: OpenrouterException - {\\\"error\\\":{\\\"message\\\":\\\"User not found.\\\",\\\"code\\\":401}}\",\"input_row\":[\"The update broke my workflow.\",\"negative\"]}],\"comparison_rows\":[{\"row_index\":0,\"input_row_index\":0,\"matched\":false,\"run_output\":{},\"expected\":\"—\",\"ground_truth_output\":{},\"comparison_types\":null,\"row_input\":{\"text\":\"I love this little app.\"},\"gt_only\":false,\"source_gt_row_index\":null,\"score_table_row\":1},{\"row_index\":1,\"input_row_index\":1,\"matched\":false,\"run_output\":{},\"expected\":\"—\",\"ground_truth_output\":{},\"comparison_types\":null,\"row_input\":{\"text\":\"The update broke my workflow.\"},\"gt_only\":false,\"source_gt_row_index\":null,\"score_table_row\":2},{\"row_index\":2,\"input_row_index\":0,\"matched\":false,\"run_output\":{},\"expected\":\"text: I love this little app.; label: positive\",\"ground_truth_output\":{\"text\":\"I love this little app.\",\"label\":\"positive\"},\"comparison_types\":[\"text: String match\",\"label: String match (Ignore case, Ignore whitespace)\"],\"row_input\":{\"text\":\"I love this little app.\"},\"gt_only\":true,\"source_gt_row_index\":0,\"score_table_row\":3},{\"row_index\":3,\"input_row_index\":1,\"matched\":false,\"run_output\":{},\"expected\":\"text: The update broke my workflow.; label: negative\",\"ground_truth_output\":{\"text\":\"The update broke my workflow.\",\"label\":\"negative\"},\"comparison_types\":[\"text: String match\",\"label: String match (Ignore case, Ignore whitespace)\"],\"row_input\":{\"text\":\"The update broke my workflow.\"},\"gt_only\":true,\"source_gt_row_index\":1,\"score_table_row\":4},{\"row_index\":4,\"input_row_index\":null,\"matched\":false,\"run_output\":{},\"expected\":\"text: The meeting starts at noon.; label: neutral\",\"ground_truth_output\":{\"text\":\"The meeting starts at noon.\",\"label\":\"neutral\"},\"comparison_types\":[\"text: String match\",\"label: String match (Ignore case, Ignore whitespace)\"],\"row_input\":null,\"gt_only\":true,\"source_gt_row_index\":2,\"score_table_row\":5}],\"review_suggestion_seq_next\":2,\"diagnosisComplete\":true,\"stage_log\":[],\"review_method_id\":\"issue_analysis_suggestions\",\"review_stages\":[{\"id\":\"analysis\",\"label\":\"Issue analysis\"},{\"id\":\"suggestions\",\"label\":\"Suggested changes\"}],\"supports_segment_optimization\":true,\"design_suggestions\":[]}",
           "reviewProgress": 100
+        }
+      },
+      "91ce1bde4f6e4e6482c8860a5cc6ddec": {
+        "nodeId": "n_1790992729470_531179361",
+        "kind": "run",
+        "signature": "sha256:2fd9aedc640543a386a19d9457cae606739ee15145b0e2259b26d3e134c154ff",
+        "inputs": {
+          "prompt": {
+            "nodeId": "sentiment_v2_prompt",
+            "name": "05 Classify sentiment",
+            "sections": [
+              {
+                "name": "Task",
+                "content": "Classify the sentiment of this sentence: {text}"
+              },
+              {
+                "name": "Rules",
+                "content": "Return exactly one label: positive, negative, or neutral. Do not include an explanation."
+              }
+            ],
+            "outputFormat": {
+              "returnShape": "single",
+              "fields": [
+                {
+                  "key": "label",
+                  "type": "str",
+                  "description": "One of positive, negative, or neutral.",
+                  "examples": [
+                    "positive"
+                  ]
+                }
+              ]
+            },
+            "inputTypes": {}
+          },
+          "dataset": {
+            "nodeId": "sentiment_v2_source",
+            "name": "01 Sentiment examples",
+            "content": {
+              "schemaVersion": 2,
+              "headers": [
+                "text",
+                "expected"
+              ],
+              "columnTypes": [
+                "text",
+                "text"
+              ],
+              "rowIds": [
+                "sentiment-v2-row-1",
+                "sentiment-v2-row-2",
+                "sentiment-v2-row-3"
+              ],
+              "rows": [
+                [
+                  "I love this little app.",
+                  "positive"
+                ],
+                [
+                  "The update broke my workflow.",
+                  "negative"
+                ],
+                [
+                  "The meeting starts at noon.",
+                  "neutral"
+                ]
+              ]
+            },
+            "signature": "sha256:6f848afbc1c44ae50248d7022dbe7624b7cbc56a2996502a0a3df609943e7e9f"
+          },
+          "mapping": {
+            "text": "text"
+          },
+          "settings": {},
+          "credentialId": "388339f8-11eb-44a8-b94f-4d22366180f8"
+        },
+        "sourceRecordIds": [],
+        "summary": {
+          "promptName": "05 Classify sentiment",
+          "datasetNames": [
+            "01 Sentiment examples"
+          ],
+          "rowCount": 3,
+          "model": "gemini-2.5-flash-lite",
+          "errorCount": 0
+        },
+        "id": "91ce1bde4f6e4e6482c8860a5cc6ddec",
+        "status": "completed",
+        "createdAt": "2026-10-03T01:58:57.332Z",
+        "updatedAt": "2026-10-03T01:59:01.035Z",
+        "results": {
+          "runResults": [
+            {
+              "row_index": 0,
+              "input_row_index": 0,
+              "output": {
+                "label": "positive"
+              },
+              "error": null,
+              "input_row": [
+                "I love this little app.",
+                "positive"
+              ]
+            },
+            {
+              "row_index": 1,
+              "input_row_index": 1,
+              "output": {
+                "label": "negative"
+              },
+              "error": null,
+              "input_row": [
+                "The update broke my workflow.",
+                "negative"
+              ]
+            },
+            {
+              "row_index": 2,
+              "input_row_index": 2,
+              "output": {
+                "label": "neutral"
+              },
+              "error": null,
+              "input_row": [
+                "The meeting starts at noon.",
+                "neutral"
+              ]
+            }
+          ],
+          "runInputContent": {
+            "schemaVersion": 2,
+            "headers": [
+              "text",
+              "expected"
+            ],
+            "columnTypes": [
+              "text",
+              "text"
+            ],
+            "rowIds": [
+              "sentiment-v2-row-1",
+              "sentiment-v2-row-2",
+              "sentiment-v2-row-3"
+            ],
+            "rows": [
+              [
+                "I love this little app.",
+                "positive"
+              ],
+              [
+                "The update broke my workflow.",
+                "negative"
+              ],
+              [
+                "The meeting starts at noon.",
+                "neutral"
+              ]
+            ]
+          },
+          "runOutputFields": [
+            {
+              "display": "label",
+              "key": "label"
+            }
+          ],
+          "runProgress": 100
+        },
+        "credentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+        "model": "gemini-2.5-flash-lite",
+        "backendJobId": "cdbaf872-de88-4908-a22e-8c803b9f2877"
+      },
+      "c0e94ac3a75a4116a46df35f6983e708": {
+        "nodeId": "n_1790992772310_232620552",
+        "kind": "run",
+        "signature": "sha256:4ef59b3b910aed3391af617fcb28cbd331f171318450b6941911107a36e3c14d",
+        "inputs": {
+          "prompt": {
+            "nodeId": "sentiment_v2_prompt",
+            "name": "05 Classify sentiment",
+            "sections": [
+              {
+                "name": "Task",
+                "content": "Classify the sentiment of this sentence: {text}"
+              },
+              {
+                "name": "Rules",
+                "content": "Return exactly one label: positive, negative, or neutral. Do not include an explanation."
+              }
+            ],
+            "outputFormat": {
+              "returnShape": "single",
+              "fields": [
+                {
+                  "key": "label",
+                  "type": "str",
+                  "description": "One of positive, negative, or neutral.",
+                  "examples": [
+                    "positive"
+                  ]
+                }
+              ]
+            },
+            "inputTypes": {}
+          },
+          "dataset": {
+            "nodeId": "sentiment_v2_sampled",
+            "name": "03 Two sampled examples",
+            "content": {
+              "schemaVersion": 2,
+              "headers": [
+                "text",
+                "expected"
+              ],
+              "columnTypes": [
+                "text",
+                "text"
+              ],
+              "rowIds": [
+                "sentiment-v2-row-1",
+                "sentiment-v2-row-2"
+              ],
+              "rows": [
+                [
+                  "I love this little app.",
+                  "positive"
+                ],
+                [
+                  "The update broke my workflow.",
+                  "negative"
+                ]
+              ]
+            },
+            "signature": "sha256:48acde476e0208c341334f4f898b99c33019394a3b8370575252bbee1cff2e9b"
+          },
+          "mapping": {
+            "text": "text"
+          },
+          "settings": {},
+          "credentialId": "388339f8-11eb-44a8-b94f-4d22366180f8"
+        },
+        "sourceRecordIds": [],
+        "summary": {
+          "promptName": "05 Classify sentiment",
+          "datasetNames": [
+            "03 Two sampled examples"
+          ],
+          "rowCount": 2,
+          "model": "gemini-2.5-flash-lite",
+          "errorCount": 0
+        },
+        "id": "c0e94ac3a75a4116a46df35f6983e708",
+        "status": "completed",
+        "createdAt": "2026-10-03T01:59:37.851Z",
+        "updatedAt": "2026-10-03T01:59:41.046Z",
+        "results": {
+          "runResults": [
+            {
+              "row_index": 0,
+              "input_row_index": 0,
+              "output": {
+                "label": "positive"
+              },
+              "error": null,
+              "input_row": [
+                "I love this little app.",
+                "positive"
+              ]
+            },
+            {
+              "row_index": 1,
+              "input_row_index": 1,
+              "output": {
+                "label": "negative"
+              },
+              "error": null,
+              "input_row": [
+                "The update broke my workflow.",
+                "negative"
+              ]
+            }
+          ],
+          "runInputContent": {
+            "schemaVersion": 2,
+            "headers": [
+              "text",
+              "expected"
+            ],
+            "columnTypes": [
+              "text",
+              "text"
+            ],
+            "rowIds": [
+              "sentiment-v2-row-1",
+              "sentiment-v2-row-2"
+            ],
+            "rows": [
+              [
+                "I love this little app.",
+                "positive"
+              ],
+              [
+                "The update broke my workflow.",
+                "negative"
+              ]
+            ]
+          },
+          "runOutputFields": [
+            {
+              "display": "label",
+              "key": "label"
+            }
+          ],
+          "runProgress": 100
+        },
+        "credentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+        "model": "gemini-2.5-flash-lite",
+        "backendJobId": "bcd8134b-412b-48c9-8fc6-22eae5066a4b"
+      },
+      "0804108da1ae45ac8a7430cb96fad823": {
+        "nodeId": "n_1790993305151_798780867",
+        "kind": "run",
+        "signature": "sha256:4ef59b3b910aed3391af617fcb28cbd331f171318450b6941911107a36e3c14d",
+        "inputs": {
+          "prompt": {
+            "nodeId": "sentiment_v2_prompt",
+            "name": "05 Classify sentiment",
+            "sections": [
+              {
+                "name": "Task",
+                "content": "Classify the sentiment of this sentence: {text}"
+              },
+              {
+                "name": "Rules",
+                "content": "Return exactly one label: positive, negative, or neutral. Do not include an explanation."
+              }
+            ],
+            "outputFormat": {
+              "returnShape": "single",
+              "fields": [
+                {
+                  "key": "label",
+                  "type": "str",
+                  "description": "One of positive, negative, or neutral.",
+                  "examples": [
+                    "positive"
+                  ]
+                }
+              ]
+            },
+            "inputTypes": {}
+          },
+          "dataset": {
+            "nodeId": "sentiment_v2_sampled",
+            "name": "03 Two sampled examples",
+            "content": {
+              "schemaVersion": 2,
+              "headers": [
+                "text",
+                "expected"
+              ],
+              "columnTypes": [
+                "text",
+                "text"
+              ],
+              "rowIds": [
+                "sentiment-v2-row-1",
+                "sentiment-v2-row-2"
+              ],
+              "rows": [
+                [
+                  "I love this little app.",
+                  "positive"
+                ],
+                [
+                  "The update broke my workflow.",
+                  "negative"
+                ]
+              ]
+            },
+            "signature": "sha256:48acde476e0208c341334f4f898b99c33019394a3b8370575252bbee1cff2e9b"
+          },
+          "mapping": {
+            "text": "text"
+          },
+          "settings": {},
+          "credentialId": "388339f8-11eb-44a8-b94f-4d22366180f8"
+        },
+        "sourceRecordIds": [],
+        "summary": {
+          "promptName": "05 Classify sentiment",
+          "datasetNames": [
+            "03 Two sampled examples"
+          ],
+          "rowCount": 2,
+          "model": "gemini-2.5-flash-lite",
+          "errorCount": 0
+        },
+        "id": "0804108da1ae45ac8a7430cb96fad823",
+        "status": "completed",
+        "createdAt": "2026-10-03T02:08:32.873Z",
+        "updatedAt": "2026-10-03T02:08:35.012Z",
+        "results": {
+          "runResults": [
+            {
+              "row_index": 0,
+              "input_row_index": 0,
+              "output": {
+                "label": "positive"
+              },
+              "error": null,
+              "input_row": [
+                "I love this little app.",
+                "positive"
+              ]
+            },
+            {
+              "row_index": 1,
+              "input_row_index": 1,
+              "output": {
+                "label": "negative"
+              },
+              "error": null,
+              "input_row": [
+                "The update broke my workflow.",
+                "negative"
+              ]
+            }
+          ],
+          "runInputContent": {
+            "headers": [
+              "text",
+              "expected"
+            ],
+            "columnTypes": [
+              "text",
+              "text"
+            ],
+            "rowIds": [
+              "sentiment-v2-row-1",
+              "sentiment-v2-row-2"
+            ],
+            "rows": [
+              [
+                "I love this little app.",
+                "positive"
+              ],
+              [
+                "The update broke my workflow.",
+                "negative"
+              ]
+            ]
+          },
+          "runOutputFields": [
+            {
+              "display": "label",
+              "key": "label"
+            }
+          ],
+          "runProgress": 100
+        },
+        "credentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+        "model": "gemini-2.5-flash-lite",
+        "backendJobId": "82a0cc8e-daf0-4917-abeb-d8615d349e3f"
+      },
+      "6fa367ba43ab4b85994ba85a65a96e70": {
+        "id": "6fa367ba43ab4b85994ba85a65a96e70",
+        "nodeId": "n_1790993322792_821664909",
+        "kind": "review",
+        "signature": "sha256:9099d2ba845ed8ab8d59ff4549b74c1756be910c8a13d6b431200c8b3d754951",
+        "status": "completed",
+        "createdAt": "2026-10-03T02:08:42.948Z",
+        "updatedAt": "2026-10-03T02:08:45.175Z",
+        "inputs": {
+          "scoreNodeId": "n_1790993318752_769313697",
+          "scoreSignature": "sha256:5f3ee1c6a1fa4116861f465d508e667f30e502b0035b55c7ae3d478b82b65c33",
+          "exclusions": {},
+          "reviewMethod": "issue_analysis_suggestions",
+          "reviewCredentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+          "reviewSettings": {},
+          "gepaTargetSectionIndex": null
+        },
+        "results": {
+          "reviewResult": "{\"summary\":\"Phase 1: analyzing 1 input group(s) with failures (cap 1 failed input(s) by settings; 1 unmatched comparison row(s) in scope); each prompt includes every comparison row for that input (matched + unmatched). Phase 1.5: if more than 5 Phase-1 issues, cluster related issues (one LLM call; fallback: group by category hint); if ≤5 issues, one cluster per issue (no clustering LLM). Phase 2: one prompt-edit per cluster (sequential; one merged edit fixes all cases in the cluster); duplicate spans across clusters are deduped once.\",\"suggestions\":[],\"data_refinement\":[],\"row_diagnostics\":[{\"input_index\":3,\"row_indices\":[2],\"card_title\":\"Model produced no output\",\"issue_summary\":\"The model did not return any output, but the expected output was 'neutral'. The prompt may have been too ambiguous or the model failed to process the input.\",\"rough_modification_opinion\":\"Ensure the prompt clearly defines the expected output format and that the model is capable of processing the input text for sentiment analysis.\",\"problem_category_hint\":\"no-output\",\"gt_suspect_note\":\"\"}],\"promptSections\":[{\"name\":\"Task\",\"content\":\"Classify the sentiment of this sentence: {text}\"},{\"name\":\"Rules\",\"content\":\"Return exactly one label: positive, negative, or neutral. Do not include an explanation.\"}],\"promptFullText\":\"## Task\\n\\nClassify the sentiment of this sentence: {text}\\n\\n## Rules\\n\\nReturn exactly one label: positive, negative, or neutral. Do not include an explanation.\",\"workingSections\":[{\"name\":\"Task\",\"content\":\"Classify the sentiment of this sentence: {text}\"},{\"name\":\"Rules\",\"content\":\"Return exactly one label: positive, negative, or neutral. Do not include an explanation.\"}],\"streamComplete\":false,\"reviewProgress\":24,\"run_results\":[{\"row_index\":0,\"input_row_index\":0,\"output\":{\"label\":\"positive\"},\"error\":null,\"input_row\":[\"I love this little app.\",\"positive\"]},{\"row_index\":1,\"input_row_index\":1,\"output\":{\"label\":\"negative\"},\"error\":null,\"input_row\":[\"The update broke my workflow.\",\"negative\"]}],\"comparison_rows\":[{\"row_index\":0,\"input_row_index\":0,\"matched\":true,\"run_output\":{\"label\":\"positive\"},\"expected\":\"label: positive\",\"ground_truth_output\":{\"label\":\"positive\"},\"comparison_types\":[\"label: String match (Ignore case, Ignore whitespace)\"],\"row_input\":{\"text\":\"I love this little app.\"},\"gt_only\":false,\"source_gt_row_index\":0,\"score_table_row\":1},{\"row_index\":1,\"input_row_index\":1,\"matched\":true,\"run_output\":{\"label\":\"negative\"},\"expected\":\"label: negative\",\"ground_truth_output\":{\"label\":\"negative\"},\"comparison_types\":[\"label: String match (Ignore case, Ignore whitespace)\"],\"row_input\":{\"text\":\"The update broke my workflow.\"},\"gt_only\":false,\"source_gt_row_index\":1,\"score_table_row\":2},{\"row_index\":2,\"input_row_index\":null,\"matched\":false,\"run_output\":{},\"expected\":\"label: neutral\",\"ground_truth_output\":{\"label\":\"neutral\"},\"comparison_types\":[\"label: String match (Ignore case, Ignore whitespace)\"],\"row_input\":null,\"gt_only\":true,\"source_gt_row_index\":2,\"score_table_row\":3}],\"review_suggestion_seq_next\":1,\"diagnosisComplete\":true,\"stage_log\":[],\"review_method_id\":\"issue_analysis_suggestions\",\"review_stages\":[{\"id\":\"analysis\",\"label\":\"Issue analysis\"},{\"id\":\"suggestions\",\"label\":\"Suggested changes\"}],\"supports_segment_optimization\":true}",
+          "reviewProgress": 24
+        }
+      },
+      "d8656674de67409f810d7c76f88191db": {
+        "id": "d8656674de67409f810d7c76f88191db",
+        "nodeId": "n_1790993322792_821664909",
+        "kind": "review",
+        "signature": "sha256:af259cf5a2c8ce5fef9d7a62fecd479208178b36b3d4a9e731c7e87c82bafe1e",
+        "status": "completed",
+        "createdAt": "2026-10-03T02:08:47.164Z",
+        "updatedAt": "2026-10-03T02:08:47.164Z",
+        "inputs": {
+          "scoreNodeId": "n_1790993318752_769313697",
+          "scoreSignature": "sha256:374e2ea7bc4dde76b3e41156d519a84f03330669991523db7ded8a40f2a40260",
+          "exclusions": {},
+          "reviewMethod": "issue_analysis_suggestions",
+          "reviewCredentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+          "reviewSettings": {},
+          "gepaTargetSectionIndex": null
+        },
+        "results": {
+          "reviewResult": "{\"summary\":\"Phase 1: analyzing 1 input group(s) with failures (cap 1 failed input(s) by settings; 1 unmatched comparison row(s) in scope); each prompt includes every comparison row for that input (matched + unmatched). Phase 1.5: if more than 5 Phase-1 issues, cluster related issues (one LLM call; fallback: group by category hint); if ≤5 issues, one cluster per issue (no clustering LLM). Phase 2: one prompt-edit per cluster (sequential; one merged edit fixes all cases in the cluster); duplicate spans across clusters are deduped once.\",\"suggestions\":[{\"name\":\"Prompt edit\",\"phase1_addresses\":[\"Model produced no output\"],\"old_sentence\":\"Return exactly one label: positive, negative, or neutral. Do not include an explanation.\",\"new_sentence\":\"Return exactly one label from the following options: positive, negative, or neutral. Do not include an explanation.\",\"reason\":\"The model produced no output, likely because the prompt was too ambiguous. This edit clarifies the expected output by explicitly listing the allowed labels, making it easier for the model to generate a valid response.\",\"target_score_row_indices\":[2],\"row_indices\":[2],\"issue_cluster_index\":0,\"issue_cluster_label\":\"no-output\",\"source\":\"pipeline\",\"suggestion_id\":1}],\"data_refinement\":[],\"row_diagnostics\":[{\"input_index\":3,\"row_indices\":[2],\"card_title\":\"Model produced no output\",\"issue_summary\":\"The model did not return any output, but the expected output was 'neutral'. The prompt may have been too ambiguous or the model failed to process the input.\",\"rough_modification_opinion\":\"Ensure the prompt clearly defines the expected output format and that the model is capable of processing the input text for sentiment analysis.\",\"problem_category_hint\":\"no-output\",\"gt_suspect_note\":\"\"}],\"promptSections\":[],\"promptFullText\":\"\",\"workingSections\":[],\"reviewProgress\":100,\"run_results\":[],\"comparison_rows\":[],\"diagnosisComplete\":true,\"stage_log\":[],\"streamComplete\":true,\"review_method_id\":\"issue_analysis_suggestions\",\"review_stages\":[{\"id\":\"analysis\",\"label\":\"Issue analysis\"},{\"id\":\"suggestions\",\"label\":\"Suggested changes\"}],\"supports_segment_optimization\":true,\"review_suggestion_seq_next\":2}",
+          "reviewProgress": 100
+        }
+      },
+      "f915ecbf1f9f436d9bffbbef49f33bb7": {
+        "id": "f915ecbf1f9f436d9bffbbef49f33bb7",
+        "nodeId": "n_1790993343479_987584794",
+        "kind": "review",
+        "signature": "sha256:af259cf5a2c8ce5fef9d7a62fecd479208178b36b3d4a9e731c7e87c82bafe1e",
+        "status": "completed",
+        "createdAt": "2026-10-03T02:09:03.645Z",
+        "updatedAt": "2026-10-03T02:59:42.671Z",
+        "inputs": {
+          "scoreNodeId": "n_1790993318752_769313697",
+          "scoreSignature": "sha256:374e2ea7bc4dde76b3e41156d519a84f03330669991523db7ded8a40f2a40260",
+          "exclusions": {},
+          "reviewMethod": "issue_analysis_suggestions",
+          "reviewCredentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+          "reviewSettings": {},
+          "gepaTargetSectionIndex": null
+        },
+        "results": {
+          "reviewResult": null,
+          "reviewProgress": 0
+        }
+      },
+      "dea894c66b5c4309954f59c269d63a35": {
+        "id": "dea894c66b5c4309954f59c269d63a35",
+        "nodeId": "n_1790993357945_972045956",
+        "kind": "review",
+        "signature": "sha256:af259cf5a2c8ce5fef9d7a62fecd479208178b36b3d4a9e731c7e87c82bafe1e",
+        "status": "completed",
+        "createdAt": "2026-10-03T02:09:18.104Z",
+        "updatedAt": "2026-10-03T02:59:42.681Z",
+        "inputs": {
+          "scoreNodeId": "n_1790993318752_769313697",
+          "scoreSignature": "sha256:374e2ea7bc4dde76b3e41156d519a84f03330669991523db7ded8a40f2a40260",
+          "exclusions": {},
+          "reviewMethod": "issue_analysis_suggestions",
+          "reviewCredentialId": "388339f8-11eb-44a8-b94f-4d22366180f8",
+          "reviewSettings": {},
+          "gepaTargetSectionIndex": null
+        },
+        "results": {
+          "reviewResult": null,
+          "reviewProgress": 0
         }
       }
     }

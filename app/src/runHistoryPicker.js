@@ -90,6 +90,12 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
         row.append(top);
         if (description.textContent) row.appendChild(description);
         row.append(input, output);
+        (item.display.notes || []).forEach((text) => {
+          const note = document.createElement('span');
+          note.className = 'modal-history-popup__fact modal-history-popup__edited';
+          note.textContent = text;
+          row.appendChild(note);
+        });
         if (item.display.meta) {
           const detail = document.createElement('small');
           detail.textContent = item.display.meta;

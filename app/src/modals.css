@@ -186,6 +186,7 @@
   background: color-mix(in srgb, var(--accent, #4677d5) 12%, transparent);
 }
 .modal-history-popup__fact { font-size: 12px; font-weight: 400; font-family: inherit; }
+.modal-history-popup__edited { color: var(--primary-btn-text); font-weight: 600; }
 .modal-history-popup__row { display: flex; align-items: center; border-top: 1px solid var(--border); }
 .modal-history-popup__row.is-current { background: var(--hover); }
 .modal-history-popup__row .modal-history-popup__item { min-width: 0; flex: 1; }
@@ -1846,6 +1847,169 @@
 
 .prompt-diff-table .diff-add .diff-new-num {
   color: var(--text);
+}
+
+/* Dataset version diff (dataset-to-dataset edge): one table, rows aligned by row ID */
+.modal-panel--dataset-diff {
+  width: 92vw;
+}
+
+.dataset-diff-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 20px;
+}
+
+/* Inset the table to the header/toolbar edges instead of the full-bleed prompt diff. */
+.modal-panel--dataset-diff .modal-body--diff {
+  padding: 0 20px 20px;
+}
+
+.dataset-diff-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 auto;
+}
+
+.dataset-diff-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--hover);
+  color: var(--text);
+}
+
+.dataset-diff-chip--added { background: var(--diff-added-bg); color: var(--diff-added-text); }
+.dataset-diff-chip--removed { background: var(--diff-removed-bg); color: var(--diff-removed-text); }
+.dataset-diff-chip--changed { background: var(--primary-btn-bg); color: var(--primary-btn-text); }
+
+.dataset-diff-only-changes {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.dataset-diff-only-changes input {
+  margin: 0;
+}
+
+.dataset-diff-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.dataset-diff-table {
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dataset-diff-table th,
+.dataset-diff-table td {
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.dataset-diff-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  background: var(--hover);
+}
+
+.dataset-diff-table .dataset-diff-col--added { color: var(--diff-added-text); }
+.dataset-diff-table .dataset-diff-col--removed { color: var(--diff-removed-text); text-decoration: line-through; }
+
+/* width: 1% keeps the # column at content width when the table stretches to fill. */
+.dataset-diff-table .dataset-diff-num {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.dataset-diff-cell {
+  min-width: 80px;
+  max-width: 360px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dataset-diff-row--added td { background: var(--diff-added-bg); }
+.dataset-diff-row--removed td { background: var(--diff-removed-bg); }
+.dataset-diff-row--removed .dataset-diff-cell,
+.dataset-diff-row--removed .dataset-diff-num { text-decoration: line-through; }
+
+.dataset-diff-cell--changed { box-shadow: inset 2px 0 0 var(--primary-btn-text); }
+.dataset-diff-cell--col-added { color: var(--diff-added-text); }
+.dataset-diff-cell--col-removed { color: var(--diff-removed-text); text-decoration: line-through; }
+
+.dataset-diff-cell del,
+.dataset-diff-cell ins {
+  border-radius: 2px;
+}
+
+.dataset-diff-cell del + ins {
+  margin-left: 3px;
+}
+
+.dataset-diff-cell del {
+  background: var(--diff-removed-bg);
+  color: var(--diff-removed-text);
+}
+
+.dataset-diff-cell ins {
+  background: var(--diff-added-bg);
+  color: var(--diff-added-text);
+  text-decoration: none;
+}
+
+.dataset-diff-old,
+.dataset-diff-new {
+  display: block;
+}
+
+.dataset-diff-gap td {
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--bg-bar);
+}
+
+.dataset-diff-gap-btn,
+.dataset-diff-more-btn {
+  padding: 2px 8px;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.dataset-diff-gap-btn:hover,
+.dataset-diff-more-btn:hover {
+  color: var(--text);
+  text-decoration: underline;
 }
 
 /* Prompt details modal: 与 Run 详情展开态同宽 */
@@ -8931,3 +9095,11 @@ button.btn.btn-danger:hover:not(:disabled) {
   font-size: 13px;
 }
 .working-dataset-missing .working-dataset-export-local { display: none; }
+.working-dataset-history-message {
+  margin: 8px 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.working-dataset-history-restore {
+  margin-left: 8px;
+}

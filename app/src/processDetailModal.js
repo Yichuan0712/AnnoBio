@@ -224,7 +224,6 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
   let running = false;
   let currentJobId = null;
   let currentHistoryStatus = '';
-  let completedActionHovered = false;
   let lastResults = restoreResults(node, 'processDfResults', 'processResults');
   let activeBranchName = '';
   let saveBtnEl = null;
@@ -308,7 +307,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
     editorView.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!isRunning)) });
     runBtn.textContent = isRunning ? 'Running, click to stop'
       : currentHistoryStatus === 'completed'
-        ? (completedActionHovered ? 'Run again' : 'Run completed')
+        ? 'Run again'
         : executionIdleLabel({ interrupted: node?.dataset?.processResumable === '1' });
     runBtn.classList.toggle('btn-danger', isRunning);
     if (saveBtnEl) saveBtnEl.disabled = isRunning || !lastResults;
@@ -323,7 +322,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
       currentHistoryStatus = current?.status || '';
       runBtn.disabled = current?.status === 'running';
       runBtn.textContent = current?.status === 'running' ? 'Runningâ€¦'
-        : current?.status === 'completed' ? (completedActionHovered ? 'Run again' : 'Run completed') : executionIdleLabel({
+        : current?.status === 'completed' ? 'Run again' : executionIdleLabel({
         interrupted: current?.status === 'stopped',
         failed: current?.status === 'failed',
       });
@@ -331,19 +330,6 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
       refreshResults();
     } catch (_) { /* startRun reports storage errors when used */ }
   }
-
-  const showCompletedAction = () => {
-    completedActionHovered = true;
-    if (!running && currentHistoryStatus === 'completed') runBtn.textContent = 'Run again';
-  };
-  const hideCompletedAction = () => {
-    completedActionHovered = false;
-    if (!running && currentHistoryStatus === 'completed') runBtn.textContent = 'Run completed';
-  };
-  runBtn.addEventListener('mouseenter', showCompletedAction);
-  runBtn.addEventListener('mouseleave', hideCompletedAction);
-  runBtn.addEventListener('focus', showCompletedAction);
-  runBtn.addEventListener('blur', hideCompletedAction);
 
   async function startRun() {
     const { bindings } = readDatasets();

@@ -7,7 +7,7 @@ test('interrupted and partial executions use Resume across runnable node types',
   assert.equal(executionIdleLabel({ interrupted: true }), 'Resume');
   assert.equal(executionIdleLabel({ hasPartial: true }), 'Resume');
   assert.equal(executionIdleLabel({ failed: true }), 'Retry');
-  assert.equal(executionIdleLabel({ completed: true, interrupted: true }), 'Run completed');
+  assert.equal(executionIdleLabel({ completed: true, interrupted: true }), 'Run again');
 });
 
 test('an incomplete Review resumes only when no live stream owns it', () => {
