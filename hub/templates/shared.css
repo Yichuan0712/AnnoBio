@@ -63,7 +63,7 @@ nav.top {
   border-radius: 0;
 }
 .brand { display: flex; align-items: center; text-decoration: none; color: var(--text); flex-shrink: 0; }
-/* logo_name.png has ~20% transparent padding on every side; the negative margins cancel it so
+/* The wordmark has ~20% transparent padding on every side; the negative margins cancel it so
    the visible wordmark is ~32px tall without making the nav taller or shifting it right. The
    letters sit ~3px below the image's center at this size, so top/bottom are uneven to line them
    up with the nav links. */

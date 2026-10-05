@@ -41,7 +41,7 @@ test('desktop .yc canvas save, Save As and merge retain history', async () => {
     const copy = path.join(root, 'copy.yc');
     const source = path.join(root, 'source.yc');
     const assets = newAssets();
-    const state = { historyVersion: 1, nodes: [{ nodeId: 'run-1', type: 'run' },
+    const state = { historyVersion: 1, zoomLevel: 1.35, nodes: [{ nodeId: 'run-1', type: 'run' },
       { nodeId: 'dataset-1', type: 'dataset' }],
     connections: [{ fromId: 'run-1', toId: 'dataset-1', type: 'run-to-dataset-snapshot' }] };
     await assets.save(original, state);
@@ -56,12 +56,14 @@ test('desktop .yc canvas save, Save As and merge retain history', async () => {
     assert.deepEqual(await assets.loadAgentSession(copy), agentSession);
     assert.deepEqual((await assets.load(copy)).connections, state.connections);
     assert.equal((await assets.load(copy)).historyVersion, 1);
+    assert.equal((await assets.load(copy)).zoomLevel, 1.35);
 
     const sourceAssets = newAssets();
     await sourceAssets.save(source, { nodes: [{ nodeId: 'run-2', type: 'run' }], connections: [] });
     const second = record('run-2', 'signature-2');
     await sourceAssets.saveHistoryRecord(source, second);
     await assets.merge(copy, source);
+    assert.equal((await assets.load(copy)).zoomLevel, 1.35);
     assert.deepEqual(new Set((await assets.loadHistoryIndex(copy)).records.map((entry) => entry.id)), new Set([first.id, second.id]));
   } finally {
     await fs.rm(root, { recursive: true, force: true });

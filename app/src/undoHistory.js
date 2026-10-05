@@ -28,6 +28,7 @@ const VOLATILE_FIELDS_BY_TYPE = {
 };
 
 function stripVolatileFields(state) {
+  const { zoomLevel, ...withoutViewport } = state;
   const nodes = Array.isArray(state?.nodes)
     ? state.nodes.map((n) => {
         const drop = VOLATILE_FIELDS_BY_TYPE[n?.type];
@@ -37,7 +38,7 @@ function stripVolatileFields(state) {
         return copy;
       })
     : [];
-  return { ...state, nodes, connections: state?.connections || [] };
+  return { ...withoutViewport, nodes, connections: state?.connections || [] };
 }
 
 function fingerprint(snapshot) {
@@ -118,10 +119,13 @@ export function createUndoHistory({ loadCanvasState, getCanvasState, onChange } 
   }
 
   function restore(snapshot) {
-    if (getCanvasState) recordOutputs(getCanvasState());
+    const liveState = getCanvasState?.();
+    if (liveState) recordOutputs(liveState);
     restoring = true;
     try {
-      loadCanvasState(withLatestOutputs(snapshot));
+      const state = withLatestOutputs(snapshot);
+      if (Number.isFinite(liveState?.zoomLevel)) state.zoomLevel = liveState.zoomLevel;
+      loadCanvasState(state);
       // loadCanvasState() doesn't fire workflow:canvas-changed itself (unlike a live user edit) —
       // dispatch it so the existing autosave listener persists the restored state, same as any
       // other change. The `restoring` guard above keeps this from bouncing back into push().

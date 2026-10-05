@@ -415,7 +415,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   let saveTimeout = null;
-  canvasAPI.setOnCanvasChange(() => {
+  function scheduleAutosave() {
     if (!currentProjectPath) return;
     if (isElectron && !window.electronAPI?.saveProject) return;
     clearTimeout(saveTimeout);
@@ -462,6 +462,11 @@ window.addEventListener('DOMContentLoaded', () => {
         }
       } catch (_) { /* best-effort — a failed sweep just tries again on the next save */ }
     }, 400);
+  }
+  canvasAPI.setOnCanvasChange(scheduleAutosave);
+  document.addEventListener('workflow:viewport-changed', () => {
+    canvasChangeVersion += 1;
+    scheduleAutosave();
   });
   } catch (err) {
     showInitError(err);
