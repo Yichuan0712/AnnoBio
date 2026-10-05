@@ -1178,6 +1178,12 @@ export function buildWorkflowCanvas(root, options = {}) {
   const MAX_ZOOM = 2;
   const ZOOM_STEP = 0.05;
 
+  function normalizeZoomLevel(value) {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value))
+      : 1;
+  }
+
   function applyZoom() {
     scaleWrapper.style.transformOrigin = '0 0';
     scaleWrapper.style.transform = `scale(${zoomLevel})`;
@@ -3047,17 +3053,20 @@ export function buildWorkflowCanvas(root, options = {}) {
   function updateZoomLabel() {
     zoomLabelEl.textContent = Math.round(zoomLevel * 100) + '%';
   }
-  zoomToolbar.querySelector('[data-zoom="out"]').addEventListener('click', () => {
-    zoomLevel = Math.max(MIN_ZOOM, zoomLevel - ZOOM_STEP);
+  function changeZoomLevel(value) {
+    const next = normalizeZoomLevel(value);
+    if (next === zoomLevel) return;
+    zoomLevel = next;
     applyZoom();
     updateContentSize();
     updateZoomLabel();
+    document.dispatchEvent(new CustomEvent('workflow:viewport-changed'));
+  }
+  zoomToolbar.querySelector('[data-zoom="out"]').addEventListener('click', () => {
+    changeZoomLevel(zoomLevel - ZOOM_STEP);
   });
   zoomToolbar.querySelector('[data-zoom="in"]').addEventListener('click', () => {
-    zoomLevel = Math.min(MAX_ZOOM, zoomLevel + ZOOM_STEP);
-    applyZoom();
-    updateContentSize();
-    updateZoomLabel();
+    changeZoomLevel(zoomLevel + ZOOM_STEP);
   });
 
   canvasControlsStack.appendChild(zoomToolbar);
@@ -3067,10 +3076,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-    zoomLevel = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomLevel + delta));
-    applyZoom();
-    updateContentSize();
-    updateZoomLabel();
+    changeZoomLevel(zoomLevel + delta);
   }, { passive: false });
 
   requestAnimationFrame(() => {
@@ -4655,7 +4661,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
       };
     });
-    return { version: 2, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), nodes, connections: connections.slice() };
+    return { version: 2, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), zoomLevel, nodes, connections: connections.slice() };
   }
 
   function loadCanvasState(state) {
@@ -4663,6 +4669,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!Array.isArray(list)) return;
     historyRevision += 1;
     canvasHistoryVersion = state.historyVersion === 1 ? 1 : null;
+    zoomLevel = normalizeZoomLevel(state.zoomLevel);
+    applyZoom();
+    updateZoomLabel();
     nodesLayer.innerHTML = '';
     nodeCount = 0;
     const createdNodes = [];

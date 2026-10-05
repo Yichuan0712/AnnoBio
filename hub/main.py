@@ -81,9 +81,8 @@ def _require_admin(request: Request) -> dict | None:
     return user if user.get("is_admin") else None
 
 
-# Wordmark (images/logo_name.png) replaces the old stroke icon plus "AnnoBio" text. The icon-only
-# file (images/logo.png) is the favicon. Both are served from the repo images/ directory.
-BRAND_LOGO = '<img class="brand-logo" src="/images/logo_name.png" alt="AnnoBio">'
+# Navigation uses a small version of the wordmark shared with the workspace; logo.png is the favicon.
+BRAND_LOGO = '<img class="brand-logo" src="/images/logo_name_nav.webp" width="452" height="156" fetchpriority="high" alt="AnnoBio">'
 
 NAV_LINKS = [
     ("/", "Home"),

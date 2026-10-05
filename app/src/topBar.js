@@ -362,7 +362,10 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunN
   brandLink.setAttribute('aria-label', 'AnnoBio');
   const brandWordmark = document.createElement('img');
   brandWordmark.className = 'top-bar-logo-full';
-  brandWordmark.src = '/images/logo_name.png';
+  brandWordmark.src = '/images/logo_name_nav.webp';
+  brandWordmark.width = 452;
+  brandWordmark.height = 156;
+  brandWordmark.fetchPriority = 'high';
   brandWordmark.alt = '';
   brandLink.appendChild(brandWordmark);
   // The wordmark's "Anno" is near-black, so dark mode shows the icon beside theme-colored text.
@@ -370,7 +373,9 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunN
   brandDark.className = 'top-bar-logo-dark';
   const brandIcon = document.createElement('img');
   brandIcon.className = 'top-bar-logo';
-  brandIcon.src = '/images/logo.png';
+  brandIcon.src = '/images/logo_nav.webp';
+  brandIcon.width = 67;
+  brandIcon.height = 66;
   brandIcon.alt = '';
   brandDark.appendChild(brandIcon);
   brandDark.appendChild(document.createTextNode('AnnoBio'));

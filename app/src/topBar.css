@@ -95,7 +95,7 @@
   cursor: pointer;
 }
 
-/* logo_name.png has transparent padding on every side; the negative margins cancel it (and its
+/* The wordmark has transparent padding on every side; the negative margins cancel it (and its
    letters sit ~3px below the image's center), matching the Hub nav exactly. */
 .top-bar-wordmark .top-bar-logo-full {
   display: block;

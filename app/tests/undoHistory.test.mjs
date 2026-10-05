@@ -79,3 +79,14 @@ test('job output alone still does not create an undo step', () => {
   change(() => Object.assign(node('r'), { runResults: results }));
   assert.equal(history.canUndo(), false);
 });
+
+test('zoom changes do not add undo steps or change zoom when undoing an edit', () => {
+  const { canvas, history, change, node } = setup([{ ...prompt }]);
+  change((state) => { state.zoomLevel = 1.5; });
+  assert.equal(history.canUndo(), false);
+  change((state) => { state.nodes[0].name = 'v2'; });
+  change((state) => { state.zoomLevel = 0.75; });
+  history.undo();
+  assert.equal(node('p').name, 'v1');
+  assert.equal(canvas.state.zoomLevel, 0.75);
+});
