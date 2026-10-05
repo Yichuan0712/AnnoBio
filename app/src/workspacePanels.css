@@ -20,7 +20,7 @@
    (and the canvas controls) off-screen. */
 .workspace-panel-host { min-width: 0; min-height: 0; overflow: hidden; contain: size; background: var(--bg-bar); }
 .workspace-panel-host[hidden], .workspace-panel-resizer[hidden] { display: none; }
-.workspace-panel-host--pipeline { grid-area: 2 / 1; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.workspace-panel-host--pipeline { grid-area: 2 / 1; display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--bg); }
 .workspace-panel-host--agent { grid-area: 1 / 2 / 3 / 3; border-left: 1px solid var(--border); }
 /* Full-screen covers the canvas and the other dock; the tracks keep their sizes, so restoring does
    not reflow the canvas. */
@@ -49,6 +49,7 @@
   border: 0;
   box-shadow: none;
 }
+.workspace-panel-host--pipeline .workspace-dock > .modal-panel { background: var(--bg); }
 
 .workspace-dock .modal-header {
   min-height: 40px;
@@ -72,6 +73,7 @@
   min-height: 40px;
   box-sizing: border-box;
   padding: 0 12px;
+  background: var(--bg-bar);
   border-bottom: 1px solid var(--border);
 }
 .workspace-panel-tabs { display: flex; align-self: stretch; gap: 6px; margin-left: -8px; }
