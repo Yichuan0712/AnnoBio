@@ -9,6 +9,7 @@ for an admin to create/list accounts by hand, but it's no longer the only way in
 """
 import asyncio
 import datetime
+import mimetypes
 import os
 from html import escape
 from pathlib import Path
@@ -25,6 +26,7 @@ import db
 import mailer
 from proxy import proxy_request
 
+mimetypes.add_type("image/webp", ".webp")
 db.init_db()
 
 REAP_INTERVAL_SEC = int(os.environ.get("PROMPT_STUDIO_REAP_INTERVAL_SEC", "300"))
@@ -1086,9 +1088,12 @@ async def no_cache_for_pages(request: Request, call_next):
     StaticFiles) or a Hub-rendered page keeps showing stale nav/copy after a rebuild, with no
     obvious way for someone testing the site to tell that's what happened. Vite's hashed build
     assets (/app/assets/*.js, *.css) are the one exception — their filename already changes
-    whenever their content does, so those are left cacheable."""
+    whenever their content does, so those are left cacheable. The small shared navigation logos
+    can be cached for a day to avoid downloading them again between Hub and Workspace pages."""
     response = await call_next(request)
-    if not request.url.path.startswith("/app/assets/"):
+    if request.url.path in ("/images/logo_name_nav.webp", "/images/logo_nav.webp") and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    elif not request.url.path.startswith("/app/assets/"):
         response.headers["Cache-Control"] = "no-store, must-revalidate"
     return response
 
