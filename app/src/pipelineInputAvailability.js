@@ -15,6 +15,11 @@ export function pipelineInputDatasetIds(route, canvasState = null) {
   const producedByAnyProcess = new Set((canvasState.connections || [])
     .filter((edge) => edge?.type === 'process-to-dataset')
     .map((edge) => edge.toId));
+  // A frozen copy of a selected step's output is that step's output: running the route recomputes it.
+  const snapshotOfSelected = new Set((canvasState.connections || [])
+    .filter((edge) => ['run-to-dataset-snapshot', 'process-to-dataset-snapshot'].includes(edge?.type)
+      && (selectedRuns.has(edge.fromId) || selectedProcesses.has(edge.fromId)))
+    .map((edge) => edge.toId));
   const firstJobIndex = (route || []).findIndex((item) => item?.type === 'process' || item?.type === 'prompt');
   const explicitBoundaryIds = new Set((route || [])
     .slice(0, firstJobIndex < 0 ? (route || []).length : firstJobIndex)
@@ -27,7 +32,7 @@ export function pipelineInputDatasetIds(route, canvasState = null) {
     .filter((id) => {
       const sourceRun = nodes.get(id)?.sourceRunNodeId;
       if (producedByProcess.has(id) || (sourceRun && selectedRuns.has(sourceRun))) return false;
-      if ((producedByAnyProcess.has(id) || sourceRun) && !explicitBoundaryIds.has(id)) return false;
+      if ((producedByAnyProcess.has(id) || sourceRun || snapshotOfSelected.has(id)) && !explicitBoundaryIds.has(id)) return false;
       return true;
     });
 }
