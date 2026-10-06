@@ -8,6 +8,17 @@ import { datasetColorAt } from './workflowNodeColors.js';
 
 const STEP_LABELS = { run: 'Run prompt', process: 'Process data' };
 
+/** One step and several steps get different sentences, and so does one Dataset versus several. */
+export function pipelineRunIntro(steps) {
+  const datasetCount = steps.reduce((count, step) => count + step.inputs.length, 0);
+  if (steps.length === 1) {
+    return datasetCount === 1
+      ? 'This step reads a Dataset from outside the Pipeline. Open it to change that Dataset.'
+      : 'This step reads Datasets from outside the Pipeline. Open it to change them.';
+  }
+  return 'These steps read Datasets from outside the Pipeline. Open a step to change what it reads.';
+}
+
 function escapeHtml(value) {
   const div = document.createElement('div');
   div.textContent = String(value ?? '');
@@ -20,7 +31,7 @@ function stepHtml(step, problems) {
       <span>${escapeHtml(input.name)}</span>
     </span>`).join('');
   const kind = step.kind === 'run' ? 'prompt' : 'process';
-  return `<button type="button" class="pipeline-run-dialog__step${problems.length ? ' has-problem' : ''}" data-node-id="${escapeHtml(step.nodeId)}" title="Open to set its input">
+  return `<button type="button" class="pipeline-run-dialog__step${problems.length ? ' has-problem' : ''}" data-node-id="${escapeHtml(step.nodeId)}" title="Open to change this input">
     <span class="pipeline-run-dialog__step-head">
       <span class="pipeline-step-kind pipeline-step-kind--${kind}">${STEP_LABELS[step.kind]}</span>
       <span class="pipeline-run-dialog__step-name">${escapeHtml(step.name)}</span>
@@ -46,11 +57,11 @@ export function openPipelineRunDialog({ getSteps, openNode, check }) {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--alert pipeline-run-dialog">
       <div class="modal-header">
-        <h2 id="pipeline-run-dialog-title" class="modal-title">Run Pipeline</h2>
+        <h2 id="pipeline-run-dialog-title" class="modal-title">Prepare inputs for this run</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body pipeline-run-dialog__body">
-        <p class="pipeline-run-dialog__intro">Open a step to change the Dataset it reads.</p>
+        <p class="pipeline-run-dialog__intro"></p>
         <div class="pipeline-run-dialog__steps"></div>
         <ul class="pipeline-run-dialog__errors" role="alert" hidden></ul>
       </div>
@@ -74,7 +85,9 @@ export function openPipelineRunDialog({ getSteps, openNode, check }) {
     const others = errors.filter((error) => !stepOf(error));
     errorsEl.innerHTML = others.map((error) => `<li>${escapeHtml(error.nodeName ? `${error.nodeName}: ${error.message}` : error.message)}</li>`).join('');
     errorsEl.hidden = !others.length;
-    overlay.querySelector('.pipeline-run-dialog__intro').hidden = !steps.length;
+    const intro = overlay.querySelector('.pipeline-run-dialog__intro');
+    intro.textContent = pipelineRunIntro(steps);
+    intro.hidden = !steps.length;
   }
   // A node window opened from a card changes the canvas; its problems are checked again on Run.
   function onCanvasChanged() {

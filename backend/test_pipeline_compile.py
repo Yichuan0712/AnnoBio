@@ -228,10 +228,12 @@ class PipelineCompileTests(unittest.TestCase):
         problem = next(item for item in result["diagnostics"] if item["code"] == "MISSING_COLUMN")
         self.assertEqual(problem["node_name"], "Run · p")
 
-    def test_disconnected_and_wrong_prompt_pair(self):
+    def test_unused_dataset_does_not_block_and_wrong_prompt_pair(self):
         state = simple()
         state["nodes"].append(dataset("unused"))
-        self.error(state, "DISCONNECTED_SELECTION")
+        spec = self.valid(state)
+        self.assertNotIn("dataset:unused", [item["id"] for item in spec["artifacts"]])
+        self.assertNotIn("dataset:unused", spec["inputs"])
         state = simple()
         state["nodes"].append(prompt("p2"))
         state["connections"].append(edge("p2", "r", "prompt-to-run"))

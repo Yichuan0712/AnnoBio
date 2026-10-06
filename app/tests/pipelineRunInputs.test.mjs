@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { pipelineRunIntro } from '../src/pipelineRunDialog.js';
 import { pipelineInputSteps } from '../src/pipelineRunInputs.js';
 
 const table = (headers, rows) => ({ headers, rows });
@@ -38,4 +39,20 @@ test('Run Pipeline lists each step that reads a Dataset from outside the route, 
     { nodeId: 'r2', kind: 'run', name: 'Explain', inputs: [{ nodeId: 'sample', name: 'Sampled examples', colorIndex: 2 }] },
     { nodeId: 'join', kind: 'process', name: 'Join', inputs: [{ nodeId: 'lookup', name: 'Lookup', colorIndex: undefined }] },
   ]);
+});
+
+test('the prepare-inputs sentence matches one step or several, and one Dataset or several', () => {
+  const step = (inputs) => ({ inputs });
+  assert.equal(
+    pipelineRunIntro([step([{}])]),
+    'This step reads a Dataset from outside the Pipeline. Open it to change that Dataset.',
+  );
+  assert.equal(
+    pipelineRunIntro([step([{}, {}])]),
+    'This step reads Datasets from outside the Pipeline. Open it to change them.',
+  );
+  assert.equal(
+    pipelineRunIntro([step([{}]), step([{}])]),
+    'These steps read Datasets from outside the Pipeline. Open a step to change what it reads.',
+  );
 });
