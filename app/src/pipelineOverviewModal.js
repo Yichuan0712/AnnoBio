@@ -6,8 +6,9 @@
  *
  * What runs is chosen here; what a run did lives in the "Pipeline Runs" tab (`runsHost`): the run
  * list, each run's steps, and Stop / Resume / Add results to canvas / Delete. Its output tables are
- * read on the canvas, where a finished run adds them. A pipeline card shows its latest run only
- * through its Stop / Resume buttons.
+ * read on the canvas, where a finished run adds them. Beside each pipeline's runs it lists the
+ * results made on its nodes one at a time (node History), which open the node itself. A pipeline
+ * card shows its latest run only through its Stop / Resume buttons.
  */
 import { showAlert, showConfirm } from './alertModal.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
@@ -183,7 +184,6 @@ function renderRunDetail(run, { onCanvas, publicationError, busy }) {
     </div>
     ${run.error ? `<div class="pipeline-run-error">${escapeHtml(run.error)}</div>` : ''}
     ${publicationError ? `<div class="pipeline-run-error">${escapeHtml(publicationError)}</div>` : ''}
-    ${onCanvas ? '<div class="pipeline-run-note">Results are on the canvas and in node History.</div>' : ''}
     <ol class="pipeline-job-list">${planJobs}</ol>`;
 }
 
@@ -247,8 +247,9 @@ function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
 /**
  * @param {Function|Array} pipelineSource a getter for live data, or a static array for callers
  * @param {{getCanvasState?: Function, getPipelineProjectId?: Function, getAssetProjectId?: Function,
- * highlightCanvasNodes?: Function, runsHost?: HTMLElement}} options live canvas hooks; `runsHost`
- * holds the Pipeline Runs view
+ * highlightCanvasNodes?: Function, runsHost?: HTMLElement, getSingleNodeRuns?: Function,
+ * openCanvasNode?: Function}} options live canvas hooks; `runsHost` holds the Pipeline Runs view,
+ * `getSingleNodeRuns` lists results made on single nodes and `openCanvasNode` opens a node's window
  */
 export function showPipelineOverviewModal(pipelineSource, options = {}) {
   const host = options.host || null;
@@ -272,6 +273,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     ? options.getAssetProjectId : () => null;
   let publishPipelineRun = typeof options.publishPipelineRun === 'function'
     ? options.publishPipelineRun : null;
+  let getSingleNodeRuns = typeof options.getSingleNodeRuns === 'function' ? options.getSingleNodeRuns : async () => [];
+  let openCanvasNode = typeof options.openCanvasNode === 'function' ? options.openCanvasNode : () => {};
+  let singleNodeRuns = [];
+  let singleNodeRunsSignature = '';
   let pipelines = [];
   let pipelineSignature = '';
   let canvasWarnings = '';
@@ -535,9 +540,9 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
    * runs whose steps are in no current pipeline come last. */
   function groupRuns() {
     const groups = pipelines.map((pipeline, index) => ({
-      title: `Pipeline ${index + 1}`, nodeIds: pipelineStepNodeIds(pipeline), runs: [],
+      title: `Pipeline ${index + 1}`, nodeIds: pipelineStepNodeIds(pipeline), runs: [], singleRuns: [],
     }));
-    const other = { title: 'Other runs', note: 'Their steps are no longer in a pipeline on the canvas.', runs: [] };
+    const other = { title: 'Other runs', note: 'Their steps are no longer in a pipeline on the canvas.', runs: [], singleRuns: [] };
     for (const item of runHistory) {
       const ids = runStepNodeIds(item);
       let best = other;
@@ -548,19 +553,46 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       }
       best.runs.push(item);
     }
-    return other.runs.length ? [...groups, other] : groups;
+    // A node removed from the canvas cannot be opened, so its single-node results are not listed.
+    const onCanvas = new Set(canvasNodes.map((node) => node.nodeId));
+    for (const item of singleNodeRuns) {
+      if (!onCanvas.has(item.nodeId)) continue;
+      (groups.find((group) => group.nodeIds.has(item.nodeId)) || other).singleRuns.push(item);
+    }
+    return other.runs.length || other.singleRuns.length ? [...groups, other] : groups;
+  }
+  /** One result made on a node itself; opening it shows the node's own window and History. */
+  function renderSingleNodeRow(item) {
+    const node = canvasNodes.find((candidate) => candidate.nodeId === item.nodeId);
+    const label = item.kind === 'run'
+      ? `${item.promptName || 'Prompt'} · ${node?.runName || 'Run'}`
+      : node?.name || 'Process';
+    // Same words and colours as the Pipeline runs above it: a completed result succeeded.
+    const status = item.status === 'completed' ? 'succeeded' : item.status || 'pending';
+    const tone = status === 'stopped' ? 'cancelled' : status;
+    return `<tr class="pipeline-runs-row pipeline-runs-node-row" tabindex="0" title="Open on canvas" data-node-id="${escapeHtml(item.nodeId)}">
+      <td><span class="pipeline-run-status pipeline-run-status--${escapeHtml(tone)}">${escapeHtml(status)}</span></td>
+      <td>${escapeHtml(item.createdAt ? new Date(item.createdAt).toLocaleString() : '')}</td>
+      <td>${escapeHtml(label)}</td>
+    </tr>`;
+  }
+  async function refreshSingleNodeRuns() {
+    const items = await getSingleNodeRuns();
+    const signature = JSON.stringify(items);
+    if (destroyed || signature === singleNodeRunsSignature) return;
+    singleNodeRuns = [...items].sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')));
+    singleNodeRunsSignature = signature;
+    renderBody();
   }
   function renderRunRows(item) {
     const selected = item.run_id === selectedRunId;
     const status = item.status || 'pending';
     const steps = item.job_count ? `${item.succeeded_job_count ?? 0}/${item.job_count}` : '';
-    const onCanvas = wasPublished(item.run_id, item.produced_artifact_ids, canvasNodes);
     const row = `<tr class="pipeline-runs-row${selected ? ' is-selected' : ''}" tabindex="0" aria-expanded="${selected}" data-run-id="${escapeHtml(item.run_id)}">
       <td><span class="pipeline-run-status pipeline-run-status--${escapeHtml(status)}">${escapeHtml(status)}</span></td>
       <td>${escapeHtml(item.created_at ? new Date(item.created_at).toLocaleString() : '')}</td>
       <td class="pipeline-runs-muted"><code>${escapeHtml(item.run_id.slice(0, 8))}</code></td>
       <td class="pipeline-runs-num">${escapeHtml(steps)}</td>
-      <td class="pipeline-runs-muted">${onCanvas ? 'On canvas' : ''}</td>
     </tr>`;
     if (!selected) return row;
     const detail = selectedRun?.run_id === item.run_id && selectedRun.jobs
@@ -570,7 +602,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
         busy: busyRunIds.has(selectedRun.run_id) || publishingRunIds.has(selectedRun.run_id),
       })
       : '<span class="pipeline-runs-muted">Loading…</span>';
-    return `${row}<tr class="pipeline-runs-detail-row"><td colspan="5">${detail}</td></tr>`;
+    return `${row}<tr class="pipeline-runs-detail-row"><td colspan="4">${detail}</td></tr>`;
   }
   function renderRunsView() {
     if (!attachedProjectId) return '<p class="pipeline-overview-empty">Open a project to see its Pipeline runs.</p>';
@@ -580,11 +612,17 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       <section class="pipeline-overview-card">
         <div class="pipeline-overview-card-header"><h3 class="pipeline-overview-card-title">${escapeHtml(group.title)}</h3></div>
         ${group.note ? `<p class="pipeline-runs-note">${escapeHtml(group.note)}</p>` : ''}
-        ${group.runs.length ? `<table class="pipeline-runs-table">
-          <colgroup><col style="width: 16%"><col style="width: 30%"><col style="width: 18%"><col style="width: 10%"><col></colgroup>
-          <thead><tr><th>Status</th><th>Started</th><th>Run</th><th class="pipeline-runs-num">Steps</th><th>Results</th></tr></thead>
+        ${group.runs.length ? `<h4 class="pipeline-runs-subtitle">Pipeline runs</h4><table class="pipeline-runs-table">
+          <colgroup><col style="width: 16%"><col style="width: 30%"><col><col style="width: 12%"></colgroup>
+          <thead><tr><th>Status</th><th>Started</th><th>Run</th><th class="pipeline-runs-num">Steps</th></tr></thead>
           <tbody>${group.runs.map(renderRunRows).join('')}</tbody>
-        </table>` : '<p class="pipeline-overview-empty">No runs yet.</p>'}
+        </table>` : ''}
+        ${group.singleRuns.length ? `<h4 class="pipeline-runs-subtitle">Single-node runs</h4><table class="pipeline-runs-table">
+          <colgroup><col style="width: 16%"><col style="width: 30%"><col></colgroup>
+          <thead><tr><th>Status</th><th>Started</th><th>Node</th></tr></thead>
+          <tbody>${group.singleRuns.map(renderSingleNodeRow).join('')}</tbody>
+        </table>` : ''}
+        ${group.runs.length || group.singleRuns.length ? '' : '<p class="pipeline-overview-empty">No runs yet.</p>'}
       </section>`).join('')}</div>`;
   }
   function renderBody() {
@@ -623,6 +661,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       renderBody();
     }
     syncProjectContext().catch(() => {});
+    refreshSingleNodeRuns().catch(() => {});
   }
   function scheduleRefresh() {
     if (refreshFrame) cancelAnimationFrame(refreshFrame);
@@ -641,6 +680,8 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (typeof nextOptions.getPipelineProjectId === 'function') getPipelineProjectId = nextOptions.getPipelineProjectId;
     if (typeof nextOptions.getAssetProjectId === 'function') getAssetProjectId = nextOptions.getAssetProjectId;
     if (typeof nextOptions.publishPipelineRun === 'function') publishPipelineRun = nextOptions.publishPipelineRun;
+    if (typeof nextOptions.getSingleNodeRuns === 'function') getSingleNodeRuns = nextOptions.getSingleNodeRuns;
+    if (typeof nextOptions.openCanvasNode === 'function') openCanvasNode = nextOptions.openCanvasNode;
     syncProjectContext().catch(() => {});
   };
   refresh();
@@ -721,6 +762,12 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     }
   }
 
+  /** A single-node result: show its node on the canvas and open the node's window with its History. */
+  function openNodeRow(row) {
+    focusCanvasNodes([row.dataset.nodeId]);
+    openCanvasNode(row.dataset.nodeId);
+  }
+
   /** A run row opens its steps below it; opening it again closes them. */
   async function toggleRun(runId) {
     try {
@@ -734,6 +781,11 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (!event.target.closest('select, button, input, label')) {
       const step = event.target.closest('[data-canvas-node-ids]');
       if (step) focusCanvasNodes(JSON.parse(decodeURIComponent(step.dataset.canvasNodeIds)));
+    }
+    const nodeRow = event.target.closest?.('.pipeline-runs-node-row');
+    if (nodeRow) {
+      openNodeRow(nodeRow);
+      return;
     }
     const runRow = event.target.closest?.('.pipeline-runs-row');
     if (runRow) {
@@ -877,6 +929,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     const runRow = event.target.closest?.('.pipeline-runs-row');
     if (!runRow || event.target !== runRow || !['Enter', ' '].includes(event.key)) return;
     event.preventDefault();
+    if (runRow.classList.contains('pipeline-runs-node-row')) {
+      openNodeRow(runRow);
+      return;
+    }
     toggleRun(runRow.dataset.runId).then(() => {
       runsEl.querySelector(`.pipeline-runs-row[data-run-id="${runRow.dataset.runId}"]`)?.focus();
     });
