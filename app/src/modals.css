@@ -8998,112 +8998,176 @@ button.btn.btn-danger:hover:not(:disabled) {
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */
 
 
-/* Dataset reference window: use the same surfaces and swatches as Run. */
-.process-dataset-bindings-toggle {
-  align-self: flex-start;
-  flex-shrink: 0;
-  padding: 3px 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
+/* Process window: Input datasets, the Run window's Dataset picker with a check per Dataset. */
+.process-input-picker__trigger {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.process-input-picker__chips {
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.process-input-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--hover);
   font-size: 12px;
   line-height: 18px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
 }
 
-.process-dataset-bindings-toggle:hover { color: var(--text); }
-.process-dataset-bindings-toggle:focus-visible {
-  outline: 1px solid var(--text-muted);
-  outline-offset: 3px;
-}
-
-.process-datasets-dialog {
-  width: 680px;
+.process-input-chip__name {
   min-width: 0;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100dvh - 48px);
-  margin: auto;
-  padding: 0;
-  color: var(--text);
-  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.process-datasets-dialog:not([open]) { display: none; }
-.process-datasets-dialog::backdrop { background: rgba(0, 0, 0, 0.25); }
-.process-datasets-dialog .modal-header { cursor: default; flex-shrink: 0; }
-.process-datasets-dialog__body {
+
+.process-input-chip__alias {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.process-input-picker__dropdown {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  min-height: 0;
-  padding: 18px 20px 12px;
+  max-height: 320px;
+  overflow: hidden;
 }
-.process-datasets-dialog__intro {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.6;
+
+.process-input-picker__dropdown[hidden],
+.process-input-picker__search[hidden] {
+  display: none;
 }
-.process-datasets-dialog__search {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
+
+.process-input-picker__search {
+  flex-shrink: 0;
+  margin: 6px;
+  padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--control-radius);
+  border-radius: var(--control-radius, 6px);
   background: var(--bg);
   color: var(--text);
   font: inherit;
   font-size: 13px;
 }
-.process-datasets-dialog__search:focus-visible { outline: 1px solid var(--text-muted); }
-.process-datasets-dialog__scroll {
-  overflow: auto;
-  min-height: 0;
-  max-height: 45vh;
-  border: 1px solid var(--border);
-  background: var(--bg);
+
+.process-input-picker__search:focus-visible {
+  outline: 1px solid var(--text-muted);
 }
-.process-datasets-dialog__table {
-  width: 100%;
-  table-layout: fixed;
-  border-spacing: 0;
+
+.process-input-picker__list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.process-input-option.is-active {
+  background: var(--hover);
+}
+
+.process-input-option__check {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--text-muted);
+  border-radius: 3px;
+}
+
+.process-input-option[aria-selected="true"] .process-input-option__check {
+  border-color: var(--text);
+  background: var(--text);
+}
+
+.process-input-option[aria-selected="true"] .process-input-option__check::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Read because the code names it: it stays checked until the code stops naming it. */
+.process-input-option.is-fixed {
+  cursor: default;
+}
+
+.process-input-option.is-fixed .process-input-option__check {
+  opacity: 0.5;
+}
+
+.process-input-option__make-df,
+.process-input-option__alias {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.process-input-option__make-df {
+  border-color: var(--border);
+  background: var(--bg);
+  font-family: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.process-input-option:hover .process-input-option__make-df,
+.process-input-option.is-active .process-input-option__make-df,
+.process-input-option__make-df:focus-visible {
+  opacity: 1;
+}
+
+.process-input-option__alias {
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: copy;
+}
+
+.process-input-option[aria-selected="true"] .process-input-option__alias {
+  color: var(--text);
+}
+
+.process-input-option__make-df:hover,
+.process-input-option__alias:hover,
+.process-input-option__alias:focus-visible {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.process-input-picker__empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--text-muted);
   font-size: 13px;
 }
-.process-datasets-dialog__table th {
-  position: sticky;
-  top: 0;
-  padding: 9px 10px;
-  background: var(--bg-bar);
-  color: var(--text-muted);
-  text-align: left;
-  font-size: 12px;
-  font-weight: 500;
-  border-bottom: 1px solid var(--border);
-}
-.process-datasets-dialog__table th:last-child { width: 108px; }
-.process-datasets-dialog__table td {
-  padding: 12px 10px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-  overflow-wrap: anywhere;
-}
-.process-datasets-dialog__table tr:last-child td { border-bottom: 0; }
-.process-datasets-dialog__table tbody tr:hover { background: var(--hover); }
-.process-datasets-dialog__dataset { display: flex; align-items: center; gap: 9px; }
-.process-datasets-dialog__primary {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-.process-datasets-dialog__primary[hidden] { display: none; }
-.process-datasets-dialog__table code { font-size: 12px; user-select: all; }
-.process-datasets-dialog__copy { white-space: nowrap; font-size: 12px; padding: 5px 8px; }
-.process-datasets-dialog__action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.process-datasets-dialog__status { min-height: 18px; margin: 0; color: var(--text-muted); font-size: 12px; }
-.process-datasets-dialog__empty { margin: 0; padding: 20px; color: var(--text-muted); font-size: 13px; }
 
 /* Settings → Agent defaults: whether the chosen model can drive the Agent's tools. */
 /* One short paragraph at the top of each LLM settings tab saying what the tab controls. */

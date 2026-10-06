@@ -1286,29 +1286,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     return { datasets, primaryDatasetId };
   }
 
-  function syncProcessDependencies(processNode, code) {
-    const { datasets, primaryDatasetId } = getProcessDatasets(processNode);
-    let savedAliases = {};
-    try { savedAliases = JSON.parse(processNode.dataset.processDatasetAliases || '{}'); } catch (_) {}
-    const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId).map((binding) => ({
-      ...binding, alias: savedAliases[binding.nodeId] || binding.alias,
-    }));
-    const referenced = referencedDatasetAliases(code, bindings, savedAliases);
-    const required = new Set([primaryDatasetId, ...referenced]);
-    processNode.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(
-      bindings.filter((binding) => required.has(binding.nodeId)).map((binding) => [binding.nodeId, binding.alias]),
-    ));
-    const processId = processNode?.dataset?.nodeId || '';
-    connections = connections.filter((connection) => !(
-      connection.toId === processId && connection.type === EDGE_TYPE_DATASET_TO_PROCESS
-    ));
-    bindings.filter((binding) => required.has(binding.nodeId)).forEach((binding) => {
-      connections.push({ fromId: binding.nodeId, toId: processId, type: EDGE_TYPE_DATASET_TO_PROCESS });
-    });
-    updateEdges();
-    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-  }
-
   /** Every image/PDF asset id any dataset node's asset cells currently reference — the "keep" set
    * for pruneUnusedImageAssets (see renderer.js): anything in the project's asset registry that
    * ISN'T in this set is safe to delete. */

@@ -1,4 +1,4 @@
-import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
+import { processDatasetInputs } from './processDatasetBindings.js';
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 import { normalizeDatasetContent } from './datasetContent.js';
@@ -684,46 +684,56 @@ export function createWorkflowNodeFactories(deps = {}) {
             };
           })
           .filter((dataset) => dataset.content);
-        const incoming = getConnectionsList().find((connection) => (
-          connection.toId === processNodeId && connection.type === 'dataset-to-process'
-        ));
+        const inputIds = getConnectionsList()
+          .filter((connection) => connection.toId === processNodeId && connection.type === 'dataset-to-process')
+          .map((connection) => connection.fromId);
         const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === node.dataset.processPrimaryDatasetId)
           ? node.dataset.processPrimaryDatasetId
-          : (incoming?.fromId || '');
+          : (inputIds[0] || '');
         if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
-        return { datasets, primaryDatasetId };
+        return { datasets, primaryDatasetId, inputIds };
       }
-      function syncProcessDependencies(code) {
-        const { datasets, primaryDatasetId } = getProcessDatasets();
-        let savedAliases = {};
-        try { savedAliases = JSON.parse(node.dataset.processDatasetAliases || '{}'); } catch (_) {}
-        const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId).map((binding) => ({
-          ...binding, alias: savedAliases[binding.nodeId] || binding.alias,
-        }));
-        const required = new Set([primaryDatasetId, ...referencedDatasetAliases(code, bindings, savedAliases)]);
-        node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(
-          bindings.filter((binding) => required.has(binding.nodeId)).map((binding) => [binding.nodeId, binding.alias]),
-        ));
+      function savedAliases() {
+        try { return JSON.parse(node.dataset.processDatasetAliases || '{}'); } catch (_) { return {}; }
+      }
+      /** Every canvas Dataset with its alias, marking the ones this Process reads with `code`. */
+      function getProcessInputs(code) {
+        const { datasets, primaryDatasetId, inputIds } = getProcessDatasets();
+        const content = new Map(datasets.map((dataset) => [dataset.nodeId, dataset]));
+        const bindings = processDatasetInputs({ datasets, primaryDatasetId, inputIds, savedAliases: savedAliases(), code })
+          .map((binding) => ({ ...binding, color: content.get(binding.nodeId).color, content: content.get(binding.nodeId).content }));
+        return { bindings, primaryDatasetId };
+      }
+      /** Connects exactly the Datasets the Process reads and saves the alias each has in the code. */
+      function setProcessInputs({ primaryDatasetId, inputIds }, code) {
+        if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
+        else delete node.dataset.processPrimaryDatasetId;
+        const { datasets } = getProcessDatasets();
+        const inputs = processDatasetInputs({
+          datasets, primaryDatasetId, inputIds, savedAliases: savedAliases(), code,
+        }).filter((binding) => binding.input);
+        node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(inputs.map((binding) => [binding.nodeId, binding.alias])));
         const allConnections = getConnectionsList();
         for (let index = allConnections.length - 1; index >= 0; index -= 1) {
           if (allConnections[index].toId === processNodeId && allConnections[index].type === 'dataset-to-process') allConnections.splice(index, 1);
         }
-        bindings.filter((binding) => required.has(binding.nodeId)).forEach((binding) => {
+        inputs.forEach((binding) => {
           allConnections.push({ fromId: binding.nodeId, toId: processNodeId, type: 'dataset-to-process' });
         });
         updateEdges();
         emitCanvasChanged();
       }
+      // A Dataset the code names joins the inputs; one the code stops naming stays until it is unchosen.
+      function syncProcessDependencies(code) {
+        const { primaryDatasetId, inputIds } = getProcessDatasets();
+        setProcessInputs({ primaryDatasetId, inputIds }, code);
+      }
       openProcessDetailModal({
         node,
         runProcessNode,
-        getProcessDatasets,
+        getProcessInputs,
+        setProcessInputs,
         syncProcessDependencies,
-        setPrimaryDataset: (datasetNodeId, code) => {
-          if (datasetNodeId) node.dataset.processPrimaryDatasetId = datasetNodeId;
-          else delete node.dataset.processPrimaryDatasetId;
-          syncProcessDependencies(code);
-        },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
         history: getHistoryForNode?.(processNodeId),
       });

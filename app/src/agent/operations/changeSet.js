@@ -9,7 +9,7 @@
  */
 import { normalizeDatasetContent } from '../../datasetContent.js';
 import { datasetHistorySource } from '../../datasetHistorySource.js';
-import { buildProcessDatasetBindings, referencedDatasetAliasNames, referencedDatasetAliases } from '../../processDatasetBindings.js';
+import { processDatasetInputs, referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
 import { buildRunResultsTable } from '../../runResultsExport.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
@@ -343,27 +343,31 @@ export function planChangeSet(state, operations, ctx) {
     };
   }
 
-  function processAliases(primaryId) {
-    const datasets = next.nodes.filter((n) => n.type === 'dataset').map((n) => ({ nodeId: n.nodeId, name: n.name || 'Dataset' }));
-    return buildProcessDatasetBindings(datasets, primaryId);
-  }
-
+  /** Like the Process window: the Datasets it already reads stay inputs, keeping their aliases, and
+   * each one the code names joins them. Returns the inputs other than df. */
   function wireProcess(processNode, code, primary) {
     if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) fail('Process code must define process(df).');
-    const bindings = processAliases(primary.nodeId);
-    const referenced = referencedDatasetAliases(code, bindings);
+    const datasets = next.nodes.filter((n) => n.type === 'dataset').map((n) => ({ nodeId: n.nodeId, name: n.name || 'Dataset' }));
+    const inputIds = [primary.nodeId, ...next.connections
+      .filter((c) => c.type === 'dataset-to-process' && c.toId === processNode.nodeId).map((c) => c.fromId)];
+    let savedAliases = processNode.datasetAliases || {};
+    if (typeof savedAliases === 'string') {
+      try { savedAliases = JSON.parse(savedAliases); } catch (_) { savedAliases = {}; }
+    }
+    const bindings = processDatasetInputs({ datasets, primaryDatasetId: primary.nodeId, inputIds, savedAliases, code });
     const unknown = [...referencedDatasetAliasNames(code)]
       .filter((alias) => !bindings.some((b) => b.alias === alias));
     if (unknown.length) {
       fail(`The code uses ${unknown.join(', ')}, which match no dataset. Available: ${bindings.filter((b) => !b.primary).map((b) => b.alias).join(', ') || '(none)'}.`);
     }
+    const inputs = bindings.filter((b) => b.input);
     processNode.dfCode = code;
     processNode.activeMode = 'df';
     processNode.primaryDatasetId = primary.nodeId;
-    processNode.datasetAliases = JSON.stringify(Object.fromEntries(bindings.map((b) => [b.nodeId, b.alias])));
+    processNode.datasetAliases = JSON.stringify(Object.fromEntries(inputs.map((b) => [b.nodeId, b.alias])));
     disconnectWhere((c) => c.type === 'dataset-to-process' && c.toId === processNode.nodeId);
-    for (const id of new Set([primary.nodeId, ...referenced])) connect(id, processNode.nodeId, 'dataset-to-process');
-    return bindings.filter((b) => b.nodeId !== primary.nodeId && referenced.has(b.nodeId));
+    for (const b of inputs) connect(b.nodeId, processNode.nodeId, 'dataset-to-process');
+    return inputs.filter((b) => !b.primary);
   }
 
   function sampleRows(rows, op) {

@@ -13,9 +13,7 @@ import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { createRowResultsPanel } from './rowResultsTable.js';
 import { resolveDataframeProcessCode } from './processCode.js';
-import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
-import { buildProcessDatasetBindings } from './processDatasetBindings.js';
-import { openProcessDatasetsDialog } from './processDatasetsDialog.js';
+import { bindProcessInputPicker, processInputPickerHtml } from './processInputPicker.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
 import { executionIdleLabel } from './executionResumeState.js';
 
@@ -50,8 +48,8 @@ function buildDefaultCode(headers) {
 def process(df):
     # df is this Process's input Dataset as a pandas DataFrame.
 ${columnLines}
-    # Other canvas Datasets are available as df_<name> (see "View available
-    # datasets"); using one in this code links it to this Process on the canvas.
+    # Every other Input dataset is df_<name>, as shown under Input datasets;
+    # naming another canvas Dataset this way also makes it an input.
     #
     # Return one of:
     #   1. One DataFrame -> one output Dataset
@@ -103,10 +101,14 @@ function restoreResults(node, ...keys) {
 }
 
 /**
- * @param {{ node: HTMLElement, getProcessDatasets: () => { datasets: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}}>, primaryDatasetId: string }, syncProcessDependencies?: (code: string) => void, setPrimaryDataset?: (datasetNodeId: string, code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
- *   setPrimaryDataset: the Process picks its df Dataset in this window, like a Run picks its Prompt
+ * @param {{ node: HTMLElement,
+ *   getProcessInputs: (code: string) => { bindings: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}, alias: string, primary: boolean, input: boolean, referenced: boolean}>, primaryDatasetId: string },
+ *   setProcessInputs?: (inputs: { primaryDatasetId: string, inputIds: string[] }, code: string) => void,
+ *   syncProcessDependencies?: (code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
+ *   getProcessInputs: every canvas Dataset (processDatasetInputs), marking the ones the Process reads
+ *   setProcessInputs: the Process picks its Datasets in this window, like a Run picks its Prompt
  */
-export function openProcessDetailModal({ node, runProcessNode, getProcessDatasets, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName, history = null }) {
+export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, setProcessInputs, syncProcessDependencies, getUniqueDatasetExportName, history = null }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -117,20 +119,16 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
   }
 
   const title = (node?.dataset?.processName || 'Process').trim() || 'Process';
-  const readDatasets = () => {
-    const raw = getProcessDatasets?.() || {};
-    const datasets = Array.isArray(raw.datasets) ? raw.datasets.filter((dataset) => dataset?.nodeId && dataset?.content) : [];
-    const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === raw.primaryDatasetId)
-      ? raw.primaryDatasetId
-      : '';
-    return { bindings: buildProcessDatasetBindings(datasets, primaryDatasetId), primaryDatasetId };
+  const readDatasets = (code) => {
+    const raw = getProcessInputs?.(code) || {};
+    const bindings = Array.isArray(raw.bindings) ? raw.bindings.filter((binding) => binding?.nodeId && binding?.content) : [];
+    return { bindings, primaryDatasetId: bindings.some((binding) => binding.primary) ? raw.primaryDatasetId : '' };
   };
-  const initialDatasets = readDatasets();
-  const primaryInput = initialDatasets.bindings.find((binding) => binding.primary);
+  const primaryHeaders = (code) => readDatasets(code).bindings.find((binding) => binding.primary)?.content?.headers || [];
   const initialCode = resolveDataframeProcessCode({
     dfCode: node?.dataset?.processDfCode,
     code: node?.dataset?.processCode,
-  }) || buildDefaultCode(primaryInput?.content?.headers || []);
+  }) || buildDefaultCode(primaryHeaders(''));
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -147,14 +145,13 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
           <p class="run-detail-main-label">Code setup</p>
           <div class="dataset-meta-wrap process-input-wrap">
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="process-primary-picker">Input dataset</label>
-              ${nodePickerHtml({ id: 'process-primary-picker', placeholder: 'Select input dataset', ariaLabel: 'Select input dataset' })}
+              <span class="dataset-meta-label">Input datasets</span>
+              ${processInputPickerHtml({ id: 'process-input-picker', placeholder: 'Select input datasets', ariaLabel: 'Input datasets' })}
             </div>
           </div>
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
-          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the Input dataset. Referencing another alias automatically creates its canvas dependency. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
-          <button type="button" class="process-dataset-bindings-toggle" aria-haspopup="dialog">View available datasets</button>
+          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the first Input dataset; each other one is the <code>df_&lt;name&gt;</code> shown beside it. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -177,18 +174,16 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
   const editorHost = overlay.querySelector('.process-editor-host');
   const resultsContent = overlay.querySelector('.process-results-content');
   const branchPicker = overlay.querySelector('.process-branch-picker');
-  const datasetBindingsToggle = overlay.querySelector('.process-dataset-bindings-toggle');
   const runBtn = overlay.querySelector('.process-run-btn');
-  let closeDatasetsDialog = null;
-  datasetBindingsToggle.addEventListener('click', () => {
-    closeDatasetsDialog?.();
-    closeDatasetsDialog = openProcessDatasetsDialog(readDatasets().bindings);
-  });
   const editable = new Compartment();
   const editorView = new EditorView({
     doc: initialCode,
     extensions: [basicSetup, python(), editable.of(EditorView.editable.of(true)), EditorView.updateListener.of((update) => {
-      if (!update.docChanged || !history) return;
+      if (!update.docChanged) return;
+      // A df_<name> the code now names shows up as an input.
+      clearTimeout(inputsRefreshTimer);
+      inputsRefreshTimer = setTimeout(() => inputPicker.render(), 150);
+      if (!history) return;
       node.dataset.processDfCode = update.state.doc.toString();
       scheduleHistoryRefresh();
     })],
@@ -197,24 +192,23 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
   const getCode = () => editorView.state.doc.toString();
   if (history) node.dataset.processDfCode = getCode();
   let historyRefreshTimer = null;
+  let inputsRefreshTimer = null;
   function scheduleHistoryRefresh() {
     clearTimeout(historyRefreshTimer);
     historyRefreshTimer = setTimeout(() => { void refreshHistoryState(); }, 150);
   }
 
-  // Same picker as a Run window's Input dataset.
-  const primaryPicker = bindNodePicker(overlay.querySelector('#process-primary-picker'), {
-    placeholder: 'Select input dataset',
-    getOptions: () => readDatasets().bindings.map(({ nodeId, name, color }) => ({ nodeId, name, color })),
-    getValue: () => readDatasets().primaryDatasetId,
-    onSelect: (datasetNodeId) => {
-      const previousDefault = buildDefaultCode(readDatasets().bindings.find((binding) => binding.primary)?.content?.headers || []);
+  // The Run window's Input dataset picker, with a check per Dataset.
+  const inputPicker = bindProcessInputPicker(overlay.querySelector('#process-input-picker'), {
+    placeholder: 'Select input datasets',
+    getInputs: () => readDatasets(getCode()),
+    onChange: (inputs) => {
       const code = getCode();
-      setPrimaryDataset?.(datasetNodeId, code);
-      // Untouched sample code follows the new Dataset's columns; edited code is left alone.
+      const previousDefault = buildDefaultCode(primaryHeaders(code));
+      setProcessInputs?.(inputs, code);
+      // Untouched sample code follows the new df's columns; edited code is left alone.
       if (code === previousDefault) {
-        const nextDefault = buildDefaultCode(readDatasets().bindings.find((binding) => binding.primary)?.content?.headers || []);
-        editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: nextDefault } });
+        editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: buildDefaultCode(primaryHeaders(code)) } });
       }
       if (history) scheduleHistoryRefresh();
     },
@@ -315,7 +309,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
 
   function setRunningUi(isRunning) {
     running = isRunning;
-    primaryPicker.setLocked(isRunning);
+    inputPicker.setLocked(isRunning);
     editorView.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!isRunning)) });
     runBtn.textContent = isRunning ? 'Running, click to stop'
       : currentHistoryStatus === 'completed'
@@ -345,11 +339,11 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
   }
 
   async function startRun() {
-    const { bindings } = readDatasets();
+    const { bindings } = readDatasets(getCode());
     const primary = bindings.find((binding) => binding.primary);
     if (!primary) {
       showPlaceholder('Choose an Input dataset before running.');
-      primaryPicker.focus();
+      inputPicker.focus();
       return;
     }
     node.dataset.processDfCode = getCode();
@@ -398,7 +392,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
 
   function close({ discard = false } = {}) {
     clearTimeout(historyRefreshTimer);
-    closeDatasetsDialog?.();
+    clearTimeout(inputsRefreshTimer);
     if (!discard && node?.dataset) {
       node.dataset.processDfCode = getCode();
       node.dataset.processActiveMode = 'df';
