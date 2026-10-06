@@ -674,8 +674,12 @@ export function planChangeSet(state, operations, ctx) {
 
       if (node.type === 'dataset' && ('columns' in set || 'rows' in set)) {
         // Like the dataset window: an older output that still follows History becomes a saved copy when edited.
-        if (next.historyVersion === 1 && datasetHistorySource(node, next.connections)) {
+        const historySource = next.historyVersion === 1 ? datasetHistorySource(node, next.connections) : null;
+        if (historySource) {
+          const recordId = clean(byId().get(historySource.sourceId)?.historyRecordId);
+          if (!recordId) fail(`Dataset "${nodeTitle(node)}" follows History, but its ${historySource.kind} has no History record. Run it again before editing this table.`);
           node.savedCopy = true;
+          node.snapshotSourceRecordId = recordId;
           lines.push('Becomes a saved copy: History no longer replaces its table.');
         }
         if (datasetColumns(node).some((c) => c.type !== 'text')) fail('Datasets with image or pdf columns cannot be rewritten here; edit them in the dataset view.');
@@ -769,6 +773,8 @@ export function planChangeSet(state, operations, ctx) {
       if (run.runPending) fail(`Run "${nodeTitle(run)}" is still running; save its results once it finishes.`);
       const results = runResultsOf(run);
       if (!results.length) fail(`Run "${nodeTitle(run)}" has no results yet.`);
+      const recordId = clean(run.historyRecordId);
+      if (!recordId) fail(`Run "${nodeTitle(run)}" has no History record. Run it again before saving its results.`);
       const prompt = byId().get(next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === run.nodeId)?.fromId);
       const saved = runInputContentOf(run);
       const runContent = Array.isArray(saved.rows) && saved.rows.length
@@ -787,6 +793,7 @@ export function planChangeSet(state, operations, ctx) {
         sourceRunNodeId: run.nodeId,
         // A saved output is a copy, as in the UI: History never rewrites it (datasetHistorySource.js).
         savedCopy: true,
+        snapshotSourceRecordId: recordId,
         datasetContent: normalizeDatasetContent(table),
         nodeOrigin: 'agent',
       });
@@ -804,6 +811,8 @@ export function planChangeSet(state, operations, ctx) {
       const branch = clean(op.branch) || (branches.length === 1 ? branches[0] : '');
       if (!branch) fail(`Process "${nodeTitle(processNode)}" has several branches (${branches.join(', ')}); name the branch to save.`);
       if (!outputs[branch]) fail(`Process "${nodeTitle(processNode)}" has no branch "${branch}". Branches: ${branches.join(', ')}.`);
+      const recordId = clean(processNode.historyRecordId);
+      if (!recordId) fail(`Process "${nodeTitle(processNode)}" has no History record. Run it again before saving its output.`);
       const title = nodeTitle(processNode);
       const name = uniqueName(clean(op.name) || (branches.length === 1 ? `${title} results` : `${title} — ${branch}`), takenNames('dataset'));
       const content = normalizeDatasetContent(outputs[branch]);
@@ -815,6 +824,7 @@ export function planChangeSet(state, operations, ctx) {
         note: String(op.note ?? `Branch "${branch}" exported from Process "${title}".`),
         processOutputName: branch,
         savedCopy: true,
+        snapshotSourceRecordId: recordId,
         datasetContent: content,
         nodeOrigin: 'agent',
       });

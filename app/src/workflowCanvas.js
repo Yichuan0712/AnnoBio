@@ -4210,6 +4210,19 @@ export function buildWorkflowCanvas(root, options = {}) {
       datasetName = datasetName || findUniqueWorkingDatasetName('Dataset', false);
     }
 
+    const savedCopy = !!(runNodeId || processNode);
+    const sourceNode = runNodeId ? getNodeById(runNodeId) : processNode;
+    const recordId = String(snapshotSourceRecordId || sourceNode?.dataset?.historyRecordId || '').trim();
+    if (savedCopy && !recordId) {
+      showAppAlert(
+        processNode
+          ? 'This Process has no History record yet. Run it again before saving its output.'
+          : 'This Run has no History record yet. Run it again before saving its results.',
+        'Cannot create dataset',
+      );
+      return;
+    }
+
     const newNode = addDatasetNode({
       name: datasetName,
       notes: datasetNotes,
@@ -4219,8 +4232,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       sourceRunNodeId: runNodeId || '',
       processOutputName,
       // A saved Run / Process output is a copy: editable until used, never rewritten by History.
-      savedCopy: !!(runNodeId || processNode),
-      snapshotSourceRecordId: snapshotSourceRecordId || (runNodeId ? getNodeById(runNodeId) : processNode)?.dataset?.historyRecordId || '',
+      savedCopy,
+      snapshotSourceRecordId: recordId,
       colorIndex: detailColorIndex,
       headers: datasetHeaders,
       rows: datasetRows,
@@ -5607,22 +5620,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (pipeline) {
       showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
         host: workspacePanels.pipelineHost,
-        runsHost: workspacePanels.tabHost('runs'),
-        // Run and Process History. Records from a Pipeline run carry pipelineRunId; the rest are single-node results.
-        getHistoryEntries: async () => {
-          if (!historySession?.projectId || canvasHistoryVersion !== 1) return [];
-          const facts = await historySession.recordFacts();
-          return historySession.index.records.flatMap((entry, index) => {
-            if (!['run', 'process'].includes(entry.kind)) return [];
-            const summary = entry.summary || {};
-            return [{
-              recordId: entry.id, nodeId: entry.nodeId, kind: entry.kind, status: entry.status,
-              createdAt: entry.createdAt, pipelineRunId: facts[index]?.pipelineRunId || '',
-              promptName: summary.promptName || '', datasetNames: summary.datasetNames || [],
-              rowCount: summary.rowCount, errorCount: summary.errorCount || 0, model: summary.model || '',
-            }];
-          });
-        },
         // Opens the node's own window, where its History is, the same way a new node opens.
         openCanvasNode: (nodeId) => getNodeById(nodeId)?.click(),
         getCanvasState,
@@ -5794,7 +5791,6 @@ export function buildWorkflowCanvas(root, options = {}) {
   }, {
     bottomTabs: [
       { id: 'pipeline', label: 'Current Pipeline' },
-      { id: 'runs', label: 'Runtime' },
       { id: 'optimization', label: 'Prompt Version' },
       ...(isElectron ? [{ id: 'log', label: 'Log' }, { id: 'errors', label: 'Errors' }] : []),
     ],

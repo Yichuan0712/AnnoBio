@@ -817,6 +817,10 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (results.length === 0) {
       throw new Error('Run node has no saved results.');
     }
+    const recordId = String(runNode.dataset.historyRecordId || '').trim();
+    if (!recordId) {
+      throw new Error('This Run has no History record yet. Run it again before saving its results.');
+    }
 
     const connections = getConnectionsList();
     const promptEdge = connections.find((c) => c.toId === normalizedRunNodeId && c.type === 'prompt-to-run');
@@ -872,7 +876,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       agentCreated: true,
       sourceRunNodeId: normalizedRunNodeId,
       savedCopy: true,
-      snapshotSourceRecordId: runNode.dataset.historyRecordId || '',
+      snapshotSourceRecordId: recordId,
     });
     return {
       ...created,
