@@ -88,18 +88,22 @@ test('Agent identifies legacy saved Dataset snapshots as snapshots', async () =>
   assert.match(summary, /saved snapshot of run "Run"/);
 });
 
-test('editing Process code keeps the inputs chosen in its window and their aliases', () => {
+test('Process code declares its inputs as parameters, each by the alias it already has', () => {
   const state = canvas();
   state.nodes.push(
     { type: 'dataset', nodeId: 'copy', name: 'GT (Copy 1)', datasetContent: { headers: ['answer'], rows: [['A']] } },
-    { type: 'process', nodeId: 'merge', name: 'Merge', primaryDatasetId: 'raw', dfCode: 'def process(df):\n    return df\n',
+    { type: 'process', nodeId: 'merge', name: 'Merge', primaryDatasetId: 'raw', dfCode: 'def process(df, df_gt):\n    return df\n',
       datasetAliases: JSON.stringify({ raw: 'df', copy: 'df_gt', gt: 'df_gt_copy' }) },
   );
   state.connections.push({ fromId: 'raw', toId: 'merge', type: 'dataset-to-process' },
     { fromId: 'copy', toId: 'merge', type: 'dataset-to-process' });
-  const code = 'def process(df):\n    return df.join(df_gt)\n';
-  const result = planChangeSet(state, [{ op: 'update', node: 'merge', set: { code } }], { extractInputFields });
-  const merge = result.state.nodes.find((node) => node.nodeId === 'merge');
-  assert.deepEqual(JSON.parse(merge.datasetAliases), { raw: 'df', copy: 'df_gt' });
-  assert.deepEqual(result.state.connections.filter((edge) => edge.toId === 'merge').map((edge) => edge.fromId).sort(), ['copy', 'raw']);
+  const inputsAfter = (code) => {
+    const result = planChangeSet(state, [{ op: 'update', node: 'merge', set: { code } }], { extractInputFields });
+    const merge = result.state.nodes.find((node) => node.nodeId === 'merge');
+    return [JSON.parse(merge.datasetAliases), result.state.connections.filter((edge) => edge.toId === 'merge').map((edge) => edge.fromId).sort()];
+  };
+  assert.deepEqual(inputsAfter('def process(df, df_gt):\n    return df.join(df_gt)\n'), [{ raw: 'df', copy: 'df_gt' }, ['copy', 'raw']]);
+  // Code written before parameters names the alias in its body only.
+  assert.deepEqual(inputsAfter('def process(df):\n    return df.join(df_gt)\n'), [{ raw: 'df', copy: 'df_gt' }, ['copy', 'raw']]);
+  assert.deepEqual(inputsAfter('def process(df):\n    return df\n'), [{ raw: 'df' }, ['raw']]);
 });

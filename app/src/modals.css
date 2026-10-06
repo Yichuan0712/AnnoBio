@@ -9106,7 +9106,7 @@ button.btn.btn-danger:hover:not(:disabled) {
   transform: rotate(45deg);
 }
 
-/* Read because the code names it: it stays checked until the code stops naming it. */
+/* Used by the code beyond its parameter: it stays checked until the code stops using it. */
 .process-input-option.is-fixed {
   cursor: default;
 }

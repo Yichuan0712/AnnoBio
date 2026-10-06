@@ -684,34 +684,31 @@ export function createWorkflowNodeFactories(deps = {}) {
             };
           })
           .filter((dataset) => dataset.content);
-        const inputIds = getConnectionsList()
-          .filter((connection) => connection.toId === processNodeId && connection.type === 'dataset-to-process')
-          .map((connection) => connection.fromId);
+        const incoming = getConnectionsList().find((connection) => (
+          connection.toId === processNodeId && connection.type === 'dataset-to-process'
+        ));
         const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === node.dataset.processPrimaryDatasetId)
           ? node.dataset.processPrimaryDatasetId
-          : (inputIds[0] || '');
+          : (incoming?.fromId || '');
         if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
-        return { datasets, primaryDatasetId, inputIds };
+        return { datasets, primaryDatasetId };
       }
       function savedAliases() {
         try { return JSON.parse(node.dataset.processDatasetAliases || '{}'); } catch (_) { return {}; }
       }
       /** Every canvas Dataset with its alias, marking the ones this Process reads with `code`. */
       function getProcessInputs(code) {
-        const { datasets, primaryDatasetId, inputIds } = getProcessDatasets();
+        const { datasets, primaryDatasetId } = getProcessDatasets();
         const content = new Map(datasets.map((dataset) => [dataset.nodeId, dataset]));
-        const bindings = processDatasetInputs({ datasets, primaryDatasetId, inputIds, savedAliases: savedAliases(), code })
+        const bindings = processDatasetInputs({ datasets, primaryDatasetId, savedAliases: savedAliases(), code })
           .map((binding) => ({ ...binding, color: content.get(binding.nodeId).color, content: content.get(binding.nodeId).content }));
-        return { bindings, primaryDatasetId };
+        return { bindings, primaryDatasetId, savedAliases: savedAliases() };
       }
-      /** Connects exactly the Datasets the Process reads and saves the alias each has in the code. */
-      function setProcessInputs({ primaryDatasetId, inputIds }, code) {
-        if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
-        else delete node.dataset.processPrimaryDatasetId;
-        const { datasets } = getProcessDatasets();
-        const inputs = processDatasetInputs({
-          datasets, primaryDatasetId, inputIds, savedAliases: savedAliases(), code,
-        }).filter((binding) => binding.input);
+      /** Connects exactly the Datasets the code declares or uses and saves the alias each has there. */
+      function syncProcessDependencies(code) {
+        const { datasets, primaryDatasetId } = getProcessDatasets();
+        const inputs = processDatasetInputs({ datasets, primaryDatasetId, savedAliases: savedAliases(), code })
+          .filter((binding) => binding.input);
         node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(inputs.map((binding) => [binding.nodeId, binding.alias])));
         const allConnections = getConnectionsList();
         for (let index = allConnections.length - 1; index >= 0; index -= 1) {
@@ -723,17 +720,16 @@ export function createWorkflowNodeFactories(deps = {}) {
         updateEdges();
         emitCanvasChanged();
       }
-      // A Dataset the code names joins the inputs; one the code stops naming stays until it is unchosen.
-      function syncProcessDependencies(code) {
-        const { primaryDatasetId, inputIds } = getProcessDatasets();
-        setProcessInputs({ primaryDatasetId, inputIds }, code);
-      }
       openProcessDetailModal({
         node,
         runProcessNode,
         getProcessInputs,
-        setProcessInputs,
         syncProcessDependencies,
+        setPrimaryDataset: (datasetNodeId, code) => {
+          if (datasetNodeId) node.dataset.processPrimaryDatasetId = datasetNodeId;
+          else delete node.dataset.processPrimaryDatasetId;
+          syncProcessDependencies(code);
+        },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
         history: getHistoryForNode?.(processNodeId),
       });

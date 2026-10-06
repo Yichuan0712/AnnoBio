@@ -258,11 +258,16 @@ class _Compiler:
         functions = [n for n in (tree.body if tree else []) if isinstance(n, ast.FunctionDef) and n.name == "process"]
         function = functions[0] if len(functions) == 1 else None
         args = (function.args.posonlyargs + function.args.args) if function else []
-        valid_signature = bool(function and args and args[0].arg == "df"
-                               and len(args) - len(function.args.defaults) <= 1
-                               and not any(d is None for d in function.args.kw_defaults))
+        # df comes first; every other Input dataset is passed by keyword as the parameter named after its alias.
+        valid_signature = bool(function and args and args[0].arg == "df" and len(function.args.posonlyargs) <= 1)
         if not valid_signature:
-            self.report("INVALID_PROCESS_FUNCTION", nid, "dfCode", "Define one top-level process(df) callable with no other required arguments; reopen legacy row code to migrate it.")
+            self.report("INVALID_PROCESS_FUNCTION", nid, "dfCode", "Define one top-level process(df, ...) callable: df first, then one parameter per other Input dataset; reopen legacy row code to migrate it.")
+        else:
+            required = args[1:len(args) - len(function.args.defaults)] + [
+                arg for arg, default in zip(function.args.kwonlyargs, function.args.kw_defaults) if default is None]
+            for arg in required:
+                if arg.arg not in inputs:
+                    self.report("UNBOUND_DATASET_ALIAS", nid, "datasetAliases", f"Process parameter {arg.arg} matches no Input dataset.")
         # Detect referenced aliases without executing arbitrary code. Canvas normally builds
         # these edges already; a stale selection must not silently omit one.
         if tree:

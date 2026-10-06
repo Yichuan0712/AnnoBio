@@ -1,8 +1,9 @@
 /**
  * The Process window's Input datasets field: the Run window's Dataset picker (nodePicker.js) with a
  * check per canvas Dataset, so a Process can read several. The first one chosen is `df`; any other
- * input can be made `df` instead. Each Dataset shows the Python name it has in the code, which a
- * click copies. A Dataset the code names stays chosen until the code stops naming it.
+ * input can be made `df` instead. Each Dataset shows the Python name it has in the code, its
+ * process() parameter, which a click copies. A Dataset the code uses beyond that parameter stays
+ * chosen until the code stops using it.
  */
 import { selectPlaceholderLabel } from './displayTextNormalize.js';
 
@@ -33,7 +34,7 @@ export function processInputPickerHtml({ id, placeholder, ariaLabel }) {
 /**
  * @param {HTMLElement} pickerEl the element made from processInputPickerHtml
  * @param {{ placeholder: string,
- *   getInputs: () => { bindings: Array<{nodeId: string, name: string, color?: string, alias: string, primary: boolean, input: boolean, referenced: boolean}>, primaryDatasetId: string },
+ *   getInputs: () => { bindings: Array<{nodeId: string, name: string, color?: string, alias: string, primary: boolean, input: boolean, used: boolean, parameter: number}>, primaryDatasetId: string },
  *   onChange: (inputs: { primaryDatasetId: string, inputIds: string[] }) => void,
  *   isLocked?: () => boolean, closeWithin?: HTMLElement }} options
  *   closeWithin: clicks elsewhere in it close the list (the window's overlay)
@@ -58,8 +59,9 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
   }
 
   function renderChips(bindings) {
-    const inputs = bindings.filter((binding) => binding.input)
-      .sort((a, b) => Number(b.primary) - Number(a.primary));
+    // df, then the parameters after it in the code's order, then inputs the code only uses.
+    const place = (binding) => (binding.primary ? -1 : binding.parameter < 0 ? Infinity : binding.parameter);
+    const inputs = bindings.filter((binding) => binding.input).sort((a, b) => place(a) - place(b));
     if (!inputs.length) {
       const text = document.createElement('span');
       text.className = 'run-detail-ws-trigger-text';
@@ -94,8 +96,8 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
       option.dataset.nodeId = binding.nodeId;
       option.setAttribute('role', 'option');
       option.setAttribute('aria-selected', String(binding.input));
-      option.classList.toggle('is-fixed', binding.referenced);
-      if (binding.referenced) option.title = `The code uses ${binding.alias}. Remove it from the code to stop reading this dataset.`;
+      option.classList.toggle('is-fixed', binding.used);
+      if (binding.used) option.title = `The code uses ${binding.alias}. Remove that use to stop reading this dataset.`;
       const check = document.createElement('span');
       check.className = 'process-input-option__check';
       check.setAttribute('aria-hidden', 'true');
@@ -103,7 +105,8 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
       text.className = 'run-detail-ws-option-text';
       text.textContent = binding.name;
       option.append(check, swatch('run-detail-ws-option-color', binding.color), text);
-      if (binding.input && !binding.primary) {
+      // An input the code uses as df_<name> keeps that name, so it is not offered as df.
+      if (binding.input && !binding.primary && !binding.used) {
         const makePrimary = document.createElement('button');
         makePrimary.type = 'button';
         makePrimary.className = 'process-input-option__make-df';
@@ -180,11 +183,11 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
   function toggle(nodeId) {
     const { bindings, primaryDatasetId } = getInputs();
     const binding = bindings.find((item) => item.nodeId === nodeId);
-    if (!binding || binding.referenced) return;
+    if (!binding || binding.used) return;
     const inputIds = bindings.filter((item) => item.input && item.nodeId !== nodeId).map((item) => item.nodeId);
     if (binding.input) {
-      // The next input becomes df, preferring one the code does not already name as df_<name>.
-      const next = bindings.find((item) => inputIds.includes(item.nodeId) && !item.referenced)?.nodeId || inputIds[0] || '';
+      // The next input becomes df, preferring one the code does not already use as df_<name>.
+      const next = bindings.find((item) => inputIds.includes(item.nodeId) && !item.used)?.nodeId || inputIds[0] || '';
       onChange({ primaryDatasetId: binding.primary ? next : primaryDatasetId, inputIds });
     } else {
       onChange({ primaryDatasetId: primaryDatasetId || nodeId, inputIds: [...inputIds, nodeId] });

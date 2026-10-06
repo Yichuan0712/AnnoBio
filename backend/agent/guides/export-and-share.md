@@ -30,7 +30,7 @@ A route exports only if:
 - every Prompt has content and at least one output field, and every Run maps each Prompt input to an
   existing column of the right type (an unmapped input is matched to a column of the same name when
   there is exactly one);
-- every Process defines `process(df)`. A Process at the end of the route without a saved output Dataset
+- every Process defines `process(df, ...)`, with one parameter per other Input dataset. A Process at the end of the route without a saved output Dataset
   must return one DataFrame, not named branches.
 
 If export fails, the panel shows the reason. Fix the named node and export again.
