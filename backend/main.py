@@ -769,6 +769,15 @@ def cancel_pipeline_run(run_id: str, project_id: str):
         raise _pipeline_http_error(exc) from exc
 
 
+@app.delete("/api/pipeline/runs/{run_id}")
+def delete_pipeline_run(run_id: str, project_id: str):
+    try:
+        _get_pipeline_runner().delete(project_id, run_id)
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
+    return {"ok": True}
+
+
 @app.post("/api/pipeline/runs/{run_id}/resume")
 def resume_pipeline_run(run_id: str, body: PipelineResumeRequest):
     try:

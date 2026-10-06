@@ -8860,8 +8860,7 @@ button.btn.btn-danger:hover:not(:disabled) {
   font-size: 12.5px; padding: 2px 4px; border: 1px solid var(--border);
   border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); font-family: inherit;
 }
-.pipeline-run-action,
-.pipeline-save-artifact { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
+.pipeline-run-action { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 .pipeline-run-validation {
   margin-top: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg-bar); color: var(--text-muted); font-size: 12px;
@@ -8871,22 +8870,46 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-run-validation ul { margin: 6px 0 0; padding-left: 18px; }
 .pipeline-run-runtime-notes { margin-top: 6px; }
 .pipeline-run-runtime-notes summary { cursor: pointer; }
-.pipeline-run-history { margin-top: 18px; border-top: 1px solid var(--border-color); padding-top: 12px; }
-.pipeline-run-history h3 { margin: 0 0 8px; }
-.pipeline-run-history > details > summary { cursor: pointer; }
-.pipeline-run-history ol { margin: 8px 0; padding-left: 22px; }
-.pipeline-run-history li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
-.pipeline-history-detail { margin-top: 12px; }
 .pipeline-validation-plan { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; color: var(--text-muted); }
 .pipeline-validation-plan span { overflow-wrap: anywhere; }
 .pipeline-run-diagnostic--error { color: var(--status-danger); }
 .pipeline-run-diagnostic--warning { color: var(--status-warning); }
-.pipeline-run-panel {
-  margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 7px;
-  background: var(--bg-bar); min-width: 0;
+/* Pipeline Runs tab: one section per pipeline, titled and spaced like the Current Pipeline cards, with
+   a run table like the Prompt Optimization tab's. A run's row opens its steps below it. */
+.pipeline-runs { font-size: 12px; color: var(--text); }
+.pipeline-runs .pipeline-overview-card-header { min-height: 27.6px; }
+.pipeline-runs .pipeline-overview-empty { margin: 4px 0; font-size: inherit; }
+.pipeline-runs-note { margin: -4px 0 8px; color: var(--text-muted); }
+.pipeline-runs-table {
+  width: 100%;
+  /* Same column widths in every pipeline's table, so the stacked tables line up. */
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
 }
-.pipeline-run-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-muted); font-size: 12px; }
-.pipeline-run-summary code { margin-left: auto; color: var(--text-muted); }
+.pipeline-runs-table th,
+.pipeline-runs-table td {
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.pipeline-runs-table th { position: sticky; top: 0; font-weight: 600; color: var(--text-muted); background: var(--hover); }
+.pipeline-runs-row { cursor: pointer; }
+.pipeline-runs-row:hover td,
+.pipeline-runs-row.is-selected td { background: var(--hover); }
+.pipeline-runs-row:focus-visible { outline: 2px solid var(--primary-btn-text); outline-offset: -2px; }
+.pipeline-runs-table .pipeline-runs-detail-row td { white-space: normal; overflow: visible; padding: 8px 10px 10px; }
+.pipeline-runs-muted { color: var(--text-muted); }
+.pipeline-runs-num { text-align: right !important; font-variant-numeric: tabular-nums; }
+.pipeline-runs-detail-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.pipeline-runs-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.pipeline-runs-action { flex: 0 0 auto; padding: 4px 10px; font-size: 12px; }
 .pipeline-run-status,
 .pipeline-job-status {
   display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 7px;
@@ -8916,26 +8939,7 @@ button.btn.btn-danger:hover:not(:disabled) {
   align-items: center; gap: 7px; min-width: 0; font-size: 12px;
 }
 .pipeline-job-list li > span:last-of-type { color: var(--text-muted); overflow-wrap: anywhere; }
-.pipeline-artifact-list { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; font-size: 11px; color: var(--text-muted); }
-.pipeline-artifact-chip {
-  border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text);
-  padding: 3px 8px; font: inherit; cursor: pointer;
-}
-.pipeline-artifact-chip:hover { border-color: var(--accent); }
-.pipeline-artifact-chip span { color: var(--text-muted); margin-left: 3px; }
-.pipeline-artifact-chip--partial { border-style: dashed; color: var(--status-warning); }
-.pipeline-artifact-preview { margin-top: 10px; min-width: 0; }
-.pipeline-artifact-preview-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; font-size: 12px; }
-.pipeline-artifact-preview-header > span { color: var(--text-muted); }
-.pipeline-artifact-preview-header .pipeline-save-artifact { margin-left: auto; }
-.pipeline-artifact-table-wrap { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
-.pipeline-artifact-table { border-collapse: collapse; min-width: 100%; font-size: 11px; }
-.pipeline-artifact-table th,
-.pipeline-artifact-table td { padding: 5px 7px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
-.pipeline-artifact-table th { position: sticky; top: 0; background: var(--bg-bar); color: var(--text-muted); }
-.pipeline-artifact-preview-note,
-.pipeline-run-detached-note { margin: 6px 0 0; color: var(--text-muted); font-size: 11px; }
-.pipeline-overview-card--detached { border-top: 1px dashed var(--border); padding-top: 12px; }
+.pipeline-run-note { margin: 6px 0 0; color: var(--text-muted); font-size: 11px; }
 
 @media (max-width: 620px) {
   .pipeline-job-list li { grid-template-columns: auto 1fr; }

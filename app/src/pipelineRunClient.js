@@ -94,6 +94,13 @@ export function cancelPipelineRun(projectId, runId) {
   });
 }
 
+/** Removes a finished run and its stored tables; results already on the canvas keep their own copies. */
+export function deletePipelineRun(projectId, runId) {
+  return jsonRequest(`/api/pipeline/runs/${encodeURIComponent(runId)}?project_id=${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function resumePipelineRun(projectId, runId, assetProjectId = null, needsAssets = false) {
   let projectSessionId = null;
   if (needsAssets) {
