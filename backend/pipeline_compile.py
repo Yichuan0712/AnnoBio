@@ -496,21 +496,16 @@ class _Compiler:
                 self.artifacts[aid]["schema"] = deepcopy(result_schema)
 
     def check_connected(self):
-        adjacency = {**{j: set() for j in self.jobs}, **{a: set() for a in self.artifacts}}
-        for jid, job in self.jobs.items():
-            for aid in set(job["inputs"].values()) | {a for group in job["outputs"].values() for a in group}:
-                if aid in adjacency:
-                    adjacency[jid].add(aid)
-                    adjacency[aid].add(jid)
-        if adjacency:
-            seen, stack = set(), [min(adjacency)]
-            while stack:
-                current = stack.pop()
-                if current not in seen:
-                    seen.add(current)
-                    stack.extend(adjacency[current] - seen)
-            if seen != set(adjacency):
-                self.report("DISCONNECTED_SELECTION", "", "route", "Selected nodes do not form one connected dataflow.")
+        # The route is one pipeline from the panel, not one table. A Dataset that no job reads
+        # or writes is not a second pipeline, and it must not block export or become a required input.
+        touched = set()
+        for job in self.jobs.values():
+            touched.update(job["inputs"].values())
+            for group in job["outputs"].values():
+                touched.update(group)
+        for aid in [aid for aid in self.artifacts if aid not in touched]:
+            self.artifacts.pop(aid, None)
+            self.source_map.pop(aid, None)
 
     def finish(self, order=None):
         diagnostics = sorted(self.diagnostics, key=lambda d: (d["node_id"], d["field"], d["code"], d["message"]))
