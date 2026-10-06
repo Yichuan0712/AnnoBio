@@ -13,13 +13,14 @@
 import { showAlert, showConfirm } from './alertModal.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
 import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from './pipelineRouteSelection.js';
-import { buildPipelineCompileRequest, buildPipelineValidationPreview, pipelineInputHasAssets } from './pipelineRunDefinition.js';
+import { buildPipelineCompileRequest, pipelineInputHasAssets } from './pipelineRunDefinition.js';
 import { datasetProducerConflicts } from './pipelineProducerConflicts.js';
+import { openPipelineRunDialog } from './pipelineRunDialog.js';
+import { pipelineInputSteps } from './pipelineRunInputs.js';
 import {
   cancelPipelineRun,
   compileCurrentPipeline,
   deletePipelineRun,
-  getPipelineModelContext,
   getPipelineResults,
   getPipelineRun,
   getPipelineRunDefinition,
@@ -199,26 +200,6 @@ function renderRunActions(entry, pipelineIndex) {
   return `${resume}<button type="button" class="btn btn-secondary pipeline-run-action" data-action="run" data-pipeline-index="${pipelineIndex}"${busy ? ' disabled' : ''}>${busy ? 'Preparing…' : 'Run Pipeline'}</button>`;
 }
 
-function renderValidation(entry, pipelineId) {
-  const diagnostics = entry?.diagnostics || [];
-  if (!diagnostics.length && !entry?.error && !entry?.validation) return '';
-  const errors = diagnostics.filter((item) => item.severity === 'error');
-  const warnings = diagnostics.filter((item) => item.severity !== 'error');
-  const warningLabel = warnings.every((item) => String(item.code || '').startsWith('RUNTIME_'))
-    ? `runtime check${warnings.length === 1 ? '' : 's'}` : `warning${warnings.length === 1 ? '' : 's'}`;
-  const hasError = !!entry?.error || errors.length > 0;
-  const items = errors.map((item) => `<li class="pipeline-run-diagnostic--error">${escapeHtml(item.node_name ? `${item.node_name}: ${item.message}` : item.message)}</li>`).join('');
-  const warningItems = warnings.map((item) => `<li class="pipeline-run-diagnostic--warning">${escapeHtml(item.node_name ? `${item.node_name}: ${item.message}` : item.message)}</li>`).join('');
-  const validation = entry?.validation;
-  const jobs = validation?.jobs?.map((job) => `${job.name}${job.model ? ` · ${job.model}` : ''}${job.calls == null ? '' : ` · ${job.calls} calls`}`) || [];
-  return `<div class="pipeline-run-validation ${hasError ? 'pipeline-run-validation--error' : 'pipeline-run-validation--ok'}">
-    ${entry?.error ? `<div class="pipeline-run-diagnostic--error">${escapeHtml(entry.error)}</div>` : ''}
-    ${validation ? `<div>Inputs: ${escapeHtml(validation.inputLabel)}</div><div class="pipeline-validation-plan">${jobs.map((job) => `<span>${escapeHtml(job)}</span>`).join('')}</div>` : ''}
-    ${items ? `<ul>${items}</ul>` : ''}
-    ${warningItems ? `<details class="pipeline-run-runtime-notes" data-details-key="warnings:${escapeHtml(pipelineId)}"><summary>${warnings.length} ${escapeHtml(warningLabel)}</summary><ul>${warningItems}</ul></details>` : ''}
-  </div>`;
-}
-
 function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
   const route = buildSelectedRoute(pipeline, selectedByChoiceId);
   const visibleRoute = getVisibleRoute(route);
@@ -239,7 +220,6 @@ function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
         </div>
       </div>
       <ol class="pipeline-overview-steps">${steps}</ol>
-      ${renderValidation(entry, getPipelineViewId(pipeline, index))}
     </div>
   `;
 }
@@ -426,14 +406,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       canvasNodes = getCanvasState?.()?.nodes || canvasNodes;
       try { localStorage.setItem(publishedKey(projectId, run.run_id), '1'); } catch (_) {}
       publicationErrors.delete(run.run_id);
-      const entry = entryForRun(run.run_id);
-      if (entry) entry.error = '';
       renderBody();
     } catch (error) {
       const message = `Canvas sync failed: ${error?.message || error}`;
       publicationErrors.set(run.run_id, message);
-      const entry = entryForRun(run.run_id);
-      if (entry) entry.error = `Results were saved by the Pipeline, but ${message}`;
       if (!destroyed) renderBody();
     } finally {
       publishingRunIds.delete(run.run_id);
@@ -627,8 +603,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   }
   function renderBody() {
     clearCanvasHighlight();
-    const expanded = new Set(Array.from(bodyEl.querySelectorAll('details[data-details-key][open]'))
-      .map((item) => item.dataset.detailsKey));
     const content = pipelines.length > 0
       ? pipelines.map((pipeline, index) => {
         const pipelineId = getPipelineViewId(pipeline, index);
@@ -636,9 +610,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       }).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
     bodyEl.innerHTML = canvasWarnings + content;
-    for (const item of bodyEl.querySelectorAll('details[data-details-key]')) {
-      if (expanded.has(item.dataset.detailsKey)) item.open = true;
-    }
     runsEl.innerHTML = renderRunsView();
   }
   function refresh(nextSource) {
@@ -815,46 +786,50 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
         if (actionButton.dataset.action === 'run') {
           if (!context.pipeline || !getCanvasState || !attachedProjectId) throw new Error('Open a project and select a Pipeline first.');
           entry.busy = true;
-          entry.error = '';
+          renderBody();
           const projectId = attachedProjectId;
+          // Steps opened from Run Pipeline can change the canvas, so the route is read again each time.
+          const currentRoute = () => {
+            const pipeline = (readPipelines?.() || []).find((item, index) => getPipelineViewId(item, index) === context.pipelineId)
+              || context.pipeline;
+            return exportRoutePayload(buildSelectedRoute(pipeline, selectedByChoiceId));
+          };
+          // The Current Pipeline shows only the route. Run Pipeline shows what each step reads, opens
+          // the step to change it, and says only what keeps the run from starting.
+          const confirmed = await openPipelineRunDialog({
+            getSteps: () => pipelineInputSteps(getCanvasState(), currentRoute()),
+            openNode: (nodeId) => openCanvasNode(nodeId),
+            check: async () => {
+              const compiled = await compileCurrentPipeline({ canvasState: getCanvasState(), route: currentRoute() });
+              if (compiled.spec) return [];
+              const errors = (compiled.diagnostics || []).filter((item) => item.severity === 'error')
+                .map((item) => ({ nodeId: item.node_id, nodeName: item.node_name, message: item.message }));
+              return errors.length ? errors : [{ message: 'This Pipeline cannot run.' }];
+            },
+          });
+          if (!confirmed || destroyed || projectId !== attachedProjectId || !runEntriesByPipelineId.has(context.pipelineId)) {
+            entry.busy = false;
+            renderBody();
+            return;
+          }
           const canvasState = getCanvasState();
-          const signature = JSON.stringify(buildPipelineCompileRequest({ canvasState, route: context.route }));
+          const route = currentRoute();
+          const signature = JSON.stringify(buildPipelineCompileRequest({ canvasState, route }));
           if (entry.requestSignature !== signature) {
             entry.requestId = newPipelineRequestId();
             entry.requestSignature = signature;
           }
-          renderBody();
-          const compiled = await compileCurrentPipeline({ canvasState, route: context.route });
-          entry.diagnostics = compiled.diagnostics || [];
-          entry.validation = buildPipelineValidationPreview(compiled, canvasState, await getPipelineModelContext().catch(() => ({})));
-          renderBody();
-          if (!compiled.spec) {
-            entry.busy = false;
-            renderBody();
-            return;
-          }
-          const plan = entry.validation;
-          const jobs = plan?.jobs || [];
-          const calls = jobs.filter((job) => job.type === 'llm').map((job) => `${job.name}: ${job.calls == null ? 'unknown' : job.calls} calls`);
-          const message = `Inputs: ${plan?.inputLabel || 'none'}. ${jobs.length} job(s).${calls.length ? ` Model calls: ${calls.join('; ')}.` : ''} Start this Pipeline?`;
-          if (!await showConfirm(message, { title: 'Run Pipeline', confirmText: 'Run' })) {
-            entry.busy = false;
-            renderBody();
-            return;
-          }
-          if (destroyed || projectId !== attachedProjectId || !runEntriesByPipelineId.has(context.pipelineId)) return;
           entry.run = await startCurrentPipeline({
             projectId, assetProjectId: getAssetProjectId(),
-            canvasState, route: context.route, requestId: entry.requestId,
+            canvasState, route, requestId: entry.requestId,
           });
           // Autosave writes the file's run owner (currentProject.js), so the run stays listed after reopening.
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           // Pipeline Runs shows the newest run; this tab stays in front.
           selectedRunId = entry.run.run_id;
           applyRun(entry.run);
-          entry.needsAssets = pipelineInputHasAssets(canvasState, context.route);
+          entry.needsAssets = pipelineInputHasAssets(canvasState, route);
           entry.busy = false;
-          entry.error = '';
           entry.requestId = null;
           entry.requestSignature = null;
           persistRuns();
@@ -878,10 +853,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
           renderBody();
         }
       } catch (error) {
-        if (entry) {
-          entry.busy = false;
-          entry.error = error instanceof Error ? error.message : 'Pipeline action failed.';
-        }
+        if (entry) entry.busy = false;
         renderBody();
         showAlert(error instanceof Error ? error.message : 'Pipeline action failed.', { title: 'Pipeline' });
       }
