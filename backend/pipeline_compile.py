@@ -91,8 +91,16 @@ class _Compiler:
 
     def report(self, code, node_id, field, message, severity="error"):
         node = self.nodes.get(node_id, {})
+        name = node.get("name") or node.get("runName") or node_id
+        if node.get("type") == "run":
+            prompt_ids = {_text(edge.get("fromId")) for edge in self.edges
+                          if edge.get("type") == "prompt-to-run" and edge.get("toId") == node_id}
+            if len(prompt_ids) == 1:
+                prompt_name = self.nodes.get(next(iter(prompt_ids)), {}).get("name")
+                if prompt_name:
+                    name = f"{name} · {prompt_name}"
         self.diagnostics.append({"severity": severity, "code": code, "node_id": node_id,
-                                 "node_name": node.get("name") or node.get("runName") or node_id,
+                                 "node_name": name,
                                  "field": field, "message": message})
 
     def obj(self, value, node_id, field):
@@ -250,11 +258,16 @@ class _Compiler:
         functions = [n for n in (tree.body if tree else []) if isinstance(n, ast.FunctionDef) and n.name == "process"]
         function = functions[0] if len(functions) == 1 else None
         args = (function.args.posonlyargs + function.args.args) if function else []
-        valid_signature = bool(function and args and args[0].arg == "df"
-                               and len(args) - len(function.args.defaults) <= 1
-                               and not any(d is None for d in function.args.kw_defaults))
+        # df comes first; every other Input dataset is passed by keyword as the parameter named after its alias.
+        valid_signature = bool(function and args and args[0].arg == "df" and len(function.args.posonlyargs) <= 1)
         if not valid_signature:
-            self.report("INVALID_PROCESS_FUNCTION", nid, "dfCode", "Define one top-level process(df) callable with no other required arguments; reopen legacy row code to migrate it.")
+            self.report("INVALID_PROCESS_FUNCTION", nid, "dfCode", "Define one top-level process(df, ...) callable: df first, then one parameter per other Input dataset; reopen legacy row code to migrate it.")
+        else:
+            required = args[1:len(args) - len(function.args.defaults)] + [
+                arg for arg, default in zip(function.args.kwonlyargs, function.args.kw_defaults) if default is None]
+            for arg in required:
+                if arg.arg not in inputs:
+                    self.report("UNBOUND_DATASET_ALIAS", nid, "datasetAliases", f"Process parameter {arg.arg} matches no Input dataset.")
         # Detect referenced aliases without executing arbitrary code. Canvas normally builds
         # these edges already; a stale selection must not silently omit one.
         if tree:
@@ -354,10 +367,23 @@ class _Compiler:
                          for p in self.inputs_to(nid, "process-to-dataset")]
             if _text(node.get("sourceRunNodeId")):
                 producers.append((f"llm:{node['sourceRunNodeId']}", "result"))
+            # Snapshot edges describe frozen copies. Outside the selection they stay frozen tables,
+            # but conflicting provenance must not be silently discarded.
+            snapshot_sources = {f"{'llm' if edge.get('type') == 'run-to-dataset-snapshot' else 'process'}:{_text(edge.get('fromId'))}"
+                                for edge in self.edges if _text(edge.get("toId")) == nid
+                                and edge.get("type") in {"run-to-dataset-snapshot", "process-to-dataset-snapshot"}}
+            if len(snapshot_sources | {jid for jid, _ in producers}) > 1:
+                self.report("MULTIPLE_PRODUCERS", nid, "producer", "Dataset has multiple producers; choose one explicit origin.")
+                continue
             if nid in self.boundaries:
                 if any(jid in self.jobs for jid, _ in producers):
                     self.report("INPUT_PRODUCER_CONFLICT", nid, "input_dataset_ids", "Input boundary is also produced by a selected job.")
                 producers = []
+            elif not producers and len(snapshot_sources) == 1 and next(iter(snapshot_sources)) in self.jobs:
+                # A frozen copy of a selected step's output is that step's output: running the
+                # Pipeline recomputes it. A declared input boundary stays the frozen table.
+                jid = next(iter(snapshot_sources))
+                producers = [(jid, (_text(node.get("processOutputName")) or "result") if jid.startswith("process:") else "result")]
             if len(producers) > 1:
                 self.report("MULTIPLE_PRODUCERS", nid, "producer", "Dataset has multiple producers; choose one explicit origin.")
                 continue
@@ -470,21 +496,16 @@ class _Compiler:
                 self.artifacts[aid]["schema"] = deepcopy(result_schema)
 
     def check_connected(self):
-        adjacency = {**{j: set() for j in self.jobs}, **{a: set() for a in self.artifacts}}
-        for jid, job in self.jobs.items():
-            for aid in set(job["inputs"].values()) | {a for group in job["outputs"].values() for a in group}:
-                if aid in adjacency:
-                    adjacency[jid].add(aid)
-                    adjacency[aid].add(jid)
-        if adjacency:
-            seen, stack = set(), [min(adjacency)]
-            while stack:
-                current = stack.pop()
-                if current not in seen:
-                    seen.add(current)
-                    stack.extend(adjacency[current] - seen)
-            if seen != set(adjacency):
-                self.report("DISCONNECTED_SELECTION", "", "route", "Selected nodes do not form one connected dataflow.")
+        # The route is one pipeline from the panel, not one table. A Dataset that no job reads
+        # or writes is not a second pipeline, and it must not block export or become a required input.
+        touched = set()
+        for job in self.jobs.values():
+            touched.update(job["inputs"].values())
+            for group in job["outputs"].values():
+                touched.update(group)
+        for aid in [aid for aid in self.artifacts if aid not in touched]:
+            self.artifacts.pop(aid, None)
+            self.source_map.pop(aid, None)
 
     def finish(self, order=None):
         diagnostics = sorted(self.diagnostics, key=lambda d: (d["node_id"], d["field"], d["code"], d["message"]))

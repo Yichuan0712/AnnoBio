@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -392,6 +393,13 @@ class PipelineRunner:
             "revision": 1,
             "created_at": created, "updated_at": created, "started_at": None, "finished_at": None,
             "spec": deepcopy(spec), "diagnostics": compiled.get("diagnostics") or [],
+            # Keep the frozen node definitions needed to publish results into node History.
+            # Input rows are already stored as artifacts and are not duplicated here.
+            "history_canvas": {
+                "nodes": [{key: deepcopy(value) for key, value in node.items() if key != "datasetContent"}
+                          for node in canvas_state.get("nodes") or []],
+                "connections": deepcopy(canvas_state.get("connections") or []),
+            },
             "plan": plan,
             "credential_bindings": bindings,
             "execution_models": execution_models,
@@ -696,6 +704,15 @@ class PipelineRunner:
                 proc.kill()
             return self._live_status(run)
 
+    def delete(self, project_id: str, run_id: str) -> None:
+        """Remove a finished run and its stored tables. Results already added to a project keep their
+        own copies (node History, Dataset copies), and revisions copied what they reused."""
+        with self._lock:
+            run = self._load_run(project_id, run_id)
+            if run["status"] not in TERMINAL_STATES or run_id in self._threads:
+                raise PipelineRunConflict("Stop this Pipeline run before deleting it.")
+            shutil.rmtree(self._run_dir(project_id, run_id))
+
     def resume(self, project_id: str, run_id: str, *, project_session_id: str | None = None) -> dict:
         finishing_thread = None
         with self._lock:
@@ -776,6 +793,40 @@ class PipelineRunner:
     def status(self, project_id: str, run_id: str) -> dict:
         with self._lock:
             return self._live_status(self._load_run(project_id, run_id))
+
+    def definition(self, project_id: str, run_id: str) -> dict:
+        with self._lock:
+            run = self._load_run(project_id, run_id)
+            return {"spec": deepcopy(run["spec"]),
+                    "canvas_state": deepcopy(run.get("history_canvas"))}
+
+    def list_runs(self, project_id: str) -> list[dict]:
+        project_dir = self._project_dir(project_id)
+        if not project_dir.is_dir():
+            return []
+        items = []
+        with self._lock:
+            for path in project_dir.glob("*/run.json"):
+                try:
+                    run = json.loads(path.read_text(encoding="utf-8"))
+                    if run.get("project_id") != project_id or not re.fullmatch(r"[0-9a-f]{32}", str(run.get("run_id") or "")):
+                        continue
+                    jobs = run.get("jobs") or []
+                    items.append({"run_id": run["run_id"], "status": run["status"],
+                                  "created_at": run.get("created_at"), "updated_at": run.get("updated_at"),
+                                  "finished_at": run.get("finished_at"),
+                                  "job_count": len(jobs),
+                                  # Job ids name their canvas nodes (llm:<Run>, process:<Process>), which
+                                  # files a run under the pipeline it came from.
+                                  "job_ids": [state.get("job_id") for state in jobs],
+                                  "succeeded_job_count": sum(1 for state in jobs if state.get("status") == "succeeded"),
+                                  "produced_artifact_ids": sorted(logical_id for logical_id, artifact in
+                                                                  (run.get("artifacts") or {}).items()
+                                                                  if artifact.get("valid") and artifact.get("producer")),
+                                  "revision": run.get("revision") or 1})
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+        return sorted(items, key=lambda item: (item.get("created_at") or "", item["run_id"]), reverse=True)
 
     def _live_status(self, run: dict) -> dict:
         """public_status, with the in-memory row progress of attempts that are still running."""

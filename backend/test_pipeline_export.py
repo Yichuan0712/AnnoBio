@@ -419,10 +419,20 @@ else:
             main = bundle.read("branched/main.py").decode("utf-8")
             manifest = json.loads(bundle.read("branched/pipeline.json"))
             self.assertIn("run_process(frames['right'], {'df_left': frames['left'], 'df': frames['right']}", main)
-            self.assertIn('namespace[alias] = frame', main)
+            # Another input is the parameter named after its alias, or a global for older code.
+            runner = main[main.index("def run_process("):main.index("def branch(")]
+            namespace = {}
+            exec("import inspect\nfrom typing import Any, Callable\nimport pandas as pd\n" + runner, namespace)
+            exec("def with_parameter(df, df_left):\n    return df_left\n"
+                 "def with_global(df):\n    return df_left\n", namespace)
+            left, right = namespace["pd"].DataFrame({"text": ["left"]}), namespace["pd"].DataFrame({"text": ["right"]})
+            for process in (namespace["with_parameter"], namespace["with_global"]):
+                outputs = namespace["run_process"](right, {"df_left": left, "df": right}, process, "Combine")
+                self.assertEqual(outputs["result"]["text"].tolist(), ["left"])
             self.assertIn("branch(result, 'left'", main)
             self.assertIn("REQUIRED_INPUT_COLUMNS = ['text']", main)
-            self.assertIn("frames: dict[str, pd.DataFrame] = {'raw':", main)
+            self.assertIn("frames: dict[str, pd.DataFrame] = {}", main)
+            self.assertIn("'id': 'raw'", main)
             self.assertEqual(manifest["graph"]["terminal_datasets"], [{"id": "answered", "name": "Answered"}])
             for member in bundle.namelist():
                 if member.endswith(".py"):

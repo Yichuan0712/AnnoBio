@@ -5674,6 +5674,50 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   margin: 0;
 }
 
+.execution-error-panel__card {
+  padding-bottom: 20px;
+}
+
+.execution-error-panel {
+  flex: 0 1 auto;
+  max-height: min(360px, 60vh);
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--danger, #b42318);
+  background: color-mix(in srgb, var(--danger, #b42318) 7%, var(--bg));
+}
+
+.execution-error-panel__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger, #b42318) 35%, var(--border));
+}
+
+.execution-error-panel__title {
+  color: var(--danger, #b42318);
+  font-size: 13px;
+}
+
+.execution-error-panel__detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .run-detail-mapping-table {
   border: 1px solid var(--border);
   border-radius: 0;
@@ -8816,7 +8860,8 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-overview-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
 .pipeline-overview-card-title { font-size: 14px; margin: 0; }
 .pipeline-overview-card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
-.pipeline-overview-export { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
+.pipeline-overview-export,
+.pipeline-run-history { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 .pipeline-overview-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; margin: 0; padding: 0; list-style: none; }
 .pipeline-overview-step {
   display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; box-sizing: border-box;
@@ -8860,79 +8905,80 @@ button.btn.btn-danger:hover:not(:disabled) {
   font-size: 12.5px; padding: 2px 4px; border: 1px solid var(--border);
   border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); font-family: inherit;
 }
-.pipeline-run-action,
-.pipeline-save-artifact { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
+.pipeline-run-action { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 .pipeline-run-validation {
   margin-top: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg-bar); color: var(--text-muted); font-size: 12px;
 }
 .pipeline-run-validation--error { border-color: rgba(192, 57, 43, 0.5); }
-.pipeline-run-validation--ok { border-color: rgba(16, 137, 62, 0.45); }
-.pipeline-run-validation ul { margin: 6px 0 0; padding-left: 18px; }
-.pipeline-validation-plan { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; color: var(--text-muted); }
-.pipeline-validation-plan span { overflow-wrap: anywhere; }
-.pipeline-run-diagnostic--error { color: var(--status-danger); }
-.pipeline-run-diagnostic--warning { color: var(--status-warning); }
-.pipeline-run-panel {
-  margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 7px;
-  background: var(--bg-bar); min-width: 0;
+/* Run Pipeline dialog: a card per step that reads a Dataset from outside the Pipeline. Clicking a
+   card opens that node, like a Current Pipeline step; a problem found on Run sits on its card. */
+.modal-panel.pipeline-run-dialog { width: min(460px, 92vw); }
+.pipeline-run-dialog__body { min-height: 0; padding: 16px 20px 8px; max-height: min(65vh, 560px); overflow-y: auto; }
+.pipeline-run-dialog__intro { margin: 0 0 12px; font-size: 12.5px; color: var(--text-muted); }
+.pipeline-run-dialog__steps { display: flex; flex-direction: column; gap: 8px; }
+.pipeline-run-dialog__step {
+  display: flex; flex-direction: column; gap: 7px; width: 100%; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text);
+  font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
 }
-.pipeline-run-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-muted); font-size: 12px; }
-.pipeline-run-summary code { margin-left: auto; color: var(--text-muted); }
-.pipeline-run-status,
-.pipeline-job-status {
+.pipeline-run-dialog__step:hover,
+.pipeline-run-dialog__step:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pipeline-run-dialog__step.has-problem { border-color: color-mix(in srgb, var(--status-danger) 60%, var(--border)); }
+.pipeline-run-dialog__step-head { display: flex; align-items: center; gap: 8px; }
+.pipeline-run-dialog__step-head .pipeline-step-kind { flex-shrink: 0; }
+.pipeline-run-dialog__step-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.pipeline-run-dialog__open { flex-shrink: 0; font-size: 18px; line-height: 1; color: var(--text-muted); }
+.pipeline-run-dialog__step:hover .pipeline-run-dialog__open { color: var(--accent); }
+.pipeline-run-dialog__datasets { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; }
+.pipeline-run-dialog__dataset { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.pipeline-run-dialog__problem { font-size: 12px; line-height: 1.45; color: var(--status-danger); }
+.pipeline-run-dialog__errors { margin: 12px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.5; color: var(--status-danger); }
+/* Run History window, opened from a pipeline card: that pipeline's runs, one row each. */
+.modal-panel--pipeline-runs {
+  width: min(720px, 94vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+.modal-panel--pipeline-runs .modal-body { flex: 1; min-height: 0; overflow: auto; }
+/* Modal: above the Agent window (2000) and the floating Current Pipeline (2100). */
+.pipeline-runs-overlay { z-index: 2200; }
+.pipeline-runs-overlay[hidden] { display: none; }
+.pipeline-runs { font-size: 12px; color: var(--text); }
+.pipeline-runs-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+}
+.pipeline-runs-table th,
+.pipeline-runs-table td {
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.pipeline-runs-table th { position: sticky; top: 0; font-weight: 600; color: var(--text-muted); background: var(--hover); }
+.pipeline-runs-muted { color: var(--text-muted); }
+.pipeline-run-status {
   display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 7px;
   background: rgba(100, 116, 139, 0.14); color: var(--text-muted); font-size: 10.5px;
   font-weight: 700; text-transform: uppercase; letter-spacing: 0.035em;
 }
 .pipeline-run-status--running,
-.pipeline-run-status--pending,
-.pipeline-job-status--running { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
-.pipeline-run-status--succeeded,
-.pipeline-job-status--succeeded { background: color-mix(in srgb, var(--status-success) 16%, transparent); color: var(--status-success); }
+.pipeline-run-status--pending { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
+.pipeline-run-status--succeeded { background: color-mix(in srgb, var(--status-success) 16%, transparent); color: var(--status-success); }
 .pipeline-run-status--failed,
-.pipeline-run-status--interrupted,
-.pipeline-job-status--failed,
-.pipeline-job-status--interrupted { background: color-mix(in srgb, var(--status-danger) 16%, transparent); color: var(--status-danger); }
+.pipeline-run-status--interrupted { background: color-mix(in srgb, var(--status-danger) 16%, transparent); color: var(--status-danger); }
 .pipeline-run-status--cancelled,
-.pipeline-run-status--cancelling,
-.pipeline-job-status--cancelled,
-.pipeline-job-status--blocked { background: color-mix(in srgb, var(--status-warning) 16%, transparent); color: var(--status-warning); }
-.pipeline-run-error,
-.pipeline-job-error { color: var(--status-danger); font-size: 12px; overflow-wrap: anywhere; }
-.pipeline-run-error { margin-top: 7px; }
-.pipeline-job-error { grid-column: 2 / -1; margin-top: 2px; }
-.pipeline-job-list { display: grid; gap: 5px; margin: 9px 0 0; padding: 0; list-style: none; }
-.pipeline-job-list li {
-  display: grid; grid-template-columns: auto minmax(90px, 0.7fr) minmax(140px, 1.4fr);
-  align-items: center; gap: 7px; min-width: 0; font-size: 12px;
-}
-.pipeline-job-list li > span:last-of-type { color: var(--text-muted); overflow-wrap: anywhere; }
-.pipeline-artifact-list { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; font-size: 11px; color: var(--text-muted); }
-.pipeline-artifact-chip {
-  border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text);
-  padding: 3px 8px; font: inherit; cursor: pointer;
-}
-.pipeline-artifact-chip:hover { border-color: var(--accent); }
-.pipeline-artifact-chip span { color: var(--text-muted); margin-left: 3px; }
-.pipeline-artifact-chip--partial { border-style: dashed; color: var(--status-warning); }
-.pipeline-artifact-preview { margin-top: 10px; min-width: 0; }
-.pipeline-artifact-preview-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; font-size: 12px; }
-.pipeline-artifact-preview-header > span { color: var(--text-muted); }
-.pipeline-artifact-preview-header .pipeline-save-artifact { margin-left: auto; }
-.pipeline-artifact-table-wrap { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
-.pipeline-artifact-table { border-collapse: collapse; min-width: 100%; font-size: 11px; }
-.pipeline-artifact-table th,
-.pipeline-artifact-table td { padding: 5px 7px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
-.pipeline-artifact-table th { position: sticky; top: 0; background: var(--bg-bar); color: var(--text-muted); }
-.pipeline-artifact-preview-note,
-.pipeline-run-detached-note { margin: 6px 0 0; color: var(--text-muted); font-size: 11px; }
-.pipeline-overview-card--detached { border-top: 1px dashed var(--border); padding-top: 12px; }
-
-@media (max-width: 620px) {
-  .pipeline-job-list li { grid-template-columns: auto 1fr; }
-  .pipeline-job-list li > span:last-of-type { grid-column: 2; }
-}
+.pipeline-run-status--cancelling { background: color-mix(in srgb, var(--status-warning) 16%, transparent); color: var(--status-warning); }
 
 /* 右栏：结果表格 + 搜索 + 分页 + Save to workspace，全部复用 run-detail-results-* 系列
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */
@@ -8941,112 +8987,176 @@ button.btn.btn-danger:hover:not(:disabled) {
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */
 
 
-/* Dataset reference window: use the same surfaces and swatches as Run. */
-.process-dataset-bindings-toggle {
-  align-self: flex-start;
-  flex-shrink: 0;
-  padding: 3px 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
+/* Process window: Input datasets, the Run window's Dataset picker with a check per Dataset. */
+.process-input-picker__trigger {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.process-input-picker__chips {
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.process-input-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--hover);
   font-size: 12px;
   line-height: 18px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
 }
 
-.process-dataset-bindings-toggle:hover { color: var(--text); }
-.process-dataset-bindings-toggle:focus-visible {
-  outline: 1px solid var(--text-muted);
-  outline-offset: 3px;
-}
-
-.process-datasets-dialog {
-  width: 680px;
+.process-input-chip__name {
   min-width: 0;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100dvh - 48px);
-  margin: auto;
-  padding: 0;
-  color: var(--text);
-  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.process-datasets-dialog:not([open]) { display: none; }
-.process-datasets-dialog::backdrop { background: rgba(0, 0, 0, 0.25); }
-.process-datasets-dialog .modal-header { cursor: default; flex-shrink: 0; }
-.process-datasets-dialog__body {
+
+.process-input-chip__alias {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.process-input-picker__dropdown {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  min-height: 0;
-  padding: 18px 20px 12px;
+  max-height: 320px;
+  overflow: hidden;
 }
-.process-datasets-dialog__intro {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.6;
+
+.process-input-picker__dropdown[hidden],
+.process-input-picker__search[hidden] {
+  display: none;
 }
-.process-datasets-dialog__search {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
+
+.process-input-picker__search {
+  flex-shrink: 0;
+  margin: 6px;
+  padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--control-radius);
+  border-radius: var(--control-radius, 6px);
   background: var(--bg);
   color: var(--text);
   font: inherit;
   font-size: 13px;
 }
-.process-datasets-dialog__search:focus-visible { outline: 1px solid var(--text-muted); }
-.process-datasets-dialog__scroll {
-  overflow: auto;
-  min-height: 0;
-  max-height: 45vh;
-  border: 1px solid var(--border);
-  background: var(--bg);
+
+.process-input-picker__search:focus-visible {
+  outline: 1px solid var(--text-muted);
 }
-.process-datasets-dialog__table {
-  width: 100%;
-  table-layout: fixed;
-  border-spacing: 0;
+
+.process-input-picker__list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.process-input-option.is-active {
+  background: var(--hover);
+}
+
+.process-input-option__check {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--text-muted);
+  border-radius: 3px;
+}
+
+.process-input-option[aria-selected="true"] .process-input-option__check {
+  border-color: var(--text);
+  background: var(--text);
+}
+
+.process-input-option[aria-selected="true"] .process-input-option__check::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Used by the code beyond its parameter: it stays checked until the code stops using it. */
+.process-input-option.is-fixed {
+  cursor: default;
+}
+
+.process-input-option.is-fixed .process-input-option__check {
+  opacity: 0.5;
+}
+
+.process-input-option__make-df,
+.process-input-option__alias {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.process-input-option__make-df {
+  border-color: var(--border);
+  background: var(--bg);
+  font-family: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.process-input-option:hover .process-input-option__make-df,
+.process-input-option.is-active .process-input-option__make-df,
+.process-input-option__make-df:focus-visible {
+  opacity: 1;
+}
+
+.process-input-option__alias {
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: copy;
+}
+
+.process-input-option[aria-selected="true"] .process-input-option__alias {
+  color: var(--text);
+}
+
+.process-input-option__make-df:hover,
+.process-input-option__alias:hover,
+.process-input-option__alias:focus-visible {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.process-input-picker__empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--text-muted);
   font-size: 13px;
 }
-.process-datasets-dialog__table th {
-  position: sticky;
-  top: 0;
-  padding: 9px 10px;
-  background: var(--bg-bar);
-  color: var(--text-muted);
-  text-align: left;
-  font-size: 12px;
-  font-weight: 500;
-  border-bottom: 1px solid var(--border);
-}
-.process-datasets-dialog__table th:last-child { width: 108px; }
-.process-datasets-dialog__table td {
-  padding: 12px 10px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-  overflow-wrap: anywhere;
-}
-.process-datasets-dialog__table tr:last-child td { border-bottom: 0; }
-.process-datasets-dialog__table tbody tr:hover { background: var(--hover); }
-.process-datasets-dialog__dataset { display: flex; align-items: center; gap: 9px; }
-.process-datasets-dialog__primary {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-.process-datasets-dialog__primary[hidden] { display: none; }
-.process-datasets-dialog__table code { font-size: 12px; user-select: all; }
-.process-datasets-dialog__copy { white-space: nowrap; font-size: 12px; padding: 5px 8px; }
-.process-datasets-dialog__action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.process-datasets-dialog__status { min-height: 18px; margin: 0; color: var(--text-muted); font-size: 12px; }
-.process-datasets-dialog__empty { margin: 0; padding: 20px; color: var(--text-muted); font-size: 13px; }
 
 /* Settings → Agent defaults: whether the chosen model can drive the Agent's tools. */
 /* One short paragraph at the top of each LLM settings tab saying what the tab controls. */
@@ -9086,10 +9196,5 @@ button.btn.btn-danger:hover:not(:disabled) {
 
 .settings-agent-model-status__check {
   flex-shrink: 0;
-}
-.working-dataset-missing-message {
-  margin: 8px 12px;
-  color: var(--danger, #b42318);
-  font-size: 13px;
 }
 .working-dataset-missing .working-dataset-export-local { display: none; }

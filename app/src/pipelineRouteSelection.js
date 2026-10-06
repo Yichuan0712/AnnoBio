@@ -70,31 +70,35 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
     return false;
   }
 
-  /** The nearest Process every start step reaches: where their branches merge. */
-  function findSharedJoin(startIds) {
-    const distancesFrom = (startId) => {
-      const distances = new Map([[startId, 0]]);
-      const queue = [startId];
-      while (queue.length) {
-        const current = queue.shift();
-        for (const next of outgoing.get(current) || []) {
-          if (distances.has(next)) continue;
-          distances.set(next, distances.get(current) + 1);
-          queue.push(next);
-        }
+  function distancesFrom(startId) {
+    const distances = new Map([[startId, 0]]);
+    const queue = [startId];
+    while (queue.length) {
+      const current = queue.shift();
+      for (const next of outgoing.get(current) || []) {
+        if (distances.has(next)) continue;
+        distances.set(next, distances.get(current) + 1);
+        queue.push(next);
       }
-      return distances;
-    };
+    }
+    return distances;
+  }
+
+  /**
+   * The Process where the start steps' paths first meet: it reads from each of them, so each is a
+   * branch it needs. Paths that first meet anywhere else (a Prompt, whose Runs are alternatives) or
+   * never meet are not branches.
+   */
+  function findMergingProcess(startIds) {
     const distanceMaps = startIds.map(distancesFrom);
     const commonIds = [...distanceMaps[0].keys()].filter((id) => (
-      !startIds.includes(id) && stepById.get(id)?.kind === 'process' && distanceMaps.every((map) => map.has(id))
+      !startIds.includes(id) && distanceMaps.every((map) => map.has(id))
     ));
-    commonIds.sort((a, b) => {
-      const aDistance = distanceMaps.reduce((sum, map) => sum + map.get(a), 0);
-      const bDistance = distanceMaps.reduce((sum, map) => sum + map.get(b), 0);
-      return aDistance - bDistance;
-    });
-    return commonIds[0] || '';
+    const reach = new Map(commonIds.map((id) => [id, distancesFrom(id)]));
+    const firstMeetings = commonIds.filter((id) => !commonIds.some((other) => other !== id && reach.get(other).has(id)));
+    if (!firstMeetings.length || firstMeetings.some((id) => stepById.get(id)?.kind !== 'process')) return '';
+    const distance = (id) => distanceMaps.reduce((sum, map) => sum + map.get(id), 0);
+    return firstMeetings.sort((a, b) => distance(a) - distance(b))[0];
   }
 
   /** Named outputs of one Process: the only place a route forks. */
@@ -106,8 +110,9 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
 
   /**
    * Appends the route from the candidate steps to `out`, stopping before `stopId` (a branch's merge
-   * point). A branch comes only from a Process: its named outputs fork, and Datasets one Process
-   * reads merge. Any other choice between Datasets is made on the step that reads them.
+   * point). A branch comes only from a Process: its named outputs fork, and the steps whose results
+   * one Process reads merge there, so each of them runs. Steps that read one Dataset and never meet
+   * at a Process are alternatives, chosen on the step; so is any other choice between Datasets.
    */
   function walk(candidateStepIds, allowedRunIds = null, out = route, stopId = '') {
     if (out.length >= 200) return;
@@ -117,12 +122,13 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
       .filter((step) => step && !visitedStepIds.has(step.id));
     if (candidateSteps.length === 0) return;
 
-    if (candidateSteps.every((step) => step.kind === 'dataset') && candidateSteps.length > 1) {
-      const joinId = findSharedJoin(candidateSteps.map((step) => step.id));
-      if (joinId || isProcessFork(candidateSteps)) {
+    const datasetCandidates = candidateSteps.filter((step) => step.kind === 'dataset').length;
+    if (candidateSteps.length > 1 && (datasetCandidates === 0 || datasetCandidates === candidateSteps.length)) {
+      const joinId = findMergingProcess(candidateSteps.map((step) => step.id));
+      if (joinId || (datasetCandidates && isProcessFork(candidateSteps))) {
         const lanes = candidateSteps.map((step) => {
           const lane = [];
-          walk([step.id], null, lane, joinId);
+          walk([step.id], datasetCandidates ? null : allowedRunIds, lane, joinId);
           return lane;
         }).filter((lane) => lane.length);
         if (lanes.length > 1) {

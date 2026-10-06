@@ -37,10 +37,10 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     getScoreExportData,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
+    positionFrom,
     getNodeById,
     getConnections,
     datasetContentByNodeId,
-    scrollWrapper,
     createPromptNode,
     createRunNode,
     createScoreNode,
@@ -817,6 +817,10 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (results.length === 0) {
       throw new Error('Run node has no saved results.');
     }
+    const recordId = String(runNode.dataset.historyRecordId || '').trim();
+    if (!recordId) {
+      throw new Error('This Run has no History record yet. Run it again before saving its results.');
+    }
 
     const connections = getConnectionsList();
     const promptEdge = connections.find((c) => c.toId === normalizedRunNodeId && c.type === 'prompt-to-run');
@@ -857,9 +861,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const runCompleted = runNode.dataset.runCompleted === '1';
     const defaultNotes = `Exported from ${promptName} ${runName}.\n${runCompleted ? 'Run completed.' : 'Run incomplete.'}`;
     const datasetName = requestedName || findUniqueDatasetExportName(baseName);
-    const visiblePadding = 40;
-    const startLeft = typeof left === 'number' ? left : (scrollWrapper.scrollLeft + visiblePadding);
-    const startTop = typeof top === 'number' ? top : (scrollWrapper.scrollTop + visiblePadding);
+    const nearRun = positionFrom(runNode);
+    const startLeft = typeof left === 'number' ? left : nearRun.left;
+    const startTop = typeof top === 'number' ? top : nearRun.top;
     const created = addDatasetNode({
       name: datasetName,
       notes: String(notes || '').trim() || defaultNotes,
@@ -872,6 +876,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       agentCreated: true,
       sourceRunNodeId: normalizedRunNodeId,
       savedCopy: true,
+      snapshotSourceRecordId: recordId,
     });
     return {
       ...created,
@@ -993,9 +998,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const requestedName = String(name || '').trim();
     const datasetName = requestedName || findUniqueDatasetExportName(`${scoreName} comparison`);
     const datasetNotes = String(notes || '').trim() || `Exported from Score "${scoreName}". Run vs ground truth comparison.`;
-    const visiblePadding = 40;
-    const startLeft = typeof left === 'number' ? left : (scrollWrapper.scrollLeft + visiblePadding);
-    const startTop = typeof top === 'number' ? top : (scrollWrapper.scrollTop + visiblePadding);
+    const nearScore = positionFrom(scoreNode);
+    const startLeft = typeof left === 'number' ? left : nearScore.left;
+    const startTop = typeof top === 'number' ? top : nearScore.top;
     const created = addDatasetNode({
       name: datasetName,
       notes: datasetNotes,
@@ -2011,6 +2016,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     sourceRunNodeId = '',
     processOutputName = '',
     savedCopy = false,
+    snapshotSourceRecordId = '',
+    pipelineRunId = '',
+    pipelineLogicalId = '',
     colorIndex,
     ensureUniqueName = true,
     agentCreated = false,
@@ -2028,6 +2036,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       sourceRunNodeId: String(sourceRunNodeId || '').trim(),
       processOutputName: String(processOutputName || '').trim(),
       savedCopy,
+      snapshotSourceRecordId,
+      pipelineRunId,
+      pipelineLogicalId,
       colorIndex,
       headers,
       rows,

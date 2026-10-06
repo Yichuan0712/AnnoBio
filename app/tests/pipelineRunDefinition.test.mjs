@@ -3,7 +3,6 @@ import test from 'node:test';
 import {
   buildPipelineCompileRequest,
   buildPipelineStartRequest,
-  buildPipelineValidationPreview,
   pipelineInputHasAssets,
   pipelineRouteKey,
 } from '../src/pipelineRunDefinition.js';
@@ -73,32 +72,6 @@ test('compile and start share the same selected graph and asset detection', () =
   assert.equal(started.project_session_id, 'assets');
   assert.equal(pipelineInputHasAssets(state, route), true);
   assert.equal(pipelineRouteKey(route), pipelineRouteKey(structuredClone(route)));
-});
-
-test('preflight shows models and leaves calls unknown after dynamic Process output', () => {
-  const state = { nodes: [
-    { type: 'dataset', nodeId: 'raw', datasetContent: { headers: ['text'], rows: [['a'], ['b']] } },
-    { type: 'run', nodeId: 'r1', runCredentialId: 'cred-a' },
-    { type: 'run', nodeId: 'r2', runCredentialId: 'cred-a' },
-  ] };
-  const result = { spec: {
-    inputs: ['dataset:raw'],
-    outputs: ['output:final'],
-    artifacts: [{ id: 'dataset:raw', name: 'Raw' }],
-    source_map: { 'llm:r1': { names: ['Extract'] }, 'process:p': { names: ['Transform'] }, 'llm:r2': { names: ['Classify'] } },
-    jobs: [
-      { id: 'llm:r1', type: 'llm', inputs: { data: 'dataset:raw' }, outputs: { result: ['dataset:mid'] }, config: { model_binding: { run_node_id: 'r1' }, output_schema: { return_shape: 'single' } } },
-      { id: 'process:p', type: 'process', inputs: { df: 'dataset:mid' }, outputs: { result: ['dataset:dynamic'] }, config: {} },
-      { id: 'llm:r2', type: 'llm', inputs: { data: 'dataset:dynamic' }, outputs: { result: ['output:final'] }, config: { model_binding: { run_node_id: 'r2' }, output_schema: { return_shape: 'single' } } },
-    ],
-  } };
-  const preview = buildPipelineValidationPreview(result, state, {
-    credentials: [{ id: 'cred-a', model: 'mock/model' }], settings: {},
-  });
-  assert.equal(preview.inputLabel, 'Raw (2 rows)');
-  assert.equal(preview.jobs[0].calls, 2);
-  assert.equal(preview.jobs[0].model, 'mock/model');
-  assert.equal(preview.jobs[2].calls, undefined);
 });
 
 test('all selected source datasets are frozen for a multi-input Process', () => {

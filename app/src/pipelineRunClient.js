@@ -33,14 +33,6 @@ export function compileCurrentPipeline({ canvasState, route }) {
   });
 }
 
-export async function getPipelineModelContext() {
-  const [credentials, settings] = await Promise.all([
-    jsonRequest('/api/credentials'),
-    jsonRequest('/api/settings'),
-  ]);
-  return { credentials: Array.isArray(credentials) ? credentials : [], settings: settings || {} };
-}
-
 /** One id per user action. Pass the same id when that action is retried, so the backend returns the
  * run it already started instead of starting a second one; a fresh id per call would defeat that. */
 export function newPipelineRequestId() {
@@ -80,9 +72,24 @@ export function getPipelineRun(projectId, runId) {
   return jsonRequest(`/api/pipeline/runs/${encodeURIComponent(runId)}?project_id=${encodeURIComponent(projectId)}`);
 }
 
+export function listPipelineRuns(projectId) {
+  return jsonRequest(`/api/pipeline/runs?project_id=${encodeURIComponent(projectId)}`);
+}
+
+export function getPipelineRunDefinition(projectId, runId) {
+  return jsonRequest(`/api/pipeline/runs/${encodeURIComponent(runId)}/definition?project_id=${encodeURIComponent(projectId)}`);
+}
+
 export function cancelPipelineRun(projectId, runId) {
   return jsonRequest(`/api/pipeline/runs/${encodeURIComponent(runId)}/cancel?project_id=${encodeURIComponent(projectId)}`, {
     method: 'POST',
+  });
+}
+
+/** Removes a finished run and its stored tables; results already on the canvas keep their own copies. */
+export function deletePipelineRun(projectId, runId) {
+  return jsonRequest(`/api/pipeline/runs/${encodeURIComponent(runId)}?project_id=${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
   });
 }
 

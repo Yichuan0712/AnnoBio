@@ -8,6 +8,7 @@ import { nodeTitle, readNodeRows, traceRunRow } from '../canvas/workflowNodeInsp
 import { loadSources } from '../operations/proposals.js';
 import { previewTableRows } from '../execution/runJobs.js';
 import { runProcessCode } from '../../processRunClient.js';
+import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 
 const MAX_TOOL_RESULT_CHARS = 24000;
 
@@ -113,16 +114,16 @@ Operations ("op" plus the fields listed):
 - add_dataset: ref, name, note?, columns (names), rows (lists of cells, or objects keyed by column). Text only.
 - import_dataset: ref, source (pubmed | clinicaltrials | chembl | preprint), ids, fields (from search_source's importable_fields), name, note?. Records are fetched when applied.
 - add_sampler: ref (the sampler), dataset_ref (the sampled dataset), source (dataset), sampling (random | random_with_replacement | rows), size + size_unit (rows | percent) for random, rows ("1 3 5-10") for rows, name?, dataset_name?.
-- add_process: ref, name, primary_input (dataset, df in the code), code defining process(df); other datasets are df_<alias> (see inspect_node on a process, or the process-code guide). Not run until the user runs it.
+- add_process: ref, name, primary_input (dataset, df in the code), code defining process(df, ...); each other input dataset is a parameter after df named after its df_<alias> (see inspect_node on a process, or the process-code guide). Not run until the user runs it.
 - add_prompt: ref, name, note?, sections [{name, content}] with {variable} inputs, input_types? {variable: text | image | pdf}, output {return_shape: single | table, fields [{key, type: str | float | list_str | list_float, description, examples?}]}.
 - add_prompt_version: ref, prompt (source), name?, and what to change: section_edits [{name, content}] (replaces those sections by name, appends new names, keeps the rest) or sections (the complete new list), input_types, output (only what changes: {return_shape} alone keeps the fields), note. Everything else is copied. Prefer this over editing a prompt that already has runs.
 - add_run: ref, prompt, input_dataset, input_mapping {prompt input: column}, name?. It uses the model and settings in Settings → Run defaults. Not started until the user starts it.
 - add_score: ref, run, ground_truth (dataset), comparison [{field (prompt output key), ground_truth_columns, match?}], pairing? [{run_input_column (or "#" for row number), ground_truth_columns, match?}] to decide which ground-truth row belongs to which run row, combine? (all | any); or match_code defining match(input_row, output_row, gt_row) instead of rules. match: {ignore_case, ignore_symbols, ignore_whitespace, contains, semantic, embedding, rxnorm, mesh: booleans; numeric: exact | abs | rel | decimals, tolerance, decimals}.
-- save_run_results: ref, run, name?. Saves a run's results (input columns plus output fields) as a dataset.
-- save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a dataset.
+- save_run_results: ref, run, name?. Saves a run's results (input columns plus output fields) as a dataset stamped with that run's current History record. Fails if the run has no History record.
+- save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a dataset stamped with that process's current History record. Fails if the process has no History record.
 - apply_review: ref, review, suggestion_ids, name?. Creates a new prompt from the review's prompt with those suggestions applied.
 - update: node, set {field: value}. prompt: name, note, section_edits or sections, input_types, output. dataset: name, note, columns, rows (text-only ordinary datasets). process: name, code, primary_input. run: name, prompt, input_dataset, input_mapping (with History enabled, changing these inputs selects a different result or a new run). score: name, ground_truth, comparison (+ pairing, combine), match_code. sampler, review: name. A prompt or dataset that has produced results is locked: only its name and note can change; make a new version (add_prompt_version) or a new dataset (add_dataset) instead. A process's code stays editable; History keeps each run.
-- select_history: record_id. Restore that Run or Process record and its ancestor inputs. Use it alone in a proposal; the user sees and approves the affected nodes.
+- select_history: record_id. Restore that Run or Process record together with the matching upstream and downstream History lineage, including its Dataset connections. Use it alone in a proposal; the user sees and approves the affected nodes.
 - delete_history: record_id. Delete a non-current Run or Process record and every dependent history record. Use it alone in a proposal; the user sees the count before approving.
 - remove: node.`,
     {
@@ -144,9 +145,9 @@ Operations ("op" plus the fields listed):
   ),
   tool(
     'try_process',
-    'Run Process code on the canvas data without changing anything, to check it before proposing it. df is the primary dataset (only its first max_rows rows); other datasets are available as df_<alias> in full. Returns each output branch with its row count, columns and first rows, or the Python error. No model calls, nothing to confirm.',
+    'Run Process code on the canvas data without changing anything, to check it before proposing it. df is the primary dataset (only its first max_rows rows); each other dataset the code declares as a parameter named after its df_<alias> is passed in full. Returns each output branch with its row count, columns and first rows, or the Python error. No model calls, nothing to confirm.',
     {
-      code: { type: 'string', description: 'Python source defining process(df).' },
+      code: { type: 'string', description: 'Python source defining process(df, ...), one parameter per other input dataset.' },
       primary_input: { type: 'string', description: 'Exact id of the dataset used as df.' },
       max_rows: { type: 'integer', minimum: 1, maximum: 1000, description: 'Rows of the primary dataset to use. Default 50.' },
     },
@@ -259,7 +260,7 @@ async function tryProcess(args, runtime) {
   const code = String(args.code || '');
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) return { error: 'The code must define process(df).' };
   const bindings = runtime.getDatasetBindings(primary.nodeId);
-  const used = new Set(code.match(/\bdf_[A-Za-z_][A-Za-z0-9_]*\b/g) || []);
+  const used = referencedDatasetAliasNames(code);
   const unknown = [...used].filter((alias) => !bindings.some((b) => b.alias === alias));
   if (unknown.length) {
     return { error: `Unknown dataset alias ${unknown.join(', ')}. Available: ${bindings.filter((b) => !b.primary).map((b) => `${b.alias} ("${b.name}")`).join(', ')}` };

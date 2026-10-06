@@ -7,6 +7,7 @@
  */
 
 import { displayCell } from './datasetContent.js';
+import { showExecutionError } from './executionErrorPanel.js';
 
 export const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 const MAX_PREVIEW_CELL_CHARS = 200;
@@ -64,6 +65,10 @@ export function createRowResultsPanel({ container, idPrefix, buildActions }) {
 
   function showPlaceholder(text) {
     container.innerHTML = `<div class="run-detail-results-card"><div class="run-detail-results"><p class="run-detail-placeholder">${escapeHtml(text)}</p></div></div>`;
+  }
+
+  function showError(error, title = 'Execution failed') {
+    showExecutionError(container, { title, error, wrapInResultsCard: true });
   }
 
   function showResultsCard(headers, rows, statusText) {
@@ -158,5 +163,5 @@ export function createRowResultsPanel({ container, idPrefix, buildActions }) {
     refreshTable();
   }
 
-  return { showPlaceholder, showResultsCard };
+  return { showPlaceholder, showError, showResultsCard };
 }
