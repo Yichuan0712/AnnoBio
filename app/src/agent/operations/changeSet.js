@@ -9,7 +9,7 @@
  */
 import { normalizeDatasetContent } from '../../datasetContent.js';
 import { datasetHistorySource } from '../../datasetHistorySource.js';
-import { buildProcessDatasetBindings, referencedDatasetAliases } from '../../processDatasetBindings.js';
+import { buildProcessDatasetBindings, referencedDatasetAliasNames, referencedDatasetAliases } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
 import { buildRunResultsTable } from '../../runResultsExport.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
@@ -352,7 +352,7 @@ export function planChangeSet(state, operations, ctx) {
     if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) fail('Process code must define process(df).');
     const bindings = processAliases(primary.nodeId);
     const referenced = referencedDatasetAliases(code, bindings);
-    const unknown = [...new Set(code.match(/\bdf_[A-Za-z_][A-Za-z0-9_]*\b/g) || [])]
+    const unknown = [...referencedDatasetAliasNames(code)]
       .filter((alias) => !bindings.some((b) => b.alias === alias));
     if (unknown.length) {
       fail(`The code uses ${unknown.join(', ')}, which match no dataset. Available: ${bindings.filter((b) => !b.primary).map((b) => b.alias).join(', ') || '(none)'}.`);

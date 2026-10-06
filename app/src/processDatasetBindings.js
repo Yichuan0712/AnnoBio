@@ -19,8 +19,12 @@ export function buildProcessDatasetBindings(datasets, primaryDatasetId) {
   });
 }
 
+/** Python aliases always start with `df_`; the Dataset-derived part may start with a digit. */
+export function referencedDatasetAliasNames(code) {
+  return new Set(String(code || '').match(/\bdf_[A-Za-z0-9_]+\b/g) || []);
+}
+
 export function referencedDatasetAliases(code, bindings) {
-  const source = String(code || '');
-  const aliases = new Set(source.match(/\bdf_[A-Za-z_][A-Za-z0-9_]*\b/g) || []);
+  const aliases = referencedDatasetAliasNames(code);
   return new Set((bindings || []).filter((binding) => aliases.has(binding.alias)).map((binding) => binding.nodeId));
 }

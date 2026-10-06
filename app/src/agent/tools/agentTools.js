@@ -8,6 +8,7 @@ import { nodeTitle, readNodeRows, traceRunRow } from '../canvas/workflowNodeInsp
 import { loadSources } from '../operations/proposals.js';
 import { previewTableRows } from '../execution/runJobs.js';
 import { runProcessCode } from '../../processRunClient.js';
+import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 
 const MAX_TOOL_RESULT_CHARS = 24000;
 
@@ -259,7 +260,7 @@ async function tryProcess(args, runtime) {
   const code = String(args.code || '');
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) return { error: 'The code must define process(df).' };
   const bindings = runtime.getDatasetBindings(primary.nodeId);
-  const used = new Set(code.match(/\bdf_[A-Za-z_][A-Za-z0-9_]*\b/g) || []);
+  const used = referencedDatasetAliasNames(code);
   const unknown = [...used].filter((alias) => !bindings.some((b) => b.alias === alias));
   if (unknown.length) {
     return { error: `Unknown dataset alias ${unknown.join(', ')}. Available: ${bindings.filter((b) => !b.primary).map((b) => `${b.alias} ("${b.name}")`).join(', ')}` };
