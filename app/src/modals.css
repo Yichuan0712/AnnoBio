@@ -8880,6 +8880,8 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-runs .pipeline-overview-card-header { min-height: 27.6px; }
 .pipeline-runs .pipeline-overview-empty { margin: 4px 0; font-size: inherit; }
 .pipeline-runs-note { margin: -4px 0 8px; color: var(--text-muted); }
+.pipeline-runs-subtitle { margin: 0 0 6px; font-size: inherit; font-weight: 600; color: var(--text-muted); }
+.pipeline-runs-table + .pipeline-runs-subtitle { margin-top: 12px; }
 .pipeline-runs-table {
   width: 100%;
   /* Same column widths in every pipeline's table, so the stacked tables line up. */
@@ -8939,7 +8941,6 @@ button.btn.btn-danger:hover:not(:disabled) {
   align-items: center; gap: 7px; min-width: 0; font-size: 12px;
 }
 .pipeline-job-list li > span:last-of-type { color: var(--text-muted); overflow-wrap: anywhere; }
-.pipeline-run-note { margin: 6px 0 0; color: var(--text-muted); font-size: 11px; }
 
 @media (max-width: 620px) {
   .pipeline-job-list li { grid-template-columns: auto 1fr; }

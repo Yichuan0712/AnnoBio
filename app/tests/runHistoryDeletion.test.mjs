@@ -33,3 +33,23 @@ test('deletion rejects a current or running dependent record', async () => {
   await assert.rejects(session.planDelete('run-current', state), /current result/);
   await assert.rejects(session.planDelete('run-old', state, { runningNodeIds: ['process'] }), /running/);
 });
+
+test('single-node records leave out Pipeline imports and analysis records, loading each record once', async () => {
+  const stored = [
+    { id: 'manual', nodeId: 'run', kind: 'run', signature: 'a', status: 'completed', inputs: {} },
+    { id: 'piped', nodeId: 'run', kind: 'run', signature: 'a', status: 'completed', inputs: {}, pipelineRunId: 'p'.repeat(32) },
+    { id: 'tidy', nodeId: 'process', kind: 'process', signature: 'c', status: 'failed', inputs: {} },
+    { id: 'score', nodeId: 'score', kind: 'score', signature: 'd', status: 'completed', inputs: {} },
+  ];
+  let loads = 0;
+  const session = new RunHistorySession({
+    loadIndex: async () => ({ version: 1, records: stored.map(({ id, nodeId, kind, signature, status }) => ({ id, nodeId, kind, signature, status })) }),
+    loadRecord: async (_project, id) => { loads += 1; return stored.find((record) => record.id === id); },
+    saveRecord: async () => {}, saveCanvas: async () => {},
+  });
+  session.projectId = 'project';
+  session.index = await session.storage.loadIndex('project');
+  assert.deepEqual((await session.singleNodeRecords()).map((entry) => entry.id), ['manual', 'tidy']);
+  await session.contentLocks({ nodes: [], connections: [] });
+  assert.equal(loads, stored.length);
+});

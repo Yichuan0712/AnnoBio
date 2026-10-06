@@ -7,6 +7,11 @@ import { dependentHistoryIds } from './runHistoryDeletion.js';
 import { describeHistoryRecord } from './runHistoryPresentation.js';
 import { contentLocks, recordInputRefs } from './contentLocks.js';
 
+/** Record inputs and origin never change, so these are cached per record ID. */
+function recordFacts(record) {
+  return { inputRefs: recordInputRefs(record), pipelineRunId: String(record?.pipelineRunId || '') };
+}
+
 function hasLegacyOutput(node) {
   try {
     if (node.type === 'run') {
@@ -112,22 +117,30 @@ export class RunHistorySession {
   async putRecord(record) {
     if (!this.projectId) throw new Error('Open a project before using history.');
     await this.storage.saveRecord(this.projectId, record);
-    this.inputRefs?.set(record.id, recordInputRefs(record));
+    this.facts?.set(record.id, recordFacts(record));
     this.index = await this.storage.loadIndex(this.projectId);
   }
 
-  /** Locked Prompt / Dataset / Process nodes (contentLocks.js). Each record is loaded at most once per session. */
+  /** What the session needs from each record beyond its index entry; loaded at most once per record. */
+  async recordFacts() {
+    this.facts ??= new Map();
+    for (const entry of this.index.records) {
+      if (!this.facts.has(entry.id)) this.facts.set(entry.id, recordFacts(await this.storage.loadRecord(this.projectId, entry.id)));
+    }
+    return this.index.records.map((entry) => this.facts.get(entry.id));
+  }
+
+  /** Locked Prompt / Dataset / Process nodes (contentLocks.js). */
   async contentLocks(canvasState) {
     if (!this.projectId) return new Map();
-    this.inputRefs ??= new Map();
-    const refs = [];
-    for (const entry of this.index.records) {
-      if (!this.inputRefs.has(entry.id)) {
-        this.inputRefs.set(entry.id, recordInputRefs(await this.storage.loadRecord(this.projectId, entry.id)));
-      }
-      refs.push(this.inputRefs.get(entry.id));
-    }
-    return contentLocks(refs, canvasState);
+    return contentLocks((await this.recordFacts()).map((facts) => facts.inputRefs), canvasState);
+  }
+
+  /** Index entries of Run / Process results made on the node itself, not imported from a Pipeline run. */
+  async singleNodeRecords() {
+    if (!this.projectId) return [];
+    const facts = await this.recordFacts();
+    return this.index.records.filter((entry, index) => ['run', 'process'].includes(entry.kind) && !facts[index].pipelineRunId);
   }
 
   async capture(state, nodeId) {

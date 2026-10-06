@@ -196,7 +196,7 @@ P1.2 实现记录（2026-10-01）：
 
 补充（2026-10-06）：副本同时接到下游。本次读取某 artifact 的 Run 改读其副本，以它为主输入 `df` 的 Process 改连其副本；导入的下游 History 记录也以副本（按画布上的内容签名）为输入，因此整条链显示本次运行的结果，下次运行的路线也经过最新副本。只在节点仍读取原 Dataset 时改连。Process 的 `df_<name>` 合并输入不改：别名由代码按 Dataset 名称引用，副本无法接替，此类 Process 保持原连接。
 
-补充（2026-10-06）：运行结果移到 Current Pipeline 之后的 Pipeline Runs 页签。Current Pipeline 只负责选择和启动路线，不显示运行状态；最近一次运行只通过卡片上的 Stop/Resume 按钮体现。Pipeline Runs 按 Pipeline 分组（编号与 Current Pipeline 一致；运行按其 job 对应的 Run/Process 节点归入当前画布上的 Pipeline，对不上的归入 Other runs），每组一张运行表；点击一行在其下方展开各步状态和 Stop/Resume/Add results to canvas/Delete。面板不再列出产出或预览表格：运行结束后产出已作为 Dataset 副本加到画布并导入节点 History，在画布上查看；不在画布上的运行用 Add results to canvas 加回。删除只针对已结束的运行（`DELETE /api/pipeline/runs/{run_id}`），只删 Runner 中存的表；已加到画布和节点 History 的结果不受影响。桌面端运行归属记录在项目文件中（路径哈希 + 随机 id，见 `currentProject.js`），复制、移动或另存的文件从空的运行列表开始。
+补充（2026-10-06）：运行结果移到 Current Pipeline 之后的 Pipeline Runs 页签。Current Pipeline 只负责选择和启动路线，不显示运行状态；最近一次运行只通过卡片上的 Stop/Resume 按钮体现。Pipeline Runs 按 Pipeline 分组（编号与 Current Pipeline 一致；运行按其 job 对应的 Run/Process 节点归入当前画布上的 Pipeline，对不上的归入 Other runs），每组一张运行表；点击一行在其下方展开各步状态和 Stop/Resume/Add results to canvas/Delete。每组下另有 Single-node runs 表，列出该 Pipeline 各 Run/Process 节点上单独运行（非 Pipeline 导入）的 History 记录，点击定位并打开该节点。面板不再列出产出或预览表格：运行结束后产出已作为 Dataset 副本加到画布并导入节点 History，在画布上查看；不在画布上的运行用 Add results to canvas 加回。删除只针对已结束的运行（`DELETE /api/pipeline/runs/{run_id}`），只删 Runner 中存的表；已加到画布和节点 History 的结果不受影响。桌面端运行归属记录在项目文件中（路径哈希 + 随机 id，见 `currentProject.js`），复制、移动或另存的文件从空的运行列表开始。
 
 Runner 状态新增冻结的可展示执行计划：输入、依赖、模型快照、有效设置及调用量估计。单行形状的 LLM 可继续传播已知行数；经过 Process 或 table 形状后，下游调用量记为未知（`null`）。模型快照不含 API key；实际调用和恢复仍按凭据 ID 解析当前 secret。
 

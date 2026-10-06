@@ -5638,6 +5638,16 @@ export function buildWorkflowCanvas(root, options = {}) {
       showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
         host: workspacePanels.pipelineHost,
         runsHost: workspacePanels.tabHost('runs'),
+        // Results made on a Run / Process node itself, which Pipeline Runs lists beside whole-Pipeline runs.
+        getSingleNodeRuns: async () => {
+          if (!historySession?.projectId || canvasHistoryVersion !== 1) return [];
+          return (await historySession.singleNodeRecords()).map((entry) => ({
+            recordId: entry.id, nodeId: entry.nodeId, kind: entry.kind, status: entry.status,
+            createdAt: entry.createdAt, promptName: entry.summary?.promptName || '',
+          }));
+        },
+        // Opens the node's own window, where its History is, the same way a new node opens.
+        openCanvasNode: (nodeId) => getNodeById(nodeId)?.click(),
         getCanvasState,
         getPipelineProjectId,
         getAssetProjectId: getCurrentProjectId,
