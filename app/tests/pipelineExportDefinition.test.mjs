@@ -19,6 +19,21 @@ test('export carries node settings, row count and explicit input boundary, never
   assert.deepEqual(state, before);
 });
 
+test('other saved versions of a branch on the route are not sent as further Process outputs', () => {
+  const edges = [
+    { fromId: 'search', toId: 'pairs', type: 'process-to-dataset' },
+    { fromId: 'search', toId: 'pairs-copy', type: 'process-to-dataset' },
+    { fromId: 'search', toId: 'other', type: 'process-to-dataset' },
+  ];
+  const req = buildPipelineExportRequest({ name: 'Example', canvasState: {
+    nodes: [{ type: 'process', nodeId: 'search' }, { type: 'dataset', nodeId: 'pairs' },
+      { type: 'dataset', nodeId: 'pairs-copy', processOutputName: 'result', savedCopy: true },
+      { type: 'dataset', nodeId: 'other', processOutputName: 'other' }],
+    connections: edges,
+  }, route: [{ type: 'process', process_node_id: 'search' }, { type: 'dataset', dataset_node_id: 'pairs' }] });
+  assert.deepEqual(req.canvas_state.connections, [edges[0], edges[2]]);
+});
+
 test('omitted dependencies and conflicting producers remain visible to the compiler', () => {
   const edges = [
     { fromId: 'missing', toId: 'proc', type: 'dataset-to-process' },

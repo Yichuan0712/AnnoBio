@@ -9,7 +9,6 @@ import { exportPythonPipeline } from './pipelineExportClient.js';
 import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from './pipelineRouteSelection.js';
 import { buildPipelineCompileRequest, buildPipelineValidationPreview, pipelineInputHasAssets } from './pipelineRunDefinition.js';
 import { datasetProducerConflicts } from './pipelineProducerConflicts.js';
-import { datasetSnapshotStatus } from './datasetSnapshotStatus.js';
 import {
   cancelPipelineRun,
   compileCurrentPipeline,
@@ -553,12 +552,8 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     const conflictNotice = conflicts.length
       ? `<div class="pipeline-run-validation pipeline-run-validation--error">Dataset source conflict: ${escapeHtml(conflicts.map((item) => names.get(item.datasetId) || item.datasetId).join(', '))}. Remove the extra producer link before running or exporting.</div>`
       : '';
-    const stale = (state?.nodes || []).filter((node) => node.type === 'dataset'
-      && datasetSnapshotStatus(node, state.nodes, state.connections) === 'stale');
-    const staleNotice = stale.length
-      ? `<div class="pipeline-run-validation">Saved Dataset copies with changed sources: ${escapeHtml(stale.map((node) => node.name || node.nodeId).join(', '))}. These tables stay frozen in single-node runs; a full Pipeline uses new upstream outputs when their producers are selected.</div>`
-      : '';
-    const nextWarnings = conflictNotice + staleNotice;
+    // Saved copies whose source has moved on are shown on the canvas as dashed edges, not listed here.
+    const nextWarnings = conflictNotice;
     const nextSignature = JSON.stringify({ pipelines: nextPipelines, warnings: nextWarnings });
     if (nextSignature !== pipelineSignature) {
       pipelines = nextPipelines;
