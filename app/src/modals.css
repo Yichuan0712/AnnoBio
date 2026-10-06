@@ -8913,7 +8913,7 @@ button.btn.btn-danger:hover:not(:disabled) {
 /* Run Pipeline dialog: a card per step that reads a Dataset from outside the Pipeline. Clicking a
    card opens that node, like a Current Pipeline step; a problem found on Run sits on its card. */
 .modal-panel.pipeline-run-dialog { width: min(460px, 92vw); }
-.pipeline-run-dialog__body { padding: 16px 20px 8px; max-height: min(65vh, 560px); overflow-y: auto; }
+.pipeline-run-dialog__body { min-height: 0; padding: 16px 20px 8px; max-height: min(65vh, 560px); overflow-y: auto; }
 .pipeline-run-dialog__intro { margin: 0 0 12px; font-size: 12.5px; color: var(--text-muted); }
 .pipeline-run-dialog__steps { display: flex; flex-direction: column; gap: 8px; }
 .pipeline-run-dialog__step {
@@ -8931,7 +8931,6 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-run-dialog__step:hover .pipeline-run-dialog__open { color: var(--accent); }
 .pipeline-run-dialog__datasets { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; }
 .pipeline-run-dialog__dataset { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.pipeline-run-dialog__rows { color: var(--text-muted); }
 .pipeline-run-dialog__problem { font-size: 12px; line-height: 1.45; color: var(--status-danger); }
 .pipeline-run-dialog__errors { margin: 12px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.5; color: var(--status-danger); }
 /* Pipeline Runs tab: one section per pipeline, titled and spaced like the Current Pipeline cards, with

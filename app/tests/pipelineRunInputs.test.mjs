@@ -34,8 +34,8 @@ test('Run Pipeline lists each step that reads a Dataset from outside the route, 
   ];
   // The Join reads Extracted from inside the route, so only its Lookup is listed.
   assert.deepEqual(pipelineInputSteps(state, route), [
-    { nodeId: 'r1', kind: 'run', name: 'Extract', inputs: [{ nodeId: 'sample', name: 'Sampled examples', rows: 2, colorIndex: 2 }] },
-    { nodeId: 'r2', kind: 'run', name: 'Explain', inputs: [{ nodeId: 'sample', name: 'Sampled examples', rows: 2, colorIndex: 2 }] },
-    { nodeId: 'join', kind: 'process', name: 'Join', inputs: [{ nodeId: 'lookup', name: 'Lookup', rows: 1, colorIndex: undefined }] },
+    { nodeId: 'r1', kind: 'run', name: 'Extract', inputs: [{ nodeId: 'sample', name: 'Sampled examples', colorIndex: 2 }] },
+    { nodeId: 'r2', kind: 'run', name: 'Explain', inputs: [{ nodeId: 'sample', name: 'Sampled examples', colorIndex: 2 }] },
+    { nodeId: 'join', kind: 'process', name: 'Join', inputs: [{ nodeId: 'lookup', name: 'Lookup', colorIndex: undefined }] },
   ]);
 });
