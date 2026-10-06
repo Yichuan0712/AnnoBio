@@ -12,7 +12,7 @@ from unittest import mock
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from backend.pipeline_runner import PipelineRunner
+from backend.pipeline_runner import PipelineRunConflict, PipelineRunNotFound, PipelineRunner
 from backend.pipeline_runtime_adapters import PipelineJobCancelled, PipelineJobError, execute_llm_job
 from backend.test_pipeline_compile import branched, route_for
 
@@ -265,6 +265,32 @@ class PipelineRunnerTests(unittest.TestCase):
         self.assertIn(duplicate_resume["status"], {"pending", "running"})
         self.runner.cancel("idem", failed_run["run_id"])
         self.wait("idem", failed_run["run_id"])
+
+    def test_delete_removes_only_a_finished_run(self):
+        state, route = serial_state([["one"]])
+        self.block_jobs = True
+        active = self.runner.start(project_id="cleanup", canvas_state=state, route=route, input_dataset_ids=["raw"])
+        with self.assertRaises(PipelineRunConflict):
+            self.runner.delete("cleanup", active["run_id"])
+        self.runner.cancel("cleanup", active["run_id"])
+        self.wait("cleanup", active["run_id"])
+        self.block_jobs = False
+        parent = self.runner.start(project_id="cleanup", canvas_state=state, route=route, input_dataset_ids=["raw"])
+        self.wait("cleanup", parent["run_id"])
+        revised = self.runner.revise("cleanup", parent["run_id"], canvas_state=state, route=route,
+                                     input_dataset_ids=["raw"])
+        self.wait("cleanup", revised["run_id"])
+
+        listed = {item["run_id"]: item for item in self.runner.list_runs("cleanup")}
+        self.assertEqual(listed[parent["run_id"]]["job_ids"], [job["job_id"] for job in parent["jobs"]])
+        self.assertEqual(listed[parent["run_id"]]["succeeded_job_count"], len(parent["jobs"]))
+
+        self.runner.delete("cleanup", parent["run_id"])
+        self.assertNotIn(parent["run_id"], [item["run_id"] for item in self.runner.list_runs("cleanup")])
+        with self.assertRaises(PipelineRunNotFound):
+            self.runner.status("cleanup", parent["run_id"])
+        # A revision copied what it reused, so it stays readable without its parent.
+        self.assertTrue(self.runner.results("cleanup", revised["run_id"])["outputs"])
 
     def test_revision_reuses_only_unchanged_upstream(self):
         state, route = serial_state([["one"]])

@@ -2,7 +2,7 @@
 
 日期：2026-09-30。代码基线：`main` / `0b257f9`。
 
-状态：编译器、导出器、后端 Runner 和 Current Pipeline 面板运行入口已实现；面板运行历史列表与清理尚未完成，Agent 仍不能启动整条 Pipeline。多起点 Dataset 的 Python 导出已支持命名输入。其余 Phase 2 工作待实现。
+状态：编译器、导出器、后端 Runner 和 Current Pipeline 面板运行入口已实现；运行记录在 Pipeline Runs 页签中查看并可逐条删除，自动保留规则尚未实现，Agent 仍不能启动整条 Pipeline。多起点 Dataset 的 Python 导出已支持命名输入。其余 Phase 2 工作待实现。
 
 本文记录实施范围、执行语义、阶段顺序和验收标准。勾选表示实际完成并验证，不表示仅完成讨论。按里程碑逐步实施代码。
 
@@ -183,9 +183,10 @@ P1.2 实现记录（2026-10-01）：
 - [x] Current Pipeline 增加校验、Run、Stop、Retry/Resume 入口。
 - [x] 显示选中路线、输入数量、所用模型、整体和各 job 状态。
 - [x] 动态 Process/table 输出导致调用量未知时，明确显示未知，不给出虚假的精确成本。
-- [x] 预览中间/最终 artifact，并显式另存为工作区 Dataset。
+- [x] 预览中间/最终 artifact，并显式另存为工作区 Dataset。（2026-10-06 起改为运行结束后自动加到画布，面板内预览已移除。）
 - [x] 页面刷新可重新附着；画布修改不改变本次冻结的执行计划。
-- [ ] 运行历史列表与清理（保留规则、删除入口），与面板运行入口一起设计。
+- [x] 运行历史列表与删除入口（Pipeline Runs 页签）。
+- [ ] 运行历史保留规则（自动清理）。
 
 验收：用户在 UI 中启动链路、查看结果并保存输出；执行中的路线与编译预览一致。
 
@@ -194,6 +195,8 @@ P1.2 实现记录（2026-10-01）：
 补充（2026-10-05）：面板轮询重绘时保留 runtime checks 的展开状态。Runner 提供项目级运行列表及冻结定义读取；面板显示 Pipeline History。运行结束后，即使整条 Pipeline 失败或取消，前端也按冻结 artifact 把已成功的 Run/Process job 导入节点 History，并为每个有效的产出 artifact 新建带 Pipeline 运行 ID 的 Dataset 副本；无效的部分结果仍只供预览。History 记录 ID 确定且 Dataset 带来源标记，重新打开项目或手动重试同步不会重复创建；旧运行没有冻结画布定义时，仅在当前节点配置与冻结 spec 相符时补录节点 History。
 
 补充（2026-10-06）：副本同时接到下游。本次读取某 artifact 的 Run 改读其副本，以它为主输入 `df` 的 Process 改连其副本；导入的下游 History 记录也以副本（按画布上的内容签名）为输入，因此整条链显示本次运行的结果，下次运行的路线也经过最新副本。只在节点仍读取原 Dataset 时改连。Process 的 `df_<name>` 合并输入不改：别名由代码按 Dataset 名称引用，副本无法接替，此类 Process 保持原连接。
+
+补充（2026-10-06）：运行结果移到 Current Pipeline 之后的 Pipeline Runs 页签。Current Pipeline 只负责选择和启动路线，不显示运行状态；最近一次运行只通过卡片上的 Stop/Resume 按钮体现。Pipeline Runs 按 Pipeline 分组（编号与 Current Pipeline 一致；运行按其 job 对应的 Run/Process 节点归入当前画布上的 Pipeline，对不上的归入 Other runs），每组一张运行表；点击一行在其下方展开各步状态和 Stop/Resume/Add results to canvas/Delete。面板不再列出产出或预览表格：运行结束后产出已作为 Dataset 副本加到画布并导入节点 History，在画布上查看；不在画布上的运行用 Add results to canvas 加回。删除只针对已结束的运行（`DELETE /api/pipeline/runs/{run_id}`），只删 Runner 中存的表；已加到画布和节点 History 的结果不受影响。桌面端运行归属记录在项目文件中（路径哈希 + 随机 id，见 `currentProject.js`），复制、移动或另存的文件从空的运行列表开始。
 
 Runner 状态新增冻结的可展示执行计划：输入、依赖、模型快照、有效设置及调用量估计。单行形状的 LLM 可继续传播已知行数；经过 Process 或 table 形状后，下游调用量记为未知（`null`）。模型快照不含 API key；实际调用和恢复仍按凭据 ID 解析当前 secret。
 

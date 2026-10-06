@@ -5637,12 +5637,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (pipeline) {
       showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
         host: workspacePanels.pipelineHost,
+        runsHost: workspacePanels.tabHost('runs'),
         getCanvasState,
         getPipelineProjectId,
         getAssetProjectId: getCurrentProjectId,
-        saveArtifactAsDataset: ({ name, notes, logicalId, headers, rows, columnTypes, rowIds }) => addDatasetNode({
-          name, notes, headers, rows, columnTypes, rowIds, ...pipelineResultPosition(logicalId),
-        }),
         publishPipelineRun: async ({ run, definition, getArtifact }) => {
           const canvasProjectId = getCurrentProjectId();
           if (await getPipelineProjectId() !== run.project_id) throw new Error('The open project changed while publishing Pipeline results.');
@@ -5808,6 +5806,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }, {
     bottomTabs: [
       { id: 'pipeline', label: 'Current Pipeline' },
+      { id: 'runs', label: 'Pipeline Runs' },
       { id: 'optimization', label: 'Prompt Optimization' },
       ...(isElectron ? [{ id: 'log', label: 'Log' }, { id: 'errors', label: 'Errors' }] : []),
     ],
