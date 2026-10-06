@@ -41,3 +41,34 @@ export function referencedDatasetAliases(code, bindings, savedAliases = {}) {
   }
   return result;
 }
+
+/**
+ * Every canvas Dataset as one Process sees it, in canvas order. `input` marks the Datasets the
+ * Process reads: its primary `df`, each one chosen for it (`inputIds`, its dataset-to-process
+ * connections) and each one its code names (`referenced`). Another input keeps the alias it was
+ * saved with, so renaming its Dataset does not break the code; every alias is unique, and a Dataset
+ * that is not an input shows the alias it would get.
+ * @param {{ datasets: Array<{nodeId: string, name: string}>, primaryDatasetId: string,
+ *   inputIds?: Iterable<string>, savedAliases?: Record<string, string>, code?: string }} options
+ * @returns {Array<{nodeId: string, name: string, alias: string, primary: boolean, input: boolean, referenced: boolean}>}
+ */
+export function processDatasetInputs({ datasets, primaryDatasetId, inputIds = [], savedAliases = {}, code = '' }) {
+  const chosen = new Set(inputIds);
+  const savedAlias = (nodeId) => {
+    const alias = String(savedAliases?.[nodeId] || '');
+    return nodeId !== primaryDatasetId && /^df_[A-Za-z0-9_]+$/.test(alias) ? alias : '';
+  };
+  const claimed = new Set((datasets || []).map((dataset) => savedAlias(dataset.nodeId)).filter(Boolean));
+  const named = referencedDatasetAliasNames(code);
+  return buildProcessDatasetBindings(datasets, primaryDatasetId).map((binding) => {
+    if (binding.primary) return { ...binding, input: true, referenced: false };
+    let alias = savedAlias(binding.nodeId);
+    if (!alias) {
+      alias = binding.alias;
+      for (let suffix = 2; claimed.has(alias); suffix += 1) alias = `${binding.alias}_${suffix}`;
+      claimed.add(alias);
+    }
+    const referenced = named.has(alias);
+    return { ...binding, alias, input: referenced || chosen.has(binding.nodeId), referenced };
+  });
+}

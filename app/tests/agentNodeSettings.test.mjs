@@ -87,3 +87,19 @@ test('Agent identifies legacy saved Dataset snapshots as snapshots', async () =>
   const summary = await buildWorkspaceSummary(state, { extractInputFields });
   assert.match(summary, /saved snapshot of run "Run"/);
 });
+
+test('editing Process code keeps the inputs chosen in its window and their aliases', () => {
+  const state = canvas();
+  state.nodes.push(
+    { type: 'dataset', nodeId: 'copy', name: 'GT (Copy 1)', datasetContent: { headers: ['answer'], rows: [['A']] } },
+    { type: 'process', nodeId: 'merge', name: 'Merge', primaryDatasetId: 'raw', dfCode: 'def process(df):\n    return df\n',
+      datasetAliases: JSON.stringify({ raw: 'df', copy: 'df_gt', gt: 'df_gt_copy' }) },
+  );
+  state.connections.push({ fromId: 'raw', toId: 'merge', type: 'dataset-to-process' },
+    { fromId: 'copy', toId: 'merge', type: 'dataset-to-process' });
+  const code = 'def process(df):\n    return df.join(df_gt)\n';
+  const result = planChangeSet(state, [{ op: 'update', node: 'merge', set: { code } }], { extractInputFields });
+  const merge = result.state.nodes.find((node) => node.nodeId === 'merge');
+  assert.deepEqual(JSON.parse(merge.datasetAliases), { raw: 'df', copy: 'df_gt' });
+  assert.deepEqual(result.state.connections.filter((edge) => edge.toId === 'merge').map((edge) => edge.fromId).sort(), ['copy', 'raw']);
+});
