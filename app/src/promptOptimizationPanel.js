@@ -33,14 +33,14 @@ async function saveFamilyWorkbook(family, metrics) {
     wch: Math.min(60, Math.max(10, ...rows.map((row) => String(row[c] ?? '').length + 2))),
   }));
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, 'Prompt optimization');
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Prompt Version');
   const payload = XLSX.write(workbook, { bookType: 'xlsx', type: 'base64' });
 
-  const fileName = `${sanitizeFilename(family.versions[0]?.name)} - prompt optimization.xlsx`;
+  const fileName = `${sanitizeFilename(family.versions[0]?.name)} - prompt version.xlsx`;
   const api = window.electronAPI;
   if (api?.showSaveFileDialog && api?.writeFile) {
     const path = await api.showSaveFileDialog({
-      title: 'Export Prompt Optimization',
+      title: 'Export Prompt Version',
       defaultPath: fileName,
       filters: [{ name: 'Excel', extensions: ['xlsx'] }],
     });

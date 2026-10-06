@@ -5608,13 +5608,20 @@ export function buildWorkflowCanvas(root, options = {}) {
       showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
         host: workspacePanels.pipelineHost,
         runsHost: workspacePanels.tabHost('runs'),
-        // Results made on a Run / Process node itself, which Pipeline Runs lists beside whole-Pipeline runs.
-        getSingleNodeRuns: async () => {
+        // Run and Process History. Records from a Pipeline run carry pipelineRunId; the rest are single-node results.
+        getHistoryEntries: async () => {
           if (!historySession?.projectId || canvasHistoryVersion !== 1) return [];
-          return (await historySession.singleNodeRecords()).map((entry) => ({
-            recordId: entry.id, nodeId: entry.nodeId, kind: entry.kind, status: entry.status,
-            createdAt: entry.createdAt, promptName: entry.summary?.promptName || '',
-          }));
+          const facts = await historySession.recordFacts();
+          return historySession.index.records.flatMap((entry, index) => {
+            if (!['run', 'process'].includes(entry.kind)) return [];
+            const summary = entry.summary || {};
+            return [{
+              recordId: entry.id, nodeId: entry.nodeId, kind: entry.kind, status: entry.status,
+              createdAt: entry.createdAt, pipelineRunId: facts[index]?.pipelineRunId || '',
+              promptName: summary.promptName || '', datasetNames: summary.datasetNames || [],
+              rowCount: summary.rowCount, errorCount: summary.errorCount || 0, model: summary.model || '',
+            }];
+          });
         },
         // Opens the node's own window, where its History is, the same way a new node opens.
         openCanvasNode: (nodeId) => getNodeById(nodeId)?.click(),
@@ -5787,8 +5794,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   }, {
     bottomTabs: [
       { id: 'pipeline', label: 'Current Pipeline' },
-      { id: 'runs', label: 'Pipeline Runs' },
-      { id: 'optimization', label: 'Prompt Optimization' },
+      { id: 'runs', label: 'Runtime' },
+      { id: 'optimization', label: 'Prompt Version' },
       ...(isElectron ? [{ id: 'log', label: 'Log' }, { id: 'errors', label: 'Errors' }] : []),
     ],
     onCollapse: () => currentPipelineBtn.focus(),
