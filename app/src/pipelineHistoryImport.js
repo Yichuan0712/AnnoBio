@@ -62,6 +62,22 @@ function runResults(table, inputColumnCount, fields) {
   }));
 }
 
+/** Job inputs that move onto the Dataset copies a Pipeline run published: a Run's Dataset, or a
+ * Process's primary `df`. Other Process inputs are bound by `df_<name>` aliases the Process code
+ * derives from Dataset names, which a copy cannot take over, so such a Process stays as it is.
+ * @param {Map<string, string>} copyIds logical artifact id -> published copy node id
+ * @returns {Map<string, Map<string, string>>} job id -> (logical artifact id -> copy node id) */
+export function pipelineCopyInputs(spec, copyIds) {
+  const moves = new Map();
+  for (const job of spec?.jobs || []) {
+    if (job.type !== 'llm' && job.type !== 'process') continue;
+    const inputs = Object.entries(job.inputs || {}).filter(([, logicalId]) => copyIds.has(logicalId));
+    if (!inputs.length || (job.type === 'process' && inputs.some(([alias]) => alias !== 'df'))) continue;
+    moves.set(job.id, new Map(inputs.map(([, logicalId]) => [logicalId, copyIds.get(logicalId)])));
+  }
+  return moves;
+}
+
 async function recordId(runId, nodeId) {
   const signature = await sha256Signature({ pipelineRunId: runId, nodeId });
   return signature.slice('sha256:'.length, 'sha256:'.length + 32);
@@ -69,8 +85,10 @@ async function recordId(runId, nodeId) {
 
 /** Import completed Pipeline jobs into the same Run/Process History used by node detail views.
  * Every input is read from the Pipeline's immutable artifacts, never from a possibly edited canvas.
- * Deterministic record IDs make retries and project reopen safe. */
-export async function importPipelineRunHistory({ run, definition, getArtifact, session }) {
+ * Deterministic record IDs make retries and project reopen safe.
+ * `inputCopies` (job id -> logical id -> {nodeId, name, content}) records an input as the published
+ * Dataset copy its consumer is moved onto (pipelineCopyInputs), with the copy's canvas content. */
+export async function importPipelineRunHistory({ run, definition, getArtifact, session, inputCopies = new Map() }) {
   if (!session?.projectId || !definition?.canvas_state?.nodes || !definition?.spec?.jobs) {
     throw new Error('This Pipeline run has no frozen node definition for History import.');
   }
@@ -88,14 +106,23 @@ export async function importPipelineRunHistory({ run, definition, getArtifact, s
     }
     return tables.get(logicalId);
   };
-  const inputSnapshot = async (logicalId) => {
+  const inputSnapshot = async (logicalId, jobId) => {
     const artifact = artifacts.get(logicalId);
     const datasetId = String(logicalId).replace(/^dataset:/, '');
     const dataset = nodes.get(datasetId);
     if (!artifact || !dataset || dataset.type !== 'dataset') throw new Error(`Pipeline Dataset definition is missing: ${logicalId}`);
-    const content = await getTable(logicalId);
     const producer = artifact.producer;
     const upstreamPipelineRecordId = producer ? imported.get(producer.job_id) : null;
+    const published = inputCopies.get(jobId)?.get(logicalId);
+    if (published) {
+      // A saved copy: signed by its content, exactly as the canvas holds it.
+      return {
+        nodeId: published.nodeId, name: published.name || published.nodeId, content: copy(published.content),
+        signature: await datasetSignature({ nodeId: published.nodeId, content: published.content }),
+        ...(upstreamPipelineRecordId ? { upstreamPipelineRecordId } : {}),
+      };
+    }
+    const content = await getTable(logicalId);
     const sourceRecordId = !dataset.savedCopy ? upstreamPipelineRecordId : null;
     const sourceIds = sourceRecordId ? spec.source_map?.[producer.job_id]?.node_ids || [] : [];
     const sourceNodeId = sourceIds.at(-1);
@@ -129,7 +156,7 @@ export async function importPipelineRunHistory({ run, definition, getArtifact, s
     if (job.type === 'llm') {
       const promptId = sourceIds[0];
       const prompt = nodes.get(promptId);
-      const input = await inputSnapshot(job.inputs.data);
+      const input = await inputSnapshot(job.inputs.data, job.id);
       if (!prompt || prompt.type !== 'prompt') throw new Error(`Pipeline Prompt definition is missing: ${promptId}`);
       if (input.upstreamPipelineRecordId) sourceRecordIds.add(input.upstreamPipelineRecordId);
       const promptSnapshot = {
@@ -161,7 +188,7 @@ export async function importPipelineRunHistory({ run, definition, getArtifact, s
     } else if (job.type === 'process') {
       const bindings = [];
       for (const [alias, logicalId] of Object.entries(job.inputs || {})) {
-        const snapshot = await inputSnapshot(logicalId);
+        const snapshot = await inputSnapshot(logicalId, job.id);
         if (snapshot.upstreamPipelineRecordId) sourceRecordIds.add(snapshot.upstreamPipelineRecordId);
         bindings.push({ ...snapshot, alias });
       }

@@ -119,6 +119,14 @@ const ACTIVE_RUN_STATES = new Set(['pending', 'running', 'cancelling']);
 const RESUMABLE_RUN_STATES = new Set(['failed', 'cancelled', 'interrupted']);
 const PUBLISHABLE_RUN_STATES = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 
+/** Note shown on a Dataset saved from a Pipeline run: when it ran (as Pipeline History lists it)
+ * and, when known, the step that made the table. */
+export function pipelineResultNote(run, sourceLabel = '') {
+  const at = run?.finished_at || run?.created_at;
+  const when = at ? ` on ${new Date(at).toLocaleString()}` : '';
+  return `Saved from Pipeline run${when}.${sourceLabel ? `\nOutput of ${sourceLabel}.` : ''}`;
+}
+
 function displayValue(value) {
   if (value == null) return '';
   if (typeof value === 'object') {
@@ -337,6 +345,12 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     }
     catch (_) { return false; }
   }
+  /** Runs live outside the project file, so results missing from the canvas after they were added
+   * once were removed by the user (deleted, or an older save restored); only "Add results to canvas" brings them back. */
+  function everPublished(runId) {
+    try { return localStorage.getItem(publishedKey(attachedProjectId, runId)) === '1'; }
+    catch (_) { return false; }
+  }
   function storedRuns(projectId) {
     try {
       const value = JSON.parse(localStorage.getItem(storageKey(projectId)) || '[]');
@@ -375,10 +389,11 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     runHistory = [summary, ...runHistory.filter((item) => item.run_id !== run.run_id)]
       .sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')));
   }
-  async function publishCompletedRun(run) {
+  async function publishCompletedRun(run, { manual = false } = {}) {
     const produced = (run?.artifacts || []).filter((item) => item.valid && item.producer).map((item) => item.logical_id);
     if (!publishPipelineRun || !PUBLISHABLE_RUN_STATES.has(run?.status) || !run?.run_id || !produced.length
       || wasPublished(run.run_id, produced)
+      || (!manual && everPublished(run.run_id))
       || publishingRunIds.has(run.run_id)) return;
     const projectId = attachedProjectId;
     publishingRunIds.add(run.run_id);
@@ -472,7 +487,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     persistRuns();
     const latestUnpublished = runHistory.find((item) => PUBLISHABLE_RUN_STATES.has(item.status)
       && item.produced_artifact_ids?.length
-      && !wasPublished(item.run_id, item.produced_artifact_ids));
+      && !everPublished(item.run_id));
     if (latestUnpublished) {
       const run = await getPipelineRun(projectId, latestUnpublished.run_id).catch(() => null);
       if (run) await publishCompletedRun(run);
@@ -621,7 +636,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       try {
         const run = await getPipelineRun(attachedProjectId, historyButton.dataset.historyRunId);
         rememberRun(run);
-        if (historyButton.classList.contains('pipeline-history-sync')) await publishCompletedRun(run);
+        if (historyButton.classList.contains('pipeline-history-sync')) await publishCompletedRun(run, { manual: true });
         else {
           selectedHistoryRun = run;
           const result = await getPipelineResults(attachedProjectId, run.run_id);
@@ -665,13 +680,15 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (saveButton && !saveButton.disabled) {
       const context = selectedPipelineContext(saveButton);
       const entry = runEntriesByPipelineId.get(context.pipelineId);
-      const preview = saveButton.closest('.pipeline-history-detail') ? selectedHistoryPreview : entry?.preview;
+      const fromHistory = !!saveButton.closest('.pipeline-history-detail');
+      const preview = fromHistory ? selectedHistoryPreview : entry?.preview;
       if (!preview?.table || !saveArtifactAsDataset) return;
       saveButton.disabled = true;
       try {
         await saveArtifactAsDataset({
           name: preview.artifact?.name || 'Pipeline result',
-          notes: `Saved from Pipeline run ${saveButton.closest('.pipeline-history-detail') ? selectedHistoryRun.run_id : entry.run.run_id}. Logical artifact: ${preview.logical_id}.`,
+          notes: pipelineResultNote(fromHistory ? selectedHistoryRun : entry.run),
+          logicalId: preview.logical_id,
           headers: preview.table.headers || [],
           rows: preview.table.rows || [],
           columnTypes: preview.table.column_types || [],
@@ -730,6 +747,8 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
             projectId, assetProjectId: getAssetProjectId(),
             canvasState, route: context.route, requestId: entry.requestId,
           });
+          // Autosave writes the file's run owner (currentProject.js), so the run stays listed after reopening.
+          document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           entry.published = false;
           rememberRun(entry.run);
           entry.needsAssets = pipelineInputHasAssets(canvasState, context.route);
