@@ -50,15 +50,15 @@ class ProcessDataframeExecutionTests(unittest.TestCase):
         self.assertTrue(outcome["ok"])
         self.assertEqual(outcome["outputs"]["result"], [{"value": "reference", "primary_rows": 1}])
 
-    def test_safe_dataset_id_alias_is_available_to_process_code(self):
+    def test_alias_from_numeric_dataset_name_is_available_to_process_code(self):
         outcome = run_process_df_code(
             sys.executable,
-            "def process(df):\n    return df_reference_2\n",
+            "def process(df):\n    return df_13_explain_sentiment_results\n",
             ["value"],
             [["primary"]],
             input_datasets={
                 "df": {"headers": ["value"], "rows": [["primary"]]},
-                "df_reference_2": {"headers": ["value"], "rows": [["reference"]]},
+                "df_13_explain_sentiment_results": {"headers": ["value"], "rows": [["reference"]]},
             },
             primary_dataset_id="df",
         )
