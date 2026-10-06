@@ -422,7 +422,8 @@ else:
             self.assertIn('namespace[alias] = frame', main)
             self.assertIn("branch(result, 'left'", main)
             self.assertIn("REQUIRED_INPUT_COLUMNS = ['text']", main)
-            self.assertIn("frames: dict[str, pd.DataFrame] = {'raw':", main)
+            self.assertIn("frames: dict[str, pd.DataFrame] = {}", main)
+            self.assertIn("'id': 'raw'", main)
             self.assertEqual(manifest["graph"]["terminal_datasets"], [{"id": "answered", "name": "Answered"}])
             for member in bundle.namelist():
                 if member.endswith(".py"):

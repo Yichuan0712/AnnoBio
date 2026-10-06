@@ -80,6 +80,14 @@ export function getPipelineRun(projectId, runId) {
   return jsonRequest(`/api/pipeline/runs/${encodeURIComponent(runId)}?project_id=${encodeURIComponent(projectId)}`);
 }
 
+export function listPipelineRuns(projectId) {
+  return jsonRequest(`/api/pipeline/runs?project_id=${encodeURIComponent(projectId)}`);
+}
+
+export function getPipelineRunDefinition(projectId, runId) {
+  return jsonRequest(`/api/pipeline/runs/${encodeURIComponent(runId)}/definition?project_id=${encodeURIComponent(projectId)}`);
+}
+
 export function cancelPipelineRun(projectId, runId) {
   return jsonRequest(`/api/pipeline/runs/${encodeURIComponent(runId)}/cancel?project_id=${encodeURIComponent(projectId)}`, {
     method: 'POST',

@@ -50,6 +50,8 @@ def compile_and_export(*, canvas_state, route, name, credentials=None, default_c
 
 def _is_linear(spec):
     """Choose a rendering style using compiled ports only, never canvas edges."""
+    if len(spec["inputs"]) != 1:
+        return False
     current = spec["inputs"][0]
     for job in spec["jobs"]:
         outputs = [a for group in job["outputs"].values() for a in group]
@@ -57,6 +59,19 @@ def _is_linear(spec):
             return False
         current = outputs[0]
     return spec["outputs"] == [current]
+
+
+def _multi_input_data_markdown(inputs):
+    lines = ["# Input Datasets", "", "Provide one Excel workbook for each Dataset:", ""]
+    for item in inputs:
+        columns = ", ".join(f"`{column}`" for column in item["columns"]) or "(none)"
+        lines.append(f"- `{item['id']}` ({item['name']}): required columns {columns}")
+    lines.extend(["", "Image and PDF paths are resolved relative to their own input workbook.",
+                  "Run with one `--input DATASET_ID=FILE.xlsx` per Dataset:", "",
+                  "```bash", "python main.py " + " ".join(
+                      f"--input {item['id']}=/path/to/{item['id']}.xlsx" for item in inputs) + " --output output.xlsx",
+                  "```", "", "Each workbook uses the `Input` worksheet by default. `--sheet` changes it for all inputs.", ""])
+    return "\n".join(lines)
 
 
 def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at=None, force_graph=False):
@@ -67,8 +82,8 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
     """
     if spec.get("format") != "annobio.pipeline-spec" or spec.get("format_version") != 1:
         raise render.PipelineExportError("Unsupported compiled PipelineSpec version.")
-    if len(spec["inputs"]) != 1:
-        raise render.PipelineExportError("Python export currently needs exactly one starting Dataset. The compiled graph is valid, but multi-input export is not yet supported.")
+    if not spec["inputs"]:
+        raise render.PipelineExportError("Python export needs at least one starting Dataset.")
     if not spec["jobs"]:
         raise render.PipelineExportError("Python export needs at least one Process or Prompt Run.")
     uses_llm = any(j["type"] == "llm" for j in spec["jobs"])
@@ -79,6 +94,12 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
     data_id = {a: a.removeprefix("dataset:") if a.startswith("dataset:") else a for a in artifacts}
     source = spec["source_map"]
     first = artifacts[spec["inputs"][0]]
+    input_artifacts = [artifacts[aid] for aid in spec["inputs"]]
+    dag_inputs = [{"id": data_id[a["id"]], "name": a["name"],
+                   "columns": [column["name"] for column in a["schema"]["columns"]],
+                   "asset_columns": [column["name"] for column in a["schema"]["columns"]
+                                     if column.get("type") in {"image", "pdf"}]}
+                  for a in input_artifacts]
     input_schema = {"sheet": "Input", "columns": first["schema"]["columns"]}
     linear = not force_graph and _is_linear(spec)
     files, steps, executable = [], [], []
@@ -143,19 +164,23 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
         "authors": {"workflow": metadata.workflow_author, "exported_project": "AnnoBio"},
         "input": {"format": "xlsx", **input_schema}, "engines": ["litellm", "openrouter"] if uses_llm else [],
         "default_engine": engine, "output": {"format": "xlsx"}, "execution": portable}
+    if len(dag_inputs) > 1:
+        manifest["inputs"] = [{"id": item["id"], "name": item["name"], "format": "xlsx",
+                              "sheet": "Input", "columns": item["columns"]} for item in dag_inputs]
     if linear:
         manifest["route"] = route_steps
         main = render._main_module(executable, columns, 4, metadata)
     else:
         manifest["graph"] = {"steps": steps, "terminal_datasets": outputs}
         manifest["output"]["worksheets"] = outputs
-        main = _dag_main(executable, data_id[first["id"]], columns, outputs, 4, metadata)
+        main = _dag_main(executable, dag_inputs, outputs, 4, metadata)
     if not uses_llm:
         main = render._without_llm(main)
     files.extend([
         render.ExportedFile("pipeline.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"),
         render.ExportedFile("main.py", main),
-        render.ExportedFile("DATA.md", render._data_markdown(first["name"], input_schema)),
+        render.ExportedFile("DATA.md", render._data_markdown(first["name"], input_schema)
+                            if len(dag_inputs) == 1 else _multi_input_data_markdown(dag_inputs)),
         render.ExportedFile("requirements.txt", render._requirements(uses_llm)),
         render.ExportedFile("processor/__init__.py", render._package_init("User-authored Process modules.", metadata)),
     ])
@@ -171,6 +196,12 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
         ])
     else:
         files.append(render.ExportedFile("README.md", render._process_only_readme(root, metadata)))
+    if len(dag_inputs) > 1:
+        example = "python main.py " + " ".join(
+            f"--input {item['id']}=/path/to/{item['id']}.xlsx" for item in dag_inputs) + " --output output.xlsx"
+        files = [render.ExportedFile(file.path, file.content.replace(
+            "python main.py --input /path/to/input.xlsx --output output.xlsx", example))
+            if file.path == "README.md" else file for file in files]
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for file in sorted(files, key=lambda f: f.path):

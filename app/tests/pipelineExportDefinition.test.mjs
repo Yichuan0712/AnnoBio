@@ -4,7 +4,7 @@ import { buildPipelineExportRequest } from '../src/pipelineExportDefinition.js';
 
 test('export carries node settings, row count and explicit input boundary, never row values', () => {
   const state = { nodes: [
-    { type: 'dataset', nodeId: 'raw', sourceRunNodeId: 'old-run', datasetContent: { headers: ['text'], rows: [['PRIVATE']] } },
+    { type: 'dataset', nodeId: 'raw', sourceRunNodeId: 'old-run', savedCopy: true, datasetContent: { headers: ['text'], rows: [['PRIVATE']] } },
     { type: 'prompt', nodeId: 'p', sections: [{ content: 'Read {text}' }] },
     { type: 'run', nodeId: 'r', runWorkingSetId: 'raw', runSettings: { run_concurrency: 2 }, runResults: 'PRIVATE_RESULTS' },
   ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }] };
@@ -14,6 +14,7 @@ test('export carries node settings, row count and explicit input boundary, never
   assert.deepEqual(req.input_dataset_ids, ['raw']);
   assert.deepEqual(req.canvas_state.nodes[2].runSettings, { run_concurrency: 2 });
   assert.equal(req.canvas_state.nodes[0].datasetContent.row_count, 1);
+  assert.equal(req.canvas_state.nodes[0].savedCopy, true);
   assert.ok(!JSON.stringify(req).includes('PRIVATE'));
   assert.deepEqual(state, before);
 });
@@ -37,4 +38,24 @@ test('Python export rejects a missing result used as its starting Dataset', () =
     datasetContent: { headers: [], rows: [] } }], connections: [] };
   assert.throws(() => buildPipelineExportRequest({ name: 'Bad', canvasState: state,
     route: [{ type: 'dataset', dataset_node_id: 'derived' }] }), /no current result/);
+});
+
+test('Python export includes every external Dataset in a multi-input route', () => {
+  const state = { nodes: [
+    { type: 'dataset', nodeId: 'left', datasetContent: { headers: ['id'], rows: [] } },
+    { type: 'dataset', nodeId: 'right', datasetContent: { headers: ['value'], rows: [] } },
+    { type: 'process', nodeId: 'join', primaryDatasetId: 'left' },
+    { type: 'dataset', nodeId: 'out', processOutputName: 'result' },
+  ], connections: [
+    { type: 'dataset-to-process', fromId: 'left', toId: 'join' },
+    { type: 'dataset-to-process', fromId: 'right', toId: 'join' },
+    { type: 'process-to-dataset', fromId: 'join', toId: 'out' },
+  ] };
+  const route = [
+    { type: 'dataset', dataset_node_id: 'left' },
+    { type: 'dataset', dataset_node_id: 'right' },
+    { type: 'process', process_node_id: 'join' },
+    { type: 'dataset', dataset_node_id: 'out' },
+  ];
+  assert.deepEqual(buildPipelineExportRequest({ name: 'Join', canvasState: state, route }).input_dataset_ids, ['left', 'right']);
 });

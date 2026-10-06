@@ -59,14 +59,42 @@ class CompiledExportTests(unittest.TestCase):
         self.assertEqual(compiled, snapshot)
         self.assertNotIn("EXCLUDE_THIS", "\n".join(self.files(archive).values()))
 
-    def test_multi_input_is_an_export_capability_error(self):
-        state = simple()
-        state["nodes"] += [dataset("lookup"), process("join", "raw", datasetAliases={"lookup": "df_lookup"}), dataset("joined")]
-        state["nodes"][2]["runWorkingSetId"] = "joined"
-        state["connections"] += [edge("raw", "join", "dataset-to-process"), edge("lookup", "join", "dataset-to-process"), edge("join", "joined", "process-to-dataset")]
-        self.assertIsNotNone(compile_pipeline(canvas_state=state, route=route_for(state), run_defaults=DEFAULTS)["spec"])
-        with self.assertRaisesRegex(PipelineExportError, "compiled graph is valid.*multi-input"):
-            self.build(state)
+    def test_multi_input_export_accepts_named_workbooks(self):
+        state = {"nodes": [dataset("raw", ["text"]), dataset("lookup", ["suffix"]),
+                           process("join", "raw", datasetAliases={"lookup": "df_lookup"},
+                                   dfCode="def process(df):\n    out = df.copy()\n    out['text'] = out['text'] + df_lookup['suffix']\n    return out\n"),
+                           dataset("joined")],
+                 "connections": [edge("raw", "join", "dataset-to-process"),
+                                 edge("lookup", "join", "dataset-to-process"),
+                                 edge("join", "joined", "process-to-dataset")]}
+        state["nodes"][1]["datasetContent"]["headers"] = ["suffix", "image"]
+        state["nodes"][1]["datasetContent"]["columnTypes"] = ["text", "image"]
+        route = route_for(state)
+        self.assertIsNotNone(compile_pipeline(canvas_state=state, route=route,
+                                              input_dataset_ids=["raw", "lookup"], run_defaults=DEFAULTS)["spec"])
+        _, archive = self.build(state, route=route, input_dataset_ids=["raw", "lookup"])
+        files = self.files(archive)
+        manifest = json.loads(files["pipeline.json"])
+        self.assertEqual({item["id"] for item in manifest["inputs"]}, {"raw", "lookup"})
+        self.assertIn("--input raw=/path/to/raw.xlsx", files["DATA.md"])
+        self.assertIn("--input lookup=/path/to/lookup.xlsx", files["DATA.md"])
+        with tempfile.TemporaryDirectory(prefix="annobio-multi-input-") as folder:
+            with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+                bundle.extractall(folder)
+            script = '''
+import sys
+import pandas as pd
+import main
+pd.DataFrame({'text': ['a']}).to_excel('raw.xlsx', sheet_name='Input', index=False)
+pd.DataFrame({'suffix': ['x'], 'image': ['files/p.png']}).to_excel('lookup.xlsx', sheet_name='Input', index=False)
+assert main.load_input(__import__('pathlib').Path('lookup.xlsx').resolve(), 'Input', ['suffix', 'image'], ['image'])['image'][0] == str(__import__('pathlib').Path('files/p.png').resolve())
+sys.argv = ['main.py', '--input', 'raw=raw.xlsx', '--input', 'lookup=lookup.xlsx', '--output', 'out.xlsx']
+assert main.main() == 0
+assert pd.read_excel('out.xlsx')['text'].tolist() == ['ax']
+'''
+            result = subprocess.run([sys.executable, "-c", script], cwd=Path(folder) / "compiled",
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_saved_input_boundary_and_cycles_remain_distinct(self):
         state = simple()

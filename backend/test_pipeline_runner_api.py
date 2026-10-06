@@ -40,11 +40,15 @@ class PipelineRunnerApiTests(unittest.TestCase):
     def test_status_cancel_resume_results_and_error_mapping(self):
         runner = Mock()
         runner.status.return_value = {"status": "running"}
+        runner.list_runs.return_value = [{"run_id": "run-a", "status": "running"}]
+        runner.definition.return_value = {"spec": {"jobs": []}, "canvas_state": {"nodes": []}}
         runner.cancel.return_value = {"status": "cancelling"}
         runner.resume.return_value = {"status": "pending"}
         runner.results.return_value = {"outputs": []}
         with patch.object(main, "_get_pipeline_runner", return_value=runner):
             self.assertEqual(main.get_pipeline_run("run-a", "project-a")["status"], "running")
+            self.assertEqual(main.list_pipeline_runs("project-a")[0]["run_id"], "run-a")
+            self.assertEqual(main.get_pipeline_run_definition("run-a", "project-a")["spec"]["jobs"], [])
             self.assertEqual(main.cancel_pipeline_run("run-a", "project-a")["status"], "cancelling")
             resumed = main.resume_pipeline_run(
                 "run-a", main.PipelineResumeRequest(project_id="project-a", project_session_id="fresh"),
