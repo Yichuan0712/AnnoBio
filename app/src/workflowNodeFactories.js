@@ -400,7 +400,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         <span class="workflow-node__title">${escapeHtml(title)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
-      <div class="workflow-node__body workflow-node__dataset-desc">${bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>'}${savedCopy ? '<span class="workflow-node__snapshot-status">Saved copy</span>' : ''}</div>
+      <div class="workflow-node__body workflow-node__dataset-desc">${bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>'}</div>
     `;
     nodesLayer.appendChild(node);
 
@@ -442,12 +442,6 @@ export function createWorkflowNodeFactories(deps = {}) {
             node.dataset.savedCopy = '1';
             const sourceRecordId = getNodeById(datasetHistorySourceId(node))?.dataset?.historyRecordId;
             if (sourceRecordId) node.dataset.snapshotSourceRecordId = sourceRecordId;
-            if (!node.querySelector('.workflow-node__snapshot-status')) {
-              const badge = document.createElement('span');
-              badge.className = 'workflow-node__snapshot-status';
-              badge.textContent = 'Saved copy';
-              node.querySelector('.workflow-node__dataset-desc')?.appendChild(badge);
-            }
           }
           datasetContentByNodeId.set(id, content);
           emitCanvasChanged();

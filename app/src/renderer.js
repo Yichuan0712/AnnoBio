@@ -143,7 +143,10 @@ window.addEventListener('DOMContentLoaded', () => {
       // Autosave reports a failed sync; attach a handler now so it is never unhandled.
       historySync.catch(() => {});
     }
-    async function loadCanvasWithHistory(projectId, state) {
+    async function loadCanvasWithHistory(projectId, savedState) {
+      // A never-edited project is saved as {} (see backend create_project) — load it as an empty
+      // canvas; loadCanvasState skips a state without a nodes array, leaving the previous project.
+      const state = { ...savedState, nodes: savedState?.nodes || [], connections: savedState?.connections || [] };
       await historySync.catch(() => {});
       historySession = new RunHistorySession(historyStore);
       canvasAPI.setHistorySession(historySession);
@@ -181,8 +184,8 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!path) return;
     setCurrentProject(path);
     updateWindowTitleFromPath(path);
-    const state = { ...canvasAPI.getCanvasState() };
-    delete state.historyVersion;
+    // Always a blank canvas — copying the open project into a new file is what Save as is for.
+    const state = { version: 2, nodes: [], connections: [] };
     canvasAPI.clearSelection?.();
     await api.saveProject(path, state);
     await loadCanvasWithHistory(path, state);

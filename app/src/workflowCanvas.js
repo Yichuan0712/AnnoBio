@@ -63,7 +63,6 @@ import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
 import { dependencyColorSources, dependentNodeVisualColors } from './workflowDependencyColors.js';
 import { showAlert, showConfirm, showSelect } from './alertModal.js';
-import { datasetSnapshotStatus } from './datasetSnapshotStatus.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
 import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
@@ -4707,18 +4706,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
       };
     });
-    const lookup = new Map(nodes.map((node) => [node.nodeId, node]));
-    for (const item of nodes) {
-      if (item.type !== 'dataset' || !item.savedCopy) continue;
-      const status = datasetSnapshotStatus(item, lookup, connections);
-      const badge = getNodeById(item.nodeId)?.querySelector('.workflow-node__snapshot-status');
-      if (badge) {
-        badge.textContent = status === 'stale' ? 'Saved copy · source changed'
-          : status === 'current' ? 'Saved copy · current source'
-            : status === 'unknown' ? 'Saved copy · source version unknown' : 'Saved copy';
-        badge.classList.toggle('workflow-node__snapshot-status--stale', status === 'stale');
-      }
-    }
     return { version: 2, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), zoomLevel, nodes, connections: connections.slice() };
   }
 

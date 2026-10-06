@@ -128,7 +128,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
       <div class="modal-body prompt-detail-body working-dataset-detail-body">
         <div class="prompt-detail-side prompt-preview-wrap dataset-detail-preview-side">
           <div class="prompt-detail-side-scroll">
-            ${missingResult ? '<p class="working-dataset-missing-message">No current result. Select matching upstream History or run the upstream node.</p>' : ''}
             <div class="working-dataset-detail-card">
               <div class="dataset-detail-preview-search-wrap working-dataset-search-wrap">
                 <span class="dataset-detail-preview-summary wd-summary" aria-live="polite">${headers.length} columns, ${rows.length.toLocaleString()} rows</span>
