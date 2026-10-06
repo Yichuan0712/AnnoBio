@@ -8910,14 +8910,30 @@ button.btn.btn-danger:hover:not(:disabled) {
   background: var(--bg-bar); color: var(--text-muted); font-size: 12px;
 }
 .pipeline-run-validation--error { border-color: rgba(192, 57, 43, 0.5); }
-.pipeline-run-validation--ok { border-color: rgba(16, 137, 62, 0.45); }
-.pipeline-run-validation ul { margin: 6px 0 0; padding-left: 18px; }
-.pipeline-run-runtime-notes { margin-top: 6px; }
-.pipeline-run-runtime-notes summary { cursor: pointer; }
-.pipeline-validation-plan { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; color: var(--text-muted); }
-.pipeline-validation-plan span { overflow-wrap: anywhere; }
-.pipeline-run-diagnostic--error { color: var(--status-danger); }
-.pipeline-run-diagnostic--warning { color: var(--status-warning); }
+/* Run Pipeline dialog: a card per step that reads a Dataset from outside the Pipeline. Clicking a
+   card opens that node, like a Current Pipeline step; a problem found on Run sits on its card. */
+.modal-panel.pipeline-run-dialog { width: min(460px, 92vw); }
+.pipeline-run-dialog__body { padding: 16px 20px 8px; max-height: min(65vh, 560px); overflow-y: auto; }
+.pipeline-run-dialog__intro { margin: 0 0 12px; font-size: 12.5px; color: var(--text-muted); }
+.pipeline-run-dialog__steps { display: flex; flex-direction: column; gap: 8px; }
+.pipeline-run-dialog__step {
+  display: flex; flex-direction: column; gap: 7px; width: 100%; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text);
+  font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
+}
+.pipeline-run-dialog__step:hover,
+.pipeline-run-dialog__step:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pipeline-run-dialog__step.has-problem { border-color: color-mix(in srgb, var(--status-danger) 60%, var(--border)); }
+.pipeline-run-dialog__step-head { display: flex; align-items: center; gap: 8px; }
+.pipeline-run-dialog__step-head .pipeline-step-kind { flex-shrink: 0; }
+.pipeline-run-dialog__step-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.pipeline-run-dialog__open { flex-shrink: 0; font-size: 18px; line-height: 1; color: var(--text-muted); }
+.pipeline-run-dialog__step:hover .pipeline-run-dialog__open { color: var(--accent); }
+.pipeline-run-dialog__datasets { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; }
+.pipeline-run-dialog__dataset { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.pipeline-run-dialog__rows { color: var(--text-muted); }
+.pipeline-run-dialog__problem { font-size: 12px; line-height: 1.45; color: var(--status-danger); }
+.pipeline-run-dialog__errors { margin: 12px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.5; color: var(--status-danger); }
 /* Pipeline Runs tab: one section per pipeline, titled and spaced like the Current Pipeline cards, with
    a run table like the Prompt Optimization tab's. A run's row opens its steps below it. */
 .pipeline-runs { font-size: 12px; color: var(--text); }

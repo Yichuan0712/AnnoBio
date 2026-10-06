@@ -33,14 +33,6 @@ export function compileCurrentPipeline({ canvasState, route }) {
   });
 }
 
-export async function getPipelineModelContext() {
-  const [credentials, settings] = await Promise.all([
-    jsonRequest('/api/credentials'),
-    jsonRequest('/api/settings'),
-  ]);
-  return { credentials: Array.isArray(credentials) ? credentials : [], settings: settings || {} };
-}
-
 /** One id per user action. Pass the same id when that action is retried, so the backend returns the
  * run it already started instead of starting a second one; a fresh id per call would defeat that. */
 export function newPipelineRequestId() {
