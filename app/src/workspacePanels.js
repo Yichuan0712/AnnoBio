@@ -248,6 +248,7 @@ export function createWorkspacePanels(root, canvas, onChange, {
     },
     setEnabled(value) { enabled = value; notify(); },
     toggle(kind) { state[kind] = !state[kind]; persist(); notify(); },
+    show(kind) { if (!state[kind]) { state[kind] = true; persist(); } notify(); },
     collapse(kind) { state[kind] = false; persist(); notify(); },
   };
   return api;

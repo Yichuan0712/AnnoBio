@@ -234,6 +234,25 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   else overlay.setAttribute('aria-labelledby', 'pipeline-overview-title');
 
   const selectedByChoiceId = new Map();
+  // Agent reads the same picker state as the panel instead of rebuilding a default route.
+  overlay.getPipelineSelections = () => (readPipelines?.() || []).map((pipeline, index) => ({
+    id: getPipelineViewId(pipeline, index),
+    index,
+    route: buildSelectedRoute(pipeline, selectedByChoiceId),
+    nodeIds: [...pipelineStepNodeIds(pipeline)],
+  }));
+  overlay.getPipelineRunNeedsAssets = (runId) => entryForRun(runId)?.needsAssets;
+  overlay.registerAgentRun = async (pipelineId, run, needsAssets) => {
+    await syncProjectContext();
+    if (destroyed || !attachedProjectId || run.project_id !== attachedProjectId) {
+      throw new Error('The open project changed while starting this Pipeline.');
+    }
+    runEntriesByPipelineId.set(pipelineId, { run, needsAssets: needsAssets ?? entryForRun(run.run_id)?.needsAssets ?? false });
+    applyRun(run);
+    persistRuns();
+    ensurePolling();
+    renderBody();
+  };
   const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt with a Run, or a Process.';
 
   overlay.innerHTML = `

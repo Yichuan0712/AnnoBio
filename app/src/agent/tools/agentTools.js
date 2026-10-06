@@ -9,15 +9,17 @@ import { loadSources } from '../operations/proposals.js';
 import { previewTableRows } from '../execution/runJobs.js';
 import { runProcessCode } from '../../processRunClient.js';
 import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
+import { readPipelineRuns } from '../pipeline/pipelineActions.js';
 
 const MAX_TOOL_RESULT_CHARS = 24000;
 
 export const ASK_USER_TOOL = 'ask_user';
 export const PROPOSE_CHANGES_TOOL = 'propose_changes';
 export const RUN_NODES_TOOL = 'run_nodes';
+export const PIPELINE_ACTION_TOOL = 'pipeline_action';
 
 /** Tools answered by the user rather than by code; calling one ends the loop until they respond. */
-export const USER_TOOLS = new Set([ASK_USER_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL]);
+export const USER_TOOLS = new Set([ASK_USER_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, PIPELINE_ACTION_TOOL]);
 
 const GUIDE_TOPICS = [
   'pipeline-building',
@@ -47,6 +49,27 @@ export const AGENT_TOOL_DEFINITIONS = [
   tool(
     'get_workspace',
     'Rebuild the workspace summary (pipelines and every node with its status). Use it when the canvas may have changed during the conversation, for example after a run finished.',
+  ),
+  tool(
+    'get_pipeline_runs',
+    'List whole-Pipeline Run History, or read one run status. These are separate from individual Run and Process node History. Use the pipeline id in the workspace summary to filter the list.',
+    {
+      pipeline_id: { type: 'string', description: 'Optional exact Pipeline id from get_workspace.' },
+      run_id: { type: 'string', description: 'Optional exact Pipeline run id to inspect.' },
+      limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum runs, default 20.' },
+    },
+  ),
+  tool(
+    PIPELINE_ACTION_TOOL,
+    'Ask the user to run, export, stop or resume a whole Pipeline. The user sees the current selected route and must confirm before anything happens. Use get_workspace for pipeline_id and get_pipeline_runs for run_id. Run starts in the background; call get_pipeline_runs later for status. Export downloads a Python project zip.',
+    {
+      action: { type: 'string', enum: ['run', 'export', 'stop', 'resume'] },
+      pipeline_id: { type: 'string', description: 'Exact Pipeline id shown by get_workspace.' },
+      run_id: { type: 'string', description: 'Required for stop or resume.' },
+      name: { type: 'string', description: 'Optional export filename base.' },
+      summary: { type: 'string', description: 'One sentence explaining this action to the user.' },
+    },
+    ['action', 'pipeline_id', 'summary'],
   ),
   tool(
     'inspect_node',
@@ -304,6 +327,7 @@ function rowRange(args) {
 export function describeToolCall(name, args, runtime) {
   switch (name) {
     case 'get_workspace': return 'Refreshed the workspace summary';
+    case 'get_pipeline_runs': return args.run_id ? `Checked Pipeline run ${args.run_id}` : 'Read Pipeline Run History';
     case 'inspect_node': return `Inspected ${titleOf(runtime, args.node_id)}`;
     case 'read_rows': return `Read ${titleOf(runtime, args.node_id)}, ${rowRange(args)}${args.only_unmatched ? ' (unmatched)' : ''}`;
     case 'trace_row': return `Traced row ${args.input_row} of ${titleOf(runtime, args.run_node_id)}`;
@@ -334,6 +358,8 @@ async function runTool(name, args, runtime) {
   switch (name) {
     case 'get_workspace':
       return runtime.buildSummary();
+    case 'get_pipeline_runs':
+      return readPipelineRuns(args, runtime);
     case 'inspect_node':
       return runtime.inspectNode(String(args.node_id || ''));
     case 'read_rows': {

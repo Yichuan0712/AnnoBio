@@ -1,6 +1,6 @@
 # Agent 重新设计
 
-状态：P1–P3 与 P4 的 Agent 模型检查已实现（2026-09-24）；`export_pipeline` 未做。基于 2026-09-24 `main` 的代码。
+状态：P1–P3 与 P4 的 Agent 模型检查已实现（2026-09-24）。2026-10-06 增加 `pipeline_action`（整条 Pipeline 的运行、停止、续跑和 Python 导出）、`get_pipeline_runs`，并接入 Current Pipeline 当前路线。以下早期设计记录保留原阶段背景，工具表和状态以现行实现为准。
 
 ## 1. 为什么重做
 
@@ -43,6 +43,7 @@ Agent 是 **Pipeline 协作者**，覆盖用户的整条工作线，Prompt 优�
        ├─ 直接回答 ............................... 本轮结束
        ├─ propose_changes → 修改卡片 ............. 本轮结束，等用户 应用 / 拒绝 / 修改意见
        ├─ run_nodes → 运行卡片（含成本估计） ..... 本轮结束，等用户 运行 / 取消
+       ├─ pipeline_action → Pipeline 操作卡片 ... 本轮结束，等用户确认 / 取消
        └─ ask_user → 选项卡片 ................... 本轮结束，等用户选择
 ```
 
@@ -116,7 +117,7 @@ renderer                                   backend                     LLM
   messages[] + tools[] ── POST /api/agent/turn ──► LiteLLM completion(tools, stream)
   ◄──────────── SSE: text delta / tool_calls / usage ◄─────────────────
   执行只读 tool，把 tool_result 追加进 messages，再次请求
-  …直到模型不再调用 tool，或调用了 propose_changes / run_nodes / ask_user
+  …直到模型不再调用 tool，或调用了 propose_changes / run_nodes / pipeline_action / ask_user
 ```
 
 - 删除 `/api/agent/plan`、`AgentPlanResponse` 及结构化输出路径，改用原生 tool calling。
@@ -172,8 +173,9 @@ guide 放在 `backend/agent/guides/*.md`，随后端发布。
 | `try_process` | 验证 | 第 4.3 节，自动执行 |
 | `propose_changes` | 需确认 | 第 4.1 节 |
 | `run_nodes` | 需确认 | 第 4.2 节 |
+| `get_pipeline_runs` | 读 | 查询整条 Pipeline 的运行列表及单次运行的状态和各步骤进度 |
+| `pipeline_action` | 需确认 | 对面板当前路线发起运行或导出，也可停止、续跑已有 Pipeline 运行；确认时再次核对路线 |
 | `ask_user` | 需确认 | 一个问题加 2–4 个选项，用户也可以直接输入 |
-| `export_pipeline` | 需确认 | 以卡片形式给出导出按钮，复用 `pipelineExportClient.exportPythonPipeline` |
 
 `propose_changes` 支持的操作（`app/src/agent/operations/changeSet.js`）：
 
@@ -185,12 +187,12 @@ guide 放在 `backend/agent/guides/*.md`，随后端发布。
 | `add_process` | 新 Process，代码必须定义 `process(df)`，用到的 `df_<alias>` 必须对应画布上的 Dataset；不运行 |
 | `add_prompt` | 新 Prompt：sections、输入类型、输出 schema |
 | `add_prompt_version` | 新版本：`section_edits`（按名字替换或追加 section）或完整 `sections`，其余复制 |
-| `add_run` | 新 Run：Prompt、输入 Dataset、完整的输入映射、可选凭据；不启动 |
+| `add_run` | 新 Run：Prompt、输入 Dataset、完整的输入映射；使用 Settings 中的 Run 默认模型，不启动 |
 | `add_score` | 新 Score：配对规则、比较规则、组合方式与匹配选项，或自定义 `match_code` |
 | `save_run_results` | 把 Run 结果存成 Dataset，表格与画布 "Save to workspace" 完全相同（共用 `app/src/runResultsExport.js`） |
 | `save_process_output` | 把 Process 的一个输出分支存成 Dataset，连到该 Process |
 | `apply_review` | 按用户选定的建议 id，把 Review 看到的 Prompt 改写成新 Prompt（Review → Prompt 连线），并在 Review 上记录哪些建议已采纳；未验证的建议给出提醒 |
-| `update` | 按类型的字段白名单修改（名称、说明、sections、代码、输入、映射、凭据、规则等） |
+| `update` | 按类型的字段白名单修改（名称、说明、sections、代码、输入、映射、规则等） |
 | `remove` | 删除节点及其连线，并清理其他节点对它的引用 |
 
 
@@ -215,7 +217,8 @@ guide 放在 `backend/agent/guides/*.md`，随后端发布。
 | P1 ✅ | `/api/agent/turn`（流式、tools）、Hub 流式透传、新循环、工作区摘要、只读工具（除 `search_source`）、`read_guide`、`ask_user`；删除旧 Agent | 读懂任意 pipeline，回答和排错 |
 | P2 ✅ | `propose_changes` 及卡片、增 / 改 / 删操作、单步撤销、`search_source` 与导入 | 按用户确认搭建和修改 pipeline |
 | P3 ✅ | `try_process`、`run_nodes` 及成本估算、`apply_review`、把 Run / Process 输出存为 Dataset | 验证 Process 代码，逐步完成评估和优化 |
-| P4 | Agent 模型实测检查与报错提示 ✅；`export_pipeline`（未做） | 任何模型接进来都能先知道能不能用；导出 |
+| P4 ✅ | Agent 模型实测检查与报错提示；导出由 `pipeline_action` 实现 | 模型可用性检查；按用户确认导出 |
+| 后续对齐 ✅ | `get_pipeline_runs`、`pipeline_action`、当前路线和 Pipeline 结果来源 | 查询和操作整条 Pipeline |
 
 P1 完成后旧 Agent 即下线，不做新旧并存。
 
