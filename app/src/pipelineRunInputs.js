@@ -7,18 +7,14 @@ import { pipelineInputDatasetIds } from './pipelineInputAvailability.js';
 
 /**
  * @returns {Array<{ nodeId: string, kind: 'run'|'process', name: string,
- *   inputs: Array<{ nodeId: string, name: string, rows: number|null, colorIndex: number|undefined }> }>}
+ *   inputs: Array<{ nodeId: string, name: string, colorIndex: number|undefined }> }>}
  *   in route order; a Run is named after its Prompt, as the Current Pipeline names it
  */
 export function pipelineInputSteps(canvasState, route) {
   const nodes = new Map((canvasState?.nodes || []).map((node) => [node.nodeId, node]));
   const connections = canvasState?.connections || [];
   const inputIds = new Set(pipelineInputDatasetIds(route, canvasState));
-  const dataset = (nodeId) => {
-    const node = nodes.get(nodeId);
-    const rows = node?.datasetContent?.rows;
-    return { nodeId, name: node?.name || 'Dataset', rows: Array.isArray(rows) ? rows.length : null, colorIndex: node?.colorIndex };
-  };
+  const dataset = (nodeId) => ({ nodeId, name: nodes.get(nodeId)?.name || 'Dataset', colorIndex: nodes.get(nodeId)?.colorIndex });
   const steps = [];
   for (const item of route || []) {
     if (item?.type === 'prompt') {

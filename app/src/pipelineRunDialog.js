@@ -18,7 +18,6 @@ function stepHtml(step, problems) {
   const datasets = step.inputs.map((input) => `<span class="pipeline-run-dialog__dataset">
       <span class="run-detail-ws-option-color" style="background:${escapeHtml(datasetColorAt(input.colorIndex ?? 0))}" aria-hidden="true"></span>
       <span>${escapeHtml(input.name)}</span>
-      ${input.rows == null ? '' : `<span class="pipeline-run-dialog__rows">${input.rows} row${input.rows === 1 ? '' : 's'}</span>`}
     </span>`).join('');
   const kind = step.kind === 'run' ? 'prompt' : 'process';
   return `<button type="button" class="pipeline-run-dialog__step${problems.length ? ' has-problem' : ''}" data-node-id="${escapeHtml(step.nodeId)}" title="Open to set its input">
