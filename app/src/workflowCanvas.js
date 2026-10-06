@@ -65,6 +65,7 @@ import { dependencyColorSources, dependentNodeVisualColors } from './workflowDep
 import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
+import { buildSelectedRoute } from './pipelineRouteSelection.js';
 import { pipelineResultNote, showPipelineOverviewModal } from './pipelineOverviewModal.js';
 import { importPipelineRunHistory, pipelineCopyInputs, withCompatibleLegacyCanvas } from './pipelineHistoryImport.js';
 import { createWorkspacePanels } from './workspacePanels.js';
@@ -3035,6 +3036,18 @@ export function buildWorkflowCanvas(root, options = {}) {
   let agentMountGeneration = 0;
   let pendingAgentMount = false;
   const agentHistoryDeletionPreviews = new Map();
+  function getAgentPipelineSelections() {
+    const current = workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay');
+    if (current?.getPipelineSelections) return current.getPipelineSelections().map((item) => ({ ...item, source: 'panel' }));
+    return detectPipelines(getCanvasState()).map((pipeline, index) => ({
+      id: String(pipeline?.id || `pipeline-index-${index}`),
+      index,
+      route: buildSelectedRoute(pipeline, new Map()),
+      nodeIds: [...new Set((pipeline.steps || []).flatMap((step) => [step.processNodeId,
+        ...(step.versions || []).flatMap((version) => version.runNodeIds || [])]).filter(Boolean))],
+      source: 'default',
+    }));
+  }
   function mountAgentPanel() {
     if (pendingAgentMount || workspacePanels.agentHost.querySelector('.agent-window-overlay')) return;
     pendingAgentMount = true;
@@ -3049,6 +3062,18 @@ export function buildWorkflowCanvas(root, options = {}) {
         inspectNode,
         getScoreComparisonRows,
         getSelectedNodeIds: () => [...selectedNodeIds],
+        getPipelineSelections: getAgentPipelineSelections,
+        getPipelineProjectId,
+        getAssetProjectId: getCurrentProjectId,
+        getPipelineRunNeedsAssets: (runId) => workspacePanels.pipelineHost
+          .querySelector('.pipeline-overview-overlay')?.getPipelineRunNeedsAssets?.(runId),
+        showPipelinePanel: () => workspacePanels.show('pipeline'),
+        registerPipelineRun: async (pipelineId, run, needsAssets) => {
+          workspacePanels.show('pipeline');
+          const panel = workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay');
+          if (!panel?.registerAgentRun) throw new Error('Current Pipeline is unavailable.');
+          await panel.registerAgentRun(pipelineId, run, needsAssets);
+        },
         extractInputFields: extractInputFieldsFromSections,
         applyCanvasState: applyAgentCanvasState,
         getContentLocks: () => (historySession?.projectId && canvasHistoryVersion === 1
