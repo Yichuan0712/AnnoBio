@@ -2355,7 +2355,60 @@ export function buildWorkflowCanvas(root, options = {}) {
     return shape;
   }
 
-  function renderEdge(g, edge, edgeIndex, nodeBoxes) {
+  /** Datasets that are the live output of the producer's current History record: solid line.
+   * Other outputs of that Run/Process are older (or extra) snapshots: dashed. */
+  function liveHistoryOutputIds() {
+    const groups = new Map();
+    nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((node) => {
+      const id = node.dataset.nodeId;
+      const runId = String(node.dataset.sourceRunNodeId || '').trim();
+      let producerId = runId;
+      let branch = 'result';
+      if (!producerId) {
+        const edge = connections.find((item) => item.toId === id && [
+          EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT, EDGE_TYPE_PROCESS_TO_DATASET, EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT,
+        ].includes(item.type));
+        if (!edge) return;
+        producerId = edge.fromId;
+        if (edge.type !== EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT) {
+          branch = String(node.dataset.processOutputName || 'result');
+        }
+      }
+      const key = `${producerId}\0${branch}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(node);
+    });
+    const live = new Set();
+    const usedAsInput = (id) => (
+      [...nodesLayer.querySelectorAll('.workflow-node--run')].some((run) => run.dataset.runWorkingSetId === id)
+      || connections.some((edge) => edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.fromId === id)
+    );
+    for (const [key, group] of groups) {
+      const producerId = key.slice(0, key.indexOf('\0'));
+      const currentId = String(getNodeById(producerId)?.dataset.historyRecordId || '');
+      const matching = group.filter((node) => {
+        const snap = String(node.dataset.snapshotSourceRecordId || '');
+        if (snap) return snap === currentId;
+        return node.dataset.savedCopy !== '1';
+      });
+      const active = matching.find((node) => usedAsInput(node.dataset.nodeId))
+        || matching.find((node) => node.dataset.savedCopy !== '1')
+        || matching.at(-1);
+      if (active) live.add(active.dataset.nodeId);
+    }
+    return live;
+  }
+
+  function isHistorySnapshotEdge(edge, toNode, liveIds) {
+    const producerTypes = new Set([
+      EDGE_TYPE_RUN_TO_DATASET, EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT,
+      EDGE_TYPE_PROCESS_TO_DATASET, EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT,
+    ]);
+    if (!producerTypes.has(edge.type) || !toNode?.classList.contains('workflow-node--dataset')) return false;
+    return !liveIds.has(toNode.dataset.nodeId);
+  }
+
+  function renderEdge(g, edge, edgeIndex, nodeBoxes, liveIds) {
     const fromNode = getNodeById(edge.fromId);
     const toNode = getNodeById(edge.toId);
     if (!fromNode || !toNode) return;
@@ -2409,7 +2462,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     line.setAttribute('class', 'workflow-edge-line');
     line.setAttribute('stroke', 'var(--text-muted)');
     line.setAttribute('stroke-width', '2');
-    if (edge.type === EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT || edge.type === EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT) {
+    if (isHistorySnapshotEdge(edge, toNode, liveIds)) {
       line.setAttribute('stroke-dasharray', '5 4');
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
       title.textContent = 'Saved Dataset snapshot; its content does not follow upstream History.';
@@ -2463,11 +2516,12 @@ export function buildWorkflowCanvas(root, options = {}) {
       );
     });
     nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((datasetNode) => {
-      add(
-        String(datasetNode.dataset.sourceRunNodeId || '').trim(),
-        String(datasetNode.dataset.nodeId || '').trim(),
-        EDGE_TYPE_RUN_TO_DATASET,
-      );
+      const fromId = String(datasetNode.dataset.sourceRunNodeId || '').trim();
+      const toId = String(datasetNode.dataset.nodeId || '').trim();
+      if (connections.some((edge) => edge.fromId === fromId && edge.toId === toId && edge.type === EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT)) {
+        return;
+      }
+      add(fromId, toId, EDGE_TYPE_RUN_TO_DATASET);
     });
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => {
       add(
@@ -2518,9 +2572,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('pointer-events', 'none');
     const nodeBoxes = collectNodeBoxes();
+    const liveIds = liveHistoryOutputIds();
     // Automatic dependency lines sit behind explicit, user-managed workflow edges.
-    getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1, nodeBoxes));
-    connections.forEach((edge, i) => renderEdge(g, edge, i, nodeBoxes));
+    getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1, nodeBoxes, liveIds));
+    connections.forEach((edge, i) => renderEdge(g, edge, i, nodeBoxes, liveIds));
     const existing = edgesLayer.querySelector('g');
     if (existing) existing.remove();
     edgesLayer.appendChild(g);
@@ -4431,6 +4486,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   document.addEventListener('workflow:canvas-changed', () => {
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((sn) => syncScoreNodeProgressFromUpstreamRun(sn));
     syncNodeDependencyColors();
+    updateEdges();
   });
   document.addEventListener('workflow:refresh-node-colors', syncNodeDependencyColors);
   document.addEventListener('workflow:score-ground-truth-changed', () => updateEdges());
@@ -5235,6 +5291,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const progress = Number(item.runProgress || 0);
       const bar = live.querySelector('.workflow-node__run-progress');
       if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
+      updateEdges();
       document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
       return resolved;
     }
@@ -5374,6 +5431,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (priorKeys?.has(`review:${id}`)) historyAnalysisKeys.set(`review:${id}`, priorKeys.get(`review:${id}`));
     }
     historyAnalysisKeysInitialized = true;
+    updateEdges();
     document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
     return resolved;
   }
@@ -5763,6 +5821,7 @@ export function buildWorkflowCanvas(root, options = {}) {
             const sourceRecordId = getNodeById(source.sourceId)?.dataset.historyRecordId;
             if (sourceRecordId) old.dataset.snapshotSourceRecordId = sourceRecordId;
             changed = true;
+            updateEdges();
           }
           // Each step shows this run's result, also where an earlier record had the same inputs.
           for (const [jobId, recordId] of history.recordIdsByJob) {
