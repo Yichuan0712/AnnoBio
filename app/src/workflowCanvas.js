@@ -77,7 +77,6 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { openDatasetDiffModal } from './datasetDiffModal.js';
 import { datasetHistorySource } from './datasetHistorySource.js';
-import { datasetSnapshotStatus } from './datasetSnapshotStatus.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { runProcessCode, waitForProcessJob } from './processRunClient.js';
@@ -148,8 +147,6 @@ const EDGE_TYPE_DATASET_TO_PROCESS = 'dataset-to-process';
 const EDGE_TYPE_PROCESS_TO_DATASET = 'process-to-dataset';
 const EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT = 'run-to-dataset-snapshot';
 const EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT = 'process-to-dataset-snapshot';
-/** Read-only dashed edge for a Dataset a Run / Process read for another of its History results. */
-const EDGE_TYPE_HISTORY_INPUT = 'history-input';
 
 const DEFAULT_SCORE_MATCH_FLAGS = {
   semanticAlign: false,
@@ -1200,9 +1197,6 @@ export function buildWorkflowCanvas(root, options = {}) {
   const STAGGER = 36;
   /** @type {{ fromId: string, toId: string, type: string }[]} */
   let connections = [];
-  // [datasetId, Run / Process id] for every Dataset some History record of that step read (contentLocks.js).
-  // Switching History keeps them as dashed edges rather than dropping where a result came from.
-  let historyInputLinks = [];
 
   /** @type {Set<string>} Multi-selected node ids — Ctrl/Shift+click or marquee-select (see startMarqueeSelect). */
   let selectedNodeIds = new Set();
@@ -2432,15 +2426,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     line.setAttribute('class', 'workflow-edge-line');
     line.setAttribute('stroke', 'var(--text-muted)');
     line.setAttribute('stroke-width', '2');
-    const dashedNote = edge.type === EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT || edge.type === EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT
-      ? 'Saved Dataset snapshot; its content does not follow upstream History.'
-      : edge.type === EDGE_TYPE_HISTORY_INPUT
-        ? 'Input of another History result; this step reads a different Dataset now.'
-        : isEarlierResultCopy(edge) ? 'Saved from another History result of this step, not its current one.' : '';
-    if (dashedNote) {
+    if (edge.type === EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT || edge.type === EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT) {
       line.setAttribute('stroke-dasharray', '5 4');
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      title.textContent = dashedNote;
+      title.textContent = 'Saved Dataset snapshot; its content does not follow upstream History.';
       edgeGroup.appendChild(title);
     }
     line.setAttribute('marker-end', 'url(#workflow-arrow)');
@@ -2452,9 +2441,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         ? 'Selected input dataset'
         : edge.type === EDGE_TYPE_GROUND_TRUTH_TO_SCORE
           ? 'Selected ground truth dataset'
-          : edge.type === EDGE_TYPE_HISTORY_INPUT
-            ? 'Input of another History result'
-            : 'Dataset saved from Run results');
+          : 'Dataset saved from Run results');
     }
     edgeGroup.appendChild(line);
 
@@ -2472,28 +2459,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       edgeGroup.appendChild(label);
     }
   }
-
-  /** A saved copy captured from a History result other than its producer's current one. */
-  function isEarlierResultCopy(edge) {
-    if (edge.type !== EDGE_TYPE_RUN_TO_DATASET && edge.type !== EDGE_TYPE_PROCESS_TO_DATASET) return false;
-    const copy = getNodeById(edge.toId)?.dataset;
-    if (!copy) return false;
-    return datasetSnapshotStatus({
-      nodeId: edge.toId, savedCopy: copy.savedCopy === '1',
-      sourceRunNodeId: copy.sourceRunNodeId || '', snapshotSourceRecordId: copy.snapshotSourceRecordId || '',
-    }, [{ nodeId: edge.fromId, historyRecordId: getNodeById(edge.fromId)?.dataset.historyRecordId || '' }], connections) === 'stale';
-  }
-
-  async function refreshHistoryInputLinks() {
-    const session = historySession;
-    const nodes = Array.from(nodesLayer.querySelectorAll('.workflow-node'), (node) => ({ nodeId: node.dataset.nodeId }));
-    const locks = session?.projectId && canvasHistoryVersion === 1
-      ? await session.contentLocks({ nodes, connections: [] }) : new Map();
-    if (session !== historySession) return;
-    historyInputLinks = [...locks].flatMap(([datasetId, users]) => users.map((nodeId) => [datasetId, nodeId]));
-    updateEdges();
-  }
-  document.addEventListener('workflow:history-resolved', () => { refreshHistoryInputLinks().catch(() => {}); });
 
   /** Build read-only data-flow edges from fields that already drive execution and provenance. */
   function getDerivedDataFlowEdges() {
@@ -2528,13 +2493,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         EDGE_TYPE_GROUND_TRUTH_TO_SCORE,
       );
     });
-    for (const [datasetId, nodeId] of historyInputLinks) {
-      const step = getNodeById(nodeId);
-      if (!getNodeById(datasetId)?.classList.contains('workflow-node--dataset')) continue;
-      if (['run', 'process'].includes(step?.dataset.nodeType) && !stepReadsDataset(step, datasetId)) {
-        add(datasetId, nodeId, EDGE_TYPE_HISTORY_INPUT);
-      }
-    }
     return derived;
   }
 
@@ -5053,7 +5011,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     historySession = session;
     historyAnalysisKeys = new Map();
     historyAnalysisKeysInitialized = false;
-    historyInputLinks = [];
   }
 
   async function recoverHistoryJobs() {
