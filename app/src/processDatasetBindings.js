@@ -1,3 +1,5 @@
+import { codeOutsideSignature, parseProcessSignature, withProcessParameters } from './processSignature.js';
+
 /** Build readable, collision-safe Python names for a Process and its canvas Datasets. */
 function baseName(value) {
   const normalized = String(value || 'dataset').normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
@@ -44,31 +46,46 @@ export function referencedDatasetAliases(code, bindings, savedAliases = {}) {
 
 /**
  * Every canvas Dataset as one Process sees it, in canvas order. `input` marks the Datasets the
- * Process reads: its primary `df`, each one chosen for it (`inputIds`, its dataset-to-process
- * connections) and each one its code names (`referenced`). Another input keeps the alias it was
- * saved with, so renaming its Dataset does not break the code; every alias is unique, and a Dataset
- * that is not an input shows the alias it would get.
+ * Process reads: its primary `df` and each one its code names by alias, normally as a process()
+ * parameter (processSignature.js). `used` marks the ones the code also uses outside that parameter
+ * list, so they stay inputs whatever the parameters say. Another input keeps the alias it was saved
+ * with, so renaming its Dataset does not break the code; every alias is unique, and a Dataset that is
+ * not an input shows the alias it would get. `parameter` is its place among the parameters after
+ * df, or -1.
  * @param {{ datasets: Array<{nodeId: string, name: string}>, primaryDatasetId: string,
- *   inputIds?: Iterable<string>, savedAliases?: Record<string, string>, code?: string }} options
- * @returns {Array<{nodeId: string, name: string, alias: string, primary: boolean, input: boolean, referenced: boolean}>}
+ *   savedAliases?: Record<string, string>, code?: string }} options
+ * @returns {Array<{nodeId: string, name: string, alias: string, primary: boolean, input: boolean, used: boolean, parameter: number}>}
  */
-export function processDatasetInputs({ datasets, primaryDatasetId, inputIds = [], savedAliases = {}, code = '' }) {
-  const chosen = new Set(inputIds);
+export function processDatasetInputs({ datasets, primaryDatasetId, savedAliases = {}, code = '' }) {
   const savedAlias = (nodeId) => {
     const alias = String(savedAliases?.[nodeId] || '');
     return nodeId !== primaryDatasetId && /^df_[A-Za-z0-9_]+$/.test(alias) ? alias : '';
   };
   const claimed = new Set((datasets || []).map((dataset) => savedAlias(dataset.nodeId)).filter(Boolean));
   const named = referencedDatasetAliasNames(code);
+  const usedNames = referencedDatasetAliasNames(codeOutsideSignature(code));
+  const parameters = (parseProcessSignature(code)?.params || []).slice(1).map((param) => param.name);
   return buildProcessDatasetBindings(datasets, primaryDatasetId).map((binding) => {
-    if (binding.primary) return { ...binding, input: true, referenced: false };
+    if (binding.primary) return { ...binding, input: true, used: false, parameter: -1 };
     let alias = savedAlias(binding.nodeId);
     if (!alias) {
       alias = binding.alias;
       for (let suffix = 2; claimed.has(alias); suffix += 1) alias = `${binding.alias}_${suffix}`;
       claimed.add(alias);
     }
-    const referenced = named.has(alias);
-    return { ...binding, alias, input: referenced || chosen.has(binding.nodeId), referenced };
+    return { ...binding, alias, input: named.has(alias), used: usedNames.has(alias), parameter: parameters.indexOf(alias) };
   });
+}
+
+/**
+ * `code` whose process() parameters declare exactly `inputIds` as the inputs besides the primary
+ * one, each by the alias it has under `primaryDatasetId`, in the order of `inputIds`.
+ * @param {{ code: string, datasets: Array<{nodeId: string, name: string}>, primaryDatasetId: string,
+ *   inputIds: string[], savedAliases?: Record<string, string> }} options
+ */
+export function codeDeclaringInputs({ code, datasets, primaryDatasetId, inputIds, savedAliases = {} }) {
+  const aliasById = new Map(processDatasetInputs({ datasets, primaryDatasetId, savedAliases, code })
+    .filter((binding) => !binding.primary)
+    .map((binding) => [binding.nodeId, binding.alias]));
+  return withProcessParameters(code, inputIds.filter((id) => aliasById.has(id)).map((id) => aliasById.get(id)));
 }

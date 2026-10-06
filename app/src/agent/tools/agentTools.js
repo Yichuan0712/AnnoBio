@@ -114,7 +114,7 @@ Operations ("op" plus the fields listed):
 - add_dataset: ref, name, note?, columns (names), rows (lists of cells, or objects keyed by column). Text only.
 - import_dataset: ref, source (pubmed | clinicaltrials | chembl | preprint), ids, fields (from search_source's importable_fields), name, note?. Records are fetched when applied.
 - add_sampler: ref (the sampler), dataset_ref (the sampled dataset), source (dataset), sampling (random | random_with_replacement | rows), size + size_unit (rows | percent) for random, rows ("1 3 5-10") for rows, name?, dataset_name?.
-- add_process: ref, name, primary_input (dataset, df in the code), code defining process(df); other datasets are df_<alias> (see inspect_node on a process, or the process-code guide). Not run until the user runs it.
+- add_process: ref, name, primary_input (dataset, df in the code), code defining process(df, ...); each other input dataset is a parameter after df named after its df_<alias> (see inspect_node on a process, or the process-code guide). Not run until the user runs it.
 - add_prompt: ref, name, note?, sections [{name, content}] with {variable} inputs, input_types? {variable: text | image | pdf}, output {return_shape: single | table, fields [{key, type: str | float | list_str | list_float, description, examples?}]}.
 - add_prompt_version: ref, prompt (source), name?, and what to change: section_edits [{name, content}] (replaces those sections by name, appends new names, keeps the rest) or sections (the complete new list), input_types, output (only what changes: {return_shape} alone keeps the fields), note. Everything else is copied. Prefer this over editing a prompt that already has runs.
 - add_run: ref, prompt, input_dataset, input_mapping {prompt input: column}, name?. It uses the model and settings in Settings → Run defaults. Not started until the user starts it.
@@ -145,9 +145,9 @@ Operations ("op" plus the fields listed):
   ),
   tool(
     'try_process',
-    'Run Process code on the canvas data without changing anything, to check it before proposing it. df is the primary dataset (only its first max_rows rows); other datasets are available as df_<alias> in full. Returns each output branch with its row count, columns and first rows, or the Python error. No model calls, nothing to confirm.',
+    'Run Process code on the canvas data without changing anything, to check it before proposing it. df is the primary dataset (only its first max_rows rows); each other dataset the code declares as a parameter named after its df_<alias> is passed in full. Returns each output branch with its row count, columns and first rows, or the Python error. No model calls, nothing to confirm.',
     {
-      code: { type: 'string', description: 'Python source defining process(df).' },
+      code: { type: 'string', description: 'Python source defining process(df, ...), one parameter per other input dataset.' },
       primary_input: { type: 'string', description: 'Exact id of the dataset used as df.' },
       max_rows: { type: 'integer', minimum: 1, maximum: 1000, description: 'Rows of the primary dataset to use. Default 50.' },
     },

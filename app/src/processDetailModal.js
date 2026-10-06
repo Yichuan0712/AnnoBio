@@ -1,9 +1,9 @@
 /**
  * Process node editor.
  *
- * Process nodes use one explicit contract: ``process(df) -> DataFrame | {name: DataFrame}``.
- * `df` is its primary Dataset. Other canvas Datasets are exposed by readable aliases and become
- * explicit canvas dependencies only when the Process code references them.
+ * Process nodes use one explicit contract: ``process(df, df_<name>, ...) -> DataFrame | {name: DataFrame}``.
+ * `df` is its primary Dataset. Each other Input dataset is the parameter named after its readable
+ * alias (processSignature.js); checking one under Input datasets adds that parameter.
  */
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -14,6 +14,8 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { createRowResultsPanel } from './rowResultsTable.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { bindProcessInputPicker, processInputPickerHtml } from './processInputPicker.js';
+import { codeDeclaringInputs } from './processDatasetBindings.js';
+import { withProcessParameters } from './processSignature.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
 import { executionIdleLabel } from './executionResumeState.js';
 
@@ -48,8 +50,8 @@ function buildDefaultCode(headers) {
 def process(df):
     # df is this Process's input Dataset as a pandas DataFrame.
 ${columnLines}
-    # Every other Input dataset is df_<name>, as shown under Input datasets;
-    # naming another canvas Dataset this way also makes it an input.
+    # Each other Input dataset you check is a parameter after df, named
+    # df_<name> as shown under Input datasets.
     #
     # Return one of:
     #   1. One DataFrame -> one output Dataset
@@ -102,13 +104,14 @@ function restoreResults(node, ...keys) {
 
 /**
  * @param {{ node: HTMLElement,
- *   getProcessInputs: (code: string) => { bindings: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}, alias: string, primary: boolean, input: boolean, referenced: boolean}>, primaryDatasetId: string },
- *   setProcessInputs?: (inputs: { primaryDatasetId: string, inputIds: string[] }, code: string) => void,
- *   syncProcessDependencies?: (code: string) => void, getUniqueDatasetExportName?: (base: string) => string }} options
- *   getProcessInputs: every canvas Dataset (processDatasetInputs), marking the ones the Process reads
- *   setProcessInputs: the Process picks its Datasets in this window, like a Run picks its Prompt
+ *   getProcessInputs: (code: string) => { bindings: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}, alias: string, primary: boolean, input: boolean, used: boolean}>, primaryDatasetId: string, savedAliases: Record<string, string> },
+ *   syncProcessDependencies?: (code: string) => void, setPrimaryDataset?: (datasetNodeId: string, code: string) => void,
+ *   getUniqueDatasetExportName?: (base: string) => string }} options
+ *   getProcessInputs: every canvas Dataset (processDatasetInputs), marking the ones the code reads
+ *   setPrimaryDataset: the Process picks its df in this window, like a Run picks its Prompt; its other
+ *   Input datasets are the code's process() parameters, which the picker here rewrites
  */
-export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, setProcessInputs, syncProcessDependencies, getUniqueDatasetExportName, history = null }) {
+export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName, history = null }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -122,7 +125,10 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   const readDatasets = (code) => {
     const raw = getProcessInputs?.(code) || {};
     const bindings = Array.isArray(raw.bindings) ? raw.bindings.filter((binding) => binding?.nodeId && binding?.content) : [];
-    return { bindings, primaryDatasetId: bindings.some((binding) => binding.primary) ? raw.primaryDatasetId : '' };
+    return {
+      bindings, primaryDatasetId: bindings.some((binding) => binding.primary) ? raw.primaryDatasetId : '',
+      savedAliases: raw.savedAliases || {},
+    };
   };
   const primaryHeaders = (code) => readDatasets(code).bindings.find((binding) => binding.primary)?.content?.headers || [];
   const initialCode = resolveDataframeProcessCode({
@@ -151,7 +157,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
           </div>
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
-          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the first Input dataset; each other one is the <code>df_&lt;name&gt;</code> shown beside it. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
+          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the first Input dataset; each other one is the parameter named as shown beside it. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -190,6 +196,17 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     parent: editorHost,
   });
   const getCode = () => editorView.state.doc.toString();
+  /** One edit covering only what changed, so the cursor and undo history stay where they were. */
+  function replaceCode(nextCode) {
+    const code = getCode();
+    if (nextCode === code) return;
+    let from = 0;
+    while (from < code.length && from < nextCode.length && code[from] === nextCode[from]) from += 1;
+    let end = 0;
+    while (end < code.length - from && end < nextCode.length - from
+      && code[code.length - 1 - end] === nextCode[nextCode.length - 1 - end]) end += 1;
+    editorView.dispatch({ changes: { from, to: code.length - end, insert: nextCode.slice(from, nextCode.length - end) } });
+  }
   if (history) node.dataset.processDfCode = getCode();
   let historyRefreshTimer = null;
   let inputsRefreshTimer = null;
@@ -202,14 +219,17 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   const inputPicker = bindProcessInputPicker(overlay.querySelector('#process-input-picker'), {
     placeholder: 'Select input datasets',
     getInputs: () => readDatasets(getCode()),
-    onChange: (inputs) => {
+    onChange: ({ primaryDatasetId, inputIds }) => {
       const code = getCode();
-      const previousDefault = buildDefaultCode(primaryHeaders(code));
-      setProcessInputs?.(inputs, code);
+      const { bindings, savedAliases } = readDatasets(code);
       // Untouched sample code follows the new df's columns; edited code is left alone.
-      if (code === previousDefault) {
-        editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: buildDefaultCode(primaryHeaders(code)) } });
-      }
+      const untouched = withProcessParameters(code, []) === buildDefaultCode(primaryHeaders(code));
+      const headers = bindings.find((binding) => binding.nodeId === primaryDatasetId)?.content?.headers || [];
+      const nextCode = codeDeclaringInputs({
+        code: untouched ? buildDefaultCode(headers) : code, datasets: bindings, primaryDatasetId, inputIds, savedAliases,
+      });
+      replaceCode(nextCode);
+      setPrimaryDataset?.(primaryDatasetId, nextCode);
       if (history) scheduleHistoryRefresh();
     },
     isLocked: () => running,

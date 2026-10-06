@@ -30,6 +30,7 @@ def _dag_main(jobs: list[dict[str, Any]], inputs: list[dict[str, Any]], outputs:
             calls.append("\n".join(lines))
     source = r'''from __future__ import annotations
 import argparse
+import inspect
 import json
 import re
 from pathlib import Path
@@ -94,15 +95,23 @@ def input_paths(values: list[str]) -> dict[str, Path]:
         raise ValueError("Missing input Dataset(s): " + ", ".join(missing))
     return paths
 
-def run_process(primary: pd.DataFrame, input_frames: dict[str, pd.DataFrame], process: Callable[[pd.DataFrame], Any], name: str) -> dict[str, pd.DataFrame]:
-    # df is one explicit primary Dataset. Other inputs use the readable aliases displayed in the
-    # Process editor and remain independent until user code deliberately combines them.
-    scoped_inputs = {alias: frame.copy() for alias, frame in input_frames.items()}
-    namespace = process.__globals__
-    for alias, frame in scoped_inputs.items():
-        if alias != "df":
-            namespace[alias] = frame
-    result = process(primary.copy())
+def run_process(primary: pd.DataFrame, input_frames: dict[str, pd.DataFrame], process: Callable[..., Any], name: str) -> dict[str, pd.DataFrame]:
+    # df is one explicit primary Dataset. Every other input is the process() parameter named after
+    # its readable alias, as displayed in the Process editor; code written before those parameters
+    # reads the alias as a global instead.
+    parameters = list(inspect.signature(process).parameters.values())[1:]
+    takes_any = any(parameter.kind == parameter.VAR_KEYWORD for parameter in parameters)
+    declared = {parameter.name for parameter in parameters
+                if parameter.kind in (parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY)}
+    arguments = {}
+    for alias, frame in input_frames.items():
+        if alias == "df":
+            continue
+        if alias in declared or takes_any:
+            arguments[alias] = frame.copy()
+        else:
+            process.__globals__[alias] = frame.copy()
+    result = process(primary.copy(), **arguments)
     if isinstance(result, pd.DataFrame):
         return {"result": result}
     if not isinstance(result, dict):

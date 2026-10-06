@@ -343,18 +343,16 @@ export function planChangeSet(state, operations, ctx) {
     };
   }
 
-  /** Like the Process window: the Datasets it already reads stay inputs, keeping their aliases, and
-   * each one the code names joins them. Returns the inputs other than df. */
+  /** Like the Process window: the inputs are df and each Dataset the code declares as a process()
+   * parameter or uses, by the alias it already has. Returns the inputs other than df. */
   function wireProcess(processNode, code, primary) {
     if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) fail('Process code must define process(df).');
     const datasets = next.nodes.filter((n) => n.type === 'dataset').map((n) => ({ nodeId: n.nodeId, name: n.name || 'Dataset' }));
-    const inputIds = [primary.nodeId, ...next.connections
-      .filter((c) => c.type === 'dataset-to-process' && c.toId === processNode.nodeId).map((c) => c.fromId)];
     let savedAliases = processNode.datasetAliases || {};
     if (typeof savedAliases === 'string') {
       try { savedAliases = JSON.parse(savedAliases); } catch (_) { savedAliases = {}; }
     }
-    const bindings = processDatasetInputs({ datasets, primaryDatasetId: primary.nodeId, inputIds, savedAliases, code });
+    const bindings = processDatasetInputs({ datasets, primaryDatasetId: primary.nodeId, savedAliases, code });
     const unknown = [...referencedDatasetAliasNames(code)]
       .filter((alias) => !bindings.some((b) => b.alias === alias));
     if (unknown.length) {

@@ -226,7 +226,7 @@ class PipelineCompileTests(unittest.TestCase):
         state = branched()
         state["nodes"][1]["dfCode"] = "raise RuntimeError('MUST NOT EXECUTE')\ndef process(df):\n    return {'left': df, 'right': df}\n"
         self.valid(state)
-        for code in ["# def process(df):\npass", "def process(df, required):\n    return df", "async def process(df):\n    return df", "def process(df): this is invalid python!"]:
+        for code in ["# def process(df):\npass", "def process(data):\n    return data", "def process(df, df_right, /):\n    return df", "async def process(df):\n    return df", "def process(df): this is invalid python!"]:
             with self.subTest(code=code):
                 state["nodes"][1]["dfCode"] = code
                 self.error(state, "INVALID_PROCESS_FUNCTION")
@@ -235,6 +235,16 @@ class PipelineCompileTests(unittest.TestCase):
         state = branched()
         state["nodes"][4]["dfCode"] = "def process(df):\n    return df_missing\n"
         self.error(state, "UNBOUND_DATASET_ALIAS")
+        for code in ["def process(df, df_missing):\n    return df", "def process(df, *, df_missing):\n    return df"]:
+            with self.subTest(code=code):
+                state["nodes"][4]["dfCode"] = code
+                self.error(state, "UNBOUND_DATASET_ALIAS")
+        # Its other Input dataset is a parameter; one more with a default, or **inputs, needs none.
+        for code in ["def process(df, df_right):\n    return df.merge(df_right)\n",
+                     "def process(df, df_right, limit=5, **inputs):\n    return df.merge(df_right)\n"]:
+            with self.subTest(code=code):
+                state["nodes"][4]["dfCode"] = code
+                self.valid(state)
         state["nodes"][4]["datasetAliases"] = {"right": "df"}
         self.error(state, "INVALID_ALIAS")
 

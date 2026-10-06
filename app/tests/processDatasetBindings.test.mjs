@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildProcessDatasetBindings,
+  codeDeclaringInputs,
   processDatasetInputs,
   referencedDatasetAliasNames,
   referencedDatasetAliases,
@@ -34,7 +35,7 @@ test('a saved alias selects its copied Dataset when another Dataset derives the 
   assert.deepEqual([...referencedDatasetAliases('return df_candidates', bindings, { copy: 'df_candidates' })], ['copy']);
 });
 
-test('a Process reads its primary, each chosen Dataset and each Dataset its code names', () => {
+test('a Process reads its primary and each Dataset its code declares or uses', () => {
   const datasets = [
     { nodeId: 'ready', name: 'Pairs ready' },
     { nodeId: 'candidates', name: 'Candidates' },
@@ -42,9 +43,9 @@ test('a Process reads its primary, each chosen Dataset and each Dataset its code
     { nodeId: 'other', name: 'Other' },
   ];
   const inputs = processDatasetInputs({
-    datasets, primaryDatasetId: 'ready', inputIds: ['ready', 'candidates'], code: 'return df.merge(df_lookup)',
+    datasets, primaryDatasetId: 'ready', code: 'def process(df, df_candidates):\n    return df.merge(df_lookup)\n',
   });
-  assert.deepEqual(inputs.map(({ nodeId, alias, primary, input, referenced }) => [nodeId, alias, primary, input, referenced]), [
+  assert.deepEqual(inputs.map(({ nodeId, alias, primary, input, used }) => [nodeId, alias, primary, input, used]), [
     ['ready', 'df', true, true, false],
     ['candidates', 'df_candidates', false, true, false],
     ['lookup', 'df_lookup', false, true, true],
@@ -61,14 +62,26 @@ test('an input keeps its saved alias, and no other Dataset takes it', () => {
       { nodeId: 'primary', name: 'Ready (Copy 1)' },
     ],
     primaryDatasetId: 'primary',
-    inputIds: ['copy', 'former-primary', 'primary'],
     savedAliases: { copy: 'df_candidates', 'former-primary': 'df', primary: 'df_ready_copy_1' },
-    code: 'return df.merge(df_candidates)',
+    code: 'def process(df, df_candidates, df_ready):\n    return df.merge(df_candidates)\n',
   });
-  assert.deepEqual(inputs.map(({ nodeId, alias, input, referenced }) => [nodeId, alias, input, referenced]), [
+  assert.deepEqual(inputs.map(({ nodeId, alias, input, used }) => [nodeId, alias, input, used]), [
     ['copy', 'df_candidates', true, true],
     ['original', 'df_candidates_2', false, false],
     ['former-primary', 'df_ready', true, false],
     ['primary', 'df', true, false],
   ]);
+});
+
+test('choosing inputs rewrites the parameters, by the alias each has under the new df', () => {
+  const datasets = [{ nodeId: 'a', name: 'A' }, { nodeId: 'b', name: 'B' }, { nodeId: 'c', name: 'C' }];
+  const code = 'def process(df, df_b):\n    return df\n';
+  assert.equal(codeDeclaringInputs({ code, datasets, primaryDatasetId: 'a', inputIds: ['b', 'c'], savedAliases: { a: 'df', b: 'df_b' } }),
+    'def process(df, df_b, df_c):\n    return df\n');
+  // A newly checked input follows the ones the code already reads.
+  assert.equal(codeDeclaringInputs({ code: 'def process(df):\n    return df.merge(df_c)\n', datasets, primaryDatasetId: 'a', inputIds: ['c', 'b'] }),
+    'def process(df, df_c, df_b):\n    return df.merge(df_c)\n');
+  // B becomes df, so its parameter goes and A, the former df, gets one.
+  assert.equal(codeDeclaringInputs({ code, datasets, primaryDatasetId: 'b', inputIds: ['a', 'b'], savedAliases: { a: 'df', b: 'df_b' } }),
+    'def process(df, df_a):\n    return df\n');
 });
