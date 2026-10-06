@@ -103,3 +103,40 @@ test('materialization contract includes row indices and preserves input asset ty
   assert.deepEqual(table.headers, ['Input: #', 'Input: text', 'Input: image', 'Output: #', 'Output: answer']);
   assert.deepEqual(table.columnTypes, ['text', 'text', 'image', 'text', 'text']);
 });
+
+test('Prompts whose results one Process merges are branches it needs, not alternatives', () => {
+  const state = {
+    nodes: [node('dataset', 'raw'), node('prompt', 'words'), node('prompt', 'explain'),
+      node('run', 'r-words', { runWorkingSetId: 'raw' }), node('run', 'r-explain', { runWorkingSetId: 'raw' }),
+      node('dataset', 'words-out', { sourceRunNodeId: 'r-words', savedCopy: true }),
+      node('dataset', 'explain-out', { sourceRunNodeId: 'r-explain', savedCopy: true }), node('process', 'merge')],
+    connections: [edge('words', 'r-words', 'prompt-to-run'), edge('explain', 'r-explain', 'prompt-to-run'),
+      edge('words-out', 'merge', 'dataset-to-process'), edge('explain-out', 'merge', 'dataset-to-process')],
+  };
+  const pipelines = detectPipelines(state);
+  const route = buildSelectedRoute(pipelines[0], new Map());
+  const branch = route.find((step) => step.kind === 'branch');
+  assert.deepEqual(branch.lanes.map((lane) => lane.filter((step) => step.kind === 'prompt').map((step) => step.selectedValue)),
+    [['r-words'], ['r-explain']]);
+  assert.deepEqual(payload(state).filter((s) => s.type !== 'dataset'), [
+    { type: 'prompt', prompt_node_id: 'words', run_node_id: 'r-words' },
+    { type: 'prompt', prompt_node_id: 'explain', run_node_id: 'r-explain' },
+    { type: 'process', process_node_id: 'merge' },
+  ]);
+});
+
+test('Prompts whose paths first meet at another Prompt stay alternatives', () => {
+  const state = {
+    nodes: [node('dataset', 'raw'), node('prompt', 'p1'), node('prompt', 'p2'), node('prompt', 'next'),
+      node('run', 'r1', { runWorkingSetId: 'raw' }), node('run', 'r2', { runWorkingSetId: 'raw' }),
+      node('dataset', 'out1', { sourceRunNodeId: 'r1' }), node('dataset', 'out2', { sourceRunNodeId: 'r2' }),
+      node('run', 'next-1', { runWorkingSetId: 'out1' }), node('run', 'next-2', { runWorkingSetId: 'out2' }),
+      node('dataset', 'next-out', { sourceRunNodeId: 'next-1' }), node('process', 'finish')],
+    connections: [edge('p1', 'r1', 'prompt-to-run'), edge('p2', 'r2', 'prompt-to-run'),
+      edge('next', 'next-1', 'prompt-to-run'), edge('next', 'next-2', 'prompt-to-run'),
+      edge('next-out', 'finish', 'dataset-to-process')],
+  };
+  const route = buildSelectedRoute(detectPipelines(state)[0], new Map());
+  assert.equal(route.some((step) => step.kind === 'branch'), false);
+  assert.deepEqual(route.find((step) => step.kind === 'prompt').options.map((option) => option.value), ['r1', 'r2']);
+});
