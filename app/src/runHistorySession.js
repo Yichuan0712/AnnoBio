@@ -3,13 +3,28 @@ import { resolveHistoryCanvasState } from './runHistoryResolver.js';
 import { planHistorySelection } from './runHistorySelection.js';
 import { captureHistoryInput, runningHistoryRecord } from './runHistoryCapture.js';
 import { analysisInputKeys } from './runAnalysisHistory.js';
-import { dependentHistoryIds } from './runHistoryDeletion.js';
+import { dependentHistoryIds, directHistoryDownstreamIds, directHistoryUpstreamIds } from './runHistoryDeletion.js';
 import { describeHistoryRecord } from './runHistoryPresentation.js';
 import { contentLocks, recordInputRefs } from './contentLocks.js';
 
 /** Record inputs and origin never change, so these are cached per record ID. */
 function recordFacts(record) {
   return { inputRefs: recordInputRefs(record), pipelineRunId: String(record?.pipelineRunId || '') };
+}
+
+function relationSummary(record, canvasState, currentIds) {
+  const node = (canvasState?.nodes || []).find((item) => String(item?.nodeId || item?.id || '') === String(record.nodeId));
+  const nodeName = node?.runName || node?.name || node?.scoreName || node?.promptReviewName || '';
+  const promptName = record.kind === 'run' ? String(record.inputs?.prompt?.name || record.summary?.promptName || '') : '';
+  const fallback = record.kind ? `${record.kind[0].toUpperCase()}${record.kind.slice(1)}` : 'Record';
+  return {
+    id: record.id,
+    nodeId: record.nodeId,
+    kind: record.kind,
+    label: [promptName, nodeName || fallback].filter(Boolean).join(' · '),
+    createdAt: record.createdAt || '',
+    current: currentIds.has(record.id),
+  };
 }
 
 function hasLegacyOutput(node) {
@@ -77,9 +92,10 @@ export class RunHistorySession {
         const keys = await analysisInputKeys(resolved.state, resolved.currentRecordIds);
         for (const node of migration.state.nodes || []) {
           const scoreKey = keys.score.get(node.nodeId);
-          if (node.type === 'score' && scoreKey && (node.scoreMatchResult || node.scoreRowExcludedFromScoring)) {
+          if (node.type === 'score' && scoreKey && (node.scoreMatchResult || node.scoreMatchError || node.scoreRowExcludedFromScoring)) {
             await this.saveAnalysis(node.nodeId, 'score', scoreKey, {
               scoreMatchResult: node.scoreMatchResult || null,
+              scoreMatchError: node.scoreMatchError || null,
               scoreRowExcludedFromScoring: node.scoreRowExcludedFromScoring || {},
             });
           }
@@ -108,7 +124,9 @@ export class RunHistorySession {
   async select(recordId, state, { runningNodeIds = [] } = {}) {
     if (!this.projectId) throw new Error('Open a project before using history.');
     const plan = await planHistorySelection(state, recordId, {
-      loadRecord: (id) => this.storage.loadRecord(this.projectId, id), runningNodeIds,
+      loadRecord: (id) => this.storage.loadRecord(this.projectId, id),
+      recordEntries: this.index.records,
+      runningNodeIds,
     });
     const resolved = await this.resolve(plan.state);
     return { ...plan, state: resolved.state, currentRecordIds: resolved.currentRecordIds };
@@ -189,14 +207,38 @@ export class RunHistorySession {
         || (order.get(b.id) || 0) - (order.get(a.id) || 0));
   }
 
-  async displayEntriesForNode(nodeId, canvasState) {
-    return Promise.all(this.entriesForNode(nodeId).map(async (entry) => {
-      const record = await this.storage.loadRecord(this.projectId, entry.id);
-      if (!record || record.id !== entry.id || record.nodeId !== nodeId) {
-        throw new Error(`History record is missing or invalid: ${entry.id}`);
+  async displayEntriesForNode(nodeId, canvasState, { currentRecordIds = {} } = {}) {
+    const records = await Promise.all(this.index.records.map((entry) => this.storage.loadRecord(this.projectId, entry.id)));
+    for (let index = 0; index < records.length; index += 1) {
+      if (!records[index] || records[index].id !== this.index.records[index].id) {
+        throw new Error(`History record is missing or invalid: ${this.index.records[index].id}`);
       }
-      return { ...entry, display: describeHistoryRecord(record, canvasState) };
-    }));
+    }
+    const byId = new Map(records.map((record) => [record.id, record]));
+    const currentIds = new Set(Object.values(currentRecordIds).filter(Boolean));
+    const analysis = await analysisInputKeys(canvasState, currentRecordIds);
+    for (const [kind, keys] of [['score', analysis.score], ['review', analysis.review]]) {
+      for (const [analysisNodeId, key] of keys) {
+        const current = [...this.index.records].reverse().find((entry) => entry.kind === kind
+          && entry.nodeId === analysisNodeId && entry.signature === key.signature);
+        if (current) currentIds.add(current.id);
+      }
+    }
+    return this.entriesForNode(nodeId).map((entry) => {
+      const record = byId.get(entry.id);
+      if (record.nodeId !== nodeId) throw new Error(`History record is missing or invalid: ${entry.id}`);
+      const summarize = (id) => relationSummary(byId.get(id), canvasState, currentIds);
+      const byCurrentThenDate = (a, b) => Number(b.current) - Number(a.current)
+        || String(b.createdAt).localeCompare(String(a.createdAt));
+      const upstream = directHistoryUpstreamIds(records, record.id).map(summarize).sort(byCurrentThenDate);
+      const downstream = directHistoryDownstreamIds(records, record.id).map(summarize).sort(byCurrentThenDate);
+      return {
+        ...entry,
+        error: record.error || '',
+        relationships: { upstream, downstream },
+        display: describeHistoryRecord(record, canvasState, { currentRecordIds, recordById: byId }),
+      };
+    });
   }
 
   async analysisRecord(nodeId, kind, signature) {
@@ -209,13 +251,22 @@ export class RunHistorySession {
     if (!this.projectId || !['score', 'review'].includes(kind) || !key?.signature) return null;
     const previous = await this.analysisRecord(nodeId, kind, key.signature);
     if (previous && JSON.stringify(previous.results) === JSON.stringify(results)) return previous;
+    let inputs = key.inputs || {};
+    if (kind === 'review' && !inputs.scoreRecordId) {
+      const score = [...this.index.records].reverse().find((entry) => entry.kind === 'score'
+        && entry.nodeId === inputs.scoreNodeId && entry.signature === inputs.scoreSignature);
+      if (score) inputs = { ...inputs, scoreRecordId: score.id };
+    }
+    const sourceRecordIds = kind === 'score'
+      ? [...new Set([inputs.runRecordId, inputs.groundTruthSourceRecordId].filter(Boolean))]
+      : [inputs.scoreRecordId].filter(Boolean);
     const at = this.now?.() || new Date().toISOString();
     const record = previous
-      ? { ...previous, results, updatedAt: at }
+      ? { ...previous, inputs, sourceRecordIds, results, updatedAt: at }
       : {
         id: this.createId?.() || globalThis.crypto.randomUUID().replaceAll('-', ''),
         nodeId, kind, signature: key.signature, status: 'completed',
-        createdAt: at, updatedAt: at, inputs: key.inputs, results,
+        createdAt: at, updatedAt: at, inputs, sourceRecordIds, results,
       };
     await this.putRecord(record);
     return record;

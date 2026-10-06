@@ -1288,10 +1288,16 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function syncProcessDependencies(processNode, code) {
     const { datasets, primaryDatasetId } = getProcessDatasets(processNode);
-    const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
-    processNode.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(bindings.map((binding) => [binding.nodeId, binding.alias])));
-    const referenced = referencedDatasetAliases(code, bindings);
+    let savedAliases = {};
+    try { savedAliases = JSON.parse(processNode.dataset.processDatasetAliases || '{}'); } catch (_) {}
+    const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId).map((binding) => ({
+      ...binding, alias: savedAliases[binding.nodeId] || binding.alias,
+    }));
+    const referenced = referencedDatasetAliases(code, bindings, savedAliases);
     const required = new Set([primaryDatasetId, ...referenced]);
+    processNode.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(
+      bindings.filter((binding) => required.has(binding.nodeId)).map((binding) => [binding.nodeId, binding.alias]),
+    ));
     const processId = processNode?.dataset?.nodeId || '';
     connections = connections.filter((connection) => !(
       connection.toId === processId && connection.type === EDGE_TYPE_DATASET_TO_PROCESS
@@ -4593,6 +4599,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           processPending: pendingProcesses.has(nodeId),
           processResumable: node.dataset.processResumable === '1' || undefined,
           historyRecordId: node.dataset.historyRecordId || undefined,
+          historySelectionSignature: node.dataset.historySelectionSignature || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         return out;
@@ -4632,6 +4639,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           runPending: pendingRuns.has(nodeId),
           runResumable: node.dataset.runResumable === '1' || undefined,
           historyRecordId: node.dataset.historyRecordId || undefined,
+          historySelectionSignature: node.dataset.historySelectionSignature || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (pct <= 0 && node.dataset.runResults && node.dataset.runInputContent) {
@@ -4692,6 +4700,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if ((node.dataset.scoreMatchCode || '').trim()) out.scoreMatchCode = node.dataset.scoreMatchCode;
         if (node.dataset.scoreActiveMatchMode === 'code') out.scoreActiveMatchMode = 'code';
         if ((node.dataset.scoreMatchResult || '').trim()) out.scoreMatchResult = node.dataset.scoreMatchResult;
+        if ((node.dataset.scoreMatchError || '').trim()) out.scoreMatchError = node.dataset.scoreMatchError;
         if (node.dataset.scoreMatchInterrupted === '1') out.scoreMatchInterrupted = true;
         return out;
       }
@@ -4815,6 +4824,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         if (n.dfResults || n.results) node.dataset.processDfResults = n.dfResults || n.results;
         if (n.historyRecordId) node.dataset.historyRecordId = n.historyRecordId;
+        if (n.historySelectionSignature) node.dataset.historySelectionSignature = n.historySelectionSignature;
         if (n.processPending === true || n.processResumable === true) node.dataset.processResumable = '1';
         if (n.results || n.dfResults) {
           const bar = node.querySelector('.workflow-node__process-progress');
@@ -4836,6 +4846,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.runSettings && typeof n.runSettings === 'object') runNode.dataset.runSettings = JSON.stringify(n.runSettings);
         if (n.runCompleted) runNode.dataset.runCompleted = n.runCompleted;
         if (n.historyRecordId) runNode.dataset.historyRecordId = n.historyRecordId;
+        if (n.historySelectionSignature) runNode.dataset.historySelectionSignature = n.historySelectionSignature;
         if (n.runResumable === true || n.runPending === true) runNode.dataset.runResumable = '1';
         if (n.runInputContent) runNode.dataset.runInputContent = n.runInputContent;
         if (n.runResults) {
@@ -4914,6 +4925,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.scoreActiveMatchMode === 'code') scoreNode.dataset.scoreActiveMatchMode = 'code';
         if (n.scoreMatchResult && typeof n.scoreMatchResult === 'string') {
           scoreNode.dataset.scoreMatchResult = n.scoreMatchResult;
+        }
+        if (n.scoreMatchError && typeof n.scoreMatchError === 'string') {
+          scoreNode.dataset.scoreMatchError = n.scoreMatchError;
         }
         if (n.scoreMatchInterrupted === true) scoreNode.dataset.scoreMatchInterrupted = '1';
         createdNodes.push(scoreNode);
@@ -5120,7 +5134,12 @@ export function buildWorkflowCanvas(root, options = {}) {
           if (!resolved?.stale) break;
         }
         if (resolved?.stale) throw new Error('Canvas changed while loading History. Try again.');
-        return { entries: await historySession.displayEntriesForNode(nodeId, getCanvasState()), currentId: resolved?.currentRecordIds?.[nodeId] || '' };
+        return {
+          entries: await historySession.displayEntriesForNode(nodeId, getCanvasState(), {
+            currentRecordIds: resolved?.currentRecordIds || {},
+          }),
+          currentId: resolved?.currentRecordIds?.[nodeId] || '',
+        };
       },
       select: async (recordId, closeModal) => {
         const otherDetails = [...document.querySelectorAll('.modal-overlay')].filter((el) =>
@@ -5221,6 +5240,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       else delete live.dataset.runResumable;
       if (item.historyRecordId) live.dataset.historyRecordId = item.historyRecordId;
       else delete live.dataset.historyRecordId;
+      if (item.historySelectionSignature) live.dataset.historySelectionSignature = item.historySelectionSignature;
+      else delete live.dataset.historySelectionSignature;
       const progress = Number(item.runProgress || 0);
       const bar = live.querySelector('.workflow-node__run-progress');
       if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
@@ -5242,11 +5263,12 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (node.type !== 'score' && node.type !== 'promptReview') continue;
       const scoreKey = analysisKeyForSave(priorKeys, initialKeys, 'score', node.nodeId, historyAnalysisKeysInitialized);
       if (node.type === 'score' && scoreKey && (
-        node.scoreMatchResult || node.scoreRowExcludedFromScoring
+        node.scoreMatchResult || node.scoreMatchError || node.scoreRowExcludedFromScoring
         || await session.analysisRecord(node.nodeId, 'score', scoreKey.signature)
       )) {
         await session.saveAnalysis(node.nodeId, 'score', scoreKey, {
           scoreMatchResult: node.scoreMatchResult || null,
+          scoreMatchError: node.scoreMatchError || null,
           scoreRowExcludedFromScoring: node.scoreRowExcludedFromScoring || {},
         });
       }
@@ -5264,9 +5286,11 @@ export function buildWorkflowCanvas(root, options = {}) {
       const saved = key ? await session.analysisRecord(node.nodeId, 'score', key.signature) : null;
       if (saved) {
         node.scoreMatchResult = saved.results?.scoreMatchResult || undefined;
+        node.scoreMatchError = saved.results?.scoreMatchError || undefined;
         node.scoreRowExcludedFromScoring = saved.results?.scoreRowExcludedFromScoring || {};
       } else {
         delete node.scoreMatchResult;
+        delete node.scoreMatchError;
         delete node.scoreRowExcludedFromScoring;
       }
     }
@@ -5309,6 +5333,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         else delete live.dataset.runResumable;
         if (item.historyRecordId) live.dataset.historyRecordId = item.historyRecordId;
         else delete live.dataset.historyRecordId;
+        if (item.historySelectionSignature) live.dataset.historySelectionSignature = item.historySelectionSignature;
+        else delete live.dataset.historySelectionSignature;
         const bar = live.querySelector('.workflow-node__run-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
       } else if (item.type === 'process') {
@@ -5319,11 +5345,15 @@ export function buildWorkflowCanvas(root, options = {}) {
         else delete live.dataset.processResumable;
         if (item.historyRecordId) live.dataset.historyRecordId = item.historyRecordId;
         else delete live.dataset.historyRecordId;
+        if (item.historySelectionSignature) live.dataset.historySelectionSignature = item.historySelectionSignature;
+        else delete live.dataset.historySelectionSignature;
         const bar = live.querySelector('.workflow-node__process-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
       } else if (item.type === 'score') {
         if (item.scoreMatchResult == null) delete live.dataset.scoreMatchResult;
         else live.dataset.scoreMatchResult = item.scoreMatchResult;
+        if (item.scoreMatchError == null) delete live.dataset.scoreMatchError;
+        else live.dataset.scoreMatchError = item.scoreMatchError;
         if (item.scoreRowExcludedFromScoring == null) delete live.dataset.scoreRowExcludedFromScoring;
         else live.dataset.scoreRowExcludedFromScoring = JSON.stringify(item.scoreRowExcludedFromScoring);
         if (item.reviewResult == null) delete live.dataset.reviewResult;
@@ -5409,11 +5439,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     const code = resolveDataframeProcessCode({ dfCode: processNode.dataset.processDfCode, code: processNode.dataset.processCode });
     if (!code) throw new Error('The Process has no code.');
     const { datasets, primaryDatasetId } = getProcessDatasets(processNode);
-    const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
+    let savedAliases = {};
+    try { savedAliases = JSON.parse(processNode.dataset.processDatasetAliases || '{}'); } catch (_) {}
+    const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId).map((binding) => ({
+      ...binding, alias: savedAliases[binding.nodeId] || binding.alias,
+    }));
     const required = new Set([
       primaryDatasetId,
       ...connections.filter((edge) => edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.toId === nodeId).map((edge) => edge.fromId),
-      ...referencedDatasetAliases(code, bindings),
+      ...referencedDatasetAliases(code, bindings, savedAliases),
     ]);
     const executionBindings = bindings.filter((binding) => required.has(binding.nodeId));
     const missingInput = executionBindings.find((binding) => binding.missingResult);
@@ -5439,7 +5473,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     let execution;
     try {
       execution = await runProcessCode({
-        code, bindings: session ? executionBindings : bindings, signal, timeoutMs,
+        code, bindings: executionBindings, signal, timeoutMs,
         onStarted: async (jobId) => {
           if (record) {
             record = { ...record, backendJobId: jobId, updatedAt: new Date().toISOString() };
@@ -5532,7 +5566,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       extractInputFields: extractInputFieldsFromSections,
     });
     if (result?.found && (result.type === 'run' || result.type === 'process') && history && !history.stale) {
-      result.history = await historySession.displayEntriesForNode(nodeId, getCanvasState());
+      result.history = await historySession.displayEntriesForNode(nodeId, getCanvasState(), {
+        currentRecordIds: history.currentRecordIds || {},
+      });
       result.currentHistoryRecordId = history.currentRecordIds?.[nodeId] || null;
     }
     if (!result?.found || result.type !== 'score') return result;
@@ -5708,9 +5744,10 @@ export function buildWorkflowCanvas(root, options = {}) {
                 const edge = connections.find((item) => (
                   item.type === EDGE_TYPE_DATASET_TO_PROCESS && item.fromId === oldId && item.toId === consumerId
                 ));
-                if (!edge || getProcessDatasets(consumer).primaryDatasetId !== oldId) continue;
+                if (!edge) continue;
+                const wasPrimary = getProcessDatasets(consumer).primaryDatasetId === oldId;
                 edge.fromId = copyId;
-                consumer.dataset.processPrimaryDatasetId = copyId;
+                if (wasPrimary) consumer.dataset.processPrimaryDatasetId = copyId;
                 let aliases = null;
                 try { aliases = JSON.parse(consumer.dataset.processDatasetAliases || '{}'); } catch (_) {}
                 if (aliases && oldId in aliases) {

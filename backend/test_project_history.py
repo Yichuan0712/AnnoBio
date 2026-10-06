@@ -151,6 +151,18 @@ class ProjectHistoryTest(unittest.TestCase):
         prune = project_store.prune_unused_assets(self.project_id, project_store.AssetPruneRequest(usedIds=[], dryRun=True))
         self.assertEqual([item["id"] for item in prune["removed"]], ["old-asset"])
 
+    def test_legacy_review_depends_on_only_one_identical_score_attempt(self):
+        first = record(node_id="score-1", signature="same")
+        first.update(kind="score", createdAt=1)
+        second = record(node_id="score-1", signature="same")
+        second.update(kind="score", createdAt=2)
+        review = record(node_id="review-1", signature="review")
+        review.update(kind="review", createdAt=3,
+                      inputs={"scoreNodeId": "score-1", "scoreSignature": "same"})
+        records = {item["id"]: item for item in (first, second, review)}
+        self.assertEqual(project_store._dependent_history_ids(records, first["id"]), {first["id"]})
+        self.assertEqual(project_store._dependent_history_ids(records, second["id"]), {second["id"], review["id"]})
+
 
 if __name__ == "__main__":
     unittest.main()

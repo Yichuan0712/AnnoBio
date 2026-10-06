@@ -225,6 +225,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
   let currentJobId = null;
   let currentHistoryStatus = '';
   let lastResults = restoreResults(node, 'processDfResults', 'processResults');
+  let lastError = '';
   let activeBranchName = '';
   let saveBtnEl = null;
 
@@ -247,7 +248,18 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
     saveBtnEl = null;
   }
 
+  function showError(error) {
+    lastError = String(error?.message || error || 'Process failed.');
+    branchPicker.hidden = true;
+    resultsPanel.showError(lastError, `Process "${title}" failed`);
+    saveBtnEl = null;
+  }
+
   function refreshResults() {
+    if (lastError) {
+      showError(lastError);
+      return;
+    }
     if (!lastResults) {
       branchPicker.hidden = true;
       showPlaceholder('No results yet. Click Run.');
@@ -327,6 +339,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
         failed: current?.status === 'failed',
       });
       lastResults = restoreResults(node, 'processDfResults', 'processResults');
+      lastError = current?.status === 'failed' ? String(current.error || 'Process failed.') : '';
       refreshResults();
     } catch (_) { /* startRun reports storage errors when used */ }
   }
@@ -343,6 +356,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
     node.dataset.processActiveMode = 'df';
     delete node.dataset.processCode;
     syncProcessDependencies?.(getCode());
+    lastError = '';
     setRunningUi(true);
     showPlaceholder('Running…');
     try {
@@ -354,18 +368,19 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessDataset
         },
       });
       lastResults = restoreResults(node, 'processDfResults', 'processResults');
+      currentHistoryStatus = 'completed';
       if (overlay.isConnected) {
         if (lastResults) refreshResults();
         else showPlaceholder('No rows returned.');
       }
     } catch (error) {
-      if (overlay.isConnected) showPlaceholder(error?.message || 'Process failed.');
+      currentHistoryStatus = 'failed';
+      if (overlay.isConnected) showError(error);
     } finally {
       currentJobId = null;
       cancelRequested = false;
       if (overlay.isConnected) {
         setRunningUi(false);
-        if (history) void refreshHistoryState();
       }
     }
   }

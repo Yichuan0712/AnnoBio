@@ -73,7 +73,7 @@ test('imports a Pipeline chain into node History exactly once with upstream reco
   assert.deepEqual(savedCopyRecords[1].sourceRecordIds, [savedCopyRecords[0].id]);
 });
 
-test('moves Run inputs and primary Process inputs onto published copies, not aliased merge inputs', () => {
+test('moves Run inputs and every copied Process input onto published copies', () => {
   const spec = { jobs: [
     { id: 'llm:next', type: 'llm', inputs: { data: 'dataset:mid' } },
     { id: 'process:clean', type: 'process', inputs: { df: 'dataset:mid', df_raw: 'dataset:raw' } },
@@ -83,6 +83,7 @@ test('moves Run inputs and primary Process inputs onto published copies, not ali
   assert.deepEqual([...pipelineCopyInputs(spec, copies)].map(([job, inputs]) => [job, [...inputs]]), [
     ['llm:next', [['dataset:mid', 'mid-copy']]],
     ['process:clean', [['dataset:mid', 'mid-copy']]],
+    ['process:merge', [['dataset:left', 'left-copy'], ['dataset:right', 'right-copy']]],
   ]);
 });
 

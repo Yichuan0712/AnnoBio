@@ -91,12 +91,14 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
     const key = `${nodeId(node)}\u0000${signature}`;
     const candidates = bySignature.get(key) || [];
     const preferred = byId.get(String(node.historyRecordId || ''));
-    const entry = preferred?.nodeId === nodeId(node) && preferred?.signature === signature
+    const selectedSignature = String(node.historySelectionSignature || '');
+    const entry = preferred?.nodeId === nodeId(node)
+      && (preferred?.signature === signature || selectedSignature === signature)
       ? preferred : candidates.at(-1);
     if (!entry || entry.kind !== node.type) return null;
     if (!recordCache.has(entry.id)) recordCache.set(entry.id, Promise.resolve(loadRecord(entry.id)));
     const record = await recordCache.get(entry.id);
-    if (!record || record.id !== entry.id || record.signature !== signature || record.nodeId !== nodeId(node)) {
+    if (!record || record.id !== entry.id || record.signature !== entry.signature || record.nodeId !== nodeId(node)) {
       throw new Error(`History record is missing or invalid: ${entry.id}`);
     }
     return record;
@@ -158,14 +160,17 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
           const datasets = next.nodes.filter((item) => item.type === 'dataset').map((item) => ({ nodeId: nodeId(item), name: item.name || '' }));
           const allBindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
           const code = String(node.dfCode || node.code || '');
-          const required = new Set([primaryDatasetId, ...incoming.map((edge) => edge.fromId), ...referencedDatasetAliases(code, allBindings)]);
           const savedAliases = parsed(node.datasetAliases, {});
+          const aliasedBindings = allBindings.map((binding) => ({
+            ...binding, alias: savedAliases?.[binding.nodeId] || binding.alias,
+          }));
+          const required = new Set([primaryDatasetId, ...incoming.map((edge) => edge.fromId), ...referencedDatasetAliases(code, aliasedBindings, savedAliases)]);
           const bindings = [];
           let complete = true;
-          for (const binding of allBindings.filter((item) => required.has(item.nodeId))) {
+          for (const binding of aliasedBindings.filter((item) => required.has(item.nodeId))) {
             const dataset = await resolveDataset(binding.nodeId);
             if (!dataset) { complete = false; break; }
-            bindings.push({ nodeId: binding.nodeId, alias: savedAliases?.[binding.nodeId] || binding.alias, signature: dataset.signature });
+            bindings.push({ nodeId: binding.nodeId, alias: binding.alias, signature: dataset.signature });
           }
           if (complete && bindings.some((item) => item.nodeId === primaryDatasetId)) {
             signature = await processInputSignature({ code, primaryDatasetId, bindings });
@@ -176,10 +181,12 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
       if (record) {
         applyResult(node, record);
         node.historyRecordId = record.id;
+        if (record.signature === signature) delete node.historySelectionSignature;
         currentRecordIds[id] = record.id;
       } else {
         clearResult(node);
         delete node.historyRecordId;
+        delete node.historySelectionSignature;
         missingResultNodeIds.push(id);
       }
       resolvedNodes.set(id, record);

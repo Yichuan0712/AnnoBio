@@ -24,3 +24,11 @@ test('reports numeric and alphabetic df aliases through the same scanner', () =>
   const aliases = referencedDatasetAliasNames('df_alpha.merge(df_13_results)');
   assert.deepEqual([...aliases], ['df_alpha', 'df_13_results']);
 });
+
+test('a saved alias selects its copied Dataset when another Dataset derives the same name', () => {
+  const bindings = [
+    { nodeId: 'original', alias: 'df_candidates' },
+    { nodeId: 'copy', alias: 'df_candidates' },
+  ];
+  assert.deepEqual([...referencedDatasetAliases('return df_candidates', bindings, { copy: 'df_candidates' })], ['copy']);
+});
