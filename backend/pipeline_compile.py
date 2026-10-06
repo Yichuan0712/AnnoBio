@@ -367,8 +367,8 @@ class _Compiler:
                          for p in self.inputs_to(nid, "process-to-dataset")]
             if _text(node.get("sourceRunNodeId")):
                 producers.append((f"llm:{node['sourceRunNodeId']}", "result"))
-            # Legacy snapshot edges describe frozen copies. They do not become executable
-            # producers, but conflicting provenance must not be silently discarded.
+            # Snapshot edges describe frozen copies. Outside the selection they stay frozen tables,
+            # but conflicting provenance must not be silently discarded.
             snapshot_sources = {f"{'llm' if edge.get('type') == 'run-to-dataset-snapshot' else 'process'}:{_text(edge.get('fromId'))}"
                                 for edge in self.edges if _text(edge.get("toId")) == nid
                                 and edge.get("type") in {"run-to-dataset-snapshot", "process-to-dataset-snapshot"}}
@@ -379,6 +379,11 @@ class _Compiler:
                 if any(jid in self.jobs for jid, _ in producers):
                     self.report("INPUT_PRODUCER_CONFLICT", nid, "input_dataset_ids", "Input boundary is also produced by a selected job.")
                 producers = []
+            elif not producers and len(snapshot_sources) == 1 and next(iter(snapshot_sources)) in self.jobs:
+                # A frozen copy of a selected step's output is that step's output: running the
+                # Pipeline recomputes it. A declared input boundary stays the frozen table.
+                jid = next(iter(snapshot_sources))
+                producers = [(jid, (_text(node.get("processOutputName")) or "result") if jid.startswith("process:") else "result")]
             if len(producers) > 1:
                 self.report("MULTIPLE_PRODUCERS", nid, "producer", "Dataset has multiple producers; choose one explicit origin.")
                 continue

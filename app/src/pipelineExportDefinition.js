@@ -83,11 +83,14 @@ export function exportCanvasDefinition(canvasState, route) {
   const routeBranches = new Set((canvasState?.connections || [])
     .filter((edge) => edge?.type === 'process-to-dataset' && ids.has(edge.fromId) && ids.has(edge.toId))
     .map((edge) => `${edge.fromId}\u0000${branchOf.get(edge.toId) || 'result'}`));
+  // A frozen copy of a selected step's output in the route is that step's output when it runs
+  // (pipelineInputAvailability.js); the compiler needs the copy's origin to chain it.
+  const snapshotEdgeTypes = new Set(['run-to-dataset-snapshot', 'process-to-dataset-snapshot']);
   const connections = (canvasState?.connections || []).filter((edge) => (
-    executableEdgeTypes.has(edge?.type) && (
+    (executableEdgeTypes.has(edge?.type) && (
       ids.has(edge?.toId) || (edge?.type === 'process-to-dataset' && ids.has(edge?.fromId)
         && !routeBranches.has(`${edge.fromId}\u0000${branchOf.get(edge.toId) || 'result'}`))
-    )
+    )) || (snapshotEdgeTypes.has(edge?.type) && ids.has(edge.fromId) && ids.has(edge.toId))
   ));
   return { version: canvasState?.version || 2, nodes, connections };
 }

@@ -205,6 +205,21 @@ class PipelineCompileTests(unittest.TestCase):
         state["connections"][-1] = edge("split", "left", "process-to-dataset-snapshot")
         self.valid(state)
 
+    def test_frozen_copy_of_a_selected_step_output_is_that_step_output(self):
+        # The merge reads a dashed copy of the split's left branch: running the Pipeline recomputes it.
+        state = branched()
+        state["connections"] = [e for e in state["connections"] if not (e["fromId"] == "split" and e["toId"] == "left")]
+        state["connections"].append(edge("split", "left", "process-to-dataset-snapshot"))
+        spec = self.valid(state)
+        jobs = {job["id"]: job for job in spec["jobs"]}
+        self.assertEqual(jobs["process:split"]["outputs"]["left"], ["dataset:left"])
+        self.assertIn("process:split", jobs["process:merge"]["depends_on"])
+        self.assertNotIn("dataset:left", spec["inputs"])
+        # Declared as an input boundary, the copy stays a frozen table.
+        spec = self.valid(state, input_dataset_ids=["raw", "left"])
+        self.assertIn("dataset:left", spec["inputs"])
+        self.assertNotIn("left", {job["id"]: job for job in spec["jobs"]}["process:split"]["outputs"])
+
     def test_run_diagnostics_name_the_connected_prompt(self):
         state = simple()
         state["nodes"][-1]["runName"] = "Run"
