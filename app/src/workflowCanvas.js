@@ -77,6 +77,7 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { openDatasetDiffModal } from './datasetDiffModal.js';
 import { datasetHistorySource } from './datasetHistorySource.js';
+import { datasetSnapshotStatus } from './datasetSnapshotStatus.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { runProcessCode, waitForProcessJob } from './processRunClient.js';
@@ -2472,12 +2473,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
   }
 
-  /** A saved copy captured from a History result other than its producer's current one (datasetSnapshotStatus.js). */
+  /** A saved copy captured from a History result other than its producer's current one. */
   function isEarlierResultCopy(edge) {
     if (edge.type !== EDGE_TYPE_RUN_TO_DATASET && edge.type !== EDGE_TYPE_PROCESS_TO_DATASET) return false;
     const copy = getNodeById(edge.toId)?.dataset;
-    return copy?.savedCopy === '1' && !!copy.snapshotSourceRecordId
-      && getNodeById(edge.fromId)?.dataset.historyRecordId !== copy.snapshotSourceRecordId;
+    if (!copy) return false;
+    return datasetSnapshotStatus({
+      nodeId: edge.toId, savedCopy: copy.savedCopy === '1',
+      sourceRunNodeId: copy.sourceRunNodeId || '', snapshotSourceRecordId: copy.snapshotSourceRecordId || '',
+    }, [{ nodeId: edge.fromId, historyRecordId: getNodeById(edge.fromId)?.dataset.historyRecordId || '' }], connections) === 'stale';
   }
 
   async function refreshHistoryInputLinks() {
@@ -5667,6 +5671,7 @@ export function buildWorkflowCanvas(root, options = {}) {
             const sourceKind = (definition?.spec?.jobs || []).find((job) => job.id === producer?.job_id)?.type;
             const [stepName = '', runName = ''] = sourceEntry?.names || [];
             const port = producer?.port || 'result';
+            const original = String(logicalId).startsWith('dataset:') ? getNodeById(String(logicalId).slice('dataset:'.length)) : null;
             const sourceLabel = sourceKind === 'llm' ? `${stepName} ${runName}`.trim()
               : sourceKind === 'process' ? `${port === 'result' ? '' : `branch "${port}" of `}Process "${stepName}"` : '';
             const created = addDatasetNode({
@@ -5676,7 +5681,8 @@ export function buildWorkflowCanvas(root, options = {}) {
               headers: table.headers || [], rows: table.rows || [],
               columnTypes: table.column_types || [], rowIds: table.row_ids || [],
               sourceRunNodeId: sourceKind === 'llm' ? sourceNodeId : '',
-              processOutputName: sourceKind === 'process' ? producer?.port || 'result' : '',
+              // Named as the Dataset it copies (an unnamed output stays unnamed), so both are one Process branch.
+              processOutputName: sourceKind !== 'process' ? '' : original ? original.dataset.processOutputName || '' : port,
               savedCopy: true,
               pipelineRunId: run.run_id, pipelineLogicalId: logicalId,
             });

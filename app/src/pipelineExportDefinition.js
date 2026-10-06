@@ -75,9 +75,18 @@ export function exportCanvasDefinition(canvasState, route) {
     'prompt-to-run',
     'prompt-to-prompt',
   ]);
+  // A Process's other outputs stay visible so the compiler can ask for branch names, except further
+  // saved versions of a branch the route already carries (an unnamed output is the `result` branch).
+  const branchOf = new Map((canvasState?.nodes || []).map((node) => [
+    node?.nodeId, String(node?.processOutputName || '').trim() || 'result',
+  ]));
+  const routeBranches = new Set((canvasState?.connections || [])
+    .filter((edge) => edge?.type === 'process-to-dataset' && ids.has(edge.fromId) && ids.has(edge.toId))
+    .map((edge) => `${edge.fromId}\u0000${branchOf.get(edge.toId) || 'result'}`));
   const connections = (canvasState?.connections || []).filter((edge) => (
     executableEdgeTypes.has(edge?.type) && (
-      ids.has(edge?.toId) || (edge?.type === 'process-to-dataset' && ids.has(edge?.fromId))
+      ids.has(edge?.toId) || (edge?.type === 'process-to-dataset' && ids.has(edge?.fromId)
+        && !routeBranches.has(`${edge.fromId}\u0000${branchOf.get(edge.toId) || 'result'}`))
     )
   ));
   return { version: canvasState?.version || 2, nodes, connections };
