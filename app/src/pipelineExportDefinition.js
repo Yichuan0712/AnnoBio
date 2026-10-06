@@ -1,4 +1,4 @@
-import { assertPipelineInputsAvailable } from './pipelineInputAvailability.js';
+import { assertPipelineInputsAvailable, pipelineInputDatasetIds } from './pipelineInputAvailability.js';
 
 function selectedNodeIds(route) {
   const ids = new Set();
@@ -23,6 +23,7 @@ export function exportCanvasDefinition(canvasState, route) {
           name: node.name,
           sourceRunNodeId: node.sourceRunNodeId,
           processOutputName: node.processOutputName,
+          savedCopy: !!node.savedCopy,
           resultMissing: !!node.resultMissing,
           datasetContent: {
             headers: node.datasetContent?.headers || [],
@@ -82,14 +83,13 @@ export function exportCanvasDefinition(canvasState, route) {
   return { version: canvasState?.version || 2, nodes, connections };
 }
 
-/** The first displayed Dataset explicitly supplies the starting data snapshot. */
+/** Every external Dataset in the selected route is an explicit input boundary. */
 export function buildPipelineExportRequest({ name, canvasState, route }) {
   assertPipelineInputsAvailable(canvasState, route);
-  const first = route?.[0];
   return {
     name,
     canvas_state: exportCanvasDefinition(canvasState, route),
     route,
-    input_dataset_ids: first?.type === 'dataset' ? [first.dataset_node_id] : [],
+    input_dataset_ids: pipelineInputDatasetIds(route, canvasState),
   };
 }

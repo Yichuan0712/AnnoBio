@@ -4,14 +4,23 @@
  * chip becomes a picker and the remainder of the row follows the choice. Branches are drawn only
  * for a Process's named outputs and for the Datasets one Process merges.
  */
-import { showAlert } from './alertModal.js';
+import { showAlert, showConfirm } from './alertModal.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
 import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from './pipelineRouteSelection.js';
+import { buildPipelineCompileRequest, buildPipelineValidationPreview, pipelineInputHasAssets } from './pipelineRunDefinition.js';
+import { datasetProducerConflicts } from './pipelineProducerConflicts.js';
+import { datasetSnapshotStatus } from './datasetSnapshotStatus.js';
 import {
   cancelPipelineRun,
+  compileCurrentPipeline,
+  getPipelineModelContext,
   getPipelineResults,
   getPipelineRun,
+  getPipelineRunDefinition,
+  listPipelineRuns,
+  newPipelineRequestId,
   resumePipelineRun,
+  startCurrentPipeline,
 } from './pipelineRunClient.js';
 
 const STEP_LABELS = { prompt: 'Run prompt', process: 'Process data' };
@@ -108,6 +117,7 @@ function getPipelineViewId(pipeline, index) {
 
 const ACTIVE_RUN_STATES = new Set(['pending', 'running', 'cancelling']);
 const RESUMABLE_RUN_STATES = new Set(['failed', 'cancelled', 'interrupted']);
+const PUBLISHABLE_RUN_STATES = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 
 function displayValue(value) {
   if (value == null) return '';
@@ -169,6 +179,7 @@ function renderRunState(entry) {
         <code>${escapeHtml(String(run.run_id || '').slice(0, 8))}</code>
       </div>
       ${run.error ? `<div class="pipeline-run-error">${escapeHtml(run.error)}</div>` : ''}
+      ${entry?.published ? '<div class="pipeline-artifact-preview-note">Results added to node History and new Dataset nodes.</div>' : ''}
       <ol class="pipeline-job-list">${planJobs}</ol>
       ${artifacts ? `<div class="pipeline-artifact-list"><span>Artifacts</span>${artifacts}</div>` : ''}
       ${renderArtifactPreview(entry)}
@@ -184,7 +195,28 @@ function renderRunActions(entry, pipelineIndex) {
   const resume = RESUMABLE_RUN_STATES.has(status)
     ? `<button type="button" class="btn btn-secondary pipeline-run-action" data-action="resume" data-pipeline-index="${pipelineIndex}"${busy ? ' disabled' : ''}>Resume</button>`
     : '';
-  return resume;
+  if (pipelineIndex < 0) return resume;
+  return `${resume}<button type="button" class="btn btn-secondary pipeline-run-action" data-action="run" data-pipeline-index="${pipelineIndex}"${busy ? ' disabled' : ''}>${busy ? 'Preparing…' : 'Run Pipeline'}</button>`;
+}
+
+function renderValidation(entry, pipelineId) {
+  const diagnostics = entry?.diagnostics || [];
+  if (!diagnostics.length && !entry?.error && !entry?.validation) return '';
+  const errors = diagnostics.filter((item) => item.severity === 'error');
+  const warnings = diagnostics.filter((item) => item.severity !== 'error');
+  const warningLabel = warnings.every((item) => String(item.code || '').startsWith('RUNTIME_'))
+    ? `runtime check${warnings.length === 1 ? '' : 's'}` : `warning${warnings.length === 1 ? '' : 's'}`;
+  const hasError = !!entry?.error || errors.length > 0;
+  const items = errors.map((item) => `<li class="pipeline-run-diagnostic--error">${escapeHtml(item.node_name ? `${item.node_name}: ${item.message}` : item.message)}</li>`).join('');
+  const warningItems = warnings.map((item) => `<li class="pipeline-run-diagnostic--warning">${escapeHtml(item.node_name ? `${item.node_name}: ${item.message}` : item.message)}</li>`).join('');
+  const validation = entry?.validation;
+  const jobs = validation?.jobs?.map((job) => `${job.name}${job.model ? ` · ${job.model}` : ''}${job.calls == null ? '' : ` · ${job.calls} calls`}`) || [];
+  return `<div class="pipeline-run-validation ${hasError ? 'pipeline-run-validation--error' : 'pipeline-run-validation--ok'}">
+    ${entry?.error ? `<div class="pipeline-run-diagnostic--error">${escapeHtml(entry.error)}</div>` : ''}
+    ${validation ? `<div>Inputs: ${escapeHtml(validation.inputLabel)}</div><div class="pipeline-validation-plan">${jobs.map((job) => `<span>${escapeHtml(job)}</span>`).join('')}</div>` : ''}
+    ${items ? `<ul>${items}</ul>` : ''}
+    ${warningItems ? `<details class="pipeline-run-runtime-notes" data-details-key="warnings:${escapeHtml(pipelineId)}"><summary>${warnings.length} ${escapeHtml(warningLabel)}</summary><ul>${warningItems}</ul></details>` : ''}
+  </div>`;
 }
 
 function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
@@ -207,6 +239,7 @@ function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
         </div>
       </div>
       <ol class="pipeline-overview-steps">${steps}</ol>
+      ${renderValidation(entry, getPipelineViewId(pipeline, index))}
       ${renderRunState(entry)}
     </div>
   `;
@@ -247,13 +280,22 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     ? options.getAssetProjectId : () => null;
   let saveArtifactAsDataset = typeof options.saveArtifactAsDataset === 'function'
     ? options.saveArtifactAsDataset : null;
+  let publishPipelineRun = typeof options.publishPipelineRun === 'function'
+    ? options.publishPipelineRun : null;
   let pipelines = [];
   let pipelineSignature = '';
+  let canvasWarnings = '';
+  let canvasNodes = [];
   let refreshFrame = 0;
   let pollTimer = 0;
   let attachedProjectId = '';
   let destroyed = false;
   const runEntriesByPipelineId = new Map();
+  const publishingRunIds = new Set();
+  const publicationErrors = new Map();
+  let runHistory = [];
+  let selectedHistoryRun = null;
+  let selectedHistoryPreview = null;
 
   const overlay = document.createElement('div');
   overlay.className = host ? 'workspace-dock pipeline-overview-overlay' : 'modal-overlay pipeline-overview-overlay';
@@ -282,6 +324,19 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   function storageKey(projectId) {
     return `annobio.pipeline-runs.v1:${projectId}`;
   }
+  function publishedKey(projectId, runId) {
+    return `annobio.pipeline-published.v1:${projectId}:${runId}`;
+  }
+  function wasPublished(runId, producedArtifactIds = [], knownCanvasNodes = null) {
+    try {
+      if (localStorage.getItem(publishedKey(attachedProjectId, runId)) !== '1') return false;
+      const nodes = knownCanvasNodes || canvasNodes;
+      return producedArtifactIds.every((logicalId) => nodes.some((node) => (
+        node.pipelineRunId === runId && node.pipelineLogicalId === logicalId
+      )));
+    }
+    catch (_) { return false; }
+  }
   function storedRuns(projectId) {
     try {
       const value = JSON.parse(localStorage.getItem(storageKey(projectId)) || '[]');
@@ -305,6 +360,56 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = 0;
   }
+  function rememberRun(run) {
+    if (!run?.run_id) return;
+    const previous = runHistory.find((item) => item.run_id === run.run_id);
+    const summary = {
+      ...(previous || {}), run_id: run.run_id, status: run.status,
+      created_at: run.created_at || previous?.created_at,
+      finished_at: run.finished_at || previous?.finished_at,
+      job_count: run.plan?.jobs?.length ?? previous?.job_count,
+      produced_artifact_ids: Array.isArray(run.artifacts)
+        ? run.artifacts.filter((item) => item.valid && item.producer).map((item) => item.logical_id)
+        : previous?.produced_artifact_ids || [],
+    };
+    runHistory = [summary, ...runHistory.filter((item) => item.run_id !== run.run_id)]
+      .sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')));
+  }
+  async function publishCompletedRun(run) {
+    const produced = (run?.artifacts || []).filter((item) => item.valid && item.producer).map((item) => item.logical_id);
+    if (!publishPipelineRun || !PUBLISHABLE_RUN_STATES.has(run?.status) || !run?.run_id || !produced.length
+      || wasPublished(run.run_id, produced)
+      || publishingRunIds.has(run.run_id)) return;
+    const projectId = attachedProjectId;
+    publishingRunIds.add(run.run_id);
+    try {
+      const definition = await getPipelineRunDefinition(projectId, run.run_id);
+      if (destroyed || attachedProjectId !== projectId) return;
+      const result = await publishPipelineRun({
+        run, definition,
+        getArtifact: async (logicalId) => {
+          const response = await getPipelineResults(projectId, run.run_id, logicalId);
+          return response.outputs?.[0] || null;
+        },
+      });
+      if (result?.historyError) throw new Error(result.historyError);
+      canvasNodes = getCanvasState?.()?.nodes || canvasNodes;
+      try { localStorage.setItem(publishedKey(projectId, run.run_id), '1'); } catch (_) {}
+      publicationErrors.delete(run.run_id);
+      const entry = [...runEntriesByPipelineId.values()].find((item) => item?.run?.run_id === run.run_id);
+      if (entry) { entry.published = true; entry.error = ''; }
+      if (selectedHistoryRun?.run_id === run.run_id) selectedHistoryRun = run;
+      renderBody();
+    } catch (error) {
+      const message = `Canvas sync failed: ${error?.message || error}`;
+      publicationErrors.set(run.run_id, message);
+      const entry = [...runEntriesByPipelineId.values()].find((item) => item?.run?.run_id === run.run_id);
+      if (entry) entry.error = `Results were saved by the Pipeline, but ${message}`;
+      if (!destroyed) renderBody();
+    } finally {
+      publishingRunIds.delete(run.run_id);
+    }
+  }
   async function loadDefaultPreview(entry) {
     if (!entry?.run || entry.preview || entry.run.status !== 'succeeded') return;
     const data = await getPipelineResults(attachedProjectId, entry.run.run_id);
@@ -314,7 +419,11 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     const entry = runEntriesByPipelineId.get(pipelineId);
     if (!entry?.run?.run_id || !attachedProjectId) return;
     entry.run = await getPipelineRun(attachedProjectId, entry.run.run_id);
+    entry.published = wasPublished(entry.run.run_id, (entry.run.artifacts || [])
+      .filter((item) => item.valid && item.producer).map((item) => item.logical_id));
+    rememberRun(entry.run);
     await loadDefaultPreview(entry).catch(() => {});
+    if (PUBLISHABLE_RUN_STATES.has(entry.run.status)) await publishCompletedRun(entry.run);
     if (render && !destroyed) renderBody();
     persistRuns();
   }
@@ -339,6 +448,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     stopPolling();
     attachedProjectId = projectId;
     runEntriesByPipelineId.clear();
+    publicationErrors.clear();
+    runHistory = [];
+    selectedHistoryRun = null;
+    selectedHistoryPreview = null;
     if (!projectId) {
       renderBody();
       return;
@@ -351,11 +464,19 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
         preview: null,
       });
     }
+    runHistory = await listPipelineRuns(projectId).catch(() => []);
     await Promise.all(Array.from(runEntriesByPipelineId.keys()).map(async (pipelineId) => {
       try { await updateRunEntry(pipelineId, { render: false }); }
       catch (_) { runEntriesByPipelineId.delete(pipelineId); }
     }));
     persistRuns();
+    const latestUnpublished = runHistory.find((item) => PUBLISHABLE_RUN_STATES.has(item.status)
+      && item.produced_artifact_ids?.length
+      && !wasPublished(item.run_id, item.produced_artifact_ids));
+    if (latestUnpublished) {
+      const run = await getPipelineRun(projectId, latestUnpublished.run_id).catch(() => null);
+      if (run) await publishCompletedRun(run);
+    }
     ensurePolling();
     if (!destroyed) renderBody();
   }
@@ -374,6 +495,8 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   }
   function renderBody() {
     clearCanvasHighlight();
+    const expanded = new Set(Array.from(bodyEl.querySelectorAll('details[data-details-key][open]'))
+      .map((item) => item.dataset.detailsKey));
     const visibleIds = new Set(pipelines.map((pipeline, index) => getPipelineViewId(pipeline, index)));
     const content = pipelines.length > 0
       ? pipelines.map((pipeline, index) => {
@@ -385,14 +508,46 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       .filter(([pipelineId]) => !visibleIds.has(pipelineId))
       .map(([pipelineId, entry]) => renderDetachedRun(pipelineId, entry))
       .join('');
-    bodyEl.innerHTML = content + detached;
+    const history = runHistory.length ? `<section class="pipeline-run-history">
+      <h3>Pipeline History</h3>
+      <details data-details-key="pipeline-history"><summary>${runHistory.length} run${runHistory.length === 1 ? '' : 's'}</summary>
+        <ol>${runHistory.map((item) => `<li>
+          <span class="pipeline-run-status pipeline-run-status--${escapeHtml(item.status || 'pending')}">${escapeHtml(item.status || 'pending')}</span>
+          <code>${escapeHtml(item.run_id.slice(0, 8))}</code>
+          <span>${escapeHtml(item.created_at ? new Date(item.created_at).toLocaleString() : '')}</span>
+          <button type="button" class="btn btn-secondary pipeline-history-view" data-history-run-id="${escapeHtml(item.run_id)}">View</button>
+          ${wasPublished(item.run_id, item.produced_artifact_ids, canvasNodes) ? '<span>On canvas</span>' : ''}
+          ${PUBLISHABLE_RUN_STATES.has(item.status) && item.produced_artifact_ids?.length && !wasPublished(item.run_id, item.produced_artifact_ids, canvasNodes) ? `<button type="button" class="btn btn-secondary pipeline-history-sync" data-history-run-id="${escapeHtml(item.run_id)}">Add results to canvas</button>` : ''}
+          ${publicationErrors.has(item.run_id) ? `<span class="pipeline-run-diagnostic--error">${escapeHtml(publicationErrors.get(item.run_id))}</span>` : ''}
+        </li>`).join('')}</ol>
+      </details>
+      ${selectedHistoryRun ? `<div class="pipeline-overview-card pipeline-history-detail"><h3>Run ${escapeHtml(selectedHistoryRun.run_id.slice(0, 8))}</h3>${renderRunState({ run: selectedHistoryRun, preview: selectedHistoryPreview })}</div>` : ''}
+    </section>` : '';
+    bodyEl.innerHTML = canvasWarnings + content + detached + history;
+    for (const item of bodyEl.querySelectorAll('details[data-details-key]')) {
+      if (expanded.has(item.dataset.detailsKey)) item.open = true;
+    }
   }
   function refresh(nextSource) {
     if (typeof nextSource === 'function') readPipelines = nextSource;
     const nextPipelines = readPipelines?.() || [];
-    const nextSignature = JSON.stringify(nextPipelines);
+    const state = getCanvasState?.();
+    canvasNodes = state?.nodes || [];
+    const names = new Map((state?.nodes || []).map((node) => [node.nodeId, node.name || node.nodeId]));
+    const conflicts = datasetProducerConflicts(state);
+    const conflictNotice = conflicts.length
+      ? `<div class="pipeline-run-validation pipeline-run-validation--error">Dataset source conflict: ${escapeHtml(conflicts.map((item) => names.get(item.datasetId) || item.datasetId).join(', '))}. Remove the extra producer link before running or exporting.</div>`
+      : '';
+    const stale = (state?.nodes || []).filter((node) => node.type === 'dataset'
+      && datasetSnapshotStatus(node, state.nodes, state.connections) === 'stale');
+    const staleNotice = stale.length
+      ? `<div class="pipeline-run-validation">Saved Dataset copies with changed sources: ${escapeHtml(stale.map((node) => node.name || node.nodeId).join(', '))}. These tables stay frozen in single-node runs; a full Pipeline uses new upstream outputs when their producers are selected.</div>`
+      : '';
+    const nextWarnings = conflictNotice + staleNotice;
+    const nextSignature = JSON.stringify({ pipelines: nextPipelines, warnings: nextWarnings });
     if (nextSignature !== pipelineSignature) {
       pipelines = nextPipelines;
+      canvasWarnings = nextWarnings;
       pipelineSignature = nextSignature;
       renderBody();
     }
@@ -415,6 +570,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (typeof nextOptions.getPipelineProjectId === 'function') getPipelineProjectId = nextOptions.getPipelineProjectId;
     if (typeof nextOptions.getAssetProjectId === 'function') getAssetProjectId = nextOptions.getAssetProjectId;
     if (typeof nextOptions.saveArtifactAsDataset === 'function') saveArtifactAsDataset = nextOptions.saveArtifactAsDataset;
+    if (typeof nextOptions.publishPipelineRun === 'function') publishPipelineRun = nextOptions.publishPipelineRun;
     syncProjectContext().catch(() => {});
   };
   refresh();
@@ -459,8 +615,38 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       const step = event.target.closest('[data-canvas-node-ids]');
       if (step) focusCanvasNodes(JSON.parse(decodeURIComponent(step.dataset.canvasNodeIds)));
     }
+    const historyButton = event.target.closest?.('.pipeline-history-view, .pipeline-history-sync');
+    if (historyButton && !historyButton.disabled) {
+      historyButton.disabled = true;
+      try {
+        const run = await getPipelineRun(attachedProjectId, historyButton.dataset.historyRunId);
+        rememberRun(run);
+        if (historyButton.classList.contains('pipeline-history-sync')) await publishCompletedRun(run);
+        else {
+          selectedHistoryRun = run;
+          const result = await getPipelineResults(attachedProjectId, run.run_id);
+          selectedHistoryPreview = result.outputs?.[0] || null;
+        }
+        renderBody();
+      } catch (error) {
+        showAlert(error?.message || 'Could not load Pipeline History.', { title: 'Pipeline History' });
+        if (historyButton.isConnected) historyButton.disabled = false;
+      }
+      return;
+    }
     const artifactButton = event.target.closest?.('.pipeline-artifact-chip');
     if (artifactButton && !artifactButton.disabled) {
+      if (artifactButton.closest('.pipeline-history-detail') && selectedHistoryRun) {
+        artifactButton.disabled = true;
+        try {
+          const result = await getPipelineResults(attachedProjectId, selectedHistoryRun.run_id, artifactButton.dataset.logicalId);
+          selectedHistoryPreview = result.outputs?.[0] || null;
+          renderBody();
+        } catch (error) {
+          showAlert(error?.message || 'Could not load this artifact.', { title: 'Pipeline History' });
+        }
+        return;
+      }
       const context = selectedPipelineContext(artifactButton);
       const entry = runEntriesByPipelineId.get(context.pipelineId);
       if (!entry?.run?.run_id || !attachedProjectId) return;
@@ -479,13 +665,13 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (saveButton && !saveButton.disabled) {
       const context = selectedPipelineContext(saveButton);
       const entry = runEntriesByPipelineId.get(context.pipelineId);
-      const preview = entry?.preview;
+      const preview = saveButton.closest('.pipeline-history-detail') ? selectedHistoryPreview : entry?.preview;
       if (!preview?.table || !saveArtifactAsDataset) return;
       saveButton.disabled = true;
       try {
         await saveArtifactAsDataset({
           name: preview.artifact?.name || 'Pipeline result',
-          notes: `Saved from Pipeline run ${entry.run.run_id}. Logical artifact: ${preview.logical_id}.`,
+          notes: `Saved from Pipeline run ${saveButton.closest('.pipeline-history-detail') ? selectedHistoryRun.run_id : entry.run.run_id}. Logical artifact: ${preview.logical_id}.`,
           headers: preview.table.headers || [],
           rows: preview.table.rows || [],
           columnTypes: preview.table.column_types || [],
@@ -502,10 +688,60 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     const actionButton = event.target.closest?.('.pipeline-run-action');
     if (actionButton && !actionButton.disabled) {
       const context = selectedPipelineContext(actionButton);
-      const entry = runEntriesByPipelineId.get(context.pipelineId);
+      let entry = runEntriesByPipelineId.get(context.pipelineId);
+      if (!entry && actionButton.dataset.action === 'run') {
+        entry = { run: null, preview: null };
+        runEntriesByPipelineId.set(context.pipelineId, entry);
+      }
       actionButton.disabled = true;
       try {
-        if (actionButton.dataset.action === 'stop' && entry?.run?.run_id) {
+        if (actionButton.dataset.action === 'run') {
+          if (!context.pipeline || !getCanvasState || !attachedProjectId) throw new Error('Open a project and select a Pipeline first.');
+          entry.busy = true;
+          entry.error = '';
+          const projectId = attachedProjectId;
+          const canvasState = getCanvasState();
+          const signature = JSON.stringify(buildPipelineCompileRequest({ canvasState, route: context.route }));
+          if (entry.requestSignature !== signature) {
+            entry.requestId = newPipelineRequestId();
+            entry.requestSignature = signature;
+          }
+          renderBody();
+          const compiled = await compileCurrentPipeline({ canvasState, route: context.route });
+          entry.diagnostics = compiled.diagnostics || [];
+          entry.validation = buildPipelineValidationPreview(compiled, canvasState, await getPipelineModelContext().catch(() => ({})));
+          renderBody();
+          if (!compiled.spec) {
+            entry.busy = false;
+            renderBody();
+            return;
+          }
+          const plan = entry.validation;
+          const jobs = plan?.jobs || [];
+          const calls = jobs.filter((job) => job.type === 'llm').map((job) => `${job.name}: ${job.calls == null ? 'unknown' : job.calls} calls`);
+          const message = `Inputs: ${plan?.inputLabel || 'none'}. ${jobs.length} job(s).${calls.length ? ` Model calls: ${calls.join('; ')}.` : ''} Start this Pipeline?`;
+          if (!await showConfirm(message, { title: 'Run Pipeline', confirmText: 'Run' })) {
+            entry.busy = false;
+            renderBody();
+            return;
+          }
+          if (destroyed || projectId !== attachedProjectId || !runEntriesByPipelineId.has(context.pipelineId)) return;
+          entry.run = await startCurrentPipeline({
+            projectId, assetProjectId: getAssetProjectId(),
+            canvasState, route: context.route, requestId: entry.requestId,
+          });
+          entry.published = false;
+          rememberRun(entry.run);
+          entry.needsAssets = pipelineInputHasAssets(canvasState, context.route);
+          entry.preview = null;
+          entry.busy = false;
+          entry.error = '';
+          entry.requestId = null;
+          entry.requestSignature = null;
+          persistRuns();
+          ensurePolling();
+          renderBody();
+        } else if (actionButton.dataset.action === 'stop' && entry?.run?.run_id) {
           entry.busy = true;
           entry.run = await cancelPipelineRun(attachedProjectId, entry.run.run_id);
           entry.busy = false;
@@ -524,7 +760,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
           renderBody();
         }
       } catch (error) {
-        if (entry) entry.busy = false;
+        if (entry) {
+          entry.busy = false;
+          entry.error = error instanceof Error ? error.message : 'Pipeline action failed.';
+        }
         renderBody();
         showAlert(error instanceof Error ? error.message : 'Pipeline action failed.', { title: 'Pipeline' });
       }
@@ -580,6 +819,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('workflow:canvas-changed', scheduleRefresh);
+    document.removeEventListener('workflow:history-resolved', scheduleRefresh);
     document.removeEventListener('workflow:project-changed', onProjectChanged);
   }
   overlay.destroyPipelineOverview = destroy;
@@ -589,6 +829,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   overlay.querySelector('.modal-close')?.addEventListener('click', destroy);
   if (!host) document.addEventListener('keydown', onKeyDown);
   document.addEventListener('workflow:canvas-changed', scheduleRefresh);
+  document.addEventListener('workflow:history-resolved', scheduleRefresh);
   function onProjectChanged() {
     syncProjectContext().catch(() => {});
   }

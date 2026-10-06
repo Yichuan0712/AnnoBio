@@ -364,7 +364,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sourceRunNodeId = '', processOutputName = '', savedCopy = false, colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sourceRunNodeId = '', processOutputName = '', savedCopy = false, snapshotSourceRecordId = '', pipelineRunId = '', pipelineLogicalId = '', colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -385,6 +385,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (processOutputName) node.dataset.processOutputName = processOutputName;
     // A saved Run / Process output: keeps its pipeline link, but History never rewrites it (datasetHistorySource.js).
     if (savedCopy) node.dataset.savedCopy = '1';
+    if (snapshotSourceRecordId) node.dataset.snapshotSourceRecordId = snapshotSourceRecordId;
+    if (pipelineRunId) node.dataset.pipelineRunId = pipelineRunId;
+    if (pipelineLogicalId) node.dataset.pipelineLogicalId = pipelineLogicalId;
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = datasetColorAt(colorIndex);
@@ -397,7 +400,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         <span class="workflow-node__title">${escapeHtml(title)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
-      <div class="workflow-node__body workflow-node__dataset-desc">${bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>'}</div>
+      <div class="workflow-node__body workflow-node__dataset-desc">${bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>'}${savedCopy ? '<span class="workflow-node__snapshot-status">Saved copy</span>' : ''}</div>
     `;
     nodesLayer.appendChild(node);
 
@@ -437,6 +440,14 @@ export function createWorkflowNodeFactories(deps = {}) {
           if (node.dataset.savedCopy !== '1' && getHistoryForNode?.(datasetHistorySourceId(node))
             && JSON.stringify(normalizeDatasetContent(content)) !== JSON.stringify(datasetContentByNodeId.get(id) || null)) {
             node.dataset.savedCopy = '1';
+            const sourceRecordId = getNodeById(datasetHistorySourceId(node))?.dataset?.historyRecordId;
+            if (sourceRecordId) node.dataset.snapshotSourceRecordId = sourceRecordId;
+            if (!node.querySelector('.workflow-node__snapshot-status')) {
+              const badge = document.createElement('span');
+              badge.className = 'workflow-node__snapshot-status';
+              badge.textContent = 'Saved copy';
+              node.querySelector('.workflow-node__dataset-desc')?.appendChild(badge);
+            }
           }
           datasetContentByNodeId.set(id, content);
           emitCanvasChanged();

@@ -198,6 +198,21 @@ class PipelineCompileTests(unittest.TestCase):
         del state["nodes"][2]["processOutputName"]
         self.error(state, "MISSING_BRANCH_NAME")
 
+    def test_legacy_snapshot_link_cannot_hide_a_different_live_source(self):
+        state = branched()
+        state["connections"].append(edge("r", "left", "run-to-dataset-snapshot"))
+        self.error(state, "MULTIPLE_PRODUCERS")
+        state["connections"][-1] = edge("split", "left", "process-to-dataset-snapshot")
+        self.valid(state)
+
+    def test_run_diagnostics_name_the_connected_prompt(self):
+        state = simple()
+        state["nodes"][-1]["runName"] = "Run"
+        state["nodes"][-1]["runInputToColumn"] = {"text": "missing"}
+        result = self.compile(state)
+        problem = next(item for item in result["diagnostics"] if item["code"] == "MISSING_COLUMN")
+        self.assertEqual(problem["node_name"], "Run · p")
+
     def test_disconnected_and_wrong_prompt_pair(self):
         state = simple()
         state["nodes"].append(dataset("unused"))

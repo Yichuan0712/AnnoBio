@@ -63,9 +63,11 @@ import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
 import { dependencyColorSources, dependentNodeVisualColors } from './workflowDependencyColors.js';
 import { showAlert, showConfirm, showSelect } from './alertModal.js';
+import { datasetSnapshotStatus } from './datasetSnapshotStatus.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
 import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
+import { importPipelineRunHistory, withCompatibleLegacyCanvas } from './pipelineHistoryImport.js';
 import { createWorkspacePanels } from './workspacePanels.js';
 import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
@@ -3188,9 +3190,14 @@ export function buildWorkflowCanvas(root, options = {}) {
         <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
       `;
     } else if (isDataset) {
+      const hasSavedSource = node.dataset.savedCopy === '1' && (
+        !!node.dataset.sourceRunNodeId || connections.some((edge) => (
+          edge.type === EDGE_TYPE_PROCESS_TO_DATASET && edge.toId === node.dataset.nodeId
+        )));
       menu.innerHTML = `
         <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="add-sampler" role="menuitem">Sample</button>
         <button type="button" class="workflow-node-context-item workflow-node-context-item--run" data-action="process-this-dataset" role="menuitem">Process with code</button>
+        ${hasSavedSource ? '<button type="button" class="workflow-node-context-item" data-action="save-current-source-copy" role="menuitem">Save current source as new Dataset</button>' : ''}
         <button type="button" class="workflow-node-context-item" data-action="duplicate-working-dataset" role="menuitem">Duplicate this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="add-version-of-dataset" role="menuitem">Add new version of this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-dataset-name-description" role="menuitem">Edit name & description</button>
@@ -3679,6 +3686,41 @@ export function buildWorkflowCanvas(root, options = {}) {
           }));
         });
       },
+      'save-current-source-copy': async () => {
+        try {
+          const session = historySession;
+          if (!session?.projectId || canvasHistoryVersion !== 1) {
+            throw new Error('Current source History is unavailable for this project. Run the source node and save its results instead.');
+          }
+          const state = getCanvasState();
+          const id = node.dataset.nodeId;
+          const dataset = state.nodes.find((item) => item.nodeId === id && item.type === 'dataset');
+          if (!dataset?.savedCopy) return;
+          const source = datasetHistorySource({ ...dataset, savedCopy: false }, state.connections);
+          if (!source) throw new Error('This Dataset has no linked Run or Process source.');
+          dataset.savedCopy = false;
+          const resolved = await session.resolve(state);
+          if (session !== historySession || !getNodeById(id)) return;
+          const fresh = resolved.state.nodes.find((item) => item.nodeId === id);
+          const content = fresh?.datasetContent;
+          const recordId = resolved.currentRecordIds[source.sourceId];
+          if (!recordId || fresh?.resultMissing || !Array.isArray(content?.headers) || !Array.isArray(content?.rows)) {
+            throw new Error('The source has no current result. Run it before saving a new Dataset.');
+          }
+          document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: {
+            name: findUniqueDatasetExportName(`${dataset.name || 'Dataset'} current`),
+            notes: `Saved from current ${source.kind} History of "${dataset.name || 'Dataset'}".`,
+            headers: content.headers, rows: content.rows,
+            columnTypes: content.columnTypes, rowIds: content.rowIds,
+            runNodeId: source.kind === 'run' ? source.sourceId : '',
+            processNodeId: source.kind === 'process' ? source.sourceId : '',
+            processOutputName: source.kind === 'process' ? source.branch : '',
+            snapshotSourceRecordId: recordId,
+          } }));
+        } catch (error) {
+          showAlert(error?.message || 'Could not save the current source output.', { title: 'Dataset source' });
+        }
+      },
       'duplicate-working-dataset': () => {
         if (node.dataset.resultMissing === '1') {
           showAlert('This Dataset has no current result to duplicate. Select matching upstream History or run the upstream node.', { title: 'Duplicate Dataset' });
@@ -4108,7 +4150,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:add-dataset-node', (e) => {
-    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', processOutputName = '', runNodeId = '', colorIndex: detailColorIndex } = e.detail || {};
+    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', processOutputName = '', runNodeId = '', snapshotSourceRecordId = '', colorIndex: detailColorIndex } = e.detail || {};
     const VISIBLE_PADDING = 40;
     let startLeft = typeof detailLeft === 'number' ? detailLeft : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
     let startTop = typeof detailTop === 'number' ? detailTop : (scrollWrapper.scrollTop + VISIBLE_PADDING);
@@ -4163,6 +4205,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       processOutputName,
       // A saved Run / Process output is a copy: editable until used, never rewritten by History.
       savedCopy: !!(runNodeId || processNode),
+      snapshotSourceRecordId: snapshotSourceRecordId || (runNodeId ? getNodeById(runNodeId) : processNode)?.dataset?.historyRecordId || '',
       colorIndex: detailColorIndex,
       headers: datasetHeaders,
       rows: datasetRows,
@@ -4466,6 +4509,9 @@ export function buildWorkflowCanvas(root, options = {}) {
           sourceRunNodeId: node.dataset.sourceRunNodeId || '',
           processOutputName: node.dataset.processOutputName || '',
           savedCopy: node.dataset.savedCopy === '1' || undefined,
+          snapshotSourceRecordId: node.dataset.snapshotSourceRecordId || undefined,
+          pipelineRunId: node.dataset.pipelineRunId || undefined,
+          pipelineLogicalId: node.dataset.pipelineLogicalId || undefined,
           resultMissing: node.dataset.resultMissing === '1' || undefined,
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
           datasetContent: content ? cloneDatasetContent(content) : undefined,
@@ -4661,6 +4707,18 @@ export function buildWorkflowCanvas(root, options = {}) {
         nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
       };
     });
+    const lookup = new Map(nodes.map((node) => [node.nodeId, node]));
+    for (const item of nodes) {
+      if (item.type !== 'dataset' || !item.savedCopy) continue;
+      const status = datasetSnapshotStatus(item, lookup, connections);
+      const badge = getNodeById(item.nodeId)?.querySelector('.workflow-node__snapshot-status');
+      if (badge) {
+        badge.textContent = status === 'stale' ? 'Saved copy · source changed'
+          : status === 'current' ? 'Saved copy · current source'
+            : status === 'unknown' ? 'Saved copy · source version unknown' : 'Saved copy';
+        badge.classList.toggle('workflow-node__snapshot-status--stale', status === 'stale');
+      }
+    }
     return { version: 2, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), zoomLevel, nodes, connections: connections.slice() };
   }
 
@@ -4688,6 +4746,9 @@ export function buildWorkflowCanvas(root, options = {}) {
           sourceRunNodeId: n.sourceRunNodeId || '',
           processOutputName: n.processOutputName || '',
           savedCopy: n.savedCopy === true,
+          snapshotSourceRecordId: n.snapshotSourceRecordId || '',
+          pipelineRunId: n.pipelineRunId || '',
+          pipelineLogicalId: n.pipelineLogicalId || '',
           colorIndex: n.colorIndex,
           headers: content?.headers,
           rows: content?.rows,
@@ -4907,6 +4968,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     updateContentSize();
     syncNodeDependencyColors();
     updateEdges();
+    getCanvasState();
     root.querySelector('.pipeline-overview-overlay')?.refreshPipelineOverview?.();
   }
 
@@ -5512,6 +5574,67 @@ export function buildWorkflowCanvas(root, options = {}) {
         saveArtifactAsDataset: ({ name, notes, headers, rows, columnTypes, rowIds }) => addDatasetNode({
           name, notes, headers, rows, columnTypes, rowIds,
         }),
+        publishPipelineRun: async ({ run, definition, getArtifact }) => {
+          const canvasProjectId = getCurrentProjectId();
+          if (await getPipelineProjectId() !== run.project_id) throw new Error('The open project changed while publishing Pipeline results.');
+          if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
+          const frozen = withCompatibleLegacyCanvas(definition, getCanvasState());
+          let history = { imported: 0, recordIdsByJob: new Map() };
+          let historyError = '';
+          if (historySession?.projectId && canvasHistoryVersion === 1) {
+            try {
+              history = await importPipelineRunHistory({ run, definition: frozen, getArtifact, session: historySession });
+            } catch (error) {
+              historyError = error?.message || 'Could not import node History.';
+            }
+          } else {
+            historyError = 'Node History is unavailable for this project.';
+          }
+          const artifactDefs = new Map((definition?.spec?.artifacts || []).map((item) => [item.id, item]));
+          let datasets = 0;
+          for (const artifact of run.artifacts || []) {
+            if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
+            const logicalId = artifact.logical_id;
+            if (!artifact.valid || !artifactDefs.get(logicalId)?.producer) continue;
+            const producer = artifactDefs.get(logicalId).producer;
+            const existing = getCanvasState().nodes.find((item) => item.pipelineRunId === run.run_id && item.pipelineLogicalId === logicalId);
+            if (existing) {
+              const recordId = history.recordIdsByJob.get(producer?.job_id);
+              const live = getNodeById(existing.nodeId);
+              if (recordId && live && live.dataset.snapshotSourceRecordId !== recordId) {
+                live.dataset.snapshotSourceRecordId = recordId;
+                document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+              }
+              continue;
+            }
+            const result = await getArtifact(logicalId);
+            const table = result?.table;
+            if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
+            if (!table || !Array.isArray(table.rows)) continue;
+            const source = definition?.spec?.source_map?.[producer?.job_id]?.node_ids || [];
+            const sourceNodeId = source.at(-1) || '';
+            const sourceKind = (definition?.spec?.jobs || []).find((job) => job.id === producer?.job_id)?.type;
+            const created = addDatasetNode({
+              name: artifact.name || 'Pipeline result',
+              notes: `Saved from Pipeline run ${run.run_id}. Logical artifact: ${logicalId}.`,
+              headers: table.headers || [], rows: table.rows || [],
+              columnTypes: table.column_types || [], rowIds: table.row_ids || [],
+              sourceRunNodeId: sourceKind === 'llm' ? sourceNodeId : '',
+              processOutputName: sourceKind === 'process' ? producer?.port || 'result' : '',
+              savedCopy: true,
+              snapshotSourceRecordId: history.recordIdsByJob.get(producer?.job_id) || '',
+              pipelineRunId: run.run_id, pipelineLogicalId: logicalId,
+            });
+            if (created?.nodeId && sourceKind === 'process' && getNodeById(sourceNodeId)) {
+              connections.push({ fromId: sourceNodeId, toId: created.nodeId, type: EDGE_TYPE_PROCESS_TO_DATASET });
+              updateEdges();
+              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+            }
+            if (created?.created) datasets += 1;
+          }
+          if (history.imported) await reconcileHistory();
+          return { history: history.imported, datasets, historyError };
+        },
         highlightCanvasNodes: highlightPipelineNodes,
         focusCanvasNodes: focusPipelineNodes,
       });
@@ -5542,6 +5665,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   };
   document.addEventListener('workflow:canvas-changed', scheduleOptimizationRefresh);
   document.addEventListener('workflow:history-resolved', scheduleOptimizationRefresh);
+  document.addEventListener('workflow:history-resolved', () => getCanvasState());
   if (isElectron) {
     mountBackendLogPanel(workspacePanels.tabHost('log'));
     mountErrorsPanel(workspacePanels.tabHost('errors'));

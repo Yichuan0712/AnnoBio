@@ -23,10 +23,9 @@
  *
  * Only datasets that actually take part get a step; ones sitting unattached on the canvas don't.
  *
- * Known v1 limitation (documented rather than silently guessed around):
- *  - If two different producers target the same dataset id (e.g. both a stale `sourceRunNodeId`
- *    and a live `process-to-dataset` edge), the process-to-dataset edge wins — last one indexed.
+ * A Dataset with conflicting producers is left without an inferred producer; the panel reports it.
  */
+import { datasetProducerConflicts } from './pipelineProducerConflicts.js';
 
 const STEP_KIND = { PROMPT: 'prompt', PROCESS: 'process', DATASET: 'dataset' };
 
@@ -209,7 +208,9 @@ export function detectPipelines(canvasState) {
   // lets a slot narrow its datasets down to the Prompt version actually selected (see the modal).
   const datasetProducerStepId = new Map(); // dataset nodeId -> id of the step that produced it
   const datasetProducerRunId = new Map(); // dataset nodeId -> Run that produced it, if any
+  const conflictingDatasetIds = new Set(datasetProducerConflicts(canvasState).map((item) => item.datasetId));
   for (const ds of datasetNodes) {
+    if (conflictingDatasetIds.has(ds.nodeId)) continue;
     const producer = ds.sourceRunNodeId ? runNodeToStep.get(ds.sourceRunNodeId) : null;
     if (!producer) continue;
     datasetProducerStepId.set(ds.nodeId, producer.id);
@@ -217,6 +218,7 @@ export function detectPipelines(canvasState) {
   }
   for (const c of connections) {
     if (c.type !== 'run-to-dataset-snapshot') continue;
+    if (conflictingDatasetIds.has(c.toId)) continue;
     const producer = runNodeToStep.get(c.fromId);
     if (!producer) continue;
     datasetProducerStepId.set(c.toId, producer.id);
@@ -224,6 +226,7 @@ export function detectPipelines(canvasState) {
   }
   for (const c of connections) {
     if (c.type !== 'process-to-dataset' && c.type !== 'process-to-dataset-snapshot') continue;
+    if (conflictingDatasetIds.has(c.toId)) continue;
     const producer = processNodeToStep.get(c.fromId);
     // A Process has no versions, so nothing to narrow by — it gets a step id but no Run id.
     if (producer) datasetProducerStepId.set(c.toId, producer.id);

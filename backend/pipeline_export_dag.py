@@ -9,7 +9,7 @@ else:
     from pipeline_export import ExportMetadata, _python_literal
 
 
-def _dag_main(jobs: list[dict[str, Any]], input_id: str, input_columns: list[str], outputs: list[dict[str, str]], concurrency: int, metadata: ExportMetadata) -> str:
+def _dag_main(jobs: list[dict[str, Any]], inputs: list[dict[str, Any]], outputs: list[dict[str, str]], concurrency: int, metadata: ExportMetadata) -> str:
     imports, calls = [], []
     for job in jobs:
         imports.append(f"from {job['package']} import {job['module']} as {job['alias']}")
@@ -44,17 +44,55 @@ from engine import create_engine
 # IMPORTS
 
 REQUIRED_INPUT_COLUMNS = __ANNOBIO_INPUT_COLUMNS__
+INPUT_DATASETS = __ANNOBIO_INPUT_DATASETS__
 OUTPUT_DATASETS = __ANNOBIO_OUTPUTS__
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-def load_input(path: Path, sheet: str) -> pd.DataFrame:
+def absolute_asset_cell(value: Any, root: Path) -> Any:
+    if value is None or pd.isna(value):
+        return value
+    raw = str(value).strip()
+    if not raw:
+        return value
+    def absolute(item: Any) -> str:
+        path = Path(str(item))
+        return str(path if path.is_absolute() else (root / path).resolve())
+    if raw.startswith("["):
+        try:
+            values = json.loads(raw)
+        except json.JSONDecodeError:
+            values = None
+        if isinstance(values, list):
+            return json.dumps([absolute(item) for item in values], ensure_ascii=False)
+    return absolute(raw)
+
+
+def load_input(path: Path, sheet: str, required_columns: list[str], asset_columns: list[str]) -> pd.DataFrame:
     if not path.is_file():
         raise FileNotFoundError(f"Input workbook does not exist: {path}")
     frame = pd.read_excel(path, sheet_name=sheet)
-    missing = [column for column in REQUIRED_INPUT_COLUMNS if column not in frame.columns]
+    missing = [column for column in required_columns if column not in frame.columns]
     if missing:
         raise ValueError("Input workbook is missing columns: " + ", ".join(missing))
+    for column in asset_columns:
+        frame[column] = frame[column].map(lambda value: absolute_asset_cell(value, path.parent))
     return frame
+
+
+def input_paths(values: list[str]) -> dict[str, Path]:
+    expected = [item["id"] for item in INPUT_DATASETS]
+    if len(expected) == 1 and len(values) == 1 and "=" not in values[0]:
+        return {expected[0]: Path(values[0])}
+    paths: dict[str, Path] = {}
+    for value in values:
+        dataset_id, separator, path = value.partition("=")
+        if not separator or dataset_id not in expected or not path or dataset_id in paths:
+            raise ValueError("Pass each input once as --input DATASET_ID=FILE.xlsx. Expected: " + ", ".join(expected))
+        paths[dataset_id] = Path(path)
+    missing = [dataset_id for dataset_id in expected if dataset_id not in paths]
+    if missing:
+        raise ValueError("Missing input Dataset(s): " + ", ".join(missing))
+    return paths
 
 def run_process(primary: pd.DataFrame, input_frames: dict[str, pd.DataFrame], process: Callable[[pd.DataFrame], Any], name: str) -> dict[str, pd.DataFrame]:
     # df is one explicit primary Dataset. Other inputs use the readable aliases displayed in the
@@ -101,7 +139,7 @@ def write_outputs(frames: dict[str, pd.DataFrame], path: Path) -> None:
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Run the Python pipeline exported by AnnoBio.")
-    result.add_argument("--input", required=True, type=Path, help="Input Excel workbook.")
+    result.add_argument("--input", required=True, action="append", help="Input workbook; use DATASET_ID=FILE.xlsx for multiple inputs.")
     result.add_argument("--output", default=Path("output.xlsx"), type=Path, help="Output workbook.")
     result.add_argument("--sheet", default="Input", help="Input sheet name.")
     result.add_argument("--engine", choices=("litellm", "openrouter"), help="Override ANNOBIO_ENGINE.")
@@ -116,11 +154,12 @@ def main() -> int:
     args = parser().parse_args()
     if args.start_row < 0 or (args.limit is not None and args.limit < 1) or (args.concurrency is not None and args.concurrency < 1):
         raise ValueError("--start-row must be >= 0, --limit must be >= 1, and --concurrency must be >= 1.")
-    input_path = args.input.expanduser().resolve()
-    frames: dict[str, pd.DataFrame] = {__ANNOBIO_INPUT_DATASET__: load_input(input_path, args.sheet).iloc[args.start_row:]}
-    if args.limit is not None:
-        frames[__ANNOBIO_INPUT_DATASET__] = frames[__ANNOBIO_INPUT_DATASET__].iloc[:args.limit]
-    input_root = input_path.parent
+    paths = {dataset_id: path.expanduser().resolve() for dataset_id, path in input_paths(args.input).items()}
+    frames: dict[str, pd.DataFrame] = {}
+    for item in INPUT_DATASETS:
+        frame = load_input(paths[item["id"]], args.sheet, item["columns"], item["asset_columns"]).iloc[args.start_row:]
+        frames[item["id"]] = frame.iloc[:args.limit] if args.limit is not None else frame
+    input_root = paths[INPUT_DATASETS[0]["id"]].parent
     engine = create_engine(args.engine)
 
 # CALLS
@@ -132,7 +171,7 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 '''
-    source = source.replace("# IMPORTS", "\n".join(imports)).replace("__ANNOBIO_INPUT_COLUMNS__", _python_literal(input_columns)).replace("__ANNOBIO_OUTPUTS__", _python_literal(outputs)).replace("__ANNOBIO_CONCURRENCY__", str(max(1, min(32, int(concurrency or 1))))).replace("__ANNOBIO_INPUT_DATASET__", _python_literal(input_id)).replace("# CALLS", "\n\n".join(calls))
+    source = source.replace("# IMPORTS", "\n".join(imports)).replace("__ANNOBIO_INPUT_COLUMNS__", _python_literal(inputs[0]["columns"])).replace("__ANNOBIO_INPUT_DATASETS__", _python_literal(inputs)).replace("__ANNOBIO_OUTPUTS__", _python_literal(outputs)).replace("# CALLS", "\n\n".join(calls))
     return metadata.python_header("Executable entry point for this user-defined AnnoBio pipeline graph.") + "\n" + source
 
 

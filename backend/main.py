@@ -719,6 +719,14 @@ def start_pipeline_run(body: PipelineStartRequest):
     return JSONResponse(status_code=202, content=result)
 
 
+@app.get("/api/pipeline/runs")
+def list_pipeline_runs(project_id: str):
+    try:
+        return _get_pipeline_runner().list_runs(project_id)
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
+
+
 @app.post("/api/pipeline/runs/{run_id}/revisions")
 def revise_pipeline_run(run_id: str, body: PipelineStartRequest):
     """Create a new immutable revision and reuse only fingerprint-matched successful checkpoints."""
@@ -741,6 +749,14 @@ def revise_pipeline_run(run_id: str, body: PipelineStartRequest):
 def get_pipeline_run(run_id: str, project_id: str):
     try:
         return _get_pipeline_runner().status(project_id, run_id)
+    except Exception as exc:
+        raise _pipeline_http_error(exc) from exc
+
+
+@app.get("/api/pipeline/runs/{run_id}/definition")
+def get_pipeline_run_definition(run_id: str, project_id: str):
+    try:
+        return _get_pipeline_runner().definition(project_id, run_id)
     except Exception as exc:
         raise _pipeline_http_error(exc) from exc
 

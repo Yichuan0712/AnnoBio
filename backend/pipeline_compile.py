@@ -91,8 +91,16 @@ class _Compiler:
 
     def report(self, code, node_id, field, message, severity="error"):
         node = self.nodes.get(node_id, {})
+        name = node.get("name") or node.get("runName") or node_id
+        if node.get("type") == "run":
+            prompt_ids = {_text(edge.get("fromId")) for edge in self.edges
+                          if edge.get("type") == "prompt-to-run" and edge.get("toId") == node_id}
+            if len(prompt_ids) == 1:
+                prompt_name = self.nodes.get(next(iter(prompt_ids)), {}).get("name")
+                if prompt_name:
+                    name = f"{name} · {prompt_name}"
         self.diagnostics.append({"severity": severity, "code": code, "node_id": node_id,
-                                 "node_name": node.get("name") or node.get("runName") or node_id,
+                                 "node_name": name,
                                  "field": field, "message": message})
 
     def obj(self, value, node_id, field):
@@ -354,6 +362,14 @@ class _Compiler:
                          for p in self.inputs_to(nid, "process-to-dataset")]
             if _text(node.get("sourceRunNodeId")):
                 producers.append((f"llm:{node['sourceRunNodeId']}", "result"))
+            # Legacy snapshot edges describe frozen copies. They do not become executable
+            # producers, but conflicting provenance must not be silently discarded.
+            snapshot_sources = {f"{'llm' if edge.get('type') == 'run-to-dataset-snapshot' else 'process'}:{_text(edge.get('fromId'))}"
+                                for edge in self.edges if _text(edge.get("toId")) == nid
+                                and edge.get("type") in {"run-to-dataset-snapshot", "process-to-dataset-snapshot"}}
+            if len(snapshot_sources | {jid for jid, _ in producers}) > 1:
+                self.report("MULTIPLE_PRODUCERS", nid, "producer", "Dataset has multiple producers; choose one explicit origin.")
+                continue
             if nid in self.boundaries:
                 if any(jid in self.jobs for jid, _ in producers):
                     self.report("INPUT_PRODUCER_CONFLICT", nid, "input_dataset_ids", "Input boundary is also produced by a selected job.")

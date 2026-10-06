@@ -8869,6 +8869,14 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-run-validation--error { border-color: rgba(192, 57, 43, 0.5); }
 .pipeline-run-validation--ok { border-color: rgba(16, 137, 62, 0.45); }
 .pipeline-run-validation ul { margin: 6px 0 0; padding-left: 18px; }
+.pipeline-run-runtime-notes { margin-top: 6px; }
+.pipeline-run-runtime-notes summary { cursor: pointer; }
+.pipeline-run-history { margin-top: 18px; border-top: 1px solid var(--border-color); padding-top: 12px; }
+.pipeline-run-history h3 { margin: 0 0 8px; }
+.pipeline-run-history > details > summary { cursor: pointer; }
+.pipeline-run-history ol { margin: 8px 0; padding-left: 22px; }
+.pipeline-run-history li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+.pipeline-history-detail { margin-top: 12px; }
 .pipeline-validation-plan { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; color: var(--text-muted); }
 .pipeline-validation-plan span { overflow-wrap: anywhere; }
 .pipeline-run-diagnostic--error { color: var(--status-danger); }
