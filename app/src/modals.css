@@ -8860,7 +8860,8 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-overview-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
 .pipeline-overview-card-title { font-size: 14px; margin: 0; }
 .pipeline-overview-card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
-.pipeline-overview-export { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
+.pipeline-overview-export,
+.pipeline-run-history { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 .pipeline-overview-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; margin: 0; padding: 0; list-style: none; }
 .pipeline-overview-step {
   display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; box-sizing: border-box;
@@ -8933,18 +8934,21 @@ button.btn.btn-danger:hover:not(:disabled) {
 .pipeline-run-dialog__dataset { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .pipeline-run-dialog__problem { font-size: 12px; line-height: 1.45; color: var(--status-danger); }
 .pipeline-run-dialog__errors { margin: 12px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.5; color: var(--status-danger); }
-/* Runtime tab: one section per pipeline, titled and spaced like the Current Pipeline cards, with
-   a run table like the Prompt Optimization tab's. A run's row opens its steps in the same
-   Status / Started / Node table as the single-node results below it. */
+/* Run History window, opened from a pipeline card: that pipeline's runs, one row each. */
+.modal-panel--pipeline-runs {
+  width: min(720px, 94vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+.modal-panel--pipeline-runs .modal-body { flex: 1; min-height: 0; overflow: auto; }
+/* Modal: above the Agent window (2000) and the floating Current Pipeline (2100). */
+.pipeline-runs-overlay { z-index: 2200; }
+.pipeline-runs-overlay[hidden] { display: none; }
 .pipeline-runs { font-size: 12px; color: var(--text); }
-.pipeline-runs .pipeline-overview-card-header { min-height: 27.6px; }
-.pipeline-runs .pipeline-overview-empty { margin: 4px 0; font-size: inherit; }
-.pipeline-runs-note { margin: -4px 0 8px; color: var(--text-muted); }
-.pipeline-runs-subtitle { margin: 0 0 6px; font-size: inherit; font-weight: 600; color: var(--text-muted); }
-.pipeline-runs-table + .pipeline-runs-subtitle { margin-top: 12px; }
 .pipeline-runs-table {
   width: 100%;
-  /* Same column widths in every pipeline's table, so the stacked tables line up. */
   table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
@@ -8962,49 +8966,19 @@ button.btn.btn-danger:hover:not(:disabled) {
   border-bottom: 1px solid var(--border);
 }
 .pipeline-runs-table th { position: sticky; top: 0; font-weight: 600; color: var(--text-muted); background: var(--hover); }
-.pipeline-runs-row { cursor: pointer; }
-.pipeline-runs-row:hover td,
-.pipeline-runs-row.is-selected td { background: var(--hover); }
-.pipeline-runs-row:focus-visible { outline: 2px solid var(--primary-btn-text); outline-offset: -2px; }
-.pipeline-runs-table .pipeline-runs-detail-row td { white-space: normal; overflow: visible; padding: 10px 16px 12px; }
-.pipeline-runs-step-row { cursor: default; }
-.pipeline-runs-step-row:hover td { background: transparent; }
-.pipeline-runs-table td:has(.pipeline-job-error),
-.pipeline-runs-table td:has(.pipeline-runs-info) { white-space: normal; overflow: visible; }
-.pipeline-runs-info { display: flex; flex-direction: column; gap: 2px; line-height: 1.4; }
-.pipeline-runs-info-label { display: inline-block; min-width: 52px; margin-right: 6px; color: var(--text-muted); }
 .pipeline-runs-muted { color: var(--text-muted); }
-.pipeline-runs-table th.pipeline-runs-actions-col { text-align: right; }
-.pipeline-runs-detail { display: flex; flex-direction: column; gap: 8px; }
-.pipeline-runs-inputs { margin: 0; color: var(--text-muted); }
-.pipeline-runs-detail > .pipeline-run-error { margin: 0; }
-.pipeline-runs-actions-cell { white-space: nowrap; overflow: visible; text-align: right; vertical-align: middle; }
-.pipeline-runs-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.pipeline-runs-action { flex: 0 0 auto; padding: 4px 10px; font-size: 12px; }
-.pipeline-run-status,
-.pipeline-job-status {
+.pipeline-run-status {
   display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 7px;
   background: rgba(100, 116, 139, 0.14); color: var(--text-muted); font-size: 10.5px;
   font-weight: 700; text-transform: uppercase; letter-spacing: 0.035em;
 }
 .pipeline-run-status--running,
-.pipeline-run-status--pending,
-.pipeline-job-status--running { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
-.pipeline-run-status--succeeded,
-.pipeline-job-status--succeeded { background: color-mix(in srgb, var(--status-success) 16%, transparent); color: var(--status-success); }
+.pipeline-run-status--pending { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
+.pipeline-run-status--succeeded { background: color-mix(in srgb, var(--status-success) 16%, transparent); color: var(--status-success); }
 .pipeline-run-status--failed,
-.pipeline-run-status--interrupted,
-.pipeline-job-status--failed,
-.pipeline-job-status--interrupted { background: color-mix(in srgb, var(--status-danger) 16%, transparent); color: var(--status-danger); }
+.pipeline-run-status--interrupted { background: color-mix(in srgb, var(--status-danger) 16%, transparent); color: var(--status-danger); }
 .pipeline-run-status--cancelled,
-.pipeline-run-status--cancelling,
-.pipeline-run-status--blocked,
-.pipeline-job-status--cancelled,
-.pipeline-job-status--blocked { background: color-mix(in srgb, var(--status-warning) 16%, transparent); color: var(--status-warning); }
-.pipeline-run-error,
-.pipeline-job-error { color: var(--status-danger); font-size: 12px; overflow-wrap: anywhere; }
-.pipeline-run-error { margin-top: 7px; }
-.pipeline-job-error { margin-top: 2px; }
+.pipeline-run-status--cancelling { background: color-mix(in srgb, var(--status-warning) 16%, transparent); color: var(--status-warning); }
 
 /* 右栏：结果表格 + 搜索 + 分页 + Save to workspace，全部复用 run-detail-results-* 系列
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */

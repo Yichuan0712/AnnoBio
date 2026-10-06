@@ -124,14 +124,14 @@ export function mountErrorsPanel(container) {
   container.appendChild(view);
   view.innerHTML = `
     <div class="app-errors__toolbar">
+      <span class="app-errors__status"></span>
       <button type="button" class="btn btn-secondary app-errors__copy-all">Copy all</button>
       <button type="button" class="btn btn-secondary app-errors__clear">Clear</button>
     </div>
-    <p class="app-errors__empty">No errors.</p>
     <ul class="app-errors__list"></ul>
   `;
   const listEl = view.querySelector('.app-errors__list');
-  const emptyEl = view.querySelector('.app-errors__empty');
+  const statusEl = view.querySelector('.app-errors__status');
   const copyAllBtn = view.querySelector('.app-errors__copy-all');
   const clearBtn = view.querySelector('.app-errors__clear');
   const expanded = new Set();
@@ -150,7 +150,7 @@ export function mountErrorsPanel(container) {
   });
 
   return subscribeAppErrors((list) => {
-    emptyEl.hidden = list.length > 0;
+    statusEl.textContent = list.length ? `${list.length} error${list.length === 1 ? '' : 's'}` : 'No errors';
     copyAllBtn.disabled = clearBtn.disabled = list.length === 0;
     listEl.replaceChildren(...list.map((entry) => {
       const item = document.createElement('li');

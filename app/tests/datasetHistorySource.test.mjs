@@ -107,15 +107,28 @@ test('pipelines still treat a saved copy as produced by its Run', () => {
   assert.deepEqual(pipelineInputDatasetIds(route, state), ['input']);
 });
 
-test('the Agent saves outputs as copies and turns an older History output into a copy when editing it', () => {
+test('the Agent saves outputs as copies stamped with the source History record', () => {
   const extractInputFields = () => ['text'];
   const state = { ...structuredClone(graph), historyVersion: 1 };
+  const runRecordId = 'a'.repeat(32);
+  const processRecordId = 'b'.repeat(32);
+  state.nodes.find((node) => node.nodeId === 'run').historyRecordId = runRecordId;
+  state.nodes.find((node) => node.nodeId === 'process').historyRecordId = processRecordId;
   const saved = planChangeSet(state, [{ op: 'save_run_results', ref: '$out', run: 'run' }], { extractInputFields });
-  assert.equal(saved.state.nodes.find((node) => node.nodeId === saved.refs.$out).savedCopy, true);
+  const savedDataset = saved.state.nodes.find((node) => node.nodeId === saved.refs.$out);
+  assert.equal(savedDataset.savedCopy, true);
+  assert.equal(savedDataset.snapshotSourceRecordId, runRecordId);
   const savedProcess = planChangeSet(state, [{ op: 'save_process_output', ref: '$p', process: 'process' }], { extractInputFields });
-  assert.equal(savedProcess.state.nodes.find((node) => node.nodeId === savedProcess.refs.$p).savedCopy, true);
+  const savedProcessDataset = savedProcess.state.nodes.find((node) => node.nodeId === savedProcess.refs.$p);
+  assert.equal(savedProcessDataset.savedCopy, true);
+  assert.equal(savedProcessDataset.snapshotSourceRecordId, processRecordId);
+  assert.throws(
+    () => planChangeSet(structuredClone(graph), [{ op: 'save_run_results', ref: '$out', run: 'run' }], { extractInputFields }),
+    /no History record/,
+  );
   const edited = planChangeSet(state, [{ op: 'update', node: 'run-dataset', set: { columns: ['text', 'answer'], rows: [['x', 'y']] } }], { extractInputFields });
   const dataset = datasetIn(edited.state);
   assert.equal(dataset.savedCopy, true);
   assert.equal(dataset.sourceRunNodeId, 'run');
+  assert.equal(dataset.snapshotSourceRecordId, runRecordId);
 });

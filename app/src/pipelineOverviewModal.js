@@ -4,13 +4,11 @@
  * chip becomes a picker and the remainder of the row follows the choice. Branches are drawn only
  * for a Process's named outputs and for the Datasets one Process merges.
  *
- * What runs is chosen here; what a run did lives in the Runtime tab (`runsHost`): the run
- * list, each run's steps, and Stop / Resume / Add results to canvas / Delete. Its output tables are
- * read on the canvas, where a finished run adds them. Beside each pipeline's runs it lists the
- * results made on its nodes one at a time (node History), which open the node itself. A pipeline
- * card shows its latest run only through its Stop / Resume buttons.
+ * What runs is chosen here. A card shows its latest run through its Run Pipeline / Stop / Resume
+ * buttons; its Run History window lists that pipeline's runs. Output tables are
+ * read on the canvas, where a finished run adds them.
  */
-import { showAlert, showConfirm } from './alertModal.js';
+import { showAlert } from './alertModal.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
 import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from './pipelineRouteSelection.js';
 import { buildPipelineCompileRequest, pipelineInputHasAssets } from './pipelineRunDefinition.js';
@@ -20,7 +18,6 @@ import { pipelineInputSteps } from './pipelineRunInputs.js';
 import {
   cancelPipelineRun,
   compileCurrentPipeline,
-  deletePipelineRun,
   getPipelineResults,
   getPipelineRun,
   getPipelineRunDefinition,
@@ -126,18 +123,13 @@ const ACTIVE_RUN_STATES = new Set(['pending', 'running', 'cancelling']);
 const RESUMABLE_RUN_STATES = new Set(['failed', 'cancelled', 'interrupted']);
 const PUBLISHABLE_RUN_STATES = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 
-/** Note shown on a Dataset saved from a Pipeline run: when it ran (as Pipeline Runs lists it)
+/** Note shown on a Dataset saved from a Pipeline run: when it ran (as Run History lists it)
  * and, when known, the step that made the table. */
 export function pipelineResultNote(run, sourceLabel = '') {
   const at = run?.finished_at || run?.created_at;
   const when = at ? ` on ${new Date(at).toLocaleString()}` : '';
   return `Saved from Pipeline run${when}.${sourceLabel ? `\nOutput of ${sourceLabel}.` : ''}`;
 }
-
-function rowCount(count) {
-  return `${count} row${count === 1 ? '' : 's'}`;
-}
-
 
 /** Run and Process node ids in a detected pipeline, to file runs under it. */
 function pipelineStepNodeIds(pipeline) {
@@ -154,122 +146,12 @@ function runStepNodeIds(item) {
   return (item?.job_ids || []).map((id) => String(id || '').replace(/^(llm|process):/, ''));
 }
 
-function formatRunTime(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
-}
-
-/** Facts from a History record that belong in the Run info cell, beside the node name. */
-export function historyInfoText(entry) {
-  if (!entry) return '';
-  const names = (entry.datasetNames || []).filter(Boolean);
-  const parts = [];
-  if (names.length) parts.push(`Input: ${names.join(', ')}`);
-  if (Number.isFinite(entry.rowCount)) parts.push(`${entry.rowCount} row${entry.rowCount === 1 ? '' : 's'}`);
-  if (entry.errorCount) parts.push(`${entry.errorCount} error${entry.errorCount === 1 ? '' : 's'}`);
-  if (entry.model) parts.push(`Model: ${entry.model}`);
-  return parts.join(' · ');
-}
-
-function renderRunInfo(nodeLabel, historyLabel, progress) {
-  const progressHtml = progress ? ` <span class="pipeline-runs-muted">${escapeHtml(progress)}</span>` : '';
-  const history = historyLabel
-    ? escapeHtml(historyLabel)
-    : '<span class="pipeline-runs-muted">Not saved</span>';
-  return `<div class="pipeline-runs-info"><div><span class="pipeline-runs-info-label">Node</span>${escapeHtml(nodeLabel || '')}${progressHtml}</div><div><span class="pipeline-runs-info-label">History</span>${history}</div></div>`;
-}
-
-/** Status, Started, Run info — the same table for a pipeline run's steps and for single-node results. */
-export function renderStatusNodeTable(rows, className = '') {
-  return `<table class="pipeline-runs-table${className ? ` ${className}` : ''}">
-    <colgroup><col style="width: 16%"><col style="width: 30%"><col></colgroup>
-    <thead><tr><th>Status</th><th>Started</th><th>Run info</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
-}
-
-export function renderStatusNodeRow({ status, tone, time, nodeLabel, historyLabel, nodeId, error, progress }) {
-  const color = tone || status || 'pending';
-  const errorHtml = error ? `<div class="pipeline-job-error">${escapeHtml(error)}</div>` : '';
-  const open = nodeId
-    ? ` class="pipeline-runs-row pipeline-runs-node-row" tabindex="0" title="Highlight on canvas" data-node-id="${escapeHtml(nodeId)}"`
-    : ' class="pipeline-runs-row pipeline-runs-step-row"';
-  return `<tr${open}>
-    <td><span class="pipeline-run-status pipeline-run-status--${escapeHtml(color)}">${escapeHtml(status || 'pending')}</span></td>
-    <td>${escapeHtml(time || '')}</td>
-    <td>${renderRunInfo(nodeLabel, historyLabel, progress)}${errorHtml}</td>
-  </tr>`;
-}
-
-function historyForStep(run, nodeId, historyEntries) {
-  return (historyEntries || [])
-    .filter((item) => item.pipelineRunId === run.run_id && item.nodeId === nodeId)
-    .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))[0] || null;
-}
-
-/** One step of an expanded pipeline run, named the same way as a single-node result. */
-export function renderPipelineStepRows(run, canvasNodes = [], historyEntries = []) {
-  const states = new Map((run.jobs || []).map((job) => [job.job_id, job]));
-  const planned = Array.isArray(run.plan?.jobs) && run.plan.jobs.length
-    ? run.plan.jobs
-    : (run.jobs || []).map((job) => ({ job_id: job.job_id, type: job.type, name: job.job_id }));
-  return planned.map((job) => {
-    const state = states.get(job.job_id) || {};
-    const nodeId = String(job.job_id || '').replace(/^(llm|process):/, '');
-    const node = canvasNodes.find((item) => item.nodeId === nodeId);
-    const llm = job.type === 'llm' || String(job.job_id || '').startsWith('llm:');
-    const nodeLabel = llm
-      ? (node ? `${job.name || 'Prompt'} · ${node.runName || 'Run'}` : (job.name || 'Prompt'))
-      : (node?.name || job.name || 'Process');
-    const history = historyForStep(run, nodeId, historyEntries);
-    const status = state.status || 'pending';
-    return renderStatusNodeRow({
-      status,
-      time: formatRunTime(state.started_at || state.finished_at),
-      nodeLabel,
-      historyLabel: history ? (historyInfoText(history) || 'Saved result') : null,
-      nodeId: node ? nodeId : '',
-      error: state.error || '',
-      progress: state.total == null || status === 'succeeded' ? '' : `${state.completed || 0}/${state.total}`,
-    });
-  }).join('');
-}
-
-/** Stop, Resume, Add results, and Delete belong on the run's own row. Delete removes that whole run. */
-export function renderPipelineRunActionButtons(run, { onCanvas = false, busy = false } = {}) {
-  const produced = Array.isArray(run?.artifacts)
-    ? run.artifacts.some((artifact) => artifact.valid && artifact.producer)
-    : (run?.produced_artifact_ids || []).length > 0;
-  const disabled = busy ? ' disabled' : '';
-  const action = (name, label) => `<button type="button" class="btn btn-secondary pipeline-runs-action" data-action="${name}" data-run-id="${escapeHtml(run.run_id)}"${disabled}>${label}</button>`;
-  return [
-    ACTIVE_RUN_STATES.has(run?.status) ? action('stop', run.status === 'cancelling' ? 'Stopping…' : 'Stop') : '',
-    RESUMABLE_RUN_STATES.has(run?.status) ? action('resume', 'Resume') : '',
-    PUBLISHABLE_RUN_STATES.has(run?.status) && produced && !onCanvas ? action('publish', 'Add results to canvas') : '',
-    ACTIVE_RUN_STATES.has(run?.status) ? '' : action('delete', 'Delete'),
-  ].join('');
-}
-
-/** A run's expanded row: the inputs it used, then its steps in the single-node table. */
-export function renderRunDetail(run, { publicationError, canvasNodes, historyEntries }) {
-  const plan = run.plan || {};
-  const inputs = (plan.inputs || []).map((input) => `${input.name}: ${rowCount(input.row_count)}`).join(' · ');
-  const steps = renderPipelineStepRows(run, canvasNodes, historyEntries);
-  return `
-    <div class="pipeline-runs-detail">
-      <p class="pipeline-runs-inputs">Inputs: ${escapeHtml(inputs || 'none')} · Revision ${escapeHtml(run.revision || 1)}</p>
-      ${run.error ? `<div class="pipeline-run-error">${escapeHtml(run.error)}</div>` : ''}
-      ${publicationError ? `<div class="pipeline-run-error">${escapeHtml(publicationError)}</div>` : ''}
-      ${steps ? renderStatusNodeTable(steps, 'pipeline-runs-steps') : ''}
-    </div>`;
-}
-
 function renderRunActions(entry, pipelineIndex) {
   const status = entry?.run?.status;
   const busy = !!entry?.busy;
   if (ACTIVE_RUN_STATES.has(status)) {
-    return `<button type="button" class="btn btn-secondary pipeline-run-action" data-action="stop" data-pipeline-index="${pipelineIndex}"${busy ? ' disabled' : ''}>${status === 'cancelling' ? 'Stopping…' : 'Stop'}</button>`;
+    const label = status === 'cancelling' ? 'Stopping…' : 'Running, click to stop';
+    return `<button type="button" class="btn btn-secondary pipeline-run-action pipeline-run-action--running" data-action="stop" data-pipeline-index="${pipelineIndex}"${busy || status === 'cancelling' ? ' disabled' : ''}>${label}</button>`;
   }
   const resume = RESUMABLE_RUN_STATES.has(status)
     ? `<button type="button" class="btn btn-secondary pipeline-run-action" data-action="resume" data-pipeline-index="${pipelineIndex}"${busy ? ' disabled' : ''}>Resume</button>`
@@ -293,6 +175,7 @@ function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
         <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
         <div class="pipeline-overview-card-actions">
           ${renderRunActions(entry, index)}
+          <button type="button" class="btn btn-secondary pipeline-run-history" data-pipeline-index="${index}">Run History</button>
           <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python Project</button>
         </div>
       </div>
@@ -304,9 +187,8 @@ function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
 /**
  * @param {Function|Array} pipelineSource a getter for live data, or a static array for callers
  * @param {{getCanvasState?: Function, getPipelineProjectId?: Function, getAssetProjectId?: Function,
- * highlightCanvasNodes?: Function, runsHost?: HTMLElement, getHistoryEntries?: Function,
- * openCanvasNode?: Function}} options live canvas hooks; `runsHost` holds the Runtime view,
- * `getHistoryEntries` lists Run and Process History, and `openCanvasNode` opens a node's window
+ * highlightCanvasNodes?: Function, openCanvasNode?: Function}} options live canvas hooks;
+ * `openCanvasNode` opens a node's window
  */
 export function showPipelineOverviewModal(pipelineSource, options = {}) {
   const host = options.host || null;
@@ -330,11 +212,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     ? options.getAssetProjectId : () => null;
   let publishPipelineRun = typeof options.publishPipelineRun === 'function'
     ? options.publishPipelineRun : null;
-  let getHistoryEntries = typeof options.getHistoryEntries === 'function' ? options.getHistoryEntries : async () => [];
   let openCanvasNode = typeof options.openCanvasNode === 'function' ? options.openCanvasNode : () => {};
-  let historyEntries = [];
-  let singleNodeRuns = [];
-  let historySignature = '';
   let pipelines = [];
   let pipelineSignature = '';
   let canvasWarnings = '';
@@ -346,10 +224,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   const runEntriesByPipelineId = new Map();
   const publishingRunIds = new Set();
   const publicationErrors = new Map();
-  const busyRunIds = new Set();
   let runHistory = [];
-  let selectedRunId = '';
-  let selectedRun = null;
 
   const overlay = document.createElement('div');
   overlay.className = host ? 'workspace-dock pipeline-overview-overlay' : 'modal-overlay pipeline-overview-overlay';
@@ -372,16 +247,22 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   `;
 
   const bodyEl = overlay.querySelector('.pipeline-overview-body');
-  // Without a tab of its own (floating window), the run list follows the pipelines.
-  const runsDock = document.createElement('div');
-  runsDock.className = options.runsHost ? 'workspace-dock pipeline-runs-dock' : 'pipeline-runs-dock';
-  if (options.runsHost) {
-    runsDock.setAttribute('role', 'region');
-    runsDock.setAttribute('aria-label', 'Runtime');
-    runsDock.innerHTML = '<div class="modal-panel modal-panel--pipeline-overview"><div class="modal-body pipeline-overview-body"></div></div>';
-  }
-  const runsEl = runsDock.querySelector('.pipeline-overview-body') || runsDock;
-  (options.runsHost || bodyEl.parentElement).appendChild(runsDock);
+  // Run History: one pipeline's runs, opened from its card, as a modal over the rest of the app.
+  const runsWindow = document.createElement('div');
+  runsWindow.className = 'modal-overlay pipeline-runs-overlay';
+  runsWindow.hidden = true;
+  runsWindow.innerHTML = `
+    <div class="modal-panel modal-panel--pipeline-runs" role="dialog" aria-modal="true" aria-labelledby="pipeline-runs-title">
+      <div class="modal-header">
+        <h2 id="pipeline-runs-title" class="modal-title"></h2>
+        <button type="button" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body pipeline-overview-body"></div>
+    </div>`;
+  const runsTitleEl = runsWindow.querySelector('.modal-title');
+  const runsEl = runsWindow.querySelector('.pipeline-overview-body');
+  document.body.appendChild(runsWindow);
+  let historyPipelineId = '';
 
   function clearCanvasHighlight() {
     highlightCanvasNodes([]);
@@ -408,7 +289,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     catch (_) { return false; }
   }
   /** Runs live outside the project file, so results missing from the canvas after they were added
-   * once were removed by the user (deleted, or an older save restored); only "Add results to canvas" brings them back. */
+   * once were removed by the user (deleted, or an older save restored), and are not added again. */
   function everPublished(runId) {
     try { return localStorage.getItem(publishedKey(attachedProjectId, runId)) === '1'; }
     catch (_) { return false; }
@@ -446,6 +327,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       ...(previous || {}), run_id: run.run_id, status: run.status,
       created_at: run.created_at || previous?.created_at,
       finished_at: run.finished_at || previous?.finished_at,
+      error: run.error ?? previous?.error,
       job_count: run.jobs?.length ?? previous?.job_count,
       job_ids: Array.isArray(run.jobs) ? run.jobs.map((job) => job.job_id) : previous?.job_ids || [],
       succeeded_job_count: Array.isArray(run.jobs)
@@ -455,18 +337,17 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     runHistory = [summary, ...runHistory.filter((item) => item.run_id !== run.run_id)]
       .sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')));
   }
-  /** Keeps every view of a run (list, card, selected detail) on its latest status. */
+  /** Keeps every view of a run (Run History and the card) on its latest status. */
   function applyRun(run) {
     rememberRun(run);
     const entry = entryForRun(run.run_id);
     if (entry) entry.run = run;
-    if (selectedRunId === run.run_id) selectedRun = run;
   }
-  async function publishCompletedRun(run, { manual = false } = {}) {
+  async function publishCompletedRun(run) {
     const produced = producedIds(run);
     if (!publishPipelineRun || !PUBLISHABLE_RUN_STATES.has(run?.status) || !run?.run_id || !produced.length
       || wasPublished(run.run_id, produced)
-      || (!manual && everPublished(run.run_id))
+      || everPublished(run.run_id)
       || publishingRunIds.has(run.run_id)) return;
     const projectId = attachedProjectId;
     publishingRunIds.add(run.run_id);
@@ -494,7 +375,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     }
   }
   /** Fetches a run's status. With `publish`, a finished run is added to the canvas (once, see everPublished);
-   * merely looking at an older run in Pipeline Runs never adds it. */
+   * merely looking at an older run in Run History never adds it. */
   async function refreshRun(runId, { publish = false } = {}) {
     const projectId = attachedProjectId;
     const run = await getPipelineRun(projectId, runId);
@@ -527,20 +408,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (pollTimer || !activeRunIds().size) return;
     pollTimer = setInterval(() => pollRuns().catch(() => {}), 800);
   }
-  async function selectRun(runId) {
-    selectedRunId = runId || '';
-    if (selectedRun?.run_id !== selectedRunId) {
-      const known = entryForRun(selectedRunId)?.run;
-      selectedRun = known?.jobs ? known : null;
-    }
-    renderBody();
-    if (!selectedRunId) return;
-    const run = await refreshRun(selectedRunId);
-    if (run && !destroyed) {
-      renderBody();
-      ensurePolling();
-    }
-  }
   async function syncProjectContext() {
     let projectId;
     try { projectId = await getPipelineProjectId(); } catch (_) { projectId = ''; }
@@ -550,8 +417,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     runEntriesByPipelineId.clear();
     publicationErrors.clear();
     runHistory = [];
-    selectedRunId = '';
-    selectedRun = null;
     if (!projectId) {
       renderBody();
       return;
@@ -590,96 +455,58 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       clearCanvasHighlight();
     }
   }
-  /** Runs filed under the pipeline (numbered as in Current Pipeline) holding most of their steps;
-   * runs whose steps are in no current pipeline come last. */
-  function groupRuns() {
-    const groups = pipelines.map((pipeline, index) => ({
-      title: `Pipeline ${index + 1}`, nodeIds: pipelineStepNodeIds(pipeline), runs: [], singleRuns: [],
-    }));
-    const other = { title: 'Other runs', note: 'Their steps are no longer in a pipeline on the canvas.', runs: [], singleRuns: [] };
-    for (const item of runHistory) {
+  /** The runs of one pipeline: each run is filed under the pipeline holding most of its steps. */
+  function runsOfPipeline(pipelineIndex) {
+    const nodeIdSets = pipelines.map((pipeline) => pipelineStepNodeIds(pipeline));
+    return runHistory.filter((item) => {
       const ids = runStepNodeIds(item);
-      let best = other;
+      let best = -1;
       let bestCount = 0;
-      for (const group of groups) {
-        const count = ids.filter((id) => group.nodeIds.has(id)).length;
-        if (count > bestCount) { best = group; bestCount = count; }
-      }
-      best.runs.push(item);
-    }
-    // A node removed from the canvas cannot be opened, so its single-node results are not listed.
-    const onCanvas = new Set(canvasNodes.map((node) => node.nodeId));
-    for (const item of singleNodeRuns) {
-      if (!onCanvas.has(item.nodeId)) continue;
-      (groups.find((group) => group.nodeIds.has(item.nodeId)) || other).singleRuns.push(item);
-    }
-    return other.runs.length || other.singleRuns.length ? [...groups, other] : groups;
-  }
-  /** One result made on a node itself; opening it shows the node's own window and History. */
-  function renderSingleNodeRow(item) {
-    const node = canvasNodes.find((candidate) => candidate.nodeId === item.nodeId);
-    const label = item.kind === 'run'
-      ? `${item.promptName || 'Prompt'} · ${node?.runName || 'Run'}`
-      : node?.name || 'Process';
-    // A completed result uses the same word and colour as a pipeline step that succeeded.
-    const status = item.status === 'completed' ? 'succeeded' : item.status || 'pending';
-    const tone = status === 'stopped' ? 'cancelled' : status;
-    return renderStatusNodeRow({
-      status, tone, time: formatRunTime(item.createdAt), nodeLabel: label,
-      historyLabel: historyInfoText(item) || 'Saved result', nodeId: item.nodeId,
+      nodeIdSets.forEach((nodeIds, index) => {
+        const count = ids.filter((id) => nodeIds.has(id)).length;
+        if (count > bestCount) { best = index; bestCount = count; }
+      });
+      return best === pipelineIndex;
     });
   }
-  async function refreshHistoryEntries() {
-    const items = await getHistoryEntries();
-    const signature = JSON.stringify(items);
-    if (destroyed || signature === historySignature) return;
-    historyEntries = items;
-    singleNodeRuns = items.filter((item) => !item.pipelineRunId)
-      .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')));
-    historySignature = signature;
-    renderBody();
-  }
-  function renderRunRows(item) {
-    const selected = item.run_id === selectedRunId;
-    const actionRun = selected && selectedRun?.run_id === item.run_id ? selectedRun : item;
-    const produced = Array.isArray(actionRun.artifacts) ? producedIds(actionRun) : (actionRun.produced_artifact_ids || []);
+  function renderRunRow(item) {
     const status = item.status || 'pending';
-    const actions = renderPipelineRunActionButtons(actionRun, {
-      onCanvas: wasPublished(item.run_id, produced, canvasNodes),
-      busy: busyRunIds.has(item.run_id) || publishingRunIds.has(item.run_id),
-    });
-    const row = `<tr class="pipeline-runs-row${selected ? ' is-selected' : ''}" tabindex="0" aria-expanded="${selected}" data-run-id="${escapeHtml(item.run_id)}">
-      <td><span class="pipeline-run-status pipeline-run-status--${escapeHtml(status)}">${escapeHtml(status)}</span></td>
+    const problem = [item.error, publicationErrors.get(item.run_id)].filter(Boolean).join('\n');
+    return `<tr data-run-id="${escapeHtml(item.run_id)}">
+      <td${problem ? ` title="${escapeHtml(problem)}"` : ''}><span class="pipeline-run-status pipeline-run-status--${escapeHtml(status)}">${escapeHtml(status)}</span></td>
       <td>${escapeHtml(item.created_at ? new Date(item.created_at).toLocaleString() : '')}</td>
       <td class="pipeline-runs-muted"><code>${escapeHtml(item.run_id.slice(0, 8))}</code></td>
-      <td class="pipeline-runs-actions-cell"><div class="pipeline-runs-actions">${actions}</div></td>
     </tr>`;
-    if (!selected) return row;
-    const detail = selectedRun?.run_id === item.run_id && selectedRun.jobs
-      ? renderRunDetail(selectedRun, {
-        publicationError: publicationErrors.get(selectedRun.run_id) || '',
-        canvasNodes,
-        historyEntries,
-      })
-      : '<span class="pipeline-runs-muted">Loading…</span>';
-    return `${row}<tr class="pipeline-runs-detail-row"><td colspan="4">${detail}</td></tr>`;
   }
-  function renderRunsView() {
-    if (!attachedProjectId) return '<p class="pipeline-overview-empty">Open a project to see its Pipeline runs.</p>';
-    const groups = groupRuns();
-    if (!groups.length) return '<p class="pipeline-overview-empty">No Pipeline runs yet. Start one from Current Pipeline.</p>';
-    return `<div class="pipeline-runs">${groups.map((group) => `
-      <section class="pipeline-overview-card">
-        <div class="pipeline-overview-card-header"><h3 class="pipeline-overview-card-title">${escapeHtml(group.title)}</h3></div>
-        ${group.note ? `<p class="pipeline-runs-note">${escapeHtml(group.note)}</p>` : ''}
-        ${group.runs.length ? `<h4 class="pipeline-runs-subtitle">Pipeline runs</h4><table class="pipeline-runs-table">
-          <colgroup><col style="width: 16%"><col style="width: 28%"><col><col style="width: 260px"></colgroup>
-          <thead><tr><th>Status</th><th>Started</th><th>Run</th><th class="pipeline-runs-actions-col">Operation</th></tr></thead>
-          <tbody>${group.runs.map(renderRunRows).join('')}</tbody>
-        </table>` : ''}
-        ${group.singleRuns.length ? `<h4 class="pipeline-runs-subtitle">Single-node runs</h4>${renderStatusNodeTable(group.singleRuns.map(renderSingleNodeRow).join(''))}` : ''}
-        ${group.runs.length || group.singleRuns.length ? '' : '<p class="pipeline-overview-empty">No runs yet.</p>'}
-      </section>`).join('')}</div>`;
+  function renderRunsWindow() {
+    const pipelineIndex = historyPipelineId
+      ? pipelines.findIndex((pipeline, index) => getPipelineViewId(pipeline, index) === historyPipelineId)
+      : -1;
+    if (pipelineIndex < 0 || !attachedProjectId) {
+      historyPipelineId = '';
+      runsWindow.hidden = true;
+      return;
+    }
+    runsWindow.hidden = false;
+    runsTitleEl.textContent = `Pipeline ${pipelineIndex + 1} · Run History`;
+    const runs = runsOfPipeline(pipelineIndex);
+    runsEl.innerHTML = runs.length
+      ? `<div class="pipeline-runs"><table class="pipeline-runs-table">
+          <colgroup><col style="width: 20%"><col style="width: 40%"><col></colgroup>
+          <thead><tr><th>Status</th><th>Started</th><th>Run ID</th></tr></thead>
+          <tbody>${runs.map(renderRunRow).join('')}</tbody>
+        </table></div>`
+      : '<p class="pipeline-overview-empty">No runs yet. Click Run Pipeline to start one.</p>';
+  }
+  function openRunHistory(pipelineId) {
+    historyPipelineId = pipelineId;
+    renderRunsWindow();
+    if (!runsWindow.hidden) runsWindow.querySelector('.modal-close')?.focus();
+  }
+  function closeRunHistory() {
+    historyPipelineId = '';
+    runsWindow.hidden = true;
+    clearCanvasHighlight();
   }
   function renderBody() {
     clearCanvasHighlight();
@@ -690,7 +517,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       }).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
     bodyEl.innerHTML = canvasWarnings + content;
-    runsEl.innerHTML = renderRunsView();
+    renderRunsWindow();
   }
   function refresh(nextSource) {
     if (typeof nextSource === 'function') readPipelines = nextSource;
@@ -712,7 +539,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       renderBody();
     }
     syncProjectContext().catch(() => {});
-    refreshHistoryEntries().catch(() => {});
   }
   function scheduleRefresh() {
     if (refreshFrame) cancelAnimationFrame(refreshFrame);
@@ -731,7 +557,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (typeof nextOptions.getPipelineProjectId === 'function') getPipelineProjectId = nextOptions.getPipelineProjectId;
     if (typeof nextOptions.getAssetProjectId === 'function') getAssetProjectId = nextOptions.getAssetProjectId;
     if (typeof nextOptions.publishPipelineRun === 'function') publishPipelineRun = nextOptions.publishPipelineRun;
-    if (typeof nextOptions.getHistoryEntries === 'function') getHistoryEntries = nextOptions.getHistoryEntries;
     if (typeof nextOptions.openCanvasNode === 'function') openCanvasNode = nextOptions.openCanvasNode;
     syncProjectContext().catch(() => {});
   };
@@ -772,86 +597,16 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     return { card, pipelineIndex, pipelineId, pipeline, route };
   }
 
-  async function deleteRun(runId) {
-    const ok = await showConfirm('Delete this Pipeline run and its stored tables? Results already added to the canvas and node History stay.', {
-      title: 'Delete Pipeline run', confirmText: 'Delete',
-    });
-    if (!ok) return;
-    await deletePipelineRun(attachedProjectId, runId);
-    runHistory = runHistory.filter((item) => item.run_id !== runId);
-    for (const [pipelineId, entry] of runEntriesByPipelineId) {
-      if (entry?.run?.run_id === runId) runEntriesByPipelineId.delete(pipelineId);
-    }
-    persistRuns();
-    publicationErrors.delete(runId);
-    try { localStorage.removeItem(publishedKey(attachedProjectId, runId)); } catch (_) {}
-    if (selectedRunId === runId) await selectRun('');
-  }
-
-  async function onRunsAction(button) {
-    const runId = button.dataset.runId;
-    const action = button.dataset.action;
-    const projectId = attachedProjectId;
-    busyRunIds.add(runId);
-    renderBody();
-    try {
-      if (action === 'delete') {
-        await deleteRun(runId);
-      } else if (action === 'publish') {
-        const run = await refreshRun(runId);
-        if (run) await publishCompletedRun(run, { manual: true });
-      } else if (action === 'stop') {
-        applyRun(await cancelPipelineRun(projectId, runId));
-      } else if (action === 'resume') {
-        applyRun(await resumePipelineRun(projectId, runId, getAssetProjectId(), entryForRun(runId)?.needsAssets === true));
-        persistRuns();
-      }
-      ensurePolling();
-    } finally {
-      busyRunIds.delete(runId);
-      if (!destroyed) renderBody();
-    }
-  }
-
-  /** A step or single-node result: highlight its node on the canvas. The node's window stays closed. */
-  function highlightNodeRow(row) {
-    focusCanvasNodes([row.dataset.nodeId]);
-  }
-
-  /** A run row opens its steps below it; opening it again closes them. */
-  async function toggleRun(runId) {
-    try {
-      await selectRun(selectedRunId === runId ? '' : runId);
-    } catch (error) {
-      showAlert(error?.message || 'Could not load this Pipeline run.', { title: 'Runtime' });
-    }
-  }
-
   async function onPanelClick(event) {
     if (!event.target.closest('select, button, input, label')) {
       const step = event.target.closest('[data-canvas-node-ids]');
       if (step) focusCanvasNodes(JSON.parse(decodeURIComponent(step.dataset.canvasNodeIds)));
     }
-    const runsAction = event.target.closest?.('.pipeline-runs-action');
-    if (runsAction && !runsAction.disabled) {
-      try {
-        await onRunsAction(runsAction);
-      } catch (error) {
-        showAlert(error instanceof Error ? error.message : 'Pipeline action failed.', { title: 'Runtime' });
-      }
+    const historyButton = event.target.closest?.('.pipeline-run-history');
+    if (historyButton) {
+      openRunHistory(historyButton.closest('.pipeline-overview-card')?.dataset.pipelineId || '');
       return;
     }
-    const nodeRow = event.target.closest?.('.pipeline-runs-node-row');
-    if (nodeRow) {
-      highlightNodeRow(nodeRow);
-      return;
-    }
-    const runRow = event.target.closest?.('.pipeline-runs-row');
-    if (runRow?.dataset.runId) {
-      await toggleRun(runRow.dataset.runId);
-      return;
-    }
-
     const actionButton = event.target.closest?.('.pipeline-run-action');
     if (actionButton && !actionButton.disabled) {
       const context = selectedPipelineContext(actionButton);
@@ -904,8 +659,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
           });
           // Autosave writes the file's run owner (currentProject.js), so the run stays listed after reopening.
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-          // Pipeline Runs shows the newest run; this tab stays in front.
-          selectedRunId = entry.run.run_id;
           applyRun(entry.run);
           entry.needsAssets = pipelineInputHasAssets(canvasState, route);
           entry.busy = false;
@@ -974,20 +727,12 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     }
   }
   bodyEl.addEventListener('click', onPanelClick);
-  runsEl.addEventListener('click', onPanelClick);
 
-  runsEl.addEventListener('keydown', (event) => {
-    const runRow = event.target.closest?.('.pipeline-runs-row');
-    if (!runRow || event.target !== runRow || !['Enter', ' '].includes(event.key)) return;
-    event.preventDefault();
-    if (runRow.classList.contains('pipeline-runs-node-row')) {
-      highlightNodeRow(runRow);
-      return;
-    }
-    if (!runRow.dataset.runId) return;
-    toggleRun(runRow.dataset.runId).then(() => {
-      runsEl.querySelector(`.pipeline-runs-row[data-run-id="${runRow.dataset.runId}"]`)?.focus();
-    });
+  runsWindow.querySelector('.modal-close').addEventListener('click', closeRunHistory);
+  runsWindow.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.stopPropagation();
+    closeRunHistory();
   });
 
   bodyEl.addEventListener('keydown', (event) => {
@@ -1002,7 +747,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     stopPolling();
     clearCanvasHighlight();
     overlay.remove();
-    runsDock.remove();
+    runsWindow.remove();
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('workflow:canvas-changed', scheduleRefresh);
     document.removeEventListener('workflow:history-resolved', scheduleRefresh);
