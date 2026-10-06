@@ -9095,9 +9095,4 @@ button.btn.btn-danger:hover:not(:disabled) {
 .settings-agent-model-status__check {
   flex-shrink: 0;
 }
-.working-dataset-missing-message {
-  margin: 8px 12px;
-  color: var(--danger, #b42318);
-  font-size: 13px;
-}
 .working-dataset-missing .working-dataset-export-local { display: none; }
