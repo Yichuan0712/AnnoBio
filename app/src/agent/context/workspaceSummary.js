@@ -1,7 +1,7 @@
 /**
  * Compact plain-text description of the canvas for the Agent's system prompt: pipelines as the
- * Current Pipeline panel shows them (Run prompt and Process data steps, pickers, branches; its
- * default choices, since the user's picks live only in the panel), then every node with the few
+ * Current Pipeline panel shows them (Run prompt and Process data steps, pickers, branches; the
+ * panel's choices when mounted, otherwise the defaults), then every node with the few
  * facts needed to decide what to inspect next. Details (prompt text, code, rows) are left to the
  * read tools.
  */
@@ -43,15 +43,15 @@ function describeRouteOption(option, lookup) {
 }
 
 /** One step as the Current Pipeline panel shows it: the default choice first, then the alternatives. */
-function describeRouteStep(step, lookup) {
+function describeRouteStep(step, lookup, selectionSource) {
   const options = [step.selectedOption, ...step.options.filter((option) => option.value !== step.selectedValue)];
   const label = STEP_LABELS[step.kind];
   if (options.length === 1) return `${label}: ${describeRouteOption(options[0], lookup)}`;
   return `${label}, a picker with ${options.length} choices: `
-    + options.map((option, i) => `${describeRouteOption(option, lookup)}${i === 0 ? ' (default)' : ''}`).join('; ');
+    + options.map((option, i) => `${describeRouteOption(option, lookup)}${i === 0 ? ` (${selectionSource === 'panel' ? 'selected' : 'default'})` : ''}`).join('; ');
 }
 
-function routeLines(route, lookup, indent) {
+function routeLines(route, lookup, indent, selectionSource) {
   const lines = [];
   route.forEach((step, i) => {
     if (step.kind === 'empty') {
@@ -60,22 +60,24 @@ function routeLines(route, lookup, indent) {
       lines.push(`${indent}${i + 1}. Branches:`);
       step.lanes.forEach((lane, laneIndex) => {
         lines.push(`${indent}   Branch ${laneIndex + 1}:`);
-        lines.push(...routeLines(lane, lookup, `${indent}     `));
+        lines.push(...routeLines(lane, lookup, `${indent}     `, selectionSource));
       });
     } else {
-      lines.push(`${indent}${i + 1}. ${describeRouteStep(step, lookup)}`);
+      lines.push(`${indent}${i + 1}. ${describeRouteStep(step, lookup, selectionSource)}`);
     }
   });
   return lines;
 }
 
-function pipelineLines(canvasState, lookup) {
+function pipelineLines(canvasState, lookup, selections = []) {
   const pipelines = detectPipelines(canvasState);
   if (!pipelines.length) return ['No pipelines yet (a pipeline needs at least one Prompt with a Run, or a Process).'];
   const lines = [];
   pipelines.forEach((pipeline, index) => {
-    lines.push(`Pipeline ${index + 1}:`);
-    lines.push(...routeLines(getVisibleRoute(buildSelectedRoute(pipeline, new Map())), lookup, '  '));
+    const selection = selections.find((item) => item.id === String(pipeline?.id || `pipeline-index-${index}`));
+    const source = selection?.source === 'panel' ? 'panel' : 'default';
+    lines.push(`Pipeline ${index + 1} [${String(pipeline?.id || `pipeline-index-${index}`)}] (${source === 'panel' ? 'current panel selection' : 'default route; Current Pipeline panel is not mounted'}):`);
+    lines.push(...routeLines(getVisibleRoute(selection?.route || buildSelectedRoute(pipeline, new Map())), lookup, '  ', source));
   });
   return lines;
 }
@@ -91,7 +93,8 @@ function datasetLine(node, lookup, canvasState) {
   const snapshotEdge = (canvasState.connections || []).find((c) =>
     (c.type === 'run-to-dataset-snapshot' || c.type === 'process-to-dataset-snapshot') && c.toId === node.nodeId);
   const sampler = node.samplerNodeId ? lookup.get(node.samplerNodeId) : null;
-  if (run) source = `; results of run ${quote(nodeTitle(run))}`;
+  if (node.pipelineRunId) source = `; saved from Pipeline run ${node.pipelineRunId}`;
+  else if (run) source = `; results of run ${quote(nodeTitle(run))}`;
   else if (processEdge && lookup.get(processEdge.fromId)) {
     source = `; output ${quote(node.processOutputName || 'result')} of process ${quote(nodeTitle(lookup.get(processEdge.fromId)))}`;
   } else if (snapshotEdge && lookup.get(snapshotEdge.fromId)) {
@@ -185,7 +188,7 @@ export async function buildWorkspaceSummary(canvasState, options = {}) {
 
   const versionsById = new Map(buildPromptFamilies(canvasState)
     .flatMap((family) => family.versions.map((version) => [version.promptId, version])));
-  const lines = ['Pipelines:', ...pipelineLines(canvasState, lookup), ''];
+  const lines = ['Pipelines:', ...pipelineLines(canvasState, lookup, options.pipelineSelections), ''];
   for (const [type, heading] of SECTION_ORDER) {
     const group = nodes.filter((n) => n.type === type);
     if (!group.length) continue;
@@ -211,4 +214,3 @@ export async function buildWorkspaceSummary(canvasState, options = {}) {
     : 'Nothing is selected on the canvas.');
   return lines.join('\n');
 }
-

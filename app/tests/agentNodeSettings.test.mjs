@@ -61,9 +61,26 @@ test('the summary lists pipelines as the Current Pipeline panel shows them', asy
   const summary = await buildWorkspaceSummary(state, { extractInputFields });
   const pipelines = summary.split('\n\n')[0];
   assert.doesNotMatch(pipelines, /Dataset/);
-  assert.match(pipelines, /Pipeline 1:\n {2}1\. Run prompt, a picker with 2 choices: "p2" \[p2\] by run "Run B" \[r2\] on "raw" \(default\); "p" \[p\] by run "Run A"/);
-  assert.match(pipelines, /Pipeline 2:\n {2}1\. Process data, a picker with 2 choices: "clean" \[clean\] reading "raw" \(default\); "trim"/);
+  assert.match(pipelines, /Pipeline 1 \[pipeline-1\] \(default route; Current Pipeline panel is not mounted\):\n {2}1\. Run prompt, a picker with 2 choices: "p2" \[p2\] by run "Run B" \[r2\] on "raw" \(default\); "p" \[p\] by run "Run A"/);
+  assert.match(pipelines, /Pipeline 2 \[pipeline-2\].*:\n {2}1\. Process data, a picker with 2 choices: "clean" \[clean\] reading "raw" \(default\); "trim"/);
   assert.match(summary, /"p2" \[p2\]: .*; new version of "p"/);
+});
+
+test('the summary uses the panel selection and identifies Pipeline result provenance', async () => {
+  const state = canvas();
+  state.nodes.push({ type: 'dataset', nodeId: 'copy', name: 'Pipeline output',
+    pipelineRunId: 'run-123', pipelineLogicalId: 'dataset:copy',
+    datasetContent: { headers: ['answer'], rows: [['A']] } });
+  const selectedRoute = [{ kind: 'prompt', selectedValue: 'r', selectedOption: {
+    kind: 'prompt', promptNodeId: 'p', promptName: 'Extract', runNodeId: 'r', runName: 'Run', inputDatasetNodeId: 'raw',
+  }, options: [{ value: 'r', kind: 'prompt', promptNodeId: 'p', promptName: 'Extract', runNodeId: 'r', runName: 'Run', inputDatasetNodeId: 'raw' }] }];
+  const summary = await buildWorkspaceSummary(state, { extractInputFields,
+    pipelineSelections: [{ id: 'pipeline-1', source: 'panel', route: selectedRoute }] });
+  assert.match(summary, /Pipeline 1 \[pipeline-1\] \(current panel selection\)/);
+  assert.match(summary, /saved from Pipeline run run-123/);
+  assert.deepEqual(inspectWorkflowNode(state, 'copy').details.producedBy, {
+    kind: 'pipeline run result', pipelineRunId: 'run-123', logicalId: 'dataset:copy',
+  });
 });
 
 test('the summary names a version made by applying a Review', async () => {
