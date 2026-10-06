@@ -24,7 +24,20 @@ export function referencedDatasetAliasNames(code) {
   return new Set(String(code || '').match(/\bdf_[A-Za-z0-9_]+\b/g) || []);
 }
 
-export function referencedDatasetAliases(code, bindings) {
+export function referencedDatasetAliases(code, bindings, savedAliases = {}) {
   const aliases = referencedDatasetAliasNames(code);
-  return new Set((bindings || []).filter((binding) => aliases.has(binding.alias)).map((binding) => binding.nodeId));
+  const available = new Set((bindings || []).map((binding) => binding.nodeId));
+  const explicit = new Map();
+  for (const [nodeId, alias] of Object.entries(savedAliases || {})) {
+    if (!available.has(nodeId) || !aliases.has(alias)) continue;
+    if (!explicit.has(alias)) explicit.set(alias, new Set());
+    explicit.get(alias).add(nodeId);
+  }
+  const result = new Set();
+  for (const alias of aliases) {
+    const exact = explicit.get(alias);
+    if (exact?.size) exact.forEach((nodeId) => result.add(nodeId));
+    else (bindings || []).filter((binding) => binding.alias === alias).forEach((binding) => result.add(binding.nodeId));
+  }
+  return result;
 }

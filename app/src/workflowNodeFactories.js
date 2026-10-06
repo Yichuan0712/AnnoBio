@@ -695,9 +695,15 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       function syncProcessDependencies(code) {
         const { datasets, primaryDatasetId } = getProcessDatasets();
-        const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
-        node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(bindings.map((binding) => [binding.nodeId, binding.alias])));
-        const required = new Set([primaryDatasetId, ...referencedDatasetAliases(code, bindings)]);
+        let savedAliases = {};
+        try { savedAliases = JSON.parse(node.dataset.processDatasetAliases || '{}'); } catch (_) {}
+        const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId).map((binding) => ({
+          ...binding, alias: savedAliases[binding.nodeId] || binding.alias,
+        }));
+        const required = new Set([primaryDatasetId, ...referencedDatasetAliases(code, bindings, savedAliases)]);
+        node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(
+          bindings.filter((binding) => required.has(binding.nodeId)).map((binding) => [binding.nodeId, binding.alias]),
+        ));
         const allConnections = getConnectionsList();
         for (let index = allConnections.length - 1; index >= 0; index -= 1) {
           if (allConnections[index].toId === processNodeId && allConnections[index].type === 'dataset-to-process') allConnections.splice(index, 1);

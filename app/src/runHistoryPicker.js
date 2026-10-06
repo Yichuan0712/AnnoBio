@@ -6,7 +6,12 @@ function formatEntry(entry, currentId) {
   const when = date && !Number.isNaN(date.getTime())
     ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
     : 'Date unavailable';
-  return { when, status: historyStatusLabel(entry.status), display: entry.display || {}, current: entry.id === currentId };
+  return {
+    when,
+    status: historyStatusLabel(entry.status),
+    display: entry.display || {},
+    current: entry.id === currentId,
+  };
 }
 
 /** Add History immediately before the pane toggle in a Run/Process window. */

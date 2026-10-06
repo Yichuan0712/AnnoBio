@@ -191,12 +191,15 @@ export async function planLegacyHistoryMigration(state, {
         const datasets = next.nodes.filter((item) => item.type === 'dataset').map((item) => ({ nodeId: nodeId(item), name: item.name || '' }));
         const allBindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
         const code = String(node.dfCode || node.code || '');
-        const required = new Set([primaryDatasetId, ...incoming.map((edge) => edge.fromId), ...referencedDatasetAliases(code, allBindings)]);
         const savedAliases = parsed(node.datasetAliases, {});
+        const aliasedBindings = allBindings.map((binding) => ({
+          ...binding, alias: savedAliases?.[binding.nodeId] || binding.alias,
+        }));
+        const required = new Set([primaryDatasetId, ...incoming.map((edge) => edge.fromId), ...referencedDatasetAliases(code, aliasedBindings, savedAliases)]);
         const bindings = [];
-        for (const binding of allBindings.filter((item) => required.has(item.nodeId))) {
+        for (const binding of aliasedBindings.filter((item) => required.has(item.nodeId))) {
           const dataset = await resolveDataset(binding.nodeId);
-          bindings.push({ ...dataset, alias: savedAliases?.[binding.nodeId] || binding.alias });
+          bindings.push({ ...dataset, alias: binding.alias });
         }
         if (!bindings.some((item) => item.nodeId === primaryDatasetId)) throw new Error(`Process primary Dataset is missing: ${id}`);
         inputs = { code, primaryDatasetId, bindings };

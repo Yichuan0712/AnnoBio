@@ -5674,6 +5674,50 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   margin: 0;
 }
 
+.execution-error-panel__card {
+  padding-bottom: 20px;
+}
+
+.execution-error-panel {
+  flex: 0 1 auto;
+  max-height: min(360px, 60vh);
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--danger, #b42318);
+  background: color-mix(in srgb, var(--danger, #b42318) 7%, var(--bg));
+}
+
+.execution-error-panel__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger, #b42318) 35%, var(--border));
+}
+
+.execution-error-panel__title {
+  color: var(--danger, #b42318);
+  font-size: 13px;
+}
+
+.execution-error-panel__detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .run-detail-mapping-table {
   border: 1px solid var(--border);
   border-radius: 0;

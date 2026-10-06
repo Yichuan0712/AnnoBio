@@ -9,6 +9,7 @@ import { showAlert } from './alertModal.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { executionIdleLabel } from './executionResumeState.js';
+import { showExecutionError } from './executionErrorPanel.js';
 import { extractInputFieldsFromSections } from './promptDetailModal.js';
 import { computeGreedyRunToGtPairing, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import {
@@ -1596,7 +1597,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (resultsFooterRightEl) resultsFooterRightEl.hidden = false;
     if (!resultsFooterRowEl) return;
     const show = activePanelMode === 'code'
-      ? !!(selectedNodeId && lastCodeMatchResult)
+      ? !!(selectedNodeId && lastCodeMatchResult && !lastCodeMatchError)
       : !!(selectedNodeId && hasScoreInputRules());
     if (show) resultsFooterRowEl.removeAttribute('hidden');
     else resultsFooterRowEl.setAttribute('hidden', '');
@@ -1652,6 +1653,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   let codeRunning = false;
   let codeCancelled = false;
   let codeCurrentJobId = null;
+  let lastCodeMatchError = String(node?.dataset?.scoreMatchError || '');
 
   function setCodeRunningUi(isRunning) {
     codeRunning = isRunning;
@@ -1674,6 +1676,19 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     codeResultsEl.innerHTML = text ? `<p class="run-detail-placeholder">${escapeHtml(text)}</p>` : '';
   }
 
+  function setCodeMatchError(error) {
+    lastCodeMatchError = String(error?.message || error || 'Score failed.');
+    if (node?.dataset) node.dataset.scoreMatchError = lastCodeMatchError;
+    showCodeResultsPlaceholder('');
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    void renderResults();
+  }
+
+  function clearCodeMatchError() {
+    lastCodeMatchError = '';
+    if (node?.dataset) delete node.dataset.scoreMatchError;
+  }
+
   /** Last completed "Match by code" run; consumed by {@link renderResults} (via {@link buildCodeMatchRunToGt}) and the "Save to workspace" export. */
   let lastCodeMatchResult = (() => {
     try {
@@ -1683,13 +1698,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       return null;
     }
   })();
-  let lastHistoryMatchRaw = node?.dataset?.scoreMatchResult || '';
+  let lastHistoryMatchRaw = `${node?.dataset?.scoreMatchResult || ''}\u0000${node?.dataset?.scoreMatchError || ''}`;
   function refreshHistoryMatchResult() {
     if (!overlay.isConnected) return;
     const raw = node?.dataset?.scoreMatchResult || '';
-    if (raw === lastHistoryMatchRaw) return;
-    lastHistoryMatchRaw = raw;
+    const error = node?.dataset?.scoreMatchError || '';
+    const historyKey = `${raw}\u0000${error}`;
+    if (historyKey === lastHistoryMatchRaw) return;
+    lastHistoryMatchRaw = historyKey;
     try { lastCodeMatchResult = raw ? JSON.parse(raw) : null; } catch (_) { lastCodeMatchResult = null; }
+    lastCodeMatchError = String(error);
     void renderResults();
     void updateSaveToWorkspaceButton();
   }
@@ -1750,7 +1768,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       if (codeCurrentJobId !== jobId) return;
       codeCurrentJobId = null;
       setCodeRunningUi(false);
-      showCodeResultsPlaceholder((e && e.message) || 'Network error while checking progress.');
+      setCodeMatchError((e && e.message) || 'Network error while checking progress.');
       return;
     }
     if (codeCurrentJobId !== jobId) return;
@@ -1764,7 +1782,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (data.error) {
       codeCurrentJobId = null;
       setCodeRunningUi(false);
-      showCodeResultsPlaceholder(data.error);
+      setCodeMatchError(data.error);
       return;
     }
     if (data.status === 'cancelled' || codeCancelled) node.dataset.scoreMatchInterrupted = '1';
@@ -1772,6 +1790,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     codeCurrentJobId = null;
     setCodeRunningUi(false);
     showCodeResultsPlaceholder('');
+    clearCodeMatchError();
     lastCodeMatchResult = {
       runRowIndices,
       outcomes: data.results || [],
@@ -1786,23 +1805,23 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   async function startCodeMatchRun() {
     if (!selectedNodeId) {
-      showCodeResultsPlaceholder('Select a ground truth dataset first.');
+      setCodeMatchError('Select a ground truth dataset first.');
       return;
     }
     const runWs = getRunWorkingSetContent();
     const { results: rawResults, outputFields } = getRunResults();
     const gtContent = getGroundTruthContent(selectedNodeId);
     if (gtContent.missingResult) {
-      showCodeResultsPlaceholder('Ground truth Dataset has no current result. Run its upstream node first.');
+      setCodeMatchError('Ground truth Dataset has no current result. Run its upstream node first.');
       return;
     }
     const results = (rawResults || []).filter((r) => isValidRunOutputForScoreRow(r, outputFields));
     if (results.length === 0) {
-      showCodeResultsPlaceholder('No run results to match.');
+      setCodeMatchError('No run results to match.');
       return;
     }
     if ((gtContent.rows || []).length === 0) {
-      showCodeResultsPlaceholder('Ground truth dataset has no rows.');
+      setCodeMatchError('Ground truth dataset has no rows.');
       return;
     }
 
@@ -1813,7 +1832,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       pythonPath = (settings?.python_path || '').trim();
     } catch (_) { /* handled by the empty-path check below */ }
     if (!pythonPath) {
-      showCodeResultsPlaceholder('Set a Python interpreter path in Settings → Python first.');
+      setCodeMatchError('Set a Python interpreter path in Settings → Python first.');
       return;
     }
 
@@ -1825,6 +1844,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const gtRowsPayload = (gtContent.rows || []).map((_, j) => ({ gt_row: buildMatchGtRowDict(gtContent, j) }));
 
     codeCancelled = false;
+    clearCodeMatchError();
     setCodeRunningUi(true);
     setCodeMatchNodeProgress(0, runRowsPayload.length);
     showCodeResultsPlaceholder('');
@@ -1841,7 +1861,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setCodeRunningUi(false);
-        showCodeResultsPlaceholder(typeof data.detail === 'string' ? data.detail : 'Failed to start.');
+        setCodeMatchError(typeof data.detail === 'string' ? data.detail : 'Failed to start.');
         return;
       }
       codeCurrentJobId = data.job_id;
@@ -1849,7 +1869,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     } catch (e) {
       setCodeRunningUi(false);
-      showCodeResultsPlaceholder((e && e.message) || 'Network error.');
+      setCodeMatchError((e && e.message) || 'Network error.');
       return;
     }
 
@@ -2566,6 +2586,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     resultsBody.innerHTML = '';
     const { inputRoot, outputRoot } = loadBundle();
     const rulesFlat = isCodeMode ? [] : getRulesFlat();
+    if (isCodeMode && lastCodeMatchError) {
+      showExecutionError(resultsBody, { title: `Score "${title}" failed`, error: lastCodeMatchError });
+      if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
+      return;
+    }
     if (!selectedNodeId) {
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Select ground truth and add rules to see comparison results.</p>';
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }

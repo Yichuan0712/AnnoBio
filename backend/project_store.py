@@ -208,24 +208,41 @@ class HistoryDelete(BaseModel):
 def _dependent_history_ids(records: dict[str, dict], root_id: str) -> set[str]:
     if root_id not in records:
         raise HTTPException(404, "History record not found.")
+
+    def direct_upstream_ids(record: dict) -> set[str]:
+        upstream = {item for item in (record.get("sourceRecordIds") or []) if item in records}
+        inputs = record.get("inputs") or {}
+        if record.get("kind") == "score":
+            upstream.update(item for item in (
+                inputs.get("runRecordId"), inputs.get("groundTruthSourceRecordId")
+            ) if item in records)
+        if record.get("kind") == "review" and inputs.get("scoreRecordId") in records:
+            upstream.add(inputs["scoreRecordId"])
+        elif record.get("kind") == "review" and inputs.get("scoreSignature"):
+            created_at = record.get("createdAt")
+            candidates = [candidate for candidate in records.values()
+                          if candidate.get("kind") == "score"
+                          and candidate.get("signature") == inputs.get("scoreSignature")
+                          and (not inputs.get("scoreNodeId") or candidate.get("nodeId") == inputs.get("scoreNodeId"))
+                          and (created_at is None or candidate.get("createdAt") is None
+                               or str(candidate.get("createdAt")) <= str(created_at))]
+            if candidates:
+                upstream.add(candidates[-1]["id"])
+        return upstream
+
+    downstream = {record_id: set() for record_id in records}
+    for record_id, record in records.items():
+        for upstream_id in direct_upstream_ids(record):
+            downstream[upstream_id].add(record_id)
+
     removed = {root_id}
-    while True:
-        removed_scores = [records[id] for id in removed if records[id].get("kind") == "score"]
-        new = set()
-        for record_id, record in records.items():
-            inputs = record.get("inputs") or {}
-            if record_id in removed:
-                continue
-            if (removed.intersection(record.get("sourceRecordIds") or [])
-                    or (record.get("kind") == "score" and (inputs.get("runRecordId") in removed or inputs.get("groundTruthSourceRecordId") in removed))
-                    or (record.get("kind") == "review" and any(
-                        score.get("signature") == inputs.get("scoreSignature")
-                        and (not inputs.get("scoreNodeId") or score.get("nodeId") == inputs.get("scoreNodeId"))
-                        for score in removed_scores))):
-                new.add(record_id)
-        if not new:
-            return removed
-        removed.update(new)
+    queue = [root_id]
+    while queue:
+        for record_id in downstream[queue.pop(0)]:
+            if record_id not in removed:
+                removed.add(record_id)
+                queue.append(record_id)
+    return removed
 
 
 class DatasetExport(BaseModel):

@@ -62,9 +62,9 @@ function runResults(table, inputColumnCount, fields) {
   }));
 }
 
-/** Job inputs that move onto the Dataset copies a Pipeline run published: a Run's Dataset, or a
- * Process's primary `df`. Other Process inputs are bound by `df_<name>` aliases the Process code
- * derives from Dataset names, which a copy cannot take over, so such a Process stays as it is.
+/** Job inputs that move onto the Dataset copies a Pipeline run published.
+ * Process aliases are stored independently from Dataset node IDs, so every copied input can move
+ * while preserving the alias used by the Process code.
  * @param {Map<string, string>} copyIds logical artifact id -> published copy node id
  * @returns {Map<string, Map<string, string>>} job id -> (logical artifact id -> copy node id) */
 export function pipelineCopyInputs(spec, copyIds) {
@@ -72,7 +72,7 @@ export function pipelineCopyInputs(spec, copyIds) {
   for (const job of spec?.jobs || []) {
     if (job.type !== 'llm' && job.type !== 'process') continue;
     const inputs = Object.entries(job.inputs || {}).filter(([, logicalId]) => copyIds.has(logicalId));
-    if (!inputs.length || (job.type === 'process' && inputs.some(([alias]) => alias !== 'df'))) continue;
+    if (!inputs.length) continue;
     moves.set(job.id, new Map(inputs.map(([, logicalId]) => [logicalId, copyIds.get(logicalId)])));
   }
   return moves;
