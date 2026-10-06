@@ -35,9 +35,9 @@ A route exports only if:
 
 If export fails, the panel shows the reason. Fix the named node and export again.
 
-## Export the Prompt Optimization table
+## Export the Prompt Version table
 
-The Prompt Optimization tab has an **Export Excel** button for each prompt. The workbook has the same
+The Prompt Version tab has an **Export Excel** button for each prompt. The workbook has the same
 columns as the table (Version, From, Run, Score, Ground truth, Precision, Recall, F1); the version tree
 is written into the Version text, and the metrics are percentages. Only the user can press it.
 

@@ -23,7 +23,7 @@ A canvas holds nodes joined by connections:
 
 A pipeline is a connected chain of Dataset, Process and Prompt/Run steps that contains at least one Prompt Run or Process; Score and Review are evaluation scaffolding around it. The bottom panel has two tabs:
 - Current Pipeline shows each pipeline as one route of "Run prompt" and "Process data" steps; Datasets are not shown. A step with alternatives (prompt versions and their Runs, or several Processes reading the same Dataset) is a picker, and the rest of the route follows the choice. A Dataset read by both Prompt Runs and Processes starts separate pipelines. Each pipeline has an Export Python Project button for the chosen route. The workspace summary lists each pipeline the same way, with the panel's default choices; the user may have picked others.
-- Prompt Optimization shows each prompt's versions as a tree, with how each was made, its Runs and Scores, and precision, recall and F1, and exports that table to Excel.
+- Prompt Version shows each prompt's versions as a tree, with how each was made, its Runs and Scores, and precision, recall and F1, and exports that table to Excel.
 
 You cannot press panel buttons: you cannot choose a route in a picker, export a Python project or an Excel table, or run a whole pipeline at once. When the user wants one of those, tell them where to click. Pipelines run stage by stage through run_nodes.
 
