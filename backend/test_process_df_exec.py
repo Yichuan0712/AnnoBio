@@ -50,15 +50,41 @@ class ProcessDataframeExecutionTests(unittest.TestCase):
         self.assertTrue(outcome["ok"])
         self.assertEqual(outcome["outputs"]["result"], [{"value": "reference", "primary_rows": 1}])
 
-    def test_safe_dataset_id_alias_is_available_to_process_code(self):
+    def run_with_reference(self, code: str) -> dict:
+        return run_process_df_code(
+            sys.executable, code, ["value"], [["primary"]],
+            input_datasets={
+                "df": {"headers": ["value"], "rows": [["primary"]]},
+                "df_reference": {"headers": ["value"], "rows": [["reference"]]},
+            },
+            primary_dataset_id="df",
+        )
+
+    def test_each_other_input_is_the_parameter_named_after_its_alias(self):
+        for code in [
+            "def process(df, df_reference):\n    return df_reference.assign(primary_rows=len(df))\n",
+            "def process(df, *, df_reference):\n    return df_reference.assign(primary_rows=len(df))\n",
+            "def process(df, **inputs):\n    return inputs['df_reference'].assign(primary_rows=len(df))\n",
+        ]:
+            with self.subTest(code=code):
+                outcome = self.run_with_reference(code)
+                self.assertTrue(outcome["ok"], outcome.get("error"))
+                self.assertEqual(outcome["outputs"]["result"], [{"value": "reference", "primary_rows": 1}])
+
+    def test_a_parameter_without_an_input_has_an_actionable_error(self):
+        outcome = self.run_with_reference("def process(df, df_reference, df_missing):\n    return df\n")
+        self.assertFalse(outcome["ok"])
+        self.assertIn("df_missing matches no Input dataset", outcome["error"])
+
+    def test_alias_from_numeric_dataset_name_is_available_to_process_code(self):
         outcome = run_process_df_code(
             sys.executable,
-            "def process(df):\n    return df_reference_2\n",
+            "def process(df):\n    return df_13_explain_sentiment_results\n",
             ["value"],
             [["primary"]],
             input_datasets={
                 "df": {"headers": ["value"], "rows": [["primary"]]},
-                "df_reference_2": {"headers": ["value"], "rows": [["reference"]]},
+                "df_13_explain_sentiment_results": {"headers": ["value"], "rows": [["reference"]]},
             },
             primary_dataset_id="df",
         )

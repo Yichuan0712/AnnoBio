@@ -644,7 +644,7 @@ container, not shared with anyone else.</p>
 column. Good for per-row logic a prompt can't (or shouldn't) do, such as flagging keywords, computing a derived
 value, or validating a format.</li>
 <li><strong>Process as dataframe</strong>: write <code>def process(df):</code>, called once on the whole dataset
-as a pandas DataFrame. Good for whole-table work a per-row function can't express, such as filtering,
+as a pandas DataFrame; each other Input dataset you check becomes a parameter after <code>df</code>. Good for whole-table work a per-row function can't express, such as filtering,
 deduplication, sorting, or sampling.</li>
 </ul>
 {fig("process-node", "A Process node: a per-row Python function, run for real against the connected dataset, with results in the same table format as a Run node.")}

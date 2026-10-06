@@ -7,17 +7,21 @@ A Process node runs one Python function over whole tables. There is no LLM invol
 ```python
 import pandas as pd
 
-def process(df):
+def process(df, df_chembl_targets):
     # df: the primary input Dataset as a pandas DataFrame (all values as they appear in the table)
+    # df_chembl_targets: another input Dataset, declared as a parameter named after its alias
     return df  # a DataFrame, or {"branch_name": DataFrame, ...}
 ```
 
-- `df` is the Dataset connected into the Process (its primary input).
-- Every other Dataset on the canvas is available as a global DataFrame named `df_<dataset_name>`: the
+- `df` is the first parameter: the Process's primary input Dataset.
+- Every other input Dataset is a parameter after `df`, named after its alias `df_<dataset_name>`: the
   Dataset name lower-cased, accents removed, and each run of characters outside `a-z0-9_` replaced by
   `_`. For example a Dataset called "ChEMBL targets (v2)" is `df_chembl_targets_v2`. If two names
-  collide, later ones get `_2`, `_3`, ... Referencing an alias in the code connects that Dataset to the
-  Process automatically. Check the exact aliases with inspect_node on the Process.
+  collide, later ones get `_2`, `_3`, ... Declaring a parameter connects that Dataset to the Process,
+  just as checking it under Input datasets in the Process window adds the parameter. An input keeps
+  its alias when its Dataset is renamed, so check the exact aliases with inspect_node on the Process.
+- Older code reads another Dataset as a global `df_<dataset_name>` without declaring it; that still
+  works, but new code declares every input as a parameter.
 - Return one DataFrame (shown as the `result` branch) or a dict mapping non-empty, unique branch names
   to DataFrames. Each branch can be saved as its own Dataset.
 - Returning anything else is an error. The run times out after 120 seconds.
@@ -44,7 +48,7 @@ that interpreter, so prefer pandas and the standard library.
 Join two sources on a key:
 
 ```python
-def process(df):
+def process(df, df_chembl_targets):
     targets = df_chembl_targets[["target_id", "pref_name"]].drop_duplicates("target_id")
     return df.merge(targets, on="target_id", how="left")
 ```

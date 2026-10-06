@@ -46,12 +46,25 @@ try:
     if not _primary_dataset_id:
         raise ValueError("A Process needs one primary Dataset")
     # The browser sends human-readable aliases, never Dataset IDs. df is primary; every other
-    # Dataset is independently available as its displayed df_<dataset_name> alias.
+    # Dataset is the process() parameter named after its df_<dataset_name> alias. Code written
+    # before those parameters reads the alias as a global instead.
+    import inspect as _inspect
+    _parameters = list(_inspect.signature(process).parameters.values())[1:]
+    _takes_any = any(_p.kind == _p.VAR_KEYWORD for _p in _parameters)
+    _declared = {_p.name: _p for _p in _parameters if _p.kind in (_p.POSITIONAL_OR_KEYWORD, _p.KEYWORD_ONLY)}
+    _arguments = {}
     for _alias, _dataset_frame in inputs.items():
-        if _alias != "df":
+        if _alias == _primary_dataset_id:
+            continue
+        if _alias in _declared or _takes_any:
+            _arguments[_alias] = _dataset_frame
+        else:
             globals()[_alias] = _dataset_frame
+    _unbound = [_name for _name, _p in _declared.items() if _name not in _arguments and _p.default is _p.empty]
+    if _unbound:
+        raise TypeError("process() parameter " + ", ".join(_unbound) + " matches no Input dataset")
     _df = inputs[_primary_dataset_id]
-    _result = process(_df)
+    _result = process(_df, **_arguments)
     if isinstance(_result, pd.DataFrame):
         _outputs = {"result": _result}
     elif isinstance(_result, dict):

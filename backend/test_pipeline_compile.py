@@ -198,10 +198,42 @@ class PipelineCompileTests(unittest.TestCase):
         del state["nodes"][2]["processOutputName"]
         self.error(state, "MISSING_BRANCH_NAME")
 
-    def test_disconnected_and_wrong_prompt_pair(self):
+    def test_legacy_snapshot_link_cannot_hide_a_different_live_source(self):
+        state = branched()
+        state["connections"].append(edge("r", "left", "run-to-dataset-snapshot"))
+        self.error(state, "MULTIPLE_PRODUCERS")
+        state["connections"][-1] = edge("split", "left", "process-to-dataset-snapshot")
+        self.valid(state)
+
+    def test_frozen_copy_of_a_selected_step_output_is_that_step_output(self):
+        # The merge reads a dashed copy of the split's left branch: running the Pipeline recomputes it.
+        state = branched()
+        state["connections"] = [e for e in state["connections"] if not (e["fromId"] == "split" and e["toId"] == "left")]
+        state["connections"].append(edge("split", "left", "process-to-dataset-snapshot"))
+        spec = self.valid(state)
+        jobs = {job["id"]: job for job in spec["jobs"]}
+        self.assertEqual(jobs["process:split"]["outputs"]["left"], ["dataset:left"])
+        self.assertIn("process:split", jobs["process:merge"]["depends_on"])
+        self.assertNotIn("dataset:left", spec["inputs"])
+        # Declared as an input boundary, the copy stays a frozen table.
+        spec = self.valid(state, input_dataset_ids=["raw", "left"])
+        self.assertIn("dataset:left", spec["inputs"])
+        self.assertNotIn("left", {job["id"]: job for job in spec["jobs"]}["process:split"]["outputs"])
+
+    def test_run_diagnostics_name_the_connected_prompt(self):
+        state = simple()
+        state["nodes"][-1]["runName"] = "Run"
+        state["nodes"][-1]["runInputToColumn"] = {"text": "missing"}
+        result = self.compile(state)
+        problem = next(item for item in result["diagnostics"] if item["code"] == "MISSING_COLUMN")
+        self.assertEqual(problem["node_name"], "Run · p")
+
+    def test_unused_dataset_does_not_block_and_wrong_prompt_pair(self):
         state = simple()
         state["nodes"].append(dataset("unused"))
-        self.error(state, "DISCONNECTED_SELECTION")
+        spec = self.valid(state)
+        self.assertNotIn("dataset:unused", [item["id"] for item in spec["artifacts"]])
+        self.assertNotIn("dataset:unused", spec["inputs"])
         state = simple()
         state["nodes"].append(prompt("p2"))
         state["connections"].append(edge("p2", "r", "prompt-to-run"))
@@ -211,7 +243,7 @@ class PipelineCompileTests(unittest.TestCase):
         state = branched()
         state["nodes"][1]["dfCode"] = "raise RuntimeError('MUST NOT EXECUTE')\ndef process(df):\n    return {'left': df, 'right': df}\n"
         self.valid(state)
-        for code in ["# def process(df):\npass", "def process(df, required):\n    return df", "async def process(df):\n    return df", "def process(df): this is invalid python!"]:
+        for code in ["# def process(df):\npass", "def process(data):\n    return data", "def process(df, df_right, /):\n    return df", "async def process(df):\n    return df", "def process(df): this is invalid python!"]:
             with self.subTest(code=code):
                 state["nodes"][1]["dfCode"] = code
                 self.error(state, "INVALID_PROCESS_FUNCTION")
@@ -220,6 +252,16 @@ class PipelineCompileTests(unittest.TestCase):
         state = branched()
         state["nodes"][4]["dfCode"] = "def process(df):\n    return df_missing\n"
         self.error(state, "UNBOUND_DATASET_ALIAS")
+        for code in ["def process(df, df_missing):\n    return df", "def process(df, *, df_missing):\n    return df"]:
+            with self.subTest(code=code):
+                state["nodes"][4]["dfCode"] = code
+                self.error(state, "UNBOUND_DATASET_ALIAS")
+        # Its other Input dataset is a parameter; one more with a default, or **inputs, needs none.
+        for code in ["def process(df, df_right):\n    return df.merge(df_right)\n",
+                     "def process(df, df_right, limit=5, **inputs):\n    return df.merge(df_right)\n"]:
+            with self.subTest(code=code):
+                state["nodes"][4]["dfCode"] = code
+                self.valid(state)
         state["nodes"][4]["datasetAliases"] = {"right": "df"}
         self.error(state, "INVALID_ALIAS")
 

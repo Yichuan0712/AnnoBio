@@ -1,4 +1,4 @@
-import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
+import { processDatasetInputs } from './processDatasetBindings.js';
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 import { normalizeDatasetContent } from './datasetContent.js';
@@ -364,7 +364,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sourceRunNodeId = '', processOutputName = '', savedCopy = false, colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sourceRunNodeId = '', processOutputName = '', savedCopy = false, snapshotSourceRecordId = '', pipelineRunId = '', pipelineLogicalId = '', colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -385,6 +385,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (processOutputName) node.dataset.processOutputName = processOutputName;
     // A saved Run / Process output: keeps its pipeline link, but History never rewrites it (datasetHistorySource.js).
     if (savedCopy) node.dataset.savedCopy = '1';
+    if (snapshotSourceRecordId) node.dataset.snapshotSourceRecordId = snapshotSourceRecordId;
+    if (pipelineRunId) node.dataset.pipelineRunId = pipelineRunId;
+    if (pipelineLogicalId) node.dataset.pipelineLogicalId = pipelineLogicalId;
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = datasetColorAt(colorIndex);
@@ -437,6 +440,8 @@ export function createWorkflowNodeFactories(deps = {}) {
           if (node.dataset.savedCopy !== '1' && getHistoryForNode?.(datasetHistorySourceId(node))
             && JSON.stringify(normalizeDatasetContent(content)) !== JSON.stringify(datasetContentByNodeId.get(id) || null)) {
             node.dataset.savedCopy = '1';
+            const sourceRecordId = getNodeById(datasetHistorySourceId(node))?.dataset?.historyRecordId;
+            if (sourceRecordId) node.dataset.snapshotSourceRecordId = sourceRecordId;
           }
           datasetContentByNodeId.set(id, content);
           emitCanvasChanged();
@@ -688,16 +693,28 @@ export function createWorkflowNodeFactories(deps = {}) {
         if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
         return { datasets, primaryDatasetId };
       }
+      function savedAliases() {
+        try { return JSON.parse(node.dataset.processDatasetAliases || '{}'); } catch (_) { return {}; }
+      }
+      /** Every canvas Dataset with its alias, marking the ones this Process reads with `code`. */
+      function getProcessInputs(code) {
+        const { datasets, primaryDatasetId } = getProcessDatasets();
+        const content = new Map(datasets.map((dataset) => [dataset.nodeId, dataset]));
+        const bindings = processDatasetInputs({ datasets, primaryDatasetId, savedAliases: savedAliases(), code })
+          .map((binding) => ({ ...binding, color: content.get(binding.nodeId).color, content: content.get(binding.nodeId).content }));
+        return { bindings, primaryDatasetId, savedAliases: savedAliases() };
+      }
+      /** Connects exactly the Datasets the code declares or uses and saves the alias each has there. */
       function syncProcessDependencies(code) {
         const { datasets, primaryDatasetId } = getProcessDatasets();
-        const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
-        node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(bindings.map((binding) => [binding.nodeId, binding.alias])));
-        const required = new Set([primaryDatasetId, ...referencedDatasetAliases(code, bindings)]);
+        const inputs = processDatasetInputs({ datasets, primaryDatasetId, savedAliases: savedAliases(), code })
+          .filter((binding) => binding.input);
+        node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(inputs.map((binding) => [binding.nodeId, binding.alias])));
         const allConnections = getConnectionsList();
         for (let index = allConnections.length - 1; index >= 0; index -= 1) {
           if (allConnections[index].toId === processNodeId && allConnections[index].type === 'dataset-to-process') allConnections.splice(index, 1);
         }
-        bindings.filter((binding) => required.has(binding.nodeId)).forEach((binding) => {
+        inputs.forEach((binding) => {
           allConnections.push({ fromId: binding.nodeId, toId: processNodeId, type: 'dataset-to-process' });
         });
         updateEdges();
@@ -706,7 +723,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       openProcessDetailModal({
         node,
         runProcessNode,
-        getProcessDatasets,
+        getProcessInputs,
         syncProcessDependencies,
         setPrimaryDataset: (datasetNodeId, code) => {
           if (datasetNodeId) node.dataset.processPrimaryDatasetId = datasetNodeId;

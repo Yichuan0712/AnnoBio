@@ -71,12 +71,15 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
   const allBindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
   const code = String(target.dfCode || target.code || '');
   if (!code.trim()) throw new Error('Process has no code.');
-  const required = new Set([primaryDatasetId, ...incoming.map((edge) => edge.fromId), ...referencedDatasetAliases(code, allBindings)]);
   const savedAliases = parsed(target.datasetAliases, {});
+  const aliasedBindings = allBindings.map((binding) => ({
+    ...binding, alias: savedAliases?.[binding.nodeId] || binding.alias,
+  }));
+  const required = new Set([primaryDatasetId, ...incoming.map((edge) => edge.fromId), ...referencedDatasetAliases(code, aliasedBindings, savedAliases)]);
   const bindings = [];
-  for (const binding of allBindings.filter((item) => required.has(item.nodeId))) {
+  for (const binding of aliasedBindings.filter((item) => required.has(item.nodeId))) {
     const dataset = await snapshotDataset(binding.nodeId);
-    bindings.push({ ...dataset, alias: savedAliases?.[binding.nodeId] || binding.alias });
+    bindings.push({ ...dataset, alias: binding.alias });
   }
   if (!bindings.some((item) => item.nodeId === primaryDatasetId)) throw new Error('Process primary Dataset is missing.');
   return {

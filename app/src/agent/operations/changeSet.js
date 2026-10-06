@@ -9,7 +9,7 @@
  */
 import { normalizeDatasetContent } from '../../datasetContent.js';
 import { datasetHistorySource } from '../../datasetHistorySource.js';
-import { buildProcessDatasetBindings, referencedDatasetAliases } from '../../processDatasetBindings.js';
+import { processDatasetInputs, referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
 import { buildRunResultsTable } from '../../runResultsExport.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
@@ -343,27 +343,29 @@ export function planChangeSet(state, operations, ctx) {
     };
   }
 
-  function processAliases(primaryId) {
-    const datasets = next.nodes.filter((n) => n.type === 'dataset').map((n) => ({ nodeId: n.nodeId, name: n.name || 'Dataset' }));
-    return buildProcessDatasetBindings(datasets, primaryId);
-  }
-
+  /** Like the Process window: the inputs are df and each Dataset the code declares as a process()
+   * parameter or uses, by the alias it already has. Returns the inputs other than df. */
   function wireProcess(processNode, code, primary) {
     if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) fail('Process code must define process(df).');
-    const bindings = processAliases(primary.nodeId);
-    const referenced = referencedDatasetAliases(code, bindings);
-    const unknown = [...new Set(code.match(/\bdf_[A-Za-z_][A-Za-z0-9_]*\b/g) || [])]
+    const datasets = next.nodes.filter((n) => n.type === 'dataset').map((n) => ({ nodeId: n.nodeId, name: n.name || 'Dataset' }));
+    let savedAliases = processNode.datasetAliases || {};
+    if (typeof savedAliases === 'string') {
+      try { savedAliases = JSON.parse(savedAliases); } catch (_) { savedAliases = {}; }
+    }
+    const bindings = processDatasetInputs({ datasets, primaryDatasetId: primary.nodeId, savedAliases, code });
+    const unknown = [...referencedDatasetAliasNames(code)]
       .filter((alias) => !bindings.some((b) => b.alias === alias));
     if (unknown.length) {
       fail(`The code uses ${unknown.join(', ')}, which match no dataset. Available: ${bindings.filter((b) => !b.primary).map((b) => b.alias).join(', ') || '(none)'}.`);
     }
+    const inputs = bindings.filter((b) => b.input);
     processNode.dfCode = code;
     processNode.activeMode = 'df';
     processNode.primaryDatasetId = primary.nodeId;
-    processNode.datasetAliases = JSON.stringify(Object.fromEntries(bindings.map((b) => [b.nodeId, b.alias])));
+    processNode.datasetAliases = JSON.stringify(Object.fromEntries(inputs.map((b) => [b.nodeId, b.alias])));
     disconnectWhere((c) => c.type === 'dataset-to-process' && c.toId === processNode.nodeId);
-    for (const id of new Set([primary.nodeId, ...referenced])) connect(id, processNode.nodeId, 'dataset-to-process');
-    return bindings.filter((b) => b.nodeId !== primary.nodeId && referenced.has(b.nodeId));
+    for (const b of inputs) connect(b.nodeId, processNode.nodeId, 'dataset-to-process');
+    return inputs.filter((b) => !b.primary);
   }
 
   function sampleRows(rows, op) {
@@ -672,8 +674,12 @@ export function planChangeSet(state, operations, ctx) {
 
       if (node.type === 'dataset' && ('columns' in set || 'rows' in set)) {
         // Like the dataset window: an older output that still follows History becomes a saved copy when edited.
-        if (next.historyVersion === 1 && datasetHistorySource(node, next.connections)) {
+        const historySource = next.historyVersion === 1 ? datasetHistorySource(node, next.connections) : null;
+        if (historySource) {
+          const recordId = clean(byId().get(historySource.sourceId)?.historyRecordId);
+          if (!recordId) fail(`Dataset "${nodeTitle(node)}" follows History, but its ${historySource.kind} has no History record. Run it again before editing this table.`);
           node.savedCopy = true;
+          node.snapshotSourceRecordId = recordId;
           lines.push('Becomes a saved copy: History no longer replaces its table.');
         }
         if (datasetColumns(node).some((c) => c.type !== 'text')) fail('Datasets with image or pdf columns cannot be rewritten here; edit them in the dataset view.');
@@ -767,6 +773,8 @@ export function planChangeSet(state, operations, ctx) {
       if (run.runPending) fail(`Run "${nodeTitle(run)}" is still running; save its results once it finishes.`);
       const results = runResultsOf(run);
       if (!results.length) fail(`Run "${nodeTitle(run)}" has no results yet.`);
+      const recordId = clean(run.historyRecordId);
+      if (!recordId) fail(`Run "${nodeTitle(run)}" has no History record. Run it again before saving its results.`);
       const prompt = byId().get(next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === run.nodeId)?.fromId);
       const saved = runInputContentOf(run);
       const runContent = Array.isArray(saved.rows) && saved.rows.length
@@ -785,6 +793,7 @@ export function planChangeSet(state, operations, ctx) {
         sourceRunNodeId: run.nodeId,
         // A saved output is a copy, as in the UI: History never rewrites it (datasetHistorySource.js).
         savedCopy: true,
+        snapshotSourceRecordId: recordId,
         datasetContent: normalizeDatasetContent(table),
         nodeOrigin: 'agent',
       });
@@ -802,6 +811,8 @@ export function planChangeSet(state, operations, ctx) {
       const branch = clean(op.branch) || (branches.length === 1 ? branches[0] : '');
       if (!branch) fail(`Process "${nodeTitle(processNode)}" has several branches (${branches.join(', ')}); name the branch to save.`);
       if (!outputs[branch]) fail(`Process "${nodeTitle(processNode)}" has no branch "${branch}". Branches: ${branches.join(', ')}.`);
+      const recordId = clean(processNode.historyRecordId);
+      if (!recordId) fail(`Process "${nodeTitle(processNode)}" has no History record. Run it again before saving its output.`);
       const title = nodeTitle(processNode);
       const name = uniqueName(clean(op.name) || (branches.length === 1 ? `${title} results` : `${title} — ${branch}`), takenNames('dataset'));
       const content = normalizeDatasetContent(outputs[branch]);
@@ -813,6 +824,7 @@ export function planChangeSet(state, operations, ctx) {
         note: String(op.note ?? `Branch "${branch}" exported from Process "${title}".`),
         processOutputName: branch,
         savedCopy: true,
+        snapshotSourceRecordId: recordId,
         datasetContent: content,
         nodeOrigin: 'agent',
       });

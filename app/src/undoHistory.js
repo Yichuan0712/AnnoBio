@@ -22,7 +22,7 @@ const MAX_HISTORY = 50;
 
 const VOLATILE_FIELDS_BY_TYPE = {
   run: ['runResults', 'runCompleted', 'runPending', 'runResumable', 'runProgress', 'runInputContent', 'runOutputBracketCollapsed', 'historyRecordId'],
-  score: ['reviewResult', 'scoreMatchResult', 'scoreMatchInterrupted', 'scoreOutputBracketCollapsed', 'scoreGtBracketCollapsed', 'scoreTableRulesColumnFilter'],
+  score: ['reviewResult', 'scoreMatchResult', 'scoreMatchError', 'scoreMatchInterrupted', 'scoreOutputBracketCollapsed', 'scoreGtBracketCollapsed', 'scoreTableRulesColumnFilter'],
   promptReview: ['reviewResult', 'reviewProgress', 'reviewPending', 'reviewInterrupted'],
   process: ['results', 'dfResults', 'processPending', 'processResumable', 'historyRecordId'],
 };

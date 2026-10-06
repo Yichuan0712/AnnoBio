@@ -41,7 +41,7 @@ import { initModalDrag } from './modalDrag.js';
 import { initModalMaximize } from './modalMaximize.js';
 import { showProjectPickerModal, loadWebProject, saveWebProject, saveWebProjectThumbnail, createWebProject, findUniqueProjectName, publishCurrentProjectToGallery } from './webProjectModal.js';
 import { showAlert, showConfirm } from './alertModal.js';
-import { setCurrentProjectId } from './currentProject.js';
+import { pipelineOwnerFor, setCurrentProjectId, setPipelineOwnerId } from './currentProject.js';
 import { createUndoHistory } from './undoHistory.js';
 import { reportAppError } from './appErrors.js';
 import { pruneUnusedAssets as pruneUnusedAssetsWeb } from './webImageApi.js';
@@ -143,7 +143,11 @@ window.addEventListener('DOMContentLoaded', () => {
       // Autosave reports a failed sync; attach a handler now so it is never unhandled.
       historySync.catch(() => {});
     }
-    async function loadCanvasWithHistory(projectId, state) {
+    async function loadCanvasWithHistory(projectId, savedState) {
+      // A never-edited project is saved as {} (see backend create_project) — load it as an empty
+      // canvas; loadCanvasState skips a state without a nodes array, leaving the previous project.
+      const state = { ...savedState, nodes: savedState?.nodes || [], connections: savedState?.connections || [] };
+      if (isElectron) state.pipelineOwner = await pipelineOwnerFor(projectId, savedState?.pipelineOwner);
       await historySync.catch(() => {});
       historySession = new RunHistorySession(historyStore);
       canvasAPI.setHistorySession(historySession);
@@ -158,6 +162,8 @@ window.addEventListener('DOMContentLoaded', () => {
         canvasAPI.loadCanvasState(state);
         showAlert(`History could not be loaded: ${error?.message || error}`, { title: 'Project history' });
       }
+      // Pipeline History attaches only now, so it never acts on the previous project's canvas.
+      if (isElectron && currentProjectPath === projectId) setPipelineOwnerId(state.pipelineOwner.id);
     }
 
   const APP_TITLE = 'AnnoBio';
@@ -181,8 +187,8 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!path) return;
     setCurrentProject(path);
     updateWindowTitleFromPath(path);
-    const state = { ...canvasAPI.getCanvasState() };
-    delete state.historyVersion;
+    // Always a blank canvas — copying the open project into a new file is what Save as is for.
+    const state = { version: 2, nodes: [], connections: [] };
     canvasAPI.clearSelection?.();
     await api.saveProject(path, state);
     await loadCanvasWithHistory(path, state);

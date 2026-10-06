@@ -2,7 +2,7 @@
 
 日期：2026-09-30。代码基线：`main` / `0b257f9`。
 
-状态：编译器、导出器和后端 Runner 已实现并通过测试。面板运行入口（P1.4）尚未提供，Agent 也不能启动整条 Pipeline，因此整条执行目前只能通过 API 使用。Phase 2 及后续阶段待实现。开发分支：`feat/pipeline-execution`。
+状态：编译器、导出器、后端 Runner 和 Current Pipeline 面板运行入口已实现；运行记录在 Pipeline Runs 页签中查看并可逐条删除，自动保留规则尚未实现，Agent 仍不能启动整条 Pipeline。多起点 Dataset 的 Python 导出已支持命名输入。其余 Phase 2 工作待实现。
 
 本文记录实施范围、执行语义、阶段顺序和验收标准。勾选表示实际完成并验证，不表示仅完成讨论。按里程碑逐步实施代码。
 
@@ -180,16 +180,23 @@ P1.2 实现记录（2026-10-01）：
 
 #### P1.4 Run Current Pipeline 与结果查看
 
-- [ ] Current Pipeline 增加校验、Run、Stop、Retry/Resume 入口。
+- [x] Current Pipeline 增加校验、Run、Stop、Retry/Resume 入口。
 - [x] 显示选中路线、输入数量、所用模型、整体和各 job 状态。
 - [x] 动态 Process/table 输出导致调用量未知时，明确显示未知，不给出虚假的精确成本。
-- [x] 预览中间/最终 artifact，并显式另存为工作区 Dataset。
+- [x] 预览中间/最终 artifact，并显式另存为工作区 Dataset。（2026-10-06 起改为运行结束后自动加到画布，面板内预览已移除。）
 - [x] 页面刷新可重新附着；画布修改不改变本次冻结的执行计划。
-- [ ] 运行历史列表与清理（保留规则、删除入口），与面板运行入口一起设计。
+- [x] 运行历史列表与删除入口（Pipeline Runs 页签）。
+- [ ] 运行历史保留规则（自动清理）。
 
 验收：用户在 UI 中启动链路、查看结果并保存输出；执行中的路线与编译预览一致。
 
-实现（2026-10-01）：`pipelineRunDefinition.js` 只把明确入口 Dataset 的行快照发送给 Runner，不会把画布中陈旧的中间 Dataset 当成本次输入；`pipelineRunClient.js` 封装 compile/start/status/cancel/resume/results API。面板中保留了运行状态、artifact 预览和 “Save as Dataset” 的显示代码，但面板没有 Run 入口，这部分目前不可达。
+实现（2026-10-05）：`pipelineRunDefinition.js` 只把明确入口 Dataset 的行快照发送给 Runner，不会把画布中陈旧的中间 Dataset 当成本次输入；`pipelineRunClient.js` 封装 compile/start/status/cancel/resume/results API。面板先编译并显示诊断、模型和调用量估计，用户确认后以幂等 request ID 启动；已有 Stop/Resume、状态、artifact 预览和 “Save as Dataset” 可直接使用。
+
+补充（2026-10-05）：面板轮询重绘时保留 runtime checks 的展开状态。Runner 提供项目级运行列表及冻结定义读取；面板显示 Pipeline History。运行结束后，即使整条 Pipeline 失败或取消，前端也按冻结 artifact 把已成功的 Run/Process job 导入节点 History，并为每个有效的产出 artifact 新建带 Pipeline 运行 ID 的 Dataset 副本；无效的部分结果仍只供预览。History 记录 ID 确定且 Dataset 带来源标记，重新打开项目或手动重试同步不会重复创建；旧运行没有冻结画布定义时，仅在当前节点配置与冻结 spec 相符时补录节点 History。
+
+补充（2026-10-06）：副本同时接到下游。本次读取某 artifact 的 Run 改读其副本，以它为主输入 `df` 的 Process 改连其副本；导入的下游 History 记录也以副本（按画布上的内容签名）为输入，因此整条链显示本次运行的结果，下次运行的路线也经过最新副本。只在节点仍读取原 Dataset 时改连。Process 的 `df_<name>` 合并输入不改：别名由代码按 Dataset 名称引用，副本无法接替，此类 Process 保持原连接。
+
+补充（2026-10-06）：运行结果移到 Current Pipeline 之后的 Pipeline Runs 页签。Current Pipeline 只负责选择和启动路线，不显示运行状态；最近一次运行只通过卡片上的 Stop/Resume 按钮体现。Pipeline Runs 按 Pipeline 分组（编号与 Current Pipeline 一致；运行按其 job 对应的 Run/Process 节点归入当前画布上的 Pipeline，对不上的归入 Other runs），每组一张运行表；点击一行在其下方展开各步状态和 Stop/Resume/Add results to canvas/Delete。每组下另有 Single-node runs 表，列出该 Pipeline 各 Run/Process 节点上单独运行（非 Pipeline 导入）的 History 记录，点击定位并打开该节点。面板不再列出产出或预览表格：运行结束后产出已作为 Dataset 副本加到画布并导入节点 History，在画布上查看；不在画布上的运行用 Add results to canvas 加回。删除只针对已结束的运行（`DELETE /api/pipeline/runs/{run_id}`），只删 Runner 中存的表；已加到画布和节点 History 的结果不受影响。桌面端运行归属记录在项目文件中（路径哈希 + 随机 id，见 `currentProject.js`），复制、移动或另存的文件从空的运行列表开始。
 
 Runner 状态新增冻结的可展示执行计划：输入、依赖、模型快照、有效设置及调用量估计。单行形状的 LLM 可继续传播已知行数；经过 Process 或 table 形状后，下游调用量记为未知（`null`）。模型快照不含 API key；实际调用和恢复仍按凭据 ID 解析当前 secret。
 
@@ -229,7 +236,7 @@ revisions API 创建新 revision。Runner 使用输入内容、完整 Job 定义
 
 实现（2026-10-01）：以 compiler/exporter 已使用的 `raw → split(left, right) → merge → LLM` 图作为共享验收夹具。Runner 按 spec 的拓扑顺序物化两个命名分支，merge 同时读取 `df` 与 `df_right`，且 Job/attempt 记录证明只调度一次；导出项目继续用同一图执行真实 pandas split/merge、mock LLM 和双最终工作表。画布路线选择测试覆盖两条 lane 保留并在共享 merge 处汇合。
 
-兼容边界：单 Run、单 Process、手工 Save to workspace、Score/Review/Sampler 的执行路径没有改成 Pipeline API；Pipeline Runner 是新增的独立执行路径。旧 `process(row)` 迁移、旧 Run 映射、原导出回归和 renderer 全量构建继续通过。Phase 1 只宣告已有单源静态命名分支/汇合闭环；多源导出的 CLI 输入绑定、纯 Process Pipeline 检测和 ensemble 仍属于 Phase 2。
+兼容边界：单 Run、单 Process、手工 Save to workspace、Score/Review/Sampler 的执行路径没有改成 Pipeline API；Pipeline Runner 是新增的独立执行路径。旧 `process(row)` 迁移、旧 Run 映射、原导出回归和 renderer 全量构建继续通过。多源导出以重复的 `--input DATASET_ID=FILE.xlsx` 绑定输入；ensemble 仍属于后续阶段。
 
 验证：30 项 Runner/API/Process/设置测试、42 项 compiler/导出器测试和 13 项前端路线及运行测试通过；Vite renderer 生产构建通过。全部 LLM 测试使用 mock，未调用付费模型。构建仍有原有的大 bundle 提示。
 
