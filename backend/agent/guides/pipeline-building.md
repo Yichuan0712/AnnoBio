@@ -48,11 +48,16 @@ A Dataset read by both Prompt Runs and Processes starts separate pipelines, one 
 than a mixed picker. Hovering a step highlights its Prompt, Run or Process and the Datasets it reads;
 clicking it finds them on the canvas. The chosen route is what Export Python Project uses.
 
-The workspace summary describes the same routes with the panel's default choices. Only the user can
-change a picker; if the choice matters, ask which one they selected.
+The workspace summary describes the route currently selected in the panel, or labels it as the default
+route when the panel has not been mounted. Only the user can change a picker; after a change, refresh
+the workspace before acting.
 
-The panel has no button to run a whole pipeline. Run it stage by stage: run each Process and Run in
-route order, and save the outputs a later step reads.
+**Run Pipeline** executes the selected route in dependency order. It first shows the external Dataset
+inputs for each step and checks whether the route can compile. A run can be stopped or resumed, and
+Run History lists previous whole-Pipeline runs. Finished outputs are added to the canvas as Dataset
+copies with their run provenance. The Agent can use `pipeline_action` to request a whole-Pipeline run,
+stop or resume after user confirmation, and `get_pipeline_runs` to read its status and history.
+Use `run_nodes` for a single Run or Process when testing or iterating on one stage.
 
 ## Advising on a design
 

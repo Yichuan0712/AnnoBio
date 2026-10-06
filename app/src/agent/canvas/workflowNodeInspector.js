@@ -136,6 +136,11 @@ function columnsOf(content) {
 
 function datasetProducer(node, canvasState, nodeLookup) {
   const id = normalizeNodeId(node?.nodeId);
+  if (node?.pipelineRunId) return {
+    kind: 'pipeline run result',
+    pipelineRunId: String(node.pipelineRunId),
+    logicalId: String(node.pipelineLogicalId || ''),
+  };
   if (node?.sourceRunNodeId) {
     const run = nodeLookup.get(normalizeNodeId(node.sourceRunNodeId));
     if (run) return { kind: 'run results', ...linkedNode(run) };

@@ -1,12 +1,13 @@
 import { AGENT_TITLE_MAX_CHARS, clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_API_BASE, waitForBackend } from './backendConfig.js';
-import { answerQuestion, findPendingInteraction, resolveProposal, resolveRunRequest, runAgentLoop } from './agent/agentLoop.js';
+import { answerQuestion, findPendingInteraction, resolvePipelineAction, resolveProposal, resolveRunRequest, runAgentLoop } from './agent/agentLoop.js';
 import { buildWorkspaceSummary } from './agent/context/workspaceSummary.js';
 import { formatAgentText } from './agent/formatAgentText.js';
 import { diffLines } from './agent/lineDiff.js';
 import { executeRunRequest, previewRunRequest } from './agent/execution/runJobs.js';
 import { applyProposal, previewProposal } from './agent/operations/proposals.js';
-import { ASK_USER_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, USER_TOOLS } from './agent/tools/agentTools.js';
+import { executePipelineAction, previewPipelineAction } from './agent/pipeline/pipelineActions.js';
+import { ASK_USER_TOOL, PIPELINE_ACTION_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, USER_TOOLS } from './agent/tools/agentTools.js';
 
 const API_BASE = BACKEND_API_BASE;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
@@ -245,7 +246,7 @@ function createProposalNode({
 
   if (outcome != null) {
     const outcomeEl = document.createElement('div');
-    outcomeEl.className = `agent-window__proposal-outcome${/^(Applied|Completed)\b/.test(outcome) ? ' is-applied' : ''}`;
+    outcomeEl.className = `agent-window__proposal-outcome${/^(Applied|Completed|Started|Exported|Stopping|Resumed)\b/.test(outcome) ? ' is-applied' : ''}`;
     outcomeEl.textContent = outcome;
     cardEl.appendChild(outcomeEl);
     return cardEl;
@@ -566,15 +567,21 @@ export function mountAgentChatSession({
           }));
         } else if (call.preview) {
           const isRun = call.name === RUN_NODES_TOOL;
+          const isPipeline = call.name === PIPELINE_ACTION_TOOL;
+          const actionLabel = isPipeline ? { run: 'Run Pipeline', export: 'Export', stop: 'Stop', resume: 'Resume' }[args.action] || 'Continue' : '';
           messagesEl.appendChild(createProposalNode({
             summary: String(args.summary || ''),
             preview: call.preview,
             outcome: response ? (response.outcome || 'Resolved') : null,
             active: pendingInteraction?.toolCallId === call.id,
-            onApply: () => (isRun ? submitRunDecision({ run: true }) : submitProposalDecision({ apply: true })),
-            onReject: (feedback) => (isRun ? submitRunDecision({ run: false, feedback }) : submitProposalDecision({ apply: false, feedback })),
+            onApply: () => (isPipeline ? submitPipelineDecision({ apply: true }) : isRun ? submitRunDecision({ run: true }) : submitProposalDecision({ apply: true })),
+            onReject: (feedback) => (isPipeline ? submitPipelineDecision({ apply: false, feedback }) : isRun ? submitRunDecision({ run: false, feedback }) : submitProposalDecision({ apply: false, feedback })),
             onHighlight: workspace.highlightNodes,
-            ...(isRun ? {
+            ...(isPipeline ? {
+              applyLabel: actionLabel,
+              rejectLabel: 'Cancel',
+              hint: 'The selected route is checked again before this action starts. To change the plan, type below.',
+            } : isRun ? {
               applyLabel: 'Run',
               rejectLabel: 'Cancel',
               hint: 'Nothing runs until you start it. You can stop it while it runs. To change the plan, type below.',
@@ -616,6 +623,8 @@ export function mountAgentChatSession({
                 ? 'Apply or reject the proposal above, or type what to change...'
                 : awaiting?.kind === 'run'
                   ? 'Run or cancel the jobs above, or type what to change...'
+                : awaiting?.kind === 'pipeline'
+                  ? 'Confirm or cancel the Pipeline action above, or type what to change...'
                   : credentialWarning || 'Send a message...';
   }
 
@@ -665,6 +674,7 @@ export function mountAgentChatSession({
       credentialsById,
       defaultRunCredential,
       selectedNodeIds: workspace.getSelectedNodeIds?.() || [],
+      pipelineSelections: workspace.getPipelineSelections?.() || [],
     });
     const proposalWorkspace = {
       getCanvasState: workspace.getCanvasState,
@@ -688,6 +698,13 @@ export function mountAgentChatSession({
       applyProposal: (proposal, options) => applyProposal(proposal, proposalWorkspace, options),
       previewRunRequest: (request) => previewRunRequest(request, runWorkspace),
       executeRunRequest: (request, options) => executeRunRequest(request, runWorkspace, options),
+      getPipelineSelections: workspace.getPipelineSelections,
+      getPipelineProjectId: workspace.getPipelineProjectId,
+      getAssetProjectId: workspace.getAssetProjectId,
+      getPipelineRunNeedsAssets: workspace.getPipelineRunNeedsAssets,
+      registerPipelineRun: workspace.registerPipelineRun,
+      previewPipelineAction: (request) => previewPipelineAction(request, workspace),
+      executePipelineAction: (request, preview) => executePipelineAction(request, preview, workspace),
     };
   }
 
@@ -911,6 +928,40 @@ export function mountAgentChatSession({
     });
   }
 
+  async function submitPipelineDecision({ apply, feedback = '' }, restoreText = '') {
+    const conversation = getActiveConversation();
+    if (!conversation || !credentialId || sendInFlight) return;
+    const messages = ensureConversationMessages(conversation);
+    const request = findPendingInteraction(messages);
+    if (request?.kind !== 'pipeline') return;
+    const baseline = messages.length;
+    if (!apply) {
+      resolvePipelineAction(messages, request, { status: 'cancelled', ...(feedback ? { feedback } : {}) });
+      if (findPendingInteraction(messages)) {
+        conversation.updatedAt = Date.now();
+        notifyConversationUpdated(conversation);
+        renderActiveConversation();
+        updateComposerState();
+        return;
+      }
+      await runTurn(conversation, { baseline, restoreText });
+      return;
+    }
+    await runTurn(conversation, {
+      baseline,
+      prelude: async ({ runtime, turn, setStatus }) => {
+        setStatus('Working on the Pipeline...');
+        let result;
+        try { result = await runtime.executePipelineAction(request.request, request.preview); }
+        catch (error) { result = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
+        resolvePipelineAction(messages, request, result);
+        turn.baseline = messages.length;
+        conversation.updatedAt = Date.now();
+        notifyConversationUpdated(conversation);
+      },
+    });
+  }
+
   async function submitEditedMessage() {
     const text = String(editingDraft || '').trim();
     const conversation = getActiveConversation();
@@ -954,6 +1005,10 @@ export function mountAgentChatSession({
     }
     if (pending?.kind === 'run') {
       await submitRunDecision({ run: false, feedback: text }, text);
+      return;
+    }
+    if (pending?.kind === 'pipeline') {
+      await submitPipelineDecision({ apply: false, feedback: text }, text);
       return;
     }
     if (messages.length === 0) {

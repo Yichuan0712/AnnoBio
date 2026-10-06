@@ -2,7 +2,8 @@
  * The Agent's tool-calling loop. The model streams a response; any tool calls it makes are executed
  * here and their results appended, and the model is called again, until it answers without tools or
  * calls a tool only the user can answer: ask_user (a question), propose_changes (a change proposal
- * to apply or reject) or run_nodes (jobs to start or cancel). That ends the loop until the user responds.
+ * to apply or reject), run_nodes (jobs to start or cancel), or pipeline_action. That ends the loop
+ * until the user responds.
  *
  * Conversation messages are stored in this shape and converted to OpenAI format per request:
  *   {role: 'user', content}
@@ -17,6 +18,7 @@ import {
   ASK_USER_TOOL,
   PROPOSE_CHANGES_TOOL,
   RUN_NODES_TOOL,
+  PIPELINE_ACTION_TOOL,
   USER_TOOLS,
   describeToolCall,
   executeAgentTool,
@@ -67,7 +69,7 @@ function parseArguments(raw) {
 
 /**
  * The first question, proposal or run request still waiting for the user at the end of the
- * conversation: {kind: 'question', toolCallId, question, options}, or {kind: 'proposal' | 'run',
+ * conversation: {kind: 'question', toolCallId, question, options}, or {kind: 'proposal' | 'run' | 'pipeline',
  * toolCallId, summary, request, preview} where request is the call's arguments.
  */
 export function findPendingInteraction(messages) {
@@ -88,7 +90,7 @@ export function findPendingInteraction(messages) {
       };
     }
     return {
-      kind: call.name === RUN_NODES_TOOL ? 'run' : 'proposal',
+      kind: call.name === RUN_NODES_TOOL ? 'run' : call.name === PIPELINE_ACTION_TOOL ? 'pipeline' : 'proposal',
       toolCallId: call.id,
       summary: String(args.summary || ''),
       request: args,
@@ -150,6 +152,18 @@ export function resolveRunRequest(messages, request, result) {
     ok: result.status === 'completed',
     label: request.summary,
     outcome: [heading, ...(result.results || [])].join('\n'),
+  });
+}
+
+export function resolvePipelineAction(messages, request, result) {
+  messages.push({
+    role: 'tool', toolCallId: request.toolCallId, name: PIPELINE_ACTION_TOOL,
+    content: JSON.stringify(result),
+    ok: !['cancelled', 'failed'].includes(result.status),
+    label: request.summary,
+    outcome: result.status === 'failed' ? `Failed: ${result.error}`
+      : result.status === 'cancelled' ? `Cancelled${result.feedback ? `: ${result.feedback}` : ''}`
+        : `${result.status[0].toUpperCase()}${result.status.slice(1)}${result.run?.run_id ? `: ${result.run.run_id}` : ''}`,
   });
 }
 
@@ -236,16 +250,18 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
         waiting = true;
         continue;
       }
-      if (call.name === PROPOSE_CHANGES_TOOL || call.name === RUN_NODES_TOOL) {
+      if (call.name === PROPOSE_CHANGES_TOOL || call.name === RUN_NODES_TOOL || call.name === PIPELINE_ACTION_TOOL) {
         // Validate before showing it: an invalid request goes straight back to the model to fix.
         const args = parseArguments(call.arguments);
         const isRun = call.name === RUN_NODES_TOOL;
-        progress({ status: isRun ? 'Checking the jobs...' : 'Checking the proposal...' });
+        const isPipeline = call.name === PIPELINE_ACTION_TOOL;
+        progress({ status: isPipeline ? 'Checking the Pipeline...' : isRun ? 'Checking the jobs...' : 'Checking the proposal...' });
         const preview = !args
           ? { ok: false, error: 'The arguments were not valid JSON.' }
-          : await (isRun ? runtime.previewRunRequest(args) : runtime.previewProposal(args));
+          : await (isPipeline ? runtime.previewPipelineAction(args) : isRun ? runtime.previewRunRequest(args) : runtime.previewProposal(args));
         if (preview.ok) {
-          call.preview = isRun ? { items: preview.items, total: preview.total } : { items: preview.items, warnings: preview.warnings };
+          call.preview = isPipeline ? { items: preview.items, action: preview.action, routeKey: preview.routeKey, runId: preview.runId, projectId: preview.projectId, projectIdentity: preview.projectIdentity, requestId: preview.requestId }
+            : isRun ? { items: preview.items, total: preview.total } : { items: preview.items, warnings: preview.warnings };
           waiting = true;
           if (onMessage) onMessage();
         } else {
@@ -255,7 +271,7 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
             name: call.name,
             content: JSON.stringify({ status: 'invalid', error: preview.error }),
             ok: false,
-            label: `Sent the ${isRun ? 'run request' : 'proposal'} back for a fix: ${preview.error}`,
+            label: `Sent the ${isPipeline ? 'Pipeline action' : isRun ? 'run request' : 'proposal'} back for a fix: ${preview.error}`,
           });
           if (onMessage) onMessage();
         }

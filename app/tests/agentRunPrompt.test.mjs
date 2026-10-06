@@ -42,9 +42,11 @@ test('a history-enabled Run can switch inputs; editing an output that follows Hi
   state.historyVersion = 1;
   const changed = plan(state, { prompt: 'p2', input_mapping: { title: 'title' } });
   assert.deepEqual(promptOf(changed.state), ['p2']);
+  state.nodes.push({ type: 'run', nodeId: 'another-run', runName: 'Earlier run', historyRecordId: 'record-1' });
   state.nodes.find((node) => node.nodeId === 'raw').sourceRunNodeId = 'another-run';
   const edited = planChangeSet(state, [{ op: 'update', node: 'raw', set: { rows: [['changed', 'A']] } }], { extractInputFields });
   const raw = edited.state.nodes.find((node) => node.nodeId === 'raw');
   assert.equal(raw.savedCopy, true);
   assert.equal(raw.sourceRunNodeId, 'another-run');
+  assert.equal(raw.snapshotSourceRecordId, 'record-1');
 });
