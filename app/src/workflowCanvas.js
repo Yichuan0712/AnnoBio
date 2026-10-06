@@ -65,8 +65,8 @@ import { dependencyColorSources, dependentNodeVisualColors } from './workflowDep
 import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
-import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
-import { importPipelineRunHistory, withCompatibleLegacyCanvas } from './pipelineHistoryImport.js';
+import { pipelineResultNote, showPipelineOverviewModal } from './pipelineOverviewModal.js';
+import { importPipelineRunHistory, pipelineCopyInputs, withCompatibleLegacyCanvas } from './pipelineHistoryImport.js';
 import { createWorkspacePanels } from './workspacePanels.js';
 import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
@@ -147,6 +147,8 @@ const EDGE_TYPE_DATASET_TO_PROCESS = 'dataset-to-process';
 const EDGE_TYPE_PROCESS_TO_DATASET = 'process-to-dataset';
 const EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT = 'run-to-dataset-snapshot';
 const EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT = 'process-to-dataset-snapshot';
+/** Read-only dashed edge for a Dataset a Run / Process read for another of its History results. */
+const EDGE_TYPE_HISTORY_INPUT = 'history-input';
 
 const DEFAULT_SCORE_MATCH_FLAGS = {
   semanticAlign: false,
@@ -1004,6 +1006,8 @@ const EDGE_HIT_STROKE_WIDTH = 16;
 
 /** Horizontal gap when placing a new node to the right of its parent (source → sampler, sampler → dataset, duplicate prompt). */
 const NEW_NODE_OFFSET = 40;
+/** Step between nodes stacked on one spot (a Pipeline copy over its Dataset, a second save of one output). */
+const STACK_OFFSET = 24;
 
 function generateNodeId() {
   return 'n_' + Date.now() + '_' + (Math.random() * 1e9 | 0);
@@ -1195,6 +1199,9 @@ export function buildWorkflowCanvas(root, options = {}) {
   const STAGGER = 36;
   /** @type {{ fromId: string, toId: string, type: string }[]} */
   let connections = [];
+  // [datasetId, Run / Process id] for every Dataset some History record of that step read (contentLocks.js).
+  // Switching History keeps them as dashed edges rather than dropping where a result came from.
+  let historyInputLinks = [];
 
   /** @type {Set<string>} Multi-selected node ids — Ctrl/Shift+click or marquee-select (see startMarqueeSelect). */
   let selectedNodeIds = new Set();
@@ -1392,6 +1399,27 @@ export function buildWorkflowCanvas(root, options = {}) {
     const y = typeof top === 'number' ? top : 80 + Math.floor(nodeCount / 5) * (120 + STAGGER);
     nodeCount += 1;
     return { left: x, top: y };
+  }
+  /** Where a node made from `anchor` goes: just right of it, or over it for a copy of it. A spot
+   * another node already holds steps down-right, so stacked nodes stay visible. */
+  function positionFrom(anchor, { over = false } = {}) {
+    let left = (parseFloat(anchor.style.left) || 0) + (over ? STACK_OFFSET : (anchor.offsetWidth || 280) + NEW_NODE_OFFSET);
+    let top = (parseFloat(anchor.style.top) || 0) + (over ? STACK_OFFSET : 0);
+    const taken = Array.from(nodesLayer.querySelectorAll('.workflow-node'), (node) => [parseFloat(node.style.left) || 0, parseFloat(node.style.top) || 0]);
+    while (taken.some(([x, y]) => Math.abs(x - left) < STACK_OFFSET && Math.abs(y - top) < STACK_OFFSET)) {
+      left += STACK_OFFSET;
+      top += STACK_OFFSET;
+    }
+    return { left, top };
+  }
+  /** A Pipeline result goes over the Dataset it copies, else right of the step that made it
+   * (`output:<llm|process>:<node id>:<port>` names that step when the result has no Dataset). */
+  function pipelineResultPosition(logicalId, producerNodeId = '') {
+    const id = String(logicalId || '');
+    const dataset = id.startsWith('dataset:') ? getNodeById(id.slice('dataset:'.length)) : null;
+    if (dataset) return positionFrom(dataset, { over: true });
+    const producer = getNodeById(producerNodeId || id.match(/^output:(?:llm|process):([^:]+):/)?.[1] || '');
+    return producer ? positionFrom(producer) : {};
   }
   function registerPendingReview(nodeId, reviewId) {
     if (nodeId && reviewId) pendingReviews.set(nodeId, reviewId);
@@ -2403,10 +2431,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     line.setAttribute('class', 'workflow-edge-line');
     line.setAttribute('stroke', 'var(--text-muted)');
     line.setAttribute('stroke-width', '2');
-    if (edge.type === EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT || edge.type === EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT) {
+    const dashedNote = edge.type === EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT || edge.type === EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT
+      ? 'Saved Dataset snapshot; its content does not follow upstream History.'
+      : edge.type === EDGE_TYPE_HISTORY_INPUT
+        ? 'Input of another History result; this step reads a different Dataset now.'
+        : isEarlierResultCopy(edge) ? 'Saved from another History result of this step, not its current one.' : '';
+    if (dashedNote) {
       line.setAttribute('stroke-dasharray', '5 4');
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      title.textContent = 'Saved Dataset snapshot; its content does not follow upstream History.';
+      title.textContent = dashedNote;
       edgeGroup.appendChild(title);
     }
     line.setAttribute('marker-end', 'url(#workflow-arrow)');
@@ -2418,7 +2451,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         ? 'Selected input dataset'
         : edge.type === EDGE_TYPE_GROUND_TRUTH_TO_SCORE
           ? 'Selected ground truth dataset'
-          : 'Dataset saved from Run results');
+          : edge.type === EDGE_TYPE_HISTORY_INPUT
+            ? 'Input of another History result'
+            : 'Dataset saved from Run results');
     }
     edgeGroup.appendChild(line);
 
@@ -2436,6 +2471,25 @@ export function buildWorkflowCanvas(root, options = {}) {
       edgeGroup.appendChild(label);
     }
   }
+
+  /** A saved copy captured from a History result other than its producer's current one (datasetSnapshotStatus.js). */
+  function isEarlierResultCopy(edge) {
+    if (edge.type !== EDGE_TYPE_RUN_TO_DATASET && edge.type !== EDGE_TYPE_PROCESS_TO_DATASET) return false;
+    const copy = getNodeById(edge.toId)?.dataset;
+    return copy?.savedCopy === '1' && !!copy.snapshotSourceRecordId
+      && getNodeById(edge.fromId)?.dataset.historyRecordId !== copy.snapshotSourceRecordId;
+  }
+
+  async function refreshHistoryInputLinks() {
+    const session = historySession;
+    const nodes = Array.from(nodesLayer.querySelectorAll('.workflow-node'), (node) => ({ nodeId: node.dataset.nodeId }));
+    const locks = session?.projectId && canvasHistoryVersion === 1
+      ? await session.contentLocks({ nodes, connections: [] }) : new Map();
+    if (session !== historySession) return;
+    historyInputLinks = [...locks].flatMap(([datasetId, users]) => users.map((nodeId) => [datasetId, nodeId]));
+    updateEdges();
+  }
+  document.addEventListener('workflow:history-resolved', () => { refreshHistoryInputLinks().catch(() => {}); });
 
   /** Build read-only data-flow edges from fields that already drive execution and provenance. */
   function getDerivedDataFlowEdges() {
@@ -2470,7 +2524,23 @@ export function buildWorkflowCanvas(root, options = {}) {
         EDGE_TYPE_GROUND_TRUTH_TO_SCORE,
       );
     });
+    for (const [datasetId, nodeId] of historyInputLinks) {
+      const step = getNodeById(nodeId);
+      if (!getNodeById(datasetId)?.classList.contains('workflow-node--dataset')) continue;
+      if (['run', 'process'].includes(step?.dataset.nodeType) && !stepReadsDataset(step, datasetId)) {
+        add(datasetId, nodeId, EDGE_TYPE_HISTORY_INPUT);
+      }
+    }
     return derived;
+  }
+
+  /** Whether a Run / Process reads this Dataset now. */
+  function stepReadsDataset(step, datasetId) {
+    return step?.classList.contains('workflow-node--run')
+      ? step.dataset.runWorkingSetId === datasetId
+      : connections.some((edge) => (
+        edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.fromId === datasetId && edge.toId === step?.dataset.nodeId
+      ));
   }
 
   function syncNodeDependencyColors() {
@@ -2886,10 +2956,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     DATASET_BORDER_COLORS,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
+    positionFrom,
     getNodeById,
     getConnections: () => connections,
     datasetContentByNodeId,
-    scrollWrapper,
     createPromptNode,
     createRunNode,
     createScoreNode,
@@ -3296,7 +3366,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
         document.dispatchEvent(
           new CustomEvent('workflow:add-dataset-node', {
-            detail: { name: datasetName, notes: description, headers, rows },
+            detail: { name: datasetName, notes: description, headers, rows, anchorNodeId: node.dataset.nodeId },
           })
         );
       },
@@ -3574,7 +3644,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         const datasetName = findUniqueDatasetExportName(scoreName + ' comparison');
         const notes = `Exported from Score "${scoreName}". Run vs ground truth comparison.`;
         document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
-          detail: { name: datasetName, notes, headers: payload.headers, rows: payload.rows },
+          detail: { name: datasetName, notes, headers: payload.headers, rows: payload.rows, anchorNodeId: scoreNode.dataset.nodeId },
         }));
       },
       'review-export': () => {
@@ -4138,18 +4208,19 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:score-export-to-workspace', (e) => {
-    const { scoreName = '', headers, rows } = e.detail || {};
+    const { scoreNodeId = '', scoreName = '', headers, rows } = e.detail || {};
     if (!Array.isArray(headers) || !Array.isArray(rows)) return;
     const baseName = (scoreName && scoreName.trim()) ? scoreName.trim() + ' comparison' : 'Score comparison';
     const datasetName = findUniqueDatasetExportName(baseName);
     const notes = `Exported from Score "${(scoreName && scoreName.trim()) ? scoreName.trim() : 'Score'}". Run vs ground truth comparison.`;
     document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
-      detail: { name: datasetName, notes, headers, rows },
+      detail: { name: datasetName, notes, headers, rows, anchorNodeId: scoreNodeId },
     }));
   });
 
   document.addEventListener('workflow:add-dataset-node', (e) => {
-    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', processOutputName = '', runNodeId = '', snapshotSourceRecordId = '', colorIndex: detailColorIndex } = e.detail || {};
+    // anchorNodeId: the node the Dataset comes from when nothing else names it (a Score export), for placement only.
+    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', processOutputName = '', runNodeId = '', anchorNodeId = '', snapshotSourceRecordId = '', colorIndex: detailColorIndex } = e.detail || {};
     const VISIBLE_PADDING = 40;
     let startLeft = typeof detailLeft === 'number' ? detailLeft : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
     let startTop = typeof detailTop === 'number' ? detailTop : (scrollWrapper.scrollTop + VISIBLE_PADDING);
@@ -4161,9 +4232,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     let datasetNotes = notes || '';
 
     const processNode = processNodeId ? getNodeById(processNodeId) : null;
-    if (processNode && typeof detailLeft !== 'number') {
-      startLeft = (parseFloat(processNode.style.left) || 0) + (processNode.offsetWidth || 160) + NEW_NODE_OFFSET;
-      startTop = parseFloat(processNode.style.top) || 0;
+    const anchor = processNode || getNodeById(runNodeId) || getNodeById(anchorNodeId);
+    if (anchor && typeof detailLeft !== 'number') {
+      ({ left: startLeft, top: startTop } = positionFrom(anchor));
     }
 
     if (samplerNodeId) {
@@ -4483,6 +4554,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   let canvasHistoryVersion = null;
+  /** Desktop: which file owns this project's Pipeline runs (currentProject.js pipelineOwnerFor); saved, never edited. */
+  let pipelineOwner = null;
   let historySession = null;
   let historyAnalysisKeys = new Map();
   let historyAnalysisKeysInitialized = false;
@@ -4706,7 +4779,10 @@ export function buildWorkflowCanvas(root, options = {}) {
         nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
       };
     });
-    return { version: 2, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), zoomLevel, nodes, connections: connections.slice() };
+    return {
+      version: 2, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), ...(pipelineOwner ? { pipelineOwner } : {}),
+      zoomLevel, nodes, connections: connections.slice(),
+    };
   }
 
   function loadCanvasState(state) {
@@ -4714,6 +4790,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!Array.isArray(list)) return;
     historyRevision += 1;
     canvasHistoryVersion = state.historyVersion === 1 ? 1 : null;
+    pipelineOwner = state.pipelineOwner?.id ? { at: String(state.pipelineOwner.at || ''), id: String(state.pipelineOwner.id) } : null;
     zoomLevel = normalizeZoomLevel(state.zoomLevel);
     applyZoom();
     updateZoomLabel();
@@ -4972,6 +5049,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     historySession = session;
     historyAnalysisKeys = new Map();
     historyAnalysisKeysInitialized = false;
+    historyInputLinks = [];
   }
 
   async function recoverHistoryJobs() {
@@ -5558,26 +5636,16 @@ export function buildWorkflowCanvas(root, options = {}) {
         getCanvasState,
         getPipelineProjectId,
         getAssetProjectId: getCurrentProjectId,
-        saveArtifactAsDataset: ({ name, notes, headers, rows, columnTypes, rowIds }) => addDatasetNode({
-          name, notes, headers, rows, columnTypes, rowIds,
+        saveArtifactAsDataset: ({ name, notes, logicalId, headers, rows, columnTypes, rowIds }) => addDatasetNode({
+          name, notes, headers, rows, columnTypes, rowIds, ...pipelineResultPosition(logicalId),
         }),
         publishPipelineRun: async ({ run, definition, getArtifact }) => {
           const canvasProjectId = getCurrentProjectId();
           if (await getPipelineProjectId() !== run.project_id) throw new Error('The open project changed while publishing Pipeline results.');
           if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
           const frozen = withCompatibleLegacyCanvas(definition, getCanvasState());
-          let history = { imported: 0, recordIdsByJob: new Map() };
-          let historyError = '';
-          if (historySession?.projectId && canvasHistoryVersion === 1) {
-            try {
-              history = await importPipelineRunHistory({ run, definition: frozen, getArtifact, session: historySession });
-            } catch (error) {
-              historyError = error?.message || 'Could not import node History.';
-            }
-          } else {
-            historyError = 'Node History is unavailable for this project.';
-          }
           const artifactDefs = new Map((definition?.spec?.artifacts || []).map((item) => [item.id, item]));
+          const copyIds = new Map(); // logical artifact id -> its Dataset copy on the canvas
           let datasets = 0;
           for (const artifact of run.artifacts || []) {
             if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
@@ -5586,32 +5654,33 @@ export function buildWorkflowCanvas(root, options = {}) {
             const producer = artifactDefs.get(logicalId).producer;
             const existing = getCanvasState().nodes.find((item) => item.pipelineRunId === run.run_id && item.pipelineLogicalId === logicalId);
             if (existing) {
-              const recordId = history.recordIdsByJob.get(producer?.job_id);
-              const live = getNodeById(existing.nodeId);
-              if (recordId && live && live.dataset.snapshotSourceRecordId !== recordId) {
-                live.dataset.snapshotSourceRecordId = recordId;
-                document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-              }
+              copyIds.set(logicalId, existing.nodeId);
               continue;
             }
             const result = await getArtifact(logicalId);
             const table = result?.table;
             if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
             if (!table || !Array.isArray(table.rows)) continue;
-            const source = definition?.spec?.source_map?.[producer?.job_id]?.node_ids || [];
+            const sourceEntry = definition?.spec?.source_map?.[producer?.job_id];
+            const source = sourceEntry?.node_ids || [];
             const sourceNodeId = source.at(-1) || '';
             const sourceKind = (definition?.spec?.jobs || []).find((job) => job.id === producer?.job_id)?.type;
+            const [stepName = '', runName = ''] = sourceEntry?.names || [];
+            const port = producer?.port || 'result';
+            const sourceLabel = sourceKind === 'llm' ? `${stepName} ${runName}`.trim()
+              : sourceKind === 'process' ? `${port === 'result' ? '' : `branch "${port}" of `}Process "${stepName}"` : '';
             const created = addDatasetNode({
               name: artifact.name || 'Pipeline result',
-              notes: `Saved from Pipeline run ${run.run_id}. Logical artifact: ${logicalId}.`,
+              notes: pipelineResultNote(run, sourceLabel),
+              ...pipelineResultPosition(logicalId, sourceNodeId),
               headers: table.headers || [], rows: table.rows || [],
               columnTypes: table.column_types || [], rowIds: table.row_ids || [],
               sourceRunNodeId: sourceKind === 'llm' ? sourceNodeId : '',
               processOutputName: sourceKind === 'process' ? producer?.port || 'result' : '',
               savedCopy: true,
-              snapshotSourceRecordId: history.recordIdsByJob.get(producer?.job_id) || '',
               pipelineRunId: run.run_id, pipelineLogicalId: logicalId,
             });
+            if (created?.nodeId) copyIds.set(logicalId, created.nodeId);
             if (created?.nodeId && sourceKind === 'process' && getNodeById(sourceNodeId)) {
               connections.push({ fromId: sourceNodeId, toId: created.nodeId, type: EDGE_TYPE_PROCESS_TO_DATASET });
               updateEdges();
@@ -5619,7 +5688,107 @@ export function buildWorkflowCanvas(root, options = {}) {
             }
             if (created?.created) datasets += 1;
           }
-          if (history.imported) await reconcileHistory();
+          // The steps that read an artifact in this run move onto its copy, and their History records
+          // name the copy, so the canvas shows the run's results along the whole chain.
+          const moves = pipelineCopyInputs(definition?.spec, copyIds);
+          const canvasNodes = new Map(getCanvasState().nodes.map((node) => [node.nodeId, node]));
+          const inputCopies = new Map();
+          for (const [jobId, inputs] of moves) {
+            const copies = new Map();
+            for (const [logicalId, nodeId] of inputs) {
+              const node = canvasNodes.get(nodeId);
+              if (node?.datasetContent) copies.set(logicalId, { nodeId, name: node.name, content: node.datasetContent });
+            }
+            if (copies.size) inputCopies.set(jobId, copies);
+          }
+          let history = { imported: 0, recordIdsByJob: new Map() };
+          let historyError = '';
+          if (historySession?.projectId && canvasHistoryVersion === 1) {
+            try {
+              history = await importPipelineRunHistory({ run, definition: frozen, getArtifact, session: historySession, inputCopies });
+            } catch (error) {
+              historyError = error?.message || 'Could not import node History.';
+            }
+          } else {
+            historyError = 'Node History is unavailable for this project.';
+          }
+          if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
+          let changed = false;
+          for (const [logicalId, nodeId] of copyIds) {
+            const recordId = history.recordIdsByJob.get(artifactDefs.get(logicalId).producer?.job_id);
+            const live = getNodeById(nodeId);
+            if (recordId && live && live.dataset.snapshotSourceRecordId !== recordId) {
+              live.dataset.snapshotSourceRecordId = recordId;
+              changed = true;
+            }
+          }
+          let rewired = false;
+          for (const [jobId, copies] of inputCopies) {
+            const consumerId = definition.spec.source_map?.[jobId]?.node_ids?.at(-1) || '';
+            const consumer = getNodeById(consumerId);
+            for (const [logicalId, { nodeId: copyId }] of copies) {
+              const oldId = String(logicalId).replace(/^dataset:/, '');
+              if (!consumer || !getNodeById(copyId)) continue;
+              // Only where the step still reads the old Dataset; a canvas edited since then is left alone.
+              if (consumer.classList.contains('workflow-node--run')) {
+                if (consumer.dataset.runWorkingSetId !== oldId) continue;
+                consumer.dataset.runWorkingSetId = copyId;
+              } else if (consumer.classList.contains('workflow-node--process')) {
+                const edge = connections.find((item) => (
+                  item.type === EDGE_TYPE_DATASET_TO_PROCESS && item.fromId === oldId && item.toId === consumerId
+                ));
+                if (!edge || getProcessDatasets(consumer).primaryDatasetId !== oldId) continue;
+                edge.fromId = copyId;
+                consumer.dataset.processPrimaryDatasetId = copyId;
+                let aliases = null;
+                try { aliases = JSON.parse(consumer.dataset.processDatasetAliases || '{}'); } catch (_) {}
+                if (aliases && oldId in aliases) {
+                  aliases[copyId] = aliases[oldId];
+                  delete aliases[oldId];
+                  consumer.dataset.processDatasetAliases = JSON.stringify(aliases);
+                }
+              } else {
+                continue;
+              }
+              rewired = true;
+            }
+          }
+          // An older output that still follows History would switch to this run's result beside its copy.
+          // Once the copy has taken over every step that read it, it keeps what it shows, as when edited:
+          // the earlier result, dashed with the rest of that earlier chain.
+          for (const [logicalId, copyId] of copyIds) {
+            const datasetId = String(logicalId).replace(/^dataset:/, '');
+            const old = String(logicalId).startsWith('dataset:') ? getNodeById(datasetId) : null;
+            if (!old || old.dataset.resultMissing === '1') continue;
+            const source = datasetHistorySource({
+              nodeId: datasetId, savedCopy: old.dataset.savedCopy === '1',
+              sourceRunNodeId: old.dataset.sourceRunNodeId, processOutputName: old.dataset.processOutputName,
+            }, connections);
+            const takenOver = (definition.spec.jobs || []).every((job) => {
+              if (!Object.values(job.inputs || {}).includes(logicalId)) return true;
+              const step = getNodeById(definition.spec.source_map?.[job.id]?.node_ids?.at(-1));
+              return stepReadsDataset(step, copyId) && !stepReadsDataset(step, datasetId);
+            });
+            if (!source || !takenOver) continue;
+            old.dataset.savedCopy = '1';
+            const sourceRecordId = getNodeById(source.sourceId)?.dataset.historyRecordId;
+            if (sourceRecordId) old.dataset.snapshotSourceRecordId = sourceRecordId;
+            changed = true;
+          }
+          // Each step shows this run's result, also where an earlier record had the same inputs.
+          for (const [jobId, recordId] of history.recordIdsByJob) {
+            const step = getNodeById(definition.spec.source_map?.[jobId]?.node_ids?.at(-1));
+            if (step && step.dataset.historyRecordId !== recordId) {
+              step.dataset.historyRecordId = recordId;
+              changed = true;
+            }
+          }
+          if (rewired) {
+            updateEdges();
+            syncNodeDependencyColors();
+          }
+          if (changed || rewired) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          if (history.imported || rewired || changed) await reconcileHistory();
           return { history: history.imported, datasets, historyError };
         },
         highlightCanvasNodes: highlightPipelineNodes,

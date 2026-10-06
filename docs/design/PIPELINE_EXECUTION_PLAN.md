@@ -193,6 +193,8 @@ P1.2 实现记录（2026-10-01）：
 
 补充（2026-10-05）：面板轮询重绘时保留 runtime checks 的展开状态。Runner 提供项目级运行列表及冻结定义读取；面板显示 Pipeline History。运行结束后，即使整条 Pipeline 失败或取消，前端也按冻结 artifact 把已成功的 Run/Process job 导入节点 History，并为每个有效的产出 artifact 新建带 Pipeline 运行 ID 的 Dataset 副本；无效的部分结果仍只供预览。History 记录 ID 确定且 Dataset 带来源标记，重新打开项目或手动重试同步不会重复创建；旧运行没有冻结画布定义时，仅在当前节点配置与冻结 spec 相符时补录节点 History。
 
+补充（2026-10-06）：副本同时接到下游。本次读取某 artifact 的 Run 改读其副本，以它为主输入 `df` 的 Process 改连其副本；导入的下游 History 记录也以副本（按画布上的内容签名）为输入，因此整条链显示本次运行的结果，下次运行的路线也经过最新副本。只在节点仍读取原 Dataset 时改连。Process 的 `df_<name>` 合并输入不改：别名由代码按 Dataset 名称引用，副本无法接替，此类 Process 保持原连接。
+
 Runner 状态新增冻结的可展示执行计划：输入、依赖、模型快照、有效设置及调用量估计。单行形状的 LLM 可继续传播已知行数；经过 Process 或 table 形状后，下游调用量记为未知（`null`）。模型快照不含 API key；实际调用和恢复仍按凭据 ID 解析当前 secret。
 
 运行归属：Web 复用项目 ID；桌面端使用规范化 `.yc` 绝对路径的 SHA-256 作为不暴露路径的稳定 owner，Save As 会获得新的运行历史归属。
