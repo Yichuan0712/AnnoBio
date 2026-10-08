@@ -40,8 +40,6 @@ export function exportCanvasDefinition(canvasState, route) {
           code: node.code,
           dfCode: node.dfCode,
           activeMode: node.activeMode,
-          primaryDatasetId: node.primaryDatasetId,
-          datasetAliases: node.datasetAliases,
         };
       }
       if (node.type === 'prompt') {
@@ -60,7 +58,6 @@ export function exportCanvasDefinition(canvasState, route) {
           type: 'run',
           nodeId: node.nodeId,
           runName: node.runName,
-          runWorkingSetId: node.runWorkingSetId,
           runCredentialId: node.runCredentialId,
           runInputToColumn: node.runInputToColumn,
           runSettings: node.runSettings,
@@ -70,7 +67,7 @@ export function exportCanvasDefinition(canvasState, route) {
     })
     .filter(Boolean);
   const executableEdgeTypes = new Set([
-    'dataset-to-process',
+    'data',
     'process-to-dataset',
     'prompt-to-run',
     'prompt-to-prompt',
@@ -92,7 +89,7 @@ export function exportCanvasDefinition(canvasState, route) {
         && !routeBranches.has(`${edge.fromId}\u0000${branchOf.get(edge.toId) || 'result'}`))
     )) || (snapshotEdgeTypes.has(edge?.type) && ids.has(edge.fromId) && ids.has(edge.toId))
   ));
-  return { version: canvasState?.version || 2, nodes, connections };
+  return { version: canvasState?.version || 3, nodes, connections };
 }
 
 /** Every external Dataset in the selected route is an explicit input boundary. */

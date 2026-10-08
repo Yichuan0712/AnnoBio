@@ -238,12 +238,11 @@ function inspectSampler(node, ctx) {
 function inspectProcess(node, ctx) {
   const aliases = processInputAliases(ctx.canvasState, ctx.nodeId);
   const code = String(node.dfCode || '');
-  // `connection` keeps the name the Agent has always been shown for a Process input.
   const connectedInputs = processInputEdges(ctx.canvasState)
     .filter((edge) => normalizeNodeId(edge.toId) === ctx.nodeId)
     .map((edge) => ctx.nodeLookup.get(normalizeNodeId(edge.fromId)))
     .filter(Boolean)
-    .map((dataset) => ({ connection: 'dataset-to-process', ...linkedNode(dataset) }));
+    .map((dataset) => ({ connection: 'data', ...linkedNode(dataset) }));
   const primaryId = processPrimarySource(ctx.canvasState, ctx.nodeId)?.nodeId || '';
   const primary = ctx.nodeLookup.get(primaryId);
   const outputs = processOutputsOf(node);

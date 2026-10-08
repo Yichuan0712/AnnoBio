@@ -7,11 +7,11 @@ const node = (nodeId, nodeType, fields = {}) => ({ dataset: { nodeId, nodeType, 
 test('Sample and Process follow their Dataset inputs, with the Process primary input first', () => {
   const nodes = new Map([
     ['sample', node('sample', 'sampler', { sourceNodeId: 'data-a' })],
-    ['process', node('process', 'process', { processPrimaryDatasetId: 'data-b' })],
+    ['process', node('process', 'process')],
   ]);
   const edges = [
-    { fromId: 'data-a', toId: 'process', type: 'dataset-to-process' },
-    { fromId: 'data-b', toId: 'process', type: 'dataset-to-process' },
+    { fromId: 'data-a', fromPort: 'result', toId: 'process', type: 'data', alias: 'df_a' },
+    { fromId: 'data-b', fromPort: 'result', toId: 'process', type: 'data', alias: 'df' },
   ];
   assert.deepEqual(dependencyColorSources(nodes.get('sample'), nodes, edges), {
     datasetIds: ['data-a'], promptId: '',
@@ -23,11 +23,12 @@ test('Sample and Process follow their Dataset inputs, with the Process primary i
 
 test('Run, Score, and Review retain all Dataset sources and the selected Prompt', () => {
   const nodes = new Map([
-    ['run', node('run', 'run', { runWorkingSetId: 'input' })],
+    ['run', node('run', 'run')],
     ['score', node('score', 'score', { scoreGroundTruthId: 'truth' })],
     ['review', node('review', 'promptReview')],
   ]);
   const edges = [
+    { fromId: 'input', fromPort: 'result', toId: 'run', type: 'data' },
     { fromId: 'prompt', toId: 'run', type: 'prompt-to-run' },
     { fromId: 'run', toId: 'score', type: 'run-to-score' },
     { fromId: 'score', toId: 'review', type: 'score-to-prompt-review' },

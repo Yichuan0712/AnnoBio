@@ -3,11 +3,13 @@ import test from 'node:test';
 import { inspectWorkflowNode } from '../src/agent/canvas/workflowNodeInspector.js';
 import { buildWorkspaceSummary } from '../src/agent/context/workspaceSummary.js';
 import { ChangeSetError, planChangeSet } from '../src/agent/operations/changeSet.js';
+import { upgradeCanvasState } from '../src/canvasFormat.js';
+import { DATA_EDGE, RESULT_PORT, processInputAliases, validateStepInputs } from '../src/stepInputs.js';
 
 const extractInputFields = (sections) => [...new Set(sections
   .flatMap((section) => [...String(section.content || '').matchAll(/\{([^{}]+)\}/g)].map((match) => match[1])))];
 
-const canvas = () => ({
+const canvas = () => upgradeCanvasState({
   nodes: [
     { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: { headers: ['text'], columnTypes: ['text'], rows: [['a']] } },
     { type: 'dataset', nodeId: 'gt', name: 'GT', datasetContent: { headers: ['answer'], columnTypes: ['text'], rows: [['A']] } },
@@ -29,6 +31,18 @@ test('a new Run uses Settings → Run defaults', () => {
   assert.equal(run.runCredentialId, undefined);
   assert.equal(run.runSettings, undefined);
   assert.ok(result.items[0].lines.includes('Model and settings: Settings → Run defaults'));
+});
+
+test('a Run and a Process the Agent adds read their inputs through data connections', () => {
+  const result = plan([addRun(), { op: 'add_process', ref: '$proc', primary_input: 'raw', code: 'def process(df, df_gt):\n    return df\n' }]);
+  const { $run: run, $proc: proc } = result.refs;
+  assert.deepEqual(result.state.connections.filter((edge) => edge.toId === run && edge.type === DATA_EDGE),
+    [{ type: DATA_EDGE, fromId: 'raw', fromPort: RESULT_PORT, toId: run }]);
+  assert.deepEqual(processInputAliases(result.state, proc), { raw: 'df', gt: 'df_gt' });
+  assert.deepEqual(validateStepInputs(result.state), []);
+  for (const node of result.state.nodes.filter((item) => [run, proc].includes(item.nodeId))) {
+    assert.deepEqual(['runWorkingSetId', 'primaryDatasetId', 'datasetAliases'].filter((field) => field in node), []);
+  }
 });
 
 test('the Agent cannot choose a Run model or settings', () => {
@@ -58,7 +72,7 @@ test('the summary lists pipelines as the Current Pipeline panel shows them', asy
     connections: [edge('p', 'p2', 'prompt-to-prompt'), edge('p', 'r1', 'prompt-to-run'), edge('p2', 'r2', 'prompt-to-run'),
       edge('raw', 'clean', 'dataset-to-process'), edge('raw', 'trim', 'dataset-to-process')],
   };
-  const summary = await buildWorkspaceSummary(state, { extractInputFields });
+  const summary = await buildWorkspaceSummary(upgradeCanvasState(state), { extractInputFields });
   const pipelines = summary.split('\n\n')[0];
   assert.doesNotMatch(pipelines, /Dataset/);
   assert.match(pipelines, /Pipeline 1 \[pipeline-1\] \(default route; Current Pipeline panel is not mounted\):\n {2}1\. Run prompt, a picker with 2 choices: "p2" \[p2\] by run "Run B" \[r2\] on "raw" \(default\); "p" \[p\] by run "Run A"/);
@@ -109,15 +123,14 @@ test('Process code declares its inputs as parameters, each by the alias it alrea
   const state = canvas();
   state.nodes.push(
     { type: 'dataset', nodeId: 'copy', name: 'GT (Copy 1)', datasetContent: { headers: ['answer'], rows: [['A']] } },
-    { type: 'process', nodeId: 'merge', name: 'Merge', primaryDatasetId: 'raw', dfCode: 'def process(df, df_gt):\n    return df\n',
-      datasetAliases: JSON.stringify({ raw: 'df', copy: 'df_gt', gt: 'df_gt_copy' }) },
+    { type: 'process', nodeId: 'merge', name: 'Merge', dfCode: 'def process(df, df_gt):\n    return df\n' },
   );
-  state.connections.push({ fromId: 'raw', toId: 'merge', type: 'dataset-to-process' },
-    { fromId: 'copy', toId: 'merge', type: 'dataset-to-process' });
+  // GT's own alias would be df_gt, but the copy already reads under it.
+  state.connections.push({ type: DATA_EDGE, fromId: 'raw', fromPort: RESULT_PORT, toId: 'merge', alias: 'df' },
+    { type: DATA_EDGE, fromId: 'copy', fromPort: RESULT_PORT, toId: 'merge', alias: 'df_gt' });
   const inputsAfter = (code) => {
     const result = planChangeSet(state, [{ op: 'update', node: 'merge', set: { code } }], { extractInputFields });
-    const merge = result.state.nodes.find((node) => node.nodeId === 'merge');
-    return [JSON.parse(merge.datasetAliases), result.state.connections.filter((edge) => edge.toId === 'merge').map((edge) => edge.fromId).sort()];
+    return [processInputAliases(result.state, 'merge'), result.state.connections.filter((edge) => edge.toId === 'merge').map((edge) => edge.fromId).sort()];
   };
   assert.deepEqual(inputsAfter('def process(df, df_gt):\n    return df.join(df_gt)\n'), [{ raw: 'df', copy: 'df_gt' }, ['copy', 'raw']]);
   // Code written before parameters names the alias in its body only.

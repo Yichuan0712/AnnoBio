@@ -18,7 +18,7 @@ from backend.pipeline_export import PipelineExportError, build_pipeline_archive
 
 def _canvas_state() -> dict:
     return {
-        "version": 2,
+        "version": 3,
         "nodes": [
             {
                 "type": "dataset",
@@ -73,16 +73,16 @@ def _canvas_state() -> dict:
                 "type": "run",
                 "nodeId": "run-duplicate",
                 "runName": "Run A1",
-                "runWorkingSetId": "dataset-clean",
                 "runCredentialId": "credential-1",
                 "runInputToColumn": json.dumps({"text": "text"}),
                 "runResults": json.dumps([{"output": {"answer": "private cached result"}}]),
             },
         ],
         "connections": [
-            {"fromId": "dataset-raw", "toId": "process-clean", "type": "dataset-to-process"},
+            {"fromId": "dataset-raw", "fromPort": "result", "toId": "process-clean", "type": "data", "alias": "df"},
             {"fromId": "process-clean", "toId": "dataset-clean", "type": "process-to-dataset"},
             {"fromId": "prompt-duplicate", "toId": "run-duplicate", "type": "prompt-to-run"},
+            {"fromId": "dataset-clean", "fromPort": "result", "toId": "run-duplicate", "type": "data"},
         ],
     }
 
@@ -371,7 +371,8 @@ else:
     def test_empty_source_dataset_still_requires_valid_mapping(self):
         state = _canvas_state()
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
-        run.update(runWorkingSetId="dataset-raw", runInputToColumn='{"text": "missing"}')
+        run["runInputToColumn"] = '{"text": "missing"}'
+        next(edge for edge in state["connections"] if edge["type"] == "data" and edge["toId"] == "run-duplicate")["fromId"] = "dataset-raw"
         dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-raw")
         dataset["datasetContent"]["rows"] = []
         with self.assertRaisesRegex(PipelineExportError, "maps inputs to missing columns"):
@@ -380,26 +381,27 @@ else:
 
     def test_branched_graph_exports_multi_input_process_and_terminal_workbook(self):
         state = {
-            "version": 2,
+            "version": 3,
             "nodes": [
                 {"type": "dataset", "nodeId": "raw", "name": "Raw", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "process", "nodeId": "split", "name": "Split", "dfCode": "def process(df):\n    return {'left': df, 'right': df}\n"},
                 {"type": "dataset", "nodeId": "left", "name": "Left", "processOutputName": "left", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "dataset", "nodeId": "right", "name": "Right", "processOutputName": "right", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
-                {"type": "process", "nodeId": "combine", "name": "Combine", "primaryDatasetId": "right", "datasetAliases": {"left": "df_left", "right": "df"}, "dfCode": "def process(df):\n    return df\n"},
+                {"type": "process", "nodeId": "combine", "name": "Combine", "dfCode": "def process(df):\n    return df\n"},
                 {"type": "dataset", "nodeId": "combined", "name": "Combined", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "prompt", "nodeId": "prompt", "name": "Answer", "sections": [{"name": "Task", "content": "Answer {text}"}], "inputTypes": {"text": "text"}, "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}},
-                {"type": "run", "nodeId": "run", "runName": "Answer run", "runWorkingSetId": "combined", "runInputToColumn": json.dumps({"text": "text"})},
+                {"type": "run", "nodeId": "run", "runName": "Answer run", "runInputToColumn": json.dumps({"text": "text"})},
                 {"type": "dataset", "nodeId": "answered", "name": "Answered", "sourceRunNodeId": "run", "datasetContent": {"headers": ["Input: text", "Output: answer"], "columnTypes": ["text", "text"]}},
             ],
             "connections": [
-                {"fromId": "raw", "toId": "split", "type": "dataset-to-process"},
+                {"fromId": "raw", "fromPort": "result", "toId": "split", "type": "data", "alias": "df"},
                 {"fromId": "split", "toId": "left", "type": "process-to-dataset"},
                 {"fromId": "split", "toId": "right", "type": "process-to-dataset"},
-                {"fromId": "left", "toId": "combine", "type": "dataset-to-process"},
-                {"fromId": "right", "toId": "combine", "type": "dataset-to-process"},
+                {"fromId": "left", "fromPort": "result", "toId": "combine", "type": "data", "alias": "df_left"},
+                {"fromId": "right", "fromPort": "result", "toId": "combine", "type": "data", "alias": "df"},
                 {"fromId": "combine", "toId": "combined", "type": "process-to-dataset"},
                 {"fromId": "prompt", "toId": "run", "type": "prompt-to-run"},
+                {"fromId": "combined", "fromPort": "result", "toId": "run", "type": "data"},
             ],
         }
         route = [

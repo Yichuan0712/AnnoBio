@@ -1,6 +1,8 @@
-/** Shared History test graph: input Dataset → Run → saved Run output → Process → saved Process output. */
+/** Shared History test graph: input Dataset → Run → saved Run output → Process → saved Process output.
+ * Written in the version 2 fields and upgraded, as a project opened from disk is. */
 import { buildRunResultsTable } from '../src/runResultsExport.js';
 import { captureHistoryInput, runningHistoryRecord } from '../src/runHistoryCapture.js';
+import { upgradeCanvasState } from '../src/canvasFormat.js';
 
 export const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
 export const prompt = { type: 'prompt', nodeId: 'prompt', name: 'Prompt', sections: [{ content: 'Say {{text}}' }], outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} };
@@ -12,14 +14,14 @@ export const runDataset = { type: 'dataset', nodeId: 'run-dataset', name: 'Run e
 export const processResult = { headers: ['answer'], rows: [['processed']] };
 export const process = { type: 'process', nodeId: 'process', name: 'Process', dfCode: 'return df', primaryDatasetId: 'run-dataset', dfResults: JSON.stringify({ outputs: { result: processResult }, statusText: '1 branch returned.' }) };
 export const processDataset = { type: 'dataset', nodeId: 'process-dataset', name: 'Process export', processOutputName: 'result', datasetContent: { ...processResult, columnTypes: ['text'], rowIds: ['generated-id-2'] } };
-export const graph = {
+export const graph = upgradeCanvasState({
   nodes: [input, prompt, run, runDataset, process, processDataset],
   connections: [
     { type: 'prompt-to-run', fromId: 'prompt', toId: 'run' },
     { type: 'dataset-to-process', fromId: 'run-dataset', toId: 'process' },
     { type: 'process-to-dataset', fromId: 'process', toId: 'process-dataset' },
   ],
-};
+});
 
 export const indexOf = (records) => ({ records: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) });
 

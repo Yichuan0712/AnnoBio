@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { importPipelineRunHistory, pipelineCopyInputs } from '../src/pipelineHistoryImport.js';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { normalizeDatasetContent } from '../src/datasetContent.js';
+import { upgradeCanvasState } from '../src/canvasFormat.js';
 
 test('imports a Pipeline chain into node History exactly once with upstream record references', async () => {
   const canvas = { nodes: [
@@ -53,7 +54,7 @@ test('imports a Pipeline chain into node History exactly once with upstream reco
   liveCanvas.connections = [{ type: 'prompt-to-run', fromId: 'prompt', toId: 'run' },
     { type: 'dataset-to-process', fromId: 'mid', toId: 'process' },
     { type: 'process-to-dataset', fromId: 'process', toId: 'out' }];
-  const resolved = await resolveHistoryCanvasState(liveCanvas, {
+  const resolved = await resolveHistoryCanvasState(upgradeCanvasState(liveCanvas), {
     index: session.index, loadRecord: async (id) => records.find((record) => record.id === id),
   });
   assert.equal(resolved.currentRecordIds.run, records[0].id);
@@ -142,7 +143,7 @@ test('a Process moved onto the published copy shows the imported Pipeline result
   live.connections = [{ type: 'prompt-to-run', fromId: 'prompt', toId: 'run' },
     { type: 'dataset-to-process', fromId: 'mid-copy', toId: 'process' },
     { type: 'process-to-dataset', fromId: 'process', toId: 'out' }];
-  const resolved = await resolveHistoryCanvasState(live, {
+  const resolved = await resolveHistoryCanvasState(upgradeCanvasState(live), {
     index: session.index, loadRecord: async (id) => records.find((record) => record.id === id),
   });
   assert.equal(resolved.currentRecordIds.process, processRecord.id);

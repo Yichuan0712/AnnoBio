@@ -649,7 +649,7 @@ export function createWorkflowNodeFactories(deps = {}) {
   }
 
   /** Process node: runs user-written process(df), with one primary Dataset and optional named inputs. */
-  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, primaryDatasetId = '', datasetAliases = '', outputPorts }) {
+  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, outputPorts }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--process workflow-node--no-body';
@@ -664,8 +664,6 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (code != null) node.dataset.processCode = String(code);
     if (dfCode != null) node.dataset.processDfCode = String(dfCode);
     if (dfCode != null) node.dataset.processActiveMode = 'df';
-    if (primaryDatasetId) node.dataset.processPrimaryDatasetId = String(primaryDatasetId);
-    if (datasetAliases) node.dataset.processDatasetAliases = String(datasetAliases);
     if (outputPorts) node.dataset.processOutputPorts = typeof outputPorts === 'string' ? outputPorts : JSON.stringify(outputPorts);
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);

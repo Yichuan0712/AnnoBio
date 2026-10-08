@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { contentLocks, recordInputRefs } from '../src/contentLocks.js';
 import { planChangeSet } from '../src/agent/operations/changeSet.js';
+import { upgradeCanvasState } from '../src/canvasFormat.js';
 
 const canvas = (extra = {}) => ({
   nodes: [
@@ -52,7 +53,7 @@ test('results of a node that was removed from the canvas no longer lock its inpu
 });
 
 test('the Agent cannot edit locked content either, but can rename it and edit Process code', () => {
-  const state = {
+  const state = upgradeCanvasState({
     nodes: [
       { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: { headers: ['text'], columnTypes: ['text'], rows: [['a']] } },
       { type: 'prompt', nodeId: 'p', name: 'Extract', sections: [{ name: 'Task', content: 'Read {text}' }],
@@ -60,7 +61,7 @@ test('the Agent cannot edit locked content either, but can rename it and edit Pr
       { type: 'process', nodeId: 'proc', name: 'Clean', dfCode: 'def process(df):\n    return df', primaryDatasetId: 'raw' },
     ],
     connections: [{ fromId: 'raw', toId: 'proc', type: 'dataset-to-process' }],
-  };
+  });
   const ctx = {
     extractInputFields: (sections) => [...String(sections[0]?.content || '').matchAll(/\{([^{}]+)\}/g)].map((m) => m[1]),
     contentLocks: new Map([['p', ['run']], ['raw', ['run']], ['proc', ['proc']]]),

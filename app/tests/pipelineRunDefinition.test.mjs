@@ -14,11 +14,11 @@ function fixture() {
       rows: [['PRIVATE_INPUT', { kind: 'images', assetIds: ['sha256:a'], names: ['a.png'] }]],
     } },
     { type: 'prompt', nodeId: 'p', sections: [{ name: 'Task', content: 'Read {text}' }] },
-    { type: 'run', nodeId: 'r', runWorkingSetId: 'raw', runInputToColumn: { text: 'text' }, runResults: 'PRIVATE_CACHE' },
+    { type: 'run', nodeId: 'r', runInputToColumn: { text: 'text' }, runResults: 'PRIVATE_CACHE' },
     { type: 'dataset', nodeId: 'out', sourceRunNodeId: 'r', datasetContent: {
       headers: ['Output: answer'], rows: [['STALE_OUTPUT']],
     } },
-  ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }] };
+  ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, { type: 'data', fromId: 'raw', fromPort: 'result', toId: 'r' }] };
   const route = [
     { type: 'dataset', dataset_node_id: 'raw' },
     { type: 'prompt', prompt_node_id: 'p', run_node_id: 'r' },
@@ -78,11 +78,11 @@ test('all selected source datasets are frozen for a multi-input Process', () => 
   const state = { nodes: [
     { type: 'dataset', nodeId: 'left', datasetContent: { headers: ['id'], rows: [['1']] } },
     { type: 'dataset', nodeId: 'right', datasetContent: { headers: ['id'], rows: [['2']] } },
-    { type: 'process', nodeId: 'join', primaryDatasetId: 'left' },
+    { type: 'process', nodeId: 'join' },
     { type: 'dataset', nodeId: 'out', processOutputName: 'result', datasetContent: { headers: ['old'], rows: [['stale']] } },
   ], connections: [
-    { fromId: 'left', toId: 'join', type: 'dataset-to-process' },
-    { fromId: 'right', toId: 'join', type: 'dataset-to-process' },
+    { type: 'data', fromId: 'left', fromPort: 'result', toId: 'join', alias: 'df' },
+    { type: 'data', fromId: 'right', fromPort: 'result', toId: 'join', alias: 'df_right' },
     { fromId: 'join', toId: 'out', type: 'process-to-dataset' },
   ] };
   const route = [

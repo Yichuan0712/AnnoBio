@@ -22,19 +22,24 @@ def prompt(nid="p", content="Read {text}"):
             "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}}
 
 
-def run(nid="r", input_id="raw", **extra):
-    return {"type": "run", "nodeId": nid, "runName": nid, "runWorkingSetId": input_id,
+def run(nid="r", **extra):
+    return {"type": "run", "nodeId": nid, "runName": nid,
             "runInputToColumn": {"text": "text"}, "runCredentialId": "PRIVATE_CREDENTIAL",
             "runResults": "PRIVATE_RESULTS", **extra}
 
 
-def process(nid, primary="", **extra):
-    return {"type": "process", "nodeId": nid, "name": nid, "primaryDatasetId": primary,
+def process(nid, **extra):
+    return {"type": "process", "nodeId": nid, "name": nid,
             "dfCode": "def process(df):\n    return df\n", **extra}
 
 
 def edge(a, b, typ):
     return {"fromId": a, "toId": b, "type": typ}
+
+
+def data(a, b, alias=None):
+    """An input of step b read from a: a Run's only input has no alias, a Process's primary is df."""
+    return {"type": "data", "fromId": a, "fromPort": "result", "toId": b, **({"alias": alias} if alias else {})}
 
 
 def route_for(state):
@@ -49,18 +54,18 @@ def route_for(state):
 
 
 def simple():
-    return {"nodes": [dataset("raw"), prompt(), run()], "connections": [edge("p", "r", "prompt-to-run")]}
+    return {"nodes": [dataset("raw"), prompt(), run()], "connections": [edge("p", "r", "prompt-to-run"), data("raw", "r")]}
 
 
 def branched():
     return {"nodes": [dataset("raw"), process("split"),
         dataset("left", processOutputName="left"), dataset("right", processOutputName="right"),
-        process("merge", "left", datasetAliases={"right": "df_right"}, dfCode="def process(df):\n    return df.merge(df_right)\n"),
-        dataset("merged"), prompt(), run(input_id="merged")],
-        "connections": [edge("raw", "split", "dataset-to-process"), edge("split", "left", "process-to-dataset"),
-            edge("split", "right", "process-to-dataset"), edge("left", "merge", "dataset-to-process"),
-            edge("right", "merge", "dataset-to-process"), edge("merge", "merged", "process-to-dataset"),
-            edge("p", "r", "prompt-to-run")]}
+        process("merge", dfCode="def process(df):\n    return df.merge(df_right)\n"),
+        dataset("merged"), prompt(), run()],
+        "connections": [data("raw", "split", "df"), edge("split", "left", "process-to-dataset"),
+            edge("split", "right", "process-to-dataset"), data("left", "merge", "df"),
+            data("right", "merge", "df_right"), edge("merge", "merged", "process-to-dataset"),
+            edge("p", "r", "prompt-to-run"), data("merged", "r")]}
 
 
 class PipelineCompileTests(unittest.TestCase):
@@ -115,10 +120,10 @@ class PipelineCompileTests(unittest.TestCase):
         self.assertEqual(llm["depends_on"], ["process:merge"])
 
     def test_multiple_inputs_and_process_only_are_valid_specs(self):
-        state = {"nodes": [dataset("a"), dataset("b"), process("join", "a", datasetAliases={"b": "df_b"}), dataset("out")],
-                 "connections": [edge("a", "join", "dataset-to-process"), edge("b", "join", "dataset-to-process"), edge("join", "out", "process-to-dataset")]}
+        state = {"nodes": [dataset("a"), dataset("b"), process("join"), dataset("out")],
+                 "connections": [data("a", "join", "df"), data("b", "join", "df_b"), edge("join", "out", "process-to-dataset")]}
         self.assertEqual(self.valid(state)["inputs"], ["dataset:a", "dataset:b"])
-        state["nodes"][2]["primaryDatasetId"] = ""
+        del state["connections"][0]["alias"]
         self.error(state, "INVALID_PRIMARY_INPUT")
 
     def test_dynamic_process_schema_is_not_inferred_from_cached_rows(self):
@@ -137,8 +142,8 @@ class PipelineCompileTests(unittest.TestCase):
     def test_materialized_llm_schema_supports_second_llm_and_row_numbers(self):
         state = simple()
         state["nodes"] += [dataset("out", sourceRunNodeId="r"), prompt("p2"),
-                           run("r2", "out", runInputToColumn={"text": "Output: answer"})]
-        state["connections"].append(edge("p2", "r2", "prompt-to-run"))
+                           run("r2", runInputToColumn={"text": "Output: answer"})]
+        state["connections"] += [edge("p2", "r2", "prompt-to-run"), data("out", "r2")]
         spec = self.valid(state)
         art = next(a for a in spec["artifacts"] if a["id"] == "dataset:out")
         self.assertEqual([c["name"] for c in art["schema"]["columns"]], ["Input: #", "Input: text", "Output: #", "Output: answer"])
@@ -262,7 +267,7 @@ class PipelineCompileTests(unittest.TestCase):
             with self.subTest(code=code):
                 state["nodes"][4]["dfCode"] = code
                 self.valid(state)
-        state["nodes"][4]["datasetAliases"] = {"right": "df"}
+        next(e for e in state["connections"] if e["type"] == "data" and e["fromId"] == "right")["alias"] = "right"
         self.error(state, "INVALID_ALIAS")
 
     def test_node_settings_override_defaults_without_copying_credentials(self):
