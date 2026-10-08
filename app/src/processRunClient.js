@@ -68,6 +68,20 @@ export async function runProcessCode({ code, bindings, signal, onStarted, timeou
   return waitForProcessJob(jobId, { signal, timeoutMs });
 }
 
+/**
+ * The output branches Process code returns, found by the backend parsing it; the code is not run.
+ * @returns {Promise<{ok: true, ports: string[], dynamic: boolean} | {ok: false, error: string}>}
+ */
+export async function detectProcessOutputs(code) {
+  const res = await fetch(`${BACKEND_API_BASE}/api/process/outputs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: String(code || '') }),
+  });
+  if (!res.ok) throw new Error(`Could not read the Process outputs (HTTP ${res.status}).`);
+  return res.json();
+}
+
 /** Resume polling a Process job after reopening a project. */
 export async function waitForProcessJob(jobId, { signal, timeoutMs = MAX_WAIT_MS } = {}) {
   const cancel = () => fetch(`${BACKEND_API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});

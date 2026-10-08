@@ -3050,6 +3050,17 @@ def start_process_df_run(body: ProcessDfRunRequest):
     return JSONResponse(status_code=202, content={"job_id": job_id})
 
 
+class ProcessOutputsRequest(BaseModel):
+    code: str = Field(default="", description="User code defining process(df)")
+
+
+@app.post("/api/process/outputs")
+def detect_process_outputs_endpoint(body: ProcessOutputsRequest):
+    """The output branches Process code returns, found by parsing it; the code is not run."""
+    from process_outputs import detect_process_outputs
+    return detect_process_outputs(body.code)
+
+
 @app.get("/api/process/df/run/result/{job_id}")
 def get_process_df_run_result(job_id: str):
     """Return 202 while running, 200 when done/cancelled. Polling refreshes the abandonment timer."""
