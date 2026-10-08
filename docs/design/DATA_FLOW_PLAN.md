@@ -848,23 +848,43 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 
 **手工验证（按顺序做一遍）：**
 
-- [ ] 新建：Dataset → Run（Prompt A）→ 用右键菜单 “Process results with code” 新建 Process P（代码返回两个分支）→ 在 P 的分支 1 上 “Run a prompt on results”（Prompt B）→ 新建 Process Q，`df` 是 P 的分支 2，`df_<x>` 是 Prompt B 的 Run 的结果。
-- [ ] 跑之前：P、Run B、Q 都显示等待上游，Run 按钮不可用。
-- [ ] 依次单独运行 Run A、P、Run B、Q：每一步都能运行，结果正确。
-- [ ] P 的两条输出线分别从两个端口标签出发。
-- [ ] 改 P 的代码删掉分支 1：连到分支 1 的线变红，Run B 不能运行。
-- [ ] 撤销、重做，保存后重新打开，以上状态都正确。
-- [ ] History：在 Run B 的 History 中选一条旧记录，P 和 Run A 一起切换。
+- [x] 新建：Dataset → Run（Prompt A）→ 用右键菜单 “Process results with code” 新建 Process P（代码返回两个分支）→ 在 P 的分支 1 上 “Run a prompt on results”（Prompt B）→ 新建 Process Q，`df` 是 P 的分支 2，`df_<x>` 是 Prompt B 的 Run 的结果。
+- [x] 跑之前：P、Run B、Q 都显示等待上游，Run 按钮不可用。
+- [x] 依次单独运行 Run A、P、Run B、Q：每一步都能运行，结果正确。
+- [x] P 的两条输出线分别从两个端口标签出发。
+- [x] 改 P 的代码删掉分支 1：连到分支 1 的线变红，Run B 不能运行。
+- [x] 撤销、重做，保存后重新打开，以上状态都正确。
+- [x] History：在 Run B 的 History 中选一条旧记录，P 和 Run A 一起切换。
 
 **Agent：** 无改动。Agent 暂时还不能创建步骤来源，第 13 步处理。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - 按设计 §5.3 改了字样：Run 窗口的 “Input dataset” 改为 “Input”（选择框提示 “Select input”，映射表头 “Input column”），Process 窗口的 “Input datasets” 改为 “Input”。Process 示例代码注释里的 “Input datasets” 没改：改了以后，已有项目里没动过的示例代码就不再被认作示例，换 `df` 时不会跟着重新生成。
+  - 右键菜单先列各端口的 “Run a prompt on …”，再列各端口的 “Process … with code”。分支未知（动态输出、还没识别）的 Process 不给这两类菜单项，因为还没有可连的端口。
+  - “Run a prompt on results” 新建 Run 后打开它的窗口选 Prompt；“Process results with code” 不打开窗口，与从 Dataset 新建 Process 一致。
+  - `stepOutputTable`：Process 还没有结果时，如果识别出的分支里没有所读的端口，返回 `'missing-port'` 而不是 `'no-result'`。手工验证时发现：删掉分支后 P 的结果随代码变化一起消失，下游原来提示 “等待 Split”，但重跑 Split 也不会有这个分支。
+  - 第 7 步的窗口临时适配已全部换掉，只保留一处：Process 的 `df` 读的是已经不存在的分支时，它不在列表里，窗口仍允许点 Run，由运行给出原因（`unlistedPrimary`）。
+  - Run 窗口每次展开列表时重新取候选；当前读的来源即使不再是候选（分支没了）也留在列表中。写回同一个来源时跳过，否则连线会被移到数组末尾，产生多余的画布变化。
+  - 等待上游的节点用 `title` 显示原因。分支识别结果变化时不发画布变化事件（第 2 步的撤销问题），所以识别更新后另外刷新等待节点的提示，否则重新打开项目后提示会停在旧原因上。
+  - 新增 `stepInputs.js` 的 `candidateGroups`（Datasets / Step outputs 分组），两个窗口共用，一起测试。
+- 测试：前端 190 → 195（`stepOutputMenu` 5 项；`stepOutputs` 原有用例补充了分支不存在的断言）；后端 124 项不变。
+- 手工验证（新建一个只有一个 Dataset 和两个 Prompt 的项目，全部用界面操作；Process 真实运行，Run 用拦截 `/api/run` 的模拟应答，不调用模型）：
+  - 从 Prompt 右键 “Run” 建 Run A，在窗口中从 Datasets 组选输入并映射；Run A 右键 “Process results with code” 建 Split；点 Split 的 `positive` 标签只出现这个分支的两项，“Run a prompt on 'positive'” 建 Run B 并打开窗口，选 Prompt；Split 右键 “Process 'negative' with code” 建 Merge，在它的 Input 中从 Step outputs 组勾选 Run B 的输出，代码参数加上 `df_explain`。
+  - 运行前 Split、Run B、Merge 都淡化并提示等的上游，窗口顶部有提示，Run 按钮显示 “Waiting for upstream” 且不可用；Run B 的映射区提示先运行上游。
+  - 依次运行 Run A、Split、Run B、Merge 都成功：Run B 只收到 positive 的 2 行，Merge 的 `df` 是 negative 的 2 行，`df_explain` 是 Run B 的结果表。
+  - Split 的两条输出线从两个端口标签的垂直中点出发（y=370、386，节点中点是 361.5）。
+  - 删掉 `positive` 分支：连到 Run B 的线变红并带提示，Run B 窗口和节点提示 “Process "Split" does not return branch "positive".”，不能运行。
+  - 改回代码后 Split、Run B、Merge 都找回原来的记录；撤销回到红线状态，重做恢复；另存后重新打开，记录、分支、端口出线都正确，文件里是带端口和别名的 `data` 连线。
+  - 重跑 Run A、Split、Run B 各得到第二条记录后，在 Run B 的 History 中选第一条：Split 和 Run A 一起切回各自的第一条，Merge 也找回记录。
+  - 删除被 Split 读取的 Run A 时被阻止，提示有下游节点。
 
 ---
 
@@ -1218,7 +1238,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 5 | 完成 | 2026-10-08 | `519e724` | 162 | 121 | |
 | 6 | 完成 | 2026-10-08 | `b876260` | 170 | 124 | |
 | 7 | 完成 | 2026-10-08 | `1ca0268` | 190 | 124 | |
-| 8 | 未开始 | | | | | |
+| 8 | 完成 | 2026-10-08 | `7d13b05` | 195 | 124 | |
 | 9 | 未开始 | | | | | |
 | 10 | 未开始 | | | | | |
 | 11 | 未开始 | | | | | |
