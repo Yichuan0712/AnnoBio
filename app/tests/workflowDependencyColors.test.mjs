@@ -64,3 +64,20 @@ test('Prompt colors the border and the bottom strip uses one Dataset color', () 
     borderColor: '#333333', dataColor: '#222222',
   });
 });
+
+test('a step reading another step takes the colors of the Datasets that step reads', () => {
+  const nodes = new Map([
+    ['run', node('run', 'run')],
+    ['split', node('split', 'process')],
+    ['merge', node('merge', 'process')],
+  ]);
+  const edges = [
+    { fromId: 'raw', fromPort: 'result', toId: 'run', type: 'data' },
+    { fromId: 'prompt', toId: 'run', type: 'prompt-to-run' },
+    { fromId: 'run', fromPort: 'result', toId: 'split', type: 'data', alias: 'df' },
+    { fromId: 'split', fromPort: 'left', toId: 'merge', type: 'data', alias: 'df' },
+    { fromId: 'lookup', fromPort: 'result', toId: 'merge', type: 'data', alias: 'df_lookup' },
+  ];
+  assert.deepEqual(dependencyColorSources(nodes.get('split'), nodes, edges), { datasetIds: ['raw'], promptId: '' });
+  assert.deepEqual(dependencyColorSources(nodes.get('merge'), nodes, edges), { datasetIds: ['raw', 'lookup'], promptId: '' });
+});

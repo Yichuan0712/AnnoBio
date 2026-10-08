@@ -350,7 +350,9 @@ export function planChangeSet(state, operations, ctx) {
    * parameter or uses, by the alias it already has. Returns the inputs other than df. */
   function wireProcess(processNode, code, primary) {
     if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) fail('Process code must define process(df).');
-    const bindings = processInputBindings(next, processNode.nodeId, { code, primaryId: primary.nodeId });
+    // The Agent reads and writes Dataset inputs only until it learns step outputs (DATA_FLOW_PLAN.md step 13).
+    const bindings = processInputBindings(next, processNode.nodeId, { code, primaryId: primary.nodeId })
+      .filter((binding) => binding.kind === 'dataset');
     const unknown = [...referencedDatasetAliasNames(code)]
       .filter((alias) => !bindings.some((b) => b.alias === alias));
     if (unknown.length) {

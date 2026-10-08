@@ -4,15 +4,19 @@
  * own code stays editable; History records each run with the code it used.
  */
 
-/** The nodes one History record used. Record inputs never change, so callers may cache this per record ID. */
+/**
+ * The nodes one History record used. Record inputs never change, so callers may cache this per record ID.
+ * A step's output it read locks nothing: that output is the upstream record, which cannot change.
+ */
 export function recordInputRefs(record) {
   const inputs = record?.inputs || {};
   const ref = { kind: record?.kind || '', nodeId: String(record?.nodeId || ''), promptId: '', datasetIds: [], scoreNodeId: '' };
+  const datasetIds = (items) => items.filter((item) => item?.nodeId && item.kind !== 'step').map((item) => String(item.nodeId));
   if (ref.kind === 'run') {
     ref.promptId = String(inputs.prompt?.nodeId || '');
-    ref.datasetIds = [inputs.dataset?.nodeId].filter(Boolean).map(String);
+    ref.datasetIds = datasetIds([inputs.dataset]);
   } else if (ref.kind === 'process') {
-    ref.datasetIds = (Array.isArray(inputs.bindings) ? inputs.bindings : []).map((item) => item?.nodeId).filter(Boolean).map(String);
+    ref.datasetIds = datasetIds(Array.isArray(inputs.bindings) ? inputs.bindings : []);
   } else if (ref.kind === 'score') {
     ref.datasetIds = [inputs.groundTruthId].filter(Boolean).map(String);
   } else if (ref.kind === 'review') {

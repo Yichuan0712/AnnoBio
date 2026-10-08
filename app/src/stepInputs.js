@@ -5,20 +5,41 @@
  *
  * Every input is a `data` connection { type: 'data', fromId, fromPort, toId, alias }. A Run has at
  * most one. A Process has one per input; `alias` is the name its code uses, 'df' for the primary.
- * A source is { nodeId, port }. For now every source is a Dataset and its port is 'result'.
+ * A source is { nodeId, port, kind }: a Dataset ('dataset', port 'result'), a Run's results ('run',
+ * port 'result') or one output branch of a Process ('process', port = the branch) (§3.2, §3.4).
+ * Functions that take a source look its kind up in `state` when it is not given.
  */
+import { datasetHistorySource } from './datasetHistorySource.js';
 import { buildProcessDatasetBindings, processDatasetInputs, referencedDatasetAliases } from './processDatasetBindings.js';
+import { effectiveProcessOutputs } from './processOutputPorts.js';
+import { stepOutputTable } from './stepOutputs.js';
 
 export const RESULT_PORT = 'result';
 export const DATA_EDGE = 'data';
+const STEP_KINDS = new Set(['run', 'process']);
 
 const nodeIdOf = (node) => String(node?.nodeId || node?.id || '').trim();
 const findNode = (state, id) => (state?.nodes || []).find((node) => nodeIdOf(node) === String(id || '').trim());
-const datasetsOf = (state) => (state?.nodes || []).filter((node) => node?.type === 'dataset')
-  .map((node) => ({ nodeId: nodeIdOf(node), name: node.name || 'Dataset' }));
 const dataEdges = (state) => (state?.connections || []).filter((edge) => edge?.type === DATA_EDGE);
 const dataEdgesInto = (state, toId) => dataEdges(state).filter((edge) => String(edge.toId) === String(toId).trim());
-const sourceOf = (edge) => ({ nodeId: String(edge.fromId), port: String(edge.fromPort || RESULT_PORT) });
+
+/** 'run' or 'process' for a step's output; 'dataset' otherwise, including a node no longer on the canvas. */
+function kindOf(state, nodeId) {
+  const type = findNode(state, nodeId)?.type;
+  return STEP_KINDS.has(type) ? type : 'dataset';
+}
+const sourceOf = (state, edge) => ({ nodeId: String(edge.fromId), port: String(edge.fromPort || RESULT_PORT), kind: kindOf(state, edge.fromId) });
+
+/**
+ * A stable string for a source, for option values, lookups and History: a Dataset's node ID, or
+ * `node:port` for a step's output, since two branches of one Process can both be inputs.
+ */
+export function sourceKey(source) {
+  if (!source?.nodeId) return '';
+  return STEP_KINDS.has(source.kind) ? `${source.nodeId}:${source.port || RESULT_PORT}` : String(source.nodeId);
+}
+const keyIn = (state, source) => sourceKey(source?.nodeId ? { ...source, kind: source.kind || kindOf(state, source.nodeId) } : null);
+const edgeKey = (state, edge) => sourceKey(sourceOf(state, edge));
 
 /** Removes every data connection into `toId`, in place, so the live connections array stays shared. */
 function removeDataEdgesInto(state, toId) {
@@ -28,17 +49,122 @@ function removeDataEdgesInto(state, toId) {
   }
 }
 
-/** A stable string for a source, for option values and lookups. */
-export function sourceKey(source) {
-  return source?.nodeId ? String(source.nodeId) : '';
+// ---------- names ----------
+
+/** A Run is named by its Prompt, as Current Pipeline names it; every Run is called "Run" by default. */
+function runLabel(state, run) {
+  const edge = (state?.connections || []).find((item) => item?.type === 'prompt-to-run' && String(item.toId) === nodeIdOf(run));
+  return String(findNode(state, edge?.fromId)?.name || '').trim() || String(run.runName || '').trim() || 'Run';
+}
+
+/** How a source is shown: a Dataset's name, a Run's Prompt, or a Process with its branch ("Process · branch"). */
+export function stepSourceLabel(state, source) {
+  const node = findNode(state, source?.nodeId);
+  if (!node) return String(source?.nodeId || '');
+  if (node.type === 'run') return runLabel(state, node);
+  if (node.type === 'process') {
+    const name = String(node.name || '').trim() || 'Process';
+    return (source.port || RESULT_PORT) === RESULT_PORT ? name : `${name} · ${source.port}`;
+  }
+  return String(node.name || '').trim() || 'Dataset';
+}
+
+/**
+ * Why a step cannot read `source` yet (stepOutputs.js `waiting`), as the windows, a run and the
+ * Agent say it.
+ */
+export function stepInputWaitingMessage(state, source, waiting) {
+  if (STEP_KINDS.has(source?.kind)) {
+    const name = stepSourceLabel(state, { ...source, port: RESULT_PORT });
+    if (waiting === 'missing-port') return `Process "${name}" does not return branch "${source.port}".`;
+    return `Waiting for upstream results: run "${name}" first.`;
+  }
+  return `Input Dataset "${stepSourceLabel(state, source)}" has no current result. Run its upstream node first.`;
+}
+
+/**
+ * The note a step shows while an upstream Run it reads has rows that failed: they are passed on
+ * (§3.7). Empty when there are none.
+ */
+export function stepInputErrorNotice(state, source, errorRowCount) {
+  if (!errorRowCount) return '';
+  const rows = `${errorRowCount} row${errorRowCount === 1 ? '' : 's'}`;
+  return `Upstream "${stepSourceLabel(state, source)}" has ${rows} with errors; they are passed on with the error text in their output columns.`;
+}
+
+// ---------- candidates ----------
+
+/**
+ * Every node that reads `nodeId`'s data, directly or further down: through data connections, and
+ * through a Dataset that follows a step's result (datasetHistorySource.js) until those are removed.
+ */
+function downstreamOf(state, nodeId) {
+  const children = new Map();
+  const link = (from, to) => {
+    if (!children.has(from)) children.set(from, []);
+    children.get(from).push(to);
+  };
+  for (const edge of dataEdges(state)) link(String(edge.fromId), String(edge.toId));
+  for (const node of state?.nodes || []) {
+    const source = node?.type === 'dataset' ? datasetHistorySource(node, state.connections) : null;
+    if (source) link(source.sourceId, nodeIdOf(node));
+  }
+  const found = new Set();
+  const queue = [String(nodeId)];
+  while (queue.length) {
+    for (const child of children.get(queue.shift()) || []) {
+      if (!found.has(child)) { found.add(child); queue.push(child); }
+    }
+  }
+  return found;
+}
+
+/**
+ * Every source a step could read: each Dataset in canvas order, then each Run's results and each
+ * Process output branch (processOutputPorts.js), leaving out the step itself and every step that
+ * reads it, which would make a cycle. `name` is what an alias is made from (§3.5); `label` is how
+ * the source is shown.
+ * @returns {Array<{ nodeId: string, port: string, kind: 'dataset'|'run'|'process', name: string, label: string }>}
+ */
+function candidateSources(state, stepId) {
+  const id = String(stepId || '').trim();
+  const excluded = downstreamOf(state, id);
+  excluded.add(id);
+  const nodes = state?.nodes || [];
+  const datasets = nodes.filter((node) => node?.type === 'dataset').map((node) => {
+    const name = String(node.name || '').trim() || 'Dataset';
+    return { nodeId: nodeIdOf(node), port: RESULT_PORT, kind: 'dataset', name, label: name };
+  });
+  const steps = nodes.filter((node) => STEP_KINDS.has(node?.type) && !excluded.has(nodeIdOf(node))).flatMap((node) => {
+    if (node.type === 'run') {
+      const label = runLabel(state, node);
+      return [{ nodeId: nodeIdOf(node), port: RESULT_PORT, kind: 'run', name: label, label }];
+    }
+    const { ports } = effectiveProcessOutputs({ detected: node.processOutputPorts, dfResults: node.dfResults });
+    return ports.map((port) => {
+      const source = { nodeId: nodeIdOf(node), port, kind: 'process' };
+      return { ...source, name: port === RESULT_PORT ? String(node.name || '').trim() || 'Process' : port, label: stepSourceLabel(state, source) };
+    });
+  });
+  return [...datasets, ...steps];
+}
+
+/** Every source a Run could read. */
+export function runCandidateSources(state, runId) {
+  return candidateSources(state, runId);
+}
+
+/** Every source a Process could read. */
+export function processCandidateSources(state, processId) {
+  return candidateSources(state, processId);
 }
 
 // ---------- Run ----------
 
-/** @returns {{ nodeId: string, port: string } | null} the source a Run reads */
+/** @returns {{ nodeId: string, port: string, kind: string } | null} the source a Run reads */
 export function runInputSource(state, runId) {
   const edge = dataEdgesInto(state, runId)[0];
-  return edge ? sourceOf(edge) : null;
+  return edge ? sourceOf(state, edge) : null;
 }
 
 /** Points a Run at `source`, or clears its input when `source` is null. Changes `state` in place. */
@@ -50,11 +176,9 @@ export function setRunInputSource(state, runId, source) {
   }
 }
 
-/** The table a Run reads: its input Dataset's content, or null when it has none. */
+/** The table a Run reads (stepOutputs.js), or null when it has no input or the input has no result yet. */
 export function runInputTable(state, runId) {
-  const source = runInputSource(state, runId);
-  const dataset = source ? findNode(state, source.nodeId) : null;
-  return dataset?.datasetContent || dataset?.subsetContent || null;
+  return stepOutputTable(state, runInputSource(state, runId)).table || null;
 }
 
 // ---------- Process ----------
@@ -63,7 +187,7 @@ export function runInputTable(state, runId) {
 export function processPrimarySource(state, processId) {
   const edges = dataEdgesInto(state, processId);
   const edge = edges.find((item) => item.alias === 'df') || edges[0];
-  return edge ? sourceOf(edge) : null;
+  return edge ? sourceOf(state, edge) : null;
 }
 
 /**
@@ -72,79 +196,105 @@ export function processPrimarySource(state, processId) {
  */
 export function setProcessPrimarySource(state, processId, source) {
   if (!findNode(state, processId)) return;
+  const key = keyIn(state, source);
   const edges = dataEdgesInto(state, processId);
   for (const edge of edges) {
-    if (edge.alias === 'df' && String(edge.fromId) !== String(source?.nodeId || '')) delete edge.alias;
+    if (edge.alias === 'df' && edgeKey(state, edge) !== key) delete edge.alias;
   }
-  if (!source?.nodeId) return;
-  const edge = edges.find((item) => String(item.fromId) === String(source.nodeId));
+  if (!key) return;
+  const edge = edges.find((item) => edgeKey(state, item) === key);
   if (edge) edge.alias = 'df';
   else state.connections.push({ type: DATA_EDGE, fromId: String(source.nodeId), fromPort: source.port || RESULT_PORT, toId: nodeIdOf(findNode(state, processId)), alias: 'df' });
 }
 
-/** The alias each input was recorded with: { sourceNodeId: alias }. */
+/** The alias each input was recorded with: { sourceKey: alias }. */
 export function processInputAliases(state, processId) {
-  return Object.fromEntries(dataEdgesInto(state, processId).filter((edge) => edge.alias).map((edge) => [String(edge.fromId), edge.alias]));
+  return Object.fromEntries(dataEdgesInto(state, processId).filter((edge) => edge.alias).map((edge) => [edgeKey(state, edge), edge.alias]));
 }
 
-/** Every source a Process could read, in canvas order. */
-export function processCandidateSources(state, processId) {
-  return datasetsOf(state).map((dataset) => ({ ...dataset, port: RESULT_PORT, kind: 'dataset' }));
+/** A Process's inputs as sources with their aliases; the df input's alias is always 'df'. */
+export function processInputSources(state, processId) {
+  const primaryKey = keyIn(state, processPrimarySource(state, processId));
+  return dataEdgesInto(state, processId).map((edge) => {
+    const source = sourceOf(state, edge);
+    return { ...source, alias: sourceKey(source) === primaryKey ? 'df' : String(edge.alias || '') };
+  });
+}
+
+/** The candidates under their keys, as processDatasetBindings.js works on them. */
+function keyedCandidates(state, processId) {
+  const candidates = processCandidateSources(state, processId).map((candidate) => ({ ...candidate, key: sourceKey(candidate) }));
+  return { candidates, byKey: new Map(candidates.map((candidate) => [candidate.key, candidate])) };
 }
 
 /**
  * Each candidate as the Process window shows it (processDatasetBindings.js processDatasetInputs):
- * its alias, and whether `code` makes it an input. `primaryId` overrides the recorded `df`.
- * @returns {Array<{ nodeId, port, name, alias, primary, input, used, parameter }>}
+ * its alias, and whether `code` makes it an input. `primaryId` (a source key) overrides the
+ * recorded `df`.
+ * @returns {Array<{ key, nodeId, port, kind, name, label, alias, primary, input, used, parameter }>}
  */
 export function processInputBindings(state, processId, { code = '', primaryId } = {}) {
-  const primaryDatasetId = primaryId !== undefined ? String(primaryId || '') : (processPrimarySource(state, processId)?.nodeId || '');
+  const { candidates, byKey } = keyedCandidates(state, processId);
+  const primaryKey = primaryId !== undefined ? String(primaryId || '') : keyIn(state, processPrimarySource(state, processId));
   return processDatasetInputs({
-    datasets: datasetsOf(state), primaryDatasetId, savedAliases: processInputAliases(state, processId), code,
-  }).map((binding) => ({ ...binding, port: RESULT_PORT }));
+    datasets: candidates.map((candidate) => ({ nodeId: candidate.key, name: candidate.name })),
+    primaryDatasetId: primaryKey, savedAliases: processInputAliases(state, processId), code,
+  }).map((binding) => {
+    const { key, nodeId, port, kind, name, label } = byKey.get(binding.nodeId);
+    return { ...binding, key, nodeId, port, kind, name, label };
+  });
 }
 
 /**
  * What a Process runs with, and what its History record signs: its `df`, every connected input, and
- * every Dataset `code` names by alias, each under its recorded alias or the one its name gives.
- * @returns {{ primaryId: string, bindings: Array<{ nodeId, port, name, alias, primary }> }}
+ * every source `code` names by alias, each under its recorded alias or the one its name gives. A
+ * connected input that is no longer a candidate (a branch the Process no longer returns) stays an
+ * input under its recorded alias, so the Process waits for it instead of running without it.
+ * @returns {{ primaryId: string, bindings: Array<{ key, nodeId, port, kind, name, alias, primary }> }}
+ *   primaryId is the df input's source key
  */
 export function processRequiredInputs(state, processId, { code = '' } = {}) {
-  const primaryId = processPrimarySource(state, processId)?.nodeId || '';
-  if (!primaryId) return { primaryId: '', bindings: [] };
+  const primaryKey = keyIn(state, processPrimarySource(state, processId));
+  if (!primaryKey) return { primaryId: '', bindings: [] };
+  const { candidates, byKey } = keyedCandidates(state, processId);
   const savedAliases = processInputAliases(state, processId);
-  const aliased = buildProcessDatasetBindings(datasetsOf(state), primaryId)
+  const aliased = buildProcessDatasetBindings(candidates.map((candidate) => ({ nodeId: candidate.key, name: candidate.name })), primaryKey)
     .map((binding) => ({ ...binding, alias: savedAliases[binding.nodeId] || binding.alias }));
+  const connected = processInputSources(state, processId);
   const required = new Set([
-    primaryId,
-    ...dataEdgesInto(state, processId).map((edge) => String(edge.fromId)),
+    primaryKey,
+    ...connected.map(sourceKey),
     ...referencedDatasetAliases(code, aliased, savedAliases),
   ]);
-  return {
-    primaryId,
-    bindings: aliased.filter((binding) => required.has(binding.nodeId))
-      .map(({ nodeId, name, alias, primary }) => ({ nodeId, port: RESULT_PORT, name, alias, primary })),
-  };
+  const bindings = aliased.filter((binding) => required.has(binding.nodeId)).map(({ nodeId: key, alias, primary }) => {
+    const { nodeId, port, kind, name } = byKey.get(key);
+    return { key, nodeId, port, kind, name, alias, primary };
+  });
+  for (const source of connected) {
+    const key = sourceKey(source);
+    if (byKey.has(key)) continue;
+    bindings.push({ key, nodeId: source.nodeId, port: source.port, kind: source.kind, name: stepSourceLabel(state, source), alias: source.alias, primary: key === primaryKey });
+  }
+  return { primaryId: primaryKey, bindings };
 }
 
 /**
  * Makes `inputs` exactly the Process's inputs, `primary` its `df`, and records each input's alias.
  * Changes `state` (and its connections array) in place.
- * @param {{ primary: { nodeId: string } | null, inputs: Array<{ nodeId: string, port?: string, alias: string }> }} value
+ * @param {{ primary: { nodeId: string, port?: string } | null, inputs: Array<{ nodeId: string, port?: string, alias: string }> }} value
  */
 export function setProcessInputs(state, processId, { primary, inputs }) {
   const processNode = findNode(state, processId);
   if (!processNode) return;
   const toId = nodeIdOf(processNode);
-  const primaryId = String(primary?.nodeId || '');
+  const primaryKey = keyIn(state, primary);
   removeDataEdgesInto(state, toId);
   for (const input of inputs) {
-    const fromId = String(input.nodeId);
-    const alias = fromId === primaryId ? 'df' : input.alias;
-    state.connections.push({ type: DATA_EDGE, fromId, fromPort: input.port || RESULT_PORT, toId, ...(alias ? { alias } : {}) });
+    const alias = keyIn(state, input) === primaryKey ? 'df' : input.alias;
+    state.connections.push({ type: DATA_EDGE, fromId: String(input.nodeId), fromPort: input.port || RESULT_PORT, toId, ...(alias ? { alias } : {}) });
   }
-  if (primaryId && !inputs.some((input) => String(input.nodeId) === primaryId)) {
-    state.connections.push({ type: DATA_EDGE, fromId: primaryId, fromPort: primary.port || RESULT_PORT, toId, alias: 'df' });
+  if (primaryKey && !inputs.some((input) => keyIn(state, input) === primaryKey)) {
+    state.connections.push({ type: DATA_EDGE, fromId: String(primary.nodeId), fromPort: primary.port || RESULT_PORT, toId, alias: 'df' });
   }
 }
 
@@ -153,7 +303,8 @@ export function setProcessInputs(state, processId, { primary, inputs }) {
  * the code needs no change. In place. Returns false when the Process does not read `from`.
  */
 export function replaceProcessInputSource(state, processId, from, to) {
-  const edge = dataEdgesInto(state, processId).find((item) => String(item.fromId) === String(from?.nodeId));
+  const key = keyIn(state, from);
+  const edge = dataEdgesInto(state, processId).find((item) => edgeKey(state, item) === key);
   if (!edge || !to?.nodeId) return false;
   edge.fromId = String(to.nodeId);
   edge.fromPort = to.port || RESULT_PORT;
@@ -178,7 +329,8 @@ export function runInputEdges(state) {
 /** The inputs of the Processes in `state`; the df input's alias is always 'df'. */
 export function processInputEdges(state) {
   return stepInputEdges(state).filter((edge) => findNode(state, edge.toId)?.type === 'process').map((edge) => ({
-    ...edge, alias: processPrimarySource(state, edge.toId)?.nodeId === edge.fromId ? 'df' : edge.alias,
+    ...edge,
+    alias: keyIn(state, processPrimarySource(state, edge.toId)) === keyIn(state, { nodeId: edge.fromId, port: edge.fromPort }) ? 'df' : edge.alias,
   }));
 }
 

@@ -111,7 +111,7 @@ function restoreResults(node, ...keys) {
  *   setPrimaryDataset: the Process picks its df in this window, like a Run picks its Prompt; its other
  *   Input datasets are the code's process() parameters, which the picker here rewrites
  */
-export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName, history = null }) {
+export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName, getInputNotices, history = null }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -125,9 +125,12 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   const readDatasets = (code) => {
     const raw = getProcessInputs?.(code) || {};
     const bindings = Array.isArray(raw.bindings) ? raw.bindings.filter((binding) => binding?.nodeId && binding?.content) : [];
+    const datasetPrimary = bindings.some((binding) => binding.primary);
     return {
-      bindings, primaryDatasetId: bindings.some((binding) => binding.primary) ? raw.primaryDatasetId : '',
+      bindings, primaryDatasetId: datasetPrimary ? raw.primaryDatasetId : '',
       savedAliases: raw.savedAliases || {},
+      // df is another step's output, which this picker does not list yet (DATA_FLOW_PLAN.md step 8).
+      stepPrimary: !datasetPrimary && !!raw.primaryDatasetId,
     };
   };
   const primaryHeaders = (code) => readDatasets(code).bindings.find((binding) => binding.primary)?.content?.headers || [];
@@ -164,6 +167,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
               <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
               <div class="run-detail-llm-actions-right"><button type="button" class="btn btn-secondary run-detail-run-btn process-run-btn">Run</button></div>
             </div>
+            <p class="process-editor-hint process-upstream-notice" hidden></p>
           </div>
         </div>
         <div class="run-detail-preview-wrap">
@@ -181,6 +185,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   const resultsContent = overlay.querySelector('.process-results-content');
   const branchPicker = overlay.querySelector('.process-branch-picker');
   const runBtn = overlay.querySelector('.process-run-btn');
+  const upstreamNoticeEl = overlay.querySelector('.process-upstream-notice');
   const editable = new Compartment();
   const editorView = new EditorView({
     doc: initialCode,
@@ -355,13 +360,26 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       lastResults = restoreResults(node, 'processDfResults', 'processResults');
       lastError = current?.status === 'failed' ? String(current.error || 'Process failed.') : '';
       refreshResults();
+      refreshUpstreamState();
     } catch (_) { /* startRun reports storage errors when used */ }
   }
 
+  /** An input that is another step's output without a complete result yet blocks Run; failed upstream rows are noted. */
+  function refreshUpstreamState() {
+    if (running) return;
+    if (node?.dataset?.waitingForUpstream === '1') {
+      runBtn.disabled = true;
+      runBtn.textContent = 'Waiting for upstream';
+    }
+    const notices = getInputNotices?.() || [];
+    upstreamNoticeEl.textContent = notices.join(' ');
+    upstreamNoticeEl.hidden = !notices.length;
+  }
+
   async function startRun() {
-    const { bindings } = readDatasets(getCode());
+    const { bindings, stepPrimary } = readDatasets(getCode());
     const primary = bindings.find((binding) => binding.primary);
-    if (!primary) {
+    if (!primary && !stepPrimary) {
       showPlaceholder('Choose an Input dataset before running.');
       inputPicker.focus();
       return;
@@ -439,6 +457,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   });
   refreshResults();
   if (node?.dataset?.processResumable === '1') runBtn.textContent = 'Resume';
+  refreshUpstreamState();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);
   if (history) void refreshHistoryState();

@@ -1,4 +1,5 @@
 import { publishedPipelineCopy } from './datasetHistorySource.js';
+import { stepSourceLabel } from './stepInputs.js';
 
 const rows = (content) => Array.isArray(content?.rows) ? content.rows.length : null;
 const count = (value, noun) => `${value} ${noun}${value === 1 ? '' : 's'}`;
@@ -12,8 +13,12 @@ function datasetLabel(dataset) {
   return String(dataset?.name || '').trim() || 'Unnamed dataset';
 }
 
-/** An input is named as the Dataset that restoring this record would read (runHistorySelection.js). */
+/**
+ * An input is named as the Dataset that restoring this record would read (runHistorySelection.js),
+ * or as the step whose output it read: its Prompt, or the Process and its branch.
+ */
 function inputLabel(dataset, canvasState, recordById) {
+  if (dataset?.kind === 'step') return stepSourceLabel(canvasState, dataset);
   const upstreamRecordId = String(dataset?.sourceRecordId || dataset?.upstreamPipelineRecordId || '');
   const sourceRecord = upstreamRecordId ? recordById?.get(upstreamRecordId) : null;
   return datasetLabel(publishedPipelineCopy(canvasState, dataset, sourceRecord) || dataset);
