@@ -458,7 +458,22 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - [ ] 构建通过。
 - [ ] grep 检查结果已记录。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - **构建 Review 比较行的两个模块级函数**（`buildReviewComparisonRows`、`buildReviewComparisonRowsFromCodeMatch`）改为接收调用方传入的 Run 输入表（新增最后一个参数 `runInput`）。它们原来直接读节点上的 `runWorkingSetId`，而且同时被真实节点和“画布状态伪造的节点”调用，拿不到 `connections`；不改的话，第 6 步把输入移到连线上之后它们就读不到了。7 个调用处都改为传 `readRunInputTable(runNode)`，或传 `resolveLiveScoreComparisonContext` 返回的 `runInput`。
+  - Run 窗口不再直接读写节点属性，改由节点工厂传入 `getInputSource` / `setInputSource`。`openRunDetailModal` 只有节点工厂这一个调用方。
+  - `runHistorySelection.js` 把 Run 输入从 patch 中分出来，单独记在 `runInputs` 里，在应用 patch 的同一个循环里调用 `setRunInputSource`。“哪些节点变了”的判断和顺序不变。
+  - `workflowDependencyColors.js` 删除了查找存储的 `dataset-to-run` 连线的那段：这种连线从不存储。
+- grep 检查后剩下的 `runWorkingSetId`：
+  - `stepInputs.js`；
+  - `workflowCanvas.js` 的 DOM 适配函数（`runInputState`、`writeRunInputSource`）、`getCanvasState` / `loadCanvasState` 的序列化；
+  - `workflowDependencyColors.js` 中同样性质的 DOM 适配（把节点属性交给 `runInputSource`）；
+  - `pipelineExportDefinition.js` 的字段白名单（第 6 步处理）。
+- 测试：前端 149 → 154（新增 `stepInputs.test.mjs` 5 项），现有测试一个都没改；后端 116 项不变。
+- 手工验证（按 §1 的方法驱动桌面应用）：
+  - 对照实验：`sentiment-node-smoke-test.yc` 用新旧代码各打开一次，3 个 Run 窗口、1 个 Score 窗口、1 个 Review 窗口显示的内容、16 个节点的颜色、各类连线数量全部相同。
+  - 在 Run 窗口里切换输入 Dataset：节点的输入、连线和底部颜色随之更新；随后删除这个 Dataset，被“已被 Run 或 Score 选中”的提示阻止。
 
 ---
 
@@ -1125,7 +1140,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 0 | 完成 | 2026-10-07 | `e944005` | 140 | 93 | |
 | 1 | 完成 | 2026-10-07 | `0198dbe` | 140 | 116 | |
 | 2 | 完成 | 2026-10-07 | `a90e543` | 149 | 116 | |
-| 3 | 未开始 | | | | | |
+| 3 | 完成 | 2026-10-08 | `c4ce4a4` | 154 | 116 | |
 | 4 | 未开始 | | | | | |
 | 5 | 未开始 | | | | | |
 | 6 | 未开始 | | | | | |
