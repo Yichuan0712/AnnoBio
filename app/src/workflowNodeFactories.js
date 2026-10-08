@@ -2,6 +2,37 @@ import { processDatasetInputs } from './processDatasetBindings.js';
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 import { normalizeDatasetContent } from './datasetContent.js';
+import { effectiveProcessOutputs, showsProcessOutputs } from './processOutputPorts.js';
+
+const PROCESS_OUTPUT_MISMATCH = 'Branches returned by the last run differ from the code';
+
+/** Shows a Process node's output branches (processOutputPorts.js) between its header and progress bar. */
+export function refreshProcessOutputStrip(node) {
+  const strip = node?.querySelector('.workflow-node__process-outputs');
+  if (!strip) return;
+  const outputs = effectiveProcessOutputs({
+    detected: node.dataset.processOutputPorts,
+    dfResults: node.dataset.processDfResults || node.dataset.processResults,
+  });
+  const visible = showsProcessOutputs(outputs);
+  const labels = !visible ? [] : outputs.dynamic ? [''] : outputs.ports;
+  strip.replaceChildren(...labels.map((port) => {
+    const label = document.createElement('span');
+    label.className = port ? 'workflow-node__process-port' : 'workflow-node__process-port workflow-node__process-port--dynamic';
+    if (port) label.dataset.port = port;
+    const name = document.createElement('span');
+    name.className = 'workflow-node__process-port-name';
+    name.textContent = port || 'dynamic outputs';
+    label.append(name);
+    label.title = outputs.mismatch ? PROCESS_OUTPUT_MISMATCH
+      : port ? `Output branch "${port}"` : 'Its branches are known once the Process has run';
+    return label;
+  }));
+  strip.hidden = !visible;
+  strip.classList.toggle('workflow-node__process-outputs--mismatch', visible && outputs.mismatch);
+  node.classList.toggle('workflow-node--no-body', !visible);
+}
+
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
   const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -609,7 +640,7 @@ export function createWorkflowNodeFactories(deps = {}) {
   }
 
   /** Process node: runs user-written process(df), with one primary Dataset and optional named inputs. */
-  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, primaryDatasetId = '', datasetAliases = '' }) {
+  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, primaryDatasetId = '', datasetAliases = '', outputPorts }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--process workflow-node--no-body';
@@ -626,6 +657,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (dfCode != null) node.dataset.processActiveMode = 'df';
     if (primaryDatasetId) node.dataset.processPrimaryDatasetId = String(primaryDatasetId);
     if (datasetAliases) node.dataset.processDatasetAliases = String(datasetAliases);
+    if (outputPorts) node.dataset.processOutputPorts = typeof outputPorts === 'string' ? outputPorts : JSON.stringify(outputPorts);
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
@@ -634,8 +666,10 @@ export function createWorkflowNodeFactories(deps = {}) {
         <span class="workflow-node__title">${escapeHtml(processTitle)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
+      <div class="workflow-node__process-outputs" hidden></div>
       <div class="workflow-node__process-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
+    refreshProcessOutputStrip(node);
     nodesLayer.appendChild(node);
 
     const deleteBtn = node.querySelector('.workflow-node__delete');

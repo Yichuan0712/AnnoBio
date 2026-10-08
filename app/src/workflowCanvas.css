@@ -370,6 +370,61 @@
   border-radius: 2px;
 }
 
+.workflow-node--process .workflow-node__header {
+  border-radius: 2px 2px 0 0;
+}
+
+/* Process output branches (processOutputPorts.js): one right-aligned row per branch, above the progress bar. */
+.workflow-node__process-outputs {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 4px 8px 9px;
+}
+
+.workflow-node__process-outputs[hidden] {
+  display: none;
+}
+
+.workflow-node__process-port {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-muted);
+}
+
+.workflow-node__process-port-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-node__process-port::after {
+  content: '';
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.workflow-node__process-port--dynamic {
+  font-style: italic;
+}
+
+.workflow-node__process-port--dynamic::after {
+  display: none;
+}
+
+.workflow-node__process-outputs--mismatch .workflow-node__process-port {
+  color: var(--status-warning);
+}
+
 /* Run progress: bar at bottom fills left-to-right with working set color；右侧直角，不设圆角 */
 .workflow-node__run-progress {
   position: absolute;

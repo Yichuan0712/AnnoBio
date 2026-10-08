@@ -58,7 +58,7 @@ import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
-import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
+import { createWorkflowNodeFactories, formatSamplerDescription, refreshProcessOutputStrip } from './workflowNodeFactories.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
 import { dependencyColorSources, dependentNodeVisualColors } from './workflowDependencyColors.js';
@@ -80,7 +80,8 @@ import { openDatasetDiffModal } from './datasetDiffModal.js';
 import { datasetHistorySource } from './datasetHistorySource.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
-import { runProcessCode, waitForProcessJob } from './processRunClient.js';
+import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
+import { codeHashOf, parseProcessOutputPorts } from './processOutputPorts.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
 
@@ -3728,6 +3729,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           top: (parseFloat(node.style.top) || 0) + (node.offsetHeight || 80) + NEW_NODE_OFFSET,
           title: `${base} (Copy ${copyNumber})`,
           dfCode: resolveDataframeProcessCode({ dfCode: node.dataset.processDfCode, code: node.dataset.processCode }),
+          outputPorts: node.dataset.processOutputPorts,
         });
         updateContentSize();
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -4666,6 +4668,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           activeMode: 'df',
           primaryDatasetId: node.dataset.processPrimaryDatasetId || undefined,
           datasetAliases: node.dataset.processDatasetAliases || undefined,
+          processOutputPorts: parseProcessOutputPorts(node.dataset.processOutputPorts) || undefined,
           dfResults: node.dataset.processDfResults || node.dataset.processResults || undefined,
           processPending: pendingProcesses.has(nodeId),
           processResumable: node.dataset.processResumable === '1' || undefined,
@@ -4891,9 +4894,11 @@ export function buildWorkflowCanvas(root, options = {}) {
           dfCode,
           primaryDatasetId: n.primaryDatasetId,
           datasetAliases: n.datasetAliases,
+          outputPorts: n.processOutputPorts,
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         if (n.dfResults || n.results) node.dataset.processDfResults = n.dfResults || n.results;
+        refreshProcessOutputStrip(node);
         if (n.historyRecordId) node.dataset.historyRecordId = n.historyRecordId;
         if (n.historySelectionSignature) node.dataset.historySelectionSignature = n.historySelectionSignature;
         if (n.processPending === true || n.processResumable === true) node.dataset.processResumable = '1';
@@ -5081,6 +5086,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     updateEdges();
     getCanvasState();
     root.querySelector('.pipeline-overview-overlay')?.refreshPipelineOverview?.();
+    scheduleProcessOutputSync();
   }
 
   function setOnCanvasChange(fn) {
@@ -5412,6 +5418,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       } else if (item.type === 'process') {
         if (item.dfResults == null) delete live.dataset.processDfResults;
         else live.dataset.processDfResults = item.dfResults;
+        refreshProcessOutputStrip(live);
         const progress = item.dfResults ? 100 : 0;
         if (item.processResumable) live.dataset.processResumable = '1';
         else delete live.dataset.processResumable;
@@ -5498,6 +5505,50 @@ export function buildWorkflowCanvas(root, options = {}) {
    * Run a Process node's saved code (the Agent's run_nodes) and store its output on the node the way
    * its detail view does, so the node shows 100% and its branches can be saved as Datasets.
    */
+  // The output branches each Process's code returns (processOutputPorts.js), detected by the backend
+  // whenever the code changes, however it changed: window, Agent, undo, or opening a project. The
+  // detection is stored with the code's hash, so unchanged code is never sent again. Storing it emits
+  // no canvas change: that would make an undo step of whatever History reconciled in the meantime.
+  // The next real change saves it, and a project opened without it detects again.
+  const processOutputDetections = new Map(); // node id -> hash of the code being detected
+  let processOutputSyncTimer = null;
+  const processCodeOf = (node) => resolveDataframeProcessCode({ dfCode: node.dataset.processDfCode, code: node.dataset.processCode }) || '';
+  async function syncProcessOutputPorts() {
+    let changed = false;
+    await Promise.all(Array.from(nodesLayer.querySelectorAll('.workflow-node--process'), async (node) => {
+      const nodeId = node.dataset.nodeId;
+      const hash = await codeHashOf(processCodeOf(node));
+      if (parseProcessOutputPorts(node.dataset.processOutputPorts)?.codeHash === hash) return;
+      if (processOutputDetections.get(nodeId) === hash) return;
+      processOutputDetections.set(nodeId, hash);
+      try {
+        const detected = await detectProcessOutputs(processCodeOf(node));
+        const live = getNodeById(nodeId);
+        // Code edited while this was in flight: the sync that edit triggered detects the new code.
+        if (!live || await codeHashOf(processCodeOf(live)) !== hash) return;
+        live.dataset.processOutputPorts = JSON.stringify({
+          ports: detected.ok ? detected.ports : [],
+          dynamic: detected.ok && detected.dynamic === true,
+          error: detected.ok ? '' : String(detected.error || 'Could not read the Process code.'),
+          codeHash: hash,
+        });
+        refreshProcessOutputStrip(live);
+        changed = true;
+      } catch (error) {
+        // Backend unavailable: keep the last detection; the next canvas change tries again.
+        console.warn('Could not detect Process outputs:', error);
+      } finally {
+        if (processOutputDetections.get(nodeId) === hash) processOutputDetections.delete(nodeId);
+      }
+    }));
+    if (changed) updateEdges(); // the branch labels change the node's height
+  }
+  function scheduleProcessOutputSync() {
+    clearTimeout(processOutputSyncTimer);
+    processOutputSyncTimer = setTimeout(() => { void syncProcessOutputPorts(); }, 500);
+  }
+  document.addEventListener('workflow:canvas-changed', scheduleProcessOutputSync);
+
   async function runProcessNode(nodeId, { signal, onStarted, timeoutMs } = {}) {
     if (historySession?.projectId && canvasHistoryVersion === 1) {
       let sync;
@@ -5531,6 +5582,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       processNode.dataset.historyRecordId = record.id;
       delete processNode.dataset.processDfResults;
       delete processNode.dataset.processResults;
+      refreshProcessOutputStrip(processNode);
       await reconcileHistory();
     }
     if (session) pendingProcesses.add(nodeId);
@@ -5589,6 +5641,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     else delete liveNode.dataset.processResumable;
     pendingProcesses.delete(nodeId);
     delete liveNode.dataset.processResults;
+    refreshProcessOutputStrip(liveNode);
     setProgress(liveNode, 100);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     return { outputs, cancelled };
