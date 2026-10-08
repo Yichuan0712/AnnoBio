@@ -137,3 +137,15 @@ test('Process code declares its inputs as parameters, each by the alias it alrea
   assert.deepEqual(inputsAfter('def process(df):\n    return df.join(df_gt)\n'), [{ raw: 'df', copy: 'df_gt' }, ['copy', 'raw']]);
   assert.deepEqual(inputsAfter('def process(df):\n    return df\n'), [{ raw: 'df' }, ['raw']]);
 });
+
+test('the summary names a step input by the step it reads', async () => {
+  const data = (fromId, toId, alias) => ({ type: DATA_EDGE, fromId, fromPort: RESULT_PORT, toId, ...(alias ? { alias } : {}) });
+  const state = {
+    nodes: [{ type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: { headers: ['text'], rows: [['a']] } },
+      { type: 'prompt', nodeId: 'p', name: 'Extract' }, { type: 'run', nodeId: 'r', runName: 'Run' },
+      { type: 'process', nodeId: 'clean', name: 'Clean' }],
+    connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, data('raw', 'r'), data('r', 'clean', 'df')],
+  };
+  const pipelines = (await buildWorkspaceSummary(state, { extractInputFields })).split('\n\n')[0];
+  assert.match(pipelines, /1\. Run prompt: "Extract" \[p\] by run "Run" \[r\] on "Raw"\n {2}2\. Process data: "Clean" \[clean\] reading the output of "Extract"/);
+});

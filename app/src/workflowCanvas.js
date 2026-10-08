@@ -5804,6 +5804,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     }));
     if (changed) {
       updateEdges(); // the branch labels change the node's height
+      // Not a canvas change (no undo step); the Current Pipeline still redraws its branches.
+      document.dispatchEvent(new CustomEvent('workflow:process-outputs-changed'));
       // A reader of a branch that came or went says so without waiting for History to resolve again.
       nodesLayer.querySelectorAll('.workflow-node[data-waiting-for-upstream="1"]').forEach((node) => {
         node.title = readStepInputStatus(node).waiting || 'Waiting for upstream results.';

@@ -4,7 +4,7 @@
  * payload in.
  */
 import { pipelineInputDatasetIds } from './pipelineInputAvailability.js';
-import { processInputEdges, runInputSource } from './stepInputs.js';
+import { processInputSources, runInputSource } from './stepInputs.js';
 
 /**
  * @returns {Array<{ nodeId: string, kind: 'run'|'process', name: string,
@@ -22,9 +22,9 @@ export function pipelineInputSteps(canvasState, route) {
       if (!inputIds.has(inputId)) continue;
       steps.push({ nodeId: item.run_node_id, kind: 'run', name: nodes.get(item.prompt_node_id)?.name || 'Prompt', inputs: [dataset(inputId)] });
     } else if (item?.type === 'process') {
-      const read = processInputEdges(canvasState)
-        .filter((edge) => edge.toId === item.process_node_id && inputIds.has(edge.fromId))
-        .map((edge) => dataset(edge.fromId));
+      const read = processInputSources(canvasState, item.process_node_id)
+        .filter((source) => inputIds.has(source.nodeId))
+        .map((source) => dataset(source.nodeId));
       if (read.length) steps.push({ nodeId: item.process_node_id, kind: 'process', name: nodes.get(item.process_node_id)?.name || 'Process', inputs: read });
     }
   }

@@ -38,16 +38,6 @@ def _canvas_state() -> dict:
                 "code": "def process(row):\n    row['text'] = str(row['text']).strip()\n    return row\n",
             },
             {
-                "type": "dataset",
-                "nodeId": "dataset-clean",
-                "name": "Cleaned",
-                "datasetContent": {
-                    "headers": ["text", "figure"],
-                    "columnTypes": ["text", "image"],
-                    "rows": [],
-                },
-            },
-            {
                 "type": "prompt",
                 "nodeId": "prompt-original",
                 "name": "Original prompt",
@@ -80,9 +70,8 @@ def _canvas_state() -> dict:
         ],
         "connections": [
             {"fromId": "dataset-raw", "fromPort": "result", "toId": "process-clean", "type": "data", "alias": "df"},
-            {"fromId": "process-clean", "toId": "dataset-clean", "type": "process-to-dataset"},
             {"fromId": "prompt-duplicate", "toId": "run-duplicate", "type": "prompt-to-run"},
-            {"fromId": "dataset-clean", "fromPort": "result", "toId": "run-duplicate", "type": "data"},
+            {"fromId": "process-clean", "fromPort": "result", "toId": "run-duplicate", "type": "data"},
         ],
     }
 
@@ -91,16 +80,21 @@ def _selected_route() -> list[dict]:
     return [
         {"type": "dataset", "dataset_node_id": "dataset-raw"},
         {"type": "process", "process_node_id": "process-clean"},
-        {"type": "dataset", "dataset_node_id": "dataset-clean"},
         {"type": "prompt", "prompt_node_id": "prompt-duplicate", "run_node_id": "run-duplicate"},
     ]
 
 
+def _run_reads_raw(state: dict) -> list[dict]:
+    """The Run reads the starting Dataset itself, whose columns are known; returns that route."""
+    next(edge for edge in state["connections"] if edge["type"] == "data" and edge["toId"] == "run-duplicate")["fromId"] = "dataset-raw"
+    return [_selected_route()[0], _selected_route()[-1]]
+
+
 class PipelineExportTests(unittest.TestCase):
-    def build(self, state: dict | None = None) -> tuple[str, bytes]:
+    def build(self, state: dict | None = None, route: list[dict] | None = None) -> tuple[str, bytes]:
         return build_pipeline_archive(
             canvas_state=state or _canvas_state(),
-            route=_selected_route(),
+            route=route or _selected_route(),
             name="Research Pipeline",
             credentials=[
                 {
@@ -213,9 +207,10 @@ else:
 
     def test_same_name_input_mapping_is_inferred_for_legacy_runs(self):
         state = _canvas_state()
+        route = _run_reads_raw(state)
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
         run["runInputToColumn"] = "{}"
-        filename, archive = self.build(state)
+        filename, archive = self.build(state, route)
         self.assertEqual(filename, "research-pipeline.zip")
         with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
             manifest = json.loads(bundle.read("research-pipeline/pipeline.json"))
@@ -239,7 +234,7 @@ else:
         result = namespace["process"](pd.DataFrame([{"text": "  keep  "}]))
         self.assertEqual(result.to_dict(orient="records"), [{"text": "keep"}])
 
-    def test_exported_route_selects_its_named_process_branch(self):
+    def test_exported_route_reads_its_named_process_branch(self):
         state = _canvas_state()
         process = next(node for node in state["nodes"] if node.get("nodeId") == "process-clean")
         process["dfCode"] = (
@@ -247,43 +242,45 @@ else:
             "    return {'accepted': df, 'needs_review': df.iloc[0:0]}\n"
         )
         process.pop("code", None)
-        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
-        dataset["processOutputName"] = "accepted"
+        next(edge for edge in state["connections"] if edge["toId"] == "run-duplicate" and edge["type"] == "data")["fromPort"] = "accepted"
         _, archive = self.build(state)
         with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
             manifest = json.loads(bundle.read("research-pipeline/pipeline.json"))
             main = bundle.read("research-pipeline/main.py").decode("utf-8")
-        process_step = next(step for step in manifest["route"] if step["type"] == "process")
-        self.assertEqual(process_step["output_name"], "accepted")
-        self.assertIn("output_name='accepted'", main)
+        steps = manifest["graph"]["steps"]
+        process_step = next(step for step in steps if step["type"] == "process")
+        prompt_step = next(step for step in steps if step["type"] == "prompt")
+        self.assertEqual([output["branch"] for output in process_step["outputs"]], ["accepted", "needs_review"])
+        self.assertEqual(prompt_step["input"], "output:process:process-clean:accepted")
+        self.assertIn("branch(result, 'accepted'", main)
+        # The branch nobody reads is still an output of the exported project, named after it.
+        self.assertIn({"id": "output:process:process-clean:needs_review", "name": "needs_review"}, manifest["graph"]["terminal_datasets"])
 
     def test_unmapped_input_explains_how_to_fix_the_selected_run(self):
         state = _canvas_state()
-        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
-        dataset["datasetContent"]["rows"] = [["hello", ""]]
+        route = _run_reads_raw(state)
         prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")
         prompt["sections"] = [{"name": "Task", "content": "Answer {question}"}]
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
         run["runInputToColumn"] = "{}"
         with self.assertRaisesRegex(PipelineExportError, 'Open "Run A1" and map each input'):
-            self.build(state)
+            self.build(state, route)
 
     def test_implicit_mapping_does_not_guess_between_case_collisions(self):
         state = _canvas_state()
-        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
-        dataset["datasetContent"]["headers"] = ["Question", "question"]
-        dataset["datasetContent"]["columnTypes"] = ["text", "text"]
-        dataset["datasetContent"]["rows"] = [["first", "second"]]
+        route = _run_reads_raw(state)
+        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-raw")
+        dataset["datasetContent"] = {"headers": ["Question", "question"], "columnTypes": ["text", "text"], "rows": [["first", "second"]]}
         prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")
         prompt["sections"] = [{"name": "Task", "content": "Answer {QUESTION}"}]
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
         run["runInputToColumn"] = "{}"
         with self.assertRaisesRegex(PipelineExportError, 'Open "Run A1" and map each input'):
-            self.build(state)
+            self.build(state, route)
 
     def test_duplicate_dataset_columns_are_rejected(self):
         state = _canvas_state()
-        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
+        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-raw")
         dataset["datasetContent"]["headers"] = ["text", "text"]
         dataset["datasetContent"]["columnTypes"] = ["text", "text"]
         with self.assertRaisesRegex(PipelineExportError, "contains duplicate columns: text"):
@@ -294,26 +291,16 @@ else:
         import pandas as pd
         from backend.pipeline_export_dag import build_dag_pipeline_archive
 
-        # Exercise both archive builders, including a saved empty schema and an empty branch
-        # whose cached columns do not yet contain the Prompt's required input.
+        # Exercise both archive builders. The Run reads a Process output, whose columns are only
+        # known when it runs, and its mapping is left to be resolved against the actual data.
         for graph in (False, True):
             for headers in ([], ["other"]):
                 with self.subTest(graph=graph, headers=headers):
                     state = _canvas_state()
-                    dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
-                    dataset["datasetContent"] = {"headers": headers, "rows": []}
                     run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
                     run["runInputToColumn"] = "{}"
                     if graph:
-                        state["nodes"].append({
-                            "type": "dataset", "nodeId": "answered", "name": "Answered",
-                            "sourceRunNodeId": "run-duplicate", "datasetContent": {"headers": [], "rows": []},
-                        })
-                        _, archive = build_dag_pipeline_archive(
-                            canvas_state=state,
-                            route=[*_selected_route(), {"type": "dataset", "dataset_node_id": "answered"}],
-                            name="Research Pipeline",
-                        )
+                        _, archive = build_dag_pipeline_archive(canvas_state=state, route=_selected_route(), name="Research Pipeline")
                     else:
                         _, archive = self.build(state)
                     with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
@@ -358,8 +345,6 @@ else:
 
     def test_empty_branch_preserves_explicit_mapping(self):
         state = _canvas_state()
-        dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-clean")
-        dataset["datasetContent"] = {"headers": [], "rows": []}
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
         run["runInputToColumn"] = json.dumps({"text": "custom_column"})
         _, archive = self.build(state)
@@ -372,11 +357,11 @@ else:
         state = _canvas_state()
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
         run["runInputToColumn"] = '{"text": "missing"}'
-        next(edge for edge in state["connections"] if edge["type"] == "data" and edge["toId"] == "run-duplicate")["fromId"] = "dataset-raw"
+        route = _run_reads_raw(state)
         dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-raw")
         dataset["datasetContent"]["rows"] = []
         with self.assertRaisesRegex(PipelineExportError, "maps inputs to missing columns"):
-            build_pipeline_archive(canvas_state=state, route=[_selected_route()[0], _selected_route()[-1]], name="Source")
+            build_pipeline_archive(canvas_state=state, route=route, name="Source")
 
 
     def test_branched_graph_exports_multi_input_process_and_terminal_workbook(self):
@@ -385,34 +370,23 @@ else:
             "nodes": [
                 {"type": "dataset", "nodeId": "raw", "name": "Raw", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "process", "nodeId": "split", "name": "Split", "dfCode": "def process(df):\n    return {'left': df, 'right': df}\n"},
-                {"type": "dataset", "nodeId": "left", "name": "Left", "processOutputName": "left", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
-                {"type": "dataset", "nodeId": "right", "name": "Right", "processOutputName": "right", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "process", "nodeId": "combine", "name": "Combine", "dfCode": "def process(df):\n    return df\n"},
-                {"type": "dataset", "nodeId": "combined", "name": "Combined", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "prompt", "nodeId": "prompt", "name": "Answer", "sections": [{"name": "Task", "content": "Answer {text}"}], "inputTypes": {"text": "text"}, "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}},
                 {"type": "run", "nodeId": "run", "runName": "Answer run", "runInputToColumn": json.dumps({"text": "text"})},
-                {"type": "dataset", "nodeId": "answered", "name": "Answered", "sourceRunNodeId": "run", "datasetContent": {"headers": ["Input: text", "Output: answer"], "columnTypes": ["text", "text"]}},
             ],
             "connections": [
                 {"fromId": "raw", "fromPort": "result", "toId": "split", "type": "data", "alias": "df"},
-                {"fromId": "split", "toId": "left", "type": "process-to-dataset"},
-                {"fromId": "split", "toId": "right", "type": "process-to-dataset"},
-                {"fromId": "left", "fromPort": "result", "toId": "combine", "type": "data", "alias": "df_left"},
-                {"fromId": "right", "fromPort": "result", "toId": "combine", "type": "data", "alias": "df"},
-                {"fromId": "combine", "toId": "combined", "type": "process-to-dataset"},
+                {"fromId": "split", "fromPort": "left", "toId": "combine", "type": "data", "alias": "df_left"},
+                {"fromId": "split", "fromPort": "right", "toId": "combine", "type": "data", "alias": "df"},
                 {"fromId": "prompt", "toId": "run", "type": "prompt-to-run"},
-                {"fromId": "combined", "fromPort": "result", "toId": "run", "type": "data"},
+                {"fromId": "combine", "fromPort": "result", "toId": "run", "type": "data"},
             ],
         }
         route = [
             {"type": "dataset", "dataset_node_id": "raw"},
             {"type": "process", "process_node_id": "split"},
-            {"type": "dataset", "dataset_node_id": "left"},
-            {"type": "dataset", "dataset_node_id": "right"},
             {"type": "process", "process_node_id": "combine"},
-            {"type": "dataset", "dataset_node_id": "combined"},
             {"type": "prompt", "prompt_node_id": "prompt", "run_node_id": "run"},
-            {"type": "dataset", "dataset_node_id": "answered"},
         ]
         _, archive = build_pipeline_archive(
             canvas_state=state, route=route, name="Branched", credentials=[], author_name="Ada", generated_at="2026-09-24T00:00:00Z",
@@ -420,7 +394,8 @@ else:
         with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
             main = bundle.read("branched/main.py").decode("utf-8")
             manifest = json.loads(bundle.read("branched/pipeline.json"))
-            self.assertIn("run_process(frames['right'], {'df_left': frames['left'], 'df': frames['right']}", main)
+            self.assertIn("run_process(frames['output:process:split:right'], {'df_left': frames['output:process:split:left'], "
+                          "'df': frames['output:process:split:right']}", main)
             # Another input is the parameter named after its alias, or a global for older code.
             runner = main[main.index("def run_process("):main.index("def branch(")]
             namespace = {}
@@ -435,7 +410,8 @@ else:
             self.assertIn("REQUIRED_INPUT_COLUMNS = ['text']", main)
             self.assertIn("frames: dict[str, pd.DataFrame] = {}", main)
             self.assertIn("'id': 'raw'", main)
-            self.assertEqual(manifest["graph"]["terminal_datasets"], [{"id": "answered", "name": "Answered"}])
+            # Outputs are named after the step that makes them; here the Prompt.
+            self.assertEqual(manifest["graph"]["terminal_datasets"], [{"id": "output:llm:run:result", "name": "Answer"}])
             for member in bundle.namelist():
                 if member.endswith(".py"):
                     compile(bundle.read(member), member, "exec")

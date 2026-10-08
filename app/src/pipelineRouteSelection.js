@@ -50,13 +50,22 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
   const visitedStepIds = new Set();
   const selectedRunByStepId = new Map();
 
-  /** The Datasets of a slot, narrowed to the ones the selected Run upstream produced. */
+  /**
+   * What a slot offers: the Datasets an input slot lets the first step start from, or, between steps,
+   * the output of the Run the route selected upstream (a Process slot holds one output).
+   */
   function datasetOptions(step) {
-    const producerRunId = selectedRunByStepId.get(step.producerStepId) || null;
-    const datasets = producerRunId
-      ? step.datasets.filter((dataset) => dataset.producerRunNodeId === producerRunId)
-      : step.datasets;
-    return datasets.map((dataset) => ({
+    if (step.outputs) {
+      const producerRunId = selectedRunByStepId.get(step.producerStepId) || null;
+      const outputs = producerRunId ? step.outputs.filter((output) => output.producerNodeId === producerRunId) : step.outputs;
+      return outputs.map((output) => ({
+        value: `${output.producerNodeId}:${output.port}`,
+        label: output.port,
+        output,
+        stepId: step.id,
+      }));
+    }
+    return step.datasets.map((dataset) => ({
       value: dataset.datasetNodeId,
       label: dataset.datasetName,
       dataset,
@@ -64,9 +73,12 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
     }));
   }
 
-  function datasetFeeds(dataset, selected) {
-    if (selected?.kind === 'prompt') return (dataset.consumerRunNodeIds || []).includes(selected.runNodeId);
-    if (selected?.kind === 'process') return (dataset.consumerStepIds || []).includes(selected.stepId);
+  /** The Dataset or step output a slot option carries. */
+  const optionItem = (option) => option.dataset || option.output;
+
+  function datasetFeeds(item, selected) {
+    if (selected?.kind === 'prompt') return (item.consumerRunNodeIds || []).includes(selected.runNodeId);
+    if (selected?.kind === 'process') return (item.consumerStepIds || []).includes(selected.stepId);
     return false;
   }
 
@@ -149,14 +161,14 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
       out.push(datasetStep);
       for (const option of options) visitedStepIds.add(option.stepId);
       const consumerStepIds = [...new Set(options.flatMap((option) => (
-        option.dataset.consumerStepIds || stepById.get(option.stepId)?.consumerStepIds || []
+        optionItem(option).consumerStepIds || stepById.get(option.stepId)?.consumerStepIds || []
       )))];
-      const consumerRunIds = new Set(options.flatMap((option) => option.dataset.consumerRunNodeIds || []));
+      const consumerRunIds = new Set(options.flatMap((option) => optionItem(option).consumerRunNodeIds || []));
       const nextIndex = out.length;
       walk(consumerStepIds, consumerRunIds, out, stopId);
       // Of several Datasets, the route uses the one the chosen next step reads.
       const used = options.length > 1
-        ? options.find((option) => datasetFeeds(option.dataset, out[nextIndex]?.selectedOption))
+        ? options.find((option) => datasetFeeds(optionItem(option), out[nextIndex]?.selectedOption))
         : null;
       if (used) {
         datasetStep.selectedValue = used.value;
@@ -233,6 +245,10 @@ export function getVisibleRoute(route) {
   });
 }
 
+/**
+ * The route as the compiler takes it (pipeline_compile.py): its Prompt Runs and Processes, and the
+ * Datasets they start from. Outputs passed between steps are not listed; the compiler follows them.
+ */
 export function exportRoutePayload(route) {
   const exported = [];
   const seen = new Set();
