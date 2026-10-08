@@ -183,7 +183,8 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - 单节点运行 Process 时，前端把后端返回的逐行记录（`outputs`）还原成表格（`processRunClient.js`），没有用后端同时返回的 `output_tables`，所以没有行的分支会丢掉所有列名；Pipeline Runner 用的是 `output_tables`，不受影响。步骤之间直连以后，下游会读到一张没有列的空表。第 7 步手工验证时发现，第 8 步之后已修复：后端随结果返回每个分支的列名（`output_columns`），前端按它还原表格。
 - `processDetailModal.js` 的 `refreshHistoryState` 中，记录运行中时按钮文字是乱码 `Runningâ€¦`（源文件里的省略号被二次编码）。第 7 步发现。
 - 切换 History 时，确认框列出的“要恢复输入的节点”包括输入其实没变的节点：`planHistorySelection` 把补上 `historySelectionSignature` 也算作变化，跟随记录的 Dataset 重连输出也算。第 7 步发现。
-- Kinase 示例中 Run “Rewrite pair to UniProt names” 有结果，但输入映射的值全为空。打开它的窗口会自动填上映射，Run 的签名随之改变，它和下游 5 个步骤失去 History 匹配，自动保存后这些结果不再显示。第 6 步手工验证时发现，旧代码同样如此。尚未安排处理。
+- Kinase 示例中 Run “Rewrite pair to UniProt names” 有结果，但输入映射的值全为空。打开它的窗口会自动填上映射，Run 的签名随之改变，它和下游 5 个步骤失去 History 匹配，自动保存后这些结果不再显示。第 6 步手工验证时发现，旧代码同样如此。尚未安排处理。第 9 步之后，这个映射缺失还让旧示例中这一段的 Export Python Project 报错（见第 9 步完成记录）。
+- 第 9 步起，Process 识别出的每个分支都是 Pipeline 的必需输出（Runner 和导出都要求返回每个声明的分支）。代码在不同路径返回不同字典时（例如有时只返回 `kept`），只读取其中部分分支的 Pipeline 也会因为“没有返回某个分支”而失败；以前只有被保存为 Dataset 的分支是必需的。尚未安排处理，要改的话是让没人读取的分支变成可选输出。
 
 ## 3. 步骤
 
@@ -960,20 +961,37 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 
 **手工验证：**
 
-- [ ] 用直连方式重搭 Kinase 的流程。Current Pipeline 显示的结构与旧示例一致，分支 lane 正确。
-- [ ] Run Pipeline 对话框只列出 `kinase_abstracts` 作为输入。
-- [ ] Export Python Project 生成的项目可以运行（导出测试已经用 mock 覆盖）。
-- [ ] 打开旧示例的另存副本：Pipeline 在每个中间 Dataset 处断成几段，每段都能识别和导出。
+- [x] 用直连方式重搭 Kinase 的流程。Current Pipeline 显示的结构与旧示例一致，分支 lane 正确。
+- [x] Run Pipeline 对话框只列出 `kinase_abstracts` 作为输入。
+- [x] Export Python Project 生成的项目可以运行（导出测试已经用 mock 覆盖）。
+- [x] 打开旧示例的另存副本：Pipeline 在每个中间 Dataset 处断成几段，每段都能识别和导出。（有一段因示例本身的映射缺失而报错，见完成记录。）
 
 **Agent：** `pipelineActions.js` 使用 `exportRoutePayload` 和 `pipelineInputSteps`，自动跟上。`workspaceSummary.js` 的 `pipelineLines` 中关于 Dataset 选项的描述同步调整。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - 编译器不读画布上的 `processOutputPorts`，而是用后端自己的识别器（`process_outputs.py`）从代码识别分支，所以导出定义的节点白名单没有加这个字段。这样冻结的定义与代码不会不一致。
+  - 识别为单一输出、下游却读取命名分支时（`return out`，`out` 其实是字典），按动态输出处理（端口取下游读取的，给 `RUNTIME_PROCESS_CONTRACT` warning），不报 `UNKNOWN_OUTPUT_PORT`。只有识别出命名分支、下游读取的不在其中时才报错。
+  - Process 的输出是“识别出的分支 ∪ 被读取的分支”（与计划一致）。因为 Runner 和导出都要求返回每个声明的分支，代码在不同路径返回不同字典时会失败，已记入 §2.7。
+  - 映射：去掉了 `observed_schema` 及据此推导映射的逻辑（中间不再有保存的表）。`legacy_export`（导出）下，读取步骤输出的 Run 没有映射时保存 null 并给 `RUNTIME_INPUT_MAPPING` warning，由导出代码在有数据时推导；`strict`（Run Pipeline）仍报 `UNMAPPED_INPUT`，避免上游花费调用后才失败。`EMPTY_INPUT_SCHEMA` 只对被 job 读取的入口报告。
+  - 检测：Process 识别出的每个分支都生成槽位（lane），没人读取的分支显示为空 lane，顺序按分支顺序。这是手工验证发现的：旧示例在 Resolve chosen accessions 处有一条 “Do nothing” lane，Check UniProt availability 的两条 lane 顺序也按分支顺序。这与编译器“每个分支都是输出”一致。
+  - 分支识别结果变化时不发画布变化事件（第 2 步的撤销问题），所以新增事件 `workflow:process-outputs-changed`，Current Pipeline 收到后重新识别；否则打开旧项目、首次识别完成后面板仍是旧的分支。
+  - 导出定义：发送所有指向所选节点的 `data` 连线；读取路线外步骤时，把那个步骤以 `{type, nodeId, name}` 发送，编译器据此报 `UNSELECTED_UPSTREAM` 并写明名字。
+  - Prompt 步骤的 `inputDatasetNodeId` 只在读取 Dataset 时填写。Agent 的 Pipeline 摘要中，读取步骤输出的输入写成 `the output of "<名字>"`。
+  - Current Pipeline 面板去掉了冲突提示后，整个警告管道已无用，一并删除。
+- 测试：前端 199 → 200（删除 `datasetSourceContracts` 1 项；`pipelineRouteSelection` 改写并新增 3 项；Agent 摘要 1 项；其余改写 fixture）；后端 126 → 127（编译器测试改为步骤直连，删除被删诊断的测试，新增 `UNSELECTED_UPSTREAM`、`UNKNOWN_OUTPUT_PORT`、分支命名、动态分支、环、读取同一输出等用例）。跨语言测试通过。
+- 手工验证：
+  - 用脚本把 Kinase 示例的 9 个输入改为直接读取上游步骤（保存出来的 Dataset 留在画布上但不再被读取）。打开后 Current Pipeline 的文字与第 6 步记下的旧示例完全相同，包括两处分支和它们的顺序、两条 “Do nothing” lane。
+  - Run Pipeline 对话框只列出读取 `kinase_abstracts` 的 Extract 步骤（打开后取消，未运行）。
+  - Export Python Project：9 个 job 直接读取上游输出，唯一入口是 `kinase_abstracts`，输出工作表为 “Extract site from full text”（Prompt 名）和 “missing_full_text”（分支名）；`python main.py --help` 正常，所有模块可编译。
+  - 打开旧示例副本：每个中间 Dataset 都是入口，分成 9 条单步 Pipeline。8 条导出成功；Rewrite pair to UniProt names 那条报 “map each input; missing {excerpt}, {wrong_pair}”——这个 Run 的映射本来就是空的（§2.7）。以前它读的是一个空的派生分支、列未知，导出才放过；现在它读的是列已知的普通 Dataset，映射缺失如实报出。
 
 ---
 
@@ -1239,7 +1257,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 6 | 完成 | 2026-10-08 | `b876260` | 170 | 124 | |
 | 7 | 完成 | 2026-10-08 | `1ca0268` | 190 | 124 | |
 | 8 | 完成 | 2026-10-08 | `7d13b05` | 195 | 124 | |
-| 9 | 未开始 | | | | | |
+| 9 | 完成 | 2026-10-08 | `e787111` | 200 | 127 | |
 | 10 | 未开始 | | | | | |
 | 11 | 未开始 | | | | | |
 | 12 | 未开始 | | | | | |
