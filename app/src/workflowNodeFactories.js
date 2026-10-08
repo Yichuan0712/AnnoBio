@@ -70,6 +70,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     getNodeById,
     getConnections,
     datasetContentByNodeId,
+    readRunInputSource,
+    writeRunInputSource,
+    readRunInputTable,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode,
@@ -624,6 +627,8 @@ export function createWorkflowNodeFactories(deps = {}) {
         getUniqueDatasetExportName: findUniqueDatasetExportName,
         isRunNameAlreadyUsedForPrompt,
         onWorkingSetChange: onRunWorkingSetChange,
+        getInputSource: () => readRunInputSource(node),
+        setInputSource: (source) => writeRunInputSource(node, source),
         getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
           try {
             const raw = n.dataset.runInputToColumn;
@@ -856,8 +861,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         }
         const outputFields = deriveOutputFields(results, schemaFields);
         outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
-        const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-        const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
+        const wsContent = readRunInputTable(runNode);
         const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
         cols.push({ key: '[#]', label: 'Input: #' });
         wsHeaders.forEach((h) => {
@@ -889,8 +893,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         return { results, outputFields };
       }
       function getRunWorkingSetContent() {
-        const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-        const c = wsId ? datasetContentByNodeId.get(wsId) : null;
+        const c = readRunInputTable(runNode);
         return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
       }
       function getGroundTruthContent(wsNodeId) {
@@ -937,7 +940,7 @@ export function createWorkflowNodeFactories(deps = {}) {
             };
           }
         } catch (_) {}
-        const comparison_rows = await buildReviewComparisonRows(node, runNode, datasetContentByNodeId, sections);
+        const comparison_rows = await buildReviewComparisonRows(node, runNode, datasetContentByNodeId, sections, readRunInputTable(runNode));
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
@@ -1068,7 +1071,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           runResults = JSON.parse(runNode.dataset.runResults || '[]');
           outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
         } catch (_) {}
-        const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections);
+        const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections, readRunInputTable(runNode));
         let output_schema = null;
         try {
           const raw = promptNode.dataset.promptOutputFormat || '[]';
@@ -1082,7 +1085,6 @@ export function createWorkflowNodeFactories(deps = {}) {
             output_schema = { return_shape: promptNode.dataset.promptOutputReturnShape || 'single', fields };
           }
         } catch (_) {}
-        const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
         const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
         let run_input_to_column = {};
         try {
@@ -1101,7 +1103,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           score_mapping: scoreNode.dataset.scoreMapping || '[]',
           run_credential_id,
           run_input_to_column,
-          getRunWorkingSetContent: () => runWsId ? (datasetContentByNodeId.get(runWsId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
+          getRunWorkingSetContent: () => readRunInputTable(runNode) || { headers: [], rows: [] },
           getGroundTruthContent: () => gtId ? (datasetContentByNodeId.get(gtId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
         };
       }

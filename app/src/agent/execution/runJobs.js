@@ -6,6 +6,7 @@
  */
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { displayCell } from '../../datasetContent.js';
+import { runInputSource } from '../../stepInputs.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
   datasetContentOf,
@@ -81,7 +82,8 @@ function upstream(state, nodeId, edgeType) {
 function runInputTable(state, run) {
   const saved = runInputContentOf(run);
   if (runResultsOf(run).length && Array.isArray(saved.rows) && saved.rows.length) return saved;
-  const dataset = state.nodes.find((n) => n.nodeId === run.runWorkingSetId);
+  const inputId = runInputSource(state, run.nodeId)?.nodeId;
+  const dataset = state.nodes.find((n) => n.nodeId === inputId);
   return dataset ? datasetContentOf(dataset) : { headers: [], rows: [] };
 }
 
@@ -124,7 +126,7 @@ function previewRun(job, ctx) {
   const usd = price ? inputTokens * price.input + outputTokens * price.output : null;
 
   const lines = [
-    `${pendingRows.length} row${pendingRows.length === 1 ? '' : 's'} of "${nodeTitle(ctx.state.nodes.find((n) => n.nodeId === run.runWorkingSetId))}"${done.size ? ` (continuing after ${done.size} done)` : ''}`,
+    `${pendingRows.length} row${pendingRows.length === 1 ? '' : 's'} of "${nodeTitle(ctx.state.nodes.find((n) => n.nodeId === runInputSource(ctx.state, run.nodeId)?.nodeId))}"${done.size ? ` (continuing after ${done.size} done)` : ''}`,
     `Model: ${credentialLabel(credential)}${run.runCredentialId ? '' : ' (default Run model)'}`,
     `≈ ${Math.round(inputTokens).toLocaleString('en-US')} input and ${Math.round(outputTokens).toLocaleString('en-US')} output tokens`
       + (usd != null ? `, about ${formatUsd(usd)}` : ''),

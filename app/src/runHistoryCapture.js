@@ -2,6 +2,7 @@ import { datasetSignature, processInputSignature, runInputSignature } from './ru
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { resolveHistoryCanvasState } from './runHistoryResolver.js';
 import { datasetHistorySource } from './datasetHistorySource.js';
+import { runInputSource } from './stepInputs.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -42,7 +43,7 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
     const promptEdge = canvas.connections.find((edge) => edge.type === 'prompt-to-run' && edge.toId === targetNodeId);
     const prompt = nodes.get(promptEdge?.fromId);
     if (!prompt || prompt.type !== 'prompt') throw new Error('Run has no input Prompt.');
-    const dataset = await snapshotDataset(String(target.runWorkingSetId || ''));
+    const dataset = await snapshotDataset(runInputSource(canvas, targetNodeId)?.nodeId || '');
     const promptSnapshot = {
       nodeId: nodeId(prompt), name: prompt.name || '', sections: copy(prompt.sections || prompt.fields || []),
       outputFormat: copy(prompt.outputFormat || { returnShape: 'single', fields: [] }),

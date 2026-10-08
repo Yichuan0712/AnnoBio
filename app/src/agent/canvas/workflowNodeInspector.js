@@ -5,6 +5,7 @@
  */
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 import { displayCell, normalizeDatasetContent } from '../../datasetContent.js';
+import { runInputSource } from '../../stepInputs.js';
 
 export const MAX_ROWS_PER_READ = 50;
 
@@ -294,7 +295,7 @@ function inspectRun(node, ctx, options) {
   const results = runResultsOf(node);
   const input = runInputContentOf(node);
   const prompt = upstreamOfType(ctx.canvasState, ctx.nodeLookup, ctx.nodeId, 'prompt');
-  const dataset = ctx.nodeLookup.get(normalizeNodeId(node.runWorkingSetId));
+  const dataset = ctx.nodeLookup.get(normalizeNodeId(runInputSource(ctx.canvasState, ctx.nodeId)?.nodeId));
   const mapping = parseJsonObject(node.runInputToColumn, {});
   const promptNode = prompt ? ctx.nodeLookup.get(prompt.nodeId) : null;
   const promptInputs = promptNode && typeof options.extractInputFields === 'function'

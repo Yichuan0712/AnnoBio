@@ -19,13 +19,14 @@
  *    "Save to workspace" — see workflowCanvasRuntime.js's saveRunResultsToWorkspace), or a
  *    `process-to-dataset` connection. Legacy snapshot edges also preserve the visible path,
  *    although their saved tables are independent inputs when the pipeline runs.
- *  - Consumed by: either a Run's own `runWorkingSetId` field, or a `dataset-to-process` connection.
+ *  - Consumed by: either a Run's input (stepInputs.js runInputSource), or a `dataset-to-process` connection.
  *
  * Only datasets that actually take part get a step; ones sitting unattached on the canvas don't.
  *
  * A Dataset with conflicting producers is left without an inferred producer; the panel reports it.
  */
 import { datasetProducerConflicts } from './pipelineProducerConflicts.js';
+import { runInputSource } from './stepInputs.js';
 
 const STEP_KIND = { PROMPT: 'prompt', PROCESS: 'process', DATASET: 'dataset' };
 
@@ -162,7 +163,7 @@ export function detectPipelines(canvasState) {
           runs: runNodeIds.map((runNodeId) => ({
             runNodeId,
             runName: nodeById.get(runNodeId)?.runName || 'Run',
-            inputDatasetNodeId: nodeById.get(runNodeId)?.runWorkingSetId || '',
+            inputDatasetNodeId: runInputSource(canvasState, runNodeId)?.nodeId || '',
           })),
           // Kept for callers that only need membership in the selected Prompt version.
           runNodeIds,
@@ -245,7 +246,8 @@ export function detectPipelines(canvasState) {
   }
   for (const run of runNodes) {
     const consumer = runNodeToStep.get(run.nodeId);
-    if (consumer && run.runWorkingSetId) addConsumer(run.runWorkingSetId, consumer.id, run.nodeId);
+    const input = runInputSource(canvasState, run.nodeId);
+    if (consumer && input) addConsumer(input.nodeId, consumer.id, run.nodeId);
   }
   for (const c of connections) {
     if (c.type !== 'dataset-to-process') continue;

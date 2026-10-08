@@ -3,6 +3,7 @@ import { buildProcessDatasetBindings, referencedDatasetAliases } from './process
 import { buildRunResultsTable } from './runResultsExport.js';
 import { cloneCell } from './datasetContent.js';
 import { datasetHistorySource } from './datasetHistorySource.js';
+import { runInputSource } from './stepInputs.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -145,7 +146,7 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
       if (node.type === 'run') {
         const promptEdge = next.connections.find((edge) => edge.type === 'prompt-to-run' && edge.toId === id);
         const prompt = nodes.get(promptEdge?.fromId);
-        const datasetId = String(node.runWorkingSetId || '');
+        const datasetId = runInputSource(next, id)?.nodeId || '';
         const dataset = await resolveDataset(datasetId);
         if (prompt?.type === 'prompt' && dataset) {
           signature = await runInputSignature({

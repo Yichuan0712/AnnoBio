@@ -1,3 +1,5 @@
+import { runInputSource } from './stepInputs.js';
+
 /** Return upstream Dataset IDs in color priority order, plus the selected Prompt. */
 export function dependencyColorSources(node, nodeById, connections = []) {
   if (!node?.dataset) return { datasetIds: [], promptId: '' };
@@ -10,8 +12,9 @@ export function dependencyColorSources(node, nodeById, connections = []) {
   const runSources = (runId) => {
     const run = nodeById.get(runId);
     if (!run?.dataset) return { datasetIds: [], promptId: '' };
+    const input = runInputSource({ nodes: [{ nodeId: runId, type: 'run', runWorkingSetId: run.dataset.runWorkingSetId }], connections }, runId);
     return {
-      datasetIds: uniqueIds([run.dataset.runWorkingSetId || source(runId, 'dataset-to-run')]),
+      datasetIds: uniqueIds([input?.nodeId]),
       promptId: source(runId, 'prompt-to-run'),
     };
   };
