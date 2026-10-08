@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { planLegacyHistoryMigration } from '../src/runHistoryMigration.js';
 import { buildRunResultsTable } from '../src/runResultsExport.js';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { planHistorySelection } from '../src/runHistorySelection.js';
 import { captureHistoryInput, runningHistoryRecord } from '../src/runHistoryCapture.js';
 import { pipelineInputDatasetIds } from '../src/pipelineInputAvailability.js';
 import { planChangeSet } from '../src/agent/operations/changeSet.js';
+import { recordGraph } from './historyGraphFixture.mjs';
 
-// Prompt → Run → saved output → Process, as in runHistoryMigration.test.mjs.
+// Prompt → Run → saved output → Process, as in historyGraphFixture.mjs without the saved Process output.
 const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
 const prompt = { type: 'prompt', nodeId: 'prompt', name: 'Prompt', sections: [{ content: 'Say {{text}}' }], outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} };
 const input = { type: 'dataset', nodeId: 'input', name: 'Input', datasetContent: content('hello') };
@@ -27,10 +27,7 @@ const graph = {
 };
 
 async function setup() {
-  let next = 0;
-  const migrated = await planLegacyHistoryMigration(graph, {
-    createId: () => String(++next).padStart(32, '0'), now: () => '2026-10-01T00:00:00.000Z',
-  });
+  const migrated = await recordGraph(graph);
   const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
   const index = { records: migrated.records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) };
   const resolve = (state) => resolveHistoryCanvasState(state, { index, loadRecord: async (id) => records[id] });
@@ -91,14 +88,6 @@ test('selecting a record made while the output still followed History makes it f
   const selected = await planHistorySelection(asCopy(migrated.state), processRecord.id, { loadRecord: async (id) => records[id] });
   assert.equal(datasetIn(selected.state).savedCopy, undefined);
   assert.equal(datasetIn(selected.state).sourceRunNodeId, 'run');
-});
-
-test('migrating a merged canvas leaves a saved copy and its link alone', async () => {
-  const state = asCopy(graph, [['not the run output']]);
-  const migrated = await planLegacyHistoryMigration(state, { createId: () => 'f'.repeat(32), now: () => '2026-10-01T00:00:00Z' });
-  assert.equal(migrated.detachedDatasetIds.includes('run-dataset'), false);
-  assert.equal(datasetIn(migrated.state).sourceRunNodeId, 'run');
-  assert.equal(migrated.state.connections.some((edge) => edge.type === 'run-to-dataset-snapshot'), false);
 });
 
 test('pipelines still treat a saved copy as produced by its Run', () => {

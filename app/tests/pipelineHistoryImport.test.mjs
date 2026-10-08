@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { importPipelineRunHistory, pipelineCopyInputs, withCompatibleLegacyCanvas } from '../src/pipelineHistoryImport.js';
+import { importPipelineRunHistory, pipelineCopyInputs } from '../src/pipelineHistoryImport.js';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { normalizeDatasetContent } from '../src/datasetContent.js';
 
@@ -149,16 +149,11 @@ test('a Process moved onto the published copy shows the imported Pipeline result
   assert.deepEqual(resolved.state.nodes.find((node) => node.nodeId === 'out').datasetContent.rows, [['Y']]);
 });
 
-test('does not attribute an old Pipeline run to changed live Prompt code', () => {
-  const definition = { spec: { jobs: [{ id: 'llm:run', type: 'llm', inputs: { data: 'dataset:raw' },
-    config: { sections: [{ name: 'Task', content: '{text}' }], input_mapping: { text: 'text' },
-      output_schema: { return_shape: 'single', fields: [{ key: 'answer' }] } } }],
-  artifacts: [{ id: 'dataset:raw' }], source_map: { 'llm:run': { node_ids: ['prompt', 'run'] } } } };
-  const canvas = { nodes: [
-    { type: 'dataset', nodeId: 'raw' },
-    { type: 'prompt', nodeId: 'prompt', sections: [{ name: 'Task', content: 'changed {text}' }],
-      outputFormat: { returnShape: 'single', fields: [{ key: 'answer' }] } },
-    { type: 'run', nodeId: 'run', runWorkingSetId: 'raw', runInputToColumn: { text: 'text' } },
-  ] };
-  assert.equal(withCompatibleLegacyCanvas(definition, canvas).canvas_state, undefined);
+test('a Pipeline run without a frozen node definition is not imported', async () => {
+  const definition = { spec: { jobs: [], artifacts: [], source_map: {} } };
+  const session = { projectId: 'project', index: { records: [] }, putRecord: async () => { throw new Error('nothing should be saved'); } };
+  await assert.rejects(
+    importPipelineRunHistory({ run: { run_id: 'old-run', jobs: [] }, definition, getArtifact: async () => null, session }),
+    /This Pipeline run has no frozen node definition for History import\./,
+  );
 });
