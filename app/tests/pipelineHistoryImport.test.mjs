@@ -1,153 +1,135 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { importPipelineRunHistory, pipelineCopyInputs } from '../src/pipelineHistoryImport.js';
+import { importPipelineRunHistory, pipelineRunImported, PIPELINE_RUN_BEFORE_DATA_FLOW } from '../src/pipelineHistoryImport.js';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
-import { normalizeDatasetContent } from '../src/datasetContent.js';
-import { upgradeCanvasState } from '../src/canvasFormat.js';
+import { stepOutputSignature } from '../src/runHistorySignature.js';
 
-test('imports a Pipeline chain into node History exactly once with upstream record references', async () => {
-  const canvas = { nodes: [
-    { type: 'dataset', nodeId: 'raw', name: 'Raw' },
-    { type: 'prompt', nodeId: 'prompt', name: 'Extract', sections: [{ name: 'Task', content: '{text}' }],
-      outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} },
-    { type: 'run', nodeId: 'run', runWorkingSetId: 'raw', runInputToColumn: { text: 'text' } },
-    { type: 'dataset', nodeId: 'mid', name: 'Pairs', sourceRunNodeId: 'run' },
-    { type: 'process', nodeId: 'process', name: 'Clean', primaryDatasetId: 'mid', dfCode: 'def process(df): pass' },
-    { type: 'dataset', nodeId: 'out', name: 'Clean pairs', processOutputName: 'result' },
-  ], connections: [] };
-  const spec = { artifacts: [
-    { id: 'dataset:raw', producer: null },
-    { id: 'dataset:mid', producer: { job_id: 'llm:run', port: 'result' } },
-    { id: 'dataset:out', producer: { job_id: 'process:process', port: 'result' } },
-  ], jobs: [
-    { id: 'llm:run', type: 'llm', inputs: { data: 'dataset:raw' }, outputs: { result: ['dataset:mid'] },
-      config: { input_mapping: { text: 'text' }, output_schema: { fields: [{ key: 'answer' }] }, settings: {} } },
-    { id: 'process:process', type: 'process', inputs: { df: 'dataset:mid' },
-      outputs: { result: ['dataset:out'] }, config: { code: 'def process(df): pass' } },
-  ], source_map: { 'llm:run': { node_ids: ['prompt', 'run'] },
-    'process:process': { node_ids: ['process'] } } };
-  const tables = {
-    'dataset:raw': { headers: ['text'], rows: [['x']], column_types: ['text'], row_ids: ['row-1'] },
-    'dataset:mid': { headers: ['Input: #', 'Input: text', 'Output: #', 'Output: answer'],
-      rows: [[1, 'x', 1, 'y']], column_types: ['text', 'text', 'text', 'text'], row_ids: [1] },
-    'dataset:out': { headers: ['answer'], rows: [['Y']], column_types: ['text'], row_ids: [1] },
-  };
+const RAW = { headers: ['text'], rows: [['x']], columnTypes: ['text'], rowIds: ['row-1'] };
+const prompt = (nodeId, name, field) => ({ type: 'prompt', nodeId, name, sections: [{ name: 'Task', content: '{text}' }],
+  outputFormat: { returnShape: 'single', fields: [{ key: field, type: 'str' }] }, inputTypes: {} });
+const data = (fromId, toId, alias) => ({ type: 'data', fromId, fromPort: 'result', toId, ...(alias ? { alias } : {}) });
+
+// raw → Extract (r1) → Clean (Process) → Judge (r2), connected step to step.
+const canvas = () => ({ version: 3, nodes: [
+  { type: 'dataset', nodeId: 'raw', name: 'Raw' },
+  prompt('p1', 'Extract', 'answer'), { type: 'run', nodeId: 'r1', runInputToColumn: { text: 'text' } },
+  { type: 'process', nodeId: 'clean', name: 'Clean', dfCode: 'def process(df): return df' },
+  prompt('p2', 'Judge', 'verdict'), { type: 'run', nodeId: 'r2', runInputToColumn: { text: 'answer' } },
+], connections: [
+  { type: 'prompt-to-run', fromId: 'p1', toId: 'r1' }, data('raw', 'r1'), data('r1', 'clean', 'df'),
+  { type: 'prompt-to-run', fromId: 'p2', toId: 'r2' }, data('clean', 'r2'),
+] });
+const spec = { artifacts: [
+  { id: 'dataset:raw', producer: null },
+  { id: 'output:llm:r1:result', producer: { job_id: 'llm:r1', port: 'result' } },
+  { id: 'output:process:clean:result', producer: { job_id: 'process:clean', port: 'result' } },
+  { id: 'output:llm:r2:result', producer: { job_id: 'llm:r2', port: 'result' } },
+], jobs: [
+  { id: 'llm:r1', type: 'llm', inputs: { data: 'dataset:raw' }, outputs: { result: ['output:llm:r1:result'] },
+    config: { output_schema: { fields: [{ key: 'answer' }] }, settings: {} } },
+  { id: 'process:clean', type: 'process', inputs: { df: 'output:llm:r1:result' },
+    outputs: { result: ['output:process:clean:result'] }, config: { code: 'def process(df): return df' } },
+  { id: 'llm:r2', type: 'llm', inputs: { data: 'output:process:clean:result' }, outputs: { result: ['output:llm:r2:result'] },
+    config: { output_schema: { fields: [{ key: 'verdict' }] }, settings: {} } },
+], source_map: { 'llm:r1': { node_ids: ['p1', 'r1'] }, 'process:clean': { node_ids: ['clean'] },
+  'llm:r2': { node_ids: ['p2', 'r2'] } } };
+const tables = {
+  'dataset:raw': { headers: ['text'], rows: [['x']], column_types: ['text'], row_ids: ['row-1'] },
+  'output:llm:r1:result': { headers: ['Input: #', 'Input: text', 'Output: #', 'Output: answer'], rows: [[1, 'x', 1, 'y']] },
+  'output:process:clean:result': { headers: ['answer'], rows: [['Y']], column_types: ['text'] },
+  'output:llm:r2:result': { headers: ['Input: #', 'Input: answer', 'Output: #', 'Output: verdict'], rows: [[1, 'Y', 1, 'ok']] },
+};
+const JOBS = ['llm:r1', 'process:clean', 'llm:r2'];
+const pipelineRun = (runId, statuses = {}) => ({ run_id: runId, status: 'succeeded', finished_at: '2026-10-08T00:00:00Z',
+  jobs: JOBS.map((job_id) => ({ job_id, status: statuses[job_id] || 'succeeded' })),
+  plan: { jobs: [{ job_id: 'llm:r1', model: { model: 'test', credential_id: 'cred' } }] } });
+const historySession = () => {
   const records = [];
-  const session = { projectId: 'project', index: { records: [] },
-    async putRecord(record) { records.push(record); this.index.records.push(record); } };
-  const run = { run_id: 'a'.repeat(32), status: 'succeeded', finished_at: '2026-10-05T00:00:00Z',
-    jobs: [{ job_id: 'llm:run', status: 'succeeded' }, { job_id: 'process:process', status: 'succeeded' }],
-    plan: { jobs: [{ job_id: 'llm:run', model: { model: 'test', credential_id: 'cred' } }] } };
-  const args = { run, definition: { spec, canvas_state: canvas }, session,
-    getArtifact: async (id) => ({ artifact: { valid: true }, table: tables[id] }) };
-  const first = await importPipelineRunHistory(args);
-  assert.equal(first.imported, 2);
-  assert.equal(records[0].results.runResults[0].output.answer, 'y');
-  assert.equal(records[1].inputs.bindings[0].sourceRecordId, records[0].id);
-  assert.deepEqual(records[1].sourceRecordIds, [records[0].id]);
-  const liveCanvas = structuredClone(canvas);
-  liveCanvas.nodes.find((node) => node.nodeId === 'raw').datasetContent = {
-    headers: ['text'], rows: [['x']], columnTypes: ['text'], rowIds: ['row-1'],
-  };
-  liveCanvas.nodes.find((node) => node.nodeId === 'mid').datasetContent = { headers: [], rows: [] };
-  liveCanvas.nodes.find((node) => node.nodeId === 'out').datasetContent = { headers: [], rows: [] };
-  liveCanvas.connections = [{ type: 'prompt-to-run', fromId: 'prompt', toId: 'run' },
-    { type: 'dataset-to-process', fromId: 'mid', toId: 'process' },
-    { type: 'process-to-dataset', fromId: 'process', toId: 'out' }];
-  const resolved = await resolveHistoryCanvasState(upgradeCanvasState(liveCanvas), {
+  return { records, session: { projectId: 'project', index: { records: [] },
+    async putRecord(record) { records.push(record); this.index.records.push(record); } } };
+};
+const importArgs = (run, session, frozen = canvas()) => ({ run, session, definition: { spec, canvas_state: frozen },
+  getArtifact: async (id) => ({ artifact: { valid: true }, table: tables[id] }) });
+
+test('a chain is imported as single-node records: Dataset content first, then references to the step before', async () => {
+  const { records, session } = historySession();
+  const first = await importPipelineRunHistory(importArgs(pipelineRun('a'.repeat(32)), session));
+  assert.equal(first.imported, 3);
+  const [extract, clean, judge] = records;
+  assert.deepEqual(records.map((record) => [record.nodeId, record.kind, record.pipelineRunId]),
+    [['r1', 'run', 'a'.repeat(32)], ['clean', 'process', 'a'.repeat(32)], ['r2', 'run', 'a'.repeat(32)]]);
+  assert.deepEqual([...first.recordIdsByJob], [['llm:r1', extract.id], ['process:clean', clean.id], ['llm:r2', judge.id]]);
+
+  assert.equal(extract.inputs.dataset.kind, 'dataset');
+  assert.equal(extract.inputs.dataset.name, 'Raw');
+  assert.deepEqual(extract.sourceRecordIds, []);
+  assert.equal(extract.results.runResults[0].output.answer, 'y');
+  assert.equal(extract.inputs.credentialId, 'cred');
+
+  const [binding] = clean.inputs.bindings;
+  assert.deepEqual({ ...binding, signature: undefined },
+    { kind: 'step', nodeId: 'r1', port: 'result', recordId: extract.id, alias: 'df', signature: undefined });
+  assert.equal(binding.signature, await stepOutputSignature({ nodeId: 'r1', recordId: extract.id, port: 'result' }));
+  assert.equal(clean.inputs.primaryDatasetId, 'r1:result');
+  assert.deepEqual(clean.sourceRecordIds, [extract.id]);
+  assert.deepEqual(clean.summary.datasetNames, ['Extract']);
+  assert.deepEqual(clean.results.dfResults.outputs.result.rows, [['Y']]);
+
+  // A step's output is only referenced; the table the Run read is kept as its runInputContent.
+  assert.deepEqual(judge.inputs.dataset, { kind: 'step', nodeId: 'clean', port: 'result', recordId: clean.id,
+    signature: await stepOutputSignature({ nodeId: 'clean', recordId: clean.id, port: 'result' }) });
+  assert.deepEqual(judge.sourceRecordIds, [clean.id]);
+  assert.deepEqual(judge.results.runInputContent.rows, [['Y']]);
+  assert.equal(judge.results.runResults[0].output.verdict, 'ok');
+  assert.deepEqual(judge.summary.datasetNames, ['Clean']);
+
+  // The live canvas signs its inputs as these records do, so every step shows this run.
+  const live = canvas();
+  live.nodes[0].datasetContent = structuredClone(RAW);
+  const resolved = await resolveHistoryCanvasState(live, {
     index: session.index, loadRecord: async (id) => records.find((record) => record.id === id),
   });
-  assert.equal(resolved.currentRecordIds.run, records[0].id);
-  assert.equal(resolved.currentRecordIds.process, records[1].id);
-  assert.deepEqual(resolved.state.nodes.find((node) => node.nodeId === 'out').datasetContent.rows, [['Y']]);
-  assert.equal((await importPipelineRunHistory(args)).imported, 0);
-  assert.equal(records.length, 2);
+  assert.deepEqual(resolved.currentRecordIds, { r1: extract.id, clean: clean.id, r2: judge.id });
 
-  const savedCopyCanvas = structuredClone(canvas);
-  savedCopyCanvas.nodes.find((node) => node.nodeId === 'mid').savedCopy = true;
-  const savedCopyRecords = [];
-  const savedCopySession = { projectId: 'project', index: { records: [] },
-    async putRecord(record) { savedCopyRecords.push(record); this.index.records.push(record); } };
-  await importPipelineRunHistory({ ...args, run: { ...run, run_id: 'b'.repeat(32) },
-    definition: { spec, canvas_state: savedCopyCanvas }, session: savedCopySession });
-  assert.equal(savedCopyRecords[1].inputs.bindings[0].sourceRecordId, undefined);
-  assert.deepEqual(savedCopyRecords[1].sourceRecordIds, [savedCopyRecords[0].id]);
+  assert.equal((await importPipelineRunHistory(importArgs(pipelineRun('a'.repeat(32)), session))).imported, 0);
+  assert.equal(records.length, 3);
 });
 
-test('moves Run inputs and every copied Process input onto published copies', () => {
-  const spec = { jobs: [
-    { id: 'llm:next', type: 'llm', inputs: { data: 'dataset:mid' } },
-    { id: 'process:clean', type: 'process', inputs: { df: 'dataset:mid', df_raw: 'dataset:raw' } },
-    { id: 'process:merge', type: 'process', inputs: { df: 'dataset:left', df_right: 'dataset:right' } },
+test('an entry Dataset is recorded as the run read it, not as the canvas holds it now', async () => {
+  const { records, session } = historySession();
+  const frozen = canvas();
+  frozen.nodes[0].datasetContent = { headers: ['text'], rows: [['edited since']], columnTypes: ['text'], rowIds: ['row-1'] };
+  await importPipelineRunHistory(importArgs(pipelineRun('b'.repeat(32)), session, frozen));
+  assert.deepEqual(records[0].inputs.dataset.content, RAW);
+  assert.deepEqual(records[0].results.runInputContent, RAW);
+});
+
+test('a stopped run imports only the jobs that succeeded, and the rest once it is resumed', async () => {
+  const { records, session } = historySession();
+  const stopped = pipelineRun('c'.repeat(32), { 'process:clean': 'cancelled', 'llm:r2': 'pending' });
+  assert.equal(await pipelineRunImported(stopped, session.index), false);
+  assert.equal((await importPipelineRunHistory(importArgs(stopped, session))).imported, 1);
+  assert.deepEqual(records.map((record) => record.nodeId), ['r1']);
+  assert.equal(await pipelineRunImported(stopped, session.index), true);
+
+  const resumed = pipelineRun('c'.repeat(32));
+  assert.equal(await pipelineRunImported(resumed, session.index), false);
+  assert.equal((await importPipelineRunHistory(importArgs(resumed, session))).imported, 2);
+  assert.equal(records[1].inputs.bindings[0].recordId, records[0].id);
+  assert.equal(await pipelineRunImported(resumed, session.index), true);
+  assert.equal(await pipelineRunImported(pipelineRun('d'.repeat(32)), session.index), false);
+});
+
+test('a run made before steps connected directly is not imported', async () => {
+  const session = { projectId: 'project', index: { records: [] }, putRecord: async () => { throw new Error('nothing should be saved'); } };
+  const old = { ...spec, artifacts: [
+    { id: 'dataset:raw', producer: null },
+    { id: 'dataset:pairs', producer: { job_id: 'llm:r1', port: 'result' } },
   ] };
-  const copies = new Map([['dataset:mid', 'mid-copy'], ['dataset:left', 'left-copy'], ['dataset:right', 'right-copy']]);
-  assert.deepEqual([...pipelineCopyInputs(spec, copies)].map(([job, inputs]) => [job, [...inputs]]), [
-    ['llm:next', [['dataset:mid', 'mid-copy']]],
-    ['process:clean', [['dataset:mid', 'mid-copy']]],
-    ['process:merge', [['dataset:left', 'left-copy'], ['dataset:right', 'right-copy']]],
-  ]);
-});
-
-test('a Process moved onto the published copy shows the imported Pipeline result', async () => {
-  const canvas = { nodes: [
-    { type: 'dataset', nodeId: 'raw', name: 'Raw' },
-    { type: 'prompt', nodeId: 'prompt', name: 'Extract', sections: [{ name: 'Task', content: '{text}' }],
-      outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} },
-    { type: 'run', nodeId: 'run', runWorkingSetId: 'raw', runInputToColumn: { text: 'text' } },
-    { type: 'dataset', nodeId: 'mid', name: 'Pairs', sourceRunNodeId: 'run', savedCopy: true },
-    { type: 'process', nodeId: 'process', name: 'Clean', primaryDatasetId: 'mid', dfCode: 'def process(df): pass' },
-    { type: 'dataset', nodeId: 'out', name: 'Clean pairs', processOutputName: 'result' },
-  ], connections: [] };
-  const spec = { artifacts: [
-    { id: 'dataset:raw', producer: null },
-    { id: 'dataset:mid', producer: { job_id: 'llm:run', port: 'result' } },
-    { id: 'dataset:out', producer: { job_id: 'process:process', port: 'result' } },
-  ], jobs: [
-    { id: 'llm:run', type: 'llm', inputs: { data: 'dataset:raw' }, outputs: { result: ['dataset:mid'] },
-      config: { input_mapping: { text: 'text' }, output_schema: { fields: [{ key: 'answer' }] }, settings: {} } },
-    { id: 'process:process', type: 'process', inputs: { df: 'dataset:mid' },
-      outputs: { result: ['dataset:out'] }, config: { code: 'def process(df): pass' } },
-  ], source_map: { 'llm:run': { node_ids: ['prompt', 'run'] },
-    'process:process': { node_ids: ['process'] } } };
-  const tables = {
-    'dataset:raw': { headers: ['text'], rows: [['x']], column_types: ['text'], row_ids: ['row-1'] },
-    'dataset:mid': { headers: ['Input: #', 'Input: text', 'Output: #', 'Output: answer'],
-      rows: [[1, 'x', 1, 'y']], column_types: ['text', 'text', 'text', 'text'], row_ids: [1] },
-    'dataset:out': { headers: ['answer'], rows: [['Y']], column_types: ['text'], row_ids: [1] },
-  };
-  // The copy as the canvas stores it: normalized, so its row IDs differ from the artifact's.
-  const mid = tables['dataset:mid'];
-  const copyContent = normalizeDatasetContent({ headers: mid.headers, rows: mid.rows, columnTypes: mid.column_types, rowIds: mid.row_ids });
-  const inputCopies = pipelineCopyInputs(spec, new Map([['dataset:mid', 'mid-copy']]));
-  for (const inputs of inputCopies.values()) {
-    for (const [logicalId, nodeId] of inputs) inputs.set(logicalId, { nodeId, name: 'Pairs 2', content: copyContent });
-  }
-  const records = [];
-  const session = { projectId: 'project', index: { records: [] },
-    async putRecord(record) { records.push(record); this.index.records.push(record); } };
-  const run = { run_id: 'c'.repeat(32), status: 'succeeded',
-    jobs: [{ job_id: 'llm:run', status: 'succeeded' }, { job_id: 'process:process', status: 'succeeded' }] };
-  await importPipelineRunHistory({ run, definition: { spec, canvas_state: canvas }, session, inputCopies,
-    getArtifact: async (id) => ({ artifact: { valid: true }, table: tables[id] }) });
-  const processRecord = records.find((record) => record.kind === 'process');
-  assert.equal(processRecord.inputs.primaryDatasetId, 'mid-copy');
-  assert.deepEqual(processRecord.sourceRecordIds, [records.find((record) => record.kind === 'run').id]);
-
-  const live = structuredClone(canvas);
-  live.nodes.find((node) => node.nodeId === 'raw').datasetContent = {
-    headers: ['text'], rows: [['x']], columnTypes: ['text'], rowIds: ['row-1'],
-  };
-  live.nodes.find((node) => node.nodeId === 'mid').datasetContent = { headers: ['old'], rows: [['old']] };
-  live.nodes.push({ type: 'dataset', nodeId: 'mid-copy', name: 'Pairs 2', sourceRunNodeId: 'run', savedCopy: true, datasetContent: copyContent });
-  live.nodes.find((node) => node.nodeId === 'process').primaryDatasetId = 'mid-copy';
-  live.connections = [{ type: 'prompt-to-run', fromId: 'prompt', toId: 'run' },
-    { type: 'dataset-to-process', fromId: 'mid-copy', toId: 'process' },
-    { type: 'process-to-dataset', fromId: 'process', toId: 'out' }];
-  const resolved = await resolveHistoryCanvasState(upgradeCanvasState(live), {
-    index: session.index, loadRecord: async (id) => records.find((record) => record.id === id),
-  });
-  assert.equal(resolved.currentRecordIds.process, processRecord.id);
-  assert.deepEqual(resolved.state.nodes.find((node) => node.nodeId === 'out').datasetContent.rows, [['Y']]);
+  await assert.rejects(
+    importPipelineRunHistory({ ...importArgs(pipelineRun('e'.repeat(32)), session), definition: { spec: old, canvas_state: canvas() } }),
+    { message: PIPELINE_RUN_BEFORE_DATA_FLOW },
+  );
 });
 
 test('a Pipeline run without a frozen node definition is not imported', async () => {

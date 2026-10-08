@@ -66,8 +66,8 @@ import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
 import { buildSelectedRoute } from './pipelineRouteSelection.js';
-import { pipelineResultNote, showPipelineOverviewModal } from './pipelineOverviewModal.js';
-import { importPipelineRunHistory, pipelineCopyInputs } from './pipelineHistoryImport.js';
+import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
+import { importPipelineRunHistory, pipelineRunImported } from './pipelineHistoryImport.js';
 import { createWorkspacePanels } from './workspacePanels.js';
 import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
@@ -84,7 +84,7 @@ import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './proce
 import { codeHashOf, effectiveProcessOutputs, parseProcessOutputPorts } from './processOutputPorts.js';
 import { CANVAS_VERSION } from './canvasFormat.js';
 import {
-  DATA_EDGE, RESULT_PORT, processInputAliases, processInputBindings, processInputSources, processPrimarySource, processRequiredInputs,
+  DATA_EDGE, RESULT_PORT, processInputAliases, processInputBindings, processPrimarySource, processRequiredInputs,
   replaceProcessInputSource, runCandidateSources, runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource,
   sourceKey, stepInputEdges, stepInputErrorNotice, stepInputWaitingMessage, stepSourceLabel,
 } from './stepInputs.js';
@@ -1394,15 +1394,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       top += STACK_OFFSET;
     }
     return { left, top };
-  }
-  /** A Pipeline result goes over the Dataset it copies, else right of the step that made it
-   * (`output:<llm|process>:<node id>:<port>` names that step when the result has no Dataset). */
-  function pipelineResultPosition(logicalId, producerNodeId = '') {
-    const id = String(logicalId || '');
-    const dataset = id.startsWith('dataset:') ? getNodeById(id.slice('dataset:'.length)) : null;
-    if (dataset) return positionFrom(dataset, { over: true });
-    const producer = getNodeById(producerNodeId || id.match(/^output:(?:llm|process):([^:]+):/)?.[1] || '');
-    return producer ? positionFrom(producer) : {};
   }
   function registerPendingReview(nodeId, reviewId) {
     if (nodeId && reviewId) pendingReviews.set(nodeId, reviewId);
@@ -2723,13 +2714,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       );
     });
     return derived;
-  }
-
-  /** Whether a Run / Process reads this Dataset now. */
-  function stepReadsDataset(step, datasetId) {
-    return step?.classList.contains('workflow-node--run')
-      ? readRunInputSource(step)?.nodeId === datasetId
-      : !!step && processInputSources(liveInputState(), step.dataset.nodeId).some((source) => source.nodeId === datasetId);
   }
 
   function syncNodeDependencyColors() {
@@ -6017,133 +6001,25 @@ export function buildWorkflowCanvas(root, options = {}) {
         getCanvasState,
         getPipelineProjectId,
         getAssetProjectId: getCurrentProjectId,
+        // A finished run's results are added to the History of the steps it ran, and each step switches
+        // to them; nothing is added to the canvas (docs/design/DATA_FLOW_DESIGN.md §6.3).
         publishPipelineRun: async ({ run, definition, getArtifact }) => {
           const canvasProjectId = getCurrentProjectId();
-          if (await getPipelineProjectId() !== run.project_id) throw new Error('The open project changed while publishing Pipeline results.');
-          if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
-          const artifactDefs = new Map((definition?.spec?.artifacts || []).map((item) => [item.id, item]));
-          const copyIds = new Map(); // logical artifact id -> its Dataset copy on the canvas
-          let datasets = 0;
-          for (const artifact of run.artifacts || []) {
-            if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
-            const logicalId = artifact.logical_id;
-            if (!artifact.valid || !artifactDefs.get(logicalId)?.producer) continue;
-            const producer = artifactDefs.get(logicalId).producer;
-            const existing = getCanvasState().nodes.find((item) => item.pipelineRunId === run.run_id && item.pipelineLogicalId === logicalId);
-            if (existing) {
-              copyIds.set(logicalId, existing.nodeId);
-              continue;
-            }
-            const result = await getArtifact(logicalId);
-            const table = result?.table;
-            if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
-            if (!table || !Array.isArray(table.rows)) continue;
-            const sourceEntry = definition?.spec?.source_map?.[producer?.job_id];
-            const source = sourceEntry?.node_ids || [];
-            const sourceNodeId = source.at(-1) || '';
-            const sourceKind = (definition?.spec?.jobs || []).find((job) => job.id === producer?.job_id)?.type;
-            const [stepName = '', runName = ''] = sourceEntry?.names || [];
-            const port = producer?.port || 'result';
-            const original = String(logicalId).startsWith('dataset:') ? getNodeById(String(logicalId).slice('dataset:'.length)) : null;
-            const sourceLabel = sourceKind === 'llm' ? `${stepName} ${runName}`.trim()
-              : sourceKind === 'process' ? `${port === 'result' ? '' : `branch "${port}" of `}Process "${stepName}"` : '';
-            const created = addDatasetNode({
-              name: artifact.name || 'Pipeline result',
-              notes: pipelineResultNote(run, sourceLabel),
-              ...pipelineResultPosition(logicalId, sourceNodeId),
-              headers: table.headers || [], rows: table.rows || [],
-              columnTypes: table.column_types || [], rowIds: table.row_ids || [],
-              sourceRunNodeId: sourceKind === 'llm' ? sourceNodeId : '',
-              // Named as the Dataset it copies (an unnamed output stays unnamed), so both are one Process branch.
-              processOutputName: sourceKind !== 'process' ? '' : original ? original.dataset.processOutputName || '' : port,
-              savedCopy: true,
-              pipelineRunId: run.run_id, pipelineLogicalId: logicalId,
-            });
-            if (created?.nodeId) copyIds.set(logicalId, created.nodeId);
-            if (created?.nodeId && sourceKind === 'process' && getNodeById(sourceNodeId)) {
-              connections.push({ fromId: sourceNodeId, toId: created.nodeId, type: EDGE_TYPE_PROCESS_TO_DATASET });
-              updateEdges();
-              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-            }
-            if (created?.created) datasets += 1;
+          const projectChanged = () => new Error('The open project changed while publishing Pipeline results.');
+          if (await getPipelineProjectId() !== run.project_id) throw projectChanged();
+          if (getCurrentProjectId() !== canvasProjectId) throw projectChanged();
+          if (!historySession?.projectId || canvasHistoryVersion !== 1) {
+            return { history: 0, historyError: 'Node History is unavailable for this project.' };
           }
-          // The steps that read an artifact in this run move onto its copy, and their History records
-          // name the copy, so the canvas shows the run's results along the whole chain.
-          const moves = pipelineCopyInputs(definition?.spec, copyIds);
-          const canvasNodes = new Map(getCanvasState().nodes.map((node) => [node.nodeId, node]));
-          const inputCopies = new Map();
-          for (const [jobId, inputs] of moves) {
-            const copies = new Map();
-            for (const [logicalId, nodeId] of inputs) {
-              const node = canvasNodes.get(nodeId);
-              if (node?.datasetContent) copies.set(logicalId, { nodeId, name: node.name, content: node.datasetContent });
-            }
-            if (copies.size) inputCopies.set(jobId, copies);
+          let history;
+          try {
+            history = await importPipelineRunHistory({ run, definition, getArtifact, session: historySession });
+          } catch (error) {
+            return { history: 0, historyError: error?.message || 'Could not import node History.' };
           }
-          let history = { imported: 0, recordIdsByJob: new Map() };
-          let historyError = '';
-          if (historySession?.projectId && canvasHistoryVersion === 1) {
-            try {
-              history = await importPipelineRunHistory({ run, definition, getArtifact, session: historySession, inputCopies });
-            } catch (error) {
-              historyError = error?.message || 'Could not import node History.';
-            }
-          } else {
-            historyError = 'Node History is unavailable for this project.';
-          }
-          if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
-          let changed = false;
-          for (const [logicalId, nodeId] of copyIds) {
-            const recordId = history.recordIdsByJob.get(artifactDefs.get(logicalId).producer?.job_id);
-            const live = getNodeById(nodeId);
-            if (recordId && live && live.dataset.snapshotSourceRecordId !== recordId) {
-              live.dataset.snapshotSourceRecordId = recordId;
-              changed = true;
-            }
-          }
-          let rewired = false;
-          for (const [jobId, copies] of inputCopies) {
-            const consumerId = definition.spec.source_map?.[jobId]?.node_ids?.at(-1) || '';
-            const consumer = getNodeById(consumerId);
-            for (const [logicalId, { nodeId: copyId }] of copies) {
-              const oldId = String(logicalId).replace(/^dataset:/, '');
-              if (!consumer || !getNodeById(copyId)) continue;
-              // Only where the step still reads the old Dataset; a canvas edited since then is left alone.
-              if (consumer.classList.contains('workflow-node--run')) {
-                if (readRunInputSource(consumer)?.nodeId !== oldId) continue;
-                writeRunInputSource(consumer, { nodeId: copyId, port: RESULT_PORT });
-              } else if (consumer.classList.contains('workflow-node--process')) {
-                if (!replaceProcessInput(consumer, { nodeId: oldId, port: RESULT_PORT }, { nodeId: copyId, port: RESULT_PORT })) continue;
-              } else {
-                continue;
-              }
-              rewired = true;
-            }
-          }
-          // An older output that still follows History would switch to this run's result beside its copy.
-          // Once the copy has taken over every step that read it, it keeps what it shows, as when edited:
-          // the earlier result, dashed with the rest of that earlier chain.
-          for (const [logicalId, copyId] of copyIds) {
-            const datasetId = String(logicalId).replace(/^dataset:/, '');
-            const old = String(logicalId).startsWith('dataset:') ? getNodeById(datasetId) : null;
-            if (!old || old.dataset.resultMissing === '1') continue;
-            const source = datasetHistorySource({
-              nodeId: datasetId, savedCopy: old.dataset.savedCopy === '1',
-              sourceRunNodeId: old.dataset.sourceRunNodeId, processOutputName: old.dataset.processOutputName,
-            }, connections);
-            const takenOver = (definition.spec.jobs || []).every((job) => {
-              if (!Object.values(job.inputs || {}).includes(logicalId)) return true;
-              const step = getNodeById(definition.spec.source_map?.[job.id]?.node_ids?.at(-1));
-              return stepReadsDataset(step, copyId) && !stepReadsDataset(step, datasetId);
-            });
-            if (!source || !takenOver) continue;
-            old.dataset.savedCopy = '1';
-            const sourceRecordId = getNodeById(source.sourceId)?.dataset.historyRecordId;
-            if (sourceRecordId) old.dataset.snapshotSourceRecordId = sourceRecordId;
-            changed = true;
-            updateEdges();
-          }
+          if (getCurrentProjectId() !== canvasProjectId) throw projectChanged();
           // Each step shows this run's result, also where an earlier record had the same inputs.
+          let changed = false;
           for (const [jobId, recordId] of history.recordIdsByJob) {
             const step = getNodeById(definition.spec.source_map?.[jobId]?.node_ids?.at(-1));
             if (step && step.dataset.historyRecordId !== recordId) {
@@ -6151,14 +6027,12 @@ export function buildWorkflowCanvas(root, options = {}) {
               changed = true;
             }
           }
-          if (rewired) {
-            updateEdges();
-            syncNodeDependencyColors();
-          }
-          if (changed || rewired) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-          if (history.imported || rewired || changed) await reconcileHistory();
-          return { history: history.imported, datasets, historyError };
+          if (changed) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          if (history.imported || changed) await reconcileHistory();
+          return { history: history.imported, historyError: '' };
         },
+        isPipelineRunImported: (run) => (historySession?.projectId
+          ? pipelineRunImported(run, historySession.index) : Promise.resolve(false)),
         highlightCanvasNodes: highlightPipelineNodes,
         focusCanvasNodes: focusPipelineNodes,
       });

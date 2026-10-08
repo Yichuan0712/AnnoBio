@@ -54,8 +54,8 @@ the workspace before acting.
 
 **Run Pipeline** executes the selected route in dependency order. It first shows the external Dataset
 inputs for each step and checks whether the route can compile. A run can be stopped or resumed, and
-Run History lists previous whole-Pipeline runs. Finished outputs are added to the canvas as Dataset
-copies with their run provenance. The Agent can use `pipeline_action` to request a whole-Pipeline run,
+Run History lists previous whole-Pipeline runs. When a run finishes, its results are added to the
+History of each step it ran and the steps show them; no Datasets are added. The Agent can use `pipeline_action` to request a whole-Pipeline run,
 stop or resume after user confirmation, and `get_pipeline_runs` to read its status and history.
 Use `run_nodes` for a single Run or Process when testing or iterating on one stage.
 
