@@ -64,6 +64,7 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - 启动：`cd app && tail -f /dev/null | npx electron-forge start --inspect-electron -- --remote-debugging-port=9333`，放在后台运行。前面的 `tail -f /dev/null` 不能省：Forge 读到标准输入结束就会退出，并把应用一起关掉。
 - 渲染进程的调试端口是 9333，主进程的 Node 调试端口是 9229。各自 `GET http://127.0.0.1:<端口>/json/list` 取得 WebSocket 地址，用 `Runtime.evaluate`（`awaitPromise: true`、`returnByValue: true`、`includeCommandLineAPI: true`）执行代码，用 `Page.captureScreenshot` 截图。Node 自带 `WebSocket`，写一个几十行的小脚本即可，不需要安装 Playwright。
 - 打开或新建项目时绕过系统对话框：先在主进程执行 `require('electron').dialog.showOpenDialog = async () => ({ canceled: false, filePaths: ['<路径>'] })`（新建项目替换 `showSaveDialog`，返回 `{ canceled: false, filePath }`），再在渲染进程点击 `[data-action="open-project"]` 或 `[data-action="new-project"]`。路径用正斜杠。
+- 应用窗口被其他窗口挡住时，页面处于隐藏状态，Chromium 会大幅限制定时器，脚本里的每次等待都会被拉长到几十秒甚至一分钟。驱动之前先在主进程执行 `require('electron').BrowserWindow.getAllWindows().forEach((w) => w.webContents.setBackgroundThrottling(false))`。
 - 节点状态可以直接读 DOM，例如 `.workflow-node--run` 的 `dataset.runCompleted`、`.workflow-node--process` 的 `dataset.processDfResults`、`dataset.historyRecordId`。报错会出现在底部的 Errors 页签。
 - 结束后关闭 Electron、Forge，以及它启动的后端进程（命令行含 `uvicorn main:app --port 8000`）。
 
@@ -538,7 +539,30 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - [ ] 构建通过。
 - [ ] grep 检查结果已记录。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - **别名有两套算法，分别保留。** 窗口和选择器用 `processDatasetInputs`（会校验已保存的别名，按名字推导的别名会避让已保存的别名）；执行、History 捕获和对齐用另一套（直接用已保存的别名，否则用按名字推导的别名）。两者只在少见的旧状态下不同，但 History 签名包含别名，所以没有合并：`processInputBindings` 对应前者，`processRequiredInputs` 对应后者。第 6 步别名存到连线上后，两者自然一致。
+  - **主输入规则统一为“记录的主输入是存在的 Dataset 时用它，否则取第一条输入”。** 原来 capture、resolver 在记录的主输入指向已删除节点时直接用这个无效 ID（之后报错或显示没有结果），现在会退回第一条输入。属于边缘情况。
+  - 新增 `setProcessPrimarySource`（只改主输入，供“写回推断的主输入”和窗口里的 “Use as df” 使用）、`replaceProcessInputSource`（换来源但保留别名和主输入身份，供发布 Pipeline 时改连使用，第 8 步的 “Change source…” 也会用到）、`processInputAliases`（Process 窗口要用已保存的别名表）。
+  - `runHistorySelection.js` 把 Process 的主输入、别名和连线合并成一个 `{ primary, inputs }` 记录，在应用 patch 的循环里一次比较（新写的 `processInputsOf` / `selectedProcessInputs` 只经过访问层）、一次写入。
+  - `workflowDependencyColors.js` 的适配把记录的主输入直接当作 Dataset 交给访问层：原来的颜色计算就是直接信任它，不存在的 Dataset 由调用方随后过滤；现有测试的节点表里也没有 Dataset 节点。
+  - Agent `inspect_node` 输出里每个输入的 `connection: 'dataset-to-process'` 字样保留，以免改变 Agent 看到的内容。
+- grep 检查后剩下的匹配：
+  - 局部变量和参数名 `primaryDatasetId`，以及 History 记录字段 `inputs.primaryDatasetId`；
+  - `stepInputs.js`；
+  - `workflowCanvas.js` 的 DOM 适配（`processInputState`、`storeProcessInputState`）和序列化；
+  - `workflowNodeFactories.js` 中 `createProcessNode` 读档时写入属性；
+  - `workflowDependencyColors.js` 的 DOM 适配；
+  - `pipelineExportDefinition.js` 的字段和连线白名单（第 6 步）；
+  - inspector 输出的 `'dataset-to-process'` 字样；
+  - `workflowCanvas.js` 中已不再使用的常量 `EDGE_TYPE_DATASET_TO_PROCESS`（第 12 步删除）。
+- 测试：前端 154 → 162（`stepInputs.test.mjs` 新增 8 项），改动前就有的测试一个都没改；后端 116 项不变。
+- 手工验证（新旧代码对照，Kinase 示例）：
+  - 5 个 Process 窗口的选择器内容和别名相同；
+  - 在 Tidy extracted pairs 里勾选 kinase_abstracts、再把它设为 `df` 后，代码参数、主输入、别名表和保存的 18 条连线都相同；
+  - 每个节点对上的 History 记录相同，说明签名不变。
+  - 期间发现窗口被遮挡时页面定时器会被节流，已在 §1 补充处理办法。
 
 ---
 
@@ -1141,7 +1165,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 1 | 完成 | 2026-10-07 | `0198dbe` | 140 | 116 | |
 | 2 | 完成 | 2026-10-07 | `a90e543` | 149 | 116 | |
 | 3 | 完成 | 2026-10-08 | `c4ce4a4` | 154 | 116 | |
-| 4 | 未开始 | | | | | |
+| 4 | 完成 | 2026-10-08 | `9b92a0a` | 162 | 116 | |
 | 5 | 未开始 | | | | | |
 | 6 | 未开始 | | | | | |
 | 7 | 未开始 | | | | | |
