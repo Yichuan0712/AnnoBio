@@ -1038,18 +1038,31 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 
 **手工验证：**
 
-- [ ] 在直连的流程上 Run Pipeline：结束后画布上不增加任何 Dataset；各节点显示这次运行的结果；各节点的 History 中有这次运行的记录。
-- [ ] 在最后一个节点的 History 中选一条更早的记录：上游一起切换。
-- [ ] 重新打开项目：记录不重复。
-- [ ] Stop 后 Resume，结束时导入正常。
+- [x] 在直连的流程上 Run Pipeline：结束后画布上不增加任何 Dataset；各节点显示这次运行的结果；各节点的 History 中有这次运行的记录。
+- [x] 在最后一个节点的 History 中选一条更早的记录：上游一起切换。
+- [x] 重新打开项目：记录不重复。
+- [x] Stop 后 Resume，结束时导入正常。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - “是否已导入”的判断：计划说按记录上的 `pipelineRunId` 查 History 索引，但索引条目没有这个字段，要逐条读记录。改为利用确定的记录 ID：`pipelineRunImported(run, index)` 对每个成功的 job 算出记录 ID（由运行 ID 和节点 ID 决定，job ID 是 `llm:<Run>` / `process:<Process>`），全部在索引中才算已导入，不用读任何记录。
+  - 浏览器本地的“已加过”标记（原 `everPublished`）保留，用来在本机保证“用户删掉的记录不再被加回”；但值从 `'1'` 改为当时成功的 job 数。原来的标记只按运行 ID 记：Stop 时先导入已完成的部分并记下标记，Resume 结束后就再也不导入，剩下的步骤没有记录。现在成功的 job 变多就会再导入一次（已有的记录按确定 ID 跳过）。本机没有标记时（项目在别处打开过、清过浏览器数据）由 History 检查兜底：已导入的运行只补上标记，不再把各步骤切到它，否则会覆盖用户之后选的记录。旧标记 `'1'` 自然按“1 个 job”处理，旧代码导入过的运行由 History 检查认出。
+  - 原 `wasPublished` 的画布检查及 `canvasNodes` 删除；`pipelineResultNote`、`pipelineResultPosition`、`stepReadsDataset` 已无调用方，一并删除。Run History 中导入失败的提示从 `Canvas sync failed:` 改为 `Could not add the results to node History:`。
+  - Agent 最低适配：`backend/agent/guides/pipeline-building.md` 中“结果作为 Dataset 副本加到画布”一句改为按现状描述，其余留给第 13 步。
+  - 入口 Dataset 按计划用内容签名。第 11–12 步之前，旧项目里“跟随 History”的派生 Dataset（有 `sourceRunNodeId`、没有 `savedCopy`）在画布上仍按派生签名，从这种 Dataset 开始的 Pipeline 导入后，第一个步骤的签名对不上，显示“没有结果”（记录在 History 中）。第 12 步删除派生签名后一致。新搭的流程不受影响。
+- 测试：前端 200 → 201（`pipelineHistoryImport` 改写：Dataset → LLM → Process → LLM 链的记录格式和 resolver 能否认出、幂等、入口内容来自产物、Stop/Resume 分两次导入及 `pipelineRunImported`、旧格式运行被拒、无冻结定义；删除 `pipelineCopyInputs` 和副本相关的 2 项）；后端 127 不变。
+- 手工验证：付费模型一律没有调用。Runner 的 `llm_adapter` 可以注入，所以应用启动后把它自带的后端换成同一份代码、但模型调用是假的后端（每行等 1.5 秒返回占位值；编译、产物、断点续跑、Stop/Resume、Process 都是真代码），脚本在 scratchpad `step10/fake_backend.py`。测试项目 Sentences → Extract（Run）→ Split（Process，`short` / `long` 两个分支）→ Judge（Run，读 `long`）→ Merge（Process，读 `short` 和 Judge）。
+  - Run Pipeline：对话框只列出 Extract › Sentences。结束后画布上仍只有 1 个 Dataset；4 个步骤都切到这次运行的记录并显示结果；存档中 Extract 的输入是 Dataset 内容，Split、Judge、Merge 的输入都是对上一步记录的引用（包括 `long`、`short` 两个端口），`sourceRecordIds` 正确。
+  - 再跑一次后，在 Merge 的 History 中选第一次的记录：确认框之后 Extract、Split、Judge、Merge 全部切回第一次的记录。确认框列出的节点比实际变化的多，是 §2.7 已记录的问题。
+  - 重新打开项目两次：一次正常打开，一次先删掉这两次运行在浏览器中的标记再打开。两次都没有新增记录（仍是 8 条），各节点仍停在第一次的记录上；第二次 History 检查认出两次运行，只补回标记。
+  - 第三次运行在 Judge 进行中按 Stop：Extract、Split 导入并切换，Judge 没有结果，Merge 等待上游。Resume 结束后 Judge、Merge 导入，4 个步骤都切到这次运行，记录共 12 条，没有重复。Errors 页签没有错误。
 
 ---
 
@@ -1258,7 +1271,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 7 | 完成 | 2026-10-08 | `1ca0268` | 190 | 124 | |
 | 8 | 完成 | 2026-10-08 | `7d13b05` | 195 | 124 | |
 | 9 | 完成 | 2026-10-08 | `e787111` | 200 | 127 | |
-| 10 | 未开始 | | | | | |
+| 10 | 完成 | 2026-10-08 | `e2e6736` | 201 | 127 | |
 | 11 | 未开始 | | | | | |
 | 12 | 未开始 | | | | | |
 | 13 | 未开始 | | | | | |
