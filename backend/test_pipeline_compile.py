@@ -37,9 +37,13 @@ def edge(a, b, typ):
     return {"fromId": a, "toId": b, "type": typ}
 
 
-def data(a, b, alias=None):
-    """An input of step b read from a: a Run's only input has no alias, a Process's primary is df."""
-    return {"type": "data", "fromId": a, "fromPort": "result", "toId": b, **({"alias": alias} if alias else {})}
+def data(a, b, alias=None, port="result"):
+    """An input of step b read from a (a Dataset, or a step's output port): a Run's only input has
+    no alias, a Process's primary is df."""
+    return {"type": "data", "fromId": a, "fromPort": port, "toId": b, **({"alias": alias} if alias else {})}
+
+
+SPLIT_CODE = "def process(df):\n    return {'left': df, 'right': df}\n"
 
 
 def route_for(state):
@@ -58,14 +62,11 @@ def simple():
 
 
 def branched():
-    return {"nodes": [dataset("raw"), process("split"),
-        dataset("left", processOutputName="left"), dataset("right", processOutputName="right"),
-        process("merge", dfCode="def process(df):\n    return df.merge(df_right)\n"),
-        dataset("merged"), prompt(), run()],
-        "connections": [data("raw", "split", "df"), edge("split", "left", "process-to-dataset"),
-            edge("split", "right", "process-to-dataset"), data("left", "merge", "df"),
-            data("right", "merge", "df_right"), edge("merge", "merged", "process-to-dataset"),
-            edge("p", "r", "prompt-to-run"), data("merged", "r")]}
+    """raw -> split (left, right) -> merge -> LLM, each step reading the one before it directly."""
+    return {"nodes": [dataset("raw"), process("split", dfCode=SPLIT_CODE),
+        process("merge", dfCode="def process(df):\n    return df.merge(df_right)\n"), prompt(), run()],
+        "connections": [data("raw", "split", "df"), data("split", "merge", "df", "left"),
+            data("split", "merge", "df_right", "right"), edge("p", "r", "prompt-to-run"), data("merge", "r")]}
 
 
 class PipelineCompileTests(unittest.TestCase):
@@ -114,39 +115,46 @@ class PipelineCompileTests(unittest.TestCase):
     def test_branch_merge_preserves_aliases_and_has_one_merge_job(self):
         spec = self.valid(branched())
         split, merge, llm = spec["jobs"]
-        self.assertEqual(split["outputs"], {"left": ["dataset:left"], "right": ["dataset:right"]})
-        self.assertEqual(merge["inputs"], {"df": "dataset:left", "df_right": "dataset:right"})
+        self.assertEqual(split["outputs"], {"left": ["output:process:split:left"], "right": ["output:process:split:right"]})
+        self.assertEqual(merge["inputs"], {"df": "output:process:split:left", "df_right": "output:process:split:right"})
         self.assertEqual(merge["depends_on"], ["process:split"])
+        self.assertEqual(llm["inputs"], {"data": "output:process:merge:result"})
         self.assertEqual(llm["depends_on"], ["process:merge"])
+        self.assertEqual(spec["inputs"], ["dataset:raw"])
+        self.assertEqual(spec["outputs"], ["output:llm:r:result"])
+        # Outputs are named after the step that makes them: a Prompt, a Process, or a branch.
+        names = {artifact["id"]: artifact["name"] for artifact in spec["artifacts"]}
+        self.assertEqual(names, {"dataset:raw": "raw", "output:process:split:left": "left", "output:process:split:right": "right",
+                                 "output:process:merge:result": "merge", "output:llm:r:result": "p"})
 
     def test_multiple_inputs_and_process_only_are_valid_specs(self):
-        state = {"nodes": [dataset("a"), dataset("b"), process("join"), dataset("out")],
-                 "connections": [data("a", "join", "df"), data("b", "join", "df_b"), edge("join", "out", "process-to-dataset")]}
-        self.assertEqual(self.valid(state)["inputs"], ["dataset:a", "dataset:b"])
+        state = {"nodes": [dataset("a"), dataset("b"), process("join")],
+                 "connections": [data("a", "join", "df"), data("b", "join", "df_b")]}
+        spec = self.valid(state)
+        self.assertEqual(spec["inputs"], ["dataset:a", "dataset:b"])
+        self.assertEqual(spec["outputs"], ["output:process:join:result"])
         del state["connections"][0]["alias"]
         self.error(state, "INVALID_PRIMARY_INPUT")
 
-    def test_dynamic_process_schema_is_not_inferred_from_cached_rows(self):
+    def test_a_run_reading_a_process_output_is_checked_when_it_runs(self):
         state = branched()
-        state["nodes"][5]["datasetContent"]["headers"] = ["old_column"]
         state["nodes"][-1]["runInputToColumn"] = {"text": "new_column"}
         result = self.compile(state)
         self.assertIsNotNone(result["spec"], result)
         self.assertIn("RUNTIME_INPUT_SCHEMA", [d["code"] for d in result["diagnostics"]])
-        art = next(a for a in result["spec"]["artifacts"] if a["id"] == "dataset:merged")
+        art = next(a for a in result["spec"]["artifacts"] if a["id"] == "output:process:merge:result")
         self.assertEqual(art["schema"], {"status": "runtime", "columns": []})
-        self.assertEqual(art["observed_schema"]["columns"], [{"name": "old_column", "type": "text"}])
         state["nodes"][-1]["runInputToColumn"] = {}
         self.error(state, "UNMAPPED_INPUT")
 
-    def test_materialized_llm_schema_supports_second_llm_and_row_numbers(self):
+    def test_a_run_reading_a_run_knows_its_columns(self):
         state = simple()
-        state["nodes"] += [dataset("out", sourceRunNodeId="r"), prompt("p2"),
-                           run("r2", runInputToColumn={"text": "Output: answer"})]
-        state["connections"] += [edge("p2", "r2", "prompt-to-run"), data("out", "r2")]
+        state["nodes"] += [prompt("p2"), run("r2", runInputToColumn={"text": "Output: answer"})]
+        state["connections"] += [edge("p2", "r2", "prompt-to-run"), data("r", "r2")]
         spec = self.valid(state)
-        art = next(a for a in spec["artifacts"] if a["id"] == "dataset:out")
+        art = next(a for a in spec["artifacts"] if a["id"] == "output:llm:r:result")
         self.assertEqual([c["name"] for c in art["schema"]["columns"]], ["Input: #", "Input: text", "Output: #", "Output: answer"])
+        self.assertEqual(spec["jobs"][-1]["inputs"], {"data": "output:llm:r:result"})
         self.assertEqual(spec["jobs"][-1]["depends_on"], ["llm:r"])
         state["nodes"][-1]["runInputToColumn"] = {"text": "obsolete"}
         self.error(state, "MISSING_COLUMN")
@@ -180,50 +188,62 @@ class PipelineCompileTests(unittest.TestCase):
 
     def test_missing_dependencies_are_not_added_silently(self):
         state = branched()
-        selected = [i for i in route_for(state) if i.get("dataset_node_id") != "right"]
+        selected = [i for i in route_for(state) if i.get("dataset_node_id") != "raw"]
         self.error(state, "MISSING_DEPENDENCY", route=selected)
 
-    def test_saved_output_requires_explicit_boundary_when_producer_unselected(self):
+    def test_reading_a_step_outside_the_selection_is_reported(self):
+        state = branched()
+        selected = [i for i in route_for(state) if i.get("process_node_id") != "split"]
+        result = self.compile(state, route=selected)
+        problem = next(d for d in result["diagnostics"] if d["code"] == "UNSELECTED_UPSTREAM")
+        self.assertEqual((problem["node_id"], problem["message"].split(",")[0]), ("merge", 'Reads the output of "split"'))
+
+    def test_a_dataset_saved_from_a_step_is_only_an_input(self):
+        # A Dataset saved from the Run's results is a table of its own: reading it does not chain to the Run.
         state = simple()
-        state["nodes"][0]["sourceRunNodeId"] = "old-run"
-        self.error(state, "UNSELECTED_PRODUCER")
-        self.assertEqual(self.valid(state, input_dataset_ids=["raw"])["inputs"], ["dataset:raw"])
-
-    def test_boundary_cannot_hide_selected_producer_or_cycle(self):
-        state = simple()
-        state["nodes"][0]["sourceRunNodeId"] = "r"
-        self.error(state, "CYCLIC_DEPENDENCY")
-        self.error(state, "INPUT_PRODUCER_CONFLICT", input_dataset_ids=["raw"])
-
-    def test_multiple_producers_and_missing_branch_name(self):
-        state = branched()
-        state["nodes"][2]["sourceRunNodeId"] = "r"
-        self.error(state, "MULTIPLE_PRODUCERS")
-        del state["nodes"][2]["sourceRunNodeId"]
-        del state["nodes"][2]["processOutputName"]
-        self.error(state, "MISSING_BRANCH_NAME")
-
-    def test_legacy_snapshot_link_cannot_hide_a_different_live_source(self):
-        state = branched()
-        state["connections"].append(edge("r", "left", "run-to-dataset-snapshot"))
-        self.error(state, "MULTIPLE_PRODUCERS")
-        state["connections"][-1] = edge("split", "left", "process-to-dataset-snapshot")
-        self.valid(state)
-
-    def test_frozen_copy_of_a_selected_step_output_is_that_step_output(self):
-        # The merge reads a dashed copy of the split's left branch: running the Pipeline recomputes it.
-        state = branched()
-        state["connections"] = [e for e in state["connections"] if not (e["fromId"] == "split" and e["toId"] == "left")]
-        state["connections"].append(edge("split", "left", "process-to-dataset-snapshot"))
+        state["nodes"] += [dataset("saved", sourceRunNodeId="r"), prompt("p2"), run("r2")]
+        state["connections"] += [edge("p2", "r2", "prompt-to-run"), data("saved", "r2"),
+                                 edge("r", "saved", "run-to-dataset-snapshot")]
         spec = self.valid(state)
-        jobs = {job["id"]: job for job in spec["jobs"]}
-        self.assertEqual(jobs["process:split"]["outputs"]["left"], ["dataset:left"])
-        self.assertIn("process:split", jobs["process:merge"]["depends_on"])
-        self.assertNotIn("dataset:left", spec["inputs"])
-        # Declared as an input boundary, the copy stays a frozen table.
-        spec = self.valid(state, input_dataset_ids=["raw", "left"])
-        self.assertIn("dataset:left", spec["inputs"])
-        self.assertNotIn("left", {job["id"]: job for job in spec["jobs"]}["process:split"]["outputs"])
+        self.assertEqual(spec["inputs"], ["dataset:raw", "dataset:saved"])
+        self.assertEqual({job["id"]: job["depends_on"] for job in spec["jobs"]}, {"llm:r": [], "llm:r2": []})
+
+    def test_steps_reading_each_other_are_a_cycle(self):
+        state = {"nodes": [process("a"), process("b")],
+                 "connections": [data("b", "a", "df"), data("a", "b", "df")]}
+        self.error(state, "CYCLIC_DEPENDENCY")
+
+    def test_a_branch_the_process_does_not_return_is_reported(self):
+        state = branched()
+        next(e for e in state["connections"] if e.get("alias") == "df_right")["fromPort"] = "middle"
+        result = self.compile(state)
+        self.assertIn(("UNKNOWN_OUTPUT_PORT", "merge"), [(d["code"], d["node_id"]) for d in result["diagnostics"]])
+        state = simple()
+        state["nodes"] += [prompt("p2"), run("r2")]
+        state["connections"] += [edge("p2", "r2", "prompt-to-run"), data("r", "r2", port="other")]
+        self.error(state, "UNKNOWN_OUTPUT_PORT")
+
+    def test_every_branch_of_a_process_is_an_output_and_named_by_its_branch(self):
+        state = {"nodes": [dataset("raw"), process("split", dfCode=SPLIT_CODE)], "connections": [data("raw", "split", "df")]}
+        spec = self.valid(state)
+        self.assertEqual(spec["outputs"], ["output:process:split:left", "output:process:split:right"])
+        self.assertEqual([a["name"] for a in spec["artifacts"] if a["producer"]], ["left", "right"])
+        # A branch nobody reads stays an output of the pipeline.
+        state = branched()
+        state["nodes"][1]["dfCode"] = "def process(df):\n    return {'left': df, 'right': df, 'rest': df}\n"
+        self.assertIn("output:process:split:rest", self.valid(state)["outputs"])
+
+    def test_dynamic_branches_are_the_ones_read_downstream(self):
+        state = branched()
+        for code in ["def process(df):\n    return {name: df for name in ('left', 'right')}\n",
+                     "def process(df):\n    out = {'left': df, 'right': df}\n    return out\n"]:
+            with self.subTest(code=code):
+                state["nodes"][1]["dfCode"] = code
+                result = self.compile(state)
+                self.assertIsNotNone(result["spec"], result)
+                split = next(job for job in result["spec"]["jobs"] if job["id"] == "process:split")
+                self.assertEqual(sorted(split["outputs"]), ["left", "right"])
+                self.assertIn(("RUNTIME_PROCESS_CONTRACT", "warning"), [(d["code"], d["severity"]) for d in result["diagnostics"]])
 
     def test_run_diagnostics_name_the_connected_prompt(self):
         state = simple()
@@ -255,19 +275,19 @@ class PipelineCompileTests(unittest.TestCase):
 
     def test_unbound_process_alias_and_duplicate_alias(self):
         state = branched()
-        state["nodes"][4]["dfCode"] = "def process(df):\n    return df_missing\n"
+        state["nodes"][2]["dfCode"] = "def process(df):\n    return df_missing\n"
         self.error(state, "UNBOUND_DATASET_ALIAS")
         for code in ["def process(df, df_missing):\n    return df", "def process(df, *, df_missing):\n    return df"]:
             with self.subTest(code=code):
-                state["nodes"][4]["dfCode"] = code
+                state["nodes"][2]["dfCode"] = code
                 self.error(state, "UNBOUND_DATASET_ALIAS")
         # Its other Input dataset is a parameter; one more with a default, or **inputs, needs none.
         for code in ["def process(df, df_right):\n    return df.merge(df_right)\n",
                      "def process(df, df_right, limit=5, **inputs):\n    return df.merge(df_right)\n"]:
             with self.subTest(code=code):
-                state["nodes"][4]["dfCode"] = code
+                state["nodes"][2]["dfCode"] = code
                 self.valid(state)
-        next(e for e in state["connections"] if e["type"] == "data" and e["fromId"] == "right")["alias"] = "right"
+        next(e for e in state["connections"] if e.get("alias") == "df_right")["alias"] = "right"
         self.error(state, "INVALID_ALIAS")
 
     def test_node_settings_override_defaults_without_copying_credentials(self):
@@ -303,12 +323,14 @@ class PipelineCompileTests(unittest.TestCase):
         state["nodes"][2]["runInputToColumn"] = {"text": ["text"]}
         self.error(state, "INVALID_INPUT_MAPPING")
 
-    def test_two_materializations_share_one_job_output_port(self):
+    def test_two_readers_share_one_job_output(self):
         state = simple()
-        state["nodes"] += [dataset("out-a", sourceRunNodeId="r"), dataset("out-b", sourceRunNodeId="r")]
+        state["nodes"] += [process("a"), process("b")]
+        state["connections"] += [data("r", "a", "df"), data("r", "b", "df")]
         spec = self.valid(state)
-        self.assertEqual(len(spec["jobs"]), 1)
-        self.assertEqual(spec["jobs"][0]["outputs"], {"result": ["dataset:out-a", "dataset:out-b"]})
+        jobs = {job["id"]: job for job in spec["jobs"]}
+        self.assertEqual(jobs["llm:r"]["outputs"], {"result": ["output:llm:r:result"]})
+        self.assertEqual(jobs["process:a"]["inputs"], jobs["process:b"]["inputs"])
 
     def test_complex_output_names_have_canonical_keys_and_display_columns(self):
         state = simple()

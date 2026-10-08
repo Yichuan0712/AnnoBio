@@ -7,6 +7,7 @@
  */
 import { detectPipelines } from '../../pipelineDetection.js';
 import { buildSelectedRoute, getVisibleRoute } from '../../pipelineRouteSelection.js';
+import { processInputSources, runInputSource, stepSourceLabel } from '../../stepInputs.js';
 import { buildPromptFamilies } from '../../promptOptimization.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
@@ -32,26 +33,32 @@ function linkRef(linked, missing) {
 
 const STEP_LABELS = { prompt: 'Run prompt', process: 'Process data' };
 
-function describeRouteOption(option, lookup) {
+/** An input as the summary names it: a Dataset by its name, another step's output by that step. */
+function describeInput(source, lookup, canvasState) {
+  if (source.kind === 'dataset') return quote(nodeTitle(lookup.get(source.nodeId)) || source.nodeId);
+  return `the output of ${quote(stepSourceLabel(canvasState, source))}`;
+}
+
+function describeRouteOption(option, lookup, canvasState) {
   if (option.kind === 'prompt') {
-    const input = lookup.get(option.inputDatasetNodeId);
+    const input = runInputSource(canvasState, option.runNodeId);
     return `${quote(option.promptName)} [${option.promptNodeId}] by run ${quote(option.runName)} [${option.runNodeId}]`
-      + ` on ${input ? quote(nodeTitle(input)) : '(no input dataset)'}`;
+      + ` on ${input ? describeInput(input, lookup, canvasState) : '(no input)'}`;
   }
-  const inputs = (option.inputDatasets || []).map((d) => quote(d.datasetName)).join(' + ');
+  const inputs = processInputSources(canvasState, option.processNodeId).map((source) => describeInput(source, lookup, canvasState)).join(' + ');
   return `${quote(option.label)} [${option.processNodeId}]${inputs ? ` reading ${inputs}` : ''}`;
 }
 
 /** One step as the Current Pipeline panel shows it: the default choice first, then the alternatives. */
-function describeRouteStep(step, lookup, selectionSource) {
+function describeRouteStep(step, lookup, selectionSource, canvasState) {
   const options = [step.selectedOption, ...step.options.filter((option) => option.value !== step.selectedValue)];
   const label = STEP_LABELS[step.kind];
-  if (options.length === 1) return `${label}: ${describeRouteOption(options[0], lookup)}`;
+  if (options.length === 1) return `${label}: ${describeRouteOption(options[0], lookup, canvasState)}`;
   return `${label}, a picker with ${options.length} choices: `
-    + options.map((option, i) => `${describeRouteOption(option, lookup)}${i === 0 ? ` (${selectionSource === 'panel' ? 'selected' : 'default'})` : ''}`).join('; ');
+    + options.map((option, i) => `${describeRouteOption(option, lookup, canvasState)}${i === 0 ? ` (${selectionSource === 'panel' ? 'selected' : 'default'})` : ''}`).join('; ');
 }
 
-function routeLines(route, lookup, indent, selectionSource) {
+function routeLines(route, lookup, indent, selectionSource, canvasState) {
   const lines = [];
   route.forEach((step, i) => {
     if (step.kind === 'empty') {
@@ -60,10 +67,10 @@ function routeLines(route, lookup, indent, selectionSource) {
       lines.push(`${indent}${i + 1}. Branches:`);
       step.lanes.forEach((lane, laneIndex) => {
         lines.push(`${indent}   Branch ${laneIndex + 1}:`);
-        lines.push(...routeLines(lane, lookup, `${indent}     `, selectionSource));
+        lines.push(...routeLines(lane, lookup, `${indent}     `, selectionSource, canvasState));
       });
     } else {
-      lines.push(`${indent}${i + 1}. ${describeRouteStep(step, lookup, selectionSource)}`);
+      lines.push(`${indent}${i + 1}. ${describeRouteStep(step, lookup, selectionSource, canvasState)}`);
     }
   });
   return lines;
@@ -77,7 +84,7 @@ function pipelineLines(canvasState, lookup, selections = []) {
     const selection = selections.find((item) => item.id === String(pipeline?.id || `pipeline-index-${index}`));
     const source = selection?.source === 'panel' ? 'panel' : 'default';
     lines.push(`Pipeline ${index + 1} [${String(pipeline?.id || `pipeline-index-${index}`)}] (${source === 'panel' ? 'current panel selection' : 'default route; Current Pipeline panel is not mounted'}):`);
-    lines.push(...routeLines(getVisibleRoute(selection?.route || buildSelectedRoute(pipeline, new Map())), lookup, '  ', source));
+    lines.push(...routeLines(getVisibleRoute(selection?.route || buildSelectedRoute(pipeline, new Map())), lookup, '  ', source, canvasState));
   });
   return lines;
 }

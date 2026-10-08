@@ -17,7 +17,7 @@ result = compile_pipeline(
 
 编译为纯函数：不读取文件/设置/凭据、不执行 Python 或调用模型、不修改输入对象。`run_defaults` 由调用方传入当前有效默认值；示例数字不由编译器硬编码。
 
-输入 route 使用现有 `exportRoutePayload` 格式，字段为 `type`、`dataset_node_id`、`process_node_id`、`prompt_node_id` 和 `run_node_id`。它明确选择节点集合；编译器从连接与字段解析依赖，不依赖 route 的排列顺序。
+输入 route 使用现有 `exportRoutePayload` 格式，字段为 `type`、`dataset_node_id`、`process_node_id`、`prompt_node_id` 和 `run_node_id`。它明确选择节点集合：所选的 Prompt Run 和 Process，以及它们读取的入口 Dataset。步骤之间传递的输出不出现在 route 中，编译器沿 `data` 连线找到它们，不依赖 route 的排列顺序。
 
 ```json
 [
@@ -61,7 +61,7 @@ diagnostic 包含 `severity`、稳定的 `code`、`node_id`、`node_name`、`fie
   "artifacts": [
     {"id": "dataset:raw", "name": "Articles", "producer": null,
      "schema": {"status": "known", "columns": [{"name": "text", "type": "text"}]}},
-    {"id": "output:llm:run-extract:result", "name": "Result",
+    {"id": "output:llm:run-extract:result", "name": "Extract",
      "producer": {"job_id": "llm:run-extract", "port": "result"},
      "schema": {"status": "known", "columns": [
        {"name": "Input: #", "type": "text"}, {"name": "Input: text", "type": "text"},
@@ -77,9 +77,14 @@ diagnostic 包含 `severity`、稳定的 `code`、`node_id`、`node_name`、`fie
 }
 ```
 
-这些是逻辑 artifact，不含数据行或存储路径。P1.3 Runner 将它们绑定到每次运行独立、带摘要的实际 artifact；持久化契约见 [PIPELINE_RUNNER_V1.md](PIPELINE_RUNNER_V1.md)。末端 Run 未保存结果 Dataset 时自动获得逻辑 `result`；Process 暂要求已选择的输出 Dataset 来确定分支。
+这些是逻辑 artifact，不含数据行或存储路径。P1.3 Runner 将它们绑定到每次运行独立、带摘要的实际 artifact；持久化契约见 [PIPELINE_RUNNER_V1.md](PIPELINE_RUNNER_V1.md)。
 
-一个 job 输出端口对应 artifact ID 数组，允许同一结果保存为多个逻辑 Dataset；不是对同一个 job 重复执行。每个 artifact 最多一个生产者。
+artifact ID 只有两种（[DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md) §6.2）：
+
+- 入口 Dataset：`dataset:<节点 ID>`，`producer` 为 null。
+- 步骤输出：`output:<job>:<端口>`，例如 `output:llm:run-extract:result`、`output:process:split:left`。Run 只有一个端口 `result`。Process 的端口为它的代码静态识别出的分支（`backend/process_outputs.py`），加上被下游读取的分支；没人读取的分支仍是 Pipeline 的输出。
+
+artifact 的 `name` 用于导出的工作表和变量：入口 Dataset 用 Dataset 名，LLM 输出用 Prompt 名，Process 的单一输出用 Process 名，分支用分支名。一个 job 输出端口对应一个 artifact；每个 artifact 恰好一个生产者。
 
 ## 配置和凭据边界
 
@@ -89,25 +94,26 @@ LLM job 使用 Prompt+Run 配置快照；只复制列映射、输入类型、sec
 
 ## 依赖与入口边界
 
-- Run 读取 `runWorkingSetId`，且必须存在唯一且匹配的 `prompt-to-run` 边。
-- Process 读取 `dataset-to-process` 边；主输入绑定为 `df`，其他输入使用已记录的 `df_<alias>`。单输入可推导主输入，多输入必须明确。
-- Process 输出读取 `process-to-dataset` 边及 `processOutputName`。单输出旧节点无名字时兼容为 `result`；多输出缺名时报错。
-- Dataset 的 `sourceRunNodeId` 是 LLM 生产者。与 Process 生产者冲突时报错。
-- 选中 Dataset 的生产者在路线外时，必须通过 `input_dataset_ids` 显式声明“从这份已保存数据开始”；否则报错，避免误把缺失上游的历史缓存当成新输入。
-- 已被选中 job 生产的 Dataset 不能同时声明为起始输入。边界不能绕过循环校验。
+- Run 和 Process 的输入都是 `data` 连线（`{type: 'data', fromId, fromPort, toId, alias}`）。来源是 Dataset 时读取 `dataset:<id>`，它必须在所选 route 中，否则报 `MISSING_DEPENDENCY`；来源是 Run 或 Process 的端口时读取 `output:<job>:<端口>`，生产 job 不在所选 route 中时报 `UNSELECTED_UPSTREAM`，信息中写明上游节点名。
+- Run 恰好一条输入（多条报 `MULTIPLE_RUN_INPUTS`），且必须存在唯一且匹配的 `prompt-to-run` 边。
+- Process 的主输入是 `alias` 为 `df` 的那条（只有一条输入时可省略），否则报 `INVALID_PRIMARY_INPUT`；其他输入使用连线上记录的 `df_<alias>`。
+- 下游读取的分支不在 Process 的静态识别结果中时报 `UNKNOWN_OUTPUT_PORT`；读取 Run 的非 `result` 端口同样报错。识别为动态输出，或识别为单一输出而下游读取命名分支（例如 `return out`，返回的其实是字典）时，端口按下游读取的为准，并给出 `RUNTIME_PROCESS_CONTRACT` warning，在运行时检查。
+- Dataset 只是入口：保存自某个步骤的 Dataset（`sourceRunNodeId` 等）不再把步骤串起来，读取它的步骤从这份表开始。
+- 步骤互相读取形成环时报 `CYCLIC_DEPENDENCY`。
 - 选中数据流必须连通；不因编译而自动加入遗漏节点。
+- 已删除的诊断：`MULTIPLE_PRODUCERS`、`INPUT_PRODUCER_CONFLICT`、`UNSELECTED_PRODUCER`、`MISSING_BRANCH_NAME`（Dataset 不再有生产者）、`UNSUPPORTED_STEP_SOURCE`（步骤来源已支持）。
 
-Compiler 支持多入口及纯 Process 图，UI 的识别规则和导出能力仍保持原有范围，后续按 Phase 2 开放。P1.2 前端将路线首个 Dataset 作为显式 `input_dataset_ids`；旧 API 调用方不传时，也将路线首项 Dataset 视为显式入口。后续 job 顺序由编译器的依赖决定。
+Compiler 支持多入口及纯 Process 图。前端把所选步骤读取的所有 Dataset 作为 `input_dataset_ids`（`pipelineInputAvailability.js`）；旧 API 调用方不传时，将路线首项 Dataset 视为入口。`input_dataset_ids` 只用于检查入口是否被选中、是否有当前结果。job 顺序由编译器的依赖决定。
 
 ## Schema 与代码检查
 
 入口 Dataset headers/type 为已知契约，空输入行不使契约失效。已知列可兼容现有 Run 的同名映射推导；没有唯一匹配时报错。默认 `mapping_policy="strict"` 下，动态输入需要明确的列映射。
 
-导出使用明确的 `mapping_policy="legacy_export"`（写入 job config）。动态输入可从 observed schema 推导唯一同名映射，但实际列仍须运行时验证；历史空分支仍无法确定映射时保存 null 并产生 `RUNTIME_INPUT_MAPPING` warning，由生成代码在有数据时推导或报错。历史有数据却无法映射时仍报错。前端只发送 `row_count`，不发送数据行。这些兼容规则属于 compiler，渲染器不自行猜测映射。
+导出使用明确的 `mapping_policy="legacy_export"`（写入 job config）。动态输入（步骤输出）的映射为空时保存 null 并产生 `RUNTIME_INPUT_MAPPING` warning，由生成代码在有数据时按唯一同名列推导或报错，用户可在导出的 prompt 模块中补上。Run Pipeline 使用 `strict`，这种情况直接报 `UNMAPPED_INPUT`，避免上游已花费调用后才失败。前端只发送 `row_count`，不发送数据行。这些兼容规则属于 compiler，渲染器不自行猜测映射。
 
 Process 只做 AST 解析、入口函数签名和 Dataset alias 检查，不执行代码。要求顶层 `process(df)` 可由一个位置参数调用；P1.2 将老 `process(row)` 的纯文本迁移纳入 compiler，沿用前端适配语义。AST 检查不能保证代码运行成功或返回正确分支；实际返回值必须在运行时检查。
 
-所有 Process 输出为 `schema.status = runtime`；历史 Dataset schema 仅保留为 `observed_schema`。下游 LLM 在执行前验证真正产生的列和类型。即使代码看似简单，也不假定保存的表结构是新代码的返回契约。
+所有 Process 输出为 `schema.status = runtime`。下游 LLM 在执行前验证真正产生的列和类型。即使代码看似简单，也不假定以前的结果表结构是新代码的返回契约。
 
 对已知输入，LLM 输出契约包含 `Input: #`、输入列、`Output: #`、输出列。字段统一包含结构化 `key` 与原始 `display`，例如 `drug-name` → `key=drug_name, display=drug-name`；归一化碰撞通过后缀消歧。导出直接使用这些字段，不重新归一化。single/table 使用同一列契约，行展开留给执行器。
 

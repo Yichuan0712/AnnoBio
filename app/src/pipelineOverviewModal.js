@@ -12,7 +12,6 @@ import { showAlert } from './alertModal.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
 import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from './pipelineRouteSelection.js';
 import { buildPipelineCompileRequest, pipelineInputHasAssets } from './pipelineRunDefinition.js';
-import { datasetProducerConflicts } from './pipelineProducerConflicts.js';
 import { openPipelineRunDialog } from './pipelineRunDialog.js';
 import { pipelineInputSteps } from './pipelineRunInputs.js';
 import {
@@ -215,7 +214,6 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   let openCanvasNode = typeof options.openCanvasNode === 'function' ? options.openCanvasNode : () => {};
   let pipelines = [];
   let pipelineSignature = '';
-  let canvasWarnings = '';
   let canvasNodes = [];
   let refreshFrame = 0;
   let pollTimer = 0;
@@ -535,7 +533,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
         return renderPipeline(pipeline, index, selectedByChoiceId, runEntriesByPipelineId.get(pipelineId));
       }).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
-    bodyEl.innerHTML = canvasWarnings + content;
+    bodyEl.innerHTML = content;
     renderRunsWindow();
   }
   function refresh(nextSource) {
@@ -543,17 +541,9 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     const nextPipelines = readPipelines?.() || [];
     const state = getCanvasState?.();
     canvasNodes = state?.nodes || [];
-    const names = new Map((state?.nodes || []).map((node) => [node.nodeId, node.name || node.nodeId]));
-    const conflicts = datasetProducerConflicts(state);
-    const conflictNotice = conflicts.length
-      ? `<div class="pipeline-run-validation pipeline-run-validation--error">Dataset source conflict: ${escapeHtml(conflicts.map((item) => names.get(item.datasetId) || item.datasetId).join(', '))}. Remove the extra producer link before running or exporting.</div>`
-      : '';
-    // Saved copies whose source has moved on are shown on the canvas as dashed edges, not listed here.
-    const nextWarnings = conflictNotice;
-    const nextSignature = JSON.stringify({ pipelines: nextPipelines, warnings: nextWarnings });
+    const nextSignature = JSON.stringify(nextPipelines);
     if (nextSignature !== pipelineSignature) {
       pipelines = nextPipelines;
-      canvasWarnings = nextWarnings;
       pipelineSignature = nextSignature;
       renderBody();
     }
@@ -770,6 +760,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('workflow:canvas-changed', scheduleRefresh);
     document.removeEventListener('workflow:history-resolved', scheduleRefresh);
+    document.removeEventListener('workflow:process-outputs-changed', scheduleRefresh);
     document.removeEventListener('workflow:project-changed', onProjectChanged);
   }
   overlay.destroyPipelineOverview = destroy;
@@ -780,6 +771,8 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   if (!host) document.addEventListener('keydown', onKeyDown);
   document.addEventListener('workflow:canvas-changed', scheduleRefresh);
   document.addEventListener('workflow:history-resolved', scheduleRefresh);
+  // A Process's branches are detected from its code after it changes (processOutputPorts.js).
+  document.addEventListener('workflow:process-outputs-changed', scheduleRefresh);
   function onProjectChanged() {
     syncProjectContext().catch(() => {});
   }

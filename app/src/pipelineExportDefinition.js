@@ -1,4 +1,5 @@
 import { assertPipelineInputsAvailable, pipelineInputDatasetIds } from './pipelineInputAvailability.js';
+import { stepSourceLabel } from './stepInputs.js';
 
 function selectedNodeIds(route) {
   const ids = new Set();
@@ -21,9 +22,6 @@ export function exportCanvasDefinition(canvasState, route) {
           type: 'dataset',
           nodeId: node.nodeId,
           name: node.name,
-          sourceRunNodeId: node.sourceRunNodeId,
-          processOutputName: node.processOutputName,
-          savedCopy: !!node.savedCopy,
           resultMissing: !!node.resultMissing,
           datasetContent: {
             headers: node.datasetContent?.headers || [],
@@ -66,29 +64,18 @@ export function exportCanvasDefinition(canvasState, route) {
       return null;
     })
     .filter(Boolean);
-  const executableEdgeTypes = new Set([
-    'data',
-    'process-to-dataset',
-    'prompt-to-run',
-    'prompt-to-prompt',
-  ]);
-  // A Process's other outputs stay visible so the compiler can ask for branch names, except further
-  // saved versions of a branch the route already carries (an unnamed output is the `result` branch).
-  const branchOf = new Map((canvasState?.nodes || []).map((node) => [
-    node?.nodeId, String(node?.processOutputName || '').trim() || 'result',
-  ]));
-  const routeBranches = new Set((canvasState?.connections || [])
-    .filter((edge) => edge?.type === 'process-to-dataset' && ids.has(edge.fromId) && ids.has(edge.toId))
-    .map((edge) => `${edge.fromId}\u0000${branchOf.get(edge.toId) || 'result'}`));
-  // A frozen copy of a selected step's output in the route is that step's output when it runs
-  // (pipelineInputAvailability.js); the compiler needs the copy's origin to chain it.
-  const snapshotEdgeTypes = new Set(['run-to-dataset-snapshot', 'process-to-dataset-snapshot']);
-  const connections = (canvasState?.connections || []).filter((edge) => (
-    (executableEdgeTypes.has(edge?.type) && (
-      ids.has(edge?.toId) || (edge?.type === 'process-to-dataset' && ids.has(edge?.fromId)
-        && !routeBranches.has(`${edge.fromId}\u0000${branchOf.get(edge.toId) || 'result'}`))
-    )) || (snapshotEdgeTypes.has(edge?.type) && ids.has(edge.fromId) && ids.has(edge.toId))
-  ));
+  // What the selected steps read (`data`), and which Prompt each Run uses. Saved-from links are not
+  // sent: a Dataset is only an input (docs/design/DATA_FLOW_DESIGN.md §6.1).
+  const executableEdgeTypes = new Set(['data', 'prompt-to-run', 'prompt-to-prompt']);
+  const connections = (canvasState?.connections || []).filter((edge) => executableEdgeTypes.has(edge?.type) && ids.has(edge?.toId));
+  // A step read from outside the route goes as its name only, so the compiler can say which it is.
+  const byId = new Map((canvasState?.nodes || []).map((node) => [node?.nodeId, node]));
+  for (const edge of connections) {
+    const upstream = byId.get(edge.fromId);
+    if (edge.type !== 'data' || ids.has(edge.fromId) || !['run', 'process'].includes(upstream?.type)) continue;
+    if (nodes.some((node) => node.nodeId === edge.fromId)) continue;
+    nodes.push({ type: upstream.type, nodeId: upstream.nodeId, name: stepSourceLabel(canvasState, { nodeId: upstream.nodeId, port: 'result' }) });
+  }
   return { version: canvasState?.version || 3, nodes, connections };
 }
 

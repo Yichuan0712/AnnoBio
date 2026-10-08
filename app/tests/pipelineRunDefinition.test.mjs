@@ -44,20 +44,24 @@ test('start freezes rows only for explicit inputs and never sends stale intermed
   assert.deepEqual(state, before);
 });
 
-test('compile rejects a derived Dataset with no current result when used as an input boundary', () => {
+test('compile rejects a derived Dataset with no current result when a step starts from it', () => {
   const { state, route } = fixture();
   const out = state.nodes.find((node) => node.nodeId === 'out');
   out.resultMissing = true;
   out.datasetContent = { headers: [], rows: [] };
+  // Nothing in this route reads it.
   assert.doesNotThrow(() => buildPipelineCompileRequest({ canvasState: state, route }));
-  const boundaryRoute = [{ type: 'dataset', dataset_node_id: 'out' }];
-  assert.throws(() => buildPipelineCompileRequest({ canvasState: state, route: boundaryRoute }), /no current result/);
+  state.nodes.push({ type: 'process', nodeId: 'clean' });
+  state.connections.push({ type: 'data', fromId: 'out', fromPort: 'result', toId: 'clean', alias: 'df' });
+  const readingRoute = [{ type: 'dataset', dataset_node_id: 'out' }, { type: 'process', process_node_id: 'clean' }];
+  assert.throws(() => buildPipelineCompileRequest({ canvasState: state, route: readingRoute }), /no current result/);
 });
 
 test('an ordinary empty Dataset remains a valid input', () => {
   const state = { nodes: [{ type: 'dataset', nodeId: 'empty', name: 'Empty',
-    datasetContent: { headers: ['text'], rows: [] } }], connections: [] };
-  const route = [{ type: 'dataset', dataset_node_id: 'empty' }];
+    datasetContent: { headers: ['text'], rows: [] } }, { type: 'process', nodeId: 'clean' }],
+  connections: [{ type: 'data', fromId: 'empty', fromPort: 'result', toId: 'clean', alias: 'df' }] };
+  const route = [{ type: 'dataset', dataset_node_id: 'empty' }, { type: 'process', process_node_id: 'clean' }];
   const request = buildPipelineCompileRequest({ canvasState: state, route });
   assert.deepEqual(request.input_dataset_ids, ['empty']);
   assert.deepEqual(request.canvas_state.nodes[0].datasetContent.rows, []);

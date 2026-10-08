@@ -62,11 +62,8 @@ class CompiledExportTests(unittest.TestCase):
     def test_multi_input_export_accepts_named_workbooks(self):
         state = {"nodes": [dataset("raw", ["text"]), dataset("lookup", ["suffix"]),
                            process("join",
-                                   dfCode="def process(df):\n    out = df.copy()\n    out['text'] = out['text'] + df_lookup['suffix']\n    return out\n"),
-                           dataset("joined")],
-                 "connections": [data("raw", "join", "df"),
-                                 data("lookup", "join", "df_lookup"),
-                                 edge("join", "joined", "process-to-dataset")]}
+                                   dfCode="def process(df):\n    out = df.copy()\n    out['text'] = out['text'] + df_lookup['suffix']\n    return out\n")],
+                 "connections": [data("raw", "join", "df"), data("lookup", "join", "df_lookup")]}
         state["nodes"][1]["datasetContent"]["headers"] = ["suffix", "image"]
         state["nodes"][1]["datasetContent"]["columnTypes"] = ["text", "image"]
         route = route_for(state)
@@ -96,15 +93,14 @@ assert pd.read_excel('out.xlsx')['text'].tolist() == ['ax']
                                     capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_saved_input_boundary_and_cycles_remain_distinct(self):
-        state = simple()
-        state["nodes"][0]["sourceRunNodeId"] = "outside"
-        self.build(state, input_dataset_ids=["raw"])
-        with self.assertRaisesRegex(PipelineExportError, "outside the selection"):
-            self.build(state, input_dataset_ids=[])
-        state["nodes"][0]["sourceRunNodeId"] = "r"
-        with self.assertRaisesRegex(PipelineExportError, "also produced"):
-            self.build(state, input_dataset_ids=["raw"])
+    def test_unselected_upstream_and_cycles_never_export(self):
+        state = branched()
+        with self.assertRaisesRegex(PipelineExportError, 'output of "split", which is not in this Pipeline'):
+            self.build(state, route=[item for item in route_for(state) if item.get("process_node_id") != "split"])
+        cycle = {"nodes": [dataset("raw"), process("a"), process("b")],
+                 "connections": [data("raw", "a", "df"), data("b", "a", "df_b"), data("a", "b", "df")]}
+        with self.assertRaisesRegex(PipelineExportError, "dependency cycle"):
+            self.build(cycle)
 
     def test_invalid_graph_never_enters_codegen(self):
         state = simple()
@@ -144,11 +140,10 @@ assert pd.read_excel('out.xlsx')['text'].tolist() == ['ax']
         self.assertEqual(result["Output: drug-name"].tolist(), ["a"])
         self.assertEqual(result["Output: drug name"].tolist(), ["b"])
 
-    def test_generated_dag_executes_split_merge_llm_and_two_saved_outputs_once(self):
+    def test_generated_dag_executes_split_merge_and_llm_once(self):
         state = branched()
         state["nodes"][1]["dfCode"] = "def process(df):\n    return {'left': df, 'right': df.rename(columns={'text': 'other'})}\n"
-        state["nodes"][4]["dfCode"] = "def process(df):\n    out = df.copy()\n    out['text'] = out['text'] + ':' + df_right['other']\n    return out\n"
-        state["nodes"] += [dataset("out-a", sourceRunNodeId="r"), dataset("out-b", sourceRunNodeId="r")]
+        state["nodes"][2]["dfCode"] = "def process(df):\n    out = df.copy()\n    out['text'] = out['text'] + ':' + df_right['other']\n    return out\n"
         _, archive = self.build(state)
         with tempfile.TemporaryDirectory(prefix="annobio-compiled-") as folder:
             with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
@@ -169,10 +164,10 @@ pd.DataFrame([{'text': 'a'}, {'text': 'b'}]).to_excel('input.xlsx', sheet_name='
 sys.argv = ['main.py', '--input', 'input.xlsx', '--output', 'output.xlsx', '--concurrency', '1']
 assert main.main() == 0
 tables = pd.read_excel('output.xlsx', sheet_name=None)
-assert set(tables) == {'out-a', 'out-b'}, tables.keys()
+# The Run's output is named after its Prompt.
+assert set(tables) == {'p'}, tables.keys()
 assert calls == ['Read a:a', 'Read b:b'], calls
-assert tables['out-a']['Output: answer'].tolist() == calls
-assert tables['out-a'].equals(tables['out-b'])
+assert tables['p']['Output: answer'].tolist() == calls
 '''
             result = subprocess.run([sys.executable, "-c", script], cwd=root, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -186,9 +181,8 @@ assert tables['out-a'].equals(tables['out-b'])
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_process_only_route_exports_without_llm_engine(self):
-        state = {"nodes": [dataset("raw"), process("clean", dfCode="def process(df):\n    out = df.copy()\n    out['text'] = out['text'].str.upper()\n    return out\n"),
-                           dataset("cleaned")],
-                 "connections": [data("raw", "clean", "df"), edge("clean", "cleaned", "process-to-dataset")]}
+        state = {"nodes": [dataset("raw"), process("clean", dfCode="def process(df):\n    out = df.copy()\n    out['text'] = out['text'].str.upper()\n    return out\n")],
+                 "connections": [data("raw", "clean", "df")]}
         files = self.files(self.build(state)[1])
         self.assertFalse(any(path.startswith(("engine/", "prompt/")) for path in files))
         self.assertNotIn(".env.example", files)
@@ -209,9 +203,9 @@ assert pd.read_excel('output.xlsx')['text'].tolist() == ['A', 'B']
     def test_process_only_branched_route_executes(self):
         state = branched()
         state["nodes"] = [n for n in state["nodes"] if n["type"] not in {"prompt", "run"}]
-        state["connections"] = [e for e in state["connections"] if e["type"] != "prompt-to-run"]
+        state["connections"] = [e for e in state["connections"] if e["toId"] != "r"]
         state["nodes"][1]["dfCode"] = "def process(df):\n    return {'left': df, 'right': df.rename(columns={'text': 'other'})}\n"
-        state["nodes"][4]["dfCode"] = "def process(df):\n    out = df.copy()\n    out['text'] = out['text'] + ':' + df_right['other']\n    return out\n"
+        state["nodes"][2]["dfCode"] = "def process(df):\n    out = df.copy()\n    out['text'] = out['text'] + ':' + df_right['other']\n    return out\n"
         _, archive = self.build(state)
         self.assertNotIn("engine/__init__.py", self.files(archive))
         self.run_exported(archive, '''
@@ -221,7 +215,7 @@ import main
 pd.DataFrame([{'text': 'a'}]).to_excel('input.xlsx', sheet_name='Input', index=False)
 sys.argv = ['main.py', '--input', 'input.xlsx', '--output', 'output.xlsx']
 assert main.main() == 0
-assert pd.read_excel('output.xlsx', sheet_name=None)['merged']['text'].tolist() == ['a:a']
+assert pd.read_excel('output.xlsx', sheet_name=None)['merge']['text'].tolist() == ['a:a']
 ''')
 
 
