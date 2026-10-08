@@ -6,7 +6,8 @@
  */
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { displayCell } from '../../datasetContent.js';
-import { runInputSource } from '../../stepInputs.js';
+import { runInputSource, stepInputWaitingMessage, stepSourceLabel } from '../../stepInputs.js';
+import { stepOutputTable } from '../../stepOutputs.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
   datasetContentOf,
@@ -82,8 +83,14 @@ function upstream(state, nodeId, edgeType) {
 function runInputTable(state, run) {
   const saved = runInputContentOf(run);
   if (runResultsOf(run).length && Array.isArray(saved.rows) && saved.rows.length) return saved;
-  const inputId = runInputSource(state, run.nodeId)?.nodeId;
-  const dataset = state.nodes.find((n) => n.nodeId === inputId);
+  const source = runInputSource(state, run.nodeId);
+  if (source && source.kind !== 'dataset') {
+    // Another step's output: like the Run window, wait until that step has a complete result.
+    const output = stepOutputTable(state, source);
+    if (output.waiting) fail(stepInputWaitingMessage(state, source, output.waiting));
+    return output.table;
+  }
+  const dataset = state.nodes.find((n) => n.nodeId === source?.nodeId);
   return dataset ? datasetContentOf(dataset) : { headers: [], rows: [] };
 }
 
@@ -126,7 +133,7 @@ function previewRun(job, ctx) {
   const usd = price ? inputTokens * price.input + outputTokens * price.output : null;
 
   const lines = [
-    `${pendingRows.length} row${pendingRows.length === 1 ? '' : 's'} of "${nodeTitle(ctx.state.nodes.find((n) => n.nodeId === runInputSource(ctx.state, run.nodeId)?.nodeId))}"${done.size ? ` (continuing after ${done.size} done)` : ''}`,
+    `${pendingRows.length} row${pendingRows.length === 1 ? '' : 's'} of "${stepSourceLabel(ctx.state, runInputSource(ctx.state, run.nodeId))}"${done.size ? ` (continuing after ${done.size} done)` : ''}`,
     `Model: ${credentialLabel(credential)}${run.runCredentialId ? '' : ' (default Run model)'}`,
     `≈ ${Math.round(inputTokens).toLocaleString('en-US')} input and ${Math.round(outputTokens).toLocaleString('en-US')} output tokens`
       + (usd != null ? `, about ${formatUsd(usd)}` : ''),

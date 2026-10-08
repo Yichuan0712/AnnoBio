@@ -1,30 +1,33 @@
-import { canonicalJson, datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
+import { canonicalJson, datasetSignature, processInputSignature, runInputSignature, stepOutputSignature } from './runHistorySignature.js';
 import { datasetHistorySource, publishedPipelineCopy } from './datasetHistorySource.js';
 import {
-  RESULT_PORT, processInputEdges, processPrimarySource, runInputSource, setProcessInputs, setRunInputSource,
+  RESULT_PORT, processInputSources, processPrimarySource, runInputSource, setProcessInputs, setRunInputSource, sourceKey,
 } from './stepInputs.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
 
-/** A Process's df and its inputs with their aliases, sorted, for telling whether a selection changes them. */
+/** A Process's df and its inputs with their aliases, by source key and sorted, for telling whether a selection changes them. */
 function processInputsOf(state, processId) {
   return {
-    primary: processPrimarySource(state, processId)?.nodeId || '',
-    inputs: processInputEdges(state).filter((edge) => edge.toId === processId)
-      .map((edge) => [edge.fromId, edge.alias]).sort(([a], [b]) => a.localeCompare(b)),
+    primary: sourceKey(processPrimarySource(state, processId)),
+    inputs: processInputSources(state, processId)
+      .map((source) => [sourceKey(source), source.alias]).sort(([a], [b]) => a.localeCompare(b)),
   };
 }
 
 /** processInputsOf for the inputs a selected record gives a Process, written the way setProcessInputs stores them. */
 function selectedProcessInputs(processId, { primary, inputs }) {
   const state = {
-    nodes: [{ nodeId: processId, type: 'process' }, ...inputs.map((input) => ({ nodeId: input.nodeId, type: 'dataset' }))],
+    nodes: [{ nodeId: processId, type: 'process' }, ...[primary, ...inputs].map((input) => ({ nodeId: input.nodeId, type: input.kind }))],
     connections: [],
   };
-  setProcessInputs(state, processId, { primary: { nodeId: primary, port: RESULT_PORT }, inputs });
+  setProcessInputs(state, processId, { primary, inputs });
   return processInputsOf(state, processId);
 }
+
+/** The key a recorded input was signed under: a Dataset's node ID, or `node:port` for a step's output. */
+const recordedInputKey = (input) => (input?.kind === 'step' ? `${input.nodeId}:${input.port || RESULT_PORT}` : String(input?.nodeId || ''));
 
 /** Preview the input and output connection changes required to select one coherent History lineage. */
 export async function planHistorySelection(state, recordId, { loadRecord, recordEntries = [], runningNodeIds = [] }) {
@@ -35,8 +38,8 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   const desired = new Map();
   const selectedRecords = new Map();
   const promptEdges = new Map();
-  const runInputs = new Map(); // Run node id -> input Dataset id
-  const processInputs = new Map(); // Process node id -> { primary, inputs: [{ nodeId, port, alias }] }
+  const runInputs = new Map(); // Run node id -> input source { nodeId, port, kind }
+  const processInputs = new Map(); // Process node id -> { primary: source, inputs: [{ nodeId, port, kind, alias }] }
   const datasetSources = new Map();
   const active = new Set();
   const recordCache = new Map();
@@ -101,7 +104,24 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
       ...((dataset.sourceRecordId && !publishedCopy)
         ? { sourceRecordId: sourceRecord.id, branch: dataset.branch } : {}),
     });
-    return { nodeId: resolved.nodeId, signature };
+    return { nodeId: resolved.nodeId, port: RESULT_PORT, kind: 'dataset', key: resolved.nodeId, signature };
+  }
+
+  /**
+   * Selects the upstream record a recorded step input refers to, so its output is what the node
+   * reads again, and returns the input as a source with its signature. A record without `kind`
+   * predates step inputs and reads a Dataset.
+   */
+  async function visitInput(input) {
+    if (input?.kind !== 'step') return visitDataset(input);
+    if (!input.nodeId || !input.recordId) throw new Error('History step input is incomplete.');
+    const upstream = await visitRecord(input.recordId);
+    if (upstream.nodeId !== input.nodeId) throw new Error(`History step input does not match: ${input.nodeId}`);
+    const port = String(input.port || RESULT_PORT);
+    return {
+      nodeId: input.nodeId, port, kind: upstream.kind, key: `${input.nodeId}:${port}`,
+      signature: await stepOutputSignature({ nodeId: input.nodeId, recordId: upstream.id, port }),
+    };
   }
 
   async function visitRecord(id) {
@@ -125,13 +145,13 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
           sections: prompt.sections || [], outputFormat: prompt.outputFormat || { returnShape: 'single', fields: [] },
           inputTypes: prompt.inputTypes || {},
         });
-        const resolvedDataset = await visitDataset(dataset);
+        const input = await visitInput(dataset);
         const selectionSignature = await runInputSignature({
           promptNodeId: prompt.nodeId, prompt,
-          datasetNodeId: resolvedDataset.nodeId, datasetSignature: resolvedDataset.signature,
+          datasetNodeId: input.key, datasetSignature: input.signature,
           mapping: record.inputs.mapping || {},
         });
-        runInputs.set(record.nodeId, resolvedDataset.nodeId);
+        runInputs.set(record.nodeId, { nodeId: input.nodeId, port: input.port, kind: input.kind });
         demand(record.nodeId, 'run', {
           runInputToColumn: JSON.stringify(record.inputs.mapping || {}),
           historyRecordId: record.id,
@@ -145,18 +165,15 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
         }
         const resolvedBindings = [];
         for (const binding of bindings) {
-          const resolvedDataset = await visitDataset(binding);
-          resolvedBindings.push({ binding, ...resolvedDataset });
+          const input = await visitInput(binding);
+          resolvedBindings.push({ binding, ...input });
         }
-        const primaryDatasetId = resolvedBindings.find(({ binding }) => (
-          binding.nodeId === record.inputs.primaryDatasetId
-        ))?.nodeId || record.inputs.primaryDatasetId;
+        const primary = resolvedBindings.find(({ binding }) => recordedInputKey(binding) === record.inputs.primaryDatasetId);
+        if (!primary) throw new Error(`Process history inputs are incomplete: ${id}`);
         const code = String(record.inputs.code || '');
         const selectionSignature = await processInputSignature({
-          code, primaryDatasetId,
-          bindings: resolvedBindings.map(({ binding, nodeId: id, signature }) => ({
-            nodeId: id, alias: binding.alias, signature,
-          })),
+          code, primaryDatasetId: primary.key,
+          bindings: resolvedBindings.map(({ binding, key, signature }) => ({ key, alias: binding.alias, signature })),
         });
         demand(record.nodeId, 'process', {
           dfCode: code,
@@ -164,8 +181,8 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
           historySelectionSignature: selectionSignature,
         });
         processInputs.set(record.nodeId, {
-          primary: primaryDatasetId,
-          inputs: resolvedBindings.map(({ binding, nodeId: id }) => ({ nodeId: id, port: RESULT_PORT, alias: binding.alias })),
+          primary: { nodeId: primary.nodeId, port: primary.port, kind: primary.kind },
+          inputs: resolvedBindings.map(({ binding, nodeId: inputId, port, kind }) => ({ nodeId: inputId, port, kind, alias: binding.alias })),
         });
       }
       return record;
@@ -180,7 +197,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
     if ((record.sourceRecordIds || []).includes(upstreamId)) return true;
     const snapshots = record.kind === 'run' ? [record.inputs?.dataset] : record.inputs?.bindings;
     return (snapshots || []).some((snapshot) => (
-      snapshot?.sourceRecordId === upstreamId || snapshot?.upstreamPipelineRecordId === upstreamId
+      snapshot?.recordId === upstreamId || snapshot?.sourceRecordId === upstreamId || snapshot?.upstreamPipelineRecordId === upstreamId
     ));
   }
 
@@ -214,18 +231,16 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   const changedNodeIds = [];
   for (const [id, patch] of desired) {
     const node = nodes.get(id);
-    const inputId = runInputs.get(id);
+    const runInput = runInputs.get(id);
     const processInput = processInputs.get(id);
-    const inputChanged = (inputId !== undefined && runInputSource(next, id)?.nodeId !== inputId)
+    const inputChanged = (runInput !== undefined && sourceKey(runInputSource(next, id)) !== sourceKey(runInput))
       || (processInput !== undefined && canonicalJson(processInputsOf(next, id)) !== canonicalJson(selectedProcessInputs(id, processInput)));
     if (inputChanged || Object.entries(patch).some(([key, value]) => canonicalJson(node[key]) !== canonicalJson(value))) {
       changedNodeIds.push(id);
     }
     Object.assign(node, patch);
-    if (inputId !== undefined) setRunInputSource(next, id, { nodeId: inputId, port: RESULT_PORT });
-    if (processInput !== undefined) {
-      setProcessInputs(next, id, { primary: { nodeId: processInput.primary, port: RESULT_PORT }, inputs: processInput.inputs });
-    }
+    if (runInput !== undefined) setRunInputSource(next, id, runInput);
+    if (processInput !== undefined) setProcessInputs(next, id, processInput);
   }
   for (const [id, source] of datasetSources) {
     const node = nodes.get(id);
@@ -309,9 +324,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   // Exactly the Dataset snapshots created from a selected record become its live outputs. Other
   // outputs of that Run/Process remain connected as dashed, immutable History snapshots.
   const selectedInputDatasetIds = new Set([...processInputs.values()].flatMap(({ inputs }) => inputs.map((input) => input.nodeId)));
-  for (const inputId of runInputs.values()) {
-    if (inputId) selectedInputDatasetIds.add(inputId);
-  }
+  for (const input of runInputs.values()) selectedInputDatasetIds.add(input.nodeId);
   for (const [producerNodeId, selectedRecordId] of selectedRecords) {
     const producer = nodes.get(producerNodeId);
     if (!producer || !['run', 'process'].includes(producer.type)) continue;

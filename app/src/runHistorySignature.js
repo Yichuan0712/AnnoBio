@@ -50,11 +50,22 @@ export async function runInputSignature({ promptNodeId, prompt, datasetNodeId, d
   });
 }
 
+/**
+ * A Process's inputs as History signs them. Each binding is signed under its source key
+ * (stepInputs.js sourceKey): a Dataset's node ID, or `node:port` for a step's output, since two
+ * branches of one Process can both be inputs. `primaryDatasetId` is the key of the df binding.
+ */
 export async function processInputSignature({ code, primaryDatasetId, bindings }) {
   if (!primaryDatasetId || !Array.isArray(bindings) || !bindings.length) throw new Error('Process history input is incomplete.');
   return sha256Signature({
     kind: 'process', code: String(code || ''), primaryDatasetId,
-    bindings: bindings.map(({ nodeId, alias, signature }) => ({ nodeId, alias, signature }))
+    bindings: bindings.map(({ key, nodeId, alias, signature }) => ({ nodeId: key || nodeId, alias, signature }))
       .sort((a, b) => a.nodeId.localeCompare(b.nodeId)),
   });
+}
+
+/** One port of a Run or Process as of one of its History records: what a step input signs. */
+export async function stepOutputSignature({ nodeId, recordId, port }) {
+  if (!nodeId || !recordId || !port) throw new Error('Step output history input is incomplete.');
+  return sha256Signature({ kind: 'step-output', nodeId, recordId, port });
 }

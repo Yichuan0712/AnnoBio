@@ -1,8 +1,8 @@
-import { datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
+import { datasetSignature, processInputSignature, runInputSignature, stepOutputSignature } from './runHistorySignature.js';
 import { buildRunResultsTable } from './runResultsExport.js';
 import { cloneCell } from './datasetContent.js';
 import { datasetHistorySource } from './datasetHistorySource.js';
-import { processRequiredInputs, runInputSource } from './stepInputs.js';
+import { processRequiredInputs, runInputSource, sourceKey } from './stepInputs.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -64,7 +64,8 @@ function applyResult(node, record) {
 
 /**
  * Resolve the visible canvas from current inputs and the history index. Nothing is persisted here.
- * Missing current results clear node output caches and all dependent derived Dataset content.
+ * Missing current results clear node output caches and all dependent derived Dataset content. A Run
+ * or Process with an input that has no result yet gets `waitingForUpstream` and no current record.
  */
 export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   const next = copy(state || {});
@@ -134,6 +135,25 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
     return content ? { signature: await datasetSignature({ nodeId: id, content }) } : null;
   }
 
+  /**
+   * What one input signs, or null while it has no result: a Dataset's content (or the record it
+   * follows), or the current completed record of the step whose output it reads (§3.8).
+   */
+  async function resolveSource(source) {
+    if (!source?.nodeId) return null;
+    if (source.kind !== 'run' && source.kind !== 'process') {
+      const dataset = await resolveDataset(source.nodeId);
+      return dataset && { key: sourceKey(source), signature: dataset.signature };
+    }
+    const upstream = await resolveNode(source.nodeId);
+    if (upstream?.status !== 'completed') return null;
+    if (source.kind === 'run' ? source.port !== 'result' : !processTable(upstream, source.port)) return null;
+    return {
+      key: sourceKey(source),
+      signature: await stepOutputSignature({ nodeId: source.nodeId, recordId: upstream.id, port: source.port }),
+    };
+  }
+
   async function resolveNode(id) {
     if (resolvedNodes.has(id)) return resolvedNodes.get(id);
     const node = nodes.get(id);
@@ -142,15 +162,17 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
     visiting.add(id);
     try {
       let signature = null;
+      let waiting = false;
       if (node.type === 'run') {
         const promptEdge = next.connections.find((edge) => edge.type === 'prompt-to-run' && edge.toId === id);
         const prompt = nodes.get(promptEdge?.fromId);
-        const datasetId = runInputSource(next, id)?.nodeId || '';
-        const dataset = await resolveDataset(datasetId);
-        if (prompt?.type === 'prompt' && dataset) {
+        const source = runInputSource(next, id);
+        const input = await resolveSource(source);
+        waiting = !!source && !input;
+        if (prompt?.type === 'prompt' && input) {
           signature = await runInputSignature({
-            promptNodeId: nodeId(prompt), prompt, datasetNodeId: datasetId,
-            datasetSignature: dataset.signature, mapping: parsed(node.runInputToColumn, {}),
+            promptNodeId: nodeId(prompt), prompt, datasetNodeId: input.key,
+            datasetSignature: input.signature, mapping: parsed(node.runInputToColumn, {}),
           });
         }
       } else {
@@ -158,17 +180,18 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
         const { primaryId: primaryDatasetId, bindings: required } = processRequiredInputs(next, id, { code });
         if (primaryDatasetId) {
           const bindings = [];
-          let complete = true;
           for (const binding of required) {
-            const dataset = await resolveDataset(binding.nodeId);
-            if (!dataset) { complete = false; break; }
-            bindings.push({ nodeId: binding.nodeId, alias: binding.alias, signature: dataset.signature });
+            const input = await resolveSource(binding);
+            if (!input) { waiting = true; break; }
+            bindings.push({ key: input.key, alias: binding.alias, signature: input.signature });
           }
-          if (complete && bindings.some((item) => item.nodeId === primaryDatasetId)) {
+          if (!waiting && bindings.some((item) => item.key === primaryDatasetId)) {
             signature = await processInputSignature({ code, primaryDatasetId, bindings });
           }
         }
       }
+      if (waiting) node.waitingForUpstream = true;
+      else delete node.waitingForUpstream;
       const record = signature ? await recordFor(node, signature) : null;
       if (record) {
         applyResult(node, record);

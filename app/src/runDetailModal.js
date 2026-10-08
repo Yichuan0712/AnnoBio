@@ -113,6 +113,7 @@ export function openRunDetailModal({
   onWorkingSetChange = () => {},
   getInputSource = () => null,
   setInputSource = () => {},
+  getInputNotices = () => [],
   history = null,
 }) {
   (getRunMappingsFromCanvas?.() || []).forEach((parsed) => {
@@ -193,6 +194,7 @@ export function openRunDetailModal({
                 <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
               </div>
             </div>
+            <p class="process-editor-hint run-detail-upstream-notice" hidden></p>
           </div>
         </div>
         <div class="run-detail-preview-wrap">
@@ -230,6 +232,7 @@ export function openRunDetailModal({
     closeWithin: overlay,
   });
   const runBtn = overlay.querySelector('.run-detail-run-btn');
+  const upstreamNoticeEl = overlay.querySelector('.run-detail-upstream-notice');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
   const workingSets = getWorkingSets();
 
@@ -331,6 +334,14 @@ export function openRunDetailModal({
     runBtn.textContent = executionIdleLabel({ interrupted: node?.dataset?.runResumable === '1', hasPartial: results.length > 0 });
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
     runBtn.disabled = !(getPromptId() && selectedNodeId && allMapped);
+    // The input is another step's output that has no complete result yet (runHistoryResolver.js).
+    if (node?.dataset?.waitingForUpstream === '1') {
+      runBtn.disabled = true;
+      runBtn.textContent = 'Waiting for upstream';
+    }
+    const notices = getInputNotices?.() || [];
+    upstreamNoticeEl.textContent = notices.join(' ');
+    upstreamNoticeEl.hidden = !notices.length;
   }
 
   function getInputHeaders() {
@@ -732,6 +743,8 @@ export function openRunDetailModal({
     const content = selectedNodeId ? getSubsetContent(selectedNodeId) : null;
     const ws = getSelectedWorkingSet();
     const headers = (content?.headers || ws?.headers || []).slice();
+    // An upstream step without a result has no columns yet; its mapping is kept until it has.
+    const keepMapping = node?.dataset?.waitingForUpstream === '1';
     const columnTypes = headers.map((_, i) => (content?.columnTypes?.[i] === 'image' || content?.columnTypes?.[i] === 'pdf') ? content.columnTypes[i] : 'text');
     const inputTypes = getPromptTemplate()?.inputTypes || {};
     const headerSet = new Set(headers);
@@ -745,8 +758,8 @@ export function openRunDetailModal({
       let col = inputToColumn[inputName] || '';
       const expected = inputTypes[inputName];
       const selectedIndex = headers.indexOf(col);
-      if (col && expected && columnTypes[selectedIndex] !== expected) { col = ''; inputToColumn[inputName] = ''; }
-      if (col && !headerSet.has(col)) { col = ''; inputToColumn[inputName] = ''; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
+      if (!keepMapping && col && expected && columnTypes[selectedIndex] !== expected) { col = ''; inputToColumn[inputName] = ''; }
+      if (!keepMapping && col && !headerSet.has(col)) { col = ''; inputToColumn[inputName] = ''; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
       if (!col && inputNameToColumnMemory[inputName] && headerSet.has(inputNameToColumnMemory[inputName])) { col = inputNameToColumnMemory[inputName]; inputToColumn[inputName] = col; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
     });
     const table = document.createElement('div');

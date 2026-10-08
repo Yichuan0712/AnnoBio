@@ -73,3 +73,16 @@ test('the Agent cannot edit locked content either, but can rename it and edit Pr
   assert.doesNotThrow(update('p', { name: 'Extract (old)' }));
   assert.doesNotThrow(update('raw', { note: 'used by the first run' }));
 });
+
+test('a step output read by another step locks nothing; its Datasets and Prompt still lock', () => {
+  const run = recordInputRefs({ kind: 'run', nodeId: 'b', inputs: {
+    prompt: { nodeId: 'pb' }, dataset: { kind: 'step', nodeId: 'a', port: 'result', recordId: 'record-a' },
+  } });
+  const process = recordInputRefs({ kind: 'process', nodeId: 'p', inputs: { bindings: [
+    { kind: 'step', nodeId: 'split', port: 'left', recordId: 'record-s', alias: 'df' },
+    { kind: 'dataset', nodeId: 'lookup', alias: 'df_lookup' },
+  ] } });
+  assert.deepEqual([run.datasetIds, process.datasetIds], [[], ['lookup']]);
+  const canvas = { nodes: ['a', 'b', 'pb', 'split', 'p', 'lookup'].map((nodeId) => ({ nodeId })), connections: [] };
+  assert.deepEqual([...contentLocks([run, process], canvas)], [['pb', ['b']], ['lookup', ['p']]]);
+});

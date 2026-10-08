@@ -44,6 +44,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     datasetContentByNodeId,
     readRunInputSource,
     writeRunInputSource,
+    readRunInput,
     readRunInputTable,
     writeProcessInputs,
     createPromptNode,
@@ -525,13 +526,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       throw new Error('This run node is not connected to an upstream prompt.');
     }
 
-    const workingSetId = readRunInputSource(node)?.nodeId || '';
-    if (!workingSetId) {
+    // The input's table, or why it has none yet: a Dataset, or another step's complete result (stepOutputs.js).
+    const input = readRunInput(node);
+    if (!input.source) {
       throw new Error('This run node has no selected input dataset.');
     }
-    if (getNodeById(workingSetId)?.dataset?.resultMissing === '1') {
-      throw new Error('The selected input Dataset has no current result. Run its upstream node first.');
-    }
+    if (input.waiting) throw new Error(input.message);
     let existingResults = [];
     if (!rerunCompleted) {
       try {
@@ -541,7 +541,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         existingResults = [];
       }
     }
-    let content = readRunInputTable(node);
+    let content = input.table;
     if (existingResults.length > 0 && node.dataset.runInputContent) {
       try { content = JSON.parse(node.dataset.runInputContent); } catch (_) {}
     }
