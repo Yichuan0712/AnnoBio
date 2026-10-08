@@ -8662,6 +8662,30 @@ button.btn.btn-danger:hover:not(:disabled) {
   line-height: 1.4;
 }
 
+/* Input pickers list Datasets and Step outputs in two groups (stepInputs.js candidateGroups). */
+.run-detail-ws-group {
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* A Run or Process whose input has no result yet (docs/design/DATA_FLOW_DESIGN.md §3.7). */
+.run-detail-waiting-banner {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--status-warning);
+  border-radius: var(--control-radius, 3px);
+  font-size: 12px;
+  color: var(--status-warning);
+}
+
+.run-detail-waiting-banner[hidden] {
+  display: none;
+}
+
 .process-editor-hint code {
   background: var(--hover);
   padding: 1px 4px;
@@ -9105,6 +9129,7 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 
 .process-input-option__make-df,
+.process-input-option__change,
 .process-input-option__alias {
   flex-shrink: 0;
   padding: 1px 6px;
@@ -9116,7 +9141,8 @@ button.btn.btn-danger:hover:not(:disabled) {
   line-height: 18px;
 }
 
-.process-input-option__make-df {
+.process-input-option__make-df,
+.process-input-option__change {
   border-color: var(--border);
   background: var(--bg);
   font-family: inherit;
@@ -9126,8 +9152,37 @@ button.btn.btn-danger:hover:not(:disabled) {
 
 .process-input-option:hover .process-input-option__make-df,
 .process-input-option.is-active .process-input-option__make-df,
-.process-input-option__make-df:focus-visible {
+.process-input-option__make-df:focus-visible,
+.process-input-option:hover .process-input-option__change,
+.process-input-option.is-active .process-input-option__change,
+.process-input-option__change:focus-visible {
   opacity: 1;
+}
+
+/* Changing an input's source (processInputPicker.js): which alias, and a way back. */
+.process-input-picker__replacing {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.process-input-picker__replacing[hidden] {
+  display: none;
+}
+
+.process-input-picker__cancel {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
 }
 
 .process-input-option__alias {

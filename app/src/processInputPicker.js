@@ -1,13 +1,16 @@
 /**
- * The Process window's Input datasets field: the Run window's Dataset picker (nodePicker.js) with a
- * check per canvas Dataset, so a Process can read several. The first one chosen is `df`; any other
- * input can be made `df` instead. Each Dataset shows the Python name it has in the code, its
- * process() parameter, which a click copies. A Dataset the code uses beyond that parameter stays
- * chosen until the code stops using it.
+ * The Process window's Input field: the Run window's picker (nodePicker.js) with a check per
+ * source, so a Process can read several. Sources are Datasets and other steps' outputs, listed in
+ * two groups (docs/design/DATA_FLOW_DESIGN.md §5.3) and told apart by their key (stepInputs.js
+ * sourceKey). The first one chosen is `df`; any other input can be made `df` instead. Each source
+ * shows the Python name it has in the code, its process() parameter, which a click copies. A source
+ * the code uses beyond that parameter stays chosen until the code stops using it. An input can read
+ * another source under the same name ("Change source…"), so the code needs no change.
  */
 import { selectPlaceholderLabel } from './displayTextNormalize.js';
+import { candidateGroups } from './stepInputs.js';
 
-/** Datasets beyond which the list gets a search box. */
+/** Sources beyond which the list gets a search box. */
 const SEARCH_THRESHOLD = 8;
 
 function escapeHtml(value) {
@@ -24,9 +27,10 @@ export function processInputPickerHtml({ id, placeholder, ariaLabel }) {
       <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
     </div>
     <div class="run-detail-ws-dropdown process-input-picker__dropdown" hidden>
-      <input type="search" class="process-input-picker__search" placeholder="Find a dataset or variable…" aria-label="Find a dataset or variable" hidden>
+      <input type="search" class="process-input-picker__search" placeholder="Find an input or variable…" aria-label="Find an input or variable" hidden>
+      <div class="process-input-picker__replacing" hidden></div>
       <div class="process-input-picker__list" id="${escapeHtml(id)}-list" role="listbox" aria-multiselectable="true" aria-label="${escapeHtml(ariaLabel)}"></div>
-      <p class="process-input-picker__empty" hidden>No matching datasets.</p>
+      <p class="process-input-picker__empty" hidden>No matching inputs.</p>
     </div>
   </div>`;
 }
@@ -34,27 +38,42 @@ export function processInputPickerHtml({ id, placeholder, ariaLabel }) {
 /**
  * @param {HTMLElement} pickerEl the element made from processInputPickerHtml
  * @param {{ placeholder: string,
- *   getInputs: () => { bindings: Array<{nodeId: string, name: string, color?: string, alias: string, primary: boolean, input: boolean, used: boolean, parameter: number}>, primaryDatasetId: string },
+ *   getInputs: () => { bindings: Array<{key: string, nodeId: string, kind: string, name: string, label: string, color?: string, alias: string, primary: boolean, input: boolean, used: boolean, parameter: number}>, primaryDatasetId: string },
  *   onChange: (inputs: { primaryDatasetId: string, inputIds: string[] }) => void,
+ *   onReplace?: (change: { fromKey: string, toKey: string }) => void,
  *   isLocked?: () => boolean, closeWithin?: HTMLElement }} options
+ *   primaryDatasetId and inputIds are source keys
  *   closeWithin: clicks elsewhere in it close the list (the window's overlay)
  * @returns {{ render: () => void, setLocked: (locked: boolean) => void, focus: () => void }}
  */
-export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onChange, isLocked = () => false, closeWithin }) {
+export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onChange, onReplace, isLocked = () => false, closeWithin }) {
   const trigger = pickerEl.querySelector('.process-input-picker__trigger');
   const chips = pickerEl.querySelector('.process-input-picker__chips');
   const dropdown = pickerEl.querySelector('.process-input-picker__dropdown');
   const search = pickerEl.querySelector('.process-input-picker__search');
+  const replacingEl = pickerEl.querySelector('.process-input-picker__replacing');
   const list = pickerEl.querySelector('.process-input-picker__list');
   const empty = pickerEl.querySelector('.process-input-picker__empty');
   let active = -1;
-  let order = new Map(); // node ID -> its place in the open list
+  let order = new Map(); // source key -> its place in the open list
+  let replacing = ''; // the key of the input whose source is being changed
+  const labelOf = (binding) => binding.label || binding.name;
 
   function swatch(className, color) {
     const el = document.createElement('span');
     el.className = className;
     el.style.background = color || 'transparent';
     el.setAttribute('aria-hidden', 'true');
+    return el;
+  }
+
+  function button(className, action, text, ariaLabel) {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = className;
+    el.dataset.action = action;
+    el.textContent = text;
+    if (ariaLabel) el.setAttribute('aria-label', ariaLabel);
     return el;
   }
 
@@ -74,60 +93,75 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
       chip.className = 'process-input-chip';
       const name = document.createElement('span');
       name.className = 'process-input-chip__name';
-      name.textContent = binding.name;
+      name.textContent = labelOf(binding);
       const alias = document.createElement('code');
       alias.className = 'process-input-chip__alias';
       alias.textContent = binding.alias;
       chip.append(swatch('run-detail-ws-trigger-color', binding.color), name, alias);
-      chip.title = `${binding.name} is ${binding.alias} in the code`;
+      chip.title = `${labelOf(binding)} is ${binding.alias} in the code`;
       return chip;
     }));
   }
 
+  function optionFor(binding, index) {
+    const option = document.createElement('div');
+    option.className = 'run-detail-ws-option process-input-option';
+    option.id = `${list.id}-${index}`;
+    option.dataset.key = binding.key;
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', replacing ? 'false' : String(binding.input));
+    option.classList.toggle('is-fixed', !replacing && binding.used);
+    if (!replacing && binding.used) option.title = `The code uses ${binding.alias}. Remove that use to stop reading this input.`;
+    const check = document.createElement('span');
+    check.className = 'process-input-option__check';
+    check.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'run-detail-ws-option-text';
+    text.textContent = labelOf(binding);
+    option.append(check, swatch('run-detail-ws-option-color', binding.color), text);
+    if (replacing) return option;
+    // An input the code uses as df_<name> keeps that name, so it is not offered as df.
+    if (binding.input && !binding.primary && !binding.used) {
+      option.append(button('process-input-option__make-df', 'primary', 'Use as df', `Use ${labelOf(binding)} as df`));
+    }
+    if (binding.input && onReplace) {
+      option.append(button('process-input-option__change', 'change', 'Change source…', `Read ${binding.alias} from another input`));
+    }
+    const alias = button('process-input-option__alias', 'copy', binding.alias, `Copy variable ${binding.alias}`);
+    alias.dataset.alias = binding.alias;
+    alias.title = `Copy ${binding.alias}`;
+    option.append(alias);
+    return option;
+  }
+
   function renderList(bindings) {
     const query = search.hidden ? '' : search.value.trim().toLowerCase();
-    const rank = (binding) => (order.has(binding.nodeId) ? order.get(binding.nodeId) : order.size);
-    const shown = bindings.filter((binding) => `${binding.name} ${binding.alias}`.toLowerCase().includes(query))
+    const rank = (binding) => (order.has(binding.key) ? order.get(binding.key) : order.size);
+    const from = replacing ? bindings.find((binding) => binding.key === replacing) : null;
+    replacingEl.hidden = !from;
+    if (from) {
+      replacingEl.replaceChildren(
+        Object.assign(document.createElement('span'), { textContent: `Read ${from.alias} from:` }),
+        button('process-input-picker__cancel', 'cancel', 'Cancel'),
+      );
+    }
+    // While changing a source, the choices are the sources that are not inputs yet.
+    const shown = bindings.filter((binding) => !from || !binding.input)
+      .filter((binding) => `${labelOf(binding)} ${binding.alias}`.toLowerCase().includes(query))
       .sort((a, b) => rank(a) - rank(b));
-    list.replaceChildren(...shown.map((binding, index) => {
-      const option = document.createElement('div');
-      option.className = 'run-detail-ws-option process-input-option';
-      option.id = `${list.id}-${index}`;
-      option.dataset.nodeId = binding.nodeId;
-      option.setAttribute('role', 'option');
-      option.setAttribute('aria-selected', String(binding.input));
-      option.classList.toggle('is-fixed', binding.used);
-      if (binding.used) option.title = `The code uses ${binding.alias}. Remove that use to stop reading this dataset.`;
-      const check = document.createElement('span');
-      check.className = 'process-input-option__check';
-      check.setAttribute('aria-hidden', 'true');
-      const text = document.createElement('span');
-      text.className = 'run-detail-ws-option-text';
-      text.textContent = binding.name;
-      option.append(check, swatch('run-detail-ws-option-color', binding.color), text);
-      // An input the code uses as df_<name> keeps that name, so it is not offered as df.
-      if (binding.input && !binding.primary && !binding.used) {
-        const makePrimary = document.createElement('button');
-        makePrimary.type = 'button';
-        makePrimary.className = 'process-input-option__make-df';
-        makePrimary.dataset.action = 'primary';
-        makePrimary.textContent = 'Use as df';
-        makePrimary.setAttribute('aria-label', `Use ${binding.name} as df`);
-        option.append(makePrimary);
-      }
-      const alias = document.createElement('button');
-      alias.type = 'button';
-      alias.className = 'process-input-option__alias';
-      alias.dataset.action = 'copy';
-      alias.dataset.alias = binding.alias;
-      alias.textContent = binding.alias;
-      alias.title = `Copy ${binding.alias}`;
-      alias.setAttribute('aria-label', `Copy variable ${binding.alias}`);
-      option.append(alias);
-      return option;
-    }));
+    let index = 0;
+    const children = [];
+    for (const group of candidateGroups(shown)) {
+      const heading = document.createElement('div');
+      heading.className = 'run-detail-ws-group';
+      heading.setAttribute('role', 'presentation');
+      heading.textContent = group.label;
+      children.push(heading);
+      for (const binding of group.items) children.push(optionFor(binding, index++));
+    }
+    list.replaceChildren(...children);
     empty.hidden = shown.length > 0;
-    empty.textContent = bindings.length ? 'No matching datasets.' : 'No datasets are available on this canvas.';
+    empty.textContent = bindings.length ? 'No matching inputs.' : 'No inputs are available on this canvas.';
     setActive(Math.min(active, shown.length - 1));
   }
 
@@ -137,11 +171,13 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
     if (!dropdown.hidden) renderList(bindings);
   }
 
+  const options = () => [...list.querySelectorAll('.process-input-option')];
+
   function setActive(index) {
-    const options = [...list.children];
-    active = Math.max(-1, Math.min(options.length - 1, index));
-    options.forEach((option, i) => option.classList.toggle('is-active', i === active));
-    const option = options[active];
+    const all = options();
+    active = Math.max(-1, Math.min(all.length - 1, index));
+    all.forEach((option, i) => option.classList.toggle('is-active', i === active));
+    const option = all[active];
     const owner = search.hidden ? trigger : search;
     if (!option) {
       owner.removeAttribute('aria-activedescendant');
@@ -163,7 +199,8 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
     const group = (binding) => (binding.primary ? 0 : binding.input ? 1 : 2);
     order = new Map(bindings.map((binding, index) => [binding, index])
       .sort(([a, i], [b, j]) => group(a) - group(b) || i - j)
-      .map(([binding], index) => [binding.nodeId, index]));
+      .map(([binding], index) => [binding.key, index]));
+    replacing = '';
     search.hidden = bindings.length <= SEARCH_THRESHOLD;
     search.value = '';
     active = -1;
@@ -175,39 +212,65 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
 
   function close() {
     if (dropdown.hidden) return;
+    replacing = '';
     dropdown.hidden = true;
     trigger.setAttribute('aria-expanded', 'false');
     trigger.removeAttribute('aria-activedescendant');
   }
 
-  function toggle(nodeId) {
+  function toggle(key) {
     const { bindings, primaryDatasetId } = getInputs();
-    const binding = bindings.find((item) => item.nodeId === nodeId);
+    const binding = bindings.find((item) => item.key === key);
     if (!binding || binding.used) return;
-    const inputIds = bindings.filter((item) => item.input && item.nodeId !== nodeId).map((item) => item.nodeId);
+    const inputIds = bindings.filter((item) => item.input && item.key !== key).map((item) => item.key);
     if (binding.input) {
       // The next input becomes df, preferring one the code does not already use as df_<name>.
-      const next = bindings.find((item) => inputIds.includes(item.nodeId) && !item.used)?.nodeId || inputIds[0] || '';
+      const next = bindings.find((item) => inputIds.includes(item.key) && !item.used)?.key || inputIds[0] || '';
       onChange({ primaryDatasetId: binding.primary ? next : primaryDatasetId, inputIds });
     } else {
-      onChange({ primaryDatasetId: primaryDatasetId || nodeId, inputIds: [...inputIds, nodeId] });
+      onChange({ primaryDatasetId: primaryDatasetId || key, inputIds: [...inputIds, key] });
     }
     render();
   }
 
-  function makePrimary(nodeId) {
+  function makePrimary(key) {
     const { bindings } = getInputs();
-    onChange({ primaryDatasetId: nodeId, inputIds: bindings.filter((item) => item.input).map((item) => item.nodeId) });
+    onChange({ primaryDatasetId: key, inputIds: bindings.filter((item) => item.input).map((item) => item.key) });
     render();
     // Its button is gone with the old list; keep focus in the picker.
     (search.hidden ? trigger : search).focus();
   }
 
-  async function copy(button) {
-    const alias = button.dataset.alias;
+  function choose(key) {
+    if (!replacing) {
+      toggle(key);
+      return;
+    }
+    const fromKey = replacing;
+    replacing = '';
+    onReplace?.({ fromKey, toKey: key });
+    render();
+    (search.hidden ? trigger : search).focus();
+  }
+
+  function startReplacing(key) {
+    replacing = key;
+    active = -1;
+    renderList(getInputs().bindings);
+    (search.hidden ? trigger : search).focus();
+  }
+
+  function cancelReplacing() {
+    replacing = '';
+    renderList(getInputs().bindings);
+    (search.hidden ? trigger : search).focus();
+  }
+
+  async function copy(copyButton) {
+    const alias = copyButton.dataset.alias;
     const copied = await copyText(alias, pickerEl);
-    button.textContent = copied ? 'Copied' : 'Copy failed';
-    setTimeout(() => { if (button.isConnected) button.textContent = alias; }, 1200);
+    copyButton.textContent = copied ? 'Copied' : 'Copy failed';
+    setTimeout(() => { if (copyButton.isConnected) copyButton.textContent = alias; }, 1200);
   }
 
   trigger.addEventListener('click', () => (dropdown.hidden ? open() : close()));
@@ -216,8 +279,12 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
     if (!option) return;
     const action = event.target.closest('button')?.dataset.action;
     if (action === 'copy') void copy(event.target.closest('button'));
-    else if (action === 'primary') makePrimary(option.dataset.nodeId);
-    else toggle(option.dataset.nodeId);
+    else if (action === 'primary') makePrimary(option.dataset.key);
+    else if (action === 'change') startReplacing(option.dataset.key);
+    else choose(option.dataset.key);
+  });
+  replacingEl.addEventListener('click', (event) => {
+    if (event.target.closest('button')?.dataset.action === 'cancel') cancelReplacing();
   });
   search.addEventListener('input', () => {
     active = -1;
@@ -237,14 +304,18 @@ export function bindProcessInputPicker(pickerEl, { placeholder, getInputs, onCha
       event.preventDefault();
       setActive(active + (key === 'ArrowDown' ? 1 : -1));
     } else if (key === 'Enter' || (key === ' ' && !typing)) {
-      if (event.target.closest('.process-input-option')) return; // a button inside an option
+      if (event.target.closest('.process-input-option, .process-input-picker__replacing')) return; // a button
       event.preventDefault();
-      const option = list.children[active];
-      if (option) toggle(option.dataset.nodeId);
+      const option = options()[active];
+      if (option) choose(option.dataset.key);
     } else if (key === 'Escape') {
-      // Closes only the list, not the window it sits in.
+      // Closes only the change of source, or the list, not the window it sits in.
       event.preventDefault();
       event.stopPropagation();
+      if (replacing) {
+        cancelReplacing();
+        return;
+      }
       close();
       trigger.focus();
     }

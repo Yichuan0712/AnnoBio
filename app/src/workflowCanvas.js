@@ -81,14 +81,15 @@ import { datasetHistorySource } from './datasetHistorySource.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
-import { codeHashOf, parseProcessOutputPorts } from './processOutputPorts.js';
+import { codeHashOf, effectiveProcessOutputs, parseProcessOutputPorts } from './processOutputPorts.js';
 import { CANVAS_VERSION } from './canvasFormat.js';
 import {
   DATA_EDGE, RESULT_PORT, processInputAliases, processInputBindings, processInputSources, processPrimarySource, processRequiredInputs,
-  replaceProcessInputSource, runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource, sourceKey,
-  stepInputEdges, stepInputErrorNotice, stepInputWaitingMessage,
+  replaceProcessInputSource, runCandidateSources, runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource,
+  sourceKey, stepInputEdges, stepInputErrorNotice, stepInputWaitingMessage, stepSourceLabel,
 } from './stepInputs.js';
 import { stepOutputTable } from './stepOutputs.js';
+import { stepOutputMenuItems } from './stepOutputMenu.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
 
@@ -1892,9 +1893,11 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function getOutgoingEdgesFromNode(nodeId) {
     if (!nodeId) return [];
-    // A Run input is reported as a Dataset selection (isDatasetPickedByRunOrScore), not as downstream.
+    // A Dataset read by a Run is reported as a Dataset selection (isDatasetPickedByRunOrScore), not as
+    // downstream; a Run or Process read by another step is downstream.
+    const fromDataset = getNodeById(nodeId)?.classList.contains('workflow-node--dataset');
     return connections.filter((c) => c.fromId === nodeId
-      && !(c.type === DATA_EDGE && getNodeById(c.toId)?.classList.contains('workflow-node--run')));
+      && !(fromDataset && c.type === DATA_EDGE && getNodeById(c.toId)?.classList.contains('workflow-node--run')));
   }
 
   /**
@@ -1996,16 +1999,65 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
-  /** The notes a Run or Process window shows for upstream Runs whose failed rows it reads (§3.7). */
-  function readStepInputNotices(stepNode) {
-    const state = liveInputState();
+  /** The sources a Run or Process reads now, on `state`. */
+  function stepNodeInputs(state, stepNode) {
     const id = stepNode?.dataset?.nodeId || '';
-    const sources = stepNode?.classList.contains('workflow-node--run')
-      ? [runInputSource(state, id)]
-      : processRequiredInputs(state, id, { code: resolveDataframeProcessCode({ dfCode: stepNode?.dataset?.processDfCode, code: stepNode?.dataset?.processCode }) }).bindings;
-    return sources.filter((source) => source?.kind === 'run')
-      .map((source) => stepInputErrorNotice(state, source, stepOutputTable(state, source).errorRowCount))
-      .filter(Boolean);
+    if (stepNode?.classList.contains('workflow-node--run')) return [runInputSource(state, id)].filter(Boolean);
+    const code = resolveDataframeProcessCode({ dfCode: stepNode?.dataset?.processDfCode, code: stepNode?.dataset?.processCode });
+    return processRequiredInputs(state, id, { code }).bindings;
+  }
+
+  /**
+   * What a Run or Process window says about its inputs (docs/design/DATA_FLOW_DESIGN.md §3.7):
+   * `waiting`, why it cannot run yet (empty when it can), and a note for each upstream Run whose
+   * failed rows it reads.
+   */
+  function readStepInputStatus(stepNode) {
+    const state = liveInputState();
+    let waiting = '';
+    const notices = [];
+    for (const source of stepNodeInputs(state, stepNode)) {
+      const output = stepOutputTable(state, source);
+      if (output.waiting && !waiting) {
+        waiting = output.waiting === 'missing-port' || source.kind === 'dataset'
+          ? stepInputWaitingMessage(state, source, output.waiting)
+          : `Waiting for upstream results from "${stepSourceLabel(state, { ...source, port: RESULT_PORT })}".`;
+      }
+      const notice = source.kind === 'run' ? stepInputErrorNotice(state, source, output.errorRowCount) : '';
+      if (notice) notices.push(notice);
+    }
+    return { waiting, notices };
+  }
+
+  /** The color a source is shown with: a Dataset's own, or the border its step has now. */
+  function sourceColor(source) {
+    const node = getNodeById(source?.nodeId);
+    if (!node) return '';
+    if (source.kind === 'dataset') return datasetColorAt(normalizeDatasetColorIndex(node.dataset.datasetColorIndex) ?? 0);
+    return node.style.borderColor || '';
+  }
+
+  /**
+   * Every source a Run could read (stepInputs.js runCandidateSources) with its key and color. The
+   * source it reads now stays listed even when it is not a candidate any more (a branch that is gone).
+   */
+  function readRunInputCandidates(runNode) {
+    const state = liveInputState();
+    const candidates = runCandidateSources(state, runNode.dataset.nodeId);
+    const current = runInputSource(state, runNode.dataset.nodeId);
+    if (current && !candidates.some((candidate) => sourceKey(candidate) === sourceKey(current))) {
+      const label = stepSourceLabel(state, current);
+      candidates.push({ ...current, name: label, label, unavailable: true });
+    }
+    return candidates.map((candidate) => ({ ...candidate, key: sourceKey(candidate), color: sourceColor(candidate) }));
+  }
+
+  /** The table `source` gives now (stepOutputs.js), or why it has none: `{ table }` or `{ waiting, message }`. */
+  function readSourceOutput(source) {
+    if (!source?.nodeId) return { waiting: 'no-result', message: '' };
+    const state = liveInputState();
+    const output = stepOutputTable(state, source);
+    return output.waiting ? { ...output, message: stepInputWaitingMessage(state, source, output.waiting) } : output;
   }
 
   function isDatasetPickedByRunOrScore(datasetNodeId) {
@@ -2543,7 +2595,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     const h2 = isRunOrScore ? (toNode.offsetHeight || RUN_NODE_FALLBACK_HEIGHT) : (toNode.offsetHeight || 0);
 
     const startX = x1 + w1;
-    const startY = y1 + h1 / 2;
+    // A Process branch leaves from its label on the node (refreshProcessOutputStrip).
+    const portLabel = edge.type === DATA_EDGE && edge.fromPort && edge.fromPort !== RESULT_PORT
+      ? [...fromNode.querySelectorAll('.workflow-node__process-port[data-port]')].find((label) => label.dataset.port === edge.fromPort)
+      : null;
+    const startY = portLabel ? y1 + offsetWithin(portLabel, fromNode) + portLabel.offsetHeight / 2 : y1 + h1 / 2;
     const endX = x2;
     const toHeight = edge.type === EDGE_TYPE_PROMPT_TO_PROMPT
       ? h2
@@ -2594,7 +2650,16 @@ export function buildWorkflowCanvas(root, options = {}) {
         ? 'Selected ground truth dataset'
         : 'Dataset saved from Run results');
     } else if (edge.type === DATA_EDGE) {
-      line.setAttribute('aria-label', 'Selected input dataset');
+      const missing = missingBranch(edge, fromNode);
+      line.setAttribute('aria-label', missing ? `Branch "${edge.fromPort}" is not returned by this Process` : 'Selected input');
+      if (missing) {
+        // The branch is gone (design §3.4): the line stays, red, and its reader cannot run.
+        line.setAttribute('stroke', 'var(--status-danger)');
+        line.classList.add('workflow-edge--missing-branch');
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.textContent = `Branch "${edge.fromPort}" is not returned by this Process`;
+        edgeGroup.appendChild(title);
+      }
     }
     edgeGroup.appendChild(line);
 
@@ -2611,6 +2676,23 @@ export function buildWorkflowCanvas(root, options = {}) {
       label.append(background, icon);
       edgeGroup.appendChild(label);
     }
+  }
+
+  /** The distance from the top of `ancestor` to the top of `element` inside it. */
+  function offsetWithin(element, ancestor) {
+    let top = 0;
+    for (let el = element; el && el !== ancestor; el = el.offsetParent) top += el.offsetTop;
+    return top;
+  }
+
+  /** Whether a data connection reads a branch its Process is known not to return. */
+  function missingBranch(edge, fromNode) {
+    if (!fromNode?.classList.contains('workflow-node--process')) return false;
+    const outputs = effectiveProcessOutputs({
+      detected: fromNode.dataset.processOutputPorts,
+      dfResults: fromNode.dataset.processDfResults || fromNode.dataset.processResults,
+    });
+    return outputs.source !== 'none' && !outputs.dynamic && !outputs.ports.includes(edge.fromPort || RESULT_PORT);
   }
 
   /** Build read-only data-flow edges from fields that already drive execution and provenance. */
@@ -2985,12 +3067,16 @@ export function buildWorkflowCanvas(root, options = {}) {
     writeRunInputSource,
     readRunInput,
     readRunInputTable,
-    readStepInputNotices,
+    readRunInputCandidates,
+    readSourceOutput,
+    readStepInputStatus,
+    sourceColor,
     readProcessPrimarySource,
     writeProcessPrimarySource,
     readProcessInputBindings,
     readProcessInputAliases,
     writeProcessInputs,
+    replaceProcessInput,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode: (options) => startRunNode(options),
@@ -3082,7 +3168,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     writeRunInputSource,
     readRunInput,
     readRunInputTable,
-    readStepInputNotices,
+    readRunInputCandidates,
+    readSourceOutput,
+    readStepInputStatus,
+    sourceColor,
     readProcessPrimarySource,
     writeProcessPrimarySource,
     readProcessInputBindings,
@@ -3337,7 +3426,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
   }
 
-  function showNodeContextMenu(clientX, clientY, node) {
+  /**
+   * The node's right-click menu. `port` (a Process branch, from clicking its label) shows only the
+   * items that start a step on that branch.
+   */
+  function showNodeContextMenu(clientX, clientY, node, { port } = {}) {
     const existing = document.querySelector('.workflow-node-context-menu');
     if (existing) existing.remove();
 
@@ -3391,8 +3484,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     const menu = document.createElement('div');
     menu.className = 'workflow-node-context-menu';
     menu.setAttribute('role', 'menu');
-    if (isRun) {
+    // New steps on this node's output (stepOutputMenu.js), offered before it has a result too.
+    const stepItems = (isRun || isProcess)
+      ? stepOutputMenuItems(liveInputState(), node.dataset.nodeId, port !== undefined ? { port } : {}) : [];
+    const stepItemsHtml = stepItems.map((item) => `<button type="button" class="workflow-node-context-item workflow-node-context-item--run" data-action="${item.action}" data-port="${escapeHtml(item.source.port)}" role="menuitem">${escapeHtml(item.label)}</button>`).join('');
+    if (port !== undefined) {
+      menu.innerHTML = stepItemsHtml;
+    } else if (isRun) {
       menu.innerHTML = `
+        ${stepItemsHtml}
         <button type="button" class="workflow-node-context-item workflow-node-context-item--score" data-action="save-to-workspace-and-score" role="menuitem" ${runHasResults ? '' : 'disabled'}>Score</button>
         <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem" ${runHasResults ? '' : 'disabled'}>Save results to workspace</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-run-name" role="menuitem">Edit name</button>
@@ -3430,6 +3530,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       `;
     } else if (isProcess) {
       menu.innerHTML = `
+        ${stepItemsHtml}
         <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="duplicate-process" role="menuitem">Duplicate this process</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-process-name" role="menuitem">Edit name</button>
@@ -3443,9 +3544,13 @@ export function buildWorkflowCanvas(root, options = {}) {
       `;
     }
 
-    menu.insertAdjacentHTML('beforeend', `
-      <button type="button" class="workflow-node-context-item" data-action="copy-name-and-id" role="menuitem">Copy name and ID</button>
-    `);
+    if (port === undefined) {
+      menu.insertAdjacentHTML('beforeend', `
+        <button type="button" class="workflow-node-context-item" data-action="copy-name-and-id" role="menuitem">Copy name and ID</button>
+      `);
+    }
+    /** The output a step-output item starts from. */
+    const outputSource = (button) => ({ nodeId: node.dataset.nodeId, port: button.dataset.port || RESULT_PORT, kind: isRun ? 'run' : 'process' });
 
     function duplicateNode(isNewVersion = false) {
       const left = parseFloat(node.style.left) || 0;
@@ -3682,8 +3787,11 @@ export function buildWorkflowCanvas(root, options = {}) {
         const samplerNodeId = node.dataset.nodeId || '';
         document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId } }));
       },
-      'process-this-dataset': () => newProcessNode({ datasetNode: node }),
+      'process-this-dataset': () => newProcessNode({ inputSource: { nodeId: node.dataset.nodeId, port: RESULT_PORT, kind: 'dataset' } }),
       'run-this-prompt': () => newRunNode({ promptNode: node }),
+      // A new Run on this output; its Prompt is chosen in the Run window, which opens.
+      'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), open: true }),
+      'process-output': (button) => newProcessNode({ inputSource: outputSource(button) }),
       // A duplicate is a standalone node: no connections are copied (same for Datasets and Processes).
       duplicate: () => {
         duplicateNode(false);
@@ -4019,7 +4127,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         e.stopPropagation();
         if (btn.disabled) return;
         const action = btn.getAttribute('data-action');
-        if (actions[action]) actions[action]();
+        if (actions[action]) actions[action](btn);
         menu.remove();
       });
     });
@@ -4476,15 +4584,15 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Adds a Process. A Process picks its df Dataset in its window; started from a Dataset, it
-   * begins with that one. `open` opens its window, as when it is added from the top bar.
+   * Adds a Process. A Process picks its df in its window; started from a Dataset or a step's output
+   * (`inputSource`), it begins with that one beside it. `open` opens its window, as when it is added
+   * from the top bar.
    */
-  function newProcessNode({ datasetNode = null, open = false } = {}) {
-    const fromDataset = datasetNode?.dataset?.nodeType === 'dataset';
-    const processNode = createProcessNode({ ...(fromDataset ? besideNode(datasetNode) : visibleNodePosition()), title: 'Process' });
-    if (processNode?.dataset?.nodeId && fromDataset) {
-      const source = { nodeId: datasetNode.dataset.nodeId, port: RESULT_PORT };
-      writeProcessInputs(processNode, { primary: source, inputs: [{ ...source, alias: 'df' }] });
+  function newProcessNode({ inputSource = null, open = false } = {}) {
+    const sourceNode = inputSource?.nodeId ? getNodeById(inputSource.nodeId) : null;
+    const processNode = createProcessNode({ ...(sourceNode ? besideNode(sourceNode) : visibleNodePosition()), title: 'Process' });
+    if (processNode?.dataset?.nodeId && sourceNode) {
+      writeProcessInputs(processNode, { primary: inputSource, inputs: [{ ...inputSource, alias: 'df' }] });
       updateEdges();
     }
     updateContentSize();
@@ -4493,10 +4601,19 @@ export function buildWorkflowCanvas(root, options = {}) {
     return processNode;
   }
 
-  /** Adds a Run. A Run picks its Prompt and Dataset in its window; started from a Prompt, it begins with that one. */
-  function newRunNode({ promptNode = null, open = false } = {}) {
+  /**
+   * Adds a Run. A Run picks its Prompt and input in its window; started from a Prompt or from a
+   * step's output (`inputSource`), it begins with that one beside it.
+   */
+  function newRunNode({ promptNode = null, inputSource = null, open = false } = {}) {
     const fromPrompt = promptNode?.dataset?.nodeType === 'prompt' || promptNode?.classList?.contains('workflow-node--prompt');
-    const runNode = createRunNode({ ...(fromPrompt ? besideNode(promptNode) : visibleNodePosition()), title: 'Run' });
+    const sourceNode = inputSource?.nodeId ? getNodeById(inputSource.nodeId) : null;
+    const anchor = fromPrompt ? promptNode : sourceNode;
+    const runNode = createRunNode({ ...(anchor ? besideNode(anchor) : visibleNodePosition()), title: 'Run' });
+    if (runNode?.dataset?.nodeId && sourceNode) {
+      writeRunInputSource(runNode, inputSource);
+      updateEdges();
+    }
     if (runNode?.dataset?.nodeId && fromPrompt) {
       connections.push({
         fromId: promptNode.dataset.nodeId,
@@ -4511,13 +4628,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     return runNode;
   }
 
+  // `inputSource` ({ nodeId, port }) starts the step on that output; `sourceNodeId` names a Dataset.
   document.addEventListener('workflow:add-process-node', (e) => {
     const sourceNodeId = e.detail?.sourceNodeId || '';
-    newProcessNode({ datasetNode: sourceNodeId ? getNodeById(sourceNodeId) : null, open: e.detail?.open === true });
+    const inputSource = e.detail?.inputSource || (sourceNodeId ? { nodeId: sourceNodeId, port: RESULT_PORT } : null);
+    newProcessNode({ inputSource, open: e.detail?.open === true });
   });
   document.addEventListener('workflow:add-run-node', (e) => {
     const promptNodeId = e.detail?.promptNodeId || '';
-    newRunNode({ promptNode: promptNodeId ? getNodeById(promptNodeId) : null, open: e.detail?.open === true });
+    newRunNode({ promptNode: promptNodeId ? getNodeById(promptNodeId) : null, inputSource: e.detail?.inputSource || null, open: e.detail?.open === true });
   });
 
   document.addEventListener('workflow:add-sampler-node', (e) => {
@@ -5410,10 +5529,18 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
-  /** Marks a Run or Process whose input has no result yet (runHistoryResolver.js); the attribute is not saved. */
+  /**
+   * Marks a Run or Process whose input has no result yet (runHistoryResolver.js): it is shown faded,
+   * naming what it waits for. Neither the attribute nor the tooltip is saved.
+   */
   function setWaitingForUpstream(live, item) {
-    if (item.waitingForUpstream) live.dataset.waitingForUpstream = '1';
-    else delete live.dataset.waitingForUpstream;
+    if (item.waitingForUpstream) {
+      live.dataset.waitingForUpstream = '1';
+      live.title = readStepInputStatus(live).waiting || 'Waiting for upstream results.';
+    } else if (live.dataset.waitingForUpstream) {
+      delete live.dataset.waitingForUpstream;
+      live.removeAttribute('title');
+    }
   }
 
   async function reconcileRunHistory(nodeId) {
@@ -5675,7 +5802,13 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (processOutputDetections.get(nodeId) === hash) processOutputDetections.delete(nodeId);
       }
     }));
-    if (changed) updateEdges(); // the branch labels change the node's height
+    if (changed) {
+      updateEdges(); // the branch labels change the node's height
+      // A reader of a branch that came or went says so without waiting for History to resolve again.
+      nodesLayer.querySelectorAll('.workflow-node[data-waiting-for-upstream="1"]').forEach((node) => {
+        node.title = readStepInputStatus(node).waiting || 'Waiting for upstream results.';
+      });
+    }
   }
   function scheduleProcessOutputSync() {
     clearTimeout(processOutputSyncTimer);

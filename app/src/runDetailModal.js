@@ -15,6 +15,7 @@ import { deriveOutputFields } from './runResultsExport.js';
 import { ensureRunNodeModel } from './nodeSettings.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
 import { executionIdleLabel } from './executionResumeState.js';
+import { candidateGroups, sourceKey } from './stepInputs.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
@@ -97,12 +98,12 @@ export { deriveOutputFields };
 export function openRunDetailModal({
   node,
   startRunNode,
-  getWorkingSets = () => [],
+  getInputCandidates = () => [],
+  getInputTable = () => ({ waiting: 'no-result' }),
   getPrompts = () => [],
   getPromptId = () => '',
   selectPrompt = () => {},
   getPromptInputFields = () => [],
-  getSubsetContent = () => ({ headers: [], rows: [] }),
   getPromptTemplate = () => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }),
   unregisterPendingRun = () => {},
   getPendingRunId = () => null,
@@ -113,7 +114,7 @@ export function openRunDetailModal({
   onWorkingSetChange = () => {},
   getInputSource = () => null,
   setInputSource = () => {},
-  getInputNotices = () => [],
+  getInputStatus = () => ({ waiting: '', notices: [] }),
   history = null,
 }) {
   (getRunMappingsFromCanvas?.() || []).forEach((parsed) => {
@@ -125,7 +126,9 @@ export function openRunDetailModal({
   });
 
   let inputFields = getPromptInputFields();
-  let selectedNodeId = getInputSource()?.nodeId || '';
+  // The input is a Dataset or another step's output (stepInputs.js), chosen by its key.
+  let candidates = getInputCandidates();
+  let selectedKey = sourceKey(getInputSource());
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
   const runName = (node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent?.trim() || 'Run').trim() || 'Run';
   const nodeId = node?.dataset?.nodeId || '';
@@ -165,24 +168,25 @@ export function openRunDetailModal({
       <div class="modal-body run-detail-body modal-body--run">
         <div class="run-detail-main">
           <p class="run-detail-main-label">Run settings</p>
+          <p class="run-detail-waiting-banner" role="status" hidden></p>
           <div class="dataset-meta-wrap run-detail-meta-wrap">
             <div class="dataset-meta-field">
               <label class="dataset-meta-label" for="run-detail-prompt-picker">Input prompt</label>
               ${nodePickerHtml({ id: 'run-detail-prompt-picker', placeholder: 'Select input prompt', ariaLabel: 'Select input prompt' })}
             </div>
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="run-detail-ws-picker">Input dataset</label>
-              <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select input dataset">
+              <label class="dataset-meta-label" for="run-detail-ws-picker">Input</label>
+              <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select input">
                 <div class="run-detail-ws-trigger" tabindex="0">
                   <span class="run-detail-ws-trigger-color" id="run-detail-ws-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="run-detail-ws-trigger-text">${escapeHtml(selectPlaceholderLabel('Select input dataset'))}</span>
+                  <span class="run-detail-ws-trigger-text" id="run-detail-ws-trigger-text">${escapeHtml(selectPlaceholderLabel('Select input'))}</span>
                   <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
                 </div>
                 <div class="run-detail-ws-dropdown" id="run-detail-ws-dropdown" role="listbox" hidden></div>
               </div>
             </div>
             <div class="run-detail-inputs-section dataset-meta-field" id="run-detail-inputs-section">
-              <span class="dataset-meta-label run-detail-section-label">Map input dataset columns to prompt inputs</span>
+              <span class="dataset-meta-label run-detail-section-label">Map input columns to prompt inputs</span>
               <div class="run-detail-mapping-wrap" id="run-detail-inputs-list"></div>
             </div>
           </div>
@@ -233,8 +237,19 @@ export function openRunDetailModal({
   });
   const runBtn = overlay.querySelector('.run-detail-run-btn');
   const upstreamNoticeEl = overlay.querySelector('.run-detail-upstream-notice');
+  const waitingBannerEl = overlay.querySelector('.run-detail-waiting-banner');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
-  const workingSets = getWorkingSets();
+
+  /** The input chosen in this window, one of the candidates. */
+  function selectedSource() {
+    return candidates.find((candidate) => candidate.key === selectedKey) || null;
+  }
+
+  /** What the chosen input gives now (stepOutputs.js): `{ table }`, or `{ waiting, message }`, or null. */
+  function selectedInput() {
+    const source = selectedSource();
+    return source ? getInputTable(source) : null;
+  }
 
   function getNodeResults() {
     const r = node?.dataset?.runResults;
@@ -251,7 +266,7 @@ export function openRunDetailModal({
     if (node?.dataset?.runInputContent) {
       try { content = JSON.parse(node.dataset.runInputContent); } catch (_) {}
     }
-    if (!content && selectedNodeId) content = getSubsetContent(selectedNodeId);
+    if (!content) content = selectedInput()?.table || null;
     if (content) results = embedInputRow(results, content);
     results = markEmptyOutputAsError(results);
     let outputFields = [];
@@ -298,7 +313,18 @@ export function openRunDetailModal({
     overlay.querySelector('.run-detail-main')?.classList.remove('run-detail-main--locked');
   }
 
+  /** The banner for an input without a result yet, and the note for upstream rows that failed. */
+  function refreshInputStatus() {
+    const status = getInputStatus();
+    waitingBannerEl.textContent = status.waiting;
+    waitingBannerEl.hidden = !status.waiting;
+    upstreamNoticeEl.textContent = status.notices.join(' ');
+    upstreamNoticeEl.hidden = !status.notices.length;
+    return status;
+  }
+
   function refreshButton() {
+    const status = refreshInputStatus();
     if (isCompleted()) {
       runBtn.disabled = !historyMode;
       runBtn.textContent = 'Run again';
@@ -333,15 +359,12 @@ export function openRunDetailModal({
     runBtn.classList.add('btn-primary');
     runBtn.textContent = executionIdleLabel({ interrupted: node?.dataset?.runResumable === '1', hasPartial: results.length > 0 });
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
-    runBtn.disabled = !(getPromptId() && selectedNodeId && allMapped);
-    // The input is another step's output that has no complete result yet (runHistoryResolver.js).
-    if (node?.dataset?.waitingForUpstream === '1') {
+    runBtn.disabled = !(getPromptId() && selectedKey && allMapped);
+    // The input has no complete result yet: run the upstream step first (stepOutputs.js).
+    if (status.waiting) {
       runBtn.disabled = true;
       runBtn.textContent = 'Waiting for upstream';
     }
-    const notices = getInputNotices?.() || [];
-    upstreamNoticeEl.textContent = notices.join(' ');
-    upstreamNoticeEl.hidden = !notices.length;
   }
 
   function getInputHeaders() {
@@ -351,7 +374,7 @@ export function openRunDetailModal({
         if (Array.isArray(p?.headers)) return p.headers;
       } catch (_) {}
     }
-    return getSubsetContent(selectedNodeId)?.headers || [];
+    return selectedInput()?.table?.headers || [];
   }
 
   function showResults(results, outputFields, status, placeholderText) {
@@ -680,71 +703,78 @@ export function openRunDetailModal({
     return card;
   }
 
-  function getSelectedWorkingSet() {
-    return workingSets.find((ws) => ws.nodeId === selectedNodeId) || null;
-  }
-
   function updateRunNodeBorder() {
-    const ws = getSelectedWorkingSet();
+    const source = selectedSource();
     if (node?.style) {
-      node.style.borderColor = ws?.color || '';
-      setInputSource(selectedNodeId ? { nodeId: selectedNodeId, port: 'result' } : null);
+      node.style.borderColor = source?.color || '';
+      setInputSource(source ? { nodeId: source.nodeId, port: source.port, kind: source.kind } : null);
       const bar = node.querySelector('.workflow-node__run-progress');
-      if (bar) bar.style.background = ws?.color || bar.style.background;
+      if (bar) bar.style.background = source?.color || bar.style.background;
       document.dispatchEvent(new CustomEvent('workflow:refresh-node-colors'));
     }
   }
 
   function updateTriggerDisplay() {
-    const ws = getSelectedWorkingSet();
-    if (ws) {
-      triggerColorEl.style.background = ws.color || 'transparent';
-      triggerColorEl.style.display = ws.color ? '' : 'none';
-      triggerTextEl.textContent = ws.name || 'Dataset';
+    const source = selectedSource();
+    if (source) {
+      triggerColorEl.style.background = source.color || 'transparent';
+      triggerColorEl.style.display = source.color ? '' : 'none';
+      triggerTextEl.textContent = source.label;
     } else {
       triggerColorEl.style.background = '';
       triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = selectPlaceholderLabel('Select input dataset');
+      triggerTextEl.textContent = selectPlaceholderLabel('Select input');
     }
   }
 
-  function selectWorkingSet(id) {
-    const previousNodeId = selectedNodeId;
-    selectedNodeId = id || '';
+  function selectWorkingSet(key) {
+    const previousKey = selectedKey;
+    selectedKey = key || '';
     updateTriggerDisplay();
     updateRunNodeBorder();
     dropdownEl.hidden = true;
     pickerEl.setAttribute('aria-expanded', 'false');
-    dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.nodeId === selectedNodeId ? 'true' : 'false'));
+    dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.key === selectedKey ? 'true' : 'false'));
     renderInputMappings();
     refreshButton();
-    if (selectedNodeId !== previousNodeId) {
-      onWorkingSetChange({ runNodeId: nodeId, datasetNodeId: selectedNodeId });
+    if (selectedKey !== previousKey) {
+      onWorkingSetChange({ runNodeId: nodeId, datasetNodeId: selectedSource()?.nodeId || '' });
     }
   }
 
+  /** The inputs in two groups, Datasets and Step outputs (design §5.3), refreshed each time the list opens. */
   function populateDropdown() {
+    candidates = getInputCandidates();
     dropdownEl.innerHTML = '';
-    const add = (nid, label) => {
+    const add = (candidate) => {
+      const key = candidate?.key || '';
       const opt = document.createElement('div');
       opt.className = 'run-detail-ws-option';
       opt.setAttribute('role', 'option');
-      opt.setAttribute('aria-selected', nid === selectedNodeId ? 'true' : 'false');
-      opt.dataset.nodeId = nid;
-      opt.innerHTML = nid ? `<span class="run-detail-ws-option-color" style="background:${escapeHtml(workingSets.find((w) => w.nodeId === nid)?.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(label)}</span>` : `<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">${escapeHtml(selectPlaceholderLabel('Select input dataset'))}</span>`;
-      opt.addEventListener('click', () => selectWorkingSet(nid));
+      opt.setAttribute('aria-selected', key === selectedKey ? 'true' : 'false');
+      opt.dataset.key = key;
+      opt.innerHTML = candidate
+        ? `<span class="run-detail-ws-option-color" style="background:${escapeHtml(candidate.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(candidate.label)}</span>`
+        : `<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">${escapeHtml(selectPlaceholderLabel('Select input'))}</span>`;
+      if (candidate?.unavailable) opt.title = 'This output is no longer available.';
+      opt.addEventListener('click', () => selectWorkingSet(key));
       dropdownEl.appendChild(opt);
     };
-    add('', '');
-    workingSets.forEach((ws) => add(ws.nodeId, ws.name || 'Dataset'));
+    add(null);
+    for (const group of candidateGroups(candidates)) {
+      const heading = document.createElement('div');
+      heading.className = 'run-detail-ws-group';
+      heading.setAttribute('role', 'presentation');
+      heading.textContent = group.label;
+      dropdownEl.appendChild(heading);
+      group.items.forEach(add);
+    }
   }
 
   function renderInputMappings() {
-    const content = selectedNodeId ? getSubsetContent(selectedNodeId) : null;
-    const ws = getSelectedWorkingSet();
-    const headers = (content?.headers || ws?.headers || []).slice();
-    // An upstream step without a result has no columns yet; its mapping is kept until it has.
-    const keepMapping = node?.dataset?.waitingForUpstream === '1';
+    const input = selectedInput();
+    const content = input?.table || null;
+    const headers = (content?.headers || []).slice();
     const columnTypes = headers.map((_, i) => (content?.columnTypes?.[i] === 'image' || content?.columnTypes?.[i] === 'pdf') ? content.columnTypes[i] : 'text');
     const inputTypes = getPromptTemplate()?.inputTypes || {};
     const headerSet = new Set(headers);
@@ -754,18 +784,24 @@ export function openRunDetailModal({
       refreshButton();
       return;
     }
+    // An input without a result has no columns yet; the mapping is kept until it has.
+    if (input?.waiting) {
+      inputsListEl.innerHTML = `<p class="run-detail-placeholder">${escapeHtml(input.waiting === 'missing-port' ? input.message : 'Run the upstream step first to map its columns.')}</p>`;
+      refreshButton();
+      return;
+    }
     inputFields.forEach((inputName) => {
       let col = inputToColumn[inputName] || '';
       const expected = inputTypes[inputName];
       const selectedIndex = headers.indexOf(col);
-      if (!keepMapping && col && expected && columnTypes[selectedIndex] !== expected) { col = ''; inputToColumn[inputName] = ''; }
-      if (!keepMapping && col && !headerSet.has(col)) { col = ''; inputToColumn[inputName] = ''; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
+      if (col && expected && columnTypes[selectedIndex] !== expected) { col = ''; inputToColumn[inputName] = ''; }
+      if (col && !headerSet.has(col)) { col = ''; inputToColumn[inputName] = ''; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
       if (!col && inputNameToColumnMemory[inputName] && headerSet.has(inputNameToColumnMemory[inputName])) { col = inputNameToColumnMemory[inputName]; inputToColumn[inputName] = col; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
     });
     const table = document.createElement('div');
     table.className = 'run-detail-mapping-table';
     table.setAttribute('role', 'table');
-    table.innerHTML = `<div class="run-detail-mapping-head" role="row"><span class="run-detail-mapping-th run-detail-mapping-th--column" role="columnheader">Dataset column</span><span class="run-detail-mapping-th run-detail-mapping-th--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-th run-detail-mapping-th--input" role="columnheader">Prompt input</span></div>`;
+    table.innerHTML = `<div class="run-detail-mapping-head" role="row"><span class="run-detail-mapping-th run-detail-mapping-th--column" role="columnheader">Input column</span><span class="run-detail-mapping-th run-detail-mapping-th--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-th run-detail-mapping-th--input" role="columnheader">Prompt input</span></div>`;
     inputFields.forEach((inputName) => {
       const row = document.createElement('div');
       row.className = 'run-detail-mapping-row';
@@ -773,7 +809,7 @@ export function openRunDetailModal({
       const currentCol = inputToColumn[inputName] || '';
       const requiredType = inputTypes[inputName];
       const options = headers.map((h, i) => ({ h, type: columnTypes[i] })).filter((entry) => !requiredType || entry.type === requiredType);
-      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Dataset column for ${escapeAttr(inputName)}"><option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>${options.map(({ h, type }) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}${type === 'image' ? ' 🖼' : type === 'pdf' ? ' 📄' : ''}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}${requiredType ? ` <small>(${requiredType})</small>` : ''}</span>`;
+      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Input column for ${escapeAttr(inputName)}"><option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>${options.map(({ h, type }) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}${type === 'image' ? ' 🖼' : type === 'pdf' ? ' 📄' : ''}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}${requiredType ? ` <small>(${requiredType})</small>` : ''}</span>`;
       row.querySelector('.run-detail-column-select').addEventListener('change', (e) => {
         inputToColumn[inputName] = (e.target.value || '').trim() || '';
         if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
@@ -890,8 +926,8 @@ export function openRunDetailModal({
       refreshButton();
       return;
     }
-    if (!selectedNodeId) return;
-    const emptyInput = getSubsetContent(selectedNodeId)?.rows?.length === 0;
+    if (!selectedKey) return;
+    const emptyInput = selectedInput()?.table?.rows?.length === 0;
     if (!selectedCredentialId && !emptyInput) {
       await ensureRunNodeModel(node);
       selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();

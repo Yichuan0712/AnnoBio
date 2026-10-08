@@ -62,6 +62,10 @@ test('a Process gives one branch of its result', () => {
   assert.deepEqual(stepOutputTable(state({}, { processPending: true }), { nodeId: 'split', port: 'left' }), { waiting: 'running' });
   assert.deepEqual(stepOutputTable(state({}, { processResumable: true }), { nodeId: 'split', port: 'left' }), { waiting: 'stopped' });
   assert.deepEqual(stepOutputTable(state({}, { dfResults: undefined }), { nodeId: 'split', port: 'left' }), { waiting: 'no-result' });
+  // Before it runs, a branch its code is known not to return will not come.
+  const detected = (ports) => state({}, { dfResults: undefined, processOutputPorts: JSON.stringify({ ports, dynamic: false, error: '', codeHash: 'h' }) });
+  assert.deepEqual(stepOutputTable(detected(['right']), { nodeId: 'split', port: 'left' }), { waiting: 'missing-port' });
+  assert.deepEqual(stepOutputTable(detected(['left', 'right']), { nodeId: 'split', port: 'left' }), { waiting: 'no-result' });
   // A result saved before branches existed is the single output.
   const single = state({}, { dfResults: JSON.stringify({ headers: ['x'], rows: [['1']] }) });
   assert.deepEqual(stepOutputTable(single, { nodeId: 'split', port: 'result' }).table.rows, [['1']]);

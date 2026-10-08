@@ -104,14 +104,17 @@ function restoreResults(node, ...keys) {
 
 /**
  * @param {{ node: HTMLElement,
- *   getProcessInputs: (code: string) => { bindings: Array<{nodeId: string, name: string, color?: string, content: {headers: string[], rows: string[][]}, alias: string, primary: boolean, input: boolean, used: boolean}>, primaryDatasetId: string, savedAliases: Record<string, string> },
- *   syncProcessDependencies?: (code: string) => void, setPrimaryDataset?: (datasetNodeId: string, code: string) => void,
+ *   getProcessInputs: (code: string) => { bindings: Array<{key: string, nodeId: string, kind: string, name: string, label: string, color?: string, content?: {headers: string[], rows: string[][]}, alias: string, primary: boolean, input: boolean, used: boolean}>, primaryDatasetId: string, savedAliases: Record<string, string> },
+ *   syncProcessDependencies?: (code: string) => void, setPrimaryDataset?: (key: string, code: string) => void,
+ *   replaceInputSource?: (fromKey: string, toKey: string, code: string) => void,
+ *   getInputStatus?: () => { waiting: string, notices: string[] },
  *   getUniqueDatasetExportName?: (base: string) => string }} options
- *   getProcessInputs: every canvas Dataset (processDatasetInputs), marking the ones the code reads
+ *   getProcessInputs: every Dataset and step output (stepInputs.js processInputBindings), marking the
+ *   ones the code reads, by source key; a step output without a result yet has no content
  *   setPrimaryDataset: the Process picks its df in this window, like a Run picks its Prompt; its other
- *   Input datasets are the code's process() parameters, which the picker here rewrites
+ *   inputs are the code's process() parameters, which the picker here rewrites
  */
-export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, setPrimaryDataset, getUniqueDatasetExportName, getInputNotices, history = null }) {
+export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, setPrimaryDataset, replaceInputSource, getUniqueDatasetExportName, getInputStatus, history = null }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -124,13 +127,13 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   const title = (node?.dataset?.processName || 'Process').trim() || 'Process';
   const readDatasets = (code) => {
     const raw = getProcessInputs?.(code) || {};
-    const bindings = Array.isArray(raw.bindings) ? raw.bindings.filter((binding) => binding?.nodeId && binding?.content) : [];
-    const datasetPrimary = bindings.some((binding) => binding.primary);
+    const bindings = Array.isArray(raw.bindings) ? raw.bindings.filter((binding) => binding?.key) : [];
+    const listedPrimary = bindings.some((binding) => binding.primary);
     return {
-      bindings, primaryDatasetId: datasetPrimary ? raw.primaryDatasetId : '',
+      bindings, primaryDatasetId: listedPrimary ? raw.primaryDatasetId : '',
       savedAliases: raw.savedAliases || {},
-      // df is another step's output, which this picker does not list yet (DATA_FLOW_PLAN.md step 8).
-      stepPrimary: !datasetPrimary && !!raw.primaryDatasetId,
+      // df reads a branch its Process no longer returns, so it is not listed; running says why.
+      unlistedPrimary: !listedPrimary && !!raw.primaryDatasetId,
     };
   };
   const primaryHeaders = (code) => readDatasets(code).bindings.find((binding) => binding.primary)?.content?.headers || [];
@@ -152,15 +155,16 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       <div class="modal-body run-detail-body modal-body--run">
         <div class="run-detail-main">
           <p class="run-detail-main-label">Code setup</p>
+          <p class="run-detail-waiting-banner" role="status" hidden></p>
           <div class="dataset-meta-wrap process-input-wrap">
             <div class="dataset-meta-field">
-              <span class="dataset-meta-label">Input datasets</span>
-              ${processInputPickerHtml({ id: 'process-input-picker', placeholder: 'Select input datasets', ariaLabel: 'Input datasets' })}
+              <span class="dataset-meta-label">Input</span>
+              ${processInputPickerHtml({ id: 'process-input-picker', placeholder: 'Select inputs', ariaLabel: 'Inputs' })}
             </div>
           </div>
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
-          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the first Input dataset; each other one is the parameter named as shown beside it. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
+          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the first input; each other one is the parameter named as shown beside it. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -186,6 +190,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   const branchPicker = overlay.querySelector('.process-branch-picker');
   const runBtn = overlay.querySelector('.process-run-btn');
   const upstreamNoticeEl = overlay.querySelector('.process-upstream-notice');
+  const waitingBannerEl = overlay.querySelector('.run-detail-waiting-banner');
   const editable = new Compartment();
   const editorView = new EditorView({
     doc: initialCode,
@@ -220,23 +225,31 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     historyRefreshTimer = setTimeout(() => { void refreshHistoryState(); }, 150);
   }
 
-  // The Run window's Input dataset picker, with a check per Dataset.
+  // The Run window's Input picker, with a check per source.
   const inputPicker = bindProcessInputPicker(overlay.querySelector('#process-input-picker'), {
-    placeholder: 'Select input datasets',
+    placeholder: 'Select inputs',
     getInputs: () => readDatasets(getCode()),
     onChange: ({ primaryDatasetId, inputIds }) => {
       const code = getCode();
       const { bindings, savedAliases } = readDatasets(code);
       // Untouched sample code follows the new df's columns; edited code is left alone.
       const untouched = withProcessParameters(code, []) === buildDefaultCode(primaryHeaders(code));
-      const headers = bindings.find((binding) => binding.nodeId === primaryDatasetId)?.content?.headers || [];
+      const headers = bindings.find((binding) => binding.key === primaryDatasetId)?.content?.headers || [];
       const nextCode = codeDeclaringInputs({
-        code: untouched ? buildDefaultCode(headers) : code, datasets: bindings, primaryDatasetId, inputIds, savedAliases,
+        code: untouched ? buildDefaultCode(headers) : code,
+        // Sources are told apart by key; each alias is made from its name (stepInputs.js).
+        datasets: bindings.map((binding) => ({ nodeId: binding.key, name: binding.name })),
+        primaryDatasetId, inputIds, savedAliases,
       });
       replaceCode(nextCode);
       setPrimaryDataset?.(primaryDatasetId, nextCode);
       if (history) scheduleHistoryRefresh();
     },
+    onReplace: replaceInputSource ? ({ fromKey, toKey }) => {
+      replaceInputSource(fromKey, toKey, getCode());
+      refreshUpstreamState();
+      if (history) scheduleHistoryRefresh();
+    } : undefined,
     isLocked: () => running,
     closeWithin: overlay,
   });
@@ -364,23 +377,31 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     } catch (_) { /* startRun reports storage errors when used */ }
   }
 
-  /** An input that is another step's output without a complete result yet blocks Run; failed upstream rows are noted. */
+  /**
+   * An input without a complete result yet blocks Run and is named in the banner; failed upstream
+   * rows are noted (docs/design/DATA_FLOW_DESIGN.md §3.7).
+   */
   function refreshUpstreamState() {
+    const status = getInputStatus?.() || { waiting: '', notices: [] };
+    waitingBannerEl.textContent = status.waiting;
+    waitingBannerEl.hidden = !status.waiting;
+    upstreamNoticeEl.textContent = status.notices.join(' ');
+    upstreamNoticeEl.hidden = !status.notices.length;
     if (running) return;
-    if (node?.dataset?.waitingForUpstream === '1') {
+    if (status.waiting) {
       runBtn.disabled = true;
       runBtn.textContent = 'Waiting for upstream';
+    } else if (runBtn.textContent === 'Waiting for upstream') {
+      runBtn.disabled = false;
+      runBtn.textContent = currentHistoryStatus === 'completed' ? 'Run again' : executionIdleLabel({ interrupted: node?.dataset?.processResumable === '1' });
     }
-    const notices = getInputNotices?.() || [];
-    upstreamNoticeEl.textContent = notices.join(' ');
-    upstreamNoticeEl.hidden = !notices.length;
   }
 
   async function startRun() {
-    const { bindings, stepPrimary } = readDatasets(getCode());
+    const { bindings, unlistedPrimary } = readDatasets(getCode());
     const primary = bindings.find((binding) => binding.primary);
-    if (!primary && !stepPrimary) {
-      showPlaceholder('Choose an Input dataset before running.');
+    if (!primary && !unlistedPrimary) {
+      showPlaceholder('Choose an input before running.');
       inputPicker.focus();
       return;
     }
@@ -413,9 +434,14 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       cancelRequested = false;
       if (overlay.isConnected) {
         setRunningUi(false);
+        refreshUpstreamState();
       }
     }
   }
+
+  // An upstream step finishing elsewhere lets this one run.
+  const onHistoryResolved = () => { if (overlay.isConnected) refreshUpstreamState(); };
+  document.addEventListener('workflow:history-resolved', onHistoryResolved);
 
   const cancelJob = (jobId) => fetch(`${API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
   let cancelRequested = false;
@@ -431,6 +457,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   function close({ discard = false } = {}) {
     clearTimeout(historyRefreshTimer);
     clearTimeout(inputsRefreshTimer);
+    document.removeEventListener('workflow:history-resolved', onHistoryResolved);
     if (!discard && node?.dataset) {
       node.dataset.processDfCode = getCode();
       node.dataset.processActiveMode = 'df';

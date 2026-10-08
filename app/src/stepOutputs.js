@@ -4,6 +4,7 @@
  * state as getCanvasState() saves it, where a Run or Process carries its current History result.
  */
 import { cloneCell } from './datasetContent.js';
+import { effectiveProcessOutputs } from './processOutputPorts.js';
 import { buildRunResultsTable } from './runResultsExport.js';
 import { markEmptyOutputAsError } from './runResumeUtils.js';
 
@@ -48,7 +49,11 @@ function processOutput(processNode, port) {
   const result = parsed(processNode.dfResults, null);
   const outputs = result?.outputs && typeof result.outputs === 'object'
     ? result.outputs : (Array.isArray(result?.headers) && Array.isArray(result?.rows) ? { result } : null);
-  if (!outputs || !Object.keys(outputs).length) return { waiting: 'no-result' };
+  if (!outputs || !Object.keys(outputs).length) {
+    // Without a result, a branch the code is known not to return will not come by running it.
+    const known = effectiveProcessOutputs({ detected: processNode.processOutputPorts });
+    return { waiting: known.source === 'code' && !known.dynamic && !known.ports.includes(port) ? 'missing-port' : 'no-result' };
+  }
   const table = outputs[port];
   if (!table || !Array.isArray(table.headers) || !Array.isArray(table.rows)) return { waiting: 'missing-port' };
   const recordId = processNode.historyRecordId || nodeIdOf(processNode);

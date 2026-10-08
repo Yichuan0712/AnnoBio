@@ -73,12 +73,16 @@ export function createWorkflowNodeFactories(deps = {}) {
     readRunInputSource,
     writeRunInputSource,
     readRunInputTable,
-    readStepInputNotices,
+    readRunInputCandidates,
+    readSourceOutput,
+    readStepInputStatus,
+    sourceColor,
     readProcessPrimarySource,
     writeProcessPrimarySource,
     readProcessInputBindings,
     readProcessInputAliases,
     writeProcessInputs,
+    replaceProcessInput,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode,
@@ -575,26 +579,6 @@ export function createWorkflowNodeFactories(deps = {}) {
           return [];
         }
       }
-      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
-        const id = n.dataset.nodeId || '';
-        const content = datasetContentByNodeId.get(id);
-        const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
-        const color = datasetColorAt(colorIndex);
-        return {
-          nodeId: id,
-          name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
-          headers: content?.headers ? content.headers.slice() : [],
-          color,
-        };
-      });
-      function getSubsetContent(nodeId) {
-        // A Run reading another step's output maps that output's columns (stepOutputs.js); the window
-        // lists step outputs from DATA_FLOW_PLAN.md step 8.
-        const source = readRunInputSource(node);
-        const c = source && source.kind !== 'dataset' && source.nodeId === nodeId
-          ? readRunInputTable(node) : datasetContentByNodeId.get(nodeId);
-        return c || { headers: [], columnTypes: [], rowIds: [], rows: [] };
-      }
       function getPromptTemplate() {
         const promptNode = currentPromptNode();
         if (!promptNode) return { sections: [], outputSchema: { return_shape: 'single', fields: [] } };
@@ -619,7 +603,9 @@ export function createWorkflowNodeFactories(deps = {}) {
       openRunDetailModal({
         node,
         startRunNode,
-        getWorkingSets: () => workingSets,
+        // Datasets and step outputs (stepInputs.js runCandidateSources), and the table each gives.
+        getInputCandidates: () => readRunInputCandidates(node),
+        getInputTable: (source) => readSourceOutput(source),
         getPrompts: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'))
           .map((n) => ({
             nodeId: n.dataset.nodeId || '',
@@ -629,7 +615,6 @@ export function createWorkflowNodeFactories(deps = {}) {
         getPromptId: () => currentPromptNode()?.dataset?.nodeId || '',
         selectPrompt,
         getPromptInputFields: () => extractInputFieldsFromSections(promptSectionsOf(currentPromptNode())),
-        getSubsetContent,
         getPromptTemplate,
         unregisterPendingRun,
         getPendingRunId: () => pendingRuns.get(node.dataset.nodeId) || null,
@@ -638,12 +623,12 @@ export function createWorkflowNodeFactories(deps = {}) {
         isRunNameAlreadyUsedForPrompt,
         onWorkingSetChange: onRunWorkingSetChange,
         getInputSource: () => readRunInputSource(node),
-        // The window names a source by node only; keep the port of the node already read.
+        // Rewriting the same source would only move its connection to the end of the list.
         setInputSource: (source) => {
-          if (source?.nodeId && source.nodeId === readRunInputSource(node)?.nodeId) return;
+          if (sourceKey(source) === sourceKey(readRunInputSource(node))) return;
           writeRunInputSource(node, source);
         },
-        getInputNotices: () => readStepInputNotices(node),
+        getInputStatus: () => readStepInputStatus(node),
         getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
           try {
             const raw = n.dataset.runInputToColumn;
@@ -718,45 +703,36 @@ export function createWorkflowNodeFactories(deps = {}) {
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
+      // A branch label offers new steps on that branch (stepOutputMenu.js) instead of opening the window.
+      const portLabel = e.target.closest('.workflow-node__process-port[data-port]');
+      if (portLabel) {
+        showNodeContextMenu(e.clientX, e.clientY, node, { port: portLabel.dataset.port });
+        return;
+      }
       const processNodeId = node.dataset.nodeId;
-      function getProcessDatasets() {
-        const datasets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'))
-          .map((datasetNode) => {
-            const savedColorIndex = datasetNode.dataset.datasetColorIndex != null
-              ? parseInt(datasetNode.dataset.datasetColorIndex, 10)
-              : 0;
-            const colorIndex = Number.isFinite(savedColorIndex) && savedColorIndex >= 0
-              ? savedColorIndex % DATASET_BORDER_COLORS.length
-              : 0;
-            return {
-              nodeId: datasetNode.dataset.nodeId,
-              name: datasetNode.dataset.datasetName || 'Dataset',
-              color: datasetColorAt(colorIndex),
-              content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
-            };
-          })
-          .filter((dataset) => dataset.content);
+      /** The key of the Process's df, recording the fallback (its first input) so it stays put when inputs change. */
+      function primaryKey() {
         const primary = readProcessPrimarySource(node);
-        // Records the fallback (the first input) as the primary, so it stays put when inputs change.
         if (primary) writeProcessPrimarySource(node, primary);
-        return { datasets, primaryDatasetId: sourceKey(primary) };
+        return sourceKey(primary);
       }
       /**
-       * Every canvas Dataset with its alias, marking the ones this Process reads with `code`. Step
-       * outputs are not offered here yet (DATA_FLOW_PLAN.md step 8).
+       * Every Dataset and step output with its alias, marking the ones this Process reads with `code`,
+       * each with the table it gives now (none while a step has no result yet).
        */
       function getProcessInputs(code) {
-        const { datasets, primaryDatasetId } = getProcessDatasets();
-        const content = new Map(datasets.map((dataset) => [dataset.nodeId, dataset]));
-        const bindings = readProcessInputBindings(node, code, primaryDatasetId)
-          .filter((binding) => binding.kind === 'dataset' && content.has(binding.nodeId))
-          .map((binding) => ({ ...binding, color: content.get(binding.nodeId).color, content: content.get(binding.nodeId).content }));
+        const primaryDatasetId = primaryKey();
+        const bindings = readProcessInputBindings(node, code, primaryDatasetId).map((binding) => ({
+          ...binding,
+          color: sourceColor(binding),
+          content: binding.kind === 'dataset' ? datasetContentByNodeId.get(binding.nodeId) : readSourceOutput(binding).table,
+        }));
         return { bindings, primaryDatasetId, savedAliases: readProcessInputAliases(node) };
       }
+      const bindingFor = (key, code) => readProcessInputBindings(node, code, primaryKey()).find((binding) => binding.key === key) || null;
       /** Connects exactly the sources the code declares or uses and saves the alias each has there. */
       function syncProcessDependencies(code) {
-        const { primaryDatasetId } = getProcessDatasets();
-        const inputs = readProcessInputBindings(node, code, primaryDatasetId).filter((binding) => binding.input);
+        const inputs = readProcessInputBindings(node, code, primaryKey()).filter((binding) => binding.input);
         writeProcessInputs(node, { primary: readProcessPrimarySource(node), inputs });
         updateEdges();
         emitCanvasChanged();
@@ -766,12 +742,20 @@ export function createWorkflowNodeFactories(deps = {}) {
         runProcessNode,
         getProcessInputs,
         syncProcessDependencies,
-        setPrimaryDataset: (datasetNodeId, code) => {
-          writeProcessPrimarySource(node, datasetNodeId ? { nodeId: datasetNodeId, port: 'result' } : null);
+        setPrimaryDataset: (key, code) => {
+          writeProcessPrimarySource(node, key ? bindingFor(key, code) : null);
           syncProcessDependencies(code);
         },
+        // Another source for one input, under the same alias, so the code needs no change (design §3.5).
+        replaceInputSource: (fromKey, toKey, code) => {
+          const from = bindingFor(fromKey, code);
+          const to = bindingFor(toKey, code);
+          if (!from || !to || !replaceProcessInput(node, from, to)) return;
+          updateEdges();
+          emitCanvasChanged();
+        },
         getUniqueDatasetExportName: findUniqueDatasetExportName,
-        getInputNotices: () => readStepInputNotices(node),
+        getInputStatus: () => readStepInputStatus(node),
         history: getHistoryForNode?.(processNodeId),
       });
     });
