@@ -229,8 +229,15 @@ class _Compiler:
             self.report("MISSING_DEPENDENCY", owner, field, f"Required Dataset {nid or '(none)'} is not selected.")
         return aid
 
-    def add_process(self, nid, node):
-        jid = f"process:{nid}"
+    # Where a Run or Process reads its data (docs/design/DATA_FLOW_DESIGN.md §3.3). Only these two
+    # methods know how the canvas stores it.
+    def run_input(self, rid):
+        """The node id of the Dataset a Run reads, or '' when it has none."""
+        return _text(self.selected[rid].get("runWorkingSetId"))
+
+    def process_inputs(self, nid, node):
+        """(primary, [(source node id, alias as recorded)]) for a Process, sources in a stable order.
+        The primary is the recorded one, or the only input; its alias is df."""
         incoming = self.inputs_to(nid, "dataset-to-process")
         primary = _text(node.get("primaryDatasetId"))
         if not primary and len(incoming) == 1:
@@ -238,10 +245,14 @@ class _Compiler:
         if not incoming or primary not in incoming:
             self.report("INVALID_PRIMARY_INPUT", nid, "primaryDatasetId", "Process needs an explicit primary input among its dependencies.")
         aliases = self.obj(node.get("datasetAliases"), nid, "datasetAliases")
+        return primary, [(source, "df" if source == primary else _text(aliases.get(source))) for source in incoming]
+
+    def add_process(self, nid, node):
+        jid = f"process:{nid}"
+        primary, sources = self.process_inputs(nid, node)
         inputs = {}
-        for source in incoming:
+        for source, alias in sources:
             aid = self.require_dataset(source, nid, "inputs")
-            alias = "df" if source == primary else _text(aliases.get(source))
             if not alias or not alias.isidentifier() or (source != primary and not alias.startswith("df_")):
                 self.report("INVALID_ALIAS", nid, "datasetAliases", f"Dataset {source} needs a valid df_<name> alias.")
                 continue
@@ -287,7 +298,7 @@ class _Compiler:
         jid = f"llm:{rid}"
         if self.inputs_to(rid, "prompt-to-run") != [pid]:
             self.report("PROMPT_RUN_MISMATCH", rid, "prompt_node_id", "Run must have exactly the selected Prompt as its upstream Prompt.")
-        aid = self.require_dataset(_text(run.get("runWorkingSetId")), rid, "runWorkingSetId")
+        aid = self.require_dataset(self.run_input(rid), rid, "runWorkingSetId")
         sections = prompt.get("sections", [])
         if not isinstance(sections, list) or any(not isinstance(s, dict) for s in sections):
             self.report("INVALID_SECTIONS", pid, "sections", "Prompt sections must be objects.")
