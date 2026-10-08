@@ -315,7 +315,13 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - [ ] 前端测试数量不变，全部通过。
 - [ ] 构建通过。
 
-**完成记录：**（执行者填写）
+**完成记录：** 2026-10-07 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - 接口测试单独放在 `backend/test_process_outputs_api.py`。它要 import `main`（依赖 FastAPI），只能用 `backend/.venv` 跑；`test_process_outputs.py` 只用标准库，全局 Python 也能跑。
+  - 补充了两条计划没写的规则：键是非字符串常量（如 `1`）时报与空键相同的错误，与运行时一致；`code` 缺省时按空字符串处理。
+- 测试：后端 93 → 116（新增 20 个识别用例、3 个接口用例）；前端 140 项不变。
+- 额外核对：示例项目中 7 个真实 Process 的识别结果与设计 §3.4 的表格一致；单独启动后端用 HTTP 请求 `/api/process/outputs` 也返回正确结果。
 
 ---
 
@@ -1103,7 +1109,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 |---|---|---|---|---|---|---|
 | 基线 | — | 2026-10-07 | `ed4672f` | 146 | 93 | |
 | 0 | 完成 | 2026-10-07 | `e944005` | 140 | 93 | |
-| 1 | 未开始 | | | | | |
+| 1 | 完成 | 2026-10-07 | `0198dbe` | 140 | 116 | |
 | 2 | 未开始 | | | | | |
 | 3 | 未开始 | | | | | |
 | 4 | 未开始 | | | | | |
