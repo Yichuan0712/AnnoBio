@@ -589,7 +589,13 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - [ ] 后端测试全部通过。
 - [ ] 前端测试不受影响。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - `process_inputs(nid, node)` 返回 `(primary, [(source, alias)])`，`alias` 是记录中的原值（主输入为 `df`），不在这里校验。原因是 `add_process` 原来的诊断顺序是：先 `INVALID_PRIMARY_INPUT` 和别名表的 `INVALID_OBJECT`，再逐个输入报 `MISSING_DEPENDENCY`、`INVALID_ALIAS`、`DUPLICATE_ALIAS`。前两项放在 `process_inputs` 里，逐个输入的检查留在 `add_process`，诊断的内容和顺序因此完全不变。
+  - 诊断信息里的 `field` 值（`runWorkingSetId`、`primaryDatasetId`、`datasetAliases`）仍是旧字段名，用于在界面上定位出错的字段，第 6 步随存储一起改。
+  - 测试放在新文件 `backend/test_pipeline_compile_inputs.py`，复用 `test_pipeline_compile.py` 的 fixture，原有测试文件不改。
+- 测试：后端 116 → 121（新增 5 项），原有编译器测试未改；前端 162 项不变。编译器测试用全局 Python 也能跑（32 项）。
 
 ---
 
@@ -1166,7 +1172,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 2 | 完成 | 2026-10-07 | `a90e543` | 149 | 116 | |
 | 3 | 完成 | 2026-10-08 | `c4ce4a4` | 154 | 116 | |
 | 4 | 完成 | 2026-10-08 | `9b92a0a` | 162 | 116 | |
-| 5 | 未开始 | | | | | |
+| 5 | 完成 | 2026-10-08 | `519e724` | 162 | 121 | |
 | 6 | 未开始 | | | | | |
 | 7 | 未开始 | | | | | |
 | 8 | 未开始 | | | | | |
