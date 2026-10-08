@@ -1,8 +1,7 @@
 import { datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
-import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { resolveHistoryCanvasState } from './runHistoryResolver.js';
 import { datasetHistorySource } from './datasetHistorySource.js';
-import { runInputSource } from './stepInputs.js';
+import { processRequiredInputs, runInputSource } from './stepInputs.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -65,20 +64,12 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
     };
   }
 
-  const incoming = canvas.connections.filter((edge) => edge.type === 'dataset-to-process' && edge.toId === targetNodeId);
-  const primaryDatasetId = String(target.primaryDatasetId || incoming[0]?.fromId || '');
-  if (!primaryDatasetId) throw new Error('Process has no input Dataset.');
-  const datasets = canvas.nodes.filter((node) => node.type === 'dataset').map((node) => ({ nodeId: nodeId(node), name: node.name || '' }));
-  const allBindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
   const code = String(target.dfCode || target.code || '');
+  const { primaryId: primaryDatasetId, bindings: required } = processRequiredInputs(canvas, targetNodeId, { code });
+  if (!primaryDatasetId) throw new Error('Process has no input Dataset.');
   if (!code.trim()) throw new Error('Process has no code.');
-  const savedAliases = parsed(target.datasetAliases, {});
-  const aliasedBindings = allBindings.map((binding) => ({
-    ...binding, alias: savedAliases?.[binding.nodeId] || binding.alias,
-  }));
-  const required = new Set([primaryDatasetId, ...incoming.map((edge) => edge.fromId), ...referencedDatasetAliases(code, aliasedBindings, savedAliases)]);
   const bindings = [];
-  for (const binding of aliasedBindings.filter((item) => required.has(item.nodeId))) {
+  for (const binding of required) {
     const dataset = await snapshotDataset(binding.nodeId);
     bindings.push({ ...dataset, alias: binding.alias });
   }

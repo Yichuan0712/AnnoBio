@@ -1,9 +1,30 @@
 import { canonicalJson, datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
 import { datasetHistorySource, publishedPipelineCopy } from './datasetHistorySource.js';
-import { RESULT_PORT, runInputSource, setRunInputSource } from './stepInputs.js';
+import {
+  RESULT_PORT, processInputEdges, processPrimarySource, runInputSource, setProcessInputs, setRunInputSource,
+} from './stepInputs.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
+
+/** A Process's df and its inputs with their aliases, sorted, for telling whether a selection changes them. */
+function processInputsOf(state, processId) {
+  return {
+    primary: processPrimarySource(state, processId)?.nodeId || '',
+    inputs: processInputEdges(state).filter((edge) => edge.toId === processId)
+      .map((edge) => [edge.fromId, edge.alias]).sort(([a], [b]) => a.localeCompare(b)),
+  };
+}
+
+/** processInputsOf for the inputs a selected record gives a Process, written the way setProcessInputs stores them. */
+function selectedProcessInputs(processId, { primary, inputs }) {
+  const state = {
+    nodes: [{ nodeId: processId, type: 'process' }, ...inputs.map((input) => ({ nodeId: input.nodeId, type: 'dataset' }))],
+    connections: [],
+  };
+  setProcessInputs(state, processId, { primary: { nodeId: primary, port: RESULT_PORT }, inputs });
+  return processInputsOf(state, processId);
+}
 
 /** Preview the input and output connection changes required to select one coherent History lineage. */
 export async function planHistorySelection(state, recordId, { loadRecord, recordEntries = [], runningNodeIds = [] }) {
@@ -15,7 +36,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   const selectedRecords = new Map();
   const promptEdges = new Map();
   const runInputs = new Map(); // Run node id -> input Dataset id
-  const processInputs = new Map();
+  const processInputs = new Map(); // Process node id -> { primary, inputs: [{ nodeId, port, alias }] }
   const datasetSources = new Map();
   const active = new Set();
   const recordCache = new Map();
@@ -138,12 +159,14 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
           })),
         });
         demand(record.nodeId, 'process', {
-          dfCode: code, primaryDatasetId,
-          datasetAliases: JSON.stringify(Object.fromEntries(resolvedBindings.map(({ binding, nodeId: id }) => [id, binding.alias]))),
+          dfCode: code,
           historyRecordId: record.id,
           historySelectionSignature: selectionSignature,
         });
-        processInputs.set(record.nodeId, resolvedBindings.map(({ nodeId: id }) => id));
+        processInputs.set(record.nodeId, {
+          primary: primaryDatasetId,
+          inputs: resolvedBindings.map(({ binding, nodeId: id }) => ({ nodeId: id, port: RESULT_PORT, alias: binding.alias })),
+        });
       }
       return record;
     } finally {
@@ -192,12 +215,17 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   for (const [id, patch] of desired) {
     const node = nodes.get(id);
     const inputId = runInputs.get(id);
-    const inputChanged = inputId !== undefined && runInputSource(next, id)?.nodeId !== inputId;
+    const processInput = processInputs.get(id);
+    const inputChanged = (inputId !== undefined && runInputSource(next, id)?.nodeId !== inputId)
+      || (processInput !== undefined && canonicalJson(processInputsOf(next, id)) !== canonicalJson(selectedProcessInputs(id, processInput)));
     if (inputChanged || Object.entries(patch).some(([key, value]) => canonicalJson(node[key]) !== canonicalJson(value))) {
       changedNodeIds.push(id);
     }
     Object.assign(node, patch);
     if (inputId !== undefined) setRunInputSource(next, id, { nodeId: inputId, port: RESULT_PORT });
+    if (processInput !== undefined) {
+      setProcessInputs(next, id, { primary: { nodeId: processInput.primary, port: RESULT_PORT }, inputs: processInput.inputs });
+    }
   }
   for (const [id, source] of datasetSources) {
     const node = nodes.get(id);
@@ -225,12 +253,6 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
     if (oldPromptId !== promptId && !changedNodeIds.includes(id)) changedNodeIds.push(id);
     next.connections = next.connections.filter((edge) => !(edge.type === 'prompt-to-run' && edge.toId === id));
     next.connections.push({ type: 'prompt-to-run', fromId: promptId, toId: id });
-  }
-  for (const [id, datasetIds] of processInputs) {
-    const oldIds = next.connections.filter((edge) => edge.type === 'dataset-to-process' && edge.toId === id).map((edge) => edge.fromId).sort();
-    if (canonicalJson(oldIds) !== canonicalJson(datasetIds.slice().sort()) && !changedNodeIds.includes(id)) changedNodeIds.push(id);
-    next.connections = next.connections.filter((edge) => !(edge.type === 'dataset-to-process' && edge.toId === id));
-    datasetIds.forEach((datasetId) => next.connections.push({ type: 'dataset-to-process', fromId: datasetId, toId: id }));
   }
 
   function datasetProducer(dataset) {
@@ -286,7 +308,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
 
   // Exactly the Dataset snapshots created from a selected record become its live outputs. Other
   // outputs of that Run/Process remain connected as dashed, immutable History snapshots.
-  const selectedInputDatasetIds = new Set([...processInputs.values()].flat());
+  const selectedInputDatasetIds = new Set([...processInputs.values()].flatMap(({ inputs }) => inputs.map((input) => input.nodeId)));
   for (const inputId of runInputs.values()) {
     if (inputId) selectedInputDatasetIds.add(inputId);
   }

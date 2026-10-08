@@ -4,7 +4,7 @@
  * payload in.
  */
 import { pipelineInputDatasetIds } from './pipelineInputAvailability.js';
-import { runInputSource } from './stepInputs.js';
+import { processInputEdges, runInputSource } from './stepInputs.js';
 
 /**
  * @returns {Array<{ nodeId: string, kind: 'run'|'process', name: string,
@@ -13,7 +13,6 @@ import { runInputSource } from './stepInputs.js';
  */
 export function pipelineInputSteps(canvasState, route) {
   const nodes = new Map((canvasState?.nodes || []).map((node) => [node.nodeId, node]));
-  const connections = canvasState?.connections || [];
   const inputIds = new Set(pipelineInputDatasetIds(route, canvasState));
   const dataset = (nodeId) => ({ nodeId, name: nodes.get(nodeId)?.name || 'Dataset', colorIndex: nodes.get(nodeId)?.colorIndex });
   const steps = [];
@@ -23,8 +22,8 @@ export function pipelineInputSteps(canvasState, route) {
       if (!inputIds.has(inputId)) continue;
       steps.push({ nodeId: item.run_node_id, kind: 'run', name: nodes.get(item.prompt_node_id)?.name || 'Prompt', inputs: [dataset(inputId)] });
     } else if (item?.type === 'process') {
-      const read = connections
-        .filter((edge) => edge.type === 'dataset-to-process' && edge.toId === item.process_node_id && inputIds.has(edge.fromId))
+      const read = processInputEdges(canvasState)
+        .filter((edge) => edge.toId === item.process_node_id && inputIds.has(edge.fromId))
         .map((edge) => dataset(edge.fromId));
       if (read.length) steps.push({ nodeId: item.process_node_id, kind: 'process', name: nodes.get(item.process_node_id)?.name || 'Process', inputs: read });
     }

@@ -45,6 +45,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     readRunInputSource,
     writeRunInputSource,
     readRunInputTable,
+    writeProcessInputs,
     createPromptNode,
     createRunNode,
     createScoreNode,
@@ -2214,15 +2215,11 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       top: resolvedTop,
       title: finalName,
       dfCode: normalizedDfCode,
-      primaryDatasetId: normalizedSourceNodeId,
     });
     if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     if (node?.dataset?.nodeId) {
-      getConnectionsList().push({
-        fromId: normalizedSourceNodeId,
-        toId: node.dataset.nodeId,
-        type: 'dataset-to-process',
-      });
+      const source = { nodeId: normalizedSourceNodeId, port: RESULT_PORT };
+      writeProcessInputs(node, { primary: source, inputs: [{ ...source, alias: 'df' }] });
       updateEdges();
     }
     updateContentSize();

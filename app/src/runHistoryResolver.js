@@ -1,9 +1,8 @@
 import { datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
-import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { buildRunResultsTable } from './runResultsExport.js';
 import { cloneCell } from './datasetContent.js';
 import { datasetHistorySource } from './datasetHistorySource.js';
-import { runInputSource } from './stepInputs.js';
+import { processRequiredInputs, runInputSource } from './stepInputs.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -155,20 +154,12 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
           });
         }
       } else {
-        const incoming = next.connections.filter((edge) => edge.type === 'dataset-to-process' && edge.toId === id);
-        const primaryDatasetId = String(node.primaryDatasetId || incoming[0]?.fromId || '');
+        const code = String(node.dfCode || node.code || '');
+        const { primaryId: primaryDatasetId, bindings: required } = processRequiredInputs(next, id, { code });
         if (primaryDatasetId) {
-          const datasets = next.nodes.filter((item) => item.type === 'dataset').map((item) => ({ nodeId: nodeId(item), name: item.name || '' }));
-          const allBindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
-          const code = String(node.dfCode || node.code || '');
-          const savedAliases = parsed(node.datasetAliases, {});
-          const aliasedBindings = allBindings.map((binding) => ({
-            ...binding, alias: savedAliases?.[binding.nodeId] || binding.alias,
-          }));
-          const required = new Set([primaryDatasetId, ...incoming.map((edge) => edge.fromId), ...referencedDatasetAliases(code, aliasedBindings, savedAliases)]);
           const bindings = [];
           let complete = true;
-          for (const binding of aliasedBindings.filter((item) => required.has(item.nodeId))) {
+          for (const binding of required) {
             const dataset = await resolveDataset(binding.nodeId);
             if (!dataset) { complete = false; break; }
             bindings.push({ nodeId: binding.nodeId, alias: binding.alias, signature: dataset.signature });

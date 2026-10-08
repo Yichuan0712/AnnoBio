@@ -1,4 +1,4 @@
-import { runInputSource } from './stepInputs.js';
+import { processInputEdges, processPrimarySource, runInputSource } from './stepInputs.js';
 
 /** Return upstream Dataset IDs in color priority order, plus the selected Prompt. */
 export function dependencyColorSources(node, nodeById, connections = []) {
@@ -22,11 +22,23 @@ export function dependencyColorSources(node, nodeById, connections = []) {
   switch (node.dataset.nodeType) {
     case 'sampler':
       return { datasetIds: uniqueIds([node.dataset.sourceNodeId || source(nodeId, 'dataset-to-sampler')]), promptId: '' };
-    case 'process':
+    case 'process': {
+      // The Process as stepInputs.js reads it. Its recorded primary is taken as a Dataset as is: the
+      // caller looks each id up and drops the ones that are gone.
+      const recorded = String(node.dataset.processPrimaryDatasetId || '').trim();
+      const state = {
+        nodes: [
+          { nodeId, type: 'process', primaryDatasetId: recorded, datasetAliases: node.dataset.processDatasetAliases },
+          ...(recorded ? [{ nodeId: recorded, type: 'dataset' }] : []),
+        ],
+        connections,
+      };
       return {
-        datasetIds: uniqueIds([node.dataset.processPrimaryDatasetId, ...sources(nodeId, 'dataset-to-process')]),
+        datasetIds: uniqueIds([processPrimarySource(state, nodeId)?.nodeId,
+          ...processInputEdges(state).filter((edge) => edge.toId === nodeId).map((edge) => edge.fromId)]),
         promptId: '',
       };
+    }
     case 'run':
       return runSources(nodeId);
     case 'score': {

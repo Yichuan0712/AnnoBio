@@ -19,14 +19,14 @@
  *    "Save to workspace" — see workflowCanvasRuntime.js's saveRunResultsToWorkspace), or a
  *    `process-to-dataset` connection. Legacy snapshot edges also preserve the visible path,
  *    although their saved tables are independent inputs when the pipeline runs.
- *  - Consumed by: either a Run's input (stepInputs.js runInputSource), or a `dataset-to-process` connection.
+ *  - Consumed by: a Run's or Process's input (stepInputs.js).
  *
  * Only datasets that actually take part get a step; ones sitting unattached on the canvas don't.
  *
  * A Dataset with conflicting producers is left without an inferred producer; the panel reports it.
  */
 import { datasetProducerConflicts } from './pipelineProducerConflicts.js';
-import { runInputSource } from './stepInputs.js';
+import { processInputEdges, runInputSource } from './stepInputs.js';
 
 const STEP_KIND = { PROMPT: 'prompt', PROCESS: 'process', DATASET: 'dataset' };
 
@@ -192,7 +192,7 @@ export function detectPipelines(canvasState) {
       // Process nodes accept one dataframe. With multiple incoming Dataset edges the canvas
       // combines those datasets by row before calling process(df); retain the inputs here so the
       // Current Pipeline can describe that convergence rather than silently showing one branch.
-      inputDatasets: edges.to('dataset-to-process', p.nodeId)
+      inputDatasets: processInputEdges(canvasState).filter((edge) => edge.toId === p.nodeId).map((edge) => edge.fromId)
         .filter((datasetNodeId) => nodeById.get(datasetNodeId)?.type === 'dataset')
         .map((datasetNodeId) => ({
           datasetNodeId,
@@ -249,10 +249,9 @@ export function detectPipelines(canvasState) {
     const input = runInputSource(canvasState, run.nodeId);
     if (consumer && input) addConsumer(input.nodeId, consumer.id, run.nodeId);
   }
-  for (const c of connections) {
-    if (c.type !== 'dataset-to-process') continue;
-    const consumer = processNodeToStep.get(c.toId);
-    if (consumer) addConsumer(c.fromId, consumer.id, null);
+  for (const input of processInputEdges(canvasState)) {
+    const consumer = processNodeToStep.get(input.toId);
+    if (consumer) addConsumer(input.fromId, consumer.id, null);
   }
 
   // Datasets are grouped by the slot they sit in rather than one step each: a Run whose results
