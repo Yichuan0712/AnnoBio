@@ -13,7 +13,7 @@ import zipfile
 from backend.pipeline_compile import compile_pipeline
 from backend.pipeline_export import build_pipeline_archive, PipelineExportError
 from backend.pipeline_export_spec import export_compiled_pipeline
-from backend.test_pipeline_compile import DEFAULTS, simple, branched, dataset, edge, process, route_for
+from backend.test_pipeline_compile import DEFAULTS, simple, branched, data, dataset, edge, process, route_for
 
 
 class CompiledExportTests(unittest.TestCase):
@@ -61,11 +61,11 @@ class CompiledExportTests(unittest.TestCase):
 
     def test_multi_input_export_accepts_named_workbooks(self):
         state = {"nodes": [dataset("raw", ["text"]), dataset("lookup", ["suffix"]),
-                           process("join", "raw", datasetAliases={"lookup": "df_lookup"},
+                           process("join",
                                    dfCode="def process(df):\n    out = df.copy()\n    out['text'] = out['text'] + df_lookup['suffix']\n    return out\n"),
                            dataset("joined")],
-                 "connections": [edge("raw", "join", "dataset-to-process"),
-                                 edge("lookup", "join", "dataset-to-process"),
+                 "connections": [data("raw", "join", "df"),
+                                 data("lookup", "join", "df_lookup"),
                                  edge("join", "joined", "process-to-dataset")]}
         state["nodes"][1]["datasetContent"]["headers"] = ["suffix", "image"]
         state["nodes"][1]["datasetContent"]["columnTypes"] = ["text", "image"]
@@ -186,9 +186,9 @@ assert tables['out-a'].equals(tables['out-b'])
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_process_only_route_exports_without_llm_engine(self):
-        state = {"nodes": [dataset("raw"), process("clean", "raw", dfCode="def process(df):\n    out = df.copy()\n    out['text'] = out['text'].str.upper()\n    return out\n"),
+        state = {"nodes": [dataset("raw"), process("clean", dfCode="def process(df):\n    out = df.copy()\n    out['text'] = out['text'].str.upper()\n    return out\n"),
                            dataset("cleaned")],
-                 "connections": [edge("raw", "clean", "dataset-to-process"), edge("clean", "cleaned", "process-to-dataset")]}
+                 "connections": [data("raw", "clean", "df"), edge("clean", "cleaned", "process-to-dataset")]}
         files = self.files(self.build(state)[1])
         self.assertFalse(any(path.startswith(("engine/", "prompt/")) for path in files))
         self.assertNotIn(".env.example", files)

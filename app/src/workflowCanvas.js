@@ -82,9 +82,10 @@ import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
 import { codeHashOf, parseProcessOutputPorts } from './processOutputPorts.js';
+import { CANVAS_VERSION } from './canvasFormat.js';
 import {
-  RESULT_PORT, processInputAliases, processInputBindings, processInputEdges, processPrimarySource, processRequiredInputs,
-  replaceProcessInputSource, runInputSource, runInputTable, setProcessInputs, setProcessPrimarySource, setRunInputSource,
+  DATA_EDGE, RESULT_PORT, processInputAliases, processInputBindings, processInputEdges, processPrimarySource, processRequiredInputs,
+  replaceProcessInputSource, runInputSource, runInputTable, setProcessInputs, setProcessPrimarySource, setRunInputSource, stepInputEdges,
 } from './stepInputs.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
@@ -137,7 +138,6 @@ const EDGE_TYPE_DATASET_TO_DATASET = 'dataset-to-dataset';
 /** Edge type for prompt → run (run/test this prompt). */
 const EDGE_TYPE_PROMPT_TO_RUN = 'prompt-to-run';
 /** Read-only visual edge for the Dataset selected as a Run's input. */
-const EDGE_TYPE_DATASET_TO_RUN = 'dataset-to-run';
 /** Read-only visual edge for a Dataset materialized from Run results. */
 const EDGE_TYPE_RUN_TO_DATASET = 'run-to-dataset';
 /** Read-only visual edge for the Dataset selected as a Score's ground truth. */
@@ -148,7 +148,6 @@ const EDGE_TYPE_RUN_TO_SCORE = 'run-to-score';
 const EDGE_TYPE_SCORE_TO_PROMPT_REVIEW = 'score-to-prompt-review';
 const EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT = 'prompt-review-to-prompt';
 /** Edge type for dataset → process (run a user-written function over each row, no LLM). */
-const EDGE_TYPE_DATASET_TO_PROCESS = 'dataset-to-process';
 /** Edge type for process → dataset (exporting Process results creates a connected dataset). */
 const EDGE_TYPE_PROCESS_TO_DATASET = 'process-to-dataset';
 const EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT = 'run-to-dataset-snapshot';
@@ -1891,37 +1890,27 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function getOutgoingEdgesFromNode(nodeId) {
     if (!nodeId) return [];
-    return connections.filter((c) => c.fromId === nodeId);
+    // A Run input is reported as a Dataset selection (isDatasetPickedByRunOrScore), not as downstream.
+    return connections.filter((c) => c.fromId === nodeId
+      && !(c.type === DATA_EDGE && getNodeById(c.toId)?.classList.contains('workflow-node--run')));
   }
 
   // A Run's input on the live canvas, through stepInputs.js (docs/design/DATA_FLOW_DESIGN.md §3.3).
+  // Inputs live in the `connections` array as data connections; stepInputs.js edits it in place.
   function runInputState(runNode) {
-    return {
-      nodes: runNode ? [{ nodeId: runNode.dataset.nodeId, type: 'run', runWorkingSetId: runNode.dataset.runWorkingSetId }] : [],
-      connections,
-    };
+    return { nodes: runNode ? [{ nodeId: runNode.dataset.nodeId, type: 'run' }] : [], connections };
   }
   function readRunInputSource(runNode) {
     return runNode ? runInputSource(runInputState(runNode), runNode.dataset.nodeId) : null;
   }
   function writeRunInputSource(runNode, source) {
-    if (!runNode) return;
-    const state = runInputState(runNode);
-    setRunInputSource(state, runNode.dataset.nodeId, source);
-    const datasetId = state.nodes[0].runWorkingSetId;
-    if (datasetId) runNode.dataset.runWorkingSetId = datasetId;
-    else delete runNode.dataset.runWorkingSetId;
+    if (runNode) setRunInputSource(runInputState(runNode), runNode.dataset.nodeId, source);
   }
-  // A Process's inputs on the live canvas, through stepInputs.js. The state holds the Process, every
-  // Dataset (its candidates) and the live connections array, which stepInputs.js edits in place.
+  /** A Process and every Dataset (its candidates), with the live connections. */
   function processInputState(processNode) {
     return {
       nodes: [
-        {
-          nodeId: processNode.dataset.nodeId, type: 'process',
-          primaryDatasetId: processNode.dataset.processPrimaryDatasetId,
-          datasetAliases: processNode.dataset.processDatasetAliases,
-        },
+        { nodeId: processNode.dataset.nodeId, type: 'process' },
         ...Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'), (datasetNode) => ({
           nodeId: datasetNode.dataset.nodeId, type: 'dataset', name: datasetNode.dataset.datasetName || 'Dataset',
         })),
@@ -1929,20 +1918,11 @@ export function buildWorkflowCanvas(root, options = {}) {
       connections,
     };
   }
-  function storeProcessInputState(processNode, state) {
-    const { primaryDatasetId, datasetAliases } = state.nodes[0];
-    if (primaryDatasetId) processNode.dataset.processPrimaryDatasetId = primaryDatasetId;
-    else delete processNode.dataset.processPrimaryDatasetId;
-    if (datasetAliases) processNode.dataset.processDatasetAliases = datasetAliases;
-    else delete processNode.dataset.processDatasetAliases;
-  }
   function readProcessPrimarySource(processNode) {
     return processNode ? processPrimarySource(processInputState(processNode), processNode.dataset.nodeId) : null;
   }
   function writeProcessPrimarySource(processNode, source) {
-    const state = processInputState(processNode);
-    setProcessPrimarySource(state, processNode.dataset.nodeId, source);
-    storeProcessInputState(processNode, state);
+    setProcessPrimarySource(processInputState(processNode), processNode.dataset.nodeId, source);
   }
   function readProcessInputAliases(processNode) {
     return processInputAliases(processInputState(processNode), processNode.dataset.nodeId);
@@ -1954,15 +1934,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     return processRequiredInputs(processInputState(processNode), processNode.dataset.nodeId, { code });
   }
   function writeProcessInputs(processNode, value) {
-    const state = processInputState(processNode);
-    setProcessInputs(state, processNode.dataset.nodeId, value);
-    storeProcessInputState(processNode, state);
+    setProcessInputs(processInputState(processNode), processNode.dataset.nodeId, value);
   }
   function replaceProcessInput(processNode, from, to) {
-    const state = processInputState(processNode);
-    const replaced = replaceProcessInputSource(state, processNode.dataset.nodeId, from, to);
-    if (replaced) storeProcessInputState(processNode, state);
-    return replaced;
+    return replaceProcessInputSource(processInputState(processNode), processNode.dataset.nodeId, from, to);
   }
 
   /** The table a Run reads, from the canvas's Dataset contents; null when it has no input. */
@@ -2464,7 +2439,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const live = new Set();
     const usedAsInput = (id) => (
       [...nodesLayer.querySelectorAll('.workflow-node--run')].some((run) => readRunInputSource(run)?.nodeId === id)
-      || processInputEdges({ nodes: [], connections }).some((edge) => edge.fromId === id)
+      || stepInputEdges({ connections }).some((edge) => edge.fromId === id)
     );
     for (const [key, group] of groups) {
       const producerId = key.slice(0, key.indexOf('\0'));
@@ -2556,11 +2531,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (edge.derived) {
       line.classList.add('workflow-edge--derived');
       line.setAttribute('data-derived', 'true');
-      line.setAttribute('aria-label', edge.type === EDGE_TYPE_DATASET_TO_RUN
-        ? 'Selected input dataset'
-        : edge.type === EDGE_TYPE_GROUND_TRUTH_TO_SCORE
-          ? 'Selected ground truth dataset'
-          : 'Dataset saved from Run results');
+      line.setAttribute('aria-label', edge.type === EDGE_TYPE_GROUND_TRUTH_TO_SCORE
+        ? 'Selected ground truth dataset'
+        : 'Dataset saved from Run results');
+    } else if (edge.type === DATA_EDGE) {
+      line.setAttribute('aria-label', 'Selected input dataset');
     }
     edgeGroup.appendChild(line);
 
@@ -2591,13 +2566,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       derived.push({ fromId, toId, type, derived: true });
     };
 
-    nodesLayer.querySelectorAll('.workflow-node--run').forEach((runNode) => {
-      add(
-        readRunInputSource(runNode)?.nodeId || '',
-        String(runNode.dataset.nodeId || '').trim(),
-        EDGE_TYPE_DATASET_TO_RUN,
-      );
-    });
     nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((datasetNode) => {
       const fromId = String(datasetNode.dataset.sourceRunNodeId || '').trim();
       const toId = String(datasetNode.dataset.nodeId || '').trim();
@@ -2620,8 +2588,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   function stepReadsDataset(step, datasetId) {
     return step?.classList.contains('workflow-node--run')
       ? readRunInputSource(step)?.nodeId === datasetId
-      : processInputEdges({ nodes: [], connections }).some((edge) => (
-        edge.fromId === datasetId && edge.toId === step?.dataset.nodeId
+      : !!step && processInputEdges(processInputState(step)).some((edge) => (
+        edge.fromId === datasetId && edge.toId === step.dataset.nodeId
       ));
   }
 
@@ -4755,8 +4723,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           name: node.dataset.processName || 'Process',
           dfCode: dfCode || undefined,
           activeMode: 'df',
-          primaryDatasetId: node.dataset.processPrimaryDatasetId || undefined,
-          datasetAliases: node.dataset.processDatasetAliases || undefined,
           processOutputPorts: parseProcessOutputPorts(node.dataset.processOutputPorts) || undefined,
           dfResults: node.dataset.processDfResults || node.dataset.processResults || undefined,
           processPending: pendingProcesses.has(nodeId),
@@ -4791,7 +4757,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           left,
           top,
           runName,
-          runWorkingSetId: (node.dataset.runWorkingSetId || '').trim() || undefined,
           runCredentialId: (node.dataset.runCredentialId || '').trim() || undefined,
           runInputToColumn: node.dataset.runInputToColumn || undefined,
           runSettings: runSettingsOverrides(node),
@@ -4914,7 +4879,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       };
     });
     return {
-      version: 2, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), ...(pipelineOwner ? { pipelineOwner } : {}),
+      version: CANVAS_VERSION, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), ...(pipelineOwner ? { pipelineOwner } : {}),
       zoomLevel, nodes, connections: connections.slice(),
     };
   }
@@ -4981,8 +4946,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           nodeId: n.nodeId || n.id,
           title: n.name || 'Process',
           dfCode,
-          primaryDatasetId: n.primaryDatasetId,
-          datasetAliases: n.datasetAliases,
           outputPorts: n.processOutputPorts,
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
@@ -5005,7 +4968,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(runNode);
         if (n.runName) runNode.dataset.runName = n.runName;
-        if (n.runWorkingSetId) runNode.dataset.runWorkingSetId = n.runWorkingSetId;
         if (n.runCredentialId) runNode.dataset.runCredentialId = n.runCredentialId;
         if (n.runInputToColumn) runNode.dataset.runInputToColumn = n.runInputToColumn;
         if (n.runSettings && typeof n.runSettings === 'object') runNode.dataset.runSettings = JSON.stringify(n.runSettings);
@@ -5154,6 +5116,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (type === 'prompt-review-to-prompt') type = EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT;
         if (type === 'sampler-to-subset') type = EDGE_TYPE_SAMPLER_TO_DATASET;
         if (type === 'subset-to-subset') type = EDGE_TYPE_DATASET_TO_DATASET;
+        // A data connection also carries the output it reads and, into a Process, the alias of the code.
+        if (type === DATA_EDGE) return { type, fromId: c.fromId, fromPort: c.fromPort || RESULT_PORT, toId: c.toId, ...(c.alias ? { alias: c.alias } : {}) };
         return { fromId: c.fromId, toId: c.toId, type };
       }
       if (typeof c.from === 'number' && typeof c.to === 'number') {

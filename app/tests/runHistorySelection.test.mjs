@@ -5,6 +5,8 @@ import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { planHistorySelection } from '../src/runHistorySelection.js';
 import { RunHistorySession } from '../src/runHistorySession.js';
 import { graph, recordGraph } from './historyGraphFixture.mjs';
+import { upgradeCanvasState } from '../src/canvasFormat.js';
+import { processInputAliases, processPrimarySource } from '../src/stepInputs.js';
 
 test('selecting a downstream record restores its ancestor inputs together', async () => {
   const migrated = await recordGraph(graph);
@@ -61,7 +63,7 @@ test('selecting Pipeline history switches its upstream, outputs, and downstream 
       }, sourceRecordIds: ['tidy-current'],
     },
   ];
-  const state = {
+  const state = upgradeCanvasState({
     nodes: [
       { type: 'prompt', nodeId: 'prompt', sections: [], outputFormat: { fields: [] }, inputTypes: {} },
       { type: 'dataset', nodeId: 'raw', datasetContent: table('raw') },
@@ -83,7 +85,7 @@ test('selecting Pipeline history switches its upstream, outputs, and downstream 
       { type: 'process-to-dataset', fromId: 'tidy', toId: 'tidy-copy' },
       { type: 'dataset-to-process', fromId: 'tidy-live', toId: 'check' },
     ],
-  };
+  });
   const byId = Object.fromEntries(records.map((record) => [record.id, record]));
   const selected = await planHistorySelection(state, 'tidy-old', {
     loadRecord: async (id) => byId[id],
@@ -93,8 +95,8 @@ test('selecting Pipeline history switches its upstream, outputs, and downstream 
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'run').historyRecordId, 'run-old');
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'tidy').historyRecordId, 'tidy-old');
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'check').historyRecordId, 'check-old');
-  assert.ok(selected.state.connections.some((edge) => edge.type === 'dataset-to-process' && edge.fromId === 'run-copy' && edge.toId === 'tidy'));
-  assert.ok(selected.state.connections.some((edge) => edge.type === 'dataset-to-process' && edge.fromId === 'tidy-copy' && edge.toId === 'check'));
+  assert.ok(selected.state.connections.some((edge) => edge.type === 'data' && edge.fromId === 'run-copy' && edge.toId === 'tidy'));
+  assert.ok(selected.state.connections.some((edge) => edge.type === 'data' && edge.fromId === 'tidy-copy' && edge.toId === 'check'));
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'run-copy').savedCopy, true);
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'run-copy').sourceRunNodeId, 'run');
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'run-live').savedCopy, undefined);
@@ -109,8 +111,8 @@ test('selecting Pipeline history switches its upstream, outputs, and downstream 
     recordEntries: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })),
   });
   assert.deepEqual(restored.selectedRecordIds, { tidy: 'tidy-current', run: 'run-current', check: 'check-current' });
-  assert.ok(restored.state.connections.some((edge) => edge.type === 'dataset-to-process' && edge.fromId === 'run-live' && edge.toId === 'tidy'));
-  assert.ok(restored.state.connections.some((edge) => edge.type === 'dataset-to-process' && edge.fromId === 'tidy-live' && edge.toId === 'check'));
+  assert.ok(restored.state.connections.some((edge) => edge.type === 'data' && edge.fromId === 'run-live' && edge.toId === 'tidy'));
+  assert.ok(restored.state.connections.some((edge) => edge.type === 'data' && edge.fromId === 'tidy-live' && edge.toId === 'check'));
   assert.equal(restored.state.nodes.find((node) => node.nodeId === 'run-live').sourceRunNodeId, 'run');
   assert.ok(restored.state.connections.some((edge) => edge.type === 'process-to-dataset' && edge.fromId === 'tidy' && edge.toId === 'tidy-live'));
   assert.deepEqual(restored.state.connections.filter((edge) => (
@@ -157,7 +159,7 @@ test('selecting a multi-input Process history switches every upstream input line
   const mergeOld = merge('merge-old', 'left-live', 'left-old', 'right-live', 'right-old', 'old');
   const mergeCurrent = merge('merge-current', 'left-live', 'left-current', 'right-live', 'right-current', 'current');
   const records = [leftOld, leftCurrent, rightOld, rightCurrent, mergeOld, mergeCurrent];
-  const state = {
+  const state = upgradeCanvasState({
     nodes: [
       { type: 'dataset', nodeId: 'left-seed', datasetContent: table('left-seed') },
       { type: 'dataset', nodeId: 'right-seed', datasetContent: table('right-seed') },
@@ -179,17 +181,17 @@ test('selecting a multi-input Process history switches every upstream input line
       { type: 'dataset-to-process', fromId: 'left-live', toId: 'merge' },
       { type: 'dataset-to-process', fromId: 'right-live', toId: 'merge' },
     ],
-  };
+  });
   const byId = Object.fromEntries(records.map((record) => [record.id, record]));
   const selected = await planHistorySelection(state, 'merge-old', {
     loadRecord: async (id) => byId[id],
     recordEntries: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })),
   });
   assert.deepEqual(selected.selectedRecordIds, { merge: 'merge-old', left: 'left-old', right: 'right-old' });
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'merge').primaryDatasetId, 'left-copy');
-  assert.equal(JSON.parse(selected.state.nodes.find((node) => node.nodeId === 'merge').datasetAliases)['right-copy'], 'df_candidates');
+  assert.equal(processPrimarySource(selected.state, 'merge').nodeId, 'left-copy');
+  assert.equal(processInputAliases(selected.state, 'merge')['right-copy'], 'df_candidates');
   assert.deepEqual(selected.state.connections.filter((edge) => (
-    edge.type === 'dataset-to-process' && edge.toId === 'merge'
+    edge.type === 'data' && edge.toId === 'merge'
   )).map((edge) => edge.fromId).sort(), ['left-copy', 'right-copy']);
   assert.deepEqual(selected.state.connections.filter((edge) => edge.type === 'process-to-dataset').map((edge) => edge.toId).sort(),
     ['left-copy', 'right-copy']);

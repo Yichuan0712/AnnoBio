@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { pipelineRunIntro } from '../src/pipelineRunDialog.js';
 import { pipelineInputSteps } from '../src/pipelineRunInputs.js';
+import { upgradeCanvasState } from '../src/canvasFormat.js';
 
 const table = (headers, rows) => ({ headers, rows });
 
@@ -34,7 +35,7 @@ test('Run Pipeline lists each step that reads a Dataset from outside the route, 
     { type: 'process', process_node_id: 'join' },
   ];
   // The Join reads Extracted from inside the route, so only its Lookup is listed.
-  assert.deepEqual(pipelineInputSteps(state, route), [
+  assert.deepEqual(pipelineInputSteps(upgradeCanvasState(state), route), [
     { nodeId: 'r1', kind: 'run', name: 'Extract', inputs: [{ nodeId: 'sample', name: 'Sampled examples', colorIndex: 2 }] },
     { nodeId: 'r2', kind: 'run', name: 'Explain', inputs: [{ nodeId: 'sample', name: 'Sampled examples', colorIndex: 2 }] },
     { nodeId: 'join', kind: 'process', name: 'Join', inputs: [{ nodeId: 'lookup', name: 'Lookup', colorIndex: undefined }] },

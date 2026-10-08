@@ -402,9 +402,12 @@ def merge_project(target_id: str, source_id: str):
     Node ids are `n_<timestamp>_<random>` (see workflowCanvas.js's generateNodeId), so two
     independently created projects colliding on one is practically impossible; this relies on
     that instead of rewriting ids and every field that references one (connections, plus a
-    handful of node-type-specific fields like sourceNodeId/runWorkingSetId). Asset ids are a
+    handful of node-type-specific fields like sourceNodeId/sourceRunNodeId). Asset ids are a
     sha256 of the image bytes, so the same is true for merging the two assets dicts — a matching
     id is guaranteed to already be the same file, never a real conflict.
+
+    The two canvases may be saved in different formats. The app brings each node to the current
+    one by the fields it carries when it opens the result (app/src/canvasFormat.js).
     """
     if target_id == source_id:
         raise HTTPException(400, "Cannot merge a project into itself.")

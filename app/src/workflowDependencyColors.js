@@ -12,7 +12,7 @@ export function dependencyColorSources(node, nodeById, connections = []) {
   const runSources = (runId) => {
     const run = nodeById.get(runId);
     if (!run?.dataset) return { datasetIds: [], promptId: '' };
-    const input = runInputSource({ nodes: [{ nodeId: runId, type: 'run', runWorkingSetId: run.dataset.runWorkingSetId }], connections }, runId);
+    const input = runInputSource({ nodes: [{ nodeId: runId, type: 'run' }], connections }, runId);
     return {
       datasetIds: uniqueIds([input?.nodeId]),
       promptId: source(runId, 'prompt-to-run'),
@@ -23,16 +23,7 @@ export function dependencyColorSources(node, nodeById, connections = []) {
     case 'sampler':
       return { datasetIds: uniqueIds([node.dataset.sourceNodeId || source(nodeId, 'dataset-to-sampler')]), promptId: '' };
     case 'process': {
-      // The Process as stepInputs.js reads it. Its recorded primary is taken as a Dataset as is: the
-      // caller looks each id up and drops the ones that are gone.
-      const recorded = String(node.dataset.processPrimaryDatasetId || '').trim();
-      const state = {
-        nodes: [
-          { nodeId, type: 'process', primaryDatasetId: recorded, datasetAliases: node.dataset.processDatasetAliases },
-          ...(recorded ? [{ nodeId: recorded, type: 'dataset' }] : []),
-        ],
-        connections,
-      };
+      const state = { nodes: [{ nodeId, type: 'process' }], connections };
       return {
         datasetIds: uniqueIds([processPrimarySource(state, nodeId)?.nodeId,
           ...processInputEdges(state).filter((edge) => edge.toId === nodeId).map((edge) => edge.fromId)]),

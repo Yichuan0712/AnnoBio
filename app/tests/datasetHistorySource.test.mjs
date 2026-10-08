@@ -8,6 +8,7 @@ import { captureHistoryInput, runningHistoryRecord } from '../src/runHistoryCapt
 import { pipelineInputDatasetIds } from '../src/pipelineInputAvailability.js';
 import { planChangeSet } from '../src/agent/operations/changeSet.js';
 import { recordGraph } from './historyGraphFixture.mjs';
+import { upgradeCanvasState } from '../src/canvasFormat.js';
 
 // Prompt → Run → saved output → Process, as in historyGraphFixture.mjs without the saved Process output.
 const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
@@ -18,13 +19,13 @@ const run = { type: 'run', nodeId: 'run', runWorkingSetId: 'input', runInputToCo
 const exported = buildRunResultsTable({ results: runResults, runContent: input.datasetContent, schemaFields: prompt.outputFormat.fields });
 const runDataset = { type: 'dataset', nodeId: 'run-dataset', name: 'Run export', sourceRunNodeId: 'run', datasetContent: { ...exported, rowIds: ['generated-id'] } };
 const process = { type: 'process', nodeId: 'process', name: 'Process', dfCode: 'return df', primaryDatasetId: 'run-dataset', dfResults: JSON.stringify({ outputs: { result: { headers: ['answer'], rows: [['processed']] } } }) };
-const graph = {
+const graph = upgradeCanvasState({
   nodes: [input, prompt, run, runDataset, process],
   connections: [
     { type: 'prompt-to-run', fromId: 'prompt', toId: 'run' },
     { type: 'dataset-to-process', fromId: 'run-dataset', toId: 'process' },
   ],
-};
+});
 
 async function setup() {
   const migrated = await recordGraph(graph);

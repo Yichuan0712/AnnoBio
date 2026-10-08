@@ -229,23 +229,35 @@ class _Compiler:
             self.report("MISSING_DEPENDENCY", owner, field, f"Required Dataset {nid or '(none)'} is not selected.")
         return aid
 
-    # Where a Run or Process reads its data (docs/design/DATA_FLOW_DESIGN.md §3.3). Only these two
-    # methods know how the canvas stores it.
+    # Where a Run or Process reads its data (docs/design/DATA_FLOW_DESIGN.md §3.3): the `data`
+    # connections into it. Only these methods know how the canvas stores it.
+    def data_inputs(self, nid):
+        """[(source node id, alias as recorded)] for the `data` connections into a node, sorted by source."""
+        found = sorted({(_text(e.get("fromId")), _text(e.get("alias"))) for e in self.edges
+                        if e.get("type") == "data" and _text(e.get("toId")) == nid})
+        for source, _ in found:
+            if self.nodes.get(source, {}).get("type", "dataset") != "dataset":
+                self.report("UNSUPPORTED_STEP_SOURCE", nid, "inputs", f"Reading the output of step {source} directly is not supported yet; save it as a Dataset.")
+        return found
+
     def run_input(self, rid):
         """The node id of the Dataset a Run reads, or '' when it has none."""
-        return _text(self.selected[rid].get("runWorkingSetId"))
+        sources = self.data_inputs(rid)
+        if len(sources) > 1:
+            self.report("MULTIPLE_RUN_INPUTS", rid, "inputs", "A Run reads exactly one input.")
+        return sources[0][0] if sources else ""
 
     def process_inputs(self, nid, node):
         """(primary, [(source node id, alias as recorded)]) for a Process, sources in a stable order.
-        The primary is the recorded one, or the only input; its alias is df."""
-        incoming = self.inputs_to(nid, "dataset-to-process")
-        primary = _text(node.get("primaryDatasetId"))
-        if not primary and len(incoming) == 1:
-            primary = incoming[0]
-        if not incoming or primary not in incoming:
-            self.report("INVALID_PRIMARY_INPUT", nid, "primaryDatasetId", "Process needs an explicit primary input among its dependencies.")
-        aliases = self.obj(node.get("datasetAliases"), nid, "datasetAliases")
-        return primary, [(source, "df" if source == primary else _text(aliases.get(source))) for source in incoming]
+        The primary is the input recorded as df, or the only input."""
+        sources = self.data_inputs(nid)
+        primaries = [source for source, alias in sources if alias == "df"]
+        if not primaries and len(sources) == 1:
+            primaries = [sources[0][0]]
+        primary = primaries[0] if len(primaries) == 1 else ""
+        if not primary:
+            self.report("INVALID_PRIMARY_INPUT", nid, "inputs", "Process needs exactly one df input.")
+        return primary, [(source, "df" if source == primary else alias) for source, alias in sources]
 
     def add_process(self, nid, node):
         jid = f"process:{nid}"
@@ -254,10 +266,10 @@ class _Compiler:
         for source, alias in sources:
             aid = self.require_dataset(source, nid, "inputs")
             if not alias or not alias.isidentifier() or (source != primary and not alias.startswith("df_")):
-                self.report("INVALID_ALIAS", nid, "datasetAliases", f"Dataset {source} needs a valid df_<name> alias.")
+                self.report("INVALID_ALIAS", nid, "inputs", f"Dataset {source} needs a valid df_<name> alias.")
                 continue
             if alias in inputs:
-                self.report("DUPLICATE_ALIAS", nid, "datasetAliases", f"Multiple inputs use alias {alias}.")
+                self.report("DUPLICATE_ALIAS", nid, "inputs", f"Multiple inputs use alias {alias}.")
             inputs[alias] = aid
         code = normalize_process_code(node.get("dfCode"), node.get("code"))
         tree = None
@@ -278,7 +290,7 @@ class _Compiler:
                 arg for arg, default in zip(function.args.kwonlyargs, function.args.kw_defaults) if default is None]
             for arg in required:
                 if arg.arg not in inputs:
-                    self.report("UNBOUND_DATASET_ALIAS", nid, "datasetAliases", f"Process parameter {arg.arg} matches no Input dataset.")
+                    self.report("UNBOUND_DATASET_ALIAS", nid, "inputs", f"Process parameter {arg.arg} matches no Input dataset.")
         # Detect referenced aliases without executing arbitrary code. Canvas normally builds
         # these edges already; a stale selection must not silently omit one.
         if tree:
@@ -287,7 +299,7 @@ class _Compiler:
             bound.update(n.asname or n.name.split('.')[0] for n in ast.walk(tree) if isinstance(n, ast.alias))
             for alias in sorted({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)
                                  and isinstance(n.ctx, ast.Load) and n.id.startswith("df_")} - bound - set(inputs)):
-                self.report("UNBOUND_DATASET_ALIAS", nid, "datasetAliases", f"Referenced Dataset alias {alias} has no selected input binding.")
+                self.report("UNBOUND_DATASET_ALIAS", nid, "inputs", f"Referenced Dataset alias {alias} has no selected input binding.")
         self.jobs[jid] = {"id": jid, "type": "process", "inputs": inputs, "outputs": {}, "depends_on": [],
                           "config": {"code": code if isinstance(code, str) else "", "entrypoint": "process",
                                      "output_contract": "dataframe_or_named_dataframes"}}
@@ -298,7 +310,7 @@ class _Compiler:
         jid = f"llm:{rid}"
         if self.inputs_to(rid, "prompt-to-run") != [pid]:
             self.report("PROMPT_RUN_MISMATCH", rid, "prompt_node_id", "Run must have exactly the selected Prompt as its upstream Prompt.")
-        aid = self.require_dataset(self.run_input(rid), rid, "runWorkingSetId")
+        aid = self.require_dataset(self.run_input(rid), rid, "inputs")
         sections = prompt.get("sections", [])
         if not isinstance(sections, list) or any(not isinstance(s, dict) for s in sections):
             self.report("INVALID_SECTIONS", pid, "sections", "Prompt sections must be objects.")

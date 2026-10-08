@@ -46,6 +46,8 @@ import { createUndoHistory } from './undoHistory.js';
 import { reportAppError } from './appErrors.js';
 import { pruneUnusedAssets as pruneUnusedAssetsWeb } from './webImageApi.js';
 import { RunHistorySession } from './runHistorySession.js';
+import { upgradeCanvasState } from './canvasFormat.js';
+import { validateStepInputs } from './stepInputs.js';
 import { loadRunHistoryIndex, loadRunHistoryRecord, saveRunHistoryRecord, deleteRunHistoryRecords } from './runHistoryStore.js';
 
 // Web has no "recent files" of its own the way the OS gives desktop one — without this, every
@@ -146,7 +148,12 @@ window.addEventListener('DOMContentLoaded', () => {
     async function loadCanvasWithHistory(projectId, savedState) {
       // A never-edited project is saved as {} (see backend create_project) — load it as an empty
       // canvas; loadCanvasState skips a state without a nodes array, leaving the previous project.
-      const state = { ...savedState, nodes: savedState?.nodes || [], connections: savedState?.connections || [] };
+      // Every opened, merged or restored canvas is brought to the current format first (canvasFormat.js).
+      const state = upgradeCanvasState({ ...savedState, nodes: savedState?.nodes || [], connections: savedState?.connections || [] });
+      if (import.meta.env.DEV) {
+        const problems = validateStepInputs(state);
+        if (problems.length) console.warn('Step inputs that break the canvas format:', problems);
+      }
       if (isElectron) state.pipelineOwner = await pipelineOwnerFor(projectId, savedState?.pipelineOwner);
       await historySync.catch(() => {});
       historySession = new RunHistorySession(historyStore);

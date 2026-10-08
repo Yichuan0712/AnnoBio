@@ -1,4 +1,5 @@
 import { datasetSignature, processInputSignature, runInputSignature, sha256Signature } from './runHistorySignature.js';
+import { upgradeCanvasState } from './canvasFormat.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const parsed = (value) => {
@@ -54,7 +55,9 @@ export async function importPipelineRunHistory({ run, definition, getArtifact, s
   if (!session?.projectId || !definition?.canvas_state?.nodes || !definition?.spec?.jobs) {
     throw new Error('This Pipeline run has no frozen node definition for History import.');
   }
-  const { spec, canvas_state: canvas } = definition;
+  const { spec } = definition;
+  // A Pipeline started before canvas version 3 froze its canvas in the older format.
+  const canvas = upgradeCanvasState(definition.canvas_state);
   const nodes = new Map(canvas.nodes.map((node) => [node.nodeId, node]));
   const artifacts = new Map(spec.artifacts.map((artifact) => [artifact.id, artifact]));
   const states = new Map((run.jobs || []).map((job) => [job.job_id, job]));

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { planChangeSet } from '../src/agent/operations/changeSet.js';
+import { upgradeCanvasState } from '../src/canvasFormat.js';
 
 const extractInputFields = (sections) => [...new Set(sections
   .flatMap((section) => [...String(section.content || '').matchAll(/\{([^{}]+)\}/g)].map((match) => match[1])))];
 
-const canvas = (run = {}) => ({
+const canvas = (run = {}) => upgradeCanvasState({
   nodes: [
     { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: { headers: ['text', 'title'], columnTypes: ['text', 'text'], rows: [['a', 'A']] } },
     { type: 'prompt', nodeId: 'p1', name: 'Extract', sections: [{ name: 'Task', content: 'Read {text}' }] },

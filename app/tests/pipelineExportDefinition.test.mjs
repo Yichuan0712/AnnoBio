@@ -6,8 +6,8 @@ test('export carries node settings, row count and explicit input boundary, never
   const state = { nodes: [
     { type: 'dataset', nodeId: 'raw', sourceRunNodeId: 'old-run', savedCopy: true, datasetContent: { headers: ['text'], rows: [['PRIVATE']] } },
     { type: 'prompt', nodeId: 'p', sections: [{ content: 'Read {text}' }] },
-    { type: 'run', nodeId: 'r', runWorkingSetId: 'raw', runSettings: { run_concurrency: 2 }, runResults: 'PRIVATE_RESULTS' },
-  ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }] };
+    { type: 'run', nodeId: 'r', runSettings: { run_concurrency: 2 }, runResults: 'PRIVATE_RESULTS' },
+  ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, { type: 'data', fromId: 'raw', fromPort: 'result', toId: 'r' }] };
   const route = [{ type: 'dataset', dataset_node_id: 'raw' }, { type: 'prompt', prompt_node_id: 'p', run_node_id: 'r' }];
   const before = structuredClone(state);
   const req = buildPipelineExportRequest({ name: 'Example', canvasState: state, route });
@@ -36,7 +36,7 @@ test('other saved versions of a branch on the route are not sent as further Proc
 
 test('omitted dependencies and conflicting producers remain visible to the compiler', () => {
   const edges = [
-    { fromId: 'missing', toId: 'proc', type: 'dataset-to-process' },
+    { fromId: 'missing', fromPort: 'result', toId: 'proc', type: 'data', alias: 'df' },
     { fromId: 'outside', toId: 'out', type: 'process-to-dataset' },
     { fromId: 'proc', toId: 'other-branch', type: 'process-to-dataset' },
     { fromId: 'private-a', toId: 'private-b', type: 'prompt-to-run' },
@@ -59,11 +59,11 @@ test('Python export includes every external Dataset in a multi-input route', () 
   const state = { nodes: [
     { type: 'dataset', nodeId: 'left', datasetContent: { headers: ['id'], rows: [] } },
     { type: 'dataset', nodeId: 'right', datasetContent: { headers: ['value'], rows: [] } },
-    { type: 'process', nodeId: 'join', primaryDatasetId: 'left' },
+    { type: 'process', nodeId: 'join' },
     { type: 'dataset', nodeId: 'out', processOutputName: 'result' },
   ], connections: [
-    { type: 'dataset-to-process', fromId: 'left', toId: 'join' },
-    { type: 'dataset-to-process', fromId: 'right', toId: 'join' },
+    { type: 'data', fromId: 'left', fromPort: 'result', toId: 'join', alias: 'df' },
+    { type: 'data', fromId: 'right', fromPort: 'result', toId: 'join', alias: 'df_right' },
     { type: 'process-to-dataset', fromId: 'join', toId: 'out' },
   ] };
   const route = [

@@ -3,11 +3,12 @@ import test from 'node:test';
 import { detectPipelines } from '../src/pipelineDetection.js';
 import { buildSelectedRoute, exportRoutePayload } from '../src/pipelineRouteSelection.js';
 import { buildRunResultsTable } from '../src/runResultsExport.js';
+import { upgradeCanvasState } from '../src/canvasFormat.js';
 
 const node = (type, nodeId, extra = {}) => ({ type, nodeId, name: nodeId, ...extra });
 const edge = (fromId, toId, type) => ({ fromId, toId, type });
 const payload = (state, choices = new Map()) => {
-  const pipelines = detectPipelines(state);
+  const pipelines = detectPipelines(upgradeCanvasState(state));
   assert.equal(pipelines.length, 1);
   return exportRoutePayload(buildSelectedRoute(pipelines[0], choices));
 };
@@ -53,7 +54,7 @@ test('a Dataset read by both Runs and Processes starts one pipeline per step typ
     connections: [edge('p', 'r1', 'prompt-to-run'), edge('p', 'r2', 'prompt-to-run'),
       edge('raw', 'clean', 'dataset-to-process'), edge('raw', 'trim', 'dataset-to-process')],
   };
-  const pipelines = detectPipelines(state);
+  const pipelines = detectPipelines(upgradeCanvasState(state));
   assert.deepEqual(pipelines.map((p) => p.id), ['pipeline-1', 'pipeline-2']);
   assert.deepEqual(pipelines.map(routeKinds), [['prompt:p — Run A/p — Run B'], ['process:clean/trim']]);
 });
@@ -65,7 +66,7 @@ test('splitting drops a merging Process from the Prompt pipeline and keeps share
     connections: [edge('raw', 'prep', 'dataset-to-process'), edge('prep', 'clean', 'process-to-dataset'),
       edge('p', 'r', 'prompt-to-run'), edge('clean', 'join', 'dataset-to-process'), edge('lookup', 'join', 'dataset-to-process')],
   };
-  const pipelines = detectPipelines(state);
+  const pipelines = detectPipelines(upgradeCanvasState(state));
   assert.deepEqual(pipelines.map(routeKinds), [['process:prep', 'prompt:p'], ['process:prep', 'process:join']]);
   assert.ok(!pipelines[0].steps.some((step) => step.datasets?.some((d) => d.datasetNodeId === 'lookup')));
 });
@@ -113,7 +114,7 @@ test('Prompts whose results one Process merges are branches it needs, not altern
     connections: [edge('words', 'r-words', 'prompt-to-run'), edge('explain', 'r-explain', 'prompt-to-run'),
       edge('words-out', 'merge', 'dataset-to-process'), edge('explain-out', 'merge', 'dataset-to-process')],
   };
-  const pipelines = detectPipelines(state);
+  const pipelines = detectPipelines(upgradeCanvasState(state));
   const route = buildSelectedRoute(pipelines[0], new Map());
   const branch = route.find((step) => step.kind === 'branch');
   assert.deepEqual(branch.lanes.map((lane) => lane.filter((step) => step.kind === 'prompt').map((step) => step.selectedValue)),
@@ -136,7 +137,7 @@ test('Prompts whose paths first meet at another Prompt stay alternatives', () =>
       edge('next', 'next-1', 'prompt-to-run'), edge('next', 'next-2', 'prompt-to-run'),
       edge('next-out', 'finish', 'dataset-to-process')],
   };
-  const route = buildSelectedRoute(detectPipelines(state)[0], new Map());
+  const route = buildSelectedRoute(detectPipelines(upgradeCanvasState(state))[0], new Map());
   assert.equal(route.some((step) => step.kind === 'branch'), false);
   assert.deepEqual(route.find((step) => step.kind === 'prompt').options.map((option) => option.value), ['r1', 'r2']);
 });
