@@ -6,44 +6,6 @@ const parsed = (value) => {
   try { return JSON.parse(value); } catch (_) { return {}; }
 };
 
-/** Older Pipeline runs lack a frozen canvas definition. Recover it only when the current
- * executable node definitions still agree with that run's frozen compiler spec. */
-export function withCompatibleLegacyCanvas(definition, currentCanvas) {
-  if (definition?.canvas_state?.nodes) return definition;
-  const spec = definition?.spec;
-  if (!spec?.jobs || !currentCanvas?.nodes) return definition;
-  const nodes = new Map(currentCanvas.nodes.map((node) => [node.nodeId, node]));
-  for (const job of spec.jobs) {
-    const ids = spec.source_map?.[job.id]?.node_ids || [];
-    const target = nodes.get(ids.at(-1));
-    if (job.type === 'process') {
-      if (target?.type !== 'process' || String(target.dfCode || target.code || '') !== job.config.code) return definition;
-    } else if (job.type === 'llm') {
-      const prompt = nodes.get(ids[0]);
-      if (target?.type !== 'run' || prompt?.type !== 'prompt'
-        || target.runWorkingSetId !== String(job.inputs.data).replace(/^dataset:/, '')) return definition;
-      const sections = (prompt.sections || []).map((section) => ({
-        name: String(section.name || ''), content: String(section.content || ''),
-      }));
-      if (JSON.stringify(sections) !== JSON.stringify(job.config.sections || [])) return definition;
-      const mapping = parsed(target.runInputToColumn);
-      if (Object.entries(job.config.input_mapping || {}).some(([key, value]) => mapping[key] !== value)) return definition;
-      const format = parsed(prompt.outputFormat);
-      const fields = Array.isArray(format) ? format : format.fields || [];
-      if ((format.returnShape || format.return_shape || 'single') !== job.config.output_schema?.return_shape
-        || JSON.stringify(fields.map((field) => [field.key, field.type || 'str', !!(field.allowNone || field.allow_none)]))
-          !== JSON.stringify((job.config.output_schema?.fields || []).map((field) => [field.key, field.type || 'str', !!field.allow_none]))) return definition;
-    }
-  }
-  for (const artifact of spec.artifacts || []) {
-    const id = String(artifact.id).replace(/^dataset:/, '');
-    if (artifact.id.startsWith('dataset:') && nodes.get(id)?.type !== 'dataset') return definition;
-  }
-  return { ...definition, canvas_state: {
-    nodes: copy(currentCanvas.nodes), connections: copy(currentCanvas.connections || []),
-  } };
-}
-
 function tableContent(table) {
   if (!Array.isArray(table?.headers) || !Array.isArray(table?.rows)) throw new Error('Pipeline artifact has no table.');
   return {

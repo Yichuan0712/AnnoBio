@@ -67,7 +67,7 @@ import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
 import { buildSelectedRoute } from './pipelineRouteSelection.js';
 import { pipelineResultNote, showPipelineOverviewModal } from './pipelineOverviewModal.js';
-import { importPipelineRunHistory, pipelineCopyInputs, withCompatibleLegacyCanvas } from './pipelineHistoryImport.js';
+import { importPipelineRunHistory, pipelineCopyInputs } from './pipelineHistoryImport.js';
 import { createWorkspacePanels } from './workspacePanels.js';
 import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
@@ -5712,7 +5712,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           const canvasProjectId = getCurrentProjectId();
           if (await getPipelineProjectId() !== run.project_id) throw new Error('The open project changed while publishing Pipeline results.');
           if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
-          const frozen = withCompatibleLegacyCanvas(definition, getCanvasState());
           const artifactDefs = new Map((definition?.spec?.artifacts || []).map((item) => [item.id, item]));
           const copyIds = new Map(); // logical artifact id -> its Dataset copy on the canvas
           let datasets = 0;
@@ -5776,7 +5775,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           let historyError = '';
           if (historySession?.projectId && canvasHistoryVersion === 1) {
             try {
-              history = await importPipelineRunHistory({ run, definition: frozen, getArtifact, session: historySession, inputCopies });
+              history = await importPipelineRunHistory({ run, definition, getArtifact, session: historySession, inputCopies });
             } catch (error) {
               historyError = error?.message || 'Could not import node History.';
             }
