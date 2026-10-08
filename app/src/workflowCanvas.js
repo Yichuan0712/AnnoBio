@@ -79,10 +79,13 @@ import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAsset
 import { openDatasetDiffModal } from './datasetDiffModal.js';
 import { datasetHistorySource } from './datasetHistorySource.js';
 import { resolveDataframeProcessCode } from './processCode.js';
-import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
+import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
 import { codeHashOf, parseProcessOutputPorts } from './processOutputPorts.js';
-import { RESULT_PORT, runInputSource, runInputTable, setRunInputSource } from './stepInputs.js';
+import {
+  RESULT_PORT, processInputAliases, processInputBindings, processInputEdges, processPrimarySource, processRequiredInputs,
+  replaceProcessInputSource, runInputSource, runInputTable, setProcessInputs, setProcessPrimarySource, setRunInputSource,
+} from './stepInputs.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
 
@@ -1280,13 +1283,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         };
       })
       .filter((dataset) => dataset.content);
-    const incoming = connections.find((connection) => (
-      connection.toId === processNode?.dataset?.nodeId && connection.type === EDGE_TYPE_DATASET_TO_PROCESS
-    ));
-    const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === processNode?.dataset?.processPrimaryDatasetId)
-      ? processNode.dataset.processPrimaryDatasetId
-      : (incoming?.fromId || '');
-    if (primaryDatasetId && processNode?.dataset) processNode.dataset.processPrimaryDatasetId = primaryDatasetId;
+    const primaryDatasetId = readProcessPrimarySource(processNode)?.nodeId || '';
+    // Records the fallback (the first input) as the primary, so it stays put when inputs change.
+    if (primaryDatasetId) writeProcessPrimarySource(processNode, { nodeId: primaryDatasetId, port: RESULT_PORT });
     return { datasets, primaryDatasetId };
   }
 
@@ -1913,6 +1912,59 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (datasetId) runNode.dataset.runWorkingSetId = datasetId;
     else delete runNode.dataset.runWorkingSetId;
   }
+  // A Process's inputs on the live canvas, through stepInputs.js. The state holds the Process, every
+  // Dataset (its candidates) and the live connections array, which stepInputs.js edits in place.
+  function processInputState(processNode) {
+    return {
+      nodes: [
+        {
+          nodeId: processNode.dataset.nodeId, type: 'process',
+          primaryDatasetId: processNode.dataset.processPrimaryDatasetId,
+          datasetAliases: processNode.dataset.processDatasetAliases,
+        },
+        ...Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'), (datasetNode) => ({
+          nodeId: datasetNode.dataset.nodeId, type: 'dataset', name: datasetNode.dataset.datasetName || 'Dataset',
+        })),
+      ],
+      connections,
+    };
+  }
+  function storeProcessInputState(processNode, state) {
+    const { primaryDatasetId, datasetAliases } = state.nodes[0];
+    if (primaryDatasetId) processNode.dataset.processPrimaryDatasetId = primaryDatasetId;
+    else delete processNode.dataset.processPrimaryDatasetId;
+    if (datasetAliases) processNode.dataset.processDatasetAliases = datasetAliases;
+    else delete processNode.dataset.processDatasetAliases;
+  }
+  function readProcessPrimarySource(processNode) {
+    return processNode ? processPrimarySource(processInputState(processNode), processNode.dataset.nodeId) : null;
+  }
+  function writeProcessPrimarySource(processNode, source) {
+    const state = processInputState(processNode);
+    setProcessPrimarySource(state, processNode.dataset.nodeId, source);
+    storeProcessInputState(processNode, state);
+  }
+  function readProcessInputAliases(processNode) {
+    return processInputAliases(processInputState(processNode), processNode.dataset.nodeId);
+  }
+  function readProcessInputBindings(processNode, code, primaryId) {
+    return processInputBindings(processInputState(processNode), processNode.dataset.nodeId, { code, primaryId });
+  }
+  function readProcessRequiredInputs(processNode, code) {
+    return processRequiredInputs(processInputState(processNode), processNode.dataset.nodeId, { code });
+  }
+  function writeProcessInputs(processNode, value) {
+    const state = processInputState(processNode);
+    setProcessInputs(state, processNode.dataset.nodeId, value);
+    storeProcessInputState(processNode, state);
+  }
+  function replaceProcessInput(processNode, from, to) {
+    const state = processInputState(processNode);
+    const replaced = replaceProcessInputSource(state, processNode.dataset.nodeId, from, to);
+    if (replaced) storeProcessInputState(processNode, state);
+    return replaced;
+  }
+
   /** The table a Run reads, from the canvas's Dataset contents; null when it has no input. */
   function readRunInputTable(runNode) {
     const source = readRunInputSource(runNode);
@@ -2412,7 +2464,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const live = new Set();
     const usedAsInput = (id) => (
       [...nodesLayer.querySelectorAll('.workflow-node--run')].some((run) => readRunInputSource(run)?.nodeId === id)
-      || connections.some((edge) => edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.fromId === id)
+      || processInputEdges({ nodes: [], connections }).some((edge) => edge.fromId === id)
     );
     for (const [key, group] of groups) {
       const producerId = key.slice(0, key.indexOf('\0'));
@@ -2568,8 +2620,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   function stepReadsDataset(step, datasetId) {
     return step?.classList.contains('workflow-node--run')
       ? readRunInputSource(step)?.nodeId === datasetId
-      : connections.some((edge) => (
-        edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.fromId === datasetId && edge.toId === step?.dataset.nodeId
+      : processInputEdges({ nodes: [], connections }).some((edge) => (
+        edge.fromId === datasetId && edge.toId === step?.dataset.nodeId
       ));
   }
 
@@ -2907,6 +2959,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     readRunInputSource,
     writeRunInputSource,
     readRunInputTable,
+    readProcessPrimarySource,
+    writeProcessPrimarySource,
+    readProcessInputBindings,
+    readProcessInputAliases,
+    writeProcessInputs,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode: (options) => startRunNode(options),
@@ -2997,6 +3054,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     readRunInputSource,
     writeRunInputSource,
     readRunInputTable,
+    readProcessPrimarySource,
+    writeProcessPrimarySource,
+    readProcessInputBindings,
+    readProcessInputAliases,
+    writeProcessInputs,
     createPromptNode,
     createRunNode,
     createScoreNode,
@@ -4392,12 +4454,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     const fromDataset = datasetNode?.dataset?.nodeType === 'dataset';
     const processNode = createProcessNode({ ...(fromDataset ? besideNode(datasetNode) : visibleNodePosition()), title: 'Process' });
     if (processNode?.dataset?.nodeId && fromDataset) {
-      processNode.dataset.processPrimaryDatasetId = datasetNode.dataset.nodeId || '';
-      connections.push({
-        fromId: datasetNode.dataset.nodeId,
-        toId: processNode.dataset.nodeId,
-        type: EDGE_TYPE_DATASET_TO_PROCESS,
-      });
+      const source = { nodeId: datasetNode.dataset.nodeId, port: RESULT_PORT };
+      writeProcessInputs(processNode, { primary: source, inputs: [{ ...source, alias: 'df' }] });
       updateEdges();
     }
     updateContentSize();
@@ -5595,18 +5653,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!processNode?.classList.contains('workflow-node--process')) throw new Error('Process node was not found.');
     const code = resolveDataframeProcessCode({ dfCode: processNode.dataset.processDfCode, code: processNode.dataset.processCode });
     if (!code) throw new Error('The Process has no code.');
-    const { datasets, primaryDatasetId } = getProcessDatasets(processNode);
-    let savedAliases = {};
-    try { savedAliases = JSON.parse(processNode.dataset.processDatasetAliases || '{}'); } catch (_) {}
-    const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId).map((binding) => ({
-      ...binding, alias: savedAliases[binding.nodeId] || binding.alias,
-    }));
-    const required = new Set([
-      primaryDatasetId,
-      ...connections.filter((edge) => edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.toId === nodeId).map((edge) => edge.fromId),
-      ...referencedDatasetAliases(code, bindings, savedAliases),
-    ]);
-    const executionBindings = bindings.filter((binding) => required.has(binding.nodeId));
+    const { datasets } = getProcessDatasets(processNode);
+    const datasetById = new Map(datasets.map((dataset) => [dataset.nodeId, dataset]));
+    const executionBindings = readProcessRequiredInputs(processNode, code).bindings
+      .filter((binding) => datasetById.has(binding.nodeId))
+      .map((binding) => ({ ...datasetById.get(binding.nodeId), ...binding }));
     const missingInput = executionBindings.find((binding) => binding.missingResult);
     if (missingInput) throw new Error(`Input Dataset "${missingInput.name}" has no current result.`);
     const session = historySession?.projectId && canvasHistoryVersion === 1 ? historySession : null;
@@ -5890,20 +5941,7 @@ export function buildWorkflowCanvas(root, options = {}) {
                 if (readRunInputSource(consumer)?.nodeId !== oldId) continue;
                 writeRunInputSource(consumer, { nodeId: copyId, port: RESULT_PORT });
               } else if (consumer.classList.contains('workflow-node--process')) {
-                const edge = connections.find((item) => (
-                  item.type === EDGE_TYPE_DATASET_TO_PROCESS && item.fromId === oldId && item.toId === consumerId
-                ));
-                if (!edge) continue;
-                const wasPrimary = getProcessDatasets(consumer).primaryDatasetId === oldId;
-                edge.fromId = copyId;
-                if (wasPrimary) consumer.dataset.processPrimaryDatasetId = copyId;
-                let aliases = null;
-                try { aliases = JSON.parse(consumer.dataset.processDatasetAliases || '{}'); } catch (_) {}
-                if (aliases && oldId in aliases) {
-                  aliases[copyId] = aliases[oldId];
-                  delete aliases[oldId];
-                  consumer.dataset.processDatasetAliases = JSON.stringify(aliases);
-                }
+                if (!replaceProcessInput(consumer, { nodeId: oldId, port: RESULT_PORT }, { nodeId: copyId, port: RESULT_PORT })) continue;
               } else {
                 continue;
               }

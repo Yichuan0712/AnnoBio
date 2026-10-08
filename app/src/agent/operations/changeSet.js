@@ -9,10 +9,12 @@
  */
 import { normalizeDatasetContent } from '../../datasetContent.js';
 import { datasetHistorySource } from '../../datasetHistorySource.js';
-import { processDatasetInputs, referencedDatasetAliasNames } from '../../processDatasetBindings.js';
+import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
 import { buildRunResultsTable } from '../../runResultsExport.js';
-import { RESULT_PORT, runInputSource, setRunInputSource } from '../../stepInputs.js';
+import {
+  RESULT_PORT, processInputBindings, processPrimarySource, runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource,
+} from '../../stepInputs.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
 import { nodeTitle, processOutputsOf, runInputContentOf, runResultsOf } from '../canvas/workflowNodeInspector.js';
 
@@ -348,12 +350,7 @@ export function planChangeSet(state, operations, ctx) {
    * parameter or uses, by the alias it already has. Returns the inputs other than df. */
   function wireProcess(processNode, code, primary) {
     if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) fail('Process code must define process(df).');
-    const datasets = next.nodes.filter((n) => n.type === 'dataset').map((n) => ({ nodeId: n.nodeId, name: n.name || 'Dataset' }));
-    let savedAliases = processNode.datasetAliases || {};
-    if (typeof savedAliases === 'string') {
-      try { savedAliases = JSON.parse(savedAliases); } catch (_) { savedAliases = {}; }
-    }
-    const bindings = processDatasetInputs({ datasets, primaryDatasetId: primary.nodeId, savedAliases, code });
+    const bindings = processInputBindings(next, processNode.nodeId, { code, primaryId: primary.nodeId });
     const unknown = [...referencedDatasetAliasNames(code)]
       .filter((alias) => !bindings.some((b) => b.alias === alias));
     if (unknown.length) {
@@ -362,10 +359,7 @@ export function planChangeSet(state, operations, ctx) {
     const inputs = bindings.filter((b) => b.input);
     processNode.dfCode = code;
     processNode.activeMode = 'df';
-    processNode.primaryDatasetId = primary.nodeId;
-    processNode.datasetAliases = JSON.stringify(Object.fromEntries(inputs.map((b) => [b.nodeId, b.alias])));
-    disconnectWhere((c) => c.type === 'dataset-to-process' && c.toId === processNode.nodeId);
-    for (const b of inputs) connect(b.nodeId, processNode.nodeId, 'dataset-to-process');
+    setProcessInputs(next, processNode.nodeId, { primary: { nodeId: primary.nodeId, port: RESULT_PORT }, inputs });
     return inputs.filter((b) => !b.primary);
   }
 
@@ -694,7 +688,7 @@ export function planChangeSet(state, operations, ctx) {
       if (node.type === 'process' && ('code' in set || 'primary_input' in set)) {
         const primary = 'primary_input' in set
           ? resolve(set.primary_input, 'primary_input', ['dataset'])
-          : resolve(node.primaryDatasetId || next.connections.find((c) => c.type === 'dataset-to-process' && c.toId === node.nodeId)?.fromId, 'primary input', ['dataset']);
+          : resolve(processPrimarySource(next, node.nodeId)?.nodeId, 'primary input', ['dataset']);
         const code = 'code' in set ? String(set.code ?? '').trim() : String(node.dfCode || '');
         if ('code' in set) diffs.push({ label: 'Code', before: String(node.dfCode || ''), after: code });
         if ('primary_input' in set) lines.push(`df = "${nodeTitle(primary)}"`);
@@ -897,8 +891,8 @@ export function planChangeSet(state, operations, ctx) {
           delete other.scoreGroundTruthId;
           lines.push(`Score "${nodeTitle(other)}" loses its ground truth`);
         }
-        if (other.type === 'process' && other.primaryDatasetId === id) {
-          delete other.primaryDatasetId;
+        if (other.type === 'process' && processPrimarySource(next, other.nodeId)?.nodeId === id) {
+          setProcessPrimarySource(next, other.nodeId, null);
           lines.push(`Process "${nodeTitle(other)}" loses its primary input`);
         }
         if (other.type === 'dataset' && other.sourceRunNodeId === id) delete other.sourceRunNodeId;

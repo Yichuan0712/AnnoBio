@@ -1,4 +1,3 @@
-import { processDatasetInputs } from './processDatasetBindings.js';
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 import { normalizeDatasetContent } from './datasetContent.js';
@@ -73,6 +72,11 @@ export function createWorkflowNodeFactories(deps = {}) {
     readRunInputSource,
     writeRunInputSource,
     readRunInputTable,
+    readProcessPrimarySource,
+    writeProcessPrimarySource,
+    readProcessInputBindings,
+    readProcessInputAliases,
+    writeProcessInputs,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode,
@@ -723,39 +727,25 @@ export function createWorkflowNodeFactories(deps = {}) {
             };
           })
           .filter((dataset) => dataset.content);
-        const incoming = getConnectionsList().find((connection) => (
-          connection.toId === processNodeId && connection.type === 'dataset-to-process'
-        ));
-        const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === node.dataset.processPrimaryDatasetId)
-          ? node.dataset.processPrimaryDatasetId
-          : (incoming?.fromId || '');
-        if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
+        const primaryDatasetId = readProcessPrimarySource(node)?.nodeId || '';
+        // Records the fallback (the first input) as the primary, so it stays put when inputs change.
+        if (primaryDatasetId) writeProcessPrimarySource(node, { nodeId: primaryDatasetId, port: 'result' });
         return { datasets, primaryDatasetId };
-      }
-      function savedAliases() {
-        try { return JSON.parse(node.dataset.processDatasetAliases || '{}'); } catch (_) { return {}; }
       }
       /** Every canvas Dataset with its alias, marking the ones this Process reads with `code`. */
       function getProcessInputs(code) {
         const { datasets, primaryDatasetId } = getProcessDatasets();
         const content = new Map(datasets.map((dataset) => [dataset.nodeId, dataset]));
-        const bindings = processDatasetInputs({ datasets, primaryDatasetId, savedAliases: savedAliases(), code })
+        const bindings = readProcessInputBindings(node, code, primaryDatasetId)
+          .filter((binding) => content.has(binding.nodeId))
           .map((binding) => ({ ...binding, color: content.get(binding.nodeId).color, content: content.get(binding.nodeId).content }));
-        return { bindings, primaryDatasetId, savedAliases: savedAliases() };
+        return { bindings, primaryDatasetId, savedAliases: readProcessInputAliases(node) };
       }
       /** Connects exactly the Datasets the code declares or uses and saves the alias each has there. */
       function syncProcessDependencies(code) {
-        const { datasets, primaryDatasetId } = getProcessDatasets();
-        const inputs = processDatasetInputs({ datasets, primaryDatasetId, savedAliases: savedAliases(), code })
-          .filter((binding) => binding.input);
-        node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(inputs.map((binding) => [binding.nodeId, binding.alias])));
-        const allConnections = getConnectionsList();
-        for (let index = allConnections.length - 1; index >= 0; index -= 1) {
-          if (allConnections[index].toId === processNodeId && allConnections[index].type === 'dataset-to-process') allConnections.splice(index, 1);
-        }
-        inputs.forEach((binding) => {
-          allConnections.push({ fromId: binding.nodeId, toId: processNodeId, type: 'dataset-to-process' });
-        });
+        const { primaryDatasetId } = getProcessDatasets();
+        const inputs = readProcessInputBindings(node, code, primaryDatasetId).filter((binding) => binding.input);
+        writeProcessInputs(node, { primary: primaryDatasetId ? { nodeId: primaryDatasetId, port: 'result' } : null, inputs });
         updateEdges();
         emitCanvasChanged();
       }
@@ -765,8 +755,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         getProcessInputs,
         syncProcessDependencies,
         setPrimaryDataset: (datasetNodeId, code) => {
-          if (datasetNodeId) node.dataset.processPrimaryDatasetId = datasetNodeId;
-          else delete node.dataset.processPrimaryDatasetId;
+          writeProcessPrimarySource(node, datasetNodeId ? { nodeId: datasetNodeId, port: 'result' } : null);
           syncProcessDependencies(code);
         },
         getUniqueDatasetExportName: findUniqueDatasetExportName,

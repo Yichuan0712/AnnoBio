@@ -5,7 +5,7 @@
  */
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 import { displayCell, normalizeDatasetContent } from '../../datasetContent.js';
-import { runInputSource } from '../../stepInputs.js';
+import { processInputAliases, processInputEdges, processPrimarySource, runInputSource } from '../../stepInputs.js';
 
 export const MAX_ROWS_PER_READ = 50;
 
@@ -64,11 +64,6 @@ export function processOutputsOf(node) {
   }
   if (Array.isArray(parsed.headers) && Array.isArray(parsed.rows)) return { result: parsed };
   return {};
-}
-
-/** {datasetNodeId: alias} recorded when the Process code was last edited. */
-export function processAliasesOf(node) {
-  return parseJsonObject(node?.datasetAliases, {});
 }
 
 export function runResultsOf(node) {
@@ -241,15 +236,15 @@ function inspectSampler(node, ctx) {
 }
 
 function inspectProcess(node, ctx) {
-  const aliases = processAliasesOf(node);
+  const aliases = processInputAliases(ctx.canvasState, ctx.nodeId);
   const code = String(node.dfCode || '');
-  const connectedInputs = neighbors(ctx.canvasState, ctx.nodeLookup, ctx.nodeId, 'upstream')
-    .filter((n) => n.connection === 'dataset-to-process');
-  // Same fallback as the canvas's getProcessDatasets: without a recorded primary, the first
-  // connected Dataset is df.
-  const primaryId = ctx.nodeLookup.has(normalizeNodeId(node.primaryDatasetId))
-    ? normalizeNodeId(node.primaryDatasetId)
-    : (connectedInputs[0]?.nodeId || '');
+  // `connection` keeps the name the Agent has always been shown for a Process input.
+  const connectedInputs = processInputEdges(ctx.canvasState)
+    .filter((edge) => normalizeNodeId(edge.toId) === ctx.nodeId)
+    .map((edge) => ctx.nodeLookup.get(normalizeNodeId(edge.fromId)))
+    .filter(Boolean)
+    .map((dataset) => ({ connection: 'dataset-to-process', ...linkedNode(dataset) }));
+  const primaryId = processPrimarySource(ctx.canvasState, ctx.nodeId)?.nodeId || '';
   const primary = ctx.nodeLookup.get(primaryId);
   const outputs = processOutputsOf(node);
   const savedDatasets = neighbors(ctx.canvasState, ctx.nodeLookup, ctx.nodeId, 'downstream')
