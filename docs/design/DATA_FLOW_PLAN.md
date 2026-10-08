@@ -59,6 +59,14 @@ PowerShell 中跑后端全部测试：
 backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | ForEach-Object { "backend." + $_.BaseName })
 ```
 
+**用程序驱动桌面应用做手工验证（第 0 步实测可用）：**
+
+- 启动：`cd app && tail -f /dev/null | npx electron-forge start --inspect-electron -- --remote-debugging-port=9333`，放在后台运行。前面的 `tail -f /dev/null` 不能省：Forge 读到标准输入结束就会退出，并把应用一起关掉。
+- 渲染进程的调试端口是 9333，主进程的 Node 调试端口是 9229。各自 `GET http://127.0.0.1:<端口>/json/list` 取得 WebSocket 地址，用 `Runtime.evaluate`（`awaitPromise: true`、`returnByValue: true`、`includeCommandLineAPI: true`）执行代码，用 `Page.captureScreenshot` 截图。Node 自带 `WebSocket`，写一个几十行的小脚本即可，不需要安装 Playwright。
+- 打开或新建项目时绕过系统对话框：先在主进程执行 `require('electron').dialog.showOpenDialog = async () => ({ canceled: false, filePaths: ['<路径>'] })`（新建项目替换 `showSaveDialog`，返回 `{ canceled: false, filePath }`），再在渲染进程点击 `[data-action="open-project"]` 或 `[data-action="new-project"]`。路径用正斜杠。
+- 节点状态可以直接读 DOM，例如 `.workflow-node--run` 的 `dataset.runCompleted`、`.workflow-node--process` 的 `dataset.processDfResults`、`dataset.historyRecordId`。报错会出现在底部的 Errors 页签。
+- 结束后关闭 Electron、Forge，以及它启动的后端进程（命令行含 `uvicorn main:app --port 8000`）。
+
 说明：
 
 - 前端测试用 Node 自带的测试工具（`node:test`），测试对象是纯函数和普通的 `{nodes, connections}` 画布状态。`app/tests/pipelineSelectionBridge.mjs` 和 `historyStorageBenchmark.mjs` 不是测试，不要改名成 `.test.mjs`。
@@ -226,7 +234,19 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - [ ] 构建通过。
 - [ ] `grep -rnE "runHistoryMigration|planLegacyHistoryMigration|withCompatibleLegacyCanvas|hasLegacyOutput" app/src app/tests` 没有结果。
 
-**完成记录：**
+**完成记录：** 2026-10-07 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - `app/tests/datasetHistorySource.test.mjs` 也用迁移函数准备数据，计划里没有列出。已改用共享的辅助函数，并删除其中只测迁移的一个用例（`migrating a merged canvas leaves a saved copy and its link alone`）。
+  - 被搬走的测试共用一个新的辅助模块 `app/tests/historyGraphFixture.mjs`，里面有测试图和 `recordGraph`：它用 `captureHistoryInput` 按节点上已有的结果生成已完成的记录，签名与真实运行一致。
+  - `open` 的测试和改写后的“合并老项目”用例放在新文件 `app/tests/runHistorySession.test.mjs`。
+- 测试：前端 146 → 140（删除 10 个只测旧迁移的用例，新增 4 个 `open` 用例和 1 个 Pipeline 导入用例）；后端 93 项不变。
+- 手工验证：按 §1 的方法驱动桌面应用完成。
+  - Kinase 示例副本：4 个 Run、5 个 Process 的结果都在，9 个节点对上 History 记录。
+  - 模拟的老项目：打开没有报错，节点都显示“没有结果”，保存后带上 `historyVersion: 1`，没有生成记录。
+  - 新项目：正常，保存后带上 `historyVersion: 1`。
+  - 重新运行一个 Process：新增一条 History 记录（9 → 10）。
+- 发现的已有问题（与本计划无关，未处理）：Process 窗口中点 “Run again” 后，如果上一条记录没有结果行，结果区不会刷新，仍显示 “No rows returned”，关掉窗口再打开才显示新结果。
 
 ---
 
@@ -1082,7 +1102,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 步骤 | 状态 | 日期 | 提交 | 前端测试数 | 后端测试数 | 备注 |
 |---|---|---|---|---|---|---|
 | 基线 | — | 2026-10-07 | `ed4672f` | 146 | 93 | |
-| 0 | 未开始 | | | | | |
+| 0 | 完成 | 2026-10-07 | `e944005` | 140 | 93 | |
 | 1 | 未开始 | | | | | |
 | 2 | 未开始 | | | | | |
 | 3 | 未开始 | | | | | |
