@@ -65,6 +65,8 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - 渲染进程的调试端口是 9333，主进程的 Node 调试端口是 9229。各自 `GET http://127.0.0.1:<端口>/json/list` 取得 WebSocket 地址，用 `Runtime.evaluate`（`awaitPromise: true`、`returnByValue: true`、`includeCommandLineAPI: true`）执行代码，用 `Page.captureScreenshot` 截图。Node 自带 `WebSocket`，写一个几十行的小脚本即可，不需要安装 Playwright。
 - 打开或新建项目时绕过系统对话框：先在主进程执行 `require('electron').dialog.showOpenDialog = async () => ({ canceled: false, filePaths: ['<路径>'] })`（新建项目替换 `showSaveDialog`，返回 `{ canceled: false, filePath }`），再在渲染进程点击 `[data-action="open-project"]` 或 `[data-action="new-project"]`。路径用正斜杠。
 - 应用窗口被其他窗口挡住时，页面处于隐藏状态，Chromium 会大幅限制定时器，脚本里的每次等待都会被拉长到几十秒甚至一分钟。驱动之前先在主进程执行 `require('electron').BrowserWindow.getAllWindows().forEach((w) => w.webContents.setBackgroundThrottling(false))`。
+- 窗口最小化时 `Page.captureScreenshot` 会一直不返回，读 DOM 不受影响。不要替用户还原窗口，改为只读 DOM。
+- Export Python Project 用浏览器下载保存 zip，会弹出系统的另存为对话框（`dialog.showSaveDialog` 的替换对它无效），并且 blob 链接在点击后立即撤销，`will-download` 中 `setSavePath` 会得到 interrupted。验证导出时，先在渲染进程替换 `URL.createObjectURL` 记下 blob，并让 `blob:` 链接的 `click` 不执行，再把 blob 读回成 base64 写到文件。
 - 节点状态可以直接读 DOM，例如 `.workflow-node--run` 的 `dataset.runCompleted`、`.workflow-node--process` 的 `dataset.processDfResults`、`dataset.historyRecordId`。报错会出现在底部的 Errors 页签。
 - 结束后关闭 Electron、Forge，以及它启动的后端进程（命令行含 `uvicorn main:app --port 8000`）。
 
@@ -175,9 +177,10 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - 右键菜单和 Run 窗口的 Save results 结果不同（第 11 步统一）。
 - Score 保存的 Dataset 不记录来源（第 11 步）。
 - UI 删除 Run 后，Dataset 上的 `sourceRunNodeId` 指向不存在的节点（第 11 步字段删除后自然消失）。
-- Agent 的 `remove` 会留下过期的 `datasetAliases` 条目（第 6 步别名移到连线上后自然消失）。
+- Agent 的 `remove` 会留下过期的 `datasetAliases` 条目（第 6 步别名移到连线上后已消失）。
 - `workflowCanvasRuntime.js` 的 `addRunNode`、`addProcessNode`、`saveRunResultsToWorkspace`、`saveScoreResultsToWorkspace`、`addSampledDatasetNode` 没有调用方。相关步骤中，要么改造成唯一实现，要么删除。
 - `workflowDependencyColors.js` 约 14 行会查一条存储的 `dataset-to-run` 连线，但这种连线从不存储（第 3 步改用访问层）。
+- Kinase 示例中 Run “Rewrite pair to UniProt names” 有结果，但输入映射的值全为空。打开它的窗口会自动填上映射，Run 的签名随之改变，它和下游 5 个步骤失去 History 匹配，自动保存后这些结果不再显示。第 6 步手工验证时发现，旧代码同样如此。尚未安排处理。
 
 ## 3. 步骤
 
@@ -659,11 +662,11 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 
 **手工验证：**
 
-- [ ] 打开 Kinase 示例的另存副本：Run 和 Process 窗口中的输入与之前相同；各节点的结果仍在，没有节点变成“没有结果”。
-- [ ] Current Pipeline 显示的路线与之前相同；Export Python Project 成功。
-- [ ] 保存后文件中 `version` 为 3，有 `data` 连线，没有旧字段；重新打开正常。
-- [ ] 修改 Run 的输入后撤销、重做，结果正确。
-- [ ] 让 Agent 新建一个 Run 和一个 Process，保存后检查是 `data` 连线。
+- [x] 打开 Kinase 示例的另存副本：Run 和 Process 窗口中的输入与之前相同；各节点的结果仍在，没有节点变成“没有结果”。
+- [x] Current Pipeline 显示的路线与之前相同；Export Python Project 成功。
+- [x] 保存后文件中 `version` 为 3，有 `data` 连线，没有旧字段；重新打开正常。
+- [x] 修改 Run 的输入后撤销、重做，结果正确。
+- [x] 让 Agent 新建一个 Run 和一个 Process，保存后检查是 `data` 连线。（改用单元测试，见完成记录。）
 
 **Agent：** `changeSet.js` 已经走访问层，自动写新格式。确认 `remove` 删除节点时，相关的 `data` 连线也被删除。
 
@@ -671,11 +674,27 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - 前端测试 fixture 大多没有改写成新格式，而是在外面包一层 `upgradeCanvasState`：`pipelineRouteSelection`、`pipelineRunInputs`、`pipelineHistoryImport`（实时画布）、`agentRunPrompt`、`agentNodeSettings`、`contentLocks`、`datasetHistorySource`、`runHistorySelection`、`historyGraphFixture`。这样每个测试的输入与切换前完全相同，测试通过就说明行为不变，而且这正是每个打开的项目所走的路径。直接写成新格式的有 `stepInputs`、`workflowDependencyColors`、`pipelineExportDefinition`、`pipelineRunDefinition`、`agentNodeSettings` 中 Process 代码的用例，以及全部后端 fixture（编译器在实际使用中从不收到旧格式，所以后端不做转换）。以后的步骤改到这些测试时，顺带改成新格式。
+  - `workflowCanvas.js` 没有新增 `EDGE_TYPE_DATA`，直接用 `stepInputs.js` 的 `DATA_EDGE`。
+  - `getOutgoingEdgesFromNode` 不把指向 Run 的 `data` 连线算作下游。原来 Run 的输入不是连线，这样删除 Dataset 时的保护提示不变。
+  - 编译器另外新增 `MULTIPLE_RUN_INPUTS`（一个 Run 有多条输入）；两条输入都是 `df` 时报 `INVALID_PRIMARY_INPUT`；输入相关诊断的 `field` 统一为 `inputs`（前端不读这个值）。
+  - Agent 查看 Process 时，输入的 `connection` 显示为 `data`（原来是 `dataset-to-process`），这样 `grep -rn "dataset-to-process" app/src` 只剩 `canvasFormat.js`。
+  - `canvasFormat.test.mjs` 中读取 Kinase 示例的用例在 `examples/` 不存在时跳过：`examples/*.yc` 不在仓库中（`.gitignore`）。
+  - 手工验证中“让 Agent 新建 Run 和 Process”改为单元测试（`agentNodeSettings`：Agent 新建的 Run 和 Process 写的是 `data` 连线，`validateStepInputs` 无违规）。让真实的 Agent 操作需要调用模型；Agent 写画布走的是 `planChangeSet` 加载入画布，加载和保存 `data` 连线已在手工验证中确认。
+- 测试：前端 162 → 170（`canvasFormat.test.mjs` 6 项，`stepInputs` 增加 `validateStepInputs` 用例，Agent 新建 Run/Process 1 项）；后端 121 → 124（编译器新增：两个 `df`、Run 两条输入、读取步骤输出）。
+- 手工验证（新旧代码对照，Kinase 示例的两份副本，旧代码用 `git stash` 运行）：
+  - 9 个步骤的 History 记录和结果、4 个 Run 的输入、5 个 Process 窗口的输入选择器、Current Pipeline 的路线，新旧完全相同；读档后没有格式违规的警告。
+  - Export Python Project 成功，9 个任务的输入与画布一致（合并步骤为 `df` 加 `df_pairs_with_uniprot_candidates`）。
+  - 另存的文件 `version` 为 3，10 条 `data` 连线，没有旧字段；重新打开后 9 个步骤的记录和结果不变。
+  - 把 Run 的输入改成另一个 Dataset 后撤销、重做、再撤销，输入随之切换，最后回到原来的 History 记录。
+  - 期间发现一个旧代码就有的问题（Run 有结果但映射为空，打开窗口会自动填上映射），已记入 §2.7。
 
 ---
 
@@ -1173,7 +1192,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 3 | 完成 | 2026-10-08 | `c4ce4a4` | 154 | 116 | |
 | 4 | 完成 | 2026-10-08 | `9b92a0a` | 162 | 116 | |
 | 5 | 完成 | 2026-10-08 | `519e724` | 162 | 121 | |
-| 6 | 未开始 | | | | | |
+| 6 | 完成 | 2026-10-08 | `b876260` | 170 | 124 | |
 | 7 | 未开始 | | | | | |
 | 8 | 未开始 | | | | | |
 | 9 | 未开始 | | | | | |
