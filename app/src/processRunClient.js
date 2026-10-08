@@ -15,9 +15,12 @@ function rowsHaveAssetCells(rows) {
   return (rows || []).some((row) => (row || []).some((cell) => isAssetCell(cell)));
 }
 
-/** The backend returns each branch as a list of row objects; the canvas stores {headers, rows}. */
-export function rowsFromDicts(rowDicts) {
-  const keys = [];
+/**
+ * The backend returns each branch as a list of row objects, and its columns; the canvas stores
+ * {headers, rows}. The columns keep a branch without rows from losing them (older jobs lack them).
+ */
+export function rowsFromDicts(rowDicts, columns = []) {
+  const keys = Array.isArray(columns) ? columns.map(String) : [];
   (rowDicts || []).forEach((row) => {
     if (!row || typeof row !== 'object') return;
     Object.keys(row).forEach((key) => { if (!keys.includes(key)) keys.push(key); });
@@ -108,7 +111,7 @@ export async function waitForProcessJob(jobId, { signal, timeoutMs = MAX_WAIT_MS
       if (data.error) throw new Error(String(data.error));
       const outputs = Object.fromEntries(Object.entries(data.outputs || {})
         .map(([branch, rowDicts]) => {
-          const { headers, rows } = rowsFromDicts(rowDicts);
+          const { headers, rows } = rowsFromDicts(rowDicts, data.output_columns?.[branch]);
           return [branch, { headers, rows }];
         }));
       return { outputs, cancelled: data.status === 'cancelled' };

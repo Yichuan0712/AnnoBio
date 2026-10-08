@@ -180,7 +180,7 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - Agent 的 `remove` 会留下过期的 `datasetAliases` 条目（第 6 步别名移到连线上后已消失）。
 - `workflowCanvasRuntime.js` 的 `addRunNode`、`addProcessNode`、`saveRunResultsToWorkspace`、`saveScoreResultsToWorkspace`、`addSampledDatasetNode` 没有调用方。相关步骤中，要么改造成唯一实现，要么删除。
 - `workflowDependencyColors.js` 约 14 行会查一条存储的 `dataset-to-run` 连线，但这种连线从不存储（第 3 步改用访问层）。
-- 单节点运行 Process 时，前端把后端返回的逐行记录（`outputs`）还原成表格（`processRunClient.js`），没有用后端同时返回的 `output_tables`，所以没有行的分支会丢掉所有列名；Pipeline Runner 用的是 `output_tables`，不受影响。步骤之间直连以后，下游会读到一张没有列的空表。第 7 步手工验证时发现。
+- 单节点运行 Process 时，前端把后端返回的逐行记录（`outputs`）还原成表格（`processRunClient.js`），没有用后端同时返回的 `output_tables`，所以没有行的分支会丢掉所有列名；Pipeline Runner 用的是 `output_tables`，不受影响。步骤之间直连以后，下游会读到一张没有列的空表。第 7 步手工验证时发现，第 8 步之后已修复：后端随结果返回每个分支的列名（`output_columns`），前端按它还原表格。
 - `processDetailModal.js` 的 `refreshHistoryState` 中，记录运行中时按钮文字是乱码 `Runningâ€¦`（源文件里的省略号被二次编码）。第 7 步发现。
 - 切换 History 时，确认框列出的“要恢复输入的节点”包括输入其实没变的节点：`planHistorySelection` 把补上 `historySelectionSignature` 也算作变化，跟随记录的 Dataset 重连输出也算。第 7 步发现。
 - Kinase 示例中 Run “Rewrite pair to UniProt names” 有结果，但输入映射的值全为空。打开它的窗口会自动填上映射，Run 的签名随之改变，它和下游 5 个步骤失去 History 匹配，自动保存后这些结果不再显示。第 6 步手工验证时发现，旧代码同样如此。尚未安排处理。
