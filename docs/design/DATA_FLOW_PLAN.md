@@ -180,6 +180,9 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - Agent 的 `remove` 会留下过期的 `datasetAliases` 条目（第 6 步别名移到连线上后已消失）。
 - `workflowCanvasRuntime.js` 的 `addRunNode`、`addProcessNode`、`saveRunResultsToWorkspace`、`saveScoreResultsToWorkspace`、`addSampledDatasetNode` 没有调用方。相关步骤中，要么改造成唯一实现，要么删除。
 - `workflowDependencyColors.js` 约 14 行会查一条存储的 `dataset-to-run` 连线，但这种连线从不存储（第 3 步改用访问层）。
+- 单节点运行 Process 时，前端把后端返回的逐行记录（`outputs`）还原成表格（`processRunClient.js`），没有用后端同时返回的 `output_tables`，所以没有行的分支会丢掉所有列名；Pipeline Runner 用的是 `output_tables`，不受影响。步骤之间直连以后，下游会读到一张没有列的空表。第 7 步手工验证时发现。
+- `processDetailModal.js` 的 `refreshHistoryState` 中，记录运行中时按钮文字是乱码 `Runningâ€¦`（源文件里的省略号被二次编码）。第 7 步发现。
+- 切换 History 时，确认框列出的“要恢复输入的节点”包括输入其实没变的节点：`planHistorySelection` 把补上 `historySelectionSignature` 也算作变化，跟随记录的 Dataset 重连输出也算。第 7 步发现。
 - Kinase 示例中 Run “Rewrite pair to UniProt names” 有结果，但输入映射的值全为空。打开它的窗口会自动填上映射，Run 的签名随之改变，它和下游 5 个步骤失去 History 匹配，自动保存后这些结果不再显示。第 6 步手工验证时发现，旧代码同样如此。尚未安排处理。
 
 ## 3. 步骤
@@ -768,18 +771,39 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 
 **手工验证：** 本步骤没有界面入口，只需确认现有功能没有回退：
 
-- [ ] 示例项目的结果仍在。
-- [ ] 单节点运行 Run 和 Process 正常。
-- [ ] History 切换正常。
+- [x] 示例项目的结果仍在。
+- [x] 单节点运行 Run 和 Process 正常。
+- [x] History 切换正常。
 
 **Agent：** `run_nodes` 与窗口共用运行函数，自动遵守“等待上游”的规则。其余放到第 13 步。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - 来源对象带 `kind`（`'dataset' | 'run' | 'process'`），由 `stepInputs.js` 按节点类型查出；传入的来源没有 `kind` 时也在 `state` 里查，所以比较一律用键（`sourceKey`）。`processInputAliases` 的键改为来源的键。新增导出：`runCandidateSources`、`processInputSources`（Process 的输入及别名，`df` 已规整）、`stepSourceLabel`、`stepInputWaitingMessage`、`stepInputErrorNotice`。
+  - 判断“下游”时，除了 `data` 连线，还沿着跟随某个步骤结果的 Dataset（`datasetHistorySource`）往下找，第 12 步删除派生 Dataset 时一起去掉。Dataset 候选不受影响，仍是全部 Dataset。
+  - 已连上、但不再是候选的输入（例如 Process 不再返回的分支）仍算必需输入，别名用连线上存的，这样下游会等待而不是缺一个输入运行（设计 §3.4）。
+  - `processInputSignature` 的绑定可以带 `key`，签名里 `nodeId` 字段写的就是这个键；只有 Dataset 输入时与之前完全相同。
+  - `waiting` 不会出现 `'failed'`：画布上不保存记录的状态，失败的记录没有结果，报 `'no-result'`。
+  - 计划要求“空输出被当作出错行”，但 `markEmptyOutputAsError` 现在什么也不做，`buildRunResultsTable` 也不把空输出当作出错。`errorRowCount` 按 `buildRunResultsTable` 的实际判断计数，测试记录了这一点。
+  - `captureHistoryInput` 给 Run 另带 `inputTable`（读到的表），`runningHistoryRecord` 用它作 `runInputContent`，不写进记录。步骤来源因此不复制表格，Run 记录仍保存它运行时的输入表。
+  - `workflowCanvas.js` 用一个 `liveInputState()` 代替原来的 `runInputState` / `processInputState`：包含所有节点的 id、类型和名字，内容和结果用 getter 按需读取。新增 `readRunInput`、`readProcessExecutionInputs`、`readStepInputNotices`。
+  - 窗口的临时适配（第 8 步用完整实现替换）：Run 窗口读步骤来源时，列名取步骤输出的表；窗口按节点写回来源时，同一个节点保留原来的端口（否则会把分支改回 `result`）；等待上游时不清空列映射。Process 窗口的选择器仍只列 Dataset，`df` 是步骤输出时不再拦下 Run。这些是手工验证中发现的：不改的话，打开读取步骤的 Run 窗口会清空映射，Process 窗口会提示“Choose an Input dataset”。
+  - Agent：`wireProcess` 只取 Dataset 绑定，Agent 改代码时不会连上步骤输出（第 13 步）；`run_nodes` 预览读取步骤来源的表，上游没有结果时给出同样的等待提示。
+  - `stepSourceHistory.test.mjs` 的第 5 个场景通过 resolver 检查签名常量；`canvasFormat.test.mjs` 已经通过 capture 检查过同一组常量。
+- 测试：前端 170 → 190（`stepOutputs` 4 项、`stepInputs` 增加 6 项、`stepSourceHistory` 8 项、`contentLocks` 1 项、`workflowDependencyColors` 1 项）；后端 124 项不变。
+- 手工验证（Kinase 示例副本，另加两个直接读取步骤输出的 Process 和一个读取其中之一的 Run）：
+  - 打开后原有 9 个步骤的记录与第 6 步记下的完全相同，读档无格式警告；新加的 Run 显示等待上游，窗口中 Run 按钮不可用，文字为 “Waiting for upstream”。
+  - 读取 Extract Run 结果的 Process、读取 Check UniProt availability 分支的 Process 从窗口运行成功；保存的记录中输入是 `kind: 'step'` 引用，`primaryDatasetId` 为 `节点:端口`，没有复制表格。
+  - 读取 Process 输出的 Run 在模拟模型应答下（拦截 `/api/run`，不调用模型）运行成功，读到上游的 2 行；记录只存引用，`runInputContent` 是这 2 行。
+  - 改上游代码重跑后，下游没有结果；在下游的 History 中选回原记录，上游连同代码一起切回。
+  - 重跑原有的 Tidy extracted pairs，下游全部失去匹配；在它的 History 中切回原记录，所有步骤回到原来的记录。
+  - 期间发现的三个旧问题已记入 §2.7。
 
 ---
 
@@ -791,7 +815,7 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 
 **发布：** 不能单独发布。完成后用户可以连出步骤到步骤的线，但 Pipeline 面板要到第 9 步才认识这种连线。
 
-**先读：** 设计 §5；§2.2 中关于窗口的部分；`runDetailModal.js`；`processInputPicker.js`；`processDetailModal.js`；`workflowCanvas.js` 的 `showNodeContextMenu`（约 3213）及其 actions（约 3354）、`newRunNode`、`newProcessNode`、`renderEdge`。
+**先读：** 第 7 步完成记录中“窗口的临时适配”一条（本步骤要用完整实现替换它们）；设计 §5；§2.2 中关于窗口的部分；`runDetailModal.js`；`processInputPicker.js`；`processDetailModal.js`；`workflowCanvas.js` 的 `showNodeContextMenu`（约 3213）及其 actions（约 3354）、`newRunNode`、`newProcessNode`、`renderEdge`。
 
 **改动：**
 
@@ -1193,7 +1217,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 4 | 完成 | 2026-10-08 | `9b92a0a` | 162 | 116 | |
 | 5 | 完成 | 2026-10-08 | `519e724` | 162 | 121 | |
 | 6 | 完成 | 2026-10-08 | `b876260` | 170 | 124 | |
-| 7 | 未开始 | | | | | |
+| 7 | 完成 | 2026-10-08 | `1ca0268` | 190 | 124 | |
 | 8 | 未开始 | | | | | |
 | 9 | 未开始 | | | | | |
 | 10 | 未开始 | | | | | |
