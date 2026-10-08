@@ -149,6 +149,18 @@ function candidateSources(state, stepId) {
   return [...datasets, ...steps];
 }
 
+/**
+ * Candidates as the input pickers list them (§5.3): Datasets, then step outputs. A group without
+ * items is left out.
+ * @returns {Array<{ label: 'Datasets' | 'Step outputs', items: object[] }>}
+ */
+export function candidateGroups(candidates) {
+  return [
+    { label: 'Datasets', items: candidates.filter((candidate) => candidate.kind === 'dataset') },
+    { label: 'Step outputs', items: candidates.filter((candidate) => candidate.kind !== 'dataset') },
+  ].filter((group) => group.items.length);
+}
+
 /** Every source a Run could read. */
 export function runCandidateSources(state, runId) {
   return candidateSources(state, runId);

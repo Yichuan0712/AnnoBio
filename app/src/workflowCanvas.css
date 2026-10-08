@@ -413,8 +413,21 @@
   background: currentColor;
 }
 
+.workflow-node__process-port[data-port] {
+  cursor: pointer;
+}
+
+.workflow-node__process-port[data-port]:hover {
+  color: var(--text);
+}
+
 .workflow-node__process-port--dynamic {
   font-style: italic;
+}
+
+/* Waiting for an upstream step's result (runHistoryResolver.js waitingForUpstream). */
+.workflow-node[data-waiting-for-upstream="1"] {
+  opacity: 0.6;
 }
 
 .workflow-node__process-port--dynamic::after {
