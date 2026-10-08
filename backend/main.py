@@ -3025,7 +3025,10 @@ def _do_process_df_work(job_id: str, req: ProcessDfRunRequest) -> None:
             if was_cancelled:
                 _process_df_jobs[job_id] = {"status": "cancelled"}
             elif outcome.get("ok"):
-                _process_df_jobs[job_id] = {"status": "done", "outputs": outcome.get("outputs") or {}}
+                # Each branch's columns, kept apart from its rows: a branch without rows still has them.
+                columns = {name: list(table.get("headers") or []) for name, table in (outcome.get("output_tables") or {}).items()
+                           if isinstance(table, dict)}
+                _process_df_jobs[job_id] = {"status": "done", "outputs": outcome.get("outputs") or {}, "output_columns": columns}
             else:
                 _process_df_jobs[job_id] = {"status": "done", "error": outcome.get("error") or "Unknown error"}
         _persist_process_df_jobs()
@@ -3072,6 +3075,7 @@ def get_process_df_run_result(job_id: str):
             _touch_process_df_activity(job_id)
         status = job.get("status")
         outputs = job.get("outputs")
+        columns = job.get("output_columns") or {}
         # Jobs saved by older backend versions used one unlabelled rows list. Keep it readable
         # while the browser migrates the Process result into the named-output form.
         rows = job.get("rows") or []
@@ -3082,7 +3086,7 @@ def get_process_df_run_result(job_id: str):
     if error:
         return {"status": "done", "error": error, "outputs": {}}
     if isinstance(outputs, dict):
-        return {"status": status, "outputs": outputs}
+        return {"status": status, "outputs": outputs, "output_columns": columns}
     return {"status": status, "outputs": {"result": rows}}
 
 
