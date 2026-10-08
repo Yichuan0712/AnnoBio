@@ -82,6 +82,7 @@ import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
 import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
 import { codeHashOf, parseProcessOutputPorts } from './processOutputPorts.js';
+import { RESULT_PORT, runInputSource, runInputTable, setRunInputSource } from './stepInputs.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
 
@@ -309,10 +310,13 @@ function evaluateScoreNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
   return false;
 }
 
-/** Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow). */
-async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections = []) {
+/**
+ * Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow).
+ * `runInput` is the table the Run read (stepInputs.js); `datasetContentByNodeId` supplies the ground truth.
+ */
+async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections = [], runInput = null) {
   if ((scoreNode?.dataset?.scoreActiveMatchMode || 'rules') === 'code') {
-    return buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections);
+    return buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections, runInput);
   }
   const toCompareStr = (v) => {
     if (v === null || v === undefined) return '';
@@ -403,8 +407,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
   } catch (_) {}
   const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
-  const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
-  const runWs = runWsId ? datasetContentByNodeId.get(runWsId) : null;
+  const runWs = runInput;
   const gtContent = gtId ? datasetContentByNodeId.get(gtId) : null;
   const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
   const gtSafe = gtContent ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
@@ -782,7 +785,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
  * instead of re-deriving pairing from rule trees. Row numbering matches the modal's own Results table
  * via buildCodeMatchRunToGt + the same descriptor helpers rule mode uses.
  */
-async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections = []) {
+async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections = [], runInput = null) {
   let lastResult = null;
   try {
     lastResult = JSON.parse(scoreNode.dataset.scoreMatchResult || 'null');
@@ -795,8 +798,7 @@ async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datase
   const resultsByIndex = new Map();
   (results || []).forEach((r) => { if (r) resultsByIndex.set(r.row_index, r); });
 
-  const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
-  const runWs = runWsId ? datasetContentByNodeId.get(runWsId) : null;
+  const runWs = runInput;
   const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
 
   let runInputToColumn = {};
@@ -953,7 +955,6 @@ function runRawToFakeRunNode(runRaw) {
     dataset: {
       runResults: runRaw?.runResults || '[]',
       runOutputFields: runRaw?.runOutputFields || '[]',
-      runWorkingSetId: canvasNormalizeNodeId(runRaw?.runWorkingSetId),
       runInputToColumn: ricStr,
     },
   };
@@ -984,7 +985,7 @@ function resolveLiveScoreComparisonContext(canvasState, scoreRaw) {
   if (!promptRaw || promptRaw.type !== 'prompt') return null;
 
   const gtId = canvasNormalizeNodeId(scoreRaw.scoreGroundTruthId);
-  const wsId = canvasNormalizeNodeId(runRaw.runWorkingSetId);
+  const wsId = runInputSource(canvasState, runId)?.nodeId || '';
   if (!gtId || !wsId) return null;
 
   const datasetMap = buildDatasetContentMapFromCanvasNodes(nodes);
@@ -996,6 +997,7 @@ function resolveLiveScoreComparisonContext(canvasState, scoreRaw) {
   return {
     scoreEl: scoreRawToFakeScoreNode(scoreRaw),
     runEl: runRawToFakeRunNode(runRaw),
+    runInput: datasetMap.get(wsId),
     datasetMap,
     promptSections,
   };
@@ -1893,10 +1895,37 @@ export function buildWorkflowCanvas(root, options = {}) {
     return connections.filter((c) => c.fromId === nodeId);
   }
 
+  // A Run's input on the live canvas, through stepInputs.js (docs/design/DATA_FLOW_DESIGN.md §3.3).
+  function runInputState(runNode) {
+    return {
+      nodes: runNode ? [{ nodeId: runNode.dataset.nodeId, type: 'run', runWorkingSetId: runNode.dataset.runWorkingSetId }] : [],
+      connections,
+    };
+  }
+  function readRunInputSource(runNode) {
+    return runNode ? runInputSource(runInputState(runNode), runNode.dataset.nodeId) : null;
+  }
+  function writeRunInputSource(runNode, source) {
+    if (!runNode) return;
+    const state = runInputState(runNode);
+    setRunInputSource(state, runNode.dataset.nodeId, source);
+    const datasetId = state.nodes[0].runWorkingSetId;
+    if (datasetId) runNode.dataset.runWorkingSetId = datasetId;
+    else delete runNode.dataset.runWorkingSetId;
+  }
+  /** The table a Run reads, from the canvas's Dataset contents; null when it has no input. */
+  function readRunInputTable(runNode) {
+    const source = readRunInputSource(runNode);
+    if (!source) return null;
+    const state = runInputState(runNode);
+    state.nodes.push({ nodeId: source.nodeId, type: 'dataset', datasetContent: datasetContentByNodeId.get(source.nodeId) });
+    return runInputTable(state, runNode.dataset.nodeId);
+  }
+
   function isDatasetPickedByRunOrScore(datasetNodeId) {
     if (!datasetNodeId) return false;
     const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
-      (n) => (n.dataset.runWorkingSetId || '').trim() === datasetNodeId,
+      (n) => readRunInputSource(n)?.nodeId === datasetNodeId,
     );
     const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
       (n) => (n.dataset.scoreGroundTruthId || '').trim() === datasetNodeId,
@@ -1978,7 +2007,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (outsideOutgoing.length > 0) return { blocked: true, reason: 'downstream' };
     if (kind === 'dataset') {
       const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
-        (n) => (n.dataset.runWorkingSetId || '').trim() === nodeId && !batchIds.has(n.dataset.nodeId),
+        (n) => readRunInputSource(n)?.nodeId === nodeId && !batchIds.has(n.dataset.nodeId),
       );
       const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
         (n) => (n.dataset.scoreGroundTruthId || '').trim() === nodeId && !batchIds.has(n.dataset.nodeId),
@@ -2382,7 +2411,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
     const live = new Set();
     const usedAsInput = (id) => (
-      [...nodesLayer.querySelectorAll('.workflow-node--run')].some((run) => run.dataset.runWorkingSetId === id)
+      [...nodesLayer.querySelectorAll('.workflow-node--run')].some((run) => readRunInputSource(run)?.nodeId === id)
       || connections.some((edge) => edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.fromId === id)
     );
     for (const [key, group] of groups) {
@@ -2512,7 +2541,7 @@ export function buildWorkflowCanvas(root, options = {}) {
 
     nodesLayer.querySelectorAll('.workflow-node--run').forEach((runNode) => {
       add(
-        String(runNode.dataset.runWorkingSetId || '').trim(),
+        readRunInputSource(runNode)?.nodeId || '',
         String(runNode.dataset.nodeId || '').trim(),
         EDGE_TYPE_DATASET_TO_RUN,
       );
@@ -2538,7 +2567,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   /** Whether a Run / Process reads this Dataset now. */
   function stepReadsDataset(step, datasetId) {
     return step?.classList.contains('workflow-node--run')
-      ? step.dataset.runWorkingSetId === datasetId
+      ? readRunInputSource(step)?.nodeId === datasetId
       : connections.some((edge) => (
         edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.fromId === datasetId && edge.toId === step?.dataset.nodeId
       ));
@@ -2875,6 +2904,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     getNodeById,
     getConnections: () => connections,
     datasetContentByNodeId,
+    readRunInputSource,
+    writeRunInputSource,
+    readRunInputTable,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode: (options) => startRunNode(options),
@@ -2962,6 +2994,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     getNodeById,
     getConnections: () => connections,
     datasetContentByNodeId,
+    readRunInputSource,
+    writeRunInputSource,
+    readRunInputTable,
     createPromptNode,
     createRunNode,
     createScoreNode,
@@ -3430,8 +3465,7 @@ export function buildWorkflowCanvas(root, options = {}) {
             outputFields = Array.isArray(arr) ? arr : [];
           } catch (_) {}
           outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
-          const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-          const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
+          const wsContent = readRunInputTable(runNode);
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
           cols.push({ key: '[#]', label: 'Input: #' });
           wsHeaders.forEach((h) => {
@@ -3455,8 +3489,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
         }
         function getRunWorkingSetContent() {
-          const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-          const c = wsId ? datasetContentByNodeId.get(wsId) : null;
+          const c = readRunInputTable(runNode);
           return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
         }
         function getGroundTruthContent(wsNodeId) {
@@ -3497,7 +3530,7 @@ export function buildWorkflowCanvas(root, options = {}) {
               };
             }
           } catch (_) {}
-          const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections);
+          const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections, readRunInputTable(runNode));
           return {
             prompt_sections: sections,
             prompt_full_text: promptFullText,
@@ -3625,8 +3658,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
         }
         function getRunWorkingSetContent() {
-          const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-          const c = wsId ? datasetContentByNodeId.get(wsId) : null;
+          const c = readRunInputTable(runNode);
           return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
         }
         function getGroundTruthContent(wsNodeId) {
@@ -3650,8 +3682,7 @@ export function buildWorkflowCanvas(root, options = {}) {
             outputFields = Array.isArray(arr) ? arr : [];
           } catch (_) {}
           outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
-          const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-          const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
+          const wsContent = readRunInputTable(runNode);
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
           cols.push({ key: '[#]', label: 'Input: #' });
           wsHeaders.forEach((h) => cols.push({ key: `[${h}]`, label: `Input: ${h}` }));
@@ -5276,9 +5307,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     const run = state.nodes.find((item) => item.nodeId === nodeId);
     const promptEdge = state.connections.find((edge) => edge.type === EDGE_TYPE_PROMPT_TO_RUN && edge.toId === nodeId);
     const prompt = state.nodes.find((item) => item.nodeId === promptEdge?.fromId);
-    const dataset = state.nodes.find((item) => item.nodeId === run?.runWorkingSetId);
+    const input = runInputSource(state, nodeId);
+    const dataset = state.nodes.find((item) => item.nodeId === input?.nodeId);
     return JSON.stringify({
-      runWorkingSetId: run?.runWorkingSetId, mapping: run?.runInputToColumn,
+      input, mapping: run?.runInputToColumn,
       settings: run?.runSettings, credential: run?.runCredentialId,
       historyRecordId: run?.historyRecordId,
       promptId: promptEdge?.fromId, prompt,
@@ -5298,7 +5330,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       const item = resolved.state.nodes.find((entry) => entry.nodeId === nodeId && entry.type === 'run');
       const live = getNodeById(nodeId);
       if (!item || !live) return null;
-      const inputDataset = resolved.state.nodes.find((entry) => entry.nodeId === item.runWorkingSetId && entry.type === 'dataset');
+      const inputId = runInputSource(resolved.state, nodeId)?.nodeId;
+      const inputDataset = resolved.state.nodes.find((entry) => entry.nodeId === inputId && entry.type === 'dataset');
       if (inputDataset) {
         const datasetNode = getNodeById(inputDataset.nodeId);
         if (datasetHistorySource(inputDataset, connections)) {
@@ -5676,7 +5709,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const ctx = resolveLiveScoreComparisonContext(canvasState, raw);
     if (!ctx) return [];
     try {
-      const rows = await buildReviewComparisonRows(ctx.scoreEl, ctx.runEl, ctx.datasetMap, ctx.promptSections);
+      const rows = await buildReviewComparisonRows(ctx.scoreEl, ctx.runEl, ctx.datasetMap, ctx.promptSections, ctx.runInput);
       return Array.isArray(rows) ? rows : [];
     } catch (_) {
       return [];
@@ -5854,8 +5887,8 @@ export function buildWorkflowCanvas(root, options = {}) {
               if (!consumer || !getNodeById(copyId)) continue;
               // Only where the step still reads the old Dataset; a canvas edited since then is left alone.
               if (consumer.classList.contains('workflow-node--run')) {
-                if (consumer.dataset.runWorkingSetId !== oldId) continue;
-                consumer.dataset.runWorkingSetId = copyId;
+                if (readRunInputSource(consumer)?.nodeId !== oldId) continue;
+                writeRunInputSource(consumer, { nodeId: copyId, port: RESULT_PORT });
               } else if (consumer.classList.contains('workflow-node--process')) {
                 const edge = connections.find((item) => (
                   item.type === EDGE_TYPE_DATASET_TO_PROCESS && item.fromId === oldId && item.toId === consumerId

@@ -12,6 +12,7 @@ import { datasetHistorySource } from '../../datasetHistorySource.js';
 import { processDatasetInputs, referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
 import { buildRunResultsTable } from '../../runResultsExport.js';
+import { RESULT_PORT, runInputSource, setRunInputSource } from '../../stepInputs.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
 import { nodeTitle, processOutputsOf, runInputContentOf, runResultsOf } from '../canvas/workflowNodeInspector.js';
 
@@ -288,7 +289,7 @@ export function planChangeSet(state, operations, ctx) {
   function scoreBundle(op, run, groundTruth) {
     const prompt = next.nodes.find((n) => n.type === 'prompt'
       && next.connections.some((c) => c.type === 'prompt-to-run' && c.fromId === n.nodeId && c.toId === run.nodeId));
-    const runDataset = byId().get(run.runWorkingSetId);
+    const runDataset = byId().get(runInputSource(next, run.nodeId)?.nodeId);
     const inputColumns = runDataset ? datasetColumns(runDataset).map((c) => c.name) : [];
     const outputKeys = (prompt?.outputFormat?.fields || []).map((f) => f.key);
     const gtColumns = datasetColumns(groundTruth).map((c) => c.name);
@@ -569,9 +570,10 @@ export function planChangeSet(state, operations, ctx) {
       const name = uniqueName(clean(op.name) || 'Run', takenNames('run', (n) => runsOfPrompt.has(n.nodeId)));
       const node = addNode({
         type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name,
-        runWorkingSetId: dataset.nodeId, runInputToColumn: JSON.stringify(mapping),
+        runInputToColumn: JSON.stringify(mapping),
         nodeOrigin: 'agent',
       });
+      setRunInputSource(next, node.nodeId, { nodeId: dataset.nodeId, port: RESULT_PORT });
       connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
       registerRef(op, node.nodeId);
       return {
@@ -713,7 +715,7 @@ export function planChangeSet(state, operations, ctx) {
             : resolve(currentPromptId, 'the run\'s prompt', ['prompt']);
           const dataset = 'input_dataset' in set
             ? resolve(set.input_dataset, 'input_dataset', ['dataset'])
-            : resolve(node.runWorkingSetId, 'the run\'s input dataset', ['dataset']);
+            : resolve(runInputSource(next, node.nodeId)?.nodeId, 'the run\'s input dataset', ['dataset']);
           // A new Prompt keeps only the old mapping for inputs it shares, as the Run window does.
           const promptInputNames = new Set(promptInputs(prompt, ctx.extractInputFields).map((input) => input.name));
           const keptMapping = Object.fromEntries(Object.entries(parseJson(node.runInputToColumn, {}))
@@ -724,7 +726,7 @@ export function planChangeSet(state, operations, ctx) {
             connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
             lines.push(`Prompt "${nodeTitle(prompt)}"`);
           }
-          node.runWorkingSetId = dataset.nodeId;
+          setRunInputSource(next, node.nodeId, { nodeId: dataset.nodeId, port: RESULT_PORT });
           node.runInputToColumn = JSON.stringify(mapping);
           lines.push(`Input "${nodeTitle(dataset)}"; mapping: ${Object.entries(mapping).map(([k, v]) => `${k} ← ${v}`).join(', ')}`);
         }
@@ -779,7 +781,7 @@ export function planChangeSet(state, operations, ctx) {
       const saved = runInputContentOf(run);
       const runContent = Array.isArray(saved.rows) && saved.rows.length
         ? saved
-        : normalizeDatasetContent(byId().get(run.runWorkingSetId)?.datasetContent || { headers: [], rows: [] });
+        : normalizeDatasetContent(byId().get(runInputSource(next, run.nodeId)?.nodeId)?.datasetContent || { headers: [], rows: [] });
       const table = buildRunResultsTable({ results, runContent, schemaFields: prompt?.outputFormat?.fields || [] });
       const completed = run.runCompleted === true || run.runCompleted === '1';
       const promptName = prompt ? nodeTitle(prompt) : 'Prompt';
@@ -887,8 +889,8 @@ export function planChangeSet(state, operations, ctx) {
       const id = node.nodeId;
       const lines = [];
       for (const other of next.nodes) {
-        if (other.type === 'run' && other.runWorkingSetId === id) {
-          delete other.runWorkingSetId;
+        if (other.type === 'run' && runInputSource(next, other.nodeId)?.nodeId === id) {
+          setRunInputSource(next, other.nodeId, null);
           lines.push(`Run "${nodeTitle(other)}" loses its input dataset`);
         }
         if (other.type === 'score' && other.scoreGroundTruthId === id) {

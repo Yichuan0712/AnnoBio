@@ -3,6 +3,7 @@ import {
   reviewVerifyStateFromResult,
   verifyReviewSuggestion,
 } from './reviewSuggestionActions.js';
+import { RESULT_PORT } from './stepInputs.js';
 import { rebuildWorkingFromApplied } from './reviewWorkingSections.js';
 import {
   DEFAULT_LIMITS as PROMPT_EDIT_LIMITS,
@@ -41,6 +42,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     getNodeById,
     getConnections,
     datasetContentByNodeId,
+    readRunInputSource,
+    writeRunInputSource,
+    readRunInputTable,
     createPromptNode,
     createRunNode,
     createScoreNode,
@@ -438,7 +442,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
     if (node?.dataset) {
       node.dataset.runName = finalName;
-      node.dataset.runWorkingSetId = normalizedWorkingSetId;
+      writeRunInputSource(node, { nodeId: normalizedWorkingSetId, port: RESULT_PORT });
       node.dataset.runInputToColumn = JSON.stringify(normalizedInputToColumn);
       if (normalizedCredentialId) {
         node.dataset.runCredentialId = normalizedCredentialId;
@@ -520,7 +524,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       throw new Error('This run node is not connected to an upstream prompt.');
     }
 
-    const workingSetId = String(node.dataset.runWorkingSetId || '').trim();
+    const workingSetId = readRunInputSource(node)?.nodeId || '';
     if (!workingSetId) {
       throw new Error('This run node has no selected input dataset.');
     }
@@ -536,7 +540,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         existingResults = [];
       }
     }
-    let content = datasetContentByNodeId.get(workingSetId);
+    let content = readRunInputTable(node);
     if (existingResults.length > 0 && node.dataset.runInputContent) {
       try { content = JSON.parse(node.dataset.runInputContent); } catch (_) {}
     }
@@ -837,8 +841,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       } catch (_) {}
     }
     if (!runContent) {
-      const workingSetId = String(runNode.dataset.runWorkingSetId || '').trim();
-      const workingSetContent = datasetContentByNodeId.get(workingSetId);
+      const workingSetContent = readRunInputTable(runNode);
       if (workingSetContent) {
         runContent = {
           headers: Array.isArray(workingSetContent.headers) ? workingSetContent.headers.slice() : [],
@@ -933,8 +936,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         key: field.key || '',
         label: formatResultOutputColumnLabel((field.display || field.key || '').trim() || field.key || '—'),
       }));
-      const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-      const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
+      const wsContent = readRunInputTable(runNode);
       const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
       cols.push({ key: '[#]', label: 'Input: #' });
       wsHeaders.forEach((header) => {
@@ -964,8 +966,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
 
     function getRunWorkingSetContent() {
-      const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-      const content = wsId ? datasetContentByNodeId.get(wsId) : null;
+      const content = readRunInputTable(runNode);
       return content
         ? { headers: (content.headers || []).slice(), rows: (content.rows || []).map((row) => row.slice()) }
         : { headers: [], rows: [] };
@@ -1145,8 +1146,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
     let runInputHeaders = [];
     if (runNode) {
-      const workingSetId = String(runNode.dataset.runWorkingSetId || '').trim();
-      runInputHeaders = readDatasetHeaders(workingSetId);
+      runInputHeaders = readDatasetHeaders(readRunInputSource(runNode)?.nodeId || '');
     }
 
     const groundTruthNodeId = String(scoreNode.dataset.scoreGroundTruthId || '').trim();
@@ -1459,6 +1459,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
           ctx.runNode,
           datasetContentByNodeId,
           ctx.sections,
+          readRunInputTable(ctx.runNode),
         );
         comparisonRowCountIncluded = Array.isArray(rows) ? rows.length : 0;
       } catch (_) {
@@ -1565,7 +1566,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       throw new Error('Score node must select a ground-truth dataset before review.');
     }
 
-    const comparisonRows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections);
+    const comparisonRows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections, readRunInputTable(runNode));
     return {
       scoreNode,
       runNode,
@@ -1816,15 +1817,14 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     } catch (_) {}
 
     const runCredentialId = await resolveRunCredentialId(runNode);
-    const runWorkingSetId = String(runNode.dataset.runWorkingSetId || '').trim();
     const groundTruthNodeId = String(scoreNode.dataset.scoreGroundTruthId || '').trim();
-    const runWs = runWorkingSetId ? (datasetContentByNodeId.get(runWorkingSetId) || { headers: [], rows: [] }) : { headers: [], rows: [] };
+    const runWs = readRunInputTable(runNode) || { headers: [], rows: [] };
     const gtContent = groundTruthNodeId ? (datasetContentByNodeId.get(groundTruthNodeId) || { headers: [], rows: [] }) : { headers: [], rows: [] };
 
     const saved = parseReviewResult(reviewNode) || parseReviewResult(scoreNode) || {};
     const comparisonRows = Array.isArray(saved?.comparison_rows) && saved.comparison_rows.length > 0
       ? saved.comparison_rows
-      : await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections);
+      : await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections, readRunInputTable(runNode));
 
     return {
       reviewNode,

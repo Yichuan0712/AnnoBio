@@ -111,6 +111,8 @@ export function openRunDetailModal({
   isRunNameAlreadyUsedForPrompt = () => false,
   getRunMappingsFromCanvas,
   onWorkingSetChange = () => {},
+  getInputSource = () => null,
+  setInputSource = () => {},
   history = null,
 }) {
   (getRunMappingsFromCanvas?.() || []).forEach((parsed) => {
@@ -122,7 +124,7 @@ export function openRunDetailModal({
   });
 
   let inputFields = getPromptInputFields();
-  let selectedNodeId = (node?.dataset?.runWorkingSetId || '').trim();
+  let selectedNodeId = getInputSource()?.nodeId || '';
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
   const runName = (node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent?.trim() || 'Run').trim() || 'Run';
   const nodeId = node?.dataset?.nodeId || '';
@@ -675,7 +677,7 @@ export function openRunDetailModal({
     const ws = getSelectedWorkingSet();
     if (node?.style) {
       node.style.borderColor = ws?.color || '';
-      node.dataset.runWorkingSetId = selectedNodeId || '';
+      setInputSource(selectedNodeId ? { nodeId: selectedNodeId, port: 'result' } : null);
       const bar = node.querySelector('.workflow-node__run-progress');
       if (bar) bar.style.background = ws?.color || bar.style.background;
       document.dispatchEvent(new CustomEvent('workflow:refresh-node-colors'));

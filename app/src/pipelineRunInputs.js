@@ -4,6 +4,7 @@
  * payload in.
  */
 import { pipelineInputDatasetIds } from './pipelineInputAvailability.js';
+import { runInputSource } from './stepInputs.js';
 
 /**
  * @returns {Array<{ nodeId: string, kind: 'run'|'process', name: string,
@@ -18,7 +19,7 @@ export function pipelineInputSteps(canvasState, route) {
   const steps = [];
   for (const item of route || []) {
     if (item?.type === 'prompt') {
-      const inputId = nodes.get(item.run_node_id)?.runWorkingSetId;
+      const inputId = runInputSource(canvasState, item.run_node_id)?.nodeId;
       if (!inputIds.has(inputId)) continue;
       steps.push({ nodeId: item.run_node_id, kind: 'run', name: nodes.get(item.prompt_node_id)?.name || 'Prompt', inputs: [dataset(inputId)] });
     } else if (item?.type === 'process') {

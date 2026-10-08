@@ -1,5 +1,6 @@
 import { canonicalJson, datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
 import { datasetHistorySource, publishedPipelineCopy } from './datasetHistorySource.js';
+import { RESULT_PORT, runInputSource, setRunInputSource } from './stepInputs.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -13,6 +14,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   const desired = new Map();
   const selectedRecords = new Map();
   const promptEdges = new Map();
+  const runInputs = new Map(); // Run node id -> input Dataset id
   const processInputs = new Map();
   const datasetSources = new Map();
   const active = new Set();
@@ -108,8 +110,9 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
           datasetNodeId: resolvedDataset.nodeId, datasetSignature: resolvedDataset.signature,
           mapping: record.inputs.mapping || {},
         });
+        runInputs.set(record.nodeId, resolvedDataset.nodeId);
         demand(record.nodeId, 'run', {
-          runWorkingSetId: resolvedDataset.nodeId, runInputToColumn: JSON.stringify(record.inputs.mapping || {}),
+          runInputToColumn: JSON.stringify(record.inputs.mapping || {}),
           historyRecordId: record.id,
           historySelectionSignature: selectionSignature,
         });
@@ -188,10 +191,13 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   const changedNodeIds = [];
   for (const [id, patch] of desired) {
     const node = nodes.get(id);
-    if (Object.entries(patch).some(([key, value]) => canonicalJson(node[key]) !== canonicalJson(value))) {
+    const inputId = runInputs.get(id);
+    const inputChanged = inputId !== undefined && runInputSource(next, id)?.nodeId !== inputId;
+    if (inputChanged || Object.entries(patch).some(([key, value]) => canonicalJson(node[key]) !== canonicalJson(value))) {
       changedNodeIds.push(id);
     }
     Object.assign(node, patch);
+    if (inputId !== undefined) setRunInputSource(next, id, { nodeId: inputId, port: RESULT_PORT });
   }
   for (const [id, source] of datasetSources) {
     const node = nodes.get(id);
@@ -281,8 +287,8 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   // Exactly the Dataset snapshots created from a selected record become its live outputs. Other
   // outputs of that Run/Process remain connected as dashed, immutable History snapshots.
   const selectedInputDatasetIds = new Set([...processInputs.values()].flat());
-  for (const patch of desired.values()) {
-    if (patch.runWorkingSetId) selectedInputDatasetIds.add(patch.runWorkingSetId);
+  for (const inputId of runInputs.values()) {
+    if (inputId) selectedInputDatasetIds.add(inputId);
   }
   for (const [producerNodeId, selectedRecordId] of selectedRecords) {
     const producer = nodes.get(producerNodeId);
@@ -326,7 +332,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   };
   for (const edge of [...(state?.connections || []), ...next.connections]) link(edge.fromId, edge.toId);
   for (const node of next.nodes) {
-    if (node.type === 'run') link(node.runWorkingSetId, nodeId(node));
+    if (node.type === 'run') link(runInputSource(next, nodeId(node))?.nodeId, nodeId(node));
     if (node.type === 'dataset') link(node.sourceRunNodeId, nodeId(node));
   }
   const queue = [...affected];
