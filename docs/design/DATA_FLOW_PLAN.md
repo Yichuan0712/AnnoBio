@@ -986,7 +986,7 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
   - 导出定义：发送所有指向所选节点的 `data` 连线；读取路线外步骤时，把那个步骤以 `{type, nodeId, name}` 发送，编译器据此报 `UNSELECTED_UPSTREAM` 并写明名字。
   - Prompt 步骤的 `inputDatasetNodeId` 只在读取 Dataset 时填写。Agent 的 Pipeline 摘要中，读取步骤输出的输入写成 `the output of "<名字>"`。
   - Current Pipeline 面板去掉了冲突提示后，整个警告管道已无用，一并删除。
-- 测试：前端 199 → 200（删除 `datasetSourceContracts` 1 项；`pipelineRouteSelection` 改写并新增 3 项；Agent 摘要 1 项；其余改写 fixture）；后端 126 → 127（编译器测试改为步骤直连，删除被删诊断的测试，新增 `UNSELECTED_UPSTREAM`、`UNKNOWN_OUTPUT_PORT`、分支命名、动态分支、环、读取同一输出等用例）。跨语言测试通过。
+- 测试：前端 197 → 200（删除 `datasetSourceContracts` 1 项；`pipelineRouteSelection` 改写并新增 3 项；Agent 摘要 1 项；其余改写 fixture）；后端 126 → 127（编译器测试改为步骤直连，删除被删诊断的测试，新增 `UNSELECTED_UPSTREAM`、`UNKNOWN_OUTPUT_PORT`、分支命名、动态分支、环、读取同一输出等用例）。跨语言测试通过。
 - 手工验证：
   - 用脚本把 Kinase 示例的 9 个输入改为直接读取上游步骤（保存出来的 Dataset 留在画布上但不再被读取）。打开后 Current Pipeline 的文字与第 6 步记下的旧示例完全相同，包括两处分支和它们的顺序、两条 “Do nothing” lane。
   - Run Pipeline 对话框只列出读取 `kinase_abstracts` 的 Extract 步骤（打开后取消，未运行）。
