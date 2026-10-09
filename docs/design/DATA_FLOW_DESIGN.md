@@ -1,6 +1,6 @@
 # 步骤间数据流：设计
 
-状态：已实施（2026-10-08，`261007-data-flow-design`；Agent 完整同步见 [DATA_FLOW_PLAN.md](DATA_FLOW_PLAN.md) 第 13 步）。基于 `261006-pipeline-runs` / `ed4672f`。
+状态：已实施（2026-10-09，`261007-data-flow-design`，含 Agent 完整同步；实施记录见 [DATA_FLOW_PLAN.md](DATA_FLOW_PLAN.md)）。基于 `261006-pipeline-runs` / `ed4672f`。
 
 本文落实 [NODE_MODEL_REVIEW.md](NODE_MODEL_REVIEW.md) §2（依赖只存一处）和 §3 第二步（把位置和快照分开）。实施后，下列文档中的对应内容由本文取代：
 
@@ -370,7 +370,7 @@ Process 窗口在每个输入旁显示它的别名，和现在一样。
 
 ## 10. Agent
 
-完整同步以后再做。需要改的地方：
+已在 [DATA_FLOW_PLAN.md](DATA_FLOW_PLAN.md) 第 13 步完成。改动的地方：
 
 - `add_run`、`update`（run）的 `input_dataset`：改为通用输入来源（Dataset，或节点加分支）。
 - `add_process` 的 `primary_input` 及其他输入、`update`（process）的 `primary_input`：同上。

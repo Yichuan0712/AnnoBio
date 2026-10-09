@@ -1,6 +1,6 @@
 # 步骤间数据流：实施计划
 
-状态：第 0–12 步已完成（2026-10-08），第 13 步未开始。基于 `261006-pipeline-runs` / `ed4672f`（2026-10-07）。
+状态：第 0–13 步全部完成（2026-10-09）。基于 `261006-pipeline-runs` / `ed4672f`（2026-10-07）。
 
 本文把 [DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md)（下称“设计”）拆成 14 个可以独立执行的步骤（第 0–13 步）。每一步都写明要先读的代码、要改的文件和函数、要加的测试和验收标准，供不同的执行者（人或 LLM）在不了解前面讨论的情况下一步一步完成。
 
@@ -186,6 +186,8 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - Kinase 示例中 Run “Rewrite pair to UniProt names” 有结果，但输入映射的值全为空。打开它的窗口会自动填上映射，Run 的签名随之改变，它和下游 5 个步骤失去 History 匹配，自动保存后这些结果不再显示。第 6 步手工验证时发现，旧代码同样如此。尚未安排处理。第 9 步之后，这个映射缺失还让旧示例中这一段的 Export Python Project 报错（见第 9 步完成记录）。
 - Run 窗口选好输入后，不会把与 Prompt 输入同名的列自动填进映射；只会沿用画布上其他 Run 用过的映射。所以新项目里的第一个 Run 要手动选列。第 12 步回归时发现，与本计划无关，代码中本来如此。
 - 删除 History 记录的确认框列出受影响节点的 ID，而不是节点名。第 12 步回归时发现，与本计划无关。
+- Agent 的提案在打开过 Current Pipeline 面板之后一律应用失败（“A node window is open on the canvas”）：`applyAgentCanvasState` 把隐藏着的 Pipeline Run History 窗口也当作打开的节点窗口。2026-10-06（`5b986a7e`）引入，第 13 步手工验证时发现并修复。
+- Agent 的 `remove` 比画布上的删除宽松：画布上有下游读取的节点不能删，Agent 删除时则断开下游的输入（并在卡片上列出）。原本如此，本计划没有改。
 - 第 9 步起，Process 识别出的每个分支都是 Pipeline 的必需输出（Runner 和导出都要求返回每个声明的分支）。代码在不同路径返回不同字典时（例如有时只返回 `kept`），只读取其中部分分支的 Pipeline 也会因为“没有返回某个分支”而失败；以前只有被保存为 Dataset 的分支是必需的。尚未安排处理，要改的话是让没人读取的分支变成可选输出。
 
 ## 3. 步骤
@@ -1289,16 +1291,34 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 
 **手工验证：**
 
-- [ ] 让 Agent 搭一条 Dataset → Run → Process（两个分支）→ Run 的流程并运行，结果与手动搭的相同。
-- [ ] 让 Agent 描述当前流程，描述中没有中间 Dataset。
+- [x] 让 Agent 搭一条 Dataset → Run → Process（两个分支）→ Run 的流程并运行，结果与手动搭的相同。
+- [x] 让 Agent 描述当前流程，描述中没有中间 Dataset。（用的是脚本化的假模型，检查的是 Agent 收到的工作区摘要，见完成记录。）
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：**
+**完成记录：** 2026-10-09 完成，验收各项全部通过。
+
+- 与计划不同或计划没写到的地方：
+  - 与窗口一致的两条限制（计划第 3 条“校验”的具体做法）：
+    - 列要等上游有结果才知道。读取一个还没有结果的步骤时，不能给 `input_mapping`（报错并说明做法：先不映射，运行上游，再用 update 设置）；不给则 Run 不映射，卡片写 “Not mapped yet”。
+    - Process 的分支要等代码检查过或运行过才知道（窗口也是这样，没有端口时选不到）。读取在同一个提案里新加或改了代码的 Process、没有已知分支的 Process（包括运行时才确定分支的）都会报错，提示在下一个提案里读。只改名不算改代码。
+    所以 Agent 搭流程要分阶段：加一步、运行、再加下一步。系统提示和 `pipeline-building` 指南都写了这一点。
+  - 成环校验沿用画布选择器的规则，在 `stepInputs.js` 中新增导出 `readsFromStep`。
+  - `inspect_node` 的字段：Run 的 `inputDataset` 改为 `input`（带 `type`，Process 的输出带 `branch`）；Process 的 `inputs` 改为来源加别名，`availableAliases` 改为 `availableInputs`（窗口里的全部候选，含步骤输出和是否已是输入）；新增 `branches`（分支名、是否已知、是否动态、来自代码还是上次运行）、`readBy`（哪些步骤读它、读哪个分支、用什么别名），Run 和 Process 都有 `waitingFor`（窗口里会显示的等待说明）。Agent 的 `inspect_node` 工具说明同步更新。
+  - `try_process` 改为在画布副本上加一个临时 Process，输入就是 Process 窗口会给的（新模块 `processTrialInputs.js`），所以 `df` 可以是步骤输出（`primary_branch` 选分支），代码里的别名也可以是步骤输出。返回字段 `otherDatasets` 改为 `otherInputs`。原来供它用的 `getDatasetBindings`（`agentChatSession.js`、`workflowCanvas.js`）和 `getProcessDatasets` 已无调用方，删除。
+  - `run_nodes`：Process 增加等待上游的检查，报错与窗口相同（Run 第 7 步已有）；缺 `df` 时的提示改为 “has no df input”。
+  - `remove`：按 `data` 连线逐条说明哪个步骤失去哪个输入（Process 写出别名），不再只看主输入。
+  - 文字说明：除计划列出的三处，`export-and-share.md`（仍写着“只能从一个 Dataset 开始导出”“末端 Process 不能返回分支”，第 9 步后都不对了）和 `prompt-design.md`（“保存结果才能给下游用”）也一并改正。
+  - 修复了一个不在本计划内的旧问题（已记入 §2.7）：打开过 Current Pipeline 面板后，Agent 的提案一律应用失败。不修就无法完成本步的手工验证。
+- 测试：前端 198 → 210（新增 `agentStepInputs.test.mjs` 12 项：读 Run 结果并按其列映射、读没有结果的步骤、按名字读 Process 分支及各种报错、同一提案内新加或改代码的 Process、成环和 `input_dataset` 报错、Process 以步骤输出为 `df` 和别名、`remove` 的说明、`inspect_node`、工作区摘要、`try_process` 的输入、`run_nodes` 的等待报错、经 Agent 的 `select_history` 用步骤输入的记录；`agentNodeSettings`、`agentRunPrompt` 改用 `input`）；后端 126 不变。
+- 手工验证：后端换成假模型版本，Agent 的每一轮回复也由脚本代替（`llm_stream_chat_with_tools` 换成按轮次发出工具调用的脚本，scratchpad `step13/fake_backend.py`）。提案和运行任务仍由应用自己的工具执行，卡片上的 Apply、Run 由我逐个点击，与用户操作相同。
+  - 在新项目里先打开 Current Pipeline 面板，再发消息。Agent 依次提出：Dataset + Prompt + Run（读 Sentences）→ 运行 → Process Split（`df` 为 Extract 的结果，返回 `short` / `long`）→ 运行 → Prompt Judge + Run（读 “Split · long”，映射 `summary ← summary`）→ 运行。三张提案卡都成功应用，三个运行任务都完成：Extract 4 行，Split `short` 2 行、`long` 2 行，Judge 2 行，与第 12 步手动搭的同样流程一致。画布上只有 1 个 Dataset、3 条数据连线，Current Pipeline 显示 Extract → Split → 分支（Do nothing / Judge）。
+  - Agent 收到的最后一轮工作区摘要中，Datasets 只有 Sentences；Pipeline 一节写 Split “reading the output of "Extract"”，Judge “on the output of "Split · long"”；Processes 一节写 Split “reads the output of run … as df; branches short, long”。没有中间 Dataset。假模型不会自己组织语言，所以“让 Agent 描述”这一项检查的是它拿到的描述。
+  - **有一次真实的模型调用**：第一次发消息时，Agent 窗口用 `/api/chat` 给对话生成标题（`agentChatSession.js`），这条路径一开始没有被替换，用 Settings 里的 Agent 模型发出了一次很短的请求（生成的标题是 “Node window open blocks flow run”）。发现后立即替换并重启后端，之后再没有真实调用。第 12 步的 Review 用的是默认方法，只经过已替换的 `run_structured`，没有真实调用。
 
 ## 4. 进度
 
@@ -1318,4 +1338,4 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 10 | 完成 | 2026-10-08 | `e2e6736` | 201 | 127 | |
 | 11 | 完成 | 2026-10-08 | `dc160e9` | 208 | 127 | |
 | 12 | 完成 | 2026-10-08 | `f28af6a` | 198 | 126 | 网页版回归未做（没有环境） |
-| 13 | 未开始 | | | | | |
+| 13 | 完成 | 2026-10-09 | `657fc1a` | 210 | 126 | 手工验证中有 1 次真实的标题生成调用 |
