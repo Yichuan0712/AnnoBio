@@ -77,7 +77,6 @@ import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { openDatasetDiffModal } from './datasetDiffModal.js';
-import { datasetHistorySource } from './datasetHistorySource.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
@@ -148,8 +147,6 @@ const EDGE_TYPE_RUN_TO_SCORE = 'run-to-score';
 /** Edge type for score → prompt review (LLM analyzes results and suggests prompt changes). */
 const EDGE_TYPE_SCORE_TO_PROMPT_REVIEW = 'score-to-prompt-review';
 const EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT = 'prompt-review-to-prompt';
-/** Version 2 Process → Dataset edge; only History's older input key still names it. */
-const EDGE_TYPE_PROCESS_TO_DATASET = 'process-to-dataset';
 /** Drawn from a saved Dataset's `savedFrom` (savedDatasets.js), never stored. */
 const EDGE_TYPE_SAVED_FROM = 'saved-from';
 
@@ -1010,7 +1007,7 @@ const EDGE_HIT_STROKE_WIDTH = 16;
 
 /** Horizontal gap when placing a new node to the right of its parent (source → sampler, sampler → dataset, duplicate prompt). */
 const NEW_NODE_OFFSET = 40;
-/** Step between nodes stacked on one spot (a Pipeline copy over its Dataset, a second save of one output). */
+/** Step between nodes placed on one spot (a second save of one output). */
 const STACK_OFFSET = 24;
 
 function generateNodeId() {
@@ -1278,7 +1275,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           name: datasetNode.dataset.datasetName || 'Dataset',
           color: datasetColorAt(colorIndex),
           content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
-          missingResult: datasetNode.dataset.resultMissing === '1',
         };
       })
       .filter((dataset) => dataset.content);
@@ -1380,11 +1376,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     nodeCount += 1;
     return { left: x, top: y };
   }
-  /** Where a node made from `anchor` goes: just right of it, or over it for a copy of it. A spot
-   * another node already holds steps down-right, so stacked nodes stay visible. */
-  function positionFrom(anchor, { over = false } = {}) {
-    let left = (parseFloat(anchor.style.left) || 0) + (over ? STACK_OFFSET : (anchor.offsetWidth || 280) + NEW_NODE_OFFSET);
-    let top = (parseFloat(anchor.style.top) || 0) + (over ? STACK_OFFSET : 0);
+  /** Where a node made from `anchor` goes: just right of it. A spot another node already holds
+   * steps down-right, so stacked nodes stay visible. */
+  function positionFrom(anchor) {
+    let left = (parseFloat(anchor.style.left) || 0) + (anchor.offsetWidth || 280) + NEW_NODE_OFFSET;
+    let top = parseFloat(anchor.style.top) || 0;
     const taken = Array.from(nodesLayer.querySelectorAll('.workflow-node'), (node) => [parseFloat(node.style.left) || 0, parseFloat(node.style.top) || 0]);
     while (taken.some(([x, y]) => Math.abs(x - left) < STACK_OFFSET && Math.abs(y - top) < STACK_OFFSET)) {
       left += STACK_OFFSET;
@@ -1447,8 +1443,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
   function scoreNodeIsReadyForScoring(scoreNode) {
     const gtId = (scoreNode?.dataset?.scoreGroundTruthId || '').trim();
-    return !!gtId && getNodeById(gtId)?.dataset?.resultMissing !== '1'
-      && (scoreNodeHasCompleteRules(scoreNode) || scoreNodeHasCodeMatchResult(scoreNode));
+    return !!gtId && (scoreNodeHasCompleteRules(scoreNode) || scoreNodeHasCodeMatchResult(scoreNode));
   }
   function syncScoreNodeProgressFromUpstreamRun(scoreNode) {
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return;
@@ -1901,7 +1896,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (el.classList.contains('workflow-node--dataset')) {
         return {
           nodeId, type: 'dataset', name: el.dataset.datasetName || el.dataset.subsetName || '',
-          resultMissing: el.dataset.resultMissing === '1' || undefined,
           get datasetContent() { return datasetContentByNodeId.get(nodeId); },
         };
       }
@@ -2866,9 +2860,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   function openDatasetEdgeDetailModal(edge) {
-    const contentOf = (node) => (node && node.dataset.resultMissing !== '1'
-      ? datasetContentByNodeId.get(node.dataset.nodeId) || null
-      : null);
+    const contentOf = (node) => (node ? datasetContentByNodeId.get(node.dataset.nodeId) || null : null);
     const nameOf = (node) => (node?.dataset.datasetName || node?.dataset.subsetName || '').trim() || 'Dataset';
     const fromNode = getNodeById(edge.fromId);
     const toNode = getNodeById(edge.toId);
@@ -2957,7 +2949,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     getNextDefaultSamplerName,
     findUniqueSamplerName,
     isRunNameAlreadyUsedForPromptNodeId,
-    findUniqueRunName,
     isReviewNameAlreadyUsedForScoreNodeId,
     findUniqueReviewName,
     findUniquePromptName,
@@ -3054,7 +3045,6 @@ export function buildWorkflowCanvas(root, options = {}) {
   const {
     addPromptNode,
     addPromptVersion,
-    addRunNode,
     startRunNode,
     addScoreNode,
     updateScoreNode,
@@ -3066,8 +3056,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     applyReviewSuggestions,
     addDatasetNode,
     addSamplerNode,
-    addSampledDatasetNode,
-    addProcessNode,
     importPubmedDataset,
     importClinicaltrialsDataset,
     importPreprintDataset,
@@ -3092,7 +3080,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     getConnections: () => connections,
     datasetContentByNodeId,
     readRunInputSource,
-    writeRunInputSource,
     readRunInput,
     readRunInputTable,
     readRunInputCandidates,
@@ -3103,13 +3090,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     writeProcessPrimarySource,
     readProcessInputBindings,
     readProcessInputAliases,
-    writeProcessInputs,
     createPromptNode,
-    createRunNode,
     createScoreNode,
     createDatasetNode,
     createSamplerNode,
-    createProcessNode,
     createPromptReviewNode,
     updateContentSize,
     updateEdges,
@@ -3131,15 +3115,12 @@ export function buildWorkflowCanvas(root, options = {}) {
     findUniquePromptName,
     isPromptNameAlreadyUsed,
     getPromptDataFromNode,
-    isRunNameAlreadyUsedForPromptNodeId,
-    findUniqueRunName,
     findUniqueWorkingDatasetName,
     isDatasetNameAlreadyUsed,
     isSamplerNameAlreadyUsedForSource,
     getNextDefaultSamplerName,
     findUniqueSamplerName,
     findUniqueReviewName,
-    prepareSampledDatasetFromSampler,
     buildReviewComparisonRows,
     escapeRegex,
     markNodeAsAgentCreated,
@@ -3574,14 +3555,11 @@ export function buildWorkflowCanvas(root, options = {}) {
         }
         function getGroundTruthContent(wsNodeId) {
           const c = datasetContentByNodeId.get(wsNodeId || '');
-          if (getNodeById(wsNodeId)?.dataset?.resultMissing === '1') return { headers: [], rows: [], missingResult: true };
           if (!c) return { headers: [], rows: [] };
           return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
         }
         async function getReviewPayload() {
           if (!promptNode || !runNode || !scoreNode) return null;
-          const gtId = String(scoreNode.dataset.scoreGroundTruthId || '').trim();
-          if (gtId && getNodeById(gtId)?.dataset?.resultMissing === '1') return null;
           let sections = [];
           try {
             sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
@@ -3746,7 +3724,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         }
         function getGroundTruthContent(wsNodeId) {
           const c = datasetContentByNodeId.get(wsNodeId || '');
-          if (getNodeById(wsNodeId)?.dataset?.resultMissing === '1') return { headers: [], rows: [], missingResult: true };
           if (!c) return { headers: [], rows: [] };
           return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
         }
@@ -3862,10 +3839,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
       },
       'duplicate-working-dataset': () => {
-        if (node.dataset.resultMissing === '1') {
-          showAlert('This Dataset has no current result to duplicate. Select matching upstream History or run the upstream node.', { title: 'Duplicate Dataset' });
-          return;
-        }
         const left = parseFloat(node.style.left) || 0;
         const top = parseFloat(node.style.top) || 0;
         const height = node.offsetHeight || 80;
@@ -4692,7 +4665,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           note: node.dataset.datasetNote ?? node.dataset.subsetNote ?? '',
           samplerNodeId: node.dataset.samplerNodeId || '',
           savedFrom: readSavedFrom(node.dataset.savedFrom) || undefined,
-          resultMissing: node.dataset.resultMissing === '1' || undefined,
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
           datasetContent: content ? cloneDatasetContent(content) : undefined,
           nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
@@ -4923,7 +4895,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           columnTypes: content?.columnTypes,
           rowIds: content?.rowIds,
         });
-        if (n.resultMissing) node.dataset.resultMissing = '1';
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         createdNodes.push(node);
       } else if (n.type === 'sampler') {
@@ -5342,10 +5313,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         upstreamRecordId: upstream.historyRecordId,
         upstreamState: [upstream.runCompleted, upstream.runPending, upstream.processPending, upstream.processResumable],
       }
-      : {
-        dataset: upstream,
-        datasetProducer: state.connections.find((edge) => edge.type === EDGE_TYPE_PROCESS_TO_DATASET && edge.toId === upstream?.nodeId),
-      };
+      : { dataset: upstream };
     return JSON.stringify({
       input, mapping: run?.runInputToColumn,
       settings: run?.runSettings, credential: run?.runCredentialId,
@@ -5380,18 +5348,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       const item = resolved.state.nodes.find((entry) => entry.nodeId === nodeId && entry.type === 'run');
       const live = getNodeById(nodeId);
       if (!item || !live) return null;
-      const inputId = runInputSource(resolved.state, nodeId)?.nodeId;
-      const inputDataset = resolved.state.nodes.find((entry) => entry.nodeId === inputId && entry.type === 'dataset');
-      if (inputDataset) {
-        const datasetNode = getNodeById(inputDataset.nodeId);
-        if (datasetHistorySource(inputDataset, connections)) {
-          datasetContentByNodeId.set(inputDataset.nodeId, cloneDatasetContent(inputDataset.datasetContent));
-        }
-        if (datasetNode) {
-          if (inputDataset.resultMissing) datasetNode.dataset.resultMissing = '1';
-          else delete datasetNode.dataset.resultMissing;
-        }
-      }
       for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
         if (item[key] == null) delete live.dataset[key];
         else live.dataset[key] = item[key];
@@ -5474,18 +5430,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     for (const item of resolved.state.nodes) {
       const live = getNodeById(item.nodeId);
       if (!live) continue;
-      if (item.type === 'dataset') {
-        // Only a Dataset that still follows a History record gets its content rewritten; a saved copy
-        // keeps its own table (datasetHistorySource.js).
-        if (datasetHistorySource(item, connections)) {
-          const current = datasetContentByNodeId.get(item.nodeId);
-          if (JSON.stringify(current) !== JSON.stringify(cloneDatasetContent(item.datasetContent))) {
-            datasetContentByNodeId.set(item.nodeId, item.datasetContent);
-          }
-        }
-        if (item.resultMissing) live.dataset.resultMissing = '1';
-        else delete live.dataset.resultMissing;
-      } else if (item.type === 'run') {
+      if (item.type === 'run') {
         for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
           if (item[key] == null) delete live.dataset[key];
           else live.dataset[key] = item[key];
@@ -5919,7 +5864,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     getCanvasState,
     inspectNode,
     addPromptVersion,
-    addRunNode,
     addScoreNode,
     updateScoreNode,
     updateScoreRowSelection,
@@ -5932,10 +5876,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     runProcessNode,
     stopReviewNode,
     addSamplerNode,
-    addSampledDatasetNode,
     addPromptNode,
     addDatasetNode,
-    addProcessNode,
     importPubmedDataset,
     importClinicaltrialsDataset,
     importPreprintDataset,

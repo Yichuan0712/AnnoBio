@@ -9252,4 +9252,3 @@ button.btn.btn-danger:hover:not(:disabled) {
 .settings-agent-model-status__check {
   flex-shrink: 0;
 }
-.working-dataset-missing .working-dataset-export-local { display: none; }

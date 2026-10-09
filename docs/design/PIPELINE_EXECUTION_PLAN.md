@@ -2,7 +2,7 @@
 
 日期：2026-09-30。代码基线：`main` / `0b257f9`。
 
-状态：编译器、导出器、后端 Runner 和 Current Pipeline 面板运行入口已实现；运行记录在 Pipeline Runs 页签中查看并可逐条删除，自动保留规则尚未实现，Agent 仍不能启动整条 Pipeline。多起点 Dataset 的 Python 导出已支持命名输入。其余 Phase 2 工作待实现。
+状态：编译器、导出器、后端 Runner 和 Current Pipeline 面板运行入口已实现；运行记录在每个 Pipeline 卡片的 Run History 窗口中查看（只读，界面上没有删除入口），运行结束后结果导入各步骤的节点 History（见 2026-10-08 补充），自动保留规则尚未实现，Agent 仍不能启动整条 Pipeline。多起点 Dataset 的 Python 导出已支持命名输入。其余 Phase 2 工作待实现。
 
 本文记录实施范围、执行语义、阶段顺序和验收标准。勾选表示实际完成并验证，不表示仅完成讨论。按里程碑逐步实施代码。
 
@@ -183,9 +183,9 @@ P1.2 实现记录（2026-10-01）：
 - [x] Current Pipeline 增加校验、Run、Stop、Retry/Resume 入口。
 - [x] 显示选中路线、输入数量、所用模型、整体和各 job 状态。
 - [x] 动态 Process/table 输出导致调用量未知时，明确显示未知，不给出虚假的精确成本。
-- [x] 预览中间/最终 artifact，并显式另存为工作区 Dataset。（2026-10-06 起改为运行结束后自动加到画布，面板内预览已移除。）
+- [x] 预览中间/最终 artifact，并显式另存为工作区 Dataset。（2026-10-06 起改为运行结束后自动加到画布，面板内预览已移除；2026-10-08 起不再加到画布，只导入节点 History。）
 - [x] 页面刷新可重新附着；画布修改不改变本次冻结的执行计划。
-- [x] 运行历史列表与删除入口（Pipeline Runs 页签）。
+- [x] 运行历史列表（每个 Pipeline 卡片的 Run History 窗口，只读）。下文 2026-10-06 描述的 Pipeline Runs 页签、Add results to canvas 和逐条删除已不在界面上（`deletePipelineRun` 没有调用方）。
 - [ ] 运行历史保留规则（自动清理）。
 
 验收：用户在 UI 中启动链路、查看结果并保存输出；执行中的路线与编译预览一致。
@@ -197,6 +197,8 @@ P1.2 实现记录（2026-10-01）：
 补充（2026-10-06）：副本同时接到下游。本次读取某 artifact 的 Run 改读其副本，以它为主输入 `df` 的 Process 改连其副本；导入的下游 History 记录也以副本（按画布上的内容签名）为输入，因此整条链显示本次运行的结果，下次运行的路线也经过最新副本。只在节点仍读取原 Dataset 时改连。Process 的 `df_<name>` 合并输入不改：别名由代码按 Dataset 名称引用，副本无法接替，此类 Process 保持原连接。
 
 补充（2026-10-06）：运行结果移到 Current Pipeline 之后的 Pipeline Runs 页签。Current Pipeline 只负责选择和启动路线，不显示运行状态；最近一次运行只通过卡片上的 Stop/Resume 按钮体现。Pipeline Runs 按 Pipeline 分组（编号与 Current Pipeline 一致；运行按其 job 对应的 Run/Process 节点归入当前画布上的 Pipeline，对不上的归入 Other runs），每组一张运行表；点击一行在其下方展开各步状态和 Stop/Resume/Add results to canvas/Delete。每组下另有 Single-node runs 表，列出该 Pipeline 各 Run/Process 节点上单独运行（非 Pipeline 导入）的 History 记录，点击定位并打开该节点。面板不再列出产出或预览表格：运行结束后产出已作为 Dataset 副本加到画布并导入节点 History，在画布上查看；不在画布上的运行用 Add results to canvas 加回。删除只针对已结束的运行（`DELETE /api/pipeline/runs/{run_id}`），只删 Runner 中存的表；已加到画布和节点 History 的结果不受影响。桌面端运行归属记录在项目文件中（路径哈希 + 随机 id，见 `currentProject.js`），复制、移动或另存的文件从空的运行列表开始。
+
+补充（2026-10-08）：步骤之间直接相连后（[DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md) §6），上面两段 2026-10-05、2026-10-06 的发布方式已取代。运行结束后（成功、失败或取消），前端只把已成功的 Run/Process job 导入各步骤的节点 History，并把各步骤切到这次运行的记录；不建 Dataset 副本，不改连下游。导入的记录与单节点运行的记录格式相同，只多 `pipelineRunId`：入口 Dataset 存内容快照，步骤输入只存上游记录的引用。一次运行是否已导入，按 History 中是否已有它每个成功 job 的记录判断（记录 ID 由运行和节点决定），所以 Stop 后 Resume 会补导入后完成的 job，重新打开项目不会重复导入。改动之前产生、中间产物还是 Dataset 的运行不再导入，Run History 中提示原因。运行记录在每个 Pipeline 卡片的 Run History 窗口中查看。
 
 Runner 状态新增冻结的可展示执行计划：输入、依赖、模型快照、有效设置及调用量估计。单行形状的 LLM 可继续传播已知行数；经过 Process 或 table 形状后，下游调用量记为未知（`null`）。模型快照不含 API key；实际调用和恢复仍按凭据 ID 解析当前 secret。
 

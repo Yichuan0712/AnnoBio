@@ -179,8 +179,6 @@ class _Compiler:
         for nid in self.boundaries:
             if self.selected.get(nid, {}).get("type") != "dataset":
                 self.report("INVALID_INPUT", nid, "input_dataset_ids", "An input boundary must be a selected Dataset.")
-            elif self.selected[nid].get("resultMissing"):
-                self.report("MISSING_RESULT", nid, "resultMissing", "An input Dataset has no current result.")
         if not isinstance(self.defaults, dict):
             self.report("INVALID_DEFAULTS", "", "run_defaults", "Run defaults must be an object.")
             self.defaults = {}

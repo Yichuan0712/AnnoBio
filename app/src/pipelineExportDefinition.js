@@ -1,4 +1,4 @@
-import { assertPipelineInputsAvailable, pipelineInputDatasetIds } from './pipelineInputAvailability.js';
+import { pipelineInputDatasetIds } from './pipelineInputAvailability.js';
 import { stepSourceLabel } from './stepInputs.js';
 
 function selectedNodeIds(route) {
@@ -22,7 +22,6 @@ export function exportCanvasDefinition(canvasState, route) {
           type: 'dataset',
           nodeId: node.nodeId,
           name: node.name,
-          resultMissing: !!node.resultMissing,
           datasetContent: {
             headers: node.datasetContent?.headers || [],
             columnTypes: node.datasetContent?.columnTypes || [],
@@ -81,7 +80,6 @@ export function exportCanvasDefinition(canvasState, route) {
 
 /** Every external Dataset in the selected route is an explicit input boundary. */
 export function buildPipelineExportRequest({ name, canvasState, route }) {
-  assertPipelineInputsAvailable(canvasState, route);
   return {
     name,
     canvas_state: exportCanvasDefinition(canvasState, route),

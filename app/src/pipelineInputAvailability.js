@@ -21,13 +21,3 @@ export function pipelineInputDatasetIds(route, canvasState = null) {
   }
   return ids;
 }
-
-export function assertPipelineInputsAvailable(canvasState, route) {
-  const nodes = new Map((canvasState?.nodes || []).map((node) => [node?.nodeId, node]));
-  for (const id of pipelineInputDatasetIds(route, canvasState)) {
-    const dataset = nodes.get(id);
-    if (dataset?.resultMissing) {
-      throw new Error(`Input Dataset "${dataset.name || id}" has no current result. Run its upstream node first.`);
-    }
-  }
-}

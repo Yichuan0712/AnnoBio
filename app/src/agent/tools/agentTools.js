@@ -292,8 +292,6 @@ async function tryProcess(args, runtime) {
   const sent = bindings
     .filter((b) => b.primary || used.has(b.alias))
     .map((b) => (b.primary ? { ...b, content: { ...b.content, rows: b.content.rows.slice(0, maxRows) } } : b));
-  const missing = sent.find((binding) => binding.missingResult);
-  if (missing) return { error: `Input Dataset "${missing.name}" has no current result.` };
   try {
     const { outputs } = await runProcessCode({ code, bindings: sent, signal: runtime.signal });
     return {

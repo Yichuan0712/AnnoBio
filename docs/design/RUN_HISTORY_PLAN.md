@@ -56,7 +56,7 @@
 **Dataset 的签名**：
 
 - **原始 Dataset**：用内容的规范化哈希；输入签名另外带 Dataset 节点 ID。换到内容相同的另一个 Dataset 节点仍算换输入。
-- **派生 Dataset**（来自某个 Run / Process 的结果）：用"Dataset 节点 ID + 来源记录 ID + 分支名"。来源没有当前记录或该分支不存在时，签名不可用，不能把空表当作有效输入。这一条是下游能跟着切换的关键。
+- **派生 Dataset**（来自某个 Run / Process 的结果）：用"Dataset 节点 ID + 来源记录 ID + 分支名"。来源没有当前记录或该分支不存在时，签名不可用，不能把空表当作有效输入。这一条是下游能跟着切换的关键。（已由 [DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md) §3.8 取代：派生 Dataset 已删除，所有 Dataset 按内容签名；读取上游步骤的输入按上游记录签名。）
 - 哈希覆盖实际执行会读取的表格内容、列类型、行 ID 和资源引用；统一字段顺序、编码和空值表示。同一份输入在窗口、Agent、保存/重开后要得到相同签名。
 
 ### 按钮状态
@@ -87,6 +87,8 @@ Run 的 Resume 沿用已处理行，从下一行继续写入同一条记录。Pr
 - **运行中**：当前节点或预演会触及的任何节点正在执行时，不允许切换；对应 History 操作不可用或给出明确的运行中提示。
 
 ## 下游跟随
+
+> 其中派生 Dataset 写回的部分已由 [DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md) 取代：中间数据不再存在画布上，下游直接读取上游步骤的输出（§3.8）。
 
 某个节点的当前记录变了以后，按拓扑顺序依次处理下游：
 
@@ -157,6 +159,8 @@ Score / Review 的结果不能只按 Run 记录 ID 归档。Score 的代码匹�
 
 ## 迁移
 
+> 已由 [DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md) 取代：旧格式迁移代码已删除（DATA_FLOW_PLAN.md 第 0 步），派生 Dataset 的处理见 DATA_FLOW_DESIGN.md §9。
+
 旧项目打开时的处理：
 
 - **已有结果的 Run / Process**：把当前结果做成第 1 条记录，签名按现在的输入计算。
@@ -191,7 +195,7 @@ Score / Review 的结果不能只按 Run 记录 ID 归档。Score 的代码匹�
 2. **改原始 Dataset 的内容算换输入。** 理由同上，结果和数据对得上才有意义。（同上，见第 8 条。）
 3. **换 Settings 默认模型不算换输入，只记录。** 否则改一次 Settings，所有 Run 都会变成"没有结果"。代价是同样的输入没法换模型再跑；以后需要时，可以在 Run 窗口加模型选择，让模型成为输入的一部分。
 4. **选一条下游记录时，上游一起切。** 这样画布上每个节点显示的都是同一条链上的数据。
-5. **保存的输出是拷贝。**（2026-10-02 修订；原为"派生 Dataset 只读"，中间试过"可手改并在 History 里提醒"，均撤回。）History 记录里存着每次的输出；画布上保存出来的 Dataset 只是拷贝，之后怎么改都不影响记录。
+5. **保存的输出是拷贝。**（2026-10-02 修订；原为"派生 Dataset 只读"，中间试过"可手改并在 History 里提醒"，均撤回。已由 [DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md) §3.6 取代：保存出来的 Dataset 是普通 Dataset，只用 `savedFrom` 记下来源，不再参与 Pipeline；下面几条只描述当时的做法。）History 记录里存着每次的输出；画布上保存出来的 Dataset 只是拷贝，之后怎么改都不影响记录。
    - Run 的 "Save results" 和 Process 的 "Create dataset"（含 Agent 的 save_run_results / save_process_output）生成的 Dataset 带 `savedCopy`。它保留 `sourceRunNodeId` / `process-to-dataset` 这条产出关系，Pipeline 照常串联、照常重算它；但 History 不再写回它的内容，签名按内容算，没有"没有结果"状态（`datasetHistorySource.js`）。
    - 没被下游用来出结果之前可以改，用过之后按第 8 条锁定。
    - 旧项目里仍跟随 History 的输出（没有 `savedCopy`）照旧工作；第一次修改时变成拷贝。被下游用过的本来就锁定，保持原样，下游已有结果不受影响。

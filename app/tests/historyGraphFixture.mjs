@@ -1,47 +1,23 @@
-/** Shared History test graph: input Dataset → Run → saved Run output → Process → saved Process output.
- * Written in the version 2 fields; the outputs still follow History (upgradeKeepingDerivedDatasets). */
-import { buildRunResultsTable } from '../src/runResultsExport.js';
+/** Shared History test graph: input Dataset → Run → Process, the Process reading the Run's output
+ * directly (docs/design/DATA_FLOW_DESIGN.md §3.3). */
 import { captureHistoryInput, runningHistoryRecord } from '../src/runHistoryCapture.js';
-import { upgradeCanvasState } from '../src/canvasFormat.js';
 
 export const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
 export const prompt = { type: 'prompt', nodeId: 'prompt', name: 'Prompt', sections: [{ content: 'Say {{text}}' }], outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} };
 export const input = { type: 'dataset', nodeId: 'input', name: 'Input', datasetContent: content('hello') };
 export const runResults = [{ row_index: 0, input_row_index: 0, output: { answer: 'world' } }];
-export const run = { type: 'run', nodeId: 'run', runWorkingSetId: 'input', runInputToColumn: '{"text":"text"}', runInputContent: JSON.stringify(input.datasetContent), runResults: JSON.stringify(runResults), runCompleted: '1' };
-const exported = buildRunResultsTable({ results: runResults, runContent: input.datasetContent, schemaFields: prompt.outputFormat.fields });
-export const runDataset = { type: 'dataset', nodeId: 'run-dataset', name: 'Run export', sourceRunNodeId: 'run', datasetContent: { ...exported, rowIds: ['generated-id'] } };
+export const run = { type: 'run', nodeId: 'run', runInputToColumn: '{"text":"text"}', runInputContent: JSON.stringify(input.datasetContent), runResults: JSON.stringify(runResults), runCompleted: '1' };
 export const processResult = { headers: ['answer'], rows: [['processed']] };
-export const process = { type: 'process', nodeId: 'process', name: 'Process', dfCode: 'return df', primaryDatasetId: 'run-dataset', dfResults: JSON.stringify({ outputs: { result: processResult }, statusText: '1 branch returned.' }) };
-export const processDataset = { type: 'dataset', nodeId: 'process-dataset', name: 'Process export', processOutputName: 'result', datasetContent: { ...processResult, columnTypes: ['text'], rowIds: ['generated-id-2'] } };
-const PRODUCER_EDGES = new Set(['process-to-dataset', 'process-to-dataset-snapshot', 'run-to-dataset-snapshot']);
-
-/**
- * A version 2 canvas with its inputs upgraded to data connections, but its Datasets that follow a
- * step's History kept as version 2 had them. A canvas opened from disk no longer has such Datasets
- * (canvasFormat.js makes them plain, with `savedFrom`); this keeps the History tests of that logic
- * running until DATA_FLOW_PLAN.md step 12 deletes the logic together with them.
- */
-export function upgradeKeepingDerivedDatasets(state) {
-  const upgraded = upgradeCanvasState(state);
-  const datasets = new Map(state.nodes.filter((node) => node.type === 'dataset').map((node) => [node.nodeId, node]));
-  const dataEdges = upgraded.connections.filter((edge) => edge.type === 'data');
-  const added = dataEdges.slice(state.connections.filter((edge) => edge.type === 'data').length);
-  return {
-    ...upgraded,
-    nodes: upgraded.nodes.map((node) => (datasets.has(node.nodeId) ? structuredClone(datasets.get(node.nodeId)) : node)),
-    connections: [...state.connections.filter((edge) => edge.type !== 'dataset-to-process').map((edge) => ({ ...edge })), ...added],
-  };
-}
-
-export const graph = upgradeKeepingDerivedDatasets({
-  nodes: [input, prompt, run, runDataset, process, processDataset],
+export const process = { type: 'process', nodeId: 'process', name: 'Process', dfCode: 'return df', dfResults: JSON.stringify({ outputs: { result: processResult }, statusText: '1 branch returned.' }) };
+export const graph = {
+  version: 3,
+  nodes: [input, prompt, run, process],
   connections: [
     { type: 'prompt-to-run', fromId: 'prompt', toId: 'run' },
-    { type: 'dataset-to-process', fromId: 'run-dataset', toId: 'process' },
-    { type: 'process-to-dataset', fromId: 'process', toId: 'process-dataset' },
+    { type: 'data', fromId: 'input', fromPort: 'result', toId: 'run' },
+    { type: 'data', fromId: 'run', fromPort: 'result', toId: 'process', alias: 'df' },
   ],
-});
+};
 
 export const indexOf = (records) => ({ records: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) });
 

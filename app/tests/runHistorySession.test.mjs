@@ -51,9 +51,6 @@ test('nodes merged in with cached results but no records show no result', async 
   const incoming = structuredClone(graph);
   incoming.nodes.forEach((node) => {
     node.nodeId = `new-${node.nodeId}`;
-    if (node.runWorkingSetId) node.runWorkingSetId = `new-${node.runWorkingSetId}`;
-    if (node.primaryDatasetId) node.primaryDatasetId = `new-${node.primaryDatasetId}`;
-    if (node.sourceRunNodeId) node.sourceRunNodeId = `new-${node.sourceRunNodeId}`;
   });
   incoming.connections.forEach((edge) => { edge.fromId = `new-${edge.fromId}`; edge.toId = `new-${edge.toId}`; });
   const merged = { historyVersion: 1, nodes: [...recorded.state.nodes, ...incoming.nodes], connections: [...recorded.state.connections, ...incoming.connections] };
