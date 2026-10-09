@@ -1217,7 +1217,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 - [x] Prompt 优化流程不受影响：Dataset → Sampler → 子集 → Run → Score → Review → Apply。（Review 用的是假模型，没有得到建议，见完成记录。）
 - [x] History：切换、撤销、重做、删除记录及级联删除。
 - [x] Export Python Project。
-- [ ] 若有网页版环境，打开、保存、合并项目各做一次。（本机没有网页版环境，未做。）
+- [x] 若有网页版环境，打开、保存、合并项目各做一次。（2026-10-09 在本地补做，见完成记录末尾。）
 
 **发布说明要点（第 8–12 步一起发布）：**
 
@@ -1234,7 +1234,7 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 - [x] 前后端测试全部通过。
 - [x] 构建通过。
 - [x] grep 检查结果已记录。
-- [x] 全面回归通过（网页版一项因没有环境未做）。
+- [x] 全面回归通过。
 
 **完成记录：** 2026-10-08 完成。
 
@@ -1257,6 +1257,11 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
   - Prompt 优化：Sentences 右键 Sample → Create sample → Extract 右键 Run，以子集为输入运行 → Run 右键 Score，以 Sentences 为 ground truth、按 `#` 规则本地计算（4/4）→ Review：全部匹配时没有调用模型、没有建议；改用 2 行的 ground truth（2/4）后 Review 调用 2 次假模型，仍没有建议（占位输出不是有效的修改）→ Apply 生成新的 Prompt 版本。这条流程本步只改了 Score 的分析签名（去掉派生 ground truth），单元测试覆盖。
   - History：在 Merge 的 History 中选单节点运行的记录，确认后上游 3 个步骤一起切回；确认框只列出 4 个步骤，Sentences 不再出现（以前派生 Dataset 重连输出也会被列出）。切换不是撤销步骤（`historyRecordId` 在 `undoHistory.js` 中按运行结果处理，本来如此）。改 Merge 的代码 → 结果消失；Ctrl+Z → 约 0.3 秒后恢复原记录；Ctrl+Y → 结果消失；再 Ctrl+Z → 恢复。在 Extract 的 History 中删除 Pipeline 导入的那条记录，确认框提示连带删除 3 条下游记录，删除后存档中只剩 4 条单节点记录。
   - Export Python Project：4 个步骤，Process 和 Judge 直接读取上游输出，唯一输出工作表以 Merge Process 的名字命名；所有模块可编译，`python main.py --help` 正常。
+  - 网页版（2026-10-09 补做，代码为第 13 步之后的 `7d194ef`）：当时写的“没有环境”不准确，只是手边没有运行着的网页版。网页版前端与桌面版是同一份代码，项目存在后端的 `project_store` 里，History 是单独的记录文件。本地搭法：把后端复制到一个独立目录运行（数据、设置、凭据都是空的，所以不可能调用模型；设置里只填了 Python 路径），构建网页版前端，用一个小的 Node 服务把前端（`/app/`）和 `/api`、`/health` 放在同一个来源下，与 Hub 的做法相同；只缺 Hub 自己的登录和 `/whoami`，前端对此有容错。用无界面的 Edge 操作。没有用 Docker 组件（Docker Desktop 没有运行）。
+    - 打开：从项目选择窗口导入原版 Kinase 示例副本，读档转换与桌面版相同（12 个 Dataset、11 个有 `savedFrom`、没有旧字段、11 条来源线、10 条数据连线、只有第一个 Run 有结果）。和桌面版一样，打开本身不保存，存档要等下一次修改后才变成 version 3。
+    - 保存：在网页上运行 Tidy extracted pairs，存档变成 version 3（`savedFrom` 11 个、没有旧字段、连线只有 `prompt-to-run` 和 `data`），新记录作为单独文件写入。导入第 11 步的直连测试项目，运行 Split，新记录的输入是 `{kind: 'step', recordId: <Extract 的记录>}`，没有复制表格，`sourceRecordIds` 正确；整页刷新后重新打开，各节点停在同样的记录上。
+    - 合并：把已保存为 version 3 的 Kinase 项目合并进直连项目，节点、Dataset、`savedFrom`、数据连线和有结果的步骤数都是两者之和。再新建空项目，合并仍为 version 2 的 repaired 示例：页面上的结果与桌面版打开它时相同（34 个 Dataset、33 个有 `savedFrom`、9 个步骤中 8 个有结果）。后端合并时直接拼接两份存档，所以合并后的存档在下一次修改前仍带着旧字段（标为 version 3）；由于转换按字段而不是按 version 进行，读取时照样正确，第一次修改后的自动保存就写成新格式。
+    - 测试中遇到两件与本计划无关的事：一是本地后端放在 scratchpad 的长路径下时，写 History 临时文件超过 Windows 的路径长度限制而失败（网页版运行在 Linux 上，不受影响），换到短路径即可；二是把同一示例的两个副本先后合并进同一个项目时，后端以 “History record ID conflicts during merge” 拒绝（两者的记录 ID 相同），这是原有的合并规则。
 
 ---
 
@@ -1337,5 +1342,5 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 9 | 完成 | 2026-10-08 | `e787111` | 200 | 127 | |
 | 10 | 完成 | 2026-10-08 | `e2e6736` | 201 | 127 | |
 | 11 | 完成 | 2026-10-08 | `dc160e9` | 208 | 127 | |
-| 12 | 完成 | 2026-10-08 | `f28af6a` | 198 | 126 | 网页版回归未做（没有环境） |
+| 12 | 完成 | 2026-10-08 | `f28af6a` | 198 | 126 | 网页版回归 2026-10-09 补做 |
 | 13 | 完成 | 2026-10-09 | `657fc1a` | 210 | 126 | 手工验证中有 1 次真实的标题生成调用 |
