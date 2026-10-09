@@ -32,6 +32,14 @@ function linkRef(linked, missing) {
   return linked ? `${quote(linked.title)} [${linked.nodeId}]` : missing;
 }
 
+/** An input the inspector returned (linkedSource): a Dataset, or a step's output and its branch. */
+function sourceRef(linked, missing) {
+  if (!linked) return missing;
+  if (linked.type === 'dataset') return linkRef(linked);
+  const branch = linked.branch && linked.branch !== 'result' ? ` branch ${quote(linked.branch)}` : '';
+  return `the output of ${linked.type} ${linkRef(linked)}${branch}`;
+}
+
 const STEP_LABELS = { prompt: 'Run prompt', process: 'Process data' };
 
 /** An input as the summary names it: a Dataset by its name, another step's output by that step. */
@@ -128,18 +136,22 @@ function promptLine(node, lookup, versionsById, extractInputFields) {
 function runLine(node, inspection) {
   const d = inspection.details;
   const prompt = linkRef(d.prompt, '(no prompt)');
-  const dataset = linkRef(d.inputDataset, '(no input dataset)');
+  const input = sourceRef(d.input, '(no input)');
   const errors = d.errorRows ? `, ${d.errorRows} errors` : '';
-  return `- ${ref(node)}: prompt ${prompt} on ${dataset}; model ${d.model}; ${d.status}, ${d.inputRowsDone}/${d.inputRows} input rows${errors}`;
+  const waiting = d.waitingFor ? `; waiting: ${d.waitingFor}` : '';
+  return `- ${ref(node)}: prompt ${prompt} on ${input}; model ${d.model}; ${d.status}, ${d.inputRowsDone}/${d.inputRows} input rows${errors}${waiting}`;
 }
 
 function processLine(node, inspection) {
   const d = inspection.details;
-  const inputs = d.inputs.map((i) => `${linkRef(i)}${i.alias ? ` as ${i.alias}` : ''}`).join(', ');
+  const inputs = d.inputs.map((i) => `${sourceRef(i)}${i.alias ? ` as ${i.alias}` : ''}`).join(', ');
   const outputs = Object.entries(processOutputsOf(node))
     .map(([name, branch]) => `${name} (${branch.rows.length} rows)`)
     .join(', ');
-  return `- ${ref(node)}: reads ${inputs || '(no inputs)'}; last output ${outputs || '(not run)'}`;
+  const branches = d.branches.dynamic ? '; branches are built at run time'
+    : d.branches.names.length > 1 || (d.branches.names[0] && d.branches.names[0] !== 'result') ? `; branches ${d.branches.names.join(', ')}` : '';
+  const waiting = d.waitingFor ? `; waiting: ${d.waitingFor}` : '';
+  return `- ${ref(node)}: reads ${inputs || '(no inputs)'}${branches}; last output ${outputs || '(not run)'}${waiting}`;
 }
 
 function samplerLine(node, lookup) {

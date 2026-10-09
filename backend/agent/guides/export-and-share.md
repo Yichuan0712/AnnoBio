@@ -17,21 +17,22 @@ input mapping, output schema and model), `engine/` (LLM access through LiteLLM o
 `.env.example` (the API keys to set). A route of only Processes has none of these and needs no API key.
 
 - Input and output are Excel workbooks. Image and pdf cells hold a JSON list of file paths relative to
-  the workbook. When the route ends in several Datasets, the output workbook has one sheet per Dataset.
+  the workbook. A route that starts from several Datasets takes one workbook per Dataset
+  (`--input DATASET_ID=FILE.xlsx`). The output workbook has one sheet per final output: each step
+  output nothing else in the route reads, named after its Prompt, its Process, or its branch.
 - No data is included: no Dataset rows, images or pdfs.
 
 Only the chosen route is exported. Alternatives visible on the canvas but not chosen (other prompt
-versions, other Runs, other Processes, other Dataset branches) are left out, as are Score and Review
-nodes.
+versions, other Runs, other Processes) are left out, as are Score and Review nodes. Datasets saved
+from a step are not part of the route: the export follows the steps' direct connections.
 
 A route exports only if:
-- it starts from exactly one Dataset. A route that merges Datasets coming from different starting
-  Datasets is valid on the canvas but cannot be exported yet;
+- every step it reads is in the route (a step reading one left out is reported by name);
 - every Prompt has content and at least one output field, and every Run maps each Prompt input to an
   existing column of the right type (an unmapped input is matched to a column of the same name when
   there is exactly one);
-- every Process defines `process(df, ...)`, with one parameter per other Input dataset. A Process at the end of the route without a saved output Dataset
-  must return one DataFrame, not named branches.
+- every Process defines `process(df, ...)`, with one parameter per other input, and returns every
+  branch its code was detected to return.
 
 If export fails, the panel shows the reason. Fix the named node and export again.
 

@@ -78,7 +78,6 @@ import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
 import { openDatasetDiffModal } from './datasetDiffModal.js';
 import { resolveDataframeProcessCode } from './processCode.js';
-import { buildProcessDatasetBindings } from './processDatasetBindings.js';
 import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
 import { codeHashOf, effectiveProcessOutputs, parseProcessOutputPorts } from './processOutputPorts.js';
 import { CANVAS_VERSION } from './canvasFormat.js';
@@ -1265,24 +1264,6 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content (imported or sampled) */
   const datasetContentByNodeId = new DatasetContentMap();
-
-  function getProcessDatasets(processNode) {
-    const datasets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'))
-      .map((datasetNode) => {
-        const colorIndex = normalizeDatasetColorIndex(datasetNode.dataset.datasetColorIndex) ?? 0;
-        return {
-          nodeId: datasetNode.dataset.nodeId,
-          name: datasetNode.dataset.datasetName || 'Dataset',
-          color: datasetColorAt(colorIndex),
-          content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
-        };
-      })
-      .filter((dataset) => dataset.content);
-    const primary = readProcessPrimarySource(processNode);
-    // Records the fallback (the first input) as the primary, so it stays put when inputs change.
-    if (primary) writeProcessPrimarySource(processNode, primary);
-    return { datasets, primaryDatasetId: sourceKey(primary) };
-  }
 
   /** Every image/PDF asset id any dataset node's asset cells currently reference — the "keep" set
    * for pruneUnusedImageAssets (see renderer.js): anything in the project's asset registry that
@@ -3227,11 +3208,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         startRunNode,
         stopRunNode,
         runProcessNode,
-        // df / df_<name> bindings over every canvas Dataset for try_process, as a Process would see them.
-        getDatasetBindings: (primaryDatasetId) => {
-          const { datasets } = getProcessDatasets(null);
-          return buildProcessDatasetBindings(datasets, primaryDatasetId);
-        },
         createAndRunReviewNode,
         stopReviewNode,
         verifyReviewSuggestions,
@@ -5506,8 +5482,10 @@ export function buildWorkflowCanvas(root, options = {}) {
   function applyAgentCanvasState(nextState, { highlightNodeIds = [] } = {}) {
     // A node's detail window keeps a reference to its element; rebuilding the canvas under it
     // would leave its edits writing to a detached node.
+    // The Pipeline Run History window stays in the page, hidden, once the panel has opened; it holds
+    // no node element either way.
     const openWindows = Array.from(document.querySelectorAll('.modal-overlay')).filter((el) => (
-      !el.classList.contains('agent-window-overlay') && !el.classList.contains('pipeline-overview-overlay')
+      !el.hidden && !['agent-window-overlay', 'pipeline-overview-overlay', 'pipeline-runs-overlay'].some((name) => el.classList.contains(name))
     ));
     if (openWindows.length) {
       throw new Error('A node window is open on the canvas. Close it, then apply the proposal again.');

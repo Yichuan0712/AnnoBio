@@ -32,10 +32,10 @@ test('a new Prompt needs a mapping for its own inputs', () => {
 
 test('a Run with results keeps its Prompt, input and mapping, as in the Run window', () => {
   const ran = canvas({ runResults: JSON.stringify([{ input_row_index: 0, output: { a: 'x' } }]) });
-  for (const set of [{ prompt: 'p2', input_mapping: { title: 'title' } }, { input_dataset: 'raw' }, { input_mapping: { text: 'title' } }]) {
+  for (const set of [{ prompt: 'p2', input_mapping: { title: 'title' } }, { input: 'raw' }, { input_mapping: { text: 'title' } }]) {
     assert.throws(() => plan(ran, set), /already has results/);
   }
-  assert.throws(() => plan(canvas({ runCompleted: '1' }), { input_dataset: 'raw' }), /already has results/);
+  assert.throws(() => plan(canvas({ runCompleted: '1' }), { input: 'raw' }), /already has results/);
 });
 
 test('a history-enabled Run can switch inputs; editing a saved Dataset only changes its table', () => {

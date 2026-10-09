@@ -8,7 +8,7 @@ import { nodeTitle, readNodeRows, traceRunRow } from '../canvas/workflowNodeInsp
 import { loadSources } from '../operations/proposals.js';
 import { previewTableRows } from '../execution/runJobs.js';
 import { runProcessCode } from '../../processRunClient.js';
-import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
+import { processTrialInputs } from '../canvas/processTrialInputs.js';
 import { readPipelineRuns } from '../pipeline/pipelineActions.js';
 
 const MAX_TOOL_RESULT_CHARS = 24000;
@@ -73,7 +73,7 @@ export const AGENT_TOOL_DEFINITIONS = [
   ),
   tool(
     'inspect_node',
-    'Full configuration of one node: prompt sections, inputs and output schema; dataset columns and a preview; process code, inputs, aliases and outputs; run mapping, model and progress; score rules and metrics; review suggestions with verification results; plus its connections and any configuration problems. Run and Process nodes also include saved History records with readable input/output descriptions and currentHistoryRecordId.',
+    'Full configuration of one node: prompt sections, inputs and output schema; dataset columns, a preview and where it came from (producedBy); process code, inputs (a dataset or a step output, with branch and alias), every input it could read under its df_<alias> (availableInputs), its branches and which steps read them; run input (a dataset or a step output), mapping, model and progress; what a run or process waits for (waitingFor); score rules and metrics; review suggestions with verification results; plus its connections and any configuration problems. Run and Process nodes also include saved History records with readable input/output descriptions and currentHistoryRecordId.',
     { node_id: NODE_ID },
     ['node_id'],
   ),
@@ -137,16 +137,16 @@ Operations ("op" plus the fields listed):
 - add_dataset: ref, name, note?, columns (names), rows (lists of cells, or objects keyed by column). Text only.
 - import_dataset: ref, source (pubmed | clinicaltrials | chembl | preprint), ids, fields (from search_source's importable_fields), name, note?. Records are fetched when applied.
 - add_sampler: ref (the sampler), dataset_ref (the sampled dataset), source (dataset), sampling (random | random_with_replacement | rows), size + size_unit (rows | percent) for random, rows ("1 3 5-10") for rows, name?, dataset_name?.
-- add_process: ref, name, primary_input (dataset, df in the code), code defining process(df, ...); each other input dataset is a parameter after df named after its df_<alias> (see inspect_node on a process, or the process-code guide). Not run until the user runs it.
+- add_process: ref, name, primary_input (a dataset, run or process: df in the code), primary_branch (only for a process with several branches), code defining process(df, ...); every other input (a dataset or a step output) is a parameter after df named after its df_<alias> (inspect_node on a process lists them under availableInputs; see the process-code guide). Not run until the user runs it.
 - add_prompt: ref, name, note?, sections [{name, content}] with {variable} inputs, input_types? {variable: text | image | pdf}, output {return_shape: single | table, fields [{key, type: str | float | list_str | list_float, description, examples?}]}.
 - add_prompt_version: ref, prompt (source), name?, and what to change: section_edits [{name, content}] (replaces those sections by name, appends new names, keeps the rest) or sections (the complete new list), input_types, output (only what changes: {return_shape} alone keeps the fields), note. Everything else is copied. Prefer this over editing a prompt that already has runs.
-- add_run: ref, prompt, input_dataset, input_mapping {prompt input: column}, name?. It uses the model and settings in Settings → Run defaults. Not started until the user starts it.
+- add_run: ref, prompt, input (a dataset, a run whose results it reads, or a process), input_branch (only for a process with several branches), input_mapping {prompt input: column of what it reads}, name?. Steps connect directly: read another step's output instead of saving it as a dataset first. A run or process without a result yet has no known columns: leave out input_mapping, run it, then set input_mapping with update. A process's branches are known once its code has been checked or it has run, so read a process added or rewritten in this proposal in a later one. It uses the model and settings in Settings → Run defaults. Not started until the user starts it.
 - add_score: ref, run, ground_truth (dataset), comparison [{field (prompt output key), ground_truth_columns, match?}], pairing? [{run_input_column (or "#" for row number), ground_truth_columns, match?}] to decide which ground-truth row belongs to which run row, combine? (all | any); or match_code defining match(input_row, output_row, gt_row) instead of rules. match: {ignore_case, ignore_symbols, ignore_whitespace, contains, semantic, embedding, rxnorm, mesh: booleans; numeric: exact | abs | rel | decimals, tolerance, decimals}.
-- save_run_results: ref, run, name?. Saves a run's results (input columns plus output fields), the same table its readers get, as a plain dataset that records the run and its current History record it came from. Fails if the run has no History record.
-- save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a plain dataset that records the process, branch and current History record it came from. Fails if the process has no History record.
+- save_run_results: ref, run, name?. Saves a run's results (input columns plus output fields), the same table its readers get, as a plain dataset that records the run and its current History record it came from. Only to freeze or hand-edit results: a dataset does not follow the run, and a step reading it starts a new pipeline. Fails if the run has no History record.
+- save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a plain dataset that records the process, branch and current History record it came from. Only to freeze or hand-edit an output. Fails if the process has no History record.
 - apply_review: ref, review, suggestion_ids, name?. Creates a new prompt from the review's prompt with those suggestions applied.
-- update: node, set {field: value}. prompt: name, note, section_edits or sections, input_types, output. dataset: name, note, columns, rows (text-only ordinary datasets). process: name, code, primary_input. run: name, prompt, input_dataset, input_mapping (with History enabled, changing these inputs selects a different result or a new run). score: name, ground_truth, comparison (+ pairing, combine), match_code. sampler, review: name. A prompt or dataset that has produced results is locked: only its name and note can change; make a new version (add_prompt_version) or a new dataset (add_dataset) instead. A process's code stays editable; History keeps each run.
-- select_history: record_id. Restore that Run or Process record together with the matching upstream and downstream History lineage, including its Dataset connections. Use it alone in a proposal; the user sees and approves the affected nodes.
+- update: node, set {field: value}. prompt: name, note, section_edits or sections, input_types, output. dataset: name, note, columns, rows (text-only ordinary datasets). process: name, code, primary_input, primary_branch. run: name, prompt, input, input_branch, input_mapping (with History enabled, changing these inputs selects a different result or a new run). score: name, ground_truth, comparison (+ pairing, combine), match_code. sampler, review: name. A prompt or dataset that has produced results is locked: only its name and note can change; make a new version (add_prompt_version) or a new dataset (add_dataset) instead. A process's code stays editable; History keeps each run.
+- select_history: record_id. Restore that Run or Process record together with the matching upstream and downstream History lineage, including the inputs it read. Use it alone in a proposal; the user sees and approves the affected nodes.
 - delete_history: record_id. Delete a non-current Run or Process record and every dependent history record. Use it alone in a proposal; the user sees the count before approving.
 - remove: node.`,
     {
@@ -168,10 +168,11 @@ Operations ("op" plus the fields listed):
   ),
   tool(
     'try_process',
-    'Run Process code on the canvas data without changing anything, to check it before proposing it. df is the primary dataset (only its first max_rows rows); each other dataset the code declares as a parameter named after its df_<alias> is passed in full. Returns each output branch with its row count, columns and first rows, or the Python error. No model calls, nothing to confirm.',
+    'Run Process code on the canvas data without changing anything, to check it before proposing it. df is what primary_input gives (only its first max_rows rows): a dataset, a run\'s results or a process branch, each as it is now; a step without a result cannot be read yet. Each other input the code declares as a parameter named after its df_<alias> (a dataset or a step output) is passed in full. Returns each output branch with its row count, columns and first rows, or the Python error. No model calls, nothing to confirm.',
     {
-      code: { type: 'string', description: 'Python source defining process(df, ...), one parameter per other input dataset.' },
-      primary_input: { type: 'string', description: 'Exact id of the dataset used as df.' },
+      code: { type: 'string', description: 'Python source defining process(df, ...), one parameter per other input.' },
+      primary_input: { type: 'string', description: 'Exact id of the dataset, run or process used as df.' },
+      primary_branch: { type: 'string', description: 'The branch to read when primary_input is a process with several branches.' },
       max_rows: { type: 'integer', minimum: 1, maximum: 1000, description: 'Rows of the primary dataset to use. Default 50.' },
     },
     ['code', 'primary_input'],
@@ -275,28 +276,25 @@ async function searchSource(args) {
   return { ...body, importable_fields: importableFields };
 }
 
-/** try_process: run code on the canvas datasets (the primary one truncated) and report the branches. */
+/** try_process: run code on the inputs a Process reading primary_input would get (df truncated) and report the branches. */
 async function tryProcess(args, runtime) {
-  const state = runtime.getCanvasState();
-  const primary = state.nodes.find((n) => n.nodeId === args.primary_input && n.type === 'dataset');
-  if (!primary) return { error: 'primary_input must be the id of a dataset on the canvas.' };
   const code = String(args.code || '');
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) return { error: 'The code must define process(df).' };
-  const bindings = runtime.getDatasetBindings(primary.nodeId);
-  const used = referencedDatasetAliasNames(code);
-  const unknown = [...used].filter((alias) => !bindings.some((b) => b.alias === alias));
-  if (unknown.length) {
-    return { error: `Unknown dataset alias ${unknown.join(', ')}. Available: ${bindings.filter((b) => !b.primary).map((b) => `${b.alias} ("${b.name}")`).join(', ')}` };
+  let inputs;
+  try {
+    inputs = processTrialInputs(runtime.getCanvasState(), code, args.primary_input, args.primary_branch);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
   }
   const maxRows = Math.min(1000, Math.max(1, Number(args.max_rows) || 50));
-  const sent = bindings
-    .filter((b) => b.primary || used.has(b.alias))
-    .map((b) => (b.primary ? { ...b, content: { ...b.content, rows: b.content.rows.slice(0, maxRows) } } : b));
+  const primary = inputs.find((binding) => binding.primary);
+  const sent = inputs.map((binding) => (binding.primary
+    ? { ...binding, content: { ...binding.content, rows: binding.content.rows.slice(0, maxRows) } } : binding));
   try {
     const { outputs } = await runProcessCode({ code, bindings: sent, signal: runtime.signal });
     return {
-      df: { dataset: nodeTitle(primary), rowsUsed: Math.min(maxRows, primary.datasetContent?.rows?.length || 0) },
-      otherDatasets: sent.filter((b) => !b.primary).map((b) => ({ alias: b.alias, dataset: b.name, rows: b.content.rows.length })),
+      df: { input: primary.label, rowsUsed: Math.min(maxRows, primary.content.rows.length) },
+      otherInputs: sent.filter((b) => !b.primary).map((b) => ({ alias: b.alias, input: b.label, rows: b.content.rows.length })),
       branches: Object.entries(outputs).map(([branch, table]) => ({
         branch,
         rows: table.rows.length,

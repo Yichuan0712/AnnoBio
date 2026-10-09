@@ -6,7 +6,7 @@
  */
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { displayCell } from '../../datasetContent.js';
-import { runInputSource, stepInputWaitingMessage, stepSourceLabel } from '../../stepInputs.js';
+import { processPrimarySource, runInputSource, stepInputWaitingMessage, stepSourceLabel } from '../../stepInputs.js';
 import { stepOutputTable } from '../../stepOutputs.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
@@ -103,7 +103,7 @@ function previewRun(job, ctx) {
   if (!prompt) fail(`Run "${nodeTitle(run)}" is not connected to a prompt.`);
   if (!(prompt.outputFormat?.fields || []).length) fail(`Prompt "${nodeTitle(prompt)}" has no output fields.`);
   const inspection = inspectWorkflowNode(ctx.state, run.nodeId, { extractInputFields: ctx.extractInputFields });
-  const problem = inspection.diagnostics.find((d) => /no input dataset|without a column|not connected/.test(d));
+  const problem = inspection.diagnostics.find((d) => /has no input|without a column|not connected/.test(d));
   if (problem) fail(`Run "${nodeTitle(run)}": ${problem}`);
   const credentialId = String(run.runCredentialId || ctx.settings.default_run_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
@@ -147,12 +147,15 @@ function previewProcess(job, ctx) {
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(String(processNode.dfCode || ''))) fail(`Process "${nodeTitle(processNode)}" does not define process(df).`);
   if (!String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; the user has to choose one in Settings → Python first.');
   const inspection = inspectWorkflowNode(ctx.state, processNode.nodeId, {});
-  if (!inspection.details.primaryInput) fail(`Process "${nodeTitle(processNode)}" has no input dataset.`);
+  if (!inspection.details.primaryInput) fail(`Process "${nodeTitle(processNode)}" has no df input.`);
+  // Like the Process window: every input a step gives must have a complete result.
+  if (inspection.details.waitingFor) fail(`Process "${nodeTitle(processNode)}": ${inspection.details.waitingFor}`);
+  const df = stepSourceLabel(ctx.state, processPrimarySource(ctx.state, processNode.nodeId));
   return {
     kind: 'process',
     title: `Process "${nodeTitle(processNode)}"`,
     nodeIds: [processNode.nodeId],
-    lines: [`Runs its Python code on "${inspection.details.primaryInput.title}" (no model calls).`],
+    lines: [`Runs its Python code on "${df}" (no model calls).`],
     usd: 0,
     calls: 0,
     priced: true,
