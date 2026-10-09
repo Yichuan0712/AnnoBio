@@ -1,6 +1,6 @@
 # 步骤间数据流：实施计划
 
-状态：未开始。基于 `261006-pipeline-runs` / `ed4672f`（2026-10-07）。
+状态：第 0–12 步已完成（2026-10-08），第 13 步未开始。基于 `261006-pipeline-runs` / `ed4672f`（2026-10-07）。
 
 本文把 [DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md)（下称“设计”）拆成 14 个可以独立执行的步骤（第 0–13 步）。每一步都写明要先读的代码、要改的文件和函数、要加的测试和验收标准，供不同的执行者（人或 LLM）在不了解前面讨论的情况下一步一步完成。
 
@@ -184,6 +184,8 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 - `processDetailModal.js` 的 `refreshHistoryState` 中，记录运行中时按钮文字是乱码 `Runningâ€¦`（源文件里的省略号被二次编码）。第 7 步发现。
 - 切换 History 时，确认框列出的“要恢复输入的节点”包括输入其实没变的节点：`planHistorySelection` 把补上 `historySelectionSignature` 也算作变化，跟随记录的 Dataset 重连输出也算。第 7 步发现。
 - Kinase 示例中 Run “Rewrite pair to UniProt names” 有结果，但输入映射的值全为空。打开它的窗口会自动填上映射，Run 的签名随之改变，它和下游 5 个步骤失去 History 匹配，自动保存后这些结果不再显示。第 6 步手工验证时发现，旧代码同样如此。尚未安排处理。第 9 步之后，这个映射缺失还让旧示例中这一段的 Export Python Project 报错（见第 9 步完成记录）。
+- Run 窗口选好输入后，不会把与 Prompt 输入同名的列自动填进映射；只会沿用画布上其他 Run 用过的映射。所以新项目里的第一个 Run 要手动选列。第 12 步回归时发现，与本计划无关，代码中本来如此。
+- 删除 History 记录的确认框列出受影响节点的 ID，而不是节点名。第 12 步回归时发现，与本计划无关。
 - 第 9 步起，Process 识别出的每个分支都是 Pipeline 的必需输出（Runner 和导出都要求返回每个声明的分支）。代码在不同路径返回不同字典时（例如有时只返回 `kept`），只读取其中部分分支的 Pipeline 也会因为“没有返回某个分支”而失败；以前只有被保存为 Dataset 的分支是必需的。尚未安排处理，要改的话是让没人读取的分支变成可选输出。
 
 ## 3. 步骤
@@ -1208,28 +1210,51 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 
 **全面回归（手工）：**
 
-- [ ] 从空项目开始，用直连方式搭一条含分支和汇合的流程，逐个单独运行，再 Run Pipeline。
-- [ ] 打开两个 Kinase 示例的另存副本，检查读档转换结果。
-- [ ] Prompt 优化流程不受影响：Dataset → Sampler → 子集 → Run → Score → Review → Apply。
-- [ ] History：切换、撤销、重做、删除记录及级联删除。
-- [ ] Export Python Project。
-- [ ] 若有网页版环境，打开、保存、合并项目各做一次。
+- [x] 从空项目开始，用直连方式搭一条含分支和汇合的流程，逐个单独运行，再 Run Pipeline。
+- [x] 打开两个 Kinase 示例的另存副本，检查读档转换结果。
+- [x] Prompt 优化流程不受影响：Dataset → Sampler → 子集 → Run → Score → Review → Apply。（Review 用的是假模型，没有得到建议，见完成记录。）
+- [x] History：切换、撤销、重做、删除记录及级联删除。
+- [x] Export Python Project。
+- [ ] 若有网页版环境，打开、保存、合并项目各做一次。（本机没有网页版环境，未做。）
 
 **发布说明要点（第 8–12 步一起发布）：**
 
 - 执行节点可以直接相连，Run Pipeline 不再生成中间 Dataset。
 - 旧项目的中间 Dataset 变成入口，旧 Pipeline 在这些 Dataset 处断开，可以手动改连成直连。
 - 文件格式 version 3。
+- 旧项目中原来“跟随 History”的输出变成普通 Dataset，保留最后的表格；读取它们的步骤签名改变，打开后显示“没有结果”，记录仍在 History 中，重新运行即可（设计 §9）。例如原版 Kinase 示例打开后，只有第一个 Run 显示结果。
+- Run Pipeline 结束后把结果加到各步骤的 History 并切换过去，画布上不再添加 Dataset；Stop 后 Resume 也会导入。
+- 保存出来的 Dataset 用细虚线标出来源；Dataset 右键菜单去掉 “Save current source as new Dataset”。
 - Agent 暂时不能建立步骤之间的连接（第 13 步）。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] grep 检查结果已记录。
-- [ ] 全面回归通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] grep 检查结果已记录。
+- [x] 全面回归通过（网页版一项因没有环境未做）。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成。
+
+- 与计划不同的地方：
+  - 切换 History 时，向下游扩展只沿步骤输入的 `recordId`（`readsRecord`），不再看 `sourceRecordIds` 和旧记录的派生字段（设计 §9：旧记录中的派生输入字段不再读取）。旧记录里读取 Dataset 的输入一律按内容恢复和签名。
+  - History 列表的输出名：`savedDatasetNames` 列出 `savedFrom.recordId` 等于这条记录的全部 Dataset（以前只取一个）；没有保存时仍写 “(not exported as a Dataset node)”。
+  - `missingResult` 一并从 Dataset 窗口、Score 窗口（三处）、CSS 和 Agent 的 `tryProcess`、`inspectDataset`（删除 `currentResultAvailable` 字段）中删除，它们只接收已删除的 `resultMissing`。
+  - `positionFrom` 的 `over` 选项只供第 10 步删除的 Pipeline 副本使用，一并删除。
+  - 第 11 步只为测试保留派生 Dataset 的 `upgradeKeepingDerivedDatasets` 已删除，`historyGraphFixture.mjs` 改为 Input → Run → Process 直连。
+  - 删除 `addRunNode`、`addProcessNode`、`addSampledDatasetNode` 前确认：`renderer.js` 和顶栏用的是自己按事件实现的同名函数，canvas API 上的这三个没有调用方。随之不再使用的依赖（`writeRunInputSource`、`writeProcessInputs`、`createRunNode`、`createProcessNode`、`isRunNameAlreadyUsedForPromptNodeId`、`findUniqueRunName`、`prepareSampledDatasetFromSampler`）也从 runtime 的依赖中去掉。
+  - 只改测试数据和注释、行为不变的地方：后端 `test_project_history.py`、前端 `runHistoryStorage.test.mjs` 中作存储往返用的旧连线改成 `data`；`pipelineExportDefinition.test.mjs` 中示意“非数据连线不发送”的两条旧连线换成现有类型；`test_pipeline_compile.py` 的“保存出来的 Dataset 只是入口”改用 `savedFrom`；`project_store.py` 一处 docstring。
+- grep 检查剩余的匹配：
+  - `canvasFormat.js` 的转换代码（允许）。
+  - `primaryDatasetId`：History 记录的 `inputs.primaryDatasetId`（`pipelineHistoryImport.js`、`runHistoryCapture.js`、`runHistoryResolver.js`、`runHistorySelection.js`、`runHistorySignature.js`，允许）；其余都是函数参数或局部变量名，表示 df 输入的来源键，不是画布字段：`processDatasetBindings.js`、`processDetailModal.js`、`processInputPicker.js`、`stepInputs.js`（`processInputBindings`）、`workflowCanvas.js`（`getProcessDatasets`、`getDatasetBindings`）、`workflowNodeFactories.js`（Process 窗口的 `getProcessInputs`）。没有改名，以免与本步无关的改动。
+  - 后端没有剩余匹配（`backend/*.py`）。
+- 测试：前端 208 → 198（删除 `datasetHistorySource.test.mjs` 5 项；`runHistoryPresentation` 9 → 6，副本映射的 3 项删除、其余改为按 `savedFrom` 查找；删除 Pipeline 的 `resultMissing` 测试 2 项；`runHistoryResolver`、`runHistoryCapture`、`runHistorySelection`、`runAnalysisHistory`、`stepOutputs` 按直连改写，数量不变）；后端 127 → 126（删除 `MISSING_RESULT` 的测试）。
+- 全面回归（手工，没有调用任何模型）：后端换成同一份代码但模型调用是假的版本：单节点 Run、Review 和 Pipeline Runner 的 `run_structured` 都替换成按响应模型生成占位值的函数（scratchpad `step12/fake_backend.py`）。
+  - 空项目：新建项目，加 Sentences、Prompt Extract 和 Judge；Extract 右键 Run → 在 Run 窗口选 Sentences 并手动选列（见 §2.7）→ 运行；Run 右键 “Process results with code” → 写分支代码（`short` / `long`）→ 运行；Process 右键 “Run a prompt on 'long'” → 在窗口选 Judge → 运行；Process 右键 “Process 'short' with code” → 在输入列表加上 Judge 的输出（别名 `df_judge`）→ 写合并代码 → 运行，得到 4 行。Current Pipeline 显示 Extract → Process → 分支（Do nothing / Judge）→ Process；Run Pipeline 对话框只列出 Sentences；结束后 4 个步骤都切到这次运行的记录，画布上仍只有 1 个 Dataset。
+  - 两个示例副本：原版 12 个 Dataset、11 个有 `savedFrom`，没有旧字段，9 条 Pipeline；只有第一个 Run 显示结果，其余步骤读的都是原来跟随 History 的输出（文件中 11 个都没有 `savedCopy`），按设计 §9 显示“没有结果”，记录还在。repaired 副本 34 个 Dataset、33 个有 `savedFrom`，9 个步骤中 8 个保留结果；Combine UniProt candidates 在文件中本来就没有当前记录（它的记录都按旧的派生输入签名，与它读取的副本对不上）。Errors 页签没有错误。
+  - Prompt 优化：Sentences 右键 Sample → Create sample → Extract 右键 Run，以子集为输入运行 → Run 右键 Score，以 Sentences 为 ground truth、按 `#` 规则本地计算（4/4）→ Review：全部匹配时没有调用模型、没有建议；改用 2 行的 ground truth（2/4）后 Review 调用 2 次假模型，仍没有建议（占位输出不是有效的修改）→ Apply 生成新的 Prompt 版本。这条流程本步只改了 Score 的分析签名（去掉派生 ground truth），单元测试覆盖。
+  - History：在 Merge 的 History 中选单节点运行的记录，确认后上游 3 个步骤一起切回；确认框只列出 4 个步骤，Sentences 不再出现（以前派生 Dataset 重连输出也会被列出）。切换不是撤销步骤（`historyRecordId` 在 `undoHistory.js` 中按运行结果处理，本来如此）。改 Merge 的代码 → 结果消失；Ctrl+Z → 约 0.3 秒后恢复原记录；Ctrl+Y → 结果消失；再 Ctrl+Z → 恢复。在 Extract 的 History 中删除 Pipeline 导入的那条记录，确认框提示连带删除 3 条下游记录，删除后存档中只剩 4 条单节点记录。
+  - Export Python Project：4 个步骤，Process 和 Judge 直接读取上游输出，唯一输出工作表以 Merge Process 的名字命名；所有模块可编译，`python main.py --help` 正常。
 
 ---
 
@@ -1292,5 +1317,5 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 9 | 完成 | 2026-10-08 | `e787111` | 200 | 127 | |
 | 10 | 完成 | 2026-10-08 | `e2e6736` | 201 | 127 | |
 | 11 | 完成 | 2026-10-08 | `dc160e9` | 208 | 127 | |
-| 12 | 未开始 | | | | | |
+| 12 | 完成 | 2026-10-08 | `f28af6a` | 198 | 126 | 网页版回归未做（没有环境） |
 | 13 | 未开始 | | | | | |
