@@ -1,6 +1,6 @@
 # 节点端口：实施计划
 
-状态：计划已定，未开始。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
+状态：第 1 步完成（2026-10-09），下一步是第 2 步。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
 
 本文把 [NODE_PORTS_DESIGN.md](NODE_PORTS_DESIGN.md)（下称“设计”）的第一部分（端口和拖线：设计第 1–10 节、第 12 节）拆成 7 个可以独立执行的步骤。第二部分（统一的运行入口、Pipeline 里的 Prompt：设计第 11、13 节）还在讨论，不在本计划内。
 
@@ -250,7 +250,7 @@ cd app && npm start
 | `prompt-review-to-prompt` | Review | Apply 生成的 Prompt |
 | `dataset-to-dataset` | 原来的 Dataset | 新版本 |
 | `sampler-to-dataset` | Sampler | 样本 Dataset |
-| `saved-from`（从 `savedFrom` 推出） | Run 或 Process | 保存出来的 Dataset |
+| `saved-from`（从 `savedFrom` 推出） | Run、Process 或 Score | 保存出来的 Dataset |
 
 **连线和端口的对应：**
 
@@ -278,6 +278,7 @@ cd app && npm start
 
 1. **哪些输入能拖。** 现在界面上能改的输入，拖线也能改：Run 的 `prompt` 和 `input`、Process 的所有输入、Score 的 `ground_truth`。现在界面上改不了的，端口照样画，但不能替换或断开，悬停时说明原因：Score 的 `run`、Review 的 `score`、Sampler 的 `source`。原因是 Score 的规则和结果是针对那个 Run 的，Review 是针对那个 Score 的分析。
 2. **断开以后可以是空的。** 断开 Run 的 `prompt`、`input`，Process 的 `df`，或 Score 的 `ground_truth` 以后，端口就空着，节点不能运行，窗口里提示缺什么。断开 Process 的 `df_<别名>` 时，同时从代码参数中去掉它（第 5 步）。
+   - 例外（第 1 步发现，待用户确认）：Process 还有其他输入时，`df` 不能断开，只能替换。现有数据模型里，没有标记为 `df` 的输入时，第一个输入就是 `df`（`stepInputs.js` 的 `processPrimarySource`），所以“`df` 空着、别的输入还在”存不下来。
 3. **从输入端口拖走一条线。** 按住一个已接线的输入端口拖动，就把这条线从这个端口上拿起来：
    - 放到另一个能接的输入端口上：改接到那里（一个撤销步骤）；
    - 在空白处松开：断开，不弹菜单；
@@ -349,10 +350,22 @@ cd app && npm start
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
 
-**完成记录：** （待填）
+**完成记录：** 2026-10-09 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - **没有加 `runningNodeIds()`。** 画布的 `liveInputState()` 已经在 Run 上带 `runPending`、在 Process 上带 `processPending`（来自 `pendingProcesses`），`nodePorts` 直接读这两个字段；另外接受可选的 `running` 集合。
+  - **Score 换标准答案时删规则，本步骤就做了。** Score 窗口打开时会按当前标准答案清理规则，按计划本可以不做；但从 Score 的右键菜单发起 Review 不会打开窗口，会带着已经不存在的列上的规则。所以把窗口里的 `filterRootByGtHeaders` 移到 `scoreMappingBundle.js`（`filterScoreRulesByGtColumns`），另加 `scoreMappingForGroundTruth`，`applyPortOp` 换标准答案时调用，窗口也改用同一个函数。
+  - **Process 的 `df` 有其他输入时不能断开。** 见 §3.3 第 2 条的例外，待用户确认。
+  - 来历点：Score 的结果也能保存成 Dataset（`savedFrom.kind` 为 `score`），所以 Score 也会有右边的空心点。§3.1 的表已改。
+  - `buildDefaultCode` 移到新模块 `processSampleCode.js`（`buildDefaultProcessCode`、`isUntouchedSampleCode`），Process 窗口改用它。
+  - 输出端口的 `mismatch` 是一句提示文字，不是布尔值，可以直接用作悬停提示。
+- 发现并修正的现有问题：保存的 Process 代码会被去掉首尾空白（`resolveDataframeProcessCode` 里的 `trim()`），而示例代码以换行结尾，所以项目保存、重新打开以后，没改过的示例代码就不再被认作示例，换 `df` 时不会跟着新列重新生成。`isUntouchedSampleCode` 改为比较去掉首尾空白后的文字，Process 窗口也因此恢复了这个行为。
+- `applyPortOp` 的 `promptInputs` 选项：调用方给出 Prompt 的输入名（画布用 Prompt 的段落，Agent 用 `extractInputFields`）。不给时，换 Prompt 不改映射。
+- 测试：前端 210 → 236（`nodePorts.test.mjs` 26 项）；后端 126 项不变。
+- 没有手工验证（本步骤没有界面变化）。两个窗口的代码改动由构建和单元测试覆盖，第 2 步的手工验证中顺带在界面上检查（已加入第 2 步的清单）。
 
 ---
 
@@ -409,6 +422,7 @@ cd app && npm start
 - [ ] 悬停、选中节点：相连的线高亮。
 - [ ] 深色主题下点和线都看得清。
 - [ ] 撤销、重做、保存后重新打开，显示不变。
+- [ ] 第 1 步改动了两个窗口的代码，顺带检查：Process 窗口里换 `df` 时，没改过的示例代码按新列重新生成（包括保存后重新打开的项目）；Score 窗口里换标准答案时，新 Dataset 没有的列上的规则被删掉。
 - [ ] 截图给用户看，按用户意见调整，用户确认后在完成记录中写明（§0 第 13 条）。
 
 **Agent：** 无改动。
@@ -686,7 +700,7 @@ cd app && npm start
 | 步骤 | 状态 | 日期 | 提交 | 前端测试数 | 后端测试数 | 备注 |
 |---|---|---|---|---|---|---|
 | 基线 | — | 2026-10-09 | `cf83fc4` | 210 | 126 | |
-| 1 | 未开始 | | | | | |
+| 1 | 完成 | 2026-10-09 | `f8e7ccd` | 236 | 126 | §3.3 第 2 条有一处例外待确认 |
 | 2 | 未开始 | | | | | 完成后需用户确认外观 |
 | 3 | 未开始 | | | | | |
 | 4 | 未开始 | | | | | |
