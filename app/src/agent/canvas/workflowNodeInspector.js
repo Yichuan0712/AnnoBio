@@ -5,7 +5,11 @@
  */
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 import { displayCell, normalizeDatasetContent } from '../../datasetContent.js';
-import { processInputAliases, processInputEdges, processPrimarySource, runInputSource } from '../../stepInputs.js';
+import { effectiveProcessOutputs } from '../../processOutputPorts.js';
+import {
+  processInputBindings, processInputSources, processPrimarySource, processRequiredInputs, runInputSource, stepInputWaitingMessage,
+} from '../../stepInputs.js';
+import { stepOutputTable } from '../../stepOutputs.js';
 import { readSavedFrom } from '../../savedDatasets.js';
 
 export const MAX_ROWS_PER_READ = 50;
@@ -85,6 +89,22 @@ function savedFromNode(canvasState, nodeId) {
 
 function linkedNode(node) {
   return node ? { nodeId: normalizeNodeId(node.nodeId), type: String(node.type || ''), title: nodeTitle(node) } : null;
+}
+
+/** A source a step reads (stepInputs.js): its node, plus the branch when it is a Process's. */
+function linkedSource(nodeLookup, source) {
+  const node = source?.nodeId ? nodeLookup.get(normalizeNodeId(source.nodeId)) : null;
+  if (!node) return null;
+  return { ...linkedNode(node), ...(node.type === 'process' ? { branch: String(source.port || 'result') } : {}) };
+}
+
+/** Why a step cannot run yet because of its inputs (as its window says), or null. */
+function waitingFor(canvasState, sources) {
+  for (const source of sources) {
+    const { waiting } = stepOutputTable(canvasState, source);
+    if (waiting && source.kind !== 'dataset') return stepInputWaitingMessage(canvasState, source, waiting);
+  }
+  return null;
 }
 
 function neighbors(canvasState, nodeLookup, nodeId, direction) {
@@ -230,32 +250,36 @@ function inspectSampler(node, ctx) {
 }
 
 function inspectProcess(node, ctx) {
-  const aliases = processInputAliases(ctx.canvasState, ctx.nodeId);
   const code = String(node.dfCode || '');
-  const connectedInputs = processInputEdges(ctx.canvasState)
-    .filter((edge) => normalizeNodeId(edge.toId) === ctx.nodeId)
-    .map((edge) => ctx.nodeLookup.get(normalizeNodeId(edge.fromId)))
-    .filter(Boolean)
-    .map((dataset) => ({ connection: 'data', ...linkedNode(dataset) }));
-  const primaryId = processPrimarySource(ctx.canvasState, ctx.nodeId)?.nodeId || '';
-  const primary = ctx.nodeLookup.get(primaryId);
+  const inputs = processInputSources(ctx.canvasState, ctx.nodeId)
+    .map((source) => ({ ...linkedSource(ctx.nodeLookup, source), alias: source.alias || null }))
+    .filter((input) => input.nodeId);
+  const primary = linkedSource(ctx.nodeLookup, processPrimarySource(ctx.canvasState, ctx.nodeId));
   const outputs = processOutputsOf(node);
+  const ports = effectiveProcessOutputs({ detected: node.processOutputPorts, dfResults: node.dfResults });
   const savedDatasets = savedFromNode(ctx.canvasState, ctx.nodeId)
     .map(({ dataset, savedFrom }) => ({ ...linkedNode(dataset), branch: savedFrom.port }));
   const diagnostics = [];
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) diagnostics.push('The code does not define process(df).');
+  if (!primary) diagnostics.push('The process has no df input.');
   if (!Object.keys(outputs).length) diagnostics.push('The process has not been run yet, or its last run returned nothing.');
+  if (ports.mismatch) diagnostics.push('Its last run returned branches its code was not detected to return.');
+  const waiting = primary ? waitingFor(ctx.canvasState, processRequiredInputs(ctx.canvasState, ctx.nodeId, { code }).bindings) : null;
   return {
     details: {
       code,
-      primaryInput: linkedNode(primary),
-      inputs: connectedInputs.map((n) => ({
-        ...n,
-        alias: n.nodeId === primaryId ? 'df' : (aliases[n.nodeId] || null),
-      })),
-      availableAliases: Object.entries(aliases)
-        .map(([datasetId, alias]) => ({ alias, dataset: linkedNode(ctx.nodeLookup.get(normalizeNodeId(datasetId))) }))
-        .filter((a) => a.dataset),
+      primaryInput: primary,
+      inputs,
+      // Every Dataset and step output the code could read, under the alias it has in process(df, ...).
+      availableInputs: processInputBindings(ctx.canvasState, ctx.nodeId, { code })
+        .map((binding) => ({ ...linkedSource(ctx.nodeLookup, binding), alias: binding.alias, isInput: binding.input })),
+      branches: {
+        names: ports.ports,
+        known: ports.source !== 'none',
+        dynamic: ports.dynamic,
+        from: ports.source === 'run' ? 'last run' : ports.source === 'code' ? 'code' : 'not known yet',
+      },
+      readBy: readersOf(ctx),
       outputs: Object.entries(outputs).map(([name, branch]) => ({
         branch: name,
         rowCount: branch.rows.length,
@@ -264,10 +288,19 @@ function inspectProcess(node, ctx) {
       status: node.processPending === true ? 'running'
         : node.processResumable === true ? 'interrupted; ready to resume'
           : Object.keys(outputs).length ? 'completed' : 'not run yet',
+      waitingFor: waiting,
       savedAsDatasets: savedDatasets,
     },
     diagnostics,
   };
+}
+
+/** The steps reading a Run or Process, with the branch and alias each reads under. */
+function readersOf(ctx) {
+  return safeArray(ctx.canvasState?.connections)
+    .filter((edge) => edge?.type === 'data' && normalizeNodeId(edge.fromId) === ctx.nodeId)
+    .map((edge) => ({ ...linkedNode(ctx.nodeLookup.get(normalizeNodeId(edge.toId))), branch: String(edge.fromPort || 'result'), alias: edge.alias || null }))
+    .filter((reader) => reader.nodeId);
 }
 
 function runStatus(node, results, inputRowCount) {
@@ -282,25 +315,26 @@ function inspectRun(node, ctx, options) {
   const results = runResultsOf(node);
   const input = runInputContentOf(node);
   const prompt = upstreamOfType(ctx.canvasState, ctx.nodeLookup, ctx.nodeId, 'prompt');
-  const dataset = ctx.nodeLookup.get(normalizeNodeId(runInputSource(ctx.canvasState, ctx.nodeId)?.nodeId));
+  const source = runInputSource(ctx.canvasState, ctx.nodeId);
+  const inputSource = linkedSource(ctx.nodeLookup, source);
   const mapping = parseJsonObject(node.runInputToColumn, {});
   const promptNode = prompt ? ctx.nodeLookup.get(prompt.nodeId) : null;
   const promptInputs = promptNode && typeof options.extractInputFields === 'function'
     ? safeArray(options.extractInputFields(safeArray(promptNode.sections))).map(String)
     : [];
-  const inputRowCount = safeArray(input.rows).length || datasetContentOf(dataset).rows.length;
+  const inputRowCount = safeArray(input.rows).length || safeArray(stepOutputTable(ctx.canvasState, source).table?.rows).length;
   const errorCount = results.filter((r) => r?.error).length;
   const doneInputRows = new Set(results.map((r) => r?.input_row_index).filter((i) => typeof i === 'number')).size;
   const preview = rowWindow(results, options, 3);
   const diagnostics = [];
   if (!prompt) diagnostics.push('The run is not connected to a prompt.');
-  if (!dataset) diagnostics.push('The run has no input dataset.');
+  if (!inputSource) diagnostics.push('The run has no input.');
   const unmapped = promptInputs.filter((name) => !String(mapping[name] || '').trim());
   if (unmapped.length) diagnostics.push(`Prompt inputs without a column: ${unmapped.join(', ')}.`);
   return {
     details: {
       prompt,
-      inputDataset: linkedNode(dataset),
+      input: inputSource,
       inputMapping: mapping,
       model: credentialLabel(node.runCredentialId, options),
       status: runStatus(node, results, inputRowCount),
@@ -309,6 +343,8 @@ function inspectRun(node, ctx, options) {
       inputRowsDone: doneInputRows,
       resultRows: results.length,
       errorRows: errorCount,
+      waitingFor: source ? waitingFor(ctx.canvasState, [source]) : null,
+      readBy: readersOf(ctx),
       savedAsDatasets: savedFromNode(ctx.canvasState, ctx.nodeId).map(({ dataset }) => linkedNode(dataset)),
       preview: preview.items.map((r) => ({
         inputRow: typeof r?.input_row_index === 'number' ? r.input_row_index + 1 : null,

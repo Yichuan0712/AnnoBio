@@ -112,6 +112,14 @@ function downstreamOf(state, nodeId) {
 }
 
 /**
+ * Whether `nodeId` is the step `stepId` or reads its data, directly or further down: it cannot be one
+ * of that step's inputs, which would make a loop (the pickers leave it out, candidateSources).
+ */
+export function readsFromStep(state, nodeId, stepId) {
+  return String(nodeId) === String(stepId) || downstreamOf(state, stepId).has(String(nodeId));
+}
+
+/**
  * Every source a step could read: each Dataset in canvas order, then each Run's results and each
  * Process output branch (processOutputPorts.js), leaving out the step itself and every step that
  * reads it, which would make a cycle. `name` is what an alias is made from (§3.5); `label` is how

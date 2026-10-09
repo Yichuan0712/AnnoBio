@@ -10,10 +10,13 @@
 import { normalizeDatasetContent } from '../../datasetContent.js';
 import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
+import { effectiveProcessOutputs } from '../../processOutputPorts.js';
 import { savedProcessOutputs, savedRunOutput } from '../../savedDatasets.js';
 import {
-  RESULT_PORT, processInputBindings, processPrimarySource, runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource,
+  DATA_EDGE, RESULT_PORT, processInputBindings, processPrimarySource, readsFromStep, runInputSource, setProcessInputs,
+  setRunInputSource, stepSourceLabel,
 } from '../../stepInputs.js';
+import { stepOutputTable } from '../../stepOutputs.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
 import { nodeTitle, processOutputsOf, runResultsOf } from '../canvas/workflowNodeInspector.js';
 
@@ -126,6 +129,46 @@ export function planChangeSet(state, operations, ctx) {
     return node;
   }
 
+  const addedIds = new Set();
+  const codeChanged = new Set();
+
+  /**
+   * A step's input as the node windows offer it (stepInputs.js candidates): a Dataset, a Run's results,
+   * or one branch of a Process (`branch`; a Process with one output needs none). A Process's branches
+   * are offered once its code has been checked or it has run, so one added or rewritten in this same
+   * proposal cannot be read yet. Reading the step itself or one that reads it would make a loop.
+   * @returns {{ nodeId: string, port: string, kind: 'dataset'|'run'|'process' }}
+   */
+  function resolveSource(value, branch, label, stepId) {
+    const node = resolve(value, label, ['dataset', 'run', 'process']);
+    const port = clean(branch);
+    if (stepId && readsFromStep(next, node.nodeId, stepId)) {
+      fail(`${label} "${nodeTitle(node)}" ${node.nodeId === stepId ? 'is this step itself' : 'reads this step\'s output'}, so reading it would make a loop.`);
+    }
+    if (node.type !== 'process') {
+      if (port && port !== RESULT_PORT) fail(`${label} "${nodeTitle(node)}" is a ${node.type} with one output; it has no branch "${port}".`);
+      return { nodeId: node.nodeId, port: RESULT_PORT, kind: node.type };
+    }
+    if (addedIds.has(node.nodeId) || codeChanged.has(node.nodeId)) {
+      fail(`Process "${nodeTitle(node)}" is added or changed in this proposal, so its branches are not known yet. Read it in a later proposal, once its code has been checked.`);
+    }
+    const { ports, dynamic } = effectiveProcessOutputs({ detected: node.processOutputPorts, dfResults: node.dfResults });
+    if (!ports.length) {
+      fail(`Process "${nodeTitle(node)}" has no known branches yet${dynamic ? ': its code builds them at run time, so run it first' : '; run it first'}.`);
+    }
+    const chosen = port || (ports.length === 1 ? ports[0] : '');
+    if (!chosen) fail(`Process "${nodeTitle(node)}" has several branches (${ports.join(', ')}); name the one to read with ${label === 'input' ? 'input_branch' : 'primary_branch'}.`);
+    if (!ports.includes(chosen)) fail(`Process "${nodeTitle(node)}" has no branch "${chosen}". Branches: ${ports.join(', ')}.`);
+    return { nodeId: node.nodeId, port: chosen, kind: 'process' };
+  }
+
+  /** The columns a step reads from `source`, or null while that step has no result to read. */
+  function sourceColumns(source) {
+    const { table } = stepOutputTable(next, source);
+    if (!table) return null;
+    return table.headers.map((name, i) => ({ name, type: table.columnTypes?.[i] || 'text' }));
+  }
+
   function registerRef(op, nodeId) {
     const ref = clean(op.ref);
     if (!ref) return;
@@ -156,6 +199,7 @@ export function planChangeSet(state, operations, ctx) {
   }
 
   function addNode(node) {
+    addedIds.add(node.nodeId);
     next.nodes.push(node);
     touched.add(node.nodeId);
     return node;
@@ -254,22 +298,40 @@ export function planChangeSet(state, operations, ctx) {
     return { headers: columns, rows };
   }
 
-  function validateMapping(prompt, dataset, mapping) {
+  /**
+   * The mapping a Run gets, checked against the columns of what it reads. Like the Run window, columns
+   * can only be chosen once they are known: an input whose step has no result yet is left unmapped.
+   */
+  function validateMapping(prompt, source, mapping) {
     const inputs = promptInputs(prompt, ctx.extractInputFields);
-    const columns = datasetColumns(dataset);
+    const columns = sourceColumns(source);
+    const label = stepSourceLabel(next, source);
     const normalized = Object.fromEntries(Object.entries(mapping && typeof mapping === 'object' ? mapping : {})
-      .map(([k, v]) => [clean(k), clean(v)]));
+      .map(([k, v]) => [clean(k), clean(v)]).filter(([, v]) => v));
     for (const key of Object.keys(normalized)) {
       if (!inputs.some((i) => i.name === key)) fail(`input_mapping names "${key}", which is not an input of prompt "${nodeTitle(prompt)}".`);
+    }
+    if (!columns) {
+      if (Object.keys(normalized).length) {
+        fail(`"${label}" has no result yet, so its columns are not known. Leave out input_mapping, run "${label}", then set input_mapping with update.`);
+      }
+      return {};
     }
     for (const input of inputs) {
       const column = normalized[input.name];
       if (!column) fail(`input_mapping has no column for prompt input "${input.name}".`);
       const col = columns.find((c) => c.name === column);
-      if (!col) fail(`Dataset "${nodeTitle(dataset)}" has no column "${column}". Columns: ${columns.map((c) => c.name).join(', ')}.`);
+      if (!col) fail(`"${label}" has no column "${column}". Columns: ${columns.map((c) => c.name).join(', ')}.`);
       if (col.type !== input.type) fail(`Prompt input "${input.name}" is ${input.type} but column "${column}" is ${col.type}.`);
     }
     return normalized;
+  }
+
+  /** What a Run's card says about its input mapping. */
+  function mappingLine(mapping, source) {
+    const entries = Object.entries(mapping);
+    if (entries.length) return `Mapping: ${entries.map(([k, v]) => `${k} ← ${v}`).join(', ')}`;
+    return sourceColumns(source) ? 'Mapping: (no inputs)' : `Not mapped yet: map its inputs once "${stepSourceLabel(next, source)}" has run.`;
   }
 
   function matchFlags(match) {
@@ -290,8 +352,8 @@ export function planChangeSet(state, operations, ctx) {
   function scoreBundle(op, run, groundTruth) {
     const prompt = next.nodes.find((n) => n.type === 'prompt'
       && next.connections.some((c) => c.type === 'prompt-to-run' && c.fromId === n.nodeId && c.toId === run.nodeId));
-    const runDataset = byId().get(runInputSource(next, run.nodeId)?.nodeId);
-    const inputColumns = runDataset ? datasetColumns(runDataset).map((c) => c.name) : [];
+    const runInput = runInputSource(next, run.nodeId);
+    const inputColumns = runInput ? (sourceColumns(runInput) || []).map((c) => c.name) : [];
     const outputKeys = (prompt?.outputFormat?.fields || []).map((f) => f.key);
     const gtColumns = datasetColumns(groundTruth).map((c) => c.name);
     const gtList = (value, where) => {
@@ -345,22 +407,23 @@ export function planChangeSet(state, operations, ctx) {
     };
   }
 
-  /** Like the Process window: the inputs are df and each Dataset the code declares as a process()
-   * parameter or uses, by the alias it already has. Returns the inputs other than df. */
+  /** Like the Process window: the inputs are df (`primary`, a source) and each Dataset or step output
+   * the code declares as a process() parameter or uses, by the alias it already has. Returns the
+   * inputs other than df. */
   function wireProcess(processNode, code, primary) {
     if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) fail('Process code must define process(df).');
-    // The Agent reads and writes Dataset inputs only until it learns step outputs (DATA_FLOW_PLAN.md step 13).
-    const bindings = processInputBindings(next, processNode.nodeId, { code, primaryId: primary.nodeId })
-      .filter((binding) => binding.kind === 'dataset');
+    const primaryKey = primary.kind === 'dataset' ? primary.nodeId : `${primary.nodeId}:${primary.port}`;
+    const bindings = processInputBindings(next, processNode.nodeId, { code, primaryId: primaryKey });
     const unknown = [...referencedDatasetAliasNames(code)]
       .filter((alias) => !bindings.some((b) => b.alias === alias));
     if (unknown.length) {
-      fail(`The code uses ${unknown.join(', ')}, which match no dataset. Available: ${bindings.filter((b) => !b.primary).map((b) => b.alias).join(', ') || '(none)'}.`);
+      const available = bindings.filter((b) => !b.primary).map((b) => `${b.alias} ("${b.label}")`);
+      fail(`The code uses ${unknown.join(', ')}, which match no input. Available: ${available.join(', ') || '(none)'}.`);
     }
     const inputs = bindings.filter((b) => b.input);
     processNode.dfCode = code;
     processNode.activeMode = 'df';
-    setProcessInputs(next, processNode.nodeId, { primary: { nodeId: primary.nodeId, port: RESULT_PORT }, inputs });
+    setProcessInputs(next, processNode.nodeId, { primary: { nodeId: primary.nodeId, port: primary.port }, inputs });
     return inputs.filter((b) => !b.primary);
   }
 
@@ -499,15 +562,16 @@ export function planChangeSet(state, operations, ctx) {
     },
 
     add_process(op) {
-      const primary = resolve(op.primary_input, 'primary_input', ['dataset']);
       const code = String(op.code ?? '').trim();
       const name = uniqueName(clean(op.name) || 'Process', takenNames('process'));
-      const node = addNode({ type: 'process', nodeId: generateNodeId(), ...placeNear(primary), name, nodeOrigin: 'agent' });
+      const anchor = resolve(op.primary_input, 'primary_input', ['dataset', 'run', 'process']);
+      const node = addNode({ type: 'process', nodeId: generateNodeId(), ...placeNear(anchor), name, nodeOrigin: 'agent' });
+      const primary = resolveSource(op.primary_input, op.primary_branch, 'primary_input', node.nodeId);
       const others = wireProcess(node, code, primary);
       registerRef(op, node.nodeId);
       return {
         kind: 'add', type: 'process', title: `New process "${name}"`, nodeIds: [node.nodeId],
-        lines: [`df = "${nodeTitle(primary)}"`, ...others.map((b) => `${b.alias} = "${b.name}"`),
+        lines: [`df = "${stepSourceLabel(next, primary)}"`, ...others.map((b) => `${b.alias} = "${b.label}"`),
           'Not run yet: running it produces its output branches.'],
         diffs: [{ label: 'Code', before: '', after: code }],
       };
@@ -556,26 +620,24 @@ export function planChangeSet(state, operations, ctx) {
     },
 
     add_run(op) {
+      if ('input_dataset' in op) fail('add_run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
       const prompt = resolve(op.prompt, 'prompt', ['prompt']);
-      const dataset = resolve(op.input_dataset, 'input_dataset', ['dataset']);
-      const mapping = validateMapping(prompt, dataset, op.input_mapping);
       // Like the user, the Agent has no per-Run model or settings: Runs use Settings → Run defaults.
       if (op.credential_id != null || op.settings != null) fail('A Run uses the default Run model and settings from Settings; credential_id and settings cannot be set per Run.');
       const runsOfPrompt = new Set(next.connections.filter((c) => c.type === 'prompt-to-run' && c.fromId === prompt.nodeId).map((c) => c.toId));
       const name = uniqueName(clean(op.name) || 'Run', takenNames('run', (n) => runsOfPrompt.has(n.nodeId)));
-      const node = addNode({
-        type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name,
-        runInputToColumn: JSON.stringify(mapping),
-        nodeOrigin: 'agent',
-      });
-      setRunInputSource(next, node.nodeId, { nodeId: dataset.nodeId, port: RESULT_PORT });
+      const node = addNode({ type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name, nodeOrigin: 'agent' });
+      const source = resolveSource(op.input, op.input_branch, 'input', node.nodeId);
+      const mapping = validateMapping(prompt, source, op.input_mapping);
+      node.runInputToColumn = JSON.stringify(mapping);
+      setRunInputSource(next, node.nodeId, source);
       connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
       registerRef(op, node.nodeId);
       return {
         kind: 'add', type: 'run', title: `New run "${name}"`, nodeIds: [node.nodeId],
         lines: [
-          `Prompt "${nodeTitle(prompt)}" on "${nodeTitle(dataset)}"`,
-          `Mapping: ${Object.entries(mapping).map(([k, v]) => `${k} ← ${v}`).join(', ') || '(no inputs)'}`,
+          `Prompt "${nodeTitle(prompt)}" on "${stepSourceLabel(next, source)}"`,
+          mappingLine(mapping, source),
           'Model and settings: Settings → Run defaults',
           'Not started: it runs when you start it.',
         ],
@@ -621,12 +683,13 @@ export function planChangeSet(state, operations, ctx) {
       const allowed = {
         prompt: ['name', 'note', 'sections', 'section_edits', 'input_types', 'output'],
         dataset: ['name', 'note', 'columns', 'rows'],
-        process: ['name', 'code', 'primary_input'],
-        run: ['name', 'prompt', 'input_dataset', 'input_mapping'],
+        process: ['name', 'code', 'primary_input', 'primary_branch'],
+        run: ['name', 'prompt', 'input', 'input_branch', 'input_mapping'],
         score: ['name', 'ground_truth', 'pairing', 'comparison', 'combine', 'match_code'],
         sampler: ['name'],
         promptReview: ['name'],
       }[node.type] || [];
+      if (node.type === 'run' && 'input_dataset' in set) fail('A run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
       const bad = keys.filter((k) => !allowed.includes(k));
       if (bad.length) fail(`A ${node.type} cannot set ${bad.join(', ')}. Settable: ${allowed.join(', ')}.`);
 
@@ -677,21 +740,26 @@ export function planChangeSet(state, operations, ctx) {
         node.datasetContent = normalizeDatasetContent({ headers, rows });
       }
 
-      if (node.type === 'process' && ('code' in set || 'primary_input' in set)) {
-        const primary = 'primary_input' in set
-          ? resolve(set.primary_input, 'primary_input', ['dataset'])
-          : resolve(processPrimarySource(next, node.nodeId)?.nodeId, 'primary input', ['dataset']);
+      if (node.type === 'process' && ('code' in set || 'primary_input' in set || 'primary_branch' in set)) {
+        const current = processPrimarySource(next, node.nodeId);
+        if (!current && !('primary_input' in set)) fail(`Process "${before}" has no df input; set primary_input.`);
+        const primary = 'primary_input' in set || 'primary_branch' in set
+          ? resolveSource(set.primary_input ?? current.nodeId, set.primary_branch, 'primary_input', node.nodeId)
+          : current;
         const code = 'code' in set ? String(set.code ?? '').trim() : String(node.dfCode || '');
-        if ('code' in set) diffs.push({ label: 'Code', before: String(node.dfCode || ''), after: code });
-        if ('primary_input' in set) lines.push(`df = "${nodeTitle(primary)}"`);
+        if ('code' in set) {
+          diffs.push({ label: 'Code', before: String(node.dfCode || ''), after: code });
+          codeChanged.add(node.nodeId);
+        }
+        if ('primary_input' in set || 'primary_branch' in set) lines.push(`df = "${stepSourceLabel(next, primary)}"`);
         wireProcess(node, code, primary);
         if (node.dfResults) lines.push('Its last output no longer reflects the code until it is run again.');
       }
 
       if (node.type === 'run') {
         if (node.runPending) fail(`Run "${before}" is running; stop it before changing it.`);
-        if ('prompt' in set || 'input_dataset' in set || 'input_mapping' in set) {
-          // Like the Run window: a Run picks its Prompt and Dataset, and both lock once it has results.
+        if ('prompt' in set || 'input' in set || 'input_branch' in set || 'input_mapping' in set) {
+          // Like the Run window: a Run picks its Prompt and input, and both lock once it has results.
           if (next.historyVersion !== 1 && (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1')) {
             fail(`Run "${before}" already has results, so its prompt, input and mapping are fixed. Add a new run (add_run) instead.`);
           }
@@ -699,22 +767,24 @@ export function planChangeSet(state, operations, ctx) {
           const prompt = 'prompt' in set
             ? resolve(set.prompt, 'prompt', ['prompt'])
             : resolve(currentPromptId, 'the run\'s prompt', ['prompt']);
-          const dataset = 'input_dataset' in set
-            ? resolve(set.input_dataset, 'input_dataset', ['dataset'])
-            : resolve(runInputSource(next, node.nodeId)?.nodeId, 'the run\'s input dataset', ['dataset']);
+          const current = runInputSource(next, node.nodeId);
+          if (!current && !('input' in set)) fail(`Run "${before}" has no input; set input.`);
+          const source = 'input' in set || 'input_branch' in set
+            ? resolveSource(set.input ?? current.nodeId, set.input_branch, 'input', node.nodeId)
+            : current;
           // A new Prompt keeps only the old mapping for inputs it shares, as the Run window does.
           const promptInputNames = new Set(promptInputs(prompt, ctx.extractInputFields).map((input) => input.name));
           const keptMapping = Object.fromEntries(Object.entries(parseJson(node.runInputToColumn, {}))
             .filter(([name]) => prompt.nodeId === currentPromptId || promptInputNames.has(name)));
-          const mapping = validateMapping(prompt, dataset, set.input_mapping ?? keptMapping);
+          const mapping = validateMapping(prompt, source, set.input_mapping ?? keptMapping);
           if (prompt.nodeId !== currentPromptId) {
             disconnectWhere((c) => c.type === 'prompt-to-run' && c.toId === node.nodeId);
             connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
             lines.push(`Prompt "${nodeTitle(prompt)}"`);
           }
-          setRunInputSource(next, node.nodeId, { nodeId: dataset.nodeId, port: RESULT_PORT });
+          setRunInputSource(next, node.nodeId, source);
           node.runInputToColumn = JSON.stringify(mapping);
-          lines.push(`Input "${nodeTitle(dataset)}"; mapping: ${Object.entries(mapping).map(([k, v]) => `${k} ← ${v}`).join(', ')}`);
+          lines.push(`Input "${stepSourceLabel(next, source)}"`, mappingLine(mapping, source));
         }
       }
 
@@ -864,18 +934,17 @@ export function planChangeSet(state, operations, ctx) {
       if (node.type === 'promptReview' && node.reviewPending) fail(`Review "${nodeTitle(node)}" is running; stop it before removing it.`);
       const id = node.nodeId;
       const lines = [];
+      // Every step reading this node loses that input (a Process its df or its df_<alias> input).
+      for (const edge of next.connections.filter((c) => c.type === DATA_EDGE && c.fromId === id)) {
+        const reader = byId().get(edge.toId);
+        if (!reader) continue;
+        lines.push(reader.type === 'run' ? `Run "${nodeTitle(reader)}" loses its input`
+          : `Process "${nodeTitle(reader)}" loses its input ${edge.alias || 'df'}`);
+      }
       for (const other of next.nodes) {
-        if (other.type === 'run' && runInputSource(next, other.nodeId)?.nodeId === id) {
-          setRunInputSource(next, other.nodeId, null);
-          lines.push(`Run "${nodeTitle(other)}" loses its input dataset`);
-        }
         if (other.type === 'score' && other.scoreGroundTruthId === id) {
           delete other.scoreGroundTruthId;
           lines.push(`Score "${nodeTitle(other)}" loses its ground truth`);
-        }
-        if (other.type === 'process' && processPrimarySource(next, other.nodeId)?.nodeId === id) {
-          setProcessPrimarySource(next, other.nodeId, null);
-          lines.push(`Process "${nodeTitle(other)}" loses its primary input`);
         }
         if (other.type === 'dataset' && other.samplerNodeId === id) delete other.samplerNodeId;
       }

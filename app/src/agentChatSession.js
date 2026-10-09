@@ -693,7 +693,6 @@ export function mountAgentChatSession({
       inspectNode,
       getScoreComparisonRows: workspace.getScoreComparisonRows,
       buildSummary,
-      getDatasetBindings: workspace.getDatasetBindings,
       previewProposal: (proposal) => previewProposal(proposal, proposalWorkspace),
       applyProposal: (proposal, options) => applyProposal(proposal, proposalWorkspace, options),
       previewRunRequest: (request) => previewRunRequest(request, runWorkspace),

@@ -8,22 +8,29 @@ A Process node runs one Python function over whole tables. There is no LLM invol
 import pandas as pd
 
 def process(df, df_chembl_targets):
-    # df: the primary input Dataset as a pandas DataFrame (all values as they appear in the table)
-    # df_chembl_targets: another input Dataset, declared as a parameter named after its alias
+    # df: the primary input (a Dataset or a step's output) as a pandas DataFrame
+    # df_chembl_targets: another input, declared as a parameter named after its alias
     return df  # a DataFrame, or {"branch_name": DataFrame, ...}
 ```
 
-- `df` is the first parameter: the Process's primary input Dataset.
-- Every other input Dataset is a parameter after `df`, named after its alias `df_<dataset_name>`: the
-  Dataset name lower-cased, accents removed, and each run of characters outside `a-z0-9_` replaced by
-  `_`. For example a Dataset called "ChEMBL targets (v2)" is `df_chembl_targets_v2`. If two names
-  collide, later ones get `_2`, `_3`, ... Declaring a parameter connects that Dataset to the Process,
-  just as checking it under Input datasets in the Process window adds the parameter. An input keeps
-  its alias when its Dataset is renamed, so check the exact aliases with inspect_node on the Process.
+- `df` is the first parameter: the Process's primary input. An input is a Dataset or another step's
+  output: a Run's results (columns `Input: #`, `Input: <column>`, `Output: #`, `Output: <field>`), or
+  one branch of a Process.
+- Every other input is a parameter after `df`, named after its alias `df_<name>`. The name is a
+  Dataset's name, the Prompt name of a Run, a Process's name for its single output, or the branch name
+  for one of several branches; lower-cased, accents removed, and each run of characters outside
+  `a-z0-9_` replaced by `_`. For example a Dataset called "ChEMBL targets (v2)" is
+  `df_chembl_targets_v2` and a branch `needs_review` is `df_needs_review`. If two names collide, later
+  ones get `_2`, `_3`, ... Declaring a parameter connects that input to the Process, just as checking
+  it under Input in the Process window adds the parameter. An input keeps its alias when it is renamed,
+  so check the exact aliases with inspect_node on the Process (`availableInputs`).
+- A step's output can be read once that step has a complete result; until then the Process waits for it.
 - Older code reads another Dataset as a global `df_<dataset_name>` without declaring it; that still
   works, but new code declares every input as a parameter.
 - Return one DataFrame (shown as the `result` branch) or a dict mapping non-empty, unique branch names
-  to DataFrames. Each branch can be saved as its own Dataset.
+  to DataFrames. Each branch is an output other steps can read directly; it can also be saved as a
+  Dataset to freeze it. Always return every branch, empty when it has no rows: a pipeline needs each
+  branch the code was detected to return.
 - Returning anything else is an error. The run times out after 120 seconds.
 
 ## Environment
@@ -39,9 +46,9 @@ that interpreter, so prefer pandas and the standard library.
 - Image and pdf cells arrive as a Python list of local file paths, so code can open the files.
 - Every returned value becomes a text cell. Return strings, numbers, booleans or None; convert lists
   and dicts with `json.dumps` yourself, otherwise they are stored as unreadable text. Image and pdf
-  columns do not survive a Process, so a Prompt that needs the files must read a Dataset that still
-  holds them.
-- Column order in the returned DataFrame is the column order of the saved Dataset.
+  columns do not survive a Process, so a Prompt that needs the files must read a Dataset or a Run's
+  results that still hold them.
+- Column order in the returned DataFrame is the column order of the output.
 
 ## Patterns
 

@@ -21,7 +21,7 @@ const canvas = () => upgradeCanvasState({
   connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, { fromId: 'r', toId: 's', type: 'run-to-score' }],
 });
 const plan = (operations) => planChangeSet(canvas(), operations, { extractInputFields });
-const addRun = (extra = {}) => ({ op: 'add_run', ref: '$run', prompt: 'p', input_dataset: 'raw', input_mapping: { text: 'text' }, ...extra });
+const addRun = (extra = {}) => ({ op: 'add_run', ref: '$run', prompt: 'p', input: 'raw', input_mapping: { text: 'text' }, ...extra });
 
 // Users have no per-Run model or settings and no per-Score review method (Settings holds them),
 // so neither does the Agent.
