@@ -16,6 +16,7 @@ import {
   parseScoreMappingBundle,
   serializeScoreMappingBundle,
   emptyScoreRuleGroup,
+  filterScoreRulesByGtColumns,
   scoreBundleRootsForEmbeddingWalk,
 } from './scoreMappingBundle.js';
 import {
@@ -1425,29 +1426,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const group = root.type === 'group' && root.children ? { ...root, children: root.children.slice() } : root;
     group.children[i] = removeNodeAtPath(group.children[i], rest);
     return group;
-  }
-
-  /** Remove rules whose gtColumns include any column not in the selected GT headers. Returns new root. */
-  function filterRootByGtHeaders(root, gtSet) {
-    if (!root) return null;
-    if (root.type === 'rule') {
-      const cols = root.gtColumns || [];
-      const allIn = cols.length > 0 && cols.every((c) => {
-        const s = String(c || '').trim();
-        return s === SCORE_GT_ROW_INDEX_COLUMN || gtSet.has(s);
-      });
-      return allIn ? root : null;
-    }
-    if (root.type === 'group' && Array.isArray(root.children)) {
-      const filtered = root.children.map((ch) => filterRootByGtHeaders(ch, gtSet)).filter((x) => x != null);
-      const ops = (root.ops || []).slice(0, Math.max(0, filtered.length - 1));
-      const out = { type: 'group', ops, children: filtered };
-      if (typeof root.groupId === 'number' && Number.isInteger(root.groupId) && root.groupId > 0) {
-        out.groupId = root.groupId;
-      }
-      return out;
-    }
-    return null;
   }
 
   /** Insert child at path (path points to parent group). Returns new root. */
@@ -3598,8 +3576,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (selectedNodeId) {
       const gtSet = new Set([...(getGroundTruthHeaders(selectedNodeId) || []), SCORE_GT_ROW_INDEX_COLUMN]);
       const { inputRoot: ir1, outputRoot: or1 } = loadBundle();
-      const inF = filterRootByGtHeaders(ir1, gtSet) || emptyScoreRuleGroup();
-      const outF = filterRootByGtHeaders(or1, gtSet) || emptyScoreRuleGroup();
+      const inF = filterScoreRulesByGtColumns(ir1, gtSet) || emptyScoreRuleGroup();
+      const outF = filterScoreRulesByGtColumns(or1, gtSet) || emptyScoreRuleGroup();
       if (JSON.stringify(inF) !== JSON.stringify(ir1) || JSON.stringify(outF) !== JSON.stringify(or1)) {
         persistBundle(inF, outF);
       }
@@ -3686,8 +3664,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   if (selectedNodeId) {
     const gtSet = new Set([...(getGroundTruthHeaders(selectedNodeId) || []), SCORE_GT_ROW_INDEX_COLUMN]);
     const { inputRoot: ir2, outputRoot: or2 } = loadBundle();
-    const inF2 = filterRootByGtHeaders(ir2, gtSet) || emptyScoreRuleGroup();
-    const outF2 = filterRootByGtHeaders(or2, gtSet) || emptyScoreRuleGroup();
+    const inF2 = filterScoreRulesByGtColumns(ir2, gtSet) || emptyScoreRuleGroup();
+    const outF2 = filterScoreRulesByGtColumns(or2, gtSet) || emptyScoreRuleGroup();
     if (JSON.stringify(inF2) !== JSON.stringify(ir2) || JSON.stringify(outF2) !== JSON.stringify(or2)) {
       persistBundle(inF2, outF2);
     }

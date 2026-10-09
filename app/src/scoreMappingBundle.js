@@ -7,10 +7,12 @@
 
 import {
   DEFAULT_MATCH_FLAGS,
+  SCORE_GT_ROW_INDEX_COLUMN,
   canonicalizeMatchFlags,
   migrateLegacyMatchType,
   legacyMatchTypeWasContains,
 } from './scoreMatchPrimitives.js';
+import { flattenScoreRules } from './scoreRunGtPairing.js';
 
 export const SCORE_MAPPING_BUNDLE_V = 2;
 
@@ -214,4 +216,47 @@ export function scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot) {
   if (ch.length === 0) return emptyScoreRuleGroup();
   if (ch.length === 1) return ch[0];
   return { type: 'group', ops: Array(ch.length - 1).fill('AND'), children: ch };
+}
+
+/**
+ * Removes the rules that compare a ground-truth column outside `gtSet` (the row-index column always
+ * counts), and every rule without ground-truth columns. Returns a new root.
+ */
+export function filterScoreRulesByGtColumns(root, gtSet) {
+  if (!root) return null;
+  if (root.type === 'rule') {
+    const cols = root.gtColumns || [];
+    const allIn = cols.length > 0 && cols.every((c) => {
+      const s = String(c || '').trim();
+      return s === SCORE_GT_ROW_INDEX_COLUMN || gtSet.has(s);
+    });
+    return allIn ? root : null;
+  }
+  if (root.type === 'group' && Array.isArray(root.children)) {
+    const filtered = root.children.map((ch) => filterScoreRulesByGtColumns(ch, gtSet)).filter((x) => x != null);
+    const ops = (root.ops || []).slice(0, Math.max(0, filtered.length - 1));
+    const out = { type: 'group', ops, children: filtered };
+    if (typeof root.groupId === 'number' && Number.isInteger(root.groupId) && root.groupId > 0) {
+      out.groupId = root.groupId;
+    }
+    return out;
+  }
+  return null;
+}
+
+/**
+ * A Score's mapping once its ground truth is a table with `headers`, as the Score window leaves it
+ * when a ground truth is chosen: rules on columns the table lacks are dropped, and with no Input rule
+ * left the Output rules go too. Returns the serialized bundle, or null when nothing changes.
+ * @param {string} rawMapping the Score's `scoreMapping`
+ * @param {string[]} headers
+ */
+export function scoreMappingForGroundTruth(rawMapping, headers) {
+  const gtSet = new Set([...(headers || []), SCORE_GT_ROW_INDEX_COLUMN]);
+  const { inputRoot, outputRoot } = parseScoreMappingBundle(rawMapping || '{}');
+  const input = filterScoreRulesByGtColumns(inputRoot, gtSet) || emptyScoreRuleGroup();
+  let output = filterScoreRulesByGtColumns(outputRoot, gtSet) || emptyScoreRuleGroup();
+  if (JSON.stringify(input) === JSON.stringify(inputRoot) && JSON.stringify(output) === JSON.stringify(outputRoot)) return null;
+  if (flattenScoreRules(input).length === 0) output = emptyScoreRuleGroup();
+  return serializeScoreMappingBundle(input, output);
 }

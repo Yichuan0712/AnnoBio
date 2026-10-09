@@ -8,6 +8,7 @@
  * "$name" ref given when adding them.
  */
 import { normalizeDatasetContent } from '../../datasetContent.js';
+import { keepSharedMapping } from '../../nodePorts.js';
 import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
@@ -773,9 +774,10 @@ export function planChangeSet(state, operations, ctx) {
             ? resolveSource(set.input ?? current.nodeId, set.input_branch, 'input', node.nodeId)
             : current;
           // A new Prompt keeps only the old mapping for inputs it shares, as the Run window does.
-          const promptInputNames = new Set(promptInputs(prompt, ctx.extractInputFields).map((input) => input.name));
-          const keptMapping = Object.fromEntries(Object.entries(parseJson(node.runInputToColumn, {}))
-            .filter(([name]) => prompt.nodeId === currentPromptId || promptInputNames.has(name)));
+          const oldMapping = parseJson(node.runInputToColumn, {});
+          const keptMapping = prompt.nodeId === currentPromptId
+            ? oldMapping
+            : keepSharedMapping(oldMapping, promptInputs(prompt, ctx.extractInputFields).map((input) => input.name));
           const mapping = validateMapping(prompt, source, set.input_mapping ?? keptMapping);
           if (prompt.nodeId !== currentPromptId) {
             disconnectWhere((c) => c.type === 'prompt-to-run' && c.toId === node.nodeId);

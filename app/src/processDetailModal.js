@@ -15,58 +15,11 @@ import { createRowResultsPanel } from './rowResultsTable.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { bindProcessInputPicker, processInputPickerHtml } from './processInputPicker.js';
 import { codeDeclaringInputs } from './processDatasetBindings.js';
-import { withProcessParameters } from './processSignature.js';
+import { buildDefaultProcessCode, isUntouchedSampleCode } from './processSampleCode.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
 import { executionIdleLabel } from './executionResumeState.js';
 
 const API_BASE = BACKEND_API_BASE;
-const MAX_COMMENT_LINE_CHARS = 70;
-
-function wrapCommentList(prefix, continuationPrefix, items) {
-  const lines = [];
-  let current = prefix;
-  items.forEach((item, index) => {
-    const piece = (index === 0 ? '' : ', ') + item;
-    if (current !== prefix && current.length + piece.length > MAX_COMMENT_LINE_CHARS) {
-      lines.push(current);
-      current = continuationPrefix + item;
-    } else current += piece;
-  });
-  lines.push(current);
-  return lines.join('\n');
-}
-
-/** Sample code naming the primary Dataset's real columns. Comments must not spell a real df_<name>
- * alias: referencedDatasetAliases scans comments too, so that would add a canvas dependency. */
-function buildDefaultCode(headers) {
-  const columns = (Array.isArray(headers) ? headers : []).map((header) => String(header ?? '')).filter(Boolean);
-  const col = JSON.stringify(columns[0] || 'column');
-  const columnLines = columns.length
-    ? wrapCommentList('    # Columns: ', '    #   ', columns)
-    : '    # Columns: (none yet)';
-  return `import pandas as pd
-
-
-def process(df):
-    # df is this Process's input Dataset as a pandas DataFrame.
-${columnLines}
-    # Each other Input dataset you check is a parameter after df, named
-    # df_<name> as shown under Input datasets.
-    #
-    # Return one of:
-    #   1. One DataFrame -> one output Dataset
-    #        return df[df[${col}].notna()]
-    #   2. A dict of DataFrames -> one output Dataset per key (named branches)
-    #        mask = df[${col}].astype(str).str.len() > 0
-    #        return {"kept": df[mask], "empty": df[~mask]}
-    #
-    # Common steps:
-    #   df[${col}] = df[${col}].astype(str).str.strip()  # clean a column
-    #   df = df.drop_duplicates(subset=[${col}])  # remove duplicates
-    #   df = df.merge(df_<name>, on=${col}, how="left")  # join another Dataset
-    return df
-`;
-}
 
 function escapeHtml(value) {
   const div = document.createElement('div');
@@ -139,7 +92,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   const initialCode = resolveDataframeProcessCode({
     dfCode: node?.dataset?.processDfCode,
     code: node?.dataset?.processCode,
-  }) || buildDefaultCode(primaryHeaders(''));
+  }) || buildDefaultProcessCode(primaryHeaders(''));
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -232,10 +185,10 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       const code = getCode();
       const { bindings, savedAliases } = readDatasets(code);
       // Untouched sample code follows the new df's columns; edited code is left alone.
-      const untouched = withProcessParameters(code, []) === buildDefaultCode(primaryHeaders(code));
+      const untouched = isUntouchedSampleCode(code, primaryHeaders(code));
       const headers = bindings.find((binding) => binding.key === primaryDatasetId)?.content?.headers || [];
       const nextCode = codeDeclaringInputs({
-        code: untouched ? buildDefaultCode(headers) : code,
+        code: untouched ? buildDefaultProcessCode(headers) : code,
         // Sources are told apart by key; each alias is made from its name (stepInputs.js).
         datasets: bindings.map((binding) => ({ nodeId: binding.key, name: binding.name })),
         primaryDatasetId, inputIds, savedAliases,
