@@ -111,3 +111,65 @@ test('the Kinase example upgrades to one input per Run and one df per Process', 
     assert.equal(aliases.filter((alias) => alias === 'df').length, 1, processId);
   }
 });
+
+const PRODUCER_FIELDS = ['sourceRunNodeId', 'processOutputName', 'savedCopy', 'snapshotSourceRecordId', 'pipelineRunId', 'pipelineLogicalId', 'resultMissing'];
+const PRODUCER_EDGES = ['process-to-dataset', 'process-to-dataset-snapshot', 'run-to-dataset-snapshot'];
+const producerLeft = (state) => [
+  ...state.nodes.flatMap((node) => PRODUCER_FIELDS.filter((field) => field in node).map((field) => `${node.nodeId}.${field}`)),
+  ...state.connections.filter((edge) => PRODUCER_EDGES.includes(edge.type)).map((edge) => `${edge.type}:${edge.fromId}->${edge.toId}`),
+];
+
+test('a Dataset saved from a step keeps only where it came from, in savedFrom', () => {
+  const dataset = (nodeId, fields = {}) => ({ type: 'dataset', nodeId, name: nodeId, datasetContent: { headers: ['a'], rows: [['1']] }, ...fields });
+  const legacy = { version: 3, nodes: [
+    { type: 'run', nodeId: 'run' }, { type: 'process', nodeId: 'proc' }, { type: 'sampler', nodeId: 'sampler' },
+    dataset('saved-run', { sourceRunNodeId: 'run', savedCopy: true, snapshotSourceRecordId: 'rec-run' }),
+    // An output that followed History: its last table stays, as a plain Dataset.
+    dataset('follows-run', { sourceRunNodeId: 'run', resultMissing: true }),
+    dataset('branch', { processOutputName: 'left' }),
+    dataset('process-copy', { savedCopy: true, snapshotSourceRecordId: 'rec-proc' }),
+    dataset('run-copy', { snapshotSourceRecordId: 'rec-old' }),
+    dataset('pipeline-run', { sourceRunNodeId: 'run', savedCopy: true, snapshotSourceRecordId: 'rec-p', pipelineRunId: 'p1', pipelineLogicalId: 'dataset:x' }),
+    dataset('pipeline-branch', { processOutputName: 'right', savedCopy: true, pipelineRunId: 'p2', pipelineLogicalId: 'output:process:proc:right' }),
+    dataset('gone-source', { sourceRunNodeId: 'deleted-run', savedCopy: true }),
+    dataset('plain', { sourceRunNodeId: '', processOutputName: '', samplerNodeId: '' }),
+    dataset('sample', { samplerNodeId: 'sampler' }),
+    dataset('already', { savedFrom: { kind: 'score', nodeId: 'score', port: 'result', recordId: '' } }),
+  ], connections: [
+    { fromId: 'proc', toId: 'branch', type: 'process-to-dataset' },
+    { fromId: 'proc', toId: 'process-copy', type: 'process-to-dataset-snapshot' },
+    { fromId: 'run', toId: 'run-copy', type: 'run-to-dataset-snapshot' },
+    { fromId: 'proc', toId: 'pipeline-branch', type: 'process-to-dataset' },
+    { fromId: 'sampler', toId: 'sample', type: 'sampler-to-dataset' },
+  ] };
+  const state = upgradeCanvasState(legacy);
+  assert.deepEqual(producerLeft(state), []);
+  const savedFrom = Object.fromEntries(state.nodes.filter((node) => node.type === 'dataset').map((node) => [node.nodeId, node.savedFrom]));
+  assert.deepEqual(savedFrom, {
+    'saved-run': { kind: 'run', nodeId: 'run', port: 'result', recordId: 'rec-run' },
+    'follows-run': { kind: 'run', nodeId: 'run', port: 'result', recordId: '' },
+    branch: { kind: 'process', nodeId: 'proc', port: 'left', recordId: '' },
+    'process-copy': { kind: 'process', nodeId: 'proc', port: 'result', recordId: 'rec-proc' },
+    'run-copy': { kind: 'run', nodeId: 'run', port: 'result', recordId: 'rec-old' },
+    'pipeline-run': { kind: 'pipeline', nodeId: 'run', port: 'result', recordId: 'rec-p', pipelineRunId: 'p1' },
+    'pipeline-branch': { kind: 'pipeline', nodeId: 'proc', port: 'right', recordId: '', pipelineRunId: 'p2' },
+    'gone-source': { kind: 'run', nodeId: 'deleted-run', port: 'result', recordId: '' },
+    plain: undefined,
+    sample: undefined,
+    already: { kind: 'score', nodeId: 'score', port: 'result', recordId: '' },
+  });
+  assert.equal(state.nodes.find((node) => node.nodeId === 'sample').samplerNodeId, 'sampler');
+  assert.deepEqual(state.connections, [{ fromId: 'sampler', toId: 'sample', type: 'sampler-to-dataset' }]);
+  assert.deepEqual(state.nodes.find((node) => node.nodeId === 'follows-run').datasetContent, { headers: ['a'], rows: [['1']] });
+  assert.deepEqual(upgradeCanvasState(state), state);
+});
+
+test('the Kinase example keeps its 12 Datasets as plain tables, 11 of them saved from a step', { skip: !existsSync(KINASE) && 'the example projects are not in the repository' }, () => {
+  const { project } = JSON.parse(readFileSync(KINASE, 'utf8'));
+  const state = upgradeCanvasState(project);
+  const datasets = state.nodes.filter((node) => node.type === 'dataset');
+  assert.equal(datasets.length, 12);
+  assert.deepEqual(producerLeft(state), []);
+  assert.equal(datasets.filter((node) => node.savedFrom).length, 11);
+  assert.ok(datasets.every((node) => !node.savedFrom || state.nodes.some((other) => other.nodeId === node.savedFrom.nodeId)));
+});

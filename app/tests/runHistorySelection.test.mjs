@@ -4,8 +4,7 @@ import assert from 'node:assert/strict';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { planHistorySelection } from '../src/runHistorySelection.js';
 import { RunHistorySession } from '../src/runHistorySession.js';
-import { graph, recordGraph } from './historyGraphFixture.mjs';
-import { upgradeCanvasState } from '../src/canvasFormat.js';
+import { graph, recordGraph, upgradeKeepingDerivedDatasets } from './historyGraphFixture.mjs';
 import { processInputAliases, processPrimarySource } from '../src/stepInputs.js';
 
 test('selecting a downstream record restores its ancestor inputs together', async () => {
@@ -63,7 +62,7 @@ test('selecting Pipeline history switches its upstream, outputs, and downstream 
       }, sourceRecordIds: ['tidy-current'],
     },
   ];
-  const state = upgradeCanvasState({
+  const state = upgradeKeepingDerivedDatasets({
     nodes: [
       { type: 'prompt', nodeId: 'prompt', sections: [], outputFormat: { fields: [] }, inputTypes: {} },
       { type: 'dataset', nodeId: 'raw', datasetContent: table('raw') },
@@ -159,7 +158,7 @@ test('selecting a multi-input Process history switches every upstream input line
   const mergeOld = merge('merge-old', 'left-live', 'left-old', 'right-live', 'right-old', 'old');
   const mergeCurrent = merge('merge-current', 'left-live', 'left-current', 'right-live', 'right-current', 'current');
   const records = [leftOld, leftCurrent, rightOld, rightCurrent, mergeOld, mergeCurrent];
-  const state = upgradeCanvasState({
+  const state = upgradeKeepingDerivedDatasets({
     nodes: [
       { type: 'dataset', nodeId: 'left-seed', datasetContent: table('left-seed') },
       { type: 'dataset', nodeId: 'right-seed', datasetContent: table('right-seed') },

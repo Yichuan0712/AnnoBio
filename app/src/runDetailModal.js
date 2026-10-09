@@ -10,7 +10,7 @@ import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './display
 import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
-import { cloneCell, displayCell } from './datasetContent.js';
+import { displayCell } from './datasetContent.js';
 import { deriveOutputFields } from './runResultsExport.js';
 import { ensureRunNodeModel } from './nodeSettings.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
@@ -107,8 +107,6 @@ export function openRunDetailModal({
   getPromptTemplate = () => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }),
   unregisterPendingRun = () => {},
   getPendingRunId = () => null,
-  getPromptName = () => '',
-  getUniqueDatasetExportName = (n) => n,
   isRunNameAlreadyUsedForPrompt = () => false,
   getRunMappingsFromCanvas,
   onWorkingSetChange = () => {},
@@ -664,25 +662,8 @@ export function openRunDetailModal({
     saveBtn.className = 'btn btn-secondary run-detail-save-to-workspace-btn';
     saveBtn.textContent = 'Save to workspace';
     saveBtn.addEventListener('click', () => {
-      const promptName = (getPromptName() || '').trim() || 'Prompt';
-      const baseName = `${promptName} ${runName}`.trim();
-      const datasetName = getUniqueDatasetExportName(baseName);
-      const ih = resultsState.inputHeaders || [];
-      const outputHeaders = (resultsState.outputFields || []).map((f) => formatResultOutputColumnLabel((f.display || f.key || '').trim() || 'output'));
-      const inputHeaderLabels = ih.map((h) => 'Input: ' + (String(h ?? '').trim() || ' '));
-      const exportHeaders = ['Input: #', ...inputHeaderLabels, formatResultOutputColumnLabel('#'), ...outputHeaders];
-      const rows = (resultsState.results || []).map((r) => {
-        const outputPart = r.error ? (resultsState.outputFields || []).map(() => String(r.error)) : (resultsState.outputFields || []).map((f) => { const v = r.output?.[f.key]; return v == null ? '—' : Array.isArray(v) ? v.join(', ') : String(v); });
-        const inputRow = Array.isArray(r.input_row) ? r.input_row : [];
-        const inputPart = ih.map((_, i) => (inputRow[i] == null ? '—' : cloneCell(inputRow[i])));
-        const inputNum = String((r.input_row_index ?? 0) + 1);
-        const outputNum = String((r.row_index ?? 0) + 1);
-        return [inputNum, ...inputPart, outputNum, ...outputPart];
-      });
-      let sourceTypes = [];
-      try { sourceTypes = JSON.parse(node?.dataset?.runInputContent || '{}').columnTypes || []; } catch (_) {}
-      const columnTypes = ['text', ...ih.map((_, i) => (sourceTypes[i] === 'image' || sourceTypes[i] === 'pdf') ? sourceTypes[i] : 'text'), 'text', ...outputHeaders.map(() => 'text')];
-      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { name: datasetName, notes: `Exported from ${promptName} ${runName}.\n${resultsState.status === 'complete' ? 'Run completed.' : 'Run incomplete.'}`, headers: exportHeaders, columnTypes, rows, runNodeId: node?.dataset?.nodeId || '' } }));
+      // The same table as the context menu's Save results (savedDatasets.js).
+      document.dispatchEvent(new CustomEvent('workflow:save-run-output', { detail: { runNodeId: node?.dataset?.nodeId || '' } }));
       closeModal();
     });
     const scoreBtn = document.createElement('button');

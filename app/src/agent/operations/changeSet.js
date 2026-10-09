@@ -8,15 +8,14 @@
  * "$name" ref given when adding them.
  */
 import { normalizeDatasetContent } from '../../datasetContent.js';
-import { datasetHistorySource } from '../../datasetHistorySource.js';
 import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
-import { buildRunResultsTable } from '../../runResultsExport.js';
+import { savedProcessOutputs, savedRunOutput } from '../../savedDatasets.js';
 import {
   RESULT_PORT, processInputBindings, processPrimarySource, runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource,
 } from '../../stepInputs.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
-import { nodeTitle, processOutputsOf, runInputContentOf, runResultsOf } from '../canvas/workflowNodeInspector.js';
+import { nodeTitle, processOutputsOf, runResultsOf } from '../canvas/workflowNodeInspector.js';
 
 export class ChangeSetError extends Error {
   constructor(message, index = null) {
@@ -671,15 +670,6 @@ export function planChangeSet(state, operations, ctx) {
       }
 
       if (node.type === 'dataset' && ('columns' in set || 'rows' in set)) {
-        // Like the dataset window: an older output that still follows History becomes a saved copy when edited.
-        const historySource = next.historyVersion === 1 ? datasetHistorySource(node, next.connections) : null;
-        if (historySource) {
-          const recordId = clean(byId().get(historySource.sourceId)?.historyRecordId);
-          if (!recordId) fail(`Dataset "${nodeTitle(node)}" follows History, but its ${historySource.kind} has no History record. Run it again before editing this table.`);
-          node.savedCopy = true;
-          node.snapshotSourceRecordId = recordId;
-          lines.push('Becomes a saved copy: History no longer replaces its table.');
-        }
         if (datasetColumns(node).some((c) => c.type !== 'text')) fail('Datasets with image or pdf columns cannot be rewritten here; edit them in the dataset view.');
         const current = normalizeDatasetContent(node.datasetContent || { headers: [], rows: [] });
         const { headers, rows } = normalizeTable({ columns: set.columns ?? current.headers, rows: set.rows ?? current.rows });
@@ -771,27 +761,19 @@ export function planChangeSet(state, operations, ctx) {
       if (run.runPending) fail(`Run "${nodeTitle(run)}" is still running; save its results once it finishes.`);
       const results = runResultsOf(run);
       if (!results.length) fail(`Run "${nodeTitle(run)}" has no results yet.`);
-      const recordId = clean(run.historyRecordId);
-      if (!recordId) fail(`Run "${nodeTitle(run)}" has no History record. Run it again before saving its results.`);
-      const prompt = byId().get(next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === run.nodeId)?.fromId);
-      const saved = runInputContentOf(run);
-      const runContent = Array.isArray(saved.rows) && saved.rows.length
-        ? saved
-        : normalizeDatasetContent(byId().get(runInputSource(next, run.nodeId)?.nodeId)?.datasetContent || { headers: [], rows: [] });
-      const table = buildRunResultsTable({ results, runContent, schemaFields: prompt?.outputFormat?.fields || [] });
+      if (!clean(run.historyRecordId)) fail(`Run "${nodeTitle(run)}" has no History record. Run it again before saving its results.`);
+      // The same table and note as Save results in the UI (savedDatasets.js).
+      const saved = savedRunOutput(next, run.nodeId);
+      const { table } = saved;
       const completed = run.runCompleted === true || run.runCompleted === '1';
-      const promptName = prompt ? nodeTitle(prompt) : 'Prompt';
-      const name = uniqueName(clean(op.name) || `${promptName} ${nodeTitle(run)}`, takenNames('dataset'));
+      const name = uniqueName(clean(op.name) || saved.name, takenNames('dataset'));
       const node = addNode({
         type: 'dataset',
         nodeId: generateNodeId(),
         ...placeNear(run),
         name,
-        note: String(op.note ?? `Exported from ${promptName} ${nodeTitle(run)}.\n${completed ? 'Run completed.' : 'Run incomplete.'}`),
-        sourceRunNodeId: run.nodeId,
-        // A saved output is a copy, as in the UI: History never rewrites it (datasetHistorySource.js).
-        savedCopy: true,
-        snapshotSourceRecordId: recordId,
+        note: String(op.note ?? saved.notes),
+        savedFrom: saved.savedFrom,
         datasetContent: normalizeDatasetContent(table),
         nodeOrigin: 'agent',
       });
@@ -809,24 +791,22 @@ export function planChangeSet(state, operations, ctx) {
       const branch = clean(op.branch) || (branches.length === 1 ? branches[0] : '');
       if (!branch) fail(`Process "${nodeTitle(processNode)}" has several branches (${branches.join(', ')}); name the branch to save.`);
       if (!outputs[branch]) fail(`Process "${nodeTitle(processNode)}" has no branch "${branch}". Branches: ${branches.join(', ')}.`);
-      const recordId = clean(processNode.historyRecordId);
-      if (!recordId) fail(`Process "${nodeTitle(processNode)}" has no History record. Run it again before saving its output.`);
+      if (!clean(processNode.historyRecordId)) fail(`Process "${nodeTitle(processNode)}" has no History record. Run it again before saving its output.`);
       const title = nodeTitle(processNode);
-      const name = uniqueName(clean(op.name) || (branches.length === 1 ? `${title} results` : `${title} — ${branch}`), takenNames('dataset'));
-      const content = normalizeDatasetContent(outputs[branch]);
+      // The same Dataset as Create dataset in the UI (savedDatasets.js).
+      const saved = savedProcessOutputs(next, processNode.nodeId).find((item) => item.port === branch);
+      const name = uniqueName(clean(op.name) || saved.name, takenNames('dataset'));
+      const content = normalizeDatasetContent(saved.table);
       const node = addNode({
         type: 'dataset',
         nodeId: generateNodeId(),
         ...placeNear(processNode),
         name,
-        note: String(op.note ?? `Branch "${branch}" exported from Process "${title}".`),
-        processOutputName: branch,
-        savedCopy: true,
-        snapshotSourceRecordId: recordId,
+        note: String(op.note ?? saved.notes),
+        savedFrom: saved.savedFrom,
         datasetContent: content,
         nodeOrigin: 'agent',
       });
-      connect(processNode.nodeId, node.nodeId, 'process-to-dataset');
       registerRef(op, node.nodeId);
       return {
         kind: 'add', type: 'dataset', title: `Save branch "${branch}" of process "${title}" as "${name}"`, nodeIds: [node.nodeId],
@@ -897,7 +877,6 @@ export function planChangeSet(state, operations, ctx) {
           setProcessPrimarySource(next, other.nodeId, null);
           lines.push(`Process "${nodeTitle(other)}" loses its primary input`);
         }
-        if (other.type === 'dataset' && other.sourceRunNodeId === id) delete other.sourceRunNodeId;
         if (other.type === 'dataset' && other.samplerNodeId === id) delete other.samplerNodeId;
       }
       for (const c of next.connections) {

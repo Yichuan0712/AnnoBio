@@ -1,5 +1,5 @@
 /** Shared History test graph: input Dataset → Run → saved Run output → Process → saved Process output.
- * Written in the version 2 fields and upgraded, as a project opened from disk is. */
+ * Written in the version 2 fields; the outputs still follow History (upgradeKeepingDerivedDatasets). */
 import { buildRunResultsTable } from '../src/runResultsExport.js';
 import { captureHistoryInput, runningHistoryRecord } from '../src/runHistoryCapture.js';
 import { upgradeCanvasState } from '../src/canvasFormat.js';
@@ -14,7 +14,27 @@ export const runDataset = { type: 'dataset', nodeId: 'run-dataset', name: 'Run e
 export const processResult = { headers: ['answer'], rows: [['processed']] };
 export const process = { type: 'process', nodeId: 'process', name: 'Process', dfCode: 'return df', primaryDatasetId: 'run-dataset', dfResults: JSON.stringify({ outputs: { result: processResult }, statusText: '1 branch returned.' }) };
 export const processDataset = { type: 'dataset', nodeId: 'process-dataset', name: 'Process export', processOutputName: 'result', datasetContent: { ...processResult, columnTypes: ['text'], rowIds: ['generated-id-2'] } };
-export const graph = upgradeCanvasState({
+const PRODUCER_EDGES = new Set(['process-to-dataset', 'process-to-dataset-snapshot', 'run-to-dataset-snapshot']);
+
+/**
+ * A version 2 canvas with its inputs upgraded to data connections, but its Datasets that follow a
+ * step's History kept as version 2 had them. A canvas opened from disk no longer has such Datasets
+ * (canvasFormat.js makes them plain, with `savedFrom`); this keeps the History tests of that logic
+ * running until DATA_FLOW_PLAN.md step 12 deletes the logic together with them.
+ */
+export function upgradeKeepingDerivedDatasets(state) {
+  const upgraded = upgradeCanvasState(state);
+  const datasets = new Map(state.nodes.filter((node) => node.type === 'dataset').map((node) => [node.nodeId, node]));
+  const dataEdges = upgraded.connections.filter((edge) => edge.type === 'data');
+  const added = dataEdges.slice(state.connections.filter((edge) => edge.type === 'data').length);
+  return {
+    ...upgraded,
+    nodes: upgraded.nodes.map((node) => (datasets.has(node.nodeId) ? structuredClone(datasets.get(node.nodeId)) : node)),
+    connections: [...state.connections.filter((edge) => edge.type !== 'dataset-to-process').map((edge) => ({ ...edge })), ...added],
+  };
+}
+
+export const graph = upgradeKeepingDerivedDatasets({
   nodes: [input, prompt, run, runDataset, process, processDataset],
   connections: [
     { type: 'prompt-to-run', fromId: 'prompt', toId: 'run' },

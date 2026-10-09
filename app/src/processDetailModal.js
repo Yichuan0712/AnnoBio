@@ -107,14 +107,13 @@ function restoreResults(node, ...keys) {
  *   getProcessInputs: (code: string) => { bindings: Array<{key: string, nodeId: string, kind: string, name: string, label: string, color?: string, content?: {headers: string[], rows: string[][]}, alias: string, primary: boolean, input: boolean, used: boolean}>, primaryDatasetId: string, savedAliases: Record<string, string> },
  *   syncProcessDependencies?: (code: string) => void, setPrimaryDataset?: (key: string, code: string) => void,
  *   replaceInputSource?: (fromKey: string, toKey: string, code: string) => void,
- *   getInputStatus?: () => { waiting: string, notices: string[] },
- *   getUniqueDatasetExportName?: (base: string) => string }} options
+ *   getInputStatus?: () => { waiting: string, notices: string[] } }} options
  *   getProcessInputs: every Dataset and step output (stepInputs.js processInputBindings), marking the
  *   ones the code reads, by source key; a step output without a result yet has no content
  *   setPrimaryDataset: the Process picks its df in this window, like a Run picks its Prompt; its other
  *   inputs are the code's process() parameters, which the picker here rewrites
  */
-export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, setPrimaryDataset, replaceInputSource, getUniqueDatasetExportName, getInputStatus, history = null }) {
+export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, setPrimaryDataset, replaceInputSource, getInputStatus, history = null }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -323,26 +322,8 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
 
   function createBranchDatasets() {
     if (!lastResults) return;
-    const entries = Object.entries(lastResults.outputs);
-    const processLeft = parseFloat(node?.style?.left || '') || 0;
-    const processTop = parseFloat(node?.style?.top || '') || 0;
-    const processWidth = node?.offsetWidth || 160;
-    entries.forEach(([branchName, output], index) => {
-      const baseName = entries.length === 1 ? `${title} results` : `${title} — ${branchName}`;
-      const name = typeof getUniqueDatasetExportName === 'function' ? getUniqueDatasetExportName(baseName) : baseName;
-      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
-        detail: {
-          name,
-          notes: `Branch "${branchName}" exported from Process "${title}".`,
-          headers: output.headers,
-          rows: output.rows,
-          processNodeId: node?.dataset?.nodeId || '',
-          processOutputName: branchName,
-          left: processLeft + processWidth + 56,
-          top: processTop + index * 132,
-        },
-      }));
-    });
+    // The same Datasets as the context menu's Create dataset (savedDatasets.js).
+    document.dispatchEvent(new CustomEvent('workflow:save-process-output', { detail: { processNodeId: node?.dataset?.nodeId || '' } }));
   }
 
   function setRunningUi(isRunning) {

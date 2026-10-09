@@ -25,15 +25,25 @@ function promptFields(state, runId) {
   return Array.isArray(format) ? format : format?.fields || [];
 }
 
+/**
+ * A Run's results as a table: what a step reading the Run gets, and what Save results saves (also
+ * from a Run that stopped part way). Null when it has no results.
+ */
+export function runResultsTable(state, run) {
+  const results = parsed(run?.runResults, []);
+  if (!Array.isArray(results)) return null;
+  return buildRunResultsTable({
+    results, runContent: parsed(run.runInputContent, null), schemaFields: promptFields(state, nodeIdOf(run)),
+  });
+}
+
 function runOutput(state, run, port) {
   if (run.runPending) return { waiting: 'running' };
   if (run.runCompleted !== '1' && run.runCompleted !== true) return { waiting: run.runResumable ? 'stopped' : 'no-result' };
   if (port !== RESULT) return { waiting: 'missing-port' };
   const results = parsed(run.runResults, []);
-  if (!Array.isArray(results)) return { waiting: 'no-result' };
-  const table = buildRunResultsTable({
-    results, runContent: parsed(run.runInputContent, null), schemaFields: promptFields(state, nodeIdOf(run)),
-  });
+  const table = runResultsTable(state, run);
+  if (!table) return { waiting: 'no-result' };
   const recordId = run.historyRecordId || nodeIdOf(run);
   return {
     table: { ...table, rowIds: table.rows.map((_, index) => `${recordId}:${port}:${index}`) },
