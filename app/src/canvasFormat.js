@@ -1,7 +1,7 @@
 /**
  * Brings a saved canvas to the current format. Canvas version 3 stores every Run and Process input
- * as a `data` connection { type: 'data', fromId, fromPort, toId, alias } (docs/design/
- * DATA_FLOW_DESIGN.md §3.3, §9). Every opened, merged or restored project passes through here, and a
+ * as a `data` connection { type: 'data', fromId, fromPort, toId, alias }, and a Dataset saved from a
+ * step records that step in `savedFrom` (docs/design/DATA_FLOW_DESIGN.md §3.3, §3.6, §9). Every opened, merged or restored project passes through here, and a
  * merged canvas can mix versions, so each node is converted by the fields it carries rather than by
  * `version`; converting twice changes nothing.
  */
@@ -11,6 +11,9 @@ export const CANVAS_VERSION = 3;
 const DATA = 'data';
 const RESULT = 'result';
 const LEGACY_PROCESS_INPUT = 'dataset-to-process';
+const LEGACY_PRODUCER_EDGES = new Set(['process-to-dataset', 'process-to-dataset-snapshot', 'run-to-dataset-snapshot']);
+const LEGACY_DATASET_FIELDS = ['sourceRunNodeId', 'processOutputName', 'savedCopy', 'snapshotSourceRecordId',
+  'pipelineRunId', 'pipelineLogicalId', 'resultMissing'];
 
 const nodeIdOf = (node) => String(node?.nodeId || node?.id || '').trim();
 
@@ -85,7 +88,40 @@ export function upgradeCanvasState(state) {
     }
   }
 
-  next.connections = [...next.connections.filter((edge) => edge?.type !== LEGACY_PROCESS_INPUT), ...added];
+  convertSavedDatasets(next);
+  next.connections = [
+    ...next.connections.filter((edge) => edge?.type !== LEGACY_PROCESS_INPUT && !LEGACY_PRODUCER_EDGES.has(edge?.type)),
+    ...added,
+  ];
   next.version = CANVAS_VERSION;
   return next;
+}
+
+/**
+ * Version 2 kept where a Dataset came from in its fields and in producer connections, and read
+ * through it (an output that followed History). Every Dataset is now a plain table, and one saved
+ * from a step only records that step in `savedFrom` (DATA_FLOW_DESIGN.md §3.6, §9). Changes `state`'s
+ * nodes in place; the connections are dropped by the caller.
+ */
+function convertSavedDatasets(state) {
+  for (const node of state.nodes) {
+    if (node?.type !== 'dataset') continue;
+    const datasetId = nodeIdOf(node);
+    const producerEdge = state.connections.find((edge) => LEGACY_PRODUCER_EDGES.has(edge?.type) && String(edge.toId) === datasetId);
+    const recordId = String(node.snapshotSourceRecordId || '').trim();
+    const runId = String(node.sourceRunNodeId || '').trim();
+    let source = null;
+    if (runId) source = { kind: 'run', nodeId: runId, port: RESULT };
+    else if (producerEdge?.type === 'run-to-dataset-snapshot') source = { kind: 'run', nodeId: String(producerEdge.fromId), port: RESULT };
+    else if (producerEdge) {
+      source = { kind: 'process', nodeId: String(producerEdge.fromId), port: String(node.processOutputName || '').trim() || RESULT };
+    }
+    const pipelineRunId = String(node.pipelineRunId || '').trim();
+    if (!node.savedFrom && (source || pipelineRunId)) {
+      node.savedFrom = pipelineRunId
+        ? { kind: 'pipeline', nodeId: source?.nodeId || '', port: source?.port || RESULT, recordId, pipelineRunId }
+        : { ...source, recordId };
+    }
+    for (const field of LEGACY_DATASET_FIELDS) delete node[field];
+  }
 }

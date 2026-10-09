@@ -6,7 +6,7 @@ const data = (fromId, toId, alias, fromPort = 'result') => ({ type: 'data', from
 
 test('export carries node settings, row count and explicit input boundary, never row values', () => {
   const state = { nodes: [
-    { type: 'dataset', nodeId: 'raw', sourceRunNodeId: 'old-run', savedCopy: true, datasetContent: { headers: ['text'], rows: [['PRIVATE']] } },
+    { type: 'dataset', nodeId: 'raw', savedFrom: { kind: 'run', nodeId: 'old-run', port: 'result', recordId: 'rec' }, datasetContent: { headers: ['text'], rows: [['PRIVATE']] } },
     { type: 'prompt', nodeId: 'p', sections: [{ content: 'Read {text}' }] },
     { type: 'run', nodeId: 'r', runSettings: { run_concurrency: 2 }, runResults: 'PRIVATE_RESULTS' },
   ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, data('raw', 'r')] };
@@ -17,7 +17,7 @@ test('export carries node settings, row count and explicit input boundary, never
   assert.deepEqual(req.canvas_state.nodes[2].runSettings, { run_concurrency: 2 });
   assert.equal(req.canvas_state.nodes[0].datasetContent.row_count, 1);
   // Where a Dataset was saved from does not matter to a pipeline: it is an input.
-  assert.deepEqual(['sourceRunNodeId', 'savedCopy'].filter((field) => field in req.canvas_state.nodes[0]), []);
+  assert.equal('savedFrom' in req.canvas_state.nodes[0], false);
   assert.ok(!JSON.stringify(req).includes('PRIVATE'));
   assert.deepEqual(state, before);
 });

@@ -6,6 +6,7 @@
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 import { displayCell, normalizeDatasetContent } from '../../datasetContent.js';
 import { processInputAliases, processInputEdges, processPrimarySource, runInputSource } from '../../stepInputs.js';
+import { readSavedFrom } from '../../savedDatasets.js';
 
 export const MAX_ROWS_PER_READ = 50;
 
@@ -75,6 +76,13 @@ export function runInputContentOf(node) {
   return parseJsonObject(node?.runInputContent, { headers: [], rows: [] });
 }
 
+/** The Datasets saved from a Run or Process, with the `savedFrom` each records. */
+function savedFromNode(canvasState, nodeId) {
+  return safeArray(canvasState?.nodes)
+    .map((dataset) => ({ dataset, savedFrom: dataset?.type === 'dataset' ? readSavedFrom(dataset.savedFrom) : null }))
+    .filter(({ savedFrom }) => savedFrom && normalizeNodeId(savedFrom.nodeId) === nodeId);
+}
+
 function linkedNode(node) {
   return node ? { nodeId: normalizeNodeId(node.nodeId), type: String(node.type || ''), title: nodeTitle(node) } : null;
 }
@@ -130,31 +138,19 @@ function columnsOf(content) {
   return content.headers.map((name, i) => ({ name, type: content.columnTypes?.[i] || 'text' }));
 }
 
+const SAVED_FROM_KINDS = { run: 'saved run results', process: 'saved process output', score: 'saved score comparison', pipeline: 'pipeline run result' };
+
+/** Where a Dataset came from: a saved Dataset's `savedFrom` (savedDatasets.js), or its Sampler. */
 function datasetProducer(node, canvasState, nodeLookup) {
-  const id = normalizeNodeId(node?.nodeId);
-  if (node?.pipelineRunId) return {
-    kind: 'pipeline run result',
-    pipelineRunId: String(node.pipelineRunId),
-    logicalId: String(node.pipelineLogicalId || ''),
-  };
-  if (node?.sourceRunNodeId) {
-    const run = nodeLookup.get(normalizeNodeId(node.sourceRunNodeId));
-    if (run) return { kind: 'run results', ...linkedNode(run) };
-  }
-  const fromProcess = safeArray(canvasState?.connections)
-    .find((c) => c?.type === 'process-to-dataset' && normalizeNodeId(c.toId) === id);
-  if (fromProcess) {
-    const processNode = nodeLookup.get(normalizeNodeId(fromProcess.fromId));
-    if (processNode) {
-      return { kind: 'process output', branch: String(node.processOutputName || 'result'), ...linkedNode(processNode) };
-    }
-  }
-  const snapshot = safeArray(canvasState?.connections).find((c) =>
-    (c?.type === 'run-to-dataset-snapshot' || c?.type === 'process-to-dataset-snapshot')
-    && normalizeNodeId(c.toId) === id);
-  if (snapshot) {
-    const source = nodeLookup.get(normalizeNodeId(snapshot.fromId));
-    if (source) return { kind: snapshot.type === 'run-to-dataset-snapshot' ? 'saved run snapshot' : 'saved process snapshot', ...linkedNode(source) };
+  const savedFrom = readSavedFrom(node?.savedFrom);
+  if (savedFrom) {
+    const source = nodeLookup.get(normalizeNodeId(savedFrom.nodeId));
+    return {
+      kind: SAVED_FROM_KINDS[savedFrom.kind],
+      ...(savedFrom.pipelineRunId ? { pipelineRunId: savedFrom.pipelineRunId } : {}),
+      ...(source?.type === 'process' ? { branch: savedFrom.port } : {}),
+      ...(source ? linkedNode(source) : savedFrom.nodeId ? { sourceRemoved: true } : {}),
+    };
   }
   if (node?.samplerNodeId) {
     const sampler = nodeLookup.get(normalizeNodeId(node.samplerNodeId));
@@ -246,9 +242,8 @@ function inspectProcess(node, ctx) {
   const primaryId = processPrimarySource(ctx.canvasState, ctx.nodeId)?.nodeId || '';
   const primary = ctx.nodeLookup.get(primaryId);
   const outputs = processOutputsOf(node);
-  const savedDatasets = neighbors(ctx.canvasState, ctx.nodeLookup, ctx.nodeId, 'downstream')
-    .filter((n) => n.connection === 'process-to-dataset')
-    .map((n) => ({ ...n, branch: String(ctx.nodeLookup.get(n.nodeId)?.processOutputName || 'result') }));
+  const savedDatasets = savedFromNode(ctx.canvasState, ctx.nodeId)
+    .map(({ dataset, savedFrom }) => ({ ...linkedNode(dataset), branch: savedFrom.port }));
   const diagnostics = [];
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) diagnostics.push('The code does not define process(df).');
   if (!Object.keys(outputs).length) diagnostics.push('The process has not been run yet, or its last run returned nothing.');
@@ -316,9 +311,7 @@ function inspectRun(node, ctx, options) {
       inputRowsDone: doneInputRows,
       resultRows: results.length,
       errorRows: errorCount,
-      savedAsDatasets: safeArray(ctx.canvasState?.nodes)
-        .filter((n) => n.type === 'dataset' && normalizeNodeId(n.sourceRunNodeId) === ctx.nodeId)
-        .map(linkedNode),
+      savedAsDatasets: savedFromNode(ctx.canvasState, ctx.nodeId).map(({ dataset }) => linkedNode(dataset)),
       preview: preview.items.map((r) => ({
         inputRow: typeof r?.input_row_index === 'number' ? r.input_row_index + 1 : null,
         output: r?.output ?? null,

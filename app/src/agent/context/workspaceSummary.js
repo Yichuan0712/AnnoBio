@@ -8,6 +8,7 @@
 import { detectPipelines } from '../../pipelineDetection.js';
 import { buildSelectedRoute, getVisibleRoute } from '../../pipelineRouteSelection.js';
 import { processInputSources, runInputSource, stepSourceLabel } from '../../stepInputs.js';
+import { readSavedFrom } from '../../savedDatasets.js';
 import { buildPromptFamilies } from '../../promptOptimization.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
@@ -89,25 +90,23 @@ function pipelineLines(canvasState, lookup, selections = []) {
   return lines;
 }
 
-function datasetLine(node, lookup, canvasState) {
+function datasetLine(node, lookup) {
   const content = datasetContentOf(node);
   const columns = content.headers
     .map((h, i) => (content.columnTypes[i] && content.columnTypes[i] !== 'text' ? `${h} (${content.columnTypes[i]})` : h))
     .join(', ');
+  // A saved Dataset is a plain table; savedFrom only says where it came from (savedDatasets.js).
   let source = '';
-  const run = node.sourceRunNodeId ? lookup.get(node.sourceRunNodeId) : null;
-  const processEdge = (canvasState.connections || []).find((c) => c.type === 'process-to-dataset' && c.toId === node.nodeId);
-  const snapshotEdge = (canvasState.connections || []).find((c) =>
-    (c.type === 'run-to-dataset-snapshot' || c.type === 'process-to-dataset-snapshot') && c.toId === node.nodeId);
+  const savedFrom = readSavedFrom(node.savedFrom);
+  const from = savedFrom ? lookup.get(savedFrom.nodeId) : null;
   const sampler = node.samplerNodeId ? lookup.get(node.samplerNodeId) : null;
-  if (node.pipelineRunId) source = `; saved from Pipeline run ${node.pipelineRunId}`;
-  else if (run) source = `; results of run ${quote(nodeTitle(run))}`;
-  else if (processEdge && lookup.get(processEdge.fromId)) {
-    source = `; output ${quote(node.processOutputName || 'result')} of process ${quote(nodeTitle(lookup.get(processEdge.fromId)))}`;
-  } else if (snapshotEdge && lookup.get(snapshotEdge.fromId)) {
-    const kind = snapshotEdge.type === 'run-to-dataset-snapshot' ? 'run' : 'process';
-    source = `; saved snapshot of ${kind} ${quote(nodeTitle(lookup.get(snapshotEdge.fromId)))}`;
-  } else if (sampler) source = `; sampled by ${quote(nodeTitle(sampler))}`;
+  if (savedFrom?.kind === 'pipeline') source = `; saved from Pipeline run ${savedFrom.pipelineRunId}`;
+  else if (savedFrom && from) {
+    source = savedFrom.kind === 'run' ? `; saved results of run ${quote(nodeTitle(from))}`
+      : savedFrom.kind === 'process' ? `; saved output ${quote(savedFrom.port)} of process ${quote(nodeTitle(from))}`
+        : `; saved comparison of score ${quote(nodeTitle(from))}`;
+  } else if (savedFrom) source = `; saved from a ${savedFrom.kind} no longer on the canvas`;
+  else if (sampler) source = `; sampled by ${quote(nodeTitle(sampler))}`;
   return `- ${ref(node)}: ${content.rows.length} rows; columns: ${columns || '(none)'}${source}`;
 }
 
@@ -201,7 +200,7 @@ export async function buildWorkspaceSummary(canvasState, options = {}) {
     if (!group.length) continue;
     lines.push(`${heading}:`);
     for (const node of group) {
-      if (type === 'dataset') lines.push(datasetLine(node, lookup, canvasState));
+      if (type === 'dataset') lines.push(datasetLine(node, lookup));
       else if (type === 'prompt') lines.push(promptLine(node, lookup, versionsById, options.extractInputFields));
       else if (type === 'sampler') lines.push(samplerLine(node, lookup));
       else {

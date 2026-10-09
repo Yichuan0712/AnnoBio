@@ -16,7 +16,6 @@ import { compileRows } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { imageCell } from './datasetContent.js';
-import { buildRunResultsTable } from './runResultsExport.js';
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt } from './workflowNodeColors.js';
 
@@ -30,15 +29,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     processApiResults,
     countCompletedInputRows,
     markEmptyOutputAsError,
-    formatResultOutputColumnLabel,
     parseScoreMappingBundle,
     serializeScoreMappingBundle,
     flattenScoreRules,
     runReviewStart,
-    getScoreExportData,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
-    positionFrom,
     getNodeById,
     getConnections,
     datasetContentByNodeId,
@@ -77,7 +73,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     getPromptDataFromNode,
     isRunNameAlreadyUsedForPromptNodeId,
     findUniqueRunName,
-    findUniqueDatasetExportName,
     findUniqueWorkingDatasetName,
     isDatasetNameAlreadyUsed,
     isSamplerNameAlreadyUsedForSource,
@@ -792,232 +787,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       runNodeId: normalizedRunNodeId,
       runId: null,
       resultsCount: results.length,
-    };
-  }
-
-  function saveRunResultsToWorkspace({
-    runNodeId = '',
-    name = '',
-    notes = '',
-    left,
-    top,
-    ensureUniqueName = true,
-  } = {}) {
-    const normalizedRunNodeId = String(runNodeId || '').trim();
-    if (!normalizedRunNodeId) {
-      throw new Error('Run node id is required.');
-    }
-    const runNode = getNodeById(normalizedRunNodeId);
-    if (!runNode || !runNode.classList.contains('workflow-node--run')) {
-      throw new Error('Run node was not found.');
-    }
-
-    let results = [];
-    try {
-      results = JSON.parse(runNode.dataset.runResults || '[]');
-      if (!Array.isArray(results)) results = [];
-    } catch (_) {
-      results = [];
-    }
-    if (results.length === 0) {
-      throw new Error('Run node has no saved results.');
-    }
-    const recordId = String(runNode.dataset.historyRecordId || '').trim();
-    if (!recordId) {
-      throw new Error('This Run has no History record yet. Run it again before saving its results.');
-    }
-
-    const connections = getConnectionsList();
-    const promptEdge = connections.find((c) => c.toId === normalizedRunNodeId && c.type === 'prompt-to-run');
-    const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
-    const promptName = (promptNode?.dataset?.promptName || promptNode?.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Prompt';
-    const runName = (runNode.dataset.runName || runNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run';
-    const baseName = `${promptName} ${runName}`.trim();
-    const requestedName = String(name || '').trim();
-
-    let runContent = null;
-    if (runNode.dataset.runInputContent) {
-      try {
-        runContent = JSON.parse(runNode.dataset.runInputContent);
-      } catch (_) {}
-    }
-    if (!runContent) {
-      const workingSetContent = readRunInputTable(runNode);
-      if (workingSetContent) {
-        runContent = {
-          headers: Array.isArray(workingSetContent.headers) ? workingSetContent.headers.slice() : [],
-          columnTypes: Array.isArray(workingSetContent.columnTypes) ? workingSetContent.columnTypes.slice() : [],
-          rowIds: Array.isArray(workingSetContent.rowIds) ? workingSetContent.rowIds.slice() : [],
-          rows: Array.isArray(workingSetContent.rows) ? workingSetContent.rows.map((row) => (Array.isArray(row) ? row.slice() : [])) : [],
-        };
-      }
-    }
-    let schemaFields = [];
-    try {
-      const raw = promptNode?.dataset?.promptOutputFormat || '[]';
-      schemaFields = JSON.parse(raw);
-      if (!Array.isArray(schemaFields)) schemaFields = [];
-    } catch (_) {
-      schemaFields = [];
-    }
-    const { headers: exportHeaders, rows: exportRows, columnTypes } = buildRunResultsTable({ results, runContent, schemaFields });
-
-    const runCompleted = runNode.dataset.runCompleted === '1';
-    const defaultNotes = `Exported from ${promptName} ${runName}.\n${runCompleted ? 'Run completed.' : 'Run incomplete.'}`;
-    const datasetName = requestedName || findUniqueDatasetExportName(baseName);
-    const nearRun = positionFrom(runNode);
-    const startLeft = typeof left === 'number' ? left : nearRun.left;
-    const startTop = typeof top === 'number' ? top : nearRun.top;
-    const created = addDatasetNode({
-      name: datasetName,
-      notes: String(notes || '').trim() || defaultNotes,
-      headers: exportHeaders,
-      rows: exportRows,
-      columnTypes,
-      left: startLeft,
-      top: startTop,
-      ensureUniqueName: requestedName ? ensureUniqueName : false,
-      agentCreated: true,
-      sourceRunNodeId: normalizedRunNodeId,
-      savedCopy: true,
-      snapshotSourceRecordId: recordId,
-    });
-    return {
-      ...created,
-      runNodeId: normalizedRunNodeId,
-      exportedRowCount: exportRows.length,
-      runCompleted,
-      sourcePromptName: promptName,
-      sourceRunName: runName,
-    };
-  }
-
-  async function saveScoreResultsToWorkspace({
-    scoreNodeId = '',
-    name = '',
-    notes = '',
-    left,
-    top,
-    ensureUniqueName = true,
-  } = {}) {
-    const normalizedScoreNodeId = String(scoreNodeId || '').trim();
-    if (!normalizedScoreNodeId) {
-      throw new Error('Score node id is required.');
-    }
-    const scoreNode = getNodeById(normalizedScoreNodeId);
-    if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
-      throw new Error('Score node was not found.');
-    }
-
-    const connections = getConnectionsList();
-    const runEdge = connections.find((c) => c.toId === normalizedScoreNodeId && c.type === 'run-to-score');
-    const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
-    const promptEdge = runNode ? connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === 'prompt-to-run') : null;
-    const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
-
-    function getRunResultColumns() {
-      if (!runNode) return [];
-      const cols = [];
-      cols.push({ key: '#', label: '#' });
-      let results = [];
-      try {
-        results = JSON.parse(runNode.dataset.runResults || '[]');
-        if (!Array.isArray(results)) results = [];
-      } catch (_) {}
-      let schemaFields = [];
-      if (promptNode) {
-        try {
-          const raw = promptNode.dataset.promptOutputFormat || '[]';
-          schemaFields = JSON.parse(raw);
-          if (!Array.isArray(schemaFields)) schemaFields = [];
-        } catch (_) {}
-      }
-      const outputFields = deriveOutputFields(results, schemaFields);
-      outputFields.forEach((field) => cols.push({
-        key: field.key || '',
-        label: formatResultOutputColumnLabel((field.display || field.key || '').trim() || field.key || '—'),
-      }));
-      const wsContent = readRunInputTable(runNode);
-      const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
-      cols.push({ key: '[#]', label: 'Input: #' });
-      wsHeaders.forEach((header) => {
-        const headerText = String(header ?? '').trim() || ' ';
-        cols.push({ key: `[${headerText}]`, label: `Input: ${headerText}` });
-      });
-      return cols;
-    }
-
-    function getRunResults() {
-      if (!runNode) return { results: [], outputFields: [] };
-      let results = [];
-      try {
-        results = JSON.parse(runNode.dataset.runResults || '[]');
-        if (!Array.isArray(results)) results = [];
-      } catch (_) {}
-      let schemaFields = [];
-      if (promptNode) {
-        try {
-          const raw = promptNode.dataset.promptOutputFormat || '[]';
-          schemaFields = JSON.parse(raw);
-          if (!Array.isArray(schemaFields)) schemaFields = [];
-        } catch (_) {}
-      }
-      const outputFields = deriveOutputFields(results, schemaFields);
-      return { results, outputFields };
-    }
-
-    function getRunWorkingSetContent() {
-      const content = readRunInputTable(runNode);
-      return content
-        ? { headers: (content.headers || []).slice(), rows: (content.rows || []).map((row) => row.slice()) }
-        : { headers: [], rows: [] };
-    }
-
-    function getGroundTruthContent(wsNodeId) {
-      const content = datasetContentByNodeId.get(wsNodeId || '');
-      if (!content) return { headers: [], rows: [] };
-      return { headers: (content.headers || []).slice(), rows: (content.rows || []).map((row) => row.slice()) };
-    }
-
-    function getGroundTruthHeaders(wsNodeId) {
-      const content = datasetContentByNodeId.get(wsNodeId || '');
-      return (content && content.headers) ? content.headers.slice() : [];
-    }
-
-    const payload = await getScoreExportData({
-      node: scoreNode,
-      getRunResults,
-      getRunWorkingSetContent,
-      getGroundTruthContent,
-      getGroundTruthHeaders,
-      getRunResultColumns,
-    });
-    if (!payload || !Array.isArray(payload.headers) || !Array.isArray(payload.rows)) {
-      throw new Error('Score node has no exportable comparison results.');
-    }
-
-    const scoreName = (scoreNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Score';
-    const requestedName = String(name || '').trim();
-    const datasetName = requestedName || findUniqueDatasetExportName(`${scoreName} comparison`);
-    const datasetNotes = String(notes || '').trim() || `Exported from Score "${scoreName}". Run vs ground truth comparison.`;
-    const nearScore = positionFrom(scoreNode);
-    const startLeft = typeof left === 'number' ? left : nearScore.left;
-    const startTop = typeof top === 'number' ? top : nearScore.top;
-    const created = addDatasetNode({
-      name: datasetName,
-      notes: datasetNotes,
-      headers: payload.headers,
-      rows: payload.rows,
-      left: startLeft,
-      top: startTop,
-      ensureUniqueName: requestedName ? ensureUniqueName : false,
-      agentCreated: true,
-    });
-    return {
-      ...created,
-      scoreNodeId: normalizedScoreNodeId,
-      exportedRowCount: payload.rows.length,
-      sourceScoreName: scoreName,
     };
   }
 
@@ -2014,12 +1783,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     left,
     top,
     samplerNodeId = '',
-    sourceRunNodeId = '',
-    processOutputName = '',
-    savedCopy = false,
-    snapshotSourceRecordId = '',
-    pipelineRunId = '',
-    pipelineLogicalId = '',
+    savedFrom = null,
     colorIndex,
     ensureUniqueName = true,
     agentCreated = false,
@@ -2034,12 +1798,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       left,
       top,
       samplerNodeId: String(samplerNodeId || '').trim(),
-      sourceRunNodeId: String(sourceRunNodeId || '').trim(),
-      processOutputName: String(processOutputName || '').trim(),
-      savedCopy,
-      snapshotSourceRecordId,
-      pipelineRunId,
-      pipelineLogicalId,
+      savedFrom,
       colorIndex,
       headers,
       rows,
@@ -2615,8 +2374,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     addPromptVersion,
     addRunNode,
     startRunNode,
-    saveRunResultsToWorkspace,
-    saveScoreResultsToWorkspace,
     addScoreNode,
     updateScoreNode,
     updateScoreRowSelection,

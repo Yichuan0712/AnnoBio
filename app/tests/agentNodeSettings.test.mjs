@@ -82,9 +82,10 @@ test('the summary lists pipelines as the Current Pipeline panel shows them', asy
 
 test('the summary uses the panel selection and identifies Pipeline result provenance', async () => {
   const state = canvas();
-  state.nodes.push({ type: 'dataset', nodeId: 'copy', name: 'Pipeline output',
-    pipelineRunId: 'run-123', pipelineLogicalId: 'dataset:copy',
-    datasetContent: { headers: ['answer'], rows: [['A']] } });
+  // A Dataset a Pipeline run added before steps connected directly, as the upgrade leaves it.
+  state.nodes.push(upgradeCanvasState({ nodes: [{ type: 'dataset', nodeId: 'copy', name: 'Pipeline output',
+    sourceRunNodeId: 'r', pipelineRunId: 'run-123', pipelineLogicalId: 'dataset:copy',
+    datasetContent: { headers: ['answer'], rows: [['A']] } }], connections: [] }).nodes[0]);
   const selectedRoute = [{ kind: 'prompt', selectedValue: 'r', selectedOption: {
     kind: 'prompt', promptNodeId: 'p', promptName: 'Extract', runNodeId: 'r', runName: 'Run', inputDatasetNodeId: 'raw',
   }, options: [{ value: 'r', kind: 'prompt', promptNodeId: 'p', promptName: 'Extract', runNodeId: 'r', runName: 'Run', inputDatasetNodeId: 'raw' }] }];
@@ -93,7 +94,7 @@ test('the summary uses the panel selection and identifies Pipeline result proven
   assert.match(summary, /Pipeline 1 \[pipeline-1\] \(current panel selection\)/);
   assert.match(summary, /saved from Pipeline run run-123/);
   assert.deepEqual(inspectWorkflowNode(state, 'copy').details.producedBy, {
-    kind: 'pipeline run result', pipelineRunId: 'run-123', logicalId: 'dataset:copy',
+    kind: 'pipeline run result', pipelineRunId: 'run-123', nodeId: 'r', type: 'run', title: 'Run',
   });
 });
 
@@ -107,16 +108,21 @@ test('the summary names a version made by applying a Review', async () => {
   assert.match(summary, /"Extract v2" \[p2\]: .*; made by applying Review "Review 1" of "Extract"/);
 });
 
-test('Agent identifies legacy saved Dataset snapshots as snapshots', async () => {
+test('Agent names where a saved Dataset came from, also once that node is gone', async () => {
   const state = canvas();
-  state.nodes.push({ type: 'dataset', nodeId: 'snapshot', name: 'Saved results',
-    datasetContent: { headers: ['answer'], rows: [['A']] } });
-  state.connections.push({ fromId: 'r', toId: 'snapshot', type: 'run-to-dataset-snapshot' });
+  state.nodes.push(
+    { type: 'dataset', nodeId: 'snapshot', name: 'Saved results', savedFrom: { kind: 'run', nodeId: 'r', port: 'result', recordId: 'rec' },
+      datasetContent: { headers: ['answer'], rows: [['A']] } },
+    { type: 'dataset', nodeId: 'orphan', name: 'Old output', savedFrom: { kind: 'process', nodeId: 'deleted', port: 'kept', recordId: '' },
+      datasetContent: { headers: ['answer'], rows: [['A']] } },
+  );
   const inspected = inspectWorkflowNode(state, 'snapshot');
-  assert.equal(inspected.details.producedBy.kind, 'saved run snapshot');
-  assert.equal(inspected.details.producedBy.nodeId, 'r');
+  assert.deepEqual(inspected.details.producedBy, { kind: 'saved run results', nodeId: 'r', type: 'run', title: 'Run' });
+  assert.deepEqual(inspectWorkflowNode(state, 'r').details.savedAsDatasets, [{ nodeId: 'snapshot', type: 'dataset', title: 'Saved results' }]);
+  assert.deepEqual(inspectWorkflowNode(state, 'orphan').details.producedBy, { kind: 'saved process output', sourceRemoved: true });
   const summary = await buildWorkspaceSummary(state, { extractInputFields });
-  assert.match(summary, /saved snapshot of run "Run"/);
+  assert.match(summary, /"Saved results" \[snapshot\]: .*; saved results of run "Run"/);
+  assert.match(summary, /"Old output" \[orphan\]: .*; saved from a process no longer on the canvas/);
 });
 
 test('Process code declares its inputs as parameters, each by the alias it already has', () => {

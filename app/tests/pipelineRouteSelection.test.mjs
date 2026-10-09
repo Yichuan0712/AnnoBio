@@ -109,7 +109,7 @@ test('named branches preserve both lanes and merge once', () => {
 test('a Dataset saved from a step starts a new pipeline instead of chaining to it', () => {
   const state = {
     nodes: [node('dataset', 'raw'), node('prompt', 'p'), node('run', 'r'),
-      node('dataset', 'saved', { sourceRunNodeId: 'r' }), node('process', 'clean')],
+      node('dataset', 'saved', { savedFrom: { kind: 'run', nodeId: 'r', port: 'result', recordId: 'rec' } }), node('process', 'clean')],
     connections: [edge('p', 'r', 'prompt-to-run'), data('raw', 'r'), data('saved', 'clean', 'df')],
   };
   assert.deepEqual(detectPipelines(state).map(routeKinds), [['prompt:p'], ['process:clean']]);

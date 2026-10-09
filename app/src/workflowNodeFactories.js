@@ -1,8 +1,8 @@
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
-import { normalizeDatasetContent } from './datasetContent.js';
 import { effectiveProcessOutputs, showsProcessOutputs } from './processOutputPorts.js';
 import { sourceKey } from './stepInputs.js';
+import { readSavedFrom } from './savedDatasets.js';
 
 const PROCESS_OUTPUT_MISMATCH = 'Branches returned by the last run differ from the code';
 
@@ -114,7 +114,6 @@ export function createWorkflowNodeFactories(deps = {}) {
     unregisterPendingReview,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
-    findUniqueDatasetExportName,
     isPromptNameAlreadyUsed,
     isRunNameAlreadyUsedForPrompt,
     openProcessDetailModal,
@@ -127,12 +126,6 @@ export function createWorkflowNodeFactories(deps = {}) {
 
   function getConnectionsList() {
     return Array.isArray(getConnections?.()) ? getConnections() : [];
-  }
-
-  /** Run or Process that produced this Dataset, if any (whether or not History still rewrites it). */
-  function datasetHistorySourceId(node) {
-    return node.dataset.sourceRunNodeId || getConnectionsList().find((edge) =>
-      edge.type === 'process-to-dataset' && edge.toId === node.dataset.nodeId)?.fromId || '';
   }
 
   function onRunWorkingSetChange() {
@@ -408,7 +401,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sourceRunNodeId = '', processOutputName = '', savedCopy = false, snapshotSourceRecordId = '', pipelineRunId = '', pipelineLogicalId = '', colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', savedFrom = null, colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -424,14 +417,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (notes !== undefined && notes !== null) node.dataset.datasetNote = String(notes);
     node.dataset.nodeType = 'dataset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
-    // Links a Dataset saved from Run results to its Run (pipelines chain through it).
-    if (sourceRunNodeId) node.dataset.sourceRunNodeId = sourceRunNodeId;
-    if (processOutputName) node.dataset.processOutputName = processOutputName;
-    // A saved Run / Process output: keeps its pipeline link, but History never rewrites it (datasetHistorySource.js).
-    if (savedCopy) node.dataset.savedCopy = '1';
-    if (snapshotSourceRecordId) node.dataset.snapshotSourceRecordId = snapshotSourceRecordId;
-    if (pipelineRunId) node.dataset.pipelineRunId = pipelineRunId;
-    if (pipelineLogicalId) node.dataset.pipelineLogicalId = pipelineLogicalId;
+    // Where a Dataset saved from a step came from; shown only (savedDatasets.js).
+    const origin = readSavedFrom(savedFrom);
+    if (origin) node.dataset.savedFrom = JSON.stringify(origin);
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = datasetColorAt(colorIndex);
@@ -479,14 +467,6 @@ export function createWorkflowNodeFactories(deps = {}) {
         readOnly,
         saveContent: (content) => {
           const id = node.dataset.nodeId;
-          // An older Run / Process output still follows History; its first real edit makes it a saved copy
-          // (datasetHistorySource.js) so History stops rewriting it. The editor also saves on close.
-          if (node.dataset.savedCopy !== '1' && getHistoryForNode?.(datasetHistorySourceId(node))
-            && JSON.stringify(normalizeDatasetContent(content)) !== JSON.stringify(datasetContentByNodeId.get(id) || null)) {
-            node.dataset.savedCopy = '1';
-            const sourceRecordId = getNodeById(datasetHistorySourceId(node))?.dataset?.historyRecordId;
-            if (sourceRecordId) node.dataset.snapshotSourceRecordId = sourceRecordId;
-          }
           datasetContentByNodeId.set(id, content);
           emitCanvasChanged();
         },
@@ -618,8 +598,6 @@ export function createWorkflowNodeFactories(deps = {}) {
         getPromptTemplate,
         unregisterPendingRun,
         getPendingRunId: () => pendingRuns.get(node.dataset.nodeId) || null,
-        getPromptName: () => promptNameOf(currentPromptNode()),
-        getUniqueDatasetExportName: findUniqueDatasetExportName,
         isRunNameAlreadyUsedForPrompt,
         onWorkingSetChange: onRunWorkingSetChange,
         getInputSource: () => readRunInputSource(node),
@@ -754,7 +732,6 @@ export function createWorkflowNodeFactories(deps = {}) {
           updateEdges();
           emitCanvasChanged();
         },
-        getUniqueDatasetExportName: findUniqueDatasetExportName,
         getInputStatus: () => readStepInputStatus(node),
         history: getHistoryForNode?.(processNodeId),
       });
