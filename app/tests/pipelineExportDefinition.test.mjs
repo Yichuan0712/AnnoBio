@@ -26,8 +26,8 @@ test('only what the selected steps read, and their Prompts, is sent', () => {
   const edges = [
     data('raw', 'split', 'df'),
     data('split', 'join', 'df', 'left'),
-    { type: 'process-to-dataset', fromId: 'split', toId: 'saved' },
-    { type: 'run-to-dataset-snapshot', fromId: 'r', toId: 'saved' },
+    { type: 'sampler-to-dataset', fromId: 'sampler', toId: 'saved' },
+    { type: 'run-to-score', fromId: 'r', toId: 'score' },
     { type: 'prompt-to-run', fromId: 'p', toId: 'r' },
     data('join', 'r'),
     data('join', 'elsewhere', 'df'),
@@ -52,15 +52,6 @@ test('an upstream step outside the route goes by name only, so the compiler can 
   assert.deepEqual(req.canvas_state.connections, edges.slice(0, 2));
   assert.deepEqual(req.canvas_state.nodes.at(-1), { type: 'process', nodeId: 'outside', name: 'Clean' });
   assert.deepEqual(req.input_dataset_ids, []);
-});
-
-test('Python export rejects a missing result a step starts from', () => {
-  const state = { nodes: [
-    { type: 'dataset', nodeId: 'derived', name: 'Derived', resultMissing: true, datasetContent: { headers: [], rows: [] } },
-    { type: 'process', nodeId: 'clean' },
-  ], connections: [data('derived', 'clean', 'df')] };
-  assert.throws(() => buildPipelineExportRequest({ name: 'Bad', canvasState: state,
-    route: [{ type: 'dataset', dataset_node_id: 'derived' }, { type: 'process', process_node_id: 'clean' }] }), /no current result/);
 });
 
 test('Python export includes every Dataset a multi-input route starts from', () => {

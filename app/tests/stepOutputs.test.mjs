@@ -32,7 +32,6 @@ const state = (run = {}, processNode = {}, dataset = {}) => ({
 test('a Dataset gives its content, a Sampler subset included', () => {
   assert.equal(stepOutputTable(state(), { nodeId: 'raw' }).table, input);
   assert.deepEqual(stepOutputTable(state(), { nodeId: 'sample' }).table.rows, [['b']]);
-  assert.deepEqual(stepOutputTable(state({}, {}, { resultMissing: true }), { nodeId: 'raw' }), { waiting: 'no-result' });
   assert.deepEqual(stepOutputTable(state(), { nodeId: 'deleted' }), { waiting: 'no-result' });
   assert.deepEqual(stepOutputTable(state(), null), { waiting: 'no-result' });
 });

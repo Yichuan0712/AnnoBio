@@ -1,6 +1,5 @@
 import { datasetSignature, processInputSignature, runInputSignature, stepOutputSignature } from './runHistorySignature.js';
 import { resolveHistoryCanvasState } from './runHistoryResolver.js';
-import { datasetHistorySource } from './datasetHistorySource.js';
 import { processRequiredInputs, runInputSource, sourceKey, stepInputWaitingMessage, stepSourceLabel } from './stepInputs.js';
 import { stepOutputTable } from './stepOutputs.js';
 
@@ -25,22 +24,14 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
   const nodes = new Map(canvas.nodes.map((node) => [nodeId(node), node]));
   const target = nodes.get(targetNodeId);
   if (!target || !['run', 'process'].includes(target.type)) throw new Error(`Run or Process node was not found: ${targetNodeId}`);
-  const missing = new Set(resolved.missingDatasetIds);
 
   async function snapshotDataset(id) {
     const dataset = nodes.get(id);
-    if (!dataset || dataset.type !== 'dataset' || missing.has(id)) throw new Error(`Input Dataset has no current result: ${id}`);
-    const content = dataset.datasetContent || dataset.subsetContent;
+    const content = dataset?.type === 'dataset' ? dataset.datasetContent || dataset.subsetContent : null;
     if (!content || !Array.isArray(content.rows)) throw new Error(`Input Dataset is missing: ${id}`);
-    const link = datasetHistorySource(dataset, canvas.connections);
-    const sourceNodeId = link?.sourceId;
-    const sourceRecordId = sourceNodeId ? resolved.currentRecordIds[sourceNodeId] : null;
-    const branch = link?.branch || 'result';
-    if (sourceNodeId && !sourceRecordId) throw new Error(`Input Dataset has no current source record: ${id}`);
-    const signature = await datasetSignature({ nodeId: id, content, sourceRecordId, branch });
     return {
-      kind: 'dataset', nodeId: id, name: dataset.name || '', content: copy(content), signature,
-      ...(sourceRecordId ? { sourceNodeId, sourceRecordId, branch } : {}),
+      kind: 'dataset', nodeId: id, name: dataset.name || '', content: copy(content),
+      signature: await datasetSignature({ nodeId: id, content }),
     };
   }
 
@@ -78,7 +69,7 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
       promptNodeId: promptSnapshot.nodeId, prompt: promptSnapshot, datasetNodeId: sourceKey(source),
       datasetSignature: dataset.signature, mapping,
     });
-    const upstreamRecordId = dataset.recordId || dataset.sourceRecordId;
+    const upstreamRecordId = dataset.recordId;
     return {
       nodeId: targetNodeId, kind: 'run', signature,
       inputs: {
@@ -110,7 +101,7 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
       code, primaryDatasetId, bindings: bindings.map((item, index) => ({ ...item, key: required[index].key })),
     }),
     inputs: { code, primaryDatasetId, bindings },
-    sourceRecordIds: [...new Set(bindings.map((item) => item.recordId || item.sourceRecordId).filter(Boolean))],
+    sourceRecordIds: [...new Set(bindings.map((item) => item.recordId).filter(Boolean))],
     summary: {
       codeLine: code.split('\n')[0].trim(),
       datasetNames: bindings.map((item, index) => item.name || stepSourceLabel(canvas, required[index])),

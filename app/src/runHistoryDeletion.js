@@ -7,6 +7,7 @@ function directUpstreamIds(records, record, byId) {
   const inputs = record.inputs || {};
   if (record.kind === 'score') {
     if (byId.has(inputs.runRecordId)) ids.add(inputs.runRecordId);
+    // Score records saved while a ground truth could follow a step's History also name that record.
     if (byId.has(inputs.groundTruthSourceRecordId)) ids.add(inputs.groundTruthSourceRecordId);
   }
   if (record.kind === 'review' && byId.has(inputs.scoreRecordId)) {

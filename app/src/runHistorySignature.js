@@ -18,13 +18,9 @@ export async function sha256Signature(value) {
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-export async function datasetSignature({ nodeId, content, sourceRecordId = '', branch = '' }) {
+export async function datasetSignature({ nodeId, content }) {
   if (!nodeId) throw new Error('Dataset node ID is required for history.');
-  if (sourceRecordId) {
-    if (!branch) throw new Error('Derived Dataset branch is required for history.');
-    return sha256Signature({ kind: 'derived-dataset', nodeId, sourceRecordId, branch });
-  }
-  if (!content) throw new Error('Dataset has no current result.');
+  if (!content) throw new Error('Dataset has no content.');
   return sha256Signature({
     kind: 'dataset', nodeId,
     content: {

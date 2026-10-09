@@ -463,7 +463,6 @@ export function createWorkflowNodeFactories(deps = {}) {
       openDatasetDetailModal({
         node,
         getContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
-        missingResult: node.dataset.resultMissing === '1',
         readOnly,
         saveContent: (content) => {
           const id = node.dataset.nodeId;
@@ -861,14 +860,11 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       function getGroundTruthContent(wsNodeId) {
         const c = datasetContentByNodeId.get(wsNodeId || '');
-        if (getNodeById(wsNodeId)?.dataset?.resultMissing === '1') return { headers: [], rows: [], missingResult: true };
         if (!c) return { headers: [], rows: [] };
         return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
       }
       async function getReviewPayload() {
         if (!promptNode || !runNode || !node) return null;
-        const gtId = String(node.dataset.scoreGroundTruthId || '').trim();
-        if (gtId && getNodeById(gtId)?.dataset?.resultMissing === '1') return null;
         let sections = [];
         try {
           sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');

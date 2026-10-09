@@ -47,7 +47,7 @@ class ProjectHistoryTest(unittest.TestCase):
         item = record()
         self.save(item)
         state = {"historyVersion": 1, "nodes": [{"nodeId": "run-1"}, {"nodeId": "dataset-1"}],
-                 "connections": [{"fromId": "run-1", "toId": "dataset-1", "type": "run-to-dataset-snapshot"}]}
+                 "connections": [{"fromId": "dataset-1", "fromPort": "result", "toId": "run-1", "type": "data"}]}
         project_store.save_project(self.project_id, project_store.ProjectSave(state=state))
         session = project_store.AgentConversationsSave(
             format_version=2, activeConversationId="chat-1", conversations=[{"id": "chat-1", "messages": []}]

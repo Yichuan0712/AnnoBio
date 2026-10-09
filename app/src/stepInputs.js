@@ -9,7 +9,6 @@
  * port 'result') or one output branch of a Process ('process', port = the branch) (§3.2, §3.4).
  * Functions that take a source look its kind up in `state` when it is not given.
  */
-import { datasetHistorySource } from './datasetHistorySource.js';
 import { buildProcessDatasetBindings, processDatasetInputs, referencedDatasetAliases } from './processDatasetBindings.js';
 import { effectiveProcessOutputs } from './processOutputPorts.js';
 import { stepOutputTable } from './stepOutputs.js';
@@ -94,10 +93,7 @@ export function stepInputErrorNotice(state, source, errorRowCount) {
 
 // ---------- candidates ----------
 
-/**
- * Every node that reads `nodeId`'s data, directly or further down: through data connections, and
- * through a Dataset that follows a step's result (datasetHistorySource.js) until those are removed.
- */
+/** Every node that reads `nodeId`'s data through data connections, directly or further down. */
 function downstreamOf(state, nodeId) {
   const children = new Map();
   const link = (from, to) => {
@@ -105,10 +101,6 @@ function downstreamOf(state, nodeId) {
     children.get(from).push(to);
   };
   for (const edge of dataEdges(state)) link(String(edge.fromId), String(edge.toId));
-  for (const node of state?.nodes || []) {
-    const source = node?.type === 'dataset' ? datasetHistorySource(node, state.connections) : null;
-    if (source) link(source.sourceId, nodeIdOf(node));
-  }
   const found = new Set();
   const queue = [String(nodeId)];
   while (queue.length) {

@@ -1811,10 +1811,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const runWs = getRunWorkingSetContent();
     const { results: rawResults, outputFields } = getRunResults();
     const gtContent = getGroundTruthContent(selectedNodeId);
-    if (gtContent.missingResult) {
-      setCodeMatchError('Ground truth Dataset has no current result. Run its upstream node first.');
-      return;
-    }
     const results = (rawResults || []).filter((r) => isValidRunOutputForScoreRow(r, outputFields));
     if (results.length === 0) {
       setCodeMatchError('No run results to match.');
@@ -2610,11 +2606,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const { results: rawResults, outputFields } = getRunResults();
     const runWs = getRunWorkingSetContent();
     const rawGtContent = getGroundTruthContent(selectedNodeId);
-    if (rawGtContent.missingResult) {
-      resultsBody.innerHTML = '<p class="score-detail-placeholder">Ground truth Dataset has no current result. Run its upstream node first.</p>';
-      if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
-      return;
-    }
 
     const gtColsUsed = isCodeMode ? (rawGtContent.headers || []).slice() : buildScoreTableGtColumns(rulesFlat, rawGtContent);
 
@@ -3844,7 +3835,6 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
   const { results: rawResults, outputFields } = getRunResults();
   const runWs = getRunWorkingSetContent();
   const rawGtContent = getGroundTruthContent(selectedNodeId);
-  if (rawGtContent.missingResult) return null;
   const gtColsUsed = buildScoreTableGtColumns(rulesFlat, rawGtContent);
 
   const resultsForScore = (rawResults || []).filter((r) => r);

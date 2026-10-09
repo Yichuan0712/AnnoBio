@@ -98,12 +98,6 @@ class PipelineCompileTests(unittest.TestCase):
         state["nodes"][1]["sections"][0]["content"] = "changed"
         self.assertEqual(spec["jobs"][0]["config"]["sections"][0]["content"], "Read {text}")
 
-    def test_missing_result_input_boundary_is_rejected(self):
-        state = simple()
-        state["nodes"][0]["resultMissing"] = True
-        state["nodes"][0]["datasetContent"] = {"headers": [], "rows": []}
-        self.error(state, "MISSING_RESULT", input_dataset_ids=["raw"])
-
     def test_graph_order_does_not_depend_on_canvas_or_route_order(self):
         state = branched()
         expected = self.compile(state)
@@ -201,9 +195,9 @@ class PipelineCompileTests(unittest.TestCase):
     def test_a_dataset_saved_from_a_step_is_only_an_input(self):
         # A Dataset saved from the Run's results is a table of its own: reading it does not chain to the Run.
         state = simple()
-        state["nodes"] += [dataset("saved", sourceRunNodeId="r"), prompt("p2"), run("r2")]
-        state["connections"] += [edge("p2", "r2", "prompt-to-run"), data("saved", "r2"),
-                                 edge("r", "saved", "run-to-dataset-snapshot")]
+        saved_from = {"kind": "run", "nodeId": "r", "port": "result", "recordId": "rec"}
+        state["nodes"] += [dataset("saved", savedFrom=saved_from), prompt("p2"), run("r2")]
+        state["connections"] += [edge("p2", "r2", "prompt-to-run"), data("saved", "r2")]
         spec = self.valid(state)
         self.assertEqual(spec["inputs"], ["dataset:raw", "dataset:saved"])
         self.assertEqual({job["id"]: job["depends_on"] for job in spec["jobs"]}, {"llm:r": [], "llm:r2": []})

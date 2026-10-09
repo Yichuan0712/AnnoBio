@@ -3,7 +3,6 @@ import {
   reviewVerifyStateFromResult,
   verifyReviewSuggestion,
 } from './reviewSuggestionActions.js';
-import { RESULT_PORT } from './stepInputs.js';
 import { rebuildWorkingFromApplied } from './reviewWorkingSections.js';
 import {
   DEFAULT_LIMITS as PROMPT_EDIT_LIMITS,
@@ -39,16 +38,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     getConnections,
     datasetContentByNodeId,
     readRunInputSource,
-    writeRunInputSource,
     readRunInput,
     readRunInputTable,
-    writeProcessInputs,
     createPromptNode,
-    createRunNode,
     createScoreNode,
     createDatasetNode,
     createSamplerNode,
-    createProcessNode,
     createPromptReviewNode,
     updateContentSize,
     updateEdges,
@@ -71,15 +66,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     findUniquePromptName,
     isPromptNameAlreadyUsed,
     getPromptDataFromNode,
-    isRunNameAlreadyUsedForPromptNodeId,
-    findUniqueRunName,
     findUniqueWorkingDatasetName,
     isDatasetNameAlreadyUsed,
     isSamplerNameAlreadyUsedForSource,
     getNextDefaultSamplerName,
     findUniqueSamplerName,
     findUniqueReviewName,
-    prepareSampledDatasetFromSampler,
     escapeRegex,
     markNodeAsAgentCreated,
     emitCanvasChanged,
@@ -363,124 +355,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       sourcePromptNodeId: String(sourcePromptNode?.dataset?.nodeId || '').trim(),
       sections: resolvedSections,
       applied: true,
-    };
-  }
-
-  function addRunNode({
-    promptNodeId = '',
-    workingSetId = '',
-    inputToColumn = {},
-    credentialId = '',
-    name = '',
-    left,
-    top,
-    ensureUniqueName = true,
-  } = {}) {
-    const normalizedPromptNodeId = String(promptNodeId || '').trim();
-    const normalizedWorkingSetId = String(workingSetId || '').trim();
-    if (!normalizedPromptNodeId) {
-      throw new Error('Prompt node id is required.');
-    }
-    if (!normalizedWorkingSetId) {
-      throw new Error('Working set dataset node id is required.');
-    }
-    const promptNode = getNodeById(normalizedPromptNodeId);
-    if (!promptNode || !promptNode.classList.contains('workflow-node--prompt')) {
-      throw new Error('Prompt node was not found.');
-    }
-    const workingSetNode = getNodeById(normalizedWorkingSetId);
-    if (!workingSetNode || !workingSetNode.classList.contains('workflow-node--dataset')) {
-      throw new Error('Working set dataset node was not found.');
-    }
-
-    let promptSections = [];
-    try {
-      promptSections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
-    } catch (_) {}
-    const promptInputFields = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
-    const content = datasetContentByNodeId.get(normalizedWorkingSetId) || { headers: [], rows: [] };
-    const datasetHeaders = Array.isArray(content.headers) ? content.headers.map((header) => String(header ?? '')) : [];
-    const headerSet = new Set(datasetHeaders);
-    const normalizedCredentialId = String(credentialId == null ? '' : credentialId).trim();
-    const normalizedInputToColumn = inputToColumn && typeof inputToColumn === 'object' && !Array.isArray(inputToColumn)
-      ? Object.fromEntries(
-        Object.entries(inputToColumn)
-          .map(([key, value]) => [String(key || '').trim(), String(value == null ? '' : value).trim()])
-          .filter(([key]) => Boolean(key))
-      )
-      : {};
-    const promptFieldSet = new Set(promptInputFields);
-    const unknownInputs = Object.keys(normalizedInputToColumn).filter((field) => promptInputFields.length > 0 && !promptFieldSet.has(field));
-    if (unknownInputs.length > 0) {
-      throw new Error(`Unknown prompt inputs in mapping: ${unknownInputs.join(', ')}.`);
-    }
-    const missingInputs = promptInputFields.filter((field) => !String(normalizedInputToColumn[field] || '').trim());
-    if (missingInputs.length > 0) {
-      throw new Error(`Missing input mappings for: ${missingInputs.join(', ')}.`);
-    }
-    const unknownColumns = Object.values(normalizedInputToColumn).filter((column) => column && !headerSet.has(column));
-    if (unknownColumns.length > 0) {
-      throw new Error(`Mapped dataset columns were not found: ${unknownColumns.join(', ')}.`);
-    }
-
-    const requestedName = (name || '').trim() || 'Run';
-    const finalName = ensureUniqueName && isRunNameAlreadyUsedForPromptNodeId(requestedName, normalizedPromptNodeId)
-      ? findUniqueRunName(requestedName, normalizedPromptNodeId)
-      : requestedName;
-    const resolvedLeft = typeof left === 'number'
-      ? left
-      : (parseFloat(promptNode.style.left) || 0) + (promptNode.offsetWidth || 280) + NEW_NODE_OFFSET;
-    const resolvedTop = typeof top === 'number' ? top : (parseFloat(promptNode.style.top) || 0);
-    const node = createRunNode({
-      left: resolvedLeft,
-      top: resolvedTop,
-      title: finalName,
-    });
-    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
-    if (node?.dataset) {
-      node.dataset.runName = finalName;
-      writeRunInputSource(node, { nodeId: normalizedWorkingSetId, port: RESULT_PORT });
-      node.dataset.runInputToColumn = JSON.stringify(normalizedInputToColumn);
-      if (normalizedCredentialId) {
-        node.dataset.runCredentialId = normalizedCredentialId;
-      } else {
-        delete node.dataset.runCredentialId;
-      }
-      const workingSetColorIndex = workingSetNode.dataset.datasetColorIndex != null
-        ? parseInt(workingSetNode.dataset.datasetColorIndex, 10)
-        : 0;
-      const workingSetColor = datasetColorAt(workingSetColorIndex);
-      node.style.borderColor = workingSetColor || '';
-      const bar = node.querySelector('.workflow-node__run-progress');
-      if (bar) bar.style.background = workingSetColor || bar.style.background;
-    }
-    if (node?.dataset?.nodeId) {
-      getConnectionsList().push({
-        fromId: normalizedPromptNodeId,
-        toId: node.dataset.nodeId,
-        type: 'prompt-to-run',
-      });
-      updateEdges();
-    }
-    updateContentSize();
-    emitCanvasChanged();
-    return {
-      created: true,
-      nodeId: String(node?.dataset?.nodeId || '').trim(),
-      promptNodeId: normalizedPromptNodeId,
-      workingSetId: normalizedWorkingSetId,
-      name: String(node?.dataset?.runName || finalName).trim() || finalName,
-      credentialId: String(node?.dataset?.runCredentialId || '').trim(),
-      credentialMode: normalizedCredentialId ? 'explicit' : 'default-if-available',
-      inputToColumn: normalizedInputToColumn,
-      mappedInputs: Object.keys(normalizedInputToColumn),
-      missingInputs: [],
-      position: {
-        left: Number.parseFloat(node?.style?.left || '') || 0,
-        top: Number.parseFloat(node?.style?.top || '') || 0,
-      },
-      nameWasAdjusted: finalName !== requestedName,
-      requestedName,
     };
   }
 
@@ -1896,107 +1770,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     };
   }
 
-  function addSampledDatasetNode({
-    samplerNodeId = '',
-    name = '',
-    notes = '',
-    maxSampleUses = null,
-    left,
-    top,
-    ensureUniqueName = true,
-  } = {}) {
-    const normalizedSamplerNodeId = String(samplerNodeId || '').trim();
-    const prepared = prepareSampledDatasetFromSampler({
-      samplerNodeId: normalizedSamplerNodeId,
-      name,
-      notes,
-      left,
-      top,
-    });
-
-    const newNode = addDatasetNode({
-      name: prepared.datasetName,
-      notes: prepared.datasetNotes,
-      left: prepared.startLeft,
-      top: prepared.startTop,
-      samplerNodeId: normalizedSamplerNodeId,
-      headers: prepared.datasetHeaders,
-      rows: prepared.datasetRows,
-      ensureUniqueName,
-      agentCreated: true,
-    });
-    if (newNode?.nodeId) {
-      getConnectionsList().push({
-        fromId: normalizedSamplerNodeId,
-        toId: newNode.nodeId,
-        type: 'sampler-to-dataset',
-      });
-      updateEdges();
-      emitCanvasChanged();
-    }
-    return {
-      ...newNode,
-      samplerNodeId: normalizedSamplerNodeId,
-      sourceNodeId: prepared.sourceNodeId,
-      sampleUseCount: prepared.existingCount + (newNode?.nodeId ? 1 : 0),
-      maxSampleUses: Number.isFinite(Number(maxSampleUses)) ? Math.max(1, Math.floor(Number(maxSampleUses))) : null,
-    };
-  }
-
-  function addProcessNode({
-    sourceNodeId = '',
-    name = '',
-    code = null,
-    dfCode = null,
-    left,
-    top,
-  } = {}) {
-    const normalizedSourceNodeId = String(sourceNodeId || '').trim();
-    if (!normalizedSourceNodeId) {
-      throw new Error('Process source dataset node id is required.');
-    }
-    const sourceNode = getNodeById(normalizedSourceNodeId);
-    if (!sourceNode || !sourceNode.classList.contains('workflow-node--dataset')) {
-      throw new Error('Process source dataset node was not found.');
-    }
-
-    const finalName = String(name || '').trim() || 'Process';
-    const resolvedLeft = typeof left === 'number'
-      ? left
-      : (parseFloat(sourceNode.style.left) || 0) + (sourceNode.offsetWidth || 280) + NEW_NODE_OFFSET;
-    const resolvedTop = typeof top === 'number' ? top : (parseFloat(sourceNode.style.top) || 0);
-    // Public callers provide code as process(df). dfCode remains an input alias for saves made
-    // before Process nodes had one contract.
-    const normalizedDfCode = dfCode != null ? String(dfCode) : (code != null ? String(code) : null);
-
-    const node = createProcessNode({
-      left: resolvedLeft,
-      top: resolvedTop,
-      title: finalName,
-      dfCode: normalizedDfCode,
-    });
-    if (typeof markNodeAsAgentCreated === 'function') markNodeAsAgentCreated(node);
-    if (node?.dataset?.nodeId) {
-      const source = { nodeId: normalizedSourceNodeId, port: RESULT_PORT };
-      writeProcessInputs(node, { primary: source, inputs: [{ ...source, alias: 'df' }] });
-      updateEdges();
-    }
-    updateContentSize();
-    emitCanvasChanged();
-    return {
-      created: true,
-      nodeId: String(node?.dataset?.nodeId || '').trim(),
-      sourceNodeId: normalizedSourceNodeId,
-      name: String(node?.dataset?.processName || finalName).trim() || finalName,
-      activeMode: 'df',
-      hasDataframeCode: Boolean(normalizedDfCode),
-      position: {
-        left: Number.parseFloat(node?.style?.left || '') || 0,
-        top: Number.parseFloat(node?.style?.top || '') || 0,
-      },
-    };
-  }
-
   const PUBMED_IMPORT_POLL_INTERVAL_MS = 1200;
   const PUBMED_IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
 
@@ -2372,7 +2145,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
   return {
     addPromptNode,
     addPromptVersion,
-    addRunNode,
     startRunNode,
     addScoreNode,
     updateScoreNode,
@@ -2384,8 +2156,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     applyReviewSuggestions,
     addDatasetNode,
     addSamplerNode,
-    addSampledDatasetNode,
-    addProcessNode,
     importPubmedDataset,
     importClinicaltrialsDataset,
     importPreprintDataset,

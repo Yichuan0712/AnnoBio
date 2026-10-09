@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { planHistorySelection } from '../src/runHistorySelection.js';
 import { RunHistorySession } from '../src/runHistorySession.js';
-import { graph, recordGraph, upgradeKeepingDerivedDatasets } from './historyGraphFixture.mjs';
+import { graph, recordGraph } from './historyGraphFixture.mjs';
 import { processInputAliases, processPrimarySource } from '../src/stepInputs.js';
 
 test('selecting a downstream record restores its ancestor inputs together', async () => {
@@ -20,203 +20,105 @@ test('selecting a downstream record restores its ancestor inputs together', asyn
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'prompt').sections[0].content, 'Say {{text}}');
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'process').dfCode, 'return df');
   assert.deepEqual(new Set(Object.keys(selected.selectedRecordIds)), new Set(['run', 'process']));
-  assert.deepEqual(new Set(selected.affectedNodeIds).has('process-dataset'), true);
+  assert.ok(['input', 'run', 'process'].every((id) => selected.affectedNodeIds.includes(id)));
 });
 
-test('selecting Pipeline history switches its upstream, outputs, and downstream to one lineage', async () => {
-  const table = (value) => ({ headers: ['value'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
+const table = (value) => ({ headers: ['value'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
+const data = (fromId, toId, alias, fromPort = 'result') => ({ type: 'data', fromId, fromPort, toId, ...(alias ? { alias } : {}) });
+const step = (nodeId, recordId, alias) => ({ kind: 'step', nodeId, port: 'result', recordId, signature: `${recordId}-output`, ...(alias ? { alias } : {}) });
+/** A completed Process record reading `bindings`, with one `result` output. */
+const processRecord = (id, nodeId, bindings) => ({
+  id, nodeId, kind: 'process', status: 'completed', signature: `${id}-signature`,
+  sourceRecordIds: bindings.filter((binding) => binding.kind === 'step').map((binding) => binding.recordId),
+  inputs: { code: 'return df', primaryDatasetId: bindings[0].kind === 'step' ? `${bindings[0].nodeId}:result` : bindings[0].nodeId, bindings },
+  results: { dfResults: { outputs: { result: table(id) } } },
+});
+const entriesOf = (records) => records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature }));
+
+test('selecting any record of a chain switches its upstream and downstream to one lineage', async () => {
   const promptSnapshot = { nodeId: 'prompt', name: 'Prompt', sections: [], outputFormat: { fields: [] }, inputTypes: {} };
+  const runRecord = (id) => ({
+    id, nodeId: 'run', kind: 'run', status: 'completed', signature: `${id}-signature`, sourceRecordIds: [],
+    inputs: { prompt: promptSnapshot, dataset: { kind: 'dataset', nodeId: 'raw', name: 'Raw', content: table('raw'), signature: 'raw' }, mapping: {} },
+    results: { runResults: [], runInputContent: table('raw') },
+  });
   const records = [
-    {
-      id: 'run-old', nodeId: 'run', kind: 'run', signature: 'run-old-signature', inputs: {
-        prompt: promptSnapshot, dataset: { nodeId: 'raw', name: 'Raw', content: table('raw'), signature: 'raw-signature' }, mapping: {},
-      }, sourceRecordIds: [],
-    },
-    {
-      id: 'run-current', nodeId: 'run', kind: 'run', signature: 'run-current-signature', inputs: {
-        prompt: promptSnapshot, dataset: { nodeId: 'raw', name: 'Raw', content: table('raw'), signature: 'raw-signature' }, mapping: {},
-      }, sourceRecordIds: [],
-    },
-    {
-      id: 'tidy-old', nodeId: 'tidy', kind: 'process', signature: 'tidy-old-signature', inputs: {
-        code: 'return df', primaryDatasetId: 'run-copy',
-        bindings: [{ nodeId: 'run-copy', name: 'Run output (Copy)', content: table('old-run'), signature: 'copy', alias: 'df', upstreamPipelineRecordId: 'run-old' }],
-      }, sourceRecordIds: ['run-old'],
-    },
-    {
-      id: 'tidy-current', nodeId: 'tidy', kind: 'process', signature: 'tidy-current-signature', inputs: {
-        code: 'return df', primaryDatasetId: 'run-live',
-        bindings: [{ nodeId: 'run-live', name: 'Run output', content: table('current-run'), signature: 'live', alias: 'df', sourceRecordId: 'run-current', sourceNodeId: 'run', branch: 'result' }],
-      }, sourceRecordIds: ['run-current'],
-    },
-    {
-      id: 'check-old', nodeId: 'check', kind: 'process', signature: 'check-old-signature', inputs: {
-        code: 'return df', primaryDatasetId: 'tidy-copy',
-        bindings: [{ nodeId: 'tidy-copy', name: 'Tidy output (Copy)', content: table('old-tidy'), signature: 'copy', alias: 'df', upstreamPipelineRecordId: 'tidy-old' }],
-      }, sourceRecordIds: ['tidy-old'],
-    },
-    {
-      id: 'check-current', nodeId: 'check', kind: 'process', signature: 'check-current-signature', inputs: {
-        code: 'return df', primaryDatasetId: 'tidy-live',
-        bindings: [{ nodeId: 'tidy-live', name: 'Tidy output', content: table('current-tidy'), signature: 'live', alias: 'df', sourceRecordId: 'tidy-current', sourceNodeId: 'tidy', branch: 'result' }],
-      }, sourceRecordIds: ['tidy-current'],
-    },
+    runRecord('run-old'), runRecord('run-current'),
+    processRecord('tidy-old', 'tidy', [step('run', 'run-old', 'df')]),
+    processRecord('tidy-current', 'tidy', [step('run', 'run-current', 'df')]),
+    processRecord('check-old', 'check', [step('tidy', 'tidy-old', 'df')]),
+    processRecord('check-current', 'check', [step('tidy', 'tidy-current', 'df')]),
   ];
-  const state = upgradeKeepingDerivedDatasets({
+  const state = {
+    version: 3,
     nodes: [
       { type: 'prompt', nodeId: 'prompt', sections: [], outputFormat: { fields: [] }, inputTypes: {} },
       { type: 'dataset', nodeId: 'raw', datasetContent: table('raw') },
-      { type: 'run', nodeId: 'run', historyRecordId: 'run-current', runWorkingSetId: 'raw' },
-      { type: 'dataset', nodeId: 'run-live', sourceRunNodeId: 'run', snapshotSourceRecordId: 'run-current', datasetContent: table('current-run') },
-      { type: 'dataset', nodeId: 'run-copy', sourceRunNodeId: 'run', savedCopy: true, snapshotSourceRecordId: 'run-old', datasetContent: table('old-run') },
-      { type: 'process', nodeId: 'tidy', historyRecordId: 'tidy-current', primaryDatasetId: 'run-live', dfCode: 'return df' },
-      { type: 'dataset', nodeId: 'tidy-live', processOutputName: 'result', snapshotSourceRecordId: 'tidy-current', datasetContent: table('current-tidy') },
-      { type: 'dataset', nodeId: 'tidy-current-copy', processOutputName: 'result', savedCopy: true,
-        snapshotSourceRecordId: 'tidy-current', datasetContent: table('current-tidy') },
-      { type: 'dataset', nodeId: 'tidy-copy', processOutputName: 'result', savedCopy: true, snapshotSourceRecordId: 'tidy-old', datasetContent: table('old-tidy') },
-      { type: 'process', nodeId: 'check', historyRecordId: 'check-current', primaryDatasetId: 'tidy-live', dfCode: 'return df' },
+      { type: 'run', nodeId: 'run', historyRecordId: 'run-current' },
+      { type: 'process', nodeId: 'tidy', historyRecordId: 'tidy-current', dfCode: 'return df' },
+      { type: 'process', nodeId: 'check', historyRecordId: 'check-current', dfCode: 'return df' },
     ],
-    connections: [
-      { type: 'prompt-to-run', fromId: 'prompt', toId: 'run' },
-      { type: 'dataset-to-process', fromId: 'run-live', toId: 'tidy' },
-      { type: 'process-to-dataset', fromId: 'tidy', toId: 'tidy-live' },
-      { type: 'process-to-dataset', fromId: 'tidy', toId: 'tidy-current-copy' },
-      { type: 'process-to-dataset', fromId: 'tidy', toId: 'tidy-copy' },
-      { type: 'dataset-to-process', fromId: 'tidy-live', toId: 'check' },
-    ],
-  });
+    connections: [{ type: 'prompt-to-run', fromId: 'prompt', toId: 'run' }, data('raw', 'run'), data('run', 'tidy', 'df'), data('tidy', 'check', 'df')],
+  };
   const byId = Object.fromEntries(records.map((record) => [record.id, record]));
-  const selected = await planHistorySelection(state, 'tidy-old', {
-    loadRecord: async (id) => byId[id],
-    recordEntries: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })),
-  });
+  const plan = (current, recordId) => planHistorySelection(current, recordId, { loadRecord: async (id) => byId[id], recordEntries: entriesOf(records) });
+  const selected = await plan(state, 'tidy-old');
   assert.deepEqual(selected.selectedRecordIds, { tidy: 'tidy-old', run: 'run-old', check: 'check-old' });
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'run').historyRecordId, 'run-old');
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'tidy').historyRecordId, 'tidy-old');
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'check').historyRecordId, 'check-old');
-  assert.ok(selected.state.connections.some((edge) => edge.type === 'data' && edge.fromId === 'run-copy' && edge.toId === 'tidy'));
-  assert.ok(selected.state.connections.some((edge) => edge.type === 'data' && edge.fromId === 'tidy-copy' && edge.toId === 'check'));
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'run-copy').savedCopy, true);
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'run-copy').sourceRunNodeId, 'run');
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'run-live').savedCopy, undefined);
-  assert.ok(selected.state.connections.some((edge) => edge.type === 'run-to-dataset-snapshot' && edge.toId === 'run-live'));
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'tidy-copy').savedCopy, true);
-  assert.ok(selected.state.connections.some((edge) => edge.type === 'process-to-dataset' && edge.fromId === 'tidy' && edge.toId === 'tidy-copy'));
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'tidy-live').savedCopy, undefined);
-  assert.ok(selected.state.connections.some((edge) => edge.type === 'process-to-dataset-snapshot' && edge.fromId === 'tidy' && edge.toId === 'tidy-live'));
+  for (const [nodeId, recordId] of [['run', 'run-old'], ['tidy', 'tidy-old'], ['check', 'check-old']]) {
+    assert.equal(selected.state.nodes.find((node) => node.nodeId === nodeId).historyRecordId, recordId);
+  }
+  // Only the records change; the steps keep reading each other.
+  assert.deepEqual(selected.state.connections.filter((edge) => edge.type === 'data'), state.connections.filter((edge) => edge.type === 'data'));
 
-  const restored = await planHistorySelection(selected.state, 'tidy-current', {
-    loadRecord: async (id) => byId[id],
-    recordEntries: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })),
-  });
+  const restored = await plan(selected.state, 'tidy-current');
   assert.deepEqual(restored.selectedRecordIds, { tidy: 'tidy-current', run: 'run-current', check: 'check-current' });
-  assert.ok(restored.state.connections.some((edge) => edge.type === 'data' && edge.fromId === 'run-live' && edge.toId === 'tidy'));
-  assert.ok(restored.state.connections.some((edge) => edge.type === 'data' && edge.fromId === 'tidy-live' && edge.toId === 'check'));
-  assert.equal(restored.state.nodes.find((node) => node.nodeId === 'run-live').sourceRunNodeId, 'run');
-  assert.ok(restored.state.connections.some((edge) => edge.type === 'process-to-dataset' && edge.fromId === 'tidy' && edge.toId === 'tidy-live'));
-  assert.deepEqual(restored.state.connections.filter((edge) => (
-    edge.type === 'process-to-dataset' && edge.fromId === 'tidy'
-  )).map((edge) => edge.toId), ['tidy-live']);
-  assert.ok(restored.state.connections.some((edge) => (
-    edge.type === 'process-to-dataset-snapshot' && edge.fromId === 'tidy' && edge.toId === 'tidy-current-copy'
-  )));
-
   for (const rootId of ['run-old', 'check-old']) {
-    const lineage = await planHistorySelection(state, rootId, {
-      loadRecord: async (id) => byId[id],
-      recordEntries: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })),
-    });
-    assert.deepEqual(lineage.selectedRecordIds, { run: 'run-old', tidy: 'tidy-old', check: 'check-old' });
+    assert.deepEqual((await plan(state, rootId)).selectedRecordIds, { run: 'run-old', tidy: 'tidy-old', check: 'check-old' });
   }
 });
 
 test('selecting a multi-input Process history switches every upstream input lineage', async () => {
-  const table = (value) => ({ headers: ['value'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
-  const processRecord = (id, nodeId, inputId, value) => ({
-    id, nodeId, kind: 'process', signature: `${id}-signature`, sourceRecordIds: [],
-    inputs: { code: 'return df', primaryDatasetId: inputId,
-      bindings: [{ nodeId: inputId, name: inputId, content: table(value), signature: `${id}-input`, alias: 'df' }] },
-  });
-  const leftOld = processRecord('left-old', 'left', 'left-seed', 'left-old');
-  const leftCurrent = processRecord('left-current', 'left', 'left-seed', 'left-current');
-  const rightOld = processRecord('right-old', 'right', 'right-seed', 'right-old');
-  const rightCurrent = processRecord('right-current', 'right', 'right-seed', 'right-current');
-  const merge = (id, leftId, leftRecordId, rightId, rightRecordId, suffix) => ({
-    id, nodeId: 'merge', kind: 'process', signature: `${id}-signature`,
-    sourceRecordIds: [leftRecordId, rightRecordId],
-    inputs: {
-      code: 'return df_candidates', primaryDatasetId: leftId,
-      bindings: [
-        { nodeId: leftId, name: leftId, content: table(`left-${suffix}`), signature: `left-${suffix}`,
-          alias: 'df', upstreamPipelineRecordId: leftRecordId },
-        { nodeId: rightId, name: rightId, content: table(`right-${suffix}`), signature: `right-${suffix}`,
-          alias: 'df_candidates', upstreamPipelineRecordId: rightRecordId },
-      ],
-    },
-  });
-  // Legacy Pipeline History recorded the original Dataset IDs even though published copies exist.
-  const mergeOld = merge('merge-old', 'left-live', 'left-old', 'right-live', 'right-old', 'old');
-  const mergeCurrent = merge('merge-current', 'left-live', 'left-current', 'right-live', 'right-current', 'current');
-  const records = [leftOld, leftCurrent, rightOld, rightCurrent, mergeOld, mergeCurrent];
-  const state = upgradeKeepingDerivedDatasets({
+  const seeded = (id, nodeId, value) => processRecord(id, nodeId, [{ kind: 'dataset', nodeId: `${nodeId}-seed`, name: nodeId, content: table(value), signature: value, alias: 'df' }]);
+  const merge = (id, suffix) => processRecord(id, 'merge', [step('left', `left-${suffix}`, 'df'), step('right', `right-${suffix}`, 'df_candidates')]);
+  const records = [
+    seeded('left-old', 'left', 'left-old'), seeded('left-current', 'left', 'left-current'),
+    seeded('right-old', 'right', 'right-old'), seeded('right-current', 'right', 'right-current'),
+    merge('merge-old', 'old'), merge('merge-current', 'current'),
+  ];
+  const state = {
+    version: 3,
     nodes: [
-      { type: 'dataset', nodeId: 'left-seed', datasetContent: table('left-seed') },
-      { type: 'dataset', nodeId: 'right-seed', datasetContent: table('right-seed') },
-      { type: 'process', nodeId: 'left', historyRecordId: 'left-current', primaryDatasetId: 'left-seed', dfCode: 'return df' },
-      { type: 'process', nodeId: 'right', historyRecordId: 'right-current', primaryDatasetId: 'right-seed', dfCode: 'return df' },
-      { type: 'dataset', nodeId: 'left-live', name: 'Left', processOutputName: 'result', snapshotSourceRecordId: 'left-current', datasetContent: table('left-current') },
-      { type: 'dataset', nodeId: 'left-copy', name: 'Left', processOutputName: 'result', savedCopy: true, snapshotSourceRecordId: 'left-old', datasetContent: table('left-old') },
-      { type: 'dataset', nodeId: 'right-live', name: 'Candidates', processOutputName: 'result', snapshotSourceRecordId: 'right-current', datasetContent: table('right-current') },
-      { type: 'dataset', nodeId: 'right-copy', name: 'Candidates', processOutputName: 'result', savedCopy: true, snapshotSourceRecordId: 'right-old', datasetContent: table('right-old') },
-      { type: 'process', nodeId: 'merge', historyRecordId: 'merge-current', primaryDatasetId: 'left-live', dfCode: 'return df_candidates' },
+      { type: 'dataset', nodeId: 'left-seed', datasetContent: table('left-current') },
+      { type: 'dataset', nodeId: 'right-seed', datasetContent: table('right-current') },
+      { type: 'process', nodeId: 'left', historyRecordId: 'left-current', dfCode: 'return df' },
+      { type: 'process', nodeId: 'right', historyRecordId: 'right-current', dfCode: 'return df' },
+      { type: 'process', nodeId: 'merge', historyRecordId: 'merge-current', dfCode: 'return df' },
     ],
-    connections: [
-      { type: 'dataset-to-process', fromId: 'left-seed', toId: 'left' },
-      { type: 'dataset-to-process', fromId: 'right-seed', toId: 'right' },
-      { type: 'process-to-dataset', fromId: 'left', toId: 'left-live' },
-      { type: 'process-to-dataset-snapshot', fromId: 'left', toId: 'left-copy' },
-      { type: 'process-to-dataset', fromId: 'right', toId: 'right-live' },
-      { type: 'process-to-dataset-snapshot', fromId: 'right', toId: 'right-copy' },
-      { type: 'dataset-to-process', fromId: 'left-live', toId: 'merge' },
-      { type: 'dataset-to-process', fromId: 'right-live', toId: 'merge' },
-    ],
-  });
+    connections: [data('left-seed', 'left', 'df'), data('right-seed', 'right', 'df'), data('left', 'merge', 'df'), data('right', 'merge', 'df_candidates')],
+  };
   const byId = Object.fromEntries(records.map((record) => [record.id, record]));
-  const selected = await planHistorySelection(state, 'merge-old', {
-    loadRecord: async (id) => byId[id],
-    recordEntries: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })),
-  });
+  const selected = await planHistorySelection(state, 'merge-old', { loadRecord: async (id) => byId[id], recordEntries: entriesOf(records) });
   assert.deepEqual(selected.selectedRecordIds, { merge: 'merge-old', left: 'left-old', right: 'right-old' });
-  assert.equal(processPrimarySource(selected.state, 'merge').nodeId, 'left-copy');
-  assert.equal(processInputAliases(selected.state, 'merge')['right-copy'], 'df_candidates');
-  assert.deepEqual(selected.state.connections.filter((edge) => (
-    edge.type === 'data' && edge.toId === 'merge'
-  )).map((edge) => edge.fromId).sort(), ['left-copy', 'right-copy']);
-  assert.deepEqual(selected.state.connections.filter((edge) => edge.type === 'process-to-dataset').map((edge) => edge.toId).sort(),
-    ['left-copy', 'right-copy']);
-  const resolved = await resolveHistoryCanvasState(selected.state, {
-    index: { records: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) },
-    loadRecord: async (id) => byId[id],
-  });
-  assert.equal(resolved.currentRecordIds.merge, 'merge-old');
-  assert.equal(resolved.state.nodes.find((node) => node.nodeId === 'merge').historyRecordId, 'merge-old');
+  assert.deepEqual(selected.state.nodes.find((node) => node.nodeId === 'left-seed').datasetContent, table('left-old'));
+  assert.equal(processPrimarySource(selected.state, 'merge').nodeId, 'left');
+  assert.equal(processInputAliases(selected.state, 'merge')['right:result'], 'df_candidates');
+  const resolved = await resolveHistoryCanvasState(selected.state, { index: { records: entriesOf(records) }, loadRecord: async (id) => byId[id] });
+  assert.deepEqual(resolved.currentRecordIds, { left: 'left-old', right: 'right-old', merge: 'merge-old' });
   assert.equal(resolved.missingResultNodeIds.includes('merge'), false);
 });
 
 test('history selection rejects conflicting shared Dataset requirements atomically', async () => {
   const migrated = await recordGraph(graph);
   const processRecord = structuredClone(migrated.records.find((record) => record.nodeId === 'process'));
-  const first = structuredClone(processRecord.inputs.bindings[0]);
-  delete first.sourceRecordId;
-  delete first.sourceNodeId;
-  delete first.branch;
-  const second = structuredClone(first);
+  const runRecord = migrated.records.find((record) => record.nodeId === 'run');
+  const first = { ...structuredClone(runRecord.inputs.dataset), alias: 'df' };
+  const second = { ...structuredClone(first), alias: 'df_input' };
   second.content.rows[0][0] = 'other input';
-  processRecord.inputs.bindings = [first, second];
+  processRecord.inputs = { ...processRecord.inputs, primaryDatasetId: 'input', bindings: [first, second] };
   const before = structuredClone(migrated.state);
   await assert.rejects(
     planHistorySelection(before, processRecord.id, { loadRecord: async () => processRecord }),
-    /conflicts at dataset node run-dataset/,
+    /conflicts at dataset node input/,
   );
   assert.deepEqual(before, migrated.state);
 });

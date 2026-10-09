@@ -43,7 +43,7 @@ test('desktop .yc canvas save, Save As and merge retain history', async () => {
     const assets = newAssets();
     const state = { historyVersion: 1, zoomLevel: 1.35, nodes: [{ nodeId: 'run-1', type: 'run' },
       { nodeId: 'dataset-1', type: 'dataset' }],
-    connections: [{ fromId: 'run-1', toId: 'dataset-1', type: 'run-to-dataset-snapshot' }] };
+    connections: [{ fromId: 'dataset-1', fromPort: 'result', toId: 'run-1', type: 'data' }] };
     await assets.save(original, state);
     const first = record('run-1', 'signature-1');
     await assets.saveHistoryRecord(original, first);

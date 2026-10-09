@@ -1,6 +1,6 @@
 import { isAssetCell } from './datasetContent.js';
 import { exportCanvasDefinition } from './pipelineExportDefinition.js';
-import { pipelineInputDatasetIds, assertPipelineInputsAvailable } from './pipelineInputAvailability.js';
+import { pipelineInputDatasetIds } from './pipelineInputAvailability.js';
 export { pipelineInputDatasetIds } from './pipelineInputAvailability.js';
 
 function cloneJson(value) {
@@ -9,7 +9,6 @@ function cloneJson(value) {
 
 /** Compile/start payload: selected executable definition plus rows only for explicit inputs. */
 export function pipelineRunCanvasDefinition(canvasState, route) {
-  assertPipelineInputsAvailable(canvasState, route);
   const definition = exportCanvasDefinition(canvasState, route);
   const inputIds = new Set(pipelineInputDatasetIds(route, canvasState));
   const sourceById = new Map((canvasState?.nodes || []).map((node) => [node?.nodeId, node]));

@@ -205,14 +205,12 @@ function inspectDataset(node, ctx, options) {
     details: {
       note: String(node.note || ''),
       producedBy: datasetProducer(node, ctx.canvasState, ctx.nodeLookup),
-      currentResultAvailable: node.resultMissing !== true,
       rowCount: content.rows.length,
       columns: columnsOf(content),
       preview: preview.items.map((row, i) => ({ row: preview.startIndex + i + 1, ...rowObject(content.headers, row) })),
       previewWindow: preview.window,
     },
-    diagnostics: node.resultMissing ? ['This Dataset has no current result. Run its upstream node or select matching History.']
-      : (content.headers.length ? [] : ['The dataset has no columns.']),
+    diagnostics: content.headers.length ? [] : ['The dataset has no columns.'],
   };
 }
 

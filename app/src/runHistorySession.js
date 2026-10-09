@@ -176,7 +176,7 @@ export class RunHistorySession {
         ...entry,
         error: record.error || '',
         relationships: { upstream, downstream },
-        display: describeHistoryRecord(record, canvasState, { currentRecordIds, recordById: byId }),
+        display: describeHistoryRecord(record, canvasState),
       };
     });
   }
@@ -197,9 +197,7 @@ export class RunHistorySession {
         && entry.nodeId === inputs.scoreNodeId && entry.signature === inputs.scoreSignature);
       if (score) inputs = { ...inputs, scoreRecordId: score.id };
     }
-    const sourceRecordIds = kind === 'score'
-      ? [...new Set([inputs.runRecordId, inputs.groundTruthSourceRecordId].filter(Boolean))]
-      : [inputs.scoreRecordId].filter(Boolean);
+    const sourceRecordIds = kind === 'score' ? [inputs.runRecordId].filter(Boolean) : [inputs.scoreRecordId].filter(Boolean);
     const at = this.now?.() || new Date().toISOString();
     const record = previous
       ? { ...previous, inputs, sourceRecordIds, results, updatedAt: at }

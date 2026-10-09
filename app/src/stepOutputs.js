@@ -92,8 +92,6 @@ export function stepOutputTable(state, source) {
   const port = String(source.port || RESULT);
   if (node.type === 'run') return runOutput(state, node, port);
   if (node.type === 'process') return processOutput(node, port);
-  // A Dataset that follows a missing upstream result (datasetHistorySource.js) has none either.
-  if (node.resultMissing) return { waiting: 'no-result' };
   const content = node.datasetContent || node.subsetContent;
   return content ? { table: content } : { waiting: 'no-result' };
 }
