@@ -174,9 +174,9 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 
 ### 2.7 已知的现有问题（相关步骤顺带处理）
 
-- 右键菜单和 Run 窗口的 Save results 结果不同（第 11 步统一）。
-- Score 保存的 Dataset 不记录来源（第 11 步）。
-- UI 删除 Run 后，Dataset 上的 `sourceRunNodeId` 指向不存在的节点（第 11 步字段删除后自然消失）。
+- 右键菜单和 Run 窗口的 Save results 结果不同（第 11 步统一）。第 11 步已解决。
+- Score 保存的 Dataset 不记录来源（第 11 步）。第 11 步已解决。
+- UI 删除 Run 后，Dataset 上的 `sourceRunNodeId` 指向不存在的节点（第 11 步字段删除后自然消失）。第 11 步已解决：`savedFrom` 指向的节点不在时不画来源线，Agent 说明“来源已不在画布上”。
 - Agent 的 `remove` 会留下过期的 `datasetAliases` 条目（第 6 步别名移到连线上后已消失）。
 - `workflowCanvasRuntime.js` 的 `addRunNode`、`addProcessNode`、`saveRunResultsToWorkspace`、`saveScoreResultsToWorkspace`、`addSampledDatasetNode` 没有调用方。相关步骤中，要么改造成唯一实现，要么删除。
 - `workflowDependencyColors.js` 约 14 行会查一条存储的 `dataset-to-run` 连线，但这种连线从不存储（第 3 步改用访问层）。
@@ -1121,20 +1121,39 @@ backend/.venv/Scripts/python.exe -m unittest (Get-ChildItem backend/test_*.py | 
 
 **手工验证：**
 
-- [ ] 打开旧示例的另存副本：中间 Dataset 带来源线和来源说明，作为入口可以单独运行。
-- [ ] Run 的 Save results 从右键菜单和窗口各点一次，生成的表格完全相同（含输入列）。
-- [ ] Process 的 Create branch datasets 正常，每个 Dataset 带来源线。
-- [ ] Score 的 Save results 带来源线。
-- [ ] Dataset 右键菜单中没有 “Save current source as new Dataset”。
-- [ ] 删除来源 Run 后，来源线消失，Dataset 保留，说明文字保留。
+- [x] 打开旧示例的另存副本：中间 Dataset 带来源线和来源说明，作为入口可以单独运行。
+- [x] Run 的 Save results 从右键菜单和窗口各点一次，生成的表格完全相同（含输入列）。
+- [x] Process 的 Create branch datasets 正常，每个 Dataset 带来源线。
+- [x] Score 的 Save results 带来源线。
+- [x] Dataset 右键菜单中没有 “Save current source as new Dataset”。
+- [x] 删除来源 Run 后，来源线消失，Dataset 保留，说明文字保留。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：**
+**完成记录：** 2026-10-08 完成，验收各项全部通过。
+
+- 与计划不同的地方：
+  - Run 的保存：计划说表格用 `stepOutputTable`，但它只在 Run 完成时给出表格，而现在停在半途的 Run 也能 Save results（说明写 “Run incomplete.”）。所以从 `stepOutputs.js` 拆出 `runResultsTable`，下游读取和保存都用它，表格相同，停下的 Run 仍可保存。
+  - 保存的纯函数放在新模块 `savedDatasets.js`：`savedRunOutput`、`savedProcessOutputs`、`scoreSavedFrom`、`readSavedFrom`（DOM 上的 JSON 字符串转对象）、`savedFromLabel`（来源线的悬停文字）。画布、窗口和 Agent 都调用它们。
+  - Process 也统一成一个实现（计划只要求改传 `savedFrom`）：右键菜单和窗口都调用 `saveProcessOutputAsDatasets`。窗口经事件 `workflow:save-run-output`、`workflow:save-process-output` 调用画布上的保存函数；窗口里不再需要的 `getPromptName`、`getUniqueDatasetExportName` 参数删除。
+  - Score 节点没有 `historyRecordId`。它的当前记录按当前分析签名（`historyAnalysisKeys`）在 History 索引中查找。按规则匹配的 Score 是实时计算的、不写记录，所以手工验证中 `recordId` 为空，符合“没有 Score 记录时为空”。右键菜单改为与 Score 窗口走同一个事件 `workflow:score-export-to-workspace`。
+  - `saveRunResultsToWorkspace`、`saveScoreResultsToWorkspace` 没有调用方，直接删除，连同它们独用的依赖项。常量 `EDGE_TYPE_RUN_TO_DATASET` 和两种 `_SNAPSHOT` 已无引用，一并删除；`EDGE_TYPE_PROCESS_TO_DATASET` 还被 `runHistoryInputKey` 使用，留给第 12 步。
+  - Agent：`inspectWorkflowNode` 的 `producedBy.kind` 改为 `saved run results` / `saved process output` / `saved score comparison` / `pipeline run result`，来源节点不在时给 `sourceRemoved: true`；`logicalId` 随 `pipelineLogicalId` 字段删除。摘要写 `saved results of run "…"`、`saved output "…" of process "…"`、`saved from a … no longer on the canvas`。
+  - 测试：读档转换把“跟随 History”的 Dataset 变成普通 Dataset，于是 `historyGraphFixture.mjs` 等用 `upgradeCanvasState` 搭出的派生 Dataset 测试图不再有派生关系，12 项 History 测试失败。这些测试的对象（派生 Dataset 的 History 逻辑）第 12 步才删除，所以没有删测试，而是在 `historyGraphFixture.mjs` 中加 `upgradeKeepingDerivedDatasets`：只升级输入连线、保留派生 Dataset，供这些测试使用。**第 12 步删除派生逻辑时，同时删除这个辅助函数，并把 `historyGraphFixture.mjs` 的图改为步骤直连。** Agent 保存的测试从 `datasetHistorySource.test.mjs` 移到 `savedDatasets.test.mjs` 并改写。
+  - 第 12 步之前的过渡：History 列表中“这条记录存成了哪些 Dataset”（`exportedDatasetNames`）仍读旧字段，所以全部显示 “not exported as a Dataset node”；`resultMissing` 的读写也还在，但已没有派生 Dataset 会产生它。
+  - 来源线从来源节点右侧中间出发，Process 分支的来源线不从端口标签出发。
+- 测试：前端 201 → 208（`canvasFormat` 新增 2 项：每种产出字段的转换及重复执行、Kinase 示例 12 个 Dataset 中 11 个有 `savedFrom`；新增 `savedDatasets.test.mjs` 6 项：Run 表格与下游读到的相同、停下的 Run 和无记录、Process 分支、Score、`savedFrom` 读取和来源文字、Agent 保存；`datasetHistorySource.test.mjs` 移出 1 项；改写 `agentNodeSettings`、`agentRunPrompt` 各 1–2 项；Pipeline 测试的 fixture 改用 `savedFrom`）；后端 127 不变。
+- 手工验证（没有调用任何模型）：
+  - 打开旧示例副本：12 个 Dataset，11 个有 `savedFrom`，DOM 上没有旧字段；11 条来源线为细虚线、半透明、无箭头，悬停文字如 “Saved from Run of "Extract kinase-substrate pairs"”、“Saved from branch "missing_full_text" of Process "Resolve chosen accessions"”；说明文字不变。Tidy extracted pairs 读取原中间 Dataset，打开前没有结果（设计 §9：原来跟随 History 的输出改按内容签名），单独运行后得到 2 行。
+  - 在第 10 步的测试项目上：Judge 的 Save results 从右键菜单和窗口各点一次，存档中两个 Dataset 的表头、行和列类型完全相同，含输入列（这个 Run 读的是 Split 的 `long` 分支，所以输入列是那张表的列）。
+  - Split 窗口的 Create branch datasets 生成 “Split — long” 和 “Split — short”，各带端口正确的 `savedFrom` 和来源线。
+  - 新建 Score（以 Sentences 为 ground truth，按规则匹配，本地计算，4 行全部匹配），从窗口和右键菜单各保存一次，两个 Dataset 都带来源线 “Saved from Score "Score"”。
+  - Dataset 右键菜单为 Sample、Process with code、Duplicate、Add new version、Edit name & description、Copy name and ID，没有 “Save current source as new Dataset”。
+  - 先删 Merge、再删 Judge Run：删除没有被保存的 Dataset 阻止；Judge 的两条来源线消失，两个 Dataset 和说明保留。Ctrl+Z 后 Run 和来源线恢复。Errors 页签没有错误。
 
 ---
 
@@ -1272,6 +1291,6 @@ grep -rnE "sourceRunNodeId|processOutputName|savedCopy|snapshotSourceRecordId|pi
 | 8 | 完成 | 2026-10-08 | `7d13b05` | 195 | 124 | |
 | 9 | 完成 | 2026-10-08 | `e787111` | 200 | 127 | |
 | 10 | 完成 | 2026-10-08 | `e2e6736` | 201 | 127 | |
-| 11 | 未开始 | | | | | |
+| 11 | 完成 | 2026-10-08 | `dc160e9` | 208 | 127 | |
 | 12 | 未开始 | | | | | |
 | 13 | 未开始 | | | | | |
