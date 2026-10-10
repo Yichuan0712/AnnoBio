@@ -1,6 +1,6 @@
 # 节点端口：实施计划
 
-状态：第 1–3 步完成（2026-10-09），下一步是第 4 步。接着做之前先读 §6。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
+状态：第 1–4 步完成（2026-10-09），下一步是第 5 步。接着做之前先读 §6。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
 
 本文把 [NODE_PORTS_DESIGN.md](NODE_PORTS_DESIGN.md)（下称“设计”）的第一部分（端口和拖线：设计第 1–10 节、第 12 节）拆成 7 个可以独立执行的步骤。第二部分（统一的运行入口、Pipeline 里的 Prompt：设计第 11、13 节）还在讨论，不在本计划内。
 
@@ -574,20 +574,38 @@ cd app && npm start
 
 **手工验证：**
 
-- [ ] 表里每种输出各拉一次线到空白处，选每一项：新节点出现在松开处，线已接好。
-- [ ] Review 用假模型。
-- [ ] 取消不新建；新建可以一步撤销。
-- [ ] 右键菜单的内容与之前相同。
+- [x] 表里每种输出各拉一次线到空白处，选每一项：新节点出现在松开处，线已接好。
+- [x] Review 用假模型。
+- [x] 取消不新建；新建可以一步撤销。
+- [x] 右键菜单的内容与之前相同。
 
 **Agent：** 无改动。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：** （待填）
+**完成记录：** 2026-10-09 完成，验收各项全部通过。
+
+- 实现：
+  - `stepOutputMenu.js` 改名为 `outputMenu.js`，导出 `outputMenuItems(state, nodeId, { port })`，测试也改名为 `outputMenu.test.mjs`。每一项是 `{ action, label, source, disabled? }`：Run 的 Score 在 Run 没有结果时、Score 的 Review 在 Run 没有结果或没有标准答案时为 `disabled`，与原来右键菜单的规则相同。
+  - `showNodeContextMenu(x, y, node, { port, at })`：各类节点的右键菜单都以 `outputMenuItems` 的项开头，其余项不变；传了 `port` 时只显示这个输出的项（Process 分支的点击、在空白处松开），没有可选项时不弹菜单。`at` 是新节点放置的画布坐标，传给各个新建动作。
+  - 新增 `placeNewNodeAt(node, at)`：节点左边对准 `at.x`，标题栏的垂直中点对准 `at.y`。`newRunNode`、`newProcessNode` 加了 `at` 参数；Sample 在动作里放置；Score 和 Review 通过 `workflow:add-score-node`、`workflow:add-prompt-review-node` 事件的 `detail.at` 放置（`runReviewFromScore` 加了 `at` 参数并传给事件）。
+  - `workflowPortDrag.js`：从输出拉出的线松开时，下面没有点、并且在画布上而不在节点上，就调用 `showOutputMenu`。松开在节点上（包括别的节点的点上）则取消。
+  - 菜单按 Esc 关闭（所有节点菜单都适用）。
+  - Dataset 的 “Process with code” 改用通用的 `process-output` 动作，原来的 `process-this-dataset` 删除。
+- 与计划不同的地方：
+  - **Dataset 的右键菜单多了一项 “Run a prompt on it”**，放在最前面。计划要求右键菜单原有的文字和顺序不变，这一条做到了；但菜单与拖线共用 `outputMenuItems`，所以右键也多出这一项。它新建一个读这个 Dataset 的 Run 并打开窗口，与 Run 的 “Run a prompt on results” 一致。
+  - Prompt 的项沿用右键菜单原来的文字 “Run”（计划的表里写的是 “Run this prompt”），以免改变右键菜单的文字。
+- 手工验证（桌面应用，真实鼠标事件；在页面里拦截 `/api/review/*` 并让 `/api/run` 返回错误，没有调用模型；scratchpad `ports3/flow4.mjs`、`branch4.mjs`）：
+  - 用第 3 步留下的测试项目，从每种输出拉线到空白处并选每一项：Dataset 的三项、Prompt 的 Run、Run 的三项、Process 两个分支各一项、Score 的 Review（拦截下来的 Review 请求 1 次）。每次新节点都出现在松开处（左边与松开点差 0 像素，标题栏中点差 0–0.5 像素），线已接好：`data … .input`、`data … .df`、`dataset-to-sampler`、`prompt-to-run`、`run-to-score`、`score-to-prompt-review`。
+  - 按 Esc、点别处：菜单关闭，不新建；松开在节点上：不弹菜单；新建后撤销一次，节点消失。
+  - 右键菜单：Prompt、Run、Process、Score 的内容和顺序与之前相同，Dataset 多了 “Run a prompt on it”。
+  - 线都落在点上（0.92 像素以内）。
+  - 第一次测分支时没有弹出菜单，查下来是测试把线松开在了另一个节点灰掉的输出点上（松开在点上不算空白处），换到确认没有节点的位置后正常。
+- 测试：前端 243 → 245（菜单测试 5 → 7 项：每种输出的项、`disabled`、指定端口、没有输出的节点）；后端 126 项不变。
 
 ---
 
@@ -746,7 +764,7 @@ cd app && npm start
 | 1 | 完成 | 2026-10-09 | `f8e7ccd` | 236 | 126 | §3.3 第 2 条有一处例外待确认 |
 | 2 | 完成 | 2026-10-09 | `e62cc57` | 238 | 126 | 用户已确认外观 |
 | 3 | 完成 | 2026-10-09 | `c220d53` | 243 | 126 | |
-| 4 | 未开始 | | | | | |
+| 4 | 完成 | 2026-10-09 | `0caacf2` | 245 | 126 | Dataset 右键多了 “Run a prompt on it” |
 | 5 | 未开始 | | | | | |
 | 6 | 未开始 | | | | | |
 | 7 | 未开始 | | | | | |
@@ -755,9 +773,9 @@ cd app && npm start
 
 ### 6.1 做到哪里
 
-- 分支 `261009-node-ports`，已推到远端，最后一个提交是 `2b0008e`（第 3 步的完成记录）。工作区干净。
-- 第 1–3 步完成，第 4–7 步未开始。下一步是**第 4 步：在空白处松开，弹出创建菜单**。
-- 前端 243 项、后端 126 项测试全部通过，构建通过（于 `c220d53`）。
+- 分支 `261009-node-ports`，已推到远端。最后的功能提交是 `0caacf2`（第 4 步），之后是它的完成记录。工作区干净。
+- 第 1–4 步完成，第 5–7 步未开始。下一步是**第 5 步：Process 的输入端口与代码参数双向同步**。
+- 前端 245 项、后端 126 项测试全部通过，构建通过（于 `0caacf2`）。
 - **现在不能发布。** 第 3–7 步要一起发布（§0 第 12 条）：现在用户能拖线断开输入，Agent 还不能；窗口里的来源选择器也还在。
 - 不要合并。`261007-data-flow-design`（数据流的 14 个步骤）同样没有合并，用户要求两个分支都先留着。
 
@@ -766,7 +784,8 @@ cd app && npm start
 - 窗口里的来源选择器（Run 的 Prompt 和输入、Process 的输入、Score 的标准答案）还在，和拖线改的是同一份数据。第 6 步去掉。
 - Process 的 `df_<别名>` 端口现在不能断开，提示 “Remove df_x from the code to stop reading this input.”。第 5 步改为断开时从代码参数中去掉它，同时加上 `+` 端口。
 - Process 还有其他输入时，`df` 不能断开，只能替换（§3.3 第 2 条的例外，用户已同意）。
-- 从输出拉出的线在空白处松开，现在只是取消。第 4 步改为弹出菜单，代码位置在 `workflowPortDrag.js` 的 `onPointerUp`。
+- 从输出拉出的线在空白处松开，弹出 `outputMenu.js` 的菜单，新节点放在松开处（第 4 步）。松开在节点上（包括别的节点的点上）则取消。
+- Dataset 的右键菜单多了 “Run a prompt on it”（第 4 步，菜单与拖线共用同一份菜单项）。
 - Agent 不能断开输入，也不能把来源接到指定的端口上。第 7 步加 `connect` / `disconnect`，规则直接调用 `nodePorts.js`。
 - 两个看起来像问题、其实不是本计划造成的现象：
   - 有些线要绕一圈才进 Run 的 `prompt` 端口：示例把 Prompt 放在 Run 的右上方。把 Prompt 摆到 Run 左边即可。曾建议重新排一下直接连线版示例的布局，用户还没有回复。
@@ -777,7 +796,8 @@ cd app && npm start
 - `app/src/nodePorts.js`：端口和连线规则，纯函数（`nodePorts`、`edgeEndpoints`、`checkConnect`、`checkDisconnect`、`applyPortOp`、`portLayout`、`portTitles`）。测试 `app/tests/nodePorts.test.mjs`。
 - `app/src/workflowNodePorts.js`：把端口画到节点上（`renderNodePorts`、`applyPortTitles`、`findPortDot`、`centerWithin`）。
 - `app/src/workflowPortDrag.js`：拖线（`attachPortDrag`、`autoPanStep`）。测试 `app/tests/workflowPortDrag.test.mjs`。
-- `app/src/workflowCanvas.js` 里的接入点：`refreshNodePorts`、`portPoint`、`renderEdge`、`updateEdges`、`portState`、`applyPortOps`、`clientToCanvasPoint`、线上右键的监听，以及 `liveInputState()` 里补上的字段。
+- `app/src/outputMenu.js`：从一个输出能新建什么（`outputMenuItems`），右键菜单、分支点击和在空白处松开共用。测试 `app/tests/outputMenu.test.mjs`。
+- `app/src/workflowCanvas.js` 里的接入点：`refreshNodePorts`、`portPoint`、`renderEdge`、`updateEdges`、`portState`、`applyPortOps`、`clientToCanvasPoint`、`placeNewNodeAt`、`showNodeContextMenu` 的 `port`/`at`、线上右键的监听，以及 `liveInputState()` 里补上的字段。
 - 样式：`app/src/workflowCanvas.css` 中 “Ports” 一段；三种类型的颜色在 `app/src/index.css`（`--port-table`、`--port-prompt`、`--port-score`）。
 - `app/src/processSampleCode.js`（Process 示例代码）、`app/src/scoreMappingBundle.js` 的 `scoreMappingForGroundTruth`（换标准答案时删规则）：第 1 步从窗口里移出来的。
 
@@ -787,6 +807,8 @@ cd app && npm start
 
 - **启动和打开项目：** 见 DATA_FLOW_PLAN §1：Forge 带 `--remote-debugging-port=9333` 启动，在主进程替换 `dialog.showOpenDialog`，再点 `[data-action="open-project"]`。底部面板可以点 “Collapse panel” 收起，截图时画布更大。
 - **拖线一律用 CDP 的 `Input.dispatchMouseEvent`：** `mouseMoved` → `mousePressed` → 十几次 `mouseMoved`（每次间隔约 16 毫秒）→ `mouseReleased`，坐标用 `getBoundingClientRect()` 取点的中心。在页面里 `dispatchEvent` 合成的事件不可信，不要用它验证拖拽。
+- **找空白处松开：** 松开点附近 40 像素内不能有节点，也不能落在别的节点的点上（点的点击区域放大到 21 像素），否则不算空白处。测试时先用 `elementFromPoint` 扫出空位。
+- **Review 不调用模型：** 同样替换 `window.fetch`，让 `/api/review/analyze` 返回 `{ review_id }`、`/api/review/result/*` 一直返回运行中即可（只验证节点的创建和连线）。
 - **Run 不调用模型：** 在渲染进程替换 `window.fetch`：`POST /api/run` 返回 `{ run_id: 'fake-1' }`，`/api/run/result/fake-1` 返回 `{ status: 'done', results: [{ row_index, input_row_index, output }] }`。要测“正在运行”，就让结果一直返回 `status: 'running'`，然后在 Run 窗口里点 Stop。Process 可以真实运行（Settings 里已设好 Python）。
 - **Run 结果的列名是 `Output: <字段>` 和 `Input: <列名>`**，写测试用的 Process 代码时要用这种列名。
 - **检查线是否落在点上：** 对每条 `.workflow-edge-line` 用 `getPointAtLength(0)` 和 `getPointAtLength(总长)` 取两个端点，用 SVG 的 `getScreenCTM().inverse()` 把点的屏幕中心换算到同一坐标系，比较距离（目前都在 1 像素以内）。在缩放 50%、100%、200% 各测一次。
