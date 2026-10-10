@@ -148,6 +148,9 @@ function previewProcess(job, ctx) {
   if (!String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; the user has to choose one in Settings → Python first.');
   const inspection = inspectWorkflowNode(ctx.state, processNode.nodeId, {});
   if (!inspection.details.primaryInput) fail(`Process "${nodeTitle(processNode)}" has no df input.`);
+  if (inspection.details.unconnectedInputs?.length) {
+    fail(`Process "${nodeTitle(processNode)}": ${inspection.details.unconnectedInputs.join(', ')} not connected; connect an input to each first.`);
+  }
   // Like the Process window: every input a step gives must have a complete result.
   if (inspection.details.waitingFor) fail(`Process "${nodeTitle(processNode)}": ${inspection.details.waitingFor}`);
   const df = stepSourceLabel(ctx.state, processPrimarySource(ctx.state, processNode.nodeId));

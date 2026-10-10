@@ -14,16 +14,20 @@
 import { resolveDataframeProcessCode } from './processCode.js';
 import { effectiveProcessOutputs, showsProcessOutputs } from './processOutputPorts.js';
 import { buildDefaultProcessCode, isUntouchedSampleCode } from './processSampleCode.js';
-import { parseProcessSignature, withProcessParameters } from './processSignature.js';
+import { referencedDatasetAliasNames } from './processDatasetBindings.js';
+import { codeOutsideSignature, parseProcessSignature, withProcessParameters } from './processSignature.js';
 import { readSavedFrom, savedFromLabel } from './savedDatasets.js';
 import { scoreMappingForGroundTruth } from './scoreMappingBundle.js';
 import {
-  RESULT_PORT, DATA_EDGE, processInputSources, processPrimarySource, readsFromStep, replaceProcessInputSource,
+  RESULT_PORT, DATA_EDGE, processInputBindings, processInputSources, processPrimarySource, readsFromStep, replaceProcessInputSource,
   runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource, sourceKey, stepSourceLabel,
 } from './stepInputs.js';
 import { stepOutputTable } from './stepOutputs.js';
 
 export const PORT_TYPES = Object.freeze({ TABLE: 'table', PROMPT: 'prompt', SCORE: 'score' });
+
+/** The empty port at the end of a Process's inputs: an output dropped on it becomes a new input. */
+export const ADD_INPUT_PORT = '+';
 
 /** Connections that record where a node came from rather than what it reads (hollow dots). */
 export const LINEAGE_EDGE_TYPES = new Set(['prompt-to-prompt', 'prompt-review-to-prompt', 'dataset-to-dataset', 'sampler-to-dataset', 'saved-from']);
@@ -43,6 +47,27 @@ const findNode = (state, id) => (state?.nodes || []).find((node) => nodeIdOf(nod
 const edgesOfType = (state, type) => (state?.connections || []).filter((edge) => edge?.type === type);
 const fromOf = (state, type, toId) => String(edgesOfType(state, type).find((edge) => String(edge.toId) === String(toId))?.fromId || '');
 const isAlias = (name) => /^df_[A-Za-z0-9_]+$/.test(name);
+/** A Process's code as written (not trimmed, so an edit keeps its ends), or its migrated legacy code. */
+const processCode = (node) => {
+  const written = String(node?.dfCode ?? '');
+  return written.trim() ? written : resolveDataframeProcessCode({ dfCode: node?.dfCode, code: node?.code }) || '';
+};
+/** The df_<name> parameters after df in a Process's code, in order. */
+const signatureAliases = (code) => (parseProcessSignature(code)?.params || []).slice(1).map((param) => param.name).filter(isAlias);
+/** Whether the code uses `alias` outside its parameter list, so it cannot stop reading that input. */
+const usesAlias = (code, alias) => referencedDatasetAliasNames(codeOutsideSignature(code)).has(alias);
+
+/**
+ * The df_<name> parameters of a Process's code that no input is connected to (NODE_PORTS_PLAN.md
+ * step 5). Such a parameter shows as an empty port, and the Process cannot run until it is connected.
+ * @param {string} [code] the code to read; the Process's own code when left out
+ */
+export function unconnectedProcessInputs(state, processId, code) {
+  const node = findNode(state, processId);
+  if (node?.type !== 'process') return [];
+  const connected = new Set(processInputSources(state, nodeIdOf(node)).map((source) => source.alias));
+  return signatureAliases(code ?? processCode(node)).filter((alias) => !connected.has(alias));
+}
 
 function parsed(value, fallback) {
   if (value == null || value === '') return fallback;
@@ -138,12 +163,19 @@ function inputPorts(state, node) {
     ];
   }
   if (node.type === 'process') {
+    // df, then each parameter of the code (empty until something is connected to it), then any other
+    // input the code uses without declaring it, then the port that adds an input.
     const sources = processInputSources(state, id);
-    const primary = sources.find((source) => source.alias === 'df') || null;
-    const others = sources.filter((source) => source.alias && source.alias !== 'df');
+    const sourceOf = (alias) => {
+      const found = sources.find((source) => source.alias === alias);
+      return found ? { nodeId: found.nodeId, port: found.port, kind: found.kind } : null;
+    };
+    const declared = signatureAliases(processCode(node));
+    const undeclared = sources.map((source) => source.alias).filter((alias) => alias && alias !== 'df' && !declared.includes(alias));
     return [
-      port('df', PORT_TYPES.TABLE, 'df', { source: primary && { nodeId: primary.nodeId, port: primary.port, kind: primary.kind } }),
-      ...others.map(({ alias, ...source }) => port(alias, PORT_TYPES.TABLE, alias, { source })),
+      port('df', PORT_TYPES.TABLE, 'df', { source: sourceOf('df') }),
+      ...[...new Set([...declared, ...undeclared])].map((alias) => port(alias, PORT_TYPES.TABLE, alias, { source: sourceOf(alias) })),
+      port(ADD_INPUT_PORT, PORT_TYPES.TABLE, '+', { source: null }),
     ];
   }
   if (node.type === 'score') {
@@ -270,6 +302,10 @@ export function portTitles(state, nodeId, ports) {
   const id = nodeIdOf(node);
   const inputs = {};
   for (const item of ports?.inputs || []) {
+    if (item.id === ADD_INPUT_PORT && node?.type === 'process') {
+      inputs[item.id] = 'Drop an output here to add it as an input; its parameter is added to process().';
+      continue;
+    }
     const reads = item.source ? `Reads "${sourceName(state, item.source)}"` : 'Not connected';
     inputs[item.id] = [`${item.label}: ${reads}`, item.fixed].filter(Boolean).join('\n');
   }
@@ -315,14 +351,16 @@ function changeBlocked(state, node, inputId, running) {
 }
 
 /** The op that makes `inputPort` read `source`, given that every check passed. */
-function connectOp(nodeId, node, inputPort, source) {
+function connectOp(nodeId, node, inputPort, source, ports) {
   if (node.type === 'run') {
     return inputPort.id === 'prompt' ? { type: 'run-prompt', runId: nodeId, promptId: source.nodeId } : { type: 'run-input', runId: nodeId, source };
   }
   if (node.type === 'process') {
-    return inputPort.id === 'df'
-      ? { type: 'process-df', processId: nodeId, source }
-      : { type: 'process-alias', processId: nodeId, alias: inputPort.id, from: inputPort.source, source };
+    // As the Process window: the first input becomes df.
+    const hasDf = !!ports.inputs.find((item) => item.id === 'df')?.source;
+    if (inputPort.id === 'df' || (inputPort.id === ADD_INPUT_PORT && !hasDf)) return { type: 'process-df', processId: nodeId, source };
+    if (inputPort.id === ADD_INPUT_PORT) return { type: 'process-add', processId: nodeId, source };
+    return { type: 'process-alias', processId: nodeId, alias: inputPort.id, from: inputPort.source, source };
   }
   if (node.type === 'score' && inputPort.id === 'ground_truth') return { type: 'score-ground-truth', scoreId: nodeId, datasetId: source.nodeId };
   return null;
@@ -356,11 +394,15 @@ export function checkConnect(state, from, to, { running } = {}) {
   }
   const blocked = changeBlocked(state, targetNode, input.id, running);
   if (blocked) return refuse(blocked);
+  const targetPorts = nodePorts(state, targetId);
   if (targetNode.type === 'process') {
-    const elsewhere = nodePorts(state, targetId).inputs.find((item) => item.id !== input.id && same(item.source, source));
+    const elsewhere = targetPorts.inputs.find((item) => item.id !== input.id && same(item.source, source));
     if (elsewhere) return refuse(`Already ${elsewhere.id} of this Process; disconnect it there first.`);
+    // An input other than df while df is empty would itself be taken as df (processPrimarySource).
+    const hasDf = !!targetPorts.inputs.find((item) => item.id === 'df')?.source;
+    if (!hasDf && input.id !== 'df' && input.id !== ADD_INPUT_PORT) return refuse('This Process has no df yet. Connect df first.');
   }
-  return { ok: true, op: connectOp(targetId, targetNode, input, source) };
+  return { ok: true, op: connectOp(targetId, targetNode, input, source, targetPorts) };
 }
 
 /**
@@ -380,10 +422,16 @@ export function checkDisconnect(state, to, { running } = {}) {
   const nodeId = nodeIdOf(node);
   if (node.type === 'run') return { ok: true, op: input.id === 'prompt' ? { type: 'run-prompt', runId: nodeId, promptId: '' } : { type: 'run-input', runId: nodeId, source: null } };
   if (node.type === 'score') return { ok: true, op: { type: 'score-ground-truth', scoreId: nodeId, datasetId: '' } };
-  if (input.id !== 'df') return refuse(`Remove ${input.id} from the code to stop reading this input.`);
+  if (input.id !== 'df') {
+    // As unchecking an input in the Process window: its parameter goes, unless the code uses it.
+    if (usesAlias(processCode(node), input.id)) return refuse(`The code uses ${input.id}. Remove that use to stop reading this input.`);
+    return { ok: true, op: { type: 'process-alias-remove', processId: nodeId, alias: input.id } };
+  }
   // A Process's df is its first input when none is marked (stepInputs.js processPrimarySource), so
   // df can only be left empty with nothing else connected.
-  if (ports.inputs.length > 1) return refuse('df cannot be empty while this Process has other inputs. Drag another output onto df instead.');
+  if (ports.inputs.some((item) => item.id !== 'df' && item.source)) {
+    return refuse('df cannot be empty while this Process has other inputs. Drag another output onto df instead.');
+  }
   return { ok: true, op: { type: 'process-df', processId: nodeId, source: null } };
 }
 
@@ -455,7 +503,7 @@ export function applyPortOp(state, op, { promptInputs } = {}) {
       setProcessInputs(state, op.processId, { primary: null, inputs: [] });
       return fields;
     }
-    const code = resolveDataframeProcessCode({ dfCode: processNode.dfCode, code: processNode.code });
+    const code = processCode(processNode);
     if (current) replaceProcessInputSource(state, op.processId, current, op.source);
     else setProcessPrimarySource(state, op.processId, op.source);
     // Untouched sample code follows the new df's columns, as in the Process window.
@@ -468,7 +516,36 @@ export function applyPortOp(state, op, { promptInputs } = {}) {
   }
 
   if (op.type === 'process-alias') {
-    replaceProcessInputSource(state, op.processId, op.from, op.source);
+    // Another source for a connected input keeps its alias and the code; an empty parameter gets one.
+    if (op.from) replaceProcessInputSource(state, op.processId, op.from, op.source);
+    else {
+      const inputs = processInputSources(state, op.processId);
+      setProcessInputs(state, op.processId, { primary: processPrimarySource(state, op.processId), inputs: [...inputs, { ...op.source, alias: op.alias }] });
+    }
+    return fields;
+  }
+
+  if (op.type === 'process-add' || op.type === 'process-alias-remove') {
+    const processNode = findNode(state, op.processId);
+    if (!processNode) return fields;
+    const code = processCode(processNode);
+    const primary = processPrimarySource(state, op.processId);
+    let inputs = processInputSources(state, op.processId);
+    let aliases = signatureAliases(code);
+    if (op.type === 'process-add') {
+      // As checking an input in the Process window: it gets the alias its name gives, and a parameter.
+      const key = sourceKey(op.source);
+      const alias = processInputBindings(state, op.processId, { code }).find((binding) => binding.key === key)?.alias;
+      if (!alias) return fields;
+      inputs = [...inputs, { ...op.source, alias }];
+      aliases = [...aliases, alias];
+    } else {
+      inputs = inputs.filter((input) => input.alias !== op.alias);
+      aliases = aliases.filter((alias) => alias !== op.alias);
+    }
+    setProcessInputs(state, op.processId, { primary, inputs });
+    const next = withProcessParameters(code, aliases);
+    if (next !== code) set(processNode, 'dfCode', next);
     return fields;
   }
 

@@ -59,7 +59,7 @@ import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
 import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
-import { applyPortOp, checkDisconnect, edgeEndpoints, nodePorts, portTitles } from './nodePorts.js';
+import { applyPortOp, checkDisconnect, edgeEndpoints, nodePorts, portTitles, unconnectedProcessInputs } from './nodePorts.js';
 import { applyPortTitles, centerWithin, findPortDot, renderNodePorts } from './workflowNodePorts.js';
 import { attachPortDrag } from './workflowPortDrag.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
@@ -2083,11 +2083,20 @@ export function buildWorkflowCanvas(root, options = {}) {
    */
   function readProcessExecutionInputs(processNode, code) {
     const state = liveInputState();
+    // A parameter of the code with no input connected (an empty port, nodePorts.js) would fail in Python.
+    const unconnected = unconnectedProcessInputs(state, processNode.dataset.nodeId, code);
+    if (unconnected.length) throw new Error(unconnectedInputsMessage(unconnected));
     return processRequiredInputs(state, processNode.dataset.nodeId, { code }).bindings.map((binding) => {
       const output = stepOutputTable(state, binding);
       if (output.waiting) throw new Error(stepInputWaitingMessage(state, binding, output.waiting));
       return { ...binding, content: output.table };
     });
+  }
+
+  /** Why a Process with empty input ports cannot run (nodePorts.js unconnectedProcessInputs). */
+  function unconnectedInputsMessage(aliases) {
+    const one = aliases.length === 1;
+    return `${aliases.join(', ')} ${one ? 'is' : 'are'} not connected. Drag an output onto ${one ? 'that port' : 'those ports'} on the canvas, or remove ${one ? 'the parameter' : 'the parameters'} from the code.`;
   }
 
   /** The sources a Run or Process reads now, on `state`. */

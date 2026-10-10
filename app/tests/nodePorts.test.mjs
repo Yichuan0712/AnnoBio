@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  PORT_TYPES, applyPortOp, checkConnect, checkDisconnect, derivedEdges, edgeEndpoints, keepMappedColumns, keepSharedMapping, nodePorts,
-  portLayout, portTitles,
+  ADD_INPUT_PORT, PORT_TYPES, applyPortOp, checkConnect, checkDisconnect, derivedEdges, edgeEndpoints, keepMappedColumns, keepSharedMapping, nodePorts,
+  portLayout, portTitles, unconnectedProcessInputs,
 } from '../src/nodePorts.js';
 import { buildDefaultProcessCode, isUntouchedSampleCode } from '../src/processSampleCode.js';
 import { withProcessParameters } from '../src/processSignature.js';
@@ -77,7 +77,7 @@ test('each node type has its inputs on the left and outputs on the right', () =>
   assert.deepEqual(nodePorts(state, 'v1').outputs.map((item) => [item.id, item.type]), [['prompt', PORT_TYPES.PROMPT]]);
 
   const merge = nodePorts(state, 'merge');
-  assert.deepEqual(ids(merge.inputs), ['df', 'df_abstracts']);
+  assert.deepEqual(ids(merge.inputs), ['df', 'df_abstracts', '+']);
   assert.deepEqual(merge.inputs[0].source, { nodeId: 'split', port: 'ready', kind: 'process' });
   assert.deepEqual(ids(nodePorts(state, 'split').outputs), ['ready', 'rewrite']);
 
@@ -108,7 +108,7 @@ test('a Process with no known branches offers an output nothing can read yet', (
   assert.match(dyn[0].unavailable, /once the Process has run/);
   assert.match(nodePorts(state, 'fresh').outputs[0].unavailable, /not known yet/);
   assert.equal(nodePorts(state, 'merge').outputs[0].unavailable, undefined);
-  assert.deepEqual(ids(nodePorts(state, 'fresh').inputs), ['df']);
+  assert.deepEqual(ids(nodePorts(state, 'fresh').inputs), ['df', '+']);
   assert.equal(nodePorts(state, 'fresh').inputs[0].source, null);
 });
 
@@ -119,7 +119,7 @@ test('port names show with two or more ports, and always for Process inputs and 
   assert.deepEqual(shown('extract', 'outputs'), [false]);
   assert.deepEqual(shown('abstracts', 'outputs'), [false]);
   assert.deepEqual(shown('v1', 'outputs'), [false]);
-  assert.deepEqual(shown('split', 'inputs'), [true]);
+  assert.deepEqual(shown('split', 'inputs'), [true, true]);
   assert.deepEqual(shown('split', 'outputs'), [true, true]);
   assert.deepEqual(shown('merge', 'outputs'), [false]);
   assert.deepEqual(shown('dyn', 'outputs'), [true]);
@@ -267,7 +267,7 @@ test('an input can be left empty, except where the plan keeps it', () => {
   assert.match(checkDisconnect(state, at('score', 'run')).reason, /Run it was created from/);
   assert.match(checkDisconnect(state, at('review', 'score')).reason, /Score it was created from/);
   assert.match(checkDisconnect(state, at('sampler', 'source')).reason, /Dataset it was created from/);
-  assert.equal(checkDisconnect(state, at('merge', 'df_abstracts')).reason, 'Remove df_abstracts from the code to stop reading this input.');
+  assert.deepEqual(checkDisconnect(state, at('merge', 'df_abstracts')).op, { type: 'process-alias-remove', processId: 'merge', alias: 'df_abstracts' });
   assert.match(checkDisconnect(state, at('merge', 'df')).reason, /df cannot be empty while this Process has other inputs/);
   assert.equal(checkDisconnect(state, at('fresh', 'df')).reason, 'This input is not connected.');
   assert.equal(checkDisconnect(state, at('extract', 'nothing')).reason, 'There is no such input.');
@@ -422,7 +422,7 @@ test('a lone unnamed port sits on the header; named ports get rows', () => {
   });
   assert.deepEqual(layout('abstracts'), { left: { header: null, rows: [], lineage: null }, right: { header: 'result', rows: [], lineage: null } });
   assert.deepEqual(layout('v2'), { left: { header: null, rows: [], lineage: 'header' }, right: { header: 'prompt', rows: [], lineage: null } });
-  assert.deepEqual(layout('split'), { left: { header: null, rows: ['df'], lineage: null }, right: { header: null, rows: ['ready', 'rewrite'], lineage: null } });
+  assert.deepEqual(layout('split'), { left: { header: null, rows: ['df', '+'], lineage: null }, right: { header: null, rows: ['ready', 'rewrite'], lineage: null } });
   assert.deepEqual(layout('merge').right, { header: 'result', rows: [], lineage: null });
   assert.deepEqual(layout('review'), { left: { header: 'score', rows: [], lineage: null }, right: { header: null, rows: [], lineage: 'header' } });
   assert.deepEqual(layout('sampler').right, { header: null, rows: [], lineage: 'header' });
@@ -479,4 +479,79 @@ test('a ground truth line moves from one Score to another', () => {
   assert.equal(nodeOf(state, 'score').scoreGroundTruthId, '');
   assert.equal(nodeOf(state, 'score2').scoreGroundTruthId, 'gold');
   assert.deepEqual(derivedEdges(state).filter((item) => item.type === 'ground-truth-to-score').map((item) => item.toId), ['score2']);
+});
+
+// ---------- Process inputs and the code's parameters ----------
+
+const processWith = (code) => {
+  const state = canvas();
+  nodeOf(state, 'merge').dfCode = code;
+  return state;
+};
+
+test('each parameter of the code is a port; one with nothing connected is empty', () => {
+  const state = processWith('def process(df, df_abstracts, df_notes):\n    return df\n');
+  const inputs = nodePorts(state, 'merge').inputs;
+  assert.deepEqual(ids(inputs), ['df', 'df_abstracts', 'df_notes', ADD_INPUT_PORT]);
+  assert.equal(inputs[2].source, null);
+  assert.deepEqual(unconnectedProcessInputs(state, 'merge'), ['df_notes']);
+  assert.deepEqual(unconnectedProcessInputs(state, 'merge', 'def process(df):\n    return df\n'), []);
+  assert.equal(portTitles(state, 'merge', nodePorts(state, 'merge')).inputs.df_notes, 'df_notes: Not connected');
+  assert.match(portTitles(state, 'merge', nodePorts(state, 'merge')).inputs[ADD_INPUT_PORT], /^Drop an output here to add it as an input/);
+});
+
+test('an input the code uses without declaring it still shows, after the parameters', () => {
+  const state = processWith('def process(df):\n    return df.merge(df_abstracts)\n');
+  assert.deepEqual(ids(nodePorts(state, 'merge').inputs), ['df', 'df_abstracts', ADD_INPUT_PORT]);
+});
+
+test('an output dropped on + becomes an input under the alias its name gives, with a parameter', () => {
+  const state = processWith('def process(df, df_abstracts):\n    return df\n');
+  const result = checkConnect(state, at('gold', 'result'), at('merge', ADD_INPUT_PORT));
+  assert.deepEqual(result.op, { type: 'process-add', processId: 'merge', source: { nodeId: 'gold', port: 'result', kind: 'dataset' } });
+  const fields = applyPortOp(state, result.op);
+  assert.equal(nodeOf(state, 'merge').dfCode, 'def process(df, df_abstracts, df_gold):\n    return df\n');
+  assert.deepEqual(fields, [{ nodeId: 'merge', field: 'dfCode', value: nodeOf(state, 'merge').dfCode }]);
+  assert.deepEqual(processInputSources(state, 'merge').map((source) => `${source.alias}=${source.nodeId}`), ['df=split', 'df_abstracts=abstracts', 'df_gold=gold']);
+  assert.deepEqual(ids(nodePorts(state, 'merge').inputs), ['df', 'df_abstracts', 'df_gold', ADD_INPUT_PORT]);
+});
+
+test('on a Process without df, + takes the first input as df', () => {
+  const state = canvas();
+  assert.equal(checkConnect(state, at('gold', 'result'), at('fresh', ADD_INPUT_PORT)).op.type, 'process-df');
+});
+
+test('an output dropped on an empty parameter is read under that name, and the code stays', () => {
+  const code = 'def process(df, df_abstracts, df_notes):\n    return df\n';
+  const state = processWith(code);
+  const result = checkConnect(state, at('gold', 'result'), at('merge', 'df_notes'));
+  assert.deepEqual(result.op, { type: 'process-alias', processId: 'merge', alias: 'df_notes', from: null, source: { nodeId: 'gold', port: 'result', kind: 'dataset' } });
+  assert.deepEqual(applyPortOp(state, result.op), []);
+  assert.equal(nodeOf(state, 'merge').dfCode, code);
+  assert.deepEqual(processInputSources(state, 'merge').find((source) => source.alias === 'df_notes'), { nodeId: 'gold', port: 'result', kind: 'dataset', alias: 'df_notes' });
+  assert.deepEqual(unconnectedProcessInputs(state, 'merge'), []);
+});
+
+test('a parameter cannot be connected while df is empty', () => {
+  const state = canvas();
+  nodeOf(state, 'fresh').dfCode = 'def process(df, df_notes):\n    return df\n';
+  assert.equal(checkConnect(state, at('gold', 'result'), at('fresh', 'df_notes')).reason, 'This Process has no df yet. Connect df first.');
+});
+
+test('disconnecting an input removes its parameter, unless the code uses it', () => {
+  const state = processWith('def process(df, df_abstracts):\n    return df\n');
+  const result = checkDisconnect(state, at('merge', 'df_abstracts'));
+  const fields = applyPortOp(state, result.op);
+  assert.equal(nodeOf(state, 'merge').dfCode, 'def process(df):\n    return df\n');
+  assert.deepEqual(fields.map((item) => item.field), ['dfCode']);
+  assert.deepEqual(processInputSources(state, 'merge').map((source) => source.alias), ['df']);
+
+  const used = processWith('def process(df, df_abstracts):\n    return df.merge(df_abstracts)\n');
+  assert.equal(checkDisconnect(used, at('merge', 'df_abstracts')).reason, 'The code uses df_abstracts. Remove that use to stop reading this input.');
+});
+
+test('df stays while another input is connected, but not because of an empty parameter', () => {
+  const state = canvas();
+  nodeOf(state, 'split').dfCode = 'def process(df, df_notes):\n    return df\n';
+  assert.equal(checkDisconnect(state, at('split', 'df')).ok, true);
 });

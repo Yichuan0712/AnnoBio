@@ -6,6 +6,7 @@
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 import { displayCell, normalizeDatasetContent } from '../../datasetContent.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
+import { unconnectedProcessInputs } from '../../nodePorts.js';
 import {
   processInputBindings, processInputSources, processPrimarySource, processRequiredInputs, runInputSource, stepInputWaitingMessage,
 } from '../../stepInputs.js';
@@ -262,6 +263,9 @@ function inspectProcess(node, ctx) {
   const diagnostics = [];
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) diagnostics.push('The code does not define process(df).');
   if (!primary) diagnostics.push('The process has no df input.');
+  // Parameters of the code with nothing connected: empty ports on the canvas; it cannot run until they are.
+  const unconnected = unconnectedProcessInputs(ctx.canvasState, ctx.nodeId, code);
+  if (unconnected.length) diagnostics.push(`Not connected: ${unconnected.join(', ')}. The process cannot run until an input is connected to each.`);
   if (!Object.keys(outputs).length) diagnostics.push('The process has not been run yet, or its last run returned nothing.');
   if (ports.mismatch) diagnostics.push('Its last run returned branches its code was not detected to return.');
   const waiting = primary ? waitingFor(ctx.canvasState, processRequiredInputs(ctx.canvasState, ctx.nodeId, { code }).bindings) : null;
@@ -270,6 +274,7 @@ function inspectProcess(node, ctx) {
       code,
       primaryInput: primary,
       inputs,
+      unconnectedInputs: unconnected,
       // Every Dataset and step output the code could read, under the alias it has in process(df, ...).
       availableInputs: processInputBindings(ctx.canvasState, ctx.nodeId, { code })
         .map((binding) => ({ ...linkedSource(ctx.nodeLookup, binding), alias: binding.alias, isInput: binding.input })),

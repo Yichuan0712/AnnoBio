@@ -97,8 +97,12 @@ test('a Process the Agent adds reads step outputs as df and by alias, as its win
   assert.deepEqual(processPrimarySource(result.state, id), { nodeId: 'r', port: 'result', kind: 'run' });
   assert.deepEqual(processInputAliases(result.state, id), { 'r:result': 'df', 'split:kept': 'df_kept' });
   assert.deepEqual(result.items[0].lines.slice(0, 2), ['df = "Extract"', 'df_kept = "Split · kept"']);
-  assert.throws(() => plan([{ op: 'add_process', primary_input: 'r', code: 'def process(df, df_missing):\n    return df\n' }]),
-    /The code uses df_missing, which match no input\. Available: .*df_kept \("Split · kept"\)/);
+  // A parameter that matches no input stays unconnected, as an empty port on the canvas, and the card says so.
+  const unconnected = plan([{ op: 'add_process', ref: '$u', primary_input: 'r', code: 'def process(df, df_missing):\n    return df\n' }]);
+  assert.match(unconnected.items[0].lines.join('\n'), /Not connected yet: df_missing .*Inputs it could read: .*df_kept \("Split · kept"\)/);
+  const inspected = inspectWorkflowNode(unconnected.state, unconnected.refs.$u, { extractInputFields });
+  assert.deepEqual(inspected.details.unconnectedInputs, ['df_missing']);
+  assert.ok(inspected.diagnostics.some((line) => /Not connected: df_missing/.test(line)));
 
   const moved = plan([{ op: 'update', node: 'split', set: { primary_input: 'raw' } }]);
   assert.deepEqual(processPrimarySource(moved.state, 'split'), { nodeId: 'raw', port: 'result', kind: 'dataset' });
@@ -172,6 +176,11 @@ test('run_nodes refuses a Process whose upstream has no result, with its window\
     const env = { getCanvasState: () => state, extractInputFields, credentialsById: new Map() };
     const refused = await previewRunRequest({ jobs: [{ kind: 'process', node: 'dyn' }] }, env);
     assert.deepEqual(refused, { ok: false, error: 'Job 1: Process "Dynamic": Waiting for upstream results: run "Extract" first.' });
+    // A parameter nothing is connected to stops the run, as on the canvas.
+    state.nodes.find((node) => node.nodeId === 'split').dfCode = 'def process(df, df_notes):\n    return df\n';
+    const unconnected = await previewRunRequest({ jobs: [{ kind: 'process', node: 'split' }] }, env);
+    assert.deepEqual(unconnected, { ok: false, error: 'Job 1: Process "Split": df_notes not connected; connect an input to each first.' });
+    state.nodes.find((node) => node.nodeId === 'split').dfCode = 'def process(df):\n    return {"kept": df, "dropped": df.head(0)}\n';
     const ready = await previewRunRequest({ jobs: [{ kind: 'process', node: 'split' }] }, env);
     assert.equal(ready.ok, true);
     assert.deepEqual(ready.items[0].lines, ['Runs its Python code on "Extract" (no model calls).']);
