@@ -440,7 +440,7 @@
   white-space: nowrap;
 }
 
-/* A Process branch offers new steps on it (stepOutputMenu.js). */
+/* A Process branch offers new steps on it (outputMenu.js). */
 .workflow-node--process .workflow-node__port-row[data-port-side="right"][data-port-id]:not(.workflow-node__port-row--unavailable) {
   cursor: pointer;
 }

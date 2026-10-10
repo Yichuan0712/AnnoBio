@@ -50,9 +50,10 @@ function dragPath(from, to) {
  * @param {{ canvas: HTMLElement, nodesLayer: HTMLElement, edgesLayer: SVGSVGElement, scrollWrapper: HTMLElement,
  *   getState: () => object, clientToCanvas: (x: number, y: number) => { x: number, y: number },
  *   applyOps: (ops: object[]) => void, showBranchMenu: (x: number, y: number, node: HTMLElement, port: string) => void,
+ *   showOutputMenu: (x: number, y: number, nodeId: string, port: string) => void,
  *   promptInputs?: (prompt: object) => string[], dragThreshold?: number }} options
  */
-export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, getState, clientToCanvas, applyOps, showBranchMenu, promptInputs, dragThreshold = 4 }) {
+export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, getState, clientToCanvas, applyOps, showBranchMenu, showOutputMenu, promptInputs, dragThreshold = 4 }) {
   let drag = null;
   let tip = null;
   let tipTimer = 0;
@@ -255,6 +256,13 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
       return;
     }
     if (result?.ok && result.op) applyOps([result.op]);
+    else if (!dot && current.mode === 'out' && overEmptyCanvas(e.clientX, e.clientY)) showOutputMenu(e.clientX, e.clientY, current.from.nodeId, current.from.portId);
+  }
+
+  /** Whether the pointer is over the canvas and not over a node. */
+  function overEmptyCanvas(clientX, clientY) {
+    const el = document.elementFromPoint(clientX, clientY);
+    return !!el && scrollWrapper.contains(el) && !el.closest('.workflow-node');
   }
 
   function onPointerCancel() {

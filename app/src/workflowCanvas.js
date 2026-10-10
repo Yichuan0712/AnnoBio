@@ -91,7 +91,7 @@ import {
 } from './stepInputs.js';
 import { stepOutputTable } from './stepOutputs.js';
 import { readSavedFrom, savedFromLabel, savedProcessOutputs, savedRunOutput, scoreSavedFrom } from './savedDatasets.js';
-import { stepOutputMenuItems } from './stepOutputMenu.js';
+import { outputMenuItems } from './outputMenu.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
 
@@ -1267,6 +1267,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     clientToCanvas: clientToCanvasPoint,
     applyOps: applyPortOps,
     showBranchMenu: (x, y, node, port) => showNodeContextMenu(x, y, node, { port }),
+    // A line from an output let go over empty canvas offers new nodes on it, made where it was let go.
+    showOutputMenu: (x, y, nodeId, port) => {
+      const node = getNodeById(nodeId);
+      if (node) showNodeContextMenu(x, y, node, { port, at: clientToCanvasPoint(x, y) });
+    },
     promptInputs: promptInputNames,
   });
 
@@ -3461,7 +3466,12 @@ export function buildWorkflowCanvas(root, options = {}) {
    * The node's right-click menu. `port` (a Process branch, from clicking its label) shows only the
    * items that start a step on that branch.
    */
-  function showNodeContextMenu(clientX, clientY, node, { port } = {}) {
+  /**
+   * A node's right-click menu. With `port`, only what can be started on that output: a Process
+   * branch's menu, or the menu shown when a line from the output is let go over empty canvas; `at`
+   * is then where the new node goes (canvas coordinates).
+   */
+  function showNodeContextMenu(clientX, clientY, node, { port, at } = {}) {
     const existing = document.querySelector('.workflow-node-context-menu');
     if (existing) existing.remove();
 
@@ -3515,16 +3525,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     const menu = document.createElement('div');
     menu.className = 'workflow-node-context-menu';
     menu.setAttribute('role', 'menu');
-    // New steps on this node's output (stepOutputMenu.js), offered before it has a result too.
-    const stepItems = (isRun || isProcess)
-      ? stepOutputMenuItems(liveInputState(), node.dataset.nodeId, port !== undefined ? { port } : {}) : [];
-    const stepItemsHtml = stepItems.map((item) => `<button type="button" class="workflow-node-context-item workflow-node-context-item--run" data-action="${item.action}" data-port="${escapeHtml(item.source.port)}" role="menuitem">${escapeHtml(item.label)}</button>`).join('');
+    // New nodes on this node's output (outputMenu.js), offered before it has a result where they can run later.
+    const outputItems = outputMenuItems(liveInputState(), node.dataset.nodeId, port !== undefined ? { port } : {});
+    const stepItemsHtml = outputItems.map((item) => `<button type="button" class="workflow-node-context-item workflow-node-context-item--${OUTPUT_ITEM_CLASSES[item.action] || 'run'}" data-action="${item.action}" data-port="${escapeHtml(item.source.port)}" role="menuitem" ${item.disabled ? 'disabled' : ''}>${escapeHtml(item.label)}</button>`).join('');
     if (port !== undefined) {
+      if (!outputItems.length) return;
       menu.innerHTML = stepItemsHtml;
     } else if (isRun) {
       menu.innerHTML = `
         ${stepItemsHtml}
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--score" data-action="save-to-workspace-and-score" role="menuitem" ${runHasResults ? '' : 'disabled'}>Score</button>
         <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem" ${runHasResults ? '' : 'disabled'}>Save results to workspace</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-run-name" role="menuitem">Edit name</button>
       `;
@@ -3532,7 +3541,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const scoreHasGt = (node.dataset.scoreGroundTruthId || '').trim() !== '';
       const canSaveToWorkspace = scoreHasResults && scoreHasGt;
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem" ${scoreHasResults && scoreHasGt ? '' : 'disabled'}>Review</button>
+        ${stepItemsHtml}
         <button type="button" class="workflow-node-context-item" data-action="score-save-to-workspace" role="menuitem" ${canSaveToWorkspace ? '' : 'disabled'}>Save results to workspace</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>
       `;
@@ -3543,8 +3552,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       `;
     } else if (isDataset) {
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="add-sampler" role="menuitem">Sample</button>
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--run" data-action="process-this-dataset" role="menuitem">Process with code</button>
+        ${stepItemsHtml}
         <button type="button" class="workflow-node-context-item" data-action="duplicate-working-dataset" role="menuitem">Duplicate this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="add-version-of-dataset" role="menuitem">Add new version of this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-dataset-name-description" role="menuitem">Edit name & description</button>
@@ -3563,7 +3571,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       `;
     } else {
       menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--run" data-action="run-this-prompt" role="menuitem">Run</button>
+        ${stepItemsHtml}
         <button type="button" class="workflow-node-context-item" data-action="duplicate" role="menuitem">Duplicate this prompt</button>
         <button type="button" class="workflow-node-context-item" data-action="new-version" role="menuitem">Add new version of this prompt</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-name-description" role="menuitem">Edit name & description</button>
@@ -3575,8 +3583,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         <button type="button" class="workflow-node-context-item" data-action="copy-name-and-id" role="menuitem">Copy name and ID</button>
       `);
     }
-    /** The output a step-output item starts from. */
-    const outputSource = (button) => ({ nodeId: node.dataset.nodeId, port: button.dataset.port || RESULT_PORT, kind: isRun ? 'run' : 'process' });
+    /** The output an output item starts from. */
+    const outputSource = (button) => ({ nodeId: node.dataset.nodeId, port: button.dataset.port || RESULT_PORT, kind: isRun ? 'run' : isProcess ? 'process' : 'dataset' });
 
     function duplicateNode(isNewVersion = false) {
       const left = parseFloat(node.style.left) || 0;
@@ -3618,7 +3626,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       },
       'save-to-workspace-and-score': () => {
         if (node.dataset.nodeType !== 'run') return;
-        document.dispatchEvent(new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node.dataset.nodeId } }));
+        document.dispatchEvent(new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node.dataset.nodeId, at } }));
       },
       'score-add-review': async () => {
         if (node.dataset.nodeType !== 'score') return;
@@ -3738,6 +3746,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           scoreNodeId: scoreNode.dataset.nodeId,
           getReviewPayload,
           credentialId,
+          at,
         });
         if (!started) {
           showAlert('Could not start Review. Open Score detail and ensure the prompt has sections, Run has results, and ground truth is selected.', { title: 'Review' });
@@ -3759,6 +3768,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           sampleSize: 100,
         });
         if (newNode?.dataset?.nodeId) {
+          placeNewNodeAt(newNode, at);
           connections.push({
             fromId: sourceNodeId,
             toId: newNode.dataset.nodeId,
@@ -3773,11 +3783,10 @@ export function buildWorkflowCanvas(root, options = {}) {
         const samplerNodeId = node.dataset.nodeId || '';
         document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId } }));
       },
-      'process-this-dataset': () => newProcessNode({ inputSource: { nodeId: node.dataset.nodeId, port: RESULT_PORT, kind: 'dataset' } }),
-      'run-this-prompt': () => newRunNode({ promptNode: node }),
+      'run-this-prompt': () => newRunNode({ promptNode: node, at }),
       // A new Run on this output; its Prompt is chosen in the Run window, which opens.
-      'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), open: true }),
-      'process-output': (button) => newProcessNode({ inputSource: outputSource(button) }),
+      'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), open: true, at }),
+      'process-output': (button) => newProcessNode({ inputSource: outputSource(button), at }),
       // A duplicate is a standalone node: no connections are copied (same for Datasets and Processes).
       duplicate: () => {
         duplicateNode(false);
@@ -4055,14 +4064,23 @@ export function buildWorkflowCanvas(root, options = {}) {
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
 
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
     const close = () => {
       menu.remove();
       document.removeEventListener('click', close);
       document.removeEventListener('contextmenu', close);
+      document.removeEventListener('keydown', onKey, true);
     };
     requestAnimationFrame(() => document.addEventListener('click', close, { once: true }));
     document.addEventListener('contextmenu', close, { once: true });
+    document.addEventListener('keydown', onKey, true);
   }
+
+  /** The class each output item had in the node menus, for its icon. */
+  const OUTPUT_ITEM_CLASSES = {
+    'run-prompt-on-output': 'run', 'process-output': 'run', 'run-this-prompt': 'run',
+    'add-sampler': 'sample', 'save-to-workspace-and-score': 'score', 'score-add-review': 'review',
+  };
 
   function escapeHtml(str) {
     const div = document.createElement('div');
@@ -4508,6 +4526,16 @@ export function buildWorkflowCanvas(root, options = {}) {
   function visibleNodePosition() {
     return { left: scrollWrapper.scrollLeft + 40, top: scrollWrapper.scrollTop + 40 };
   }
+  /**
+   * Puts a node just made from a dragged line where the line was let go (`at`, canvas coordinates):
+   * its left edge and the middle of its header at that point. Without `at` it stays where it was made.
+   */
+  function placeNewNodeAt(node, at) {
+    if (!node || !at) return;
+    const headerHeight = node.querySelector('.workflow-node__header')?.offsetHeight || RUN_NODE_FALLBACK_HEIGHT;
+    setNodeCanvasPosition(node, at.x, at.y - headerHeight / 2);
+  }
+
   function besideNode(sourceNode) {
     return {
       left: (parseFloat(sourceNode.style.left) || 0) + (sourceNode.offsetWidth || 280) + NEW_NODE_OFFSET,
@@ -4520,9 +4548,10 @@ export function buildWorkflowCanvas(root, options = {}) {
    * (`inputSource`), it begins with that one beside it. `open` opens its window, as when it is added
    * from the top bar.
    */
-  function newProcessNode({ inputSource = null, open = false } = {}) {
+  function newProcessNode({ inputSource = null, open = false, at = null } = {}) {
     const sourceNode = inputSource?.nodeId ? getNodeById(inputSource.nodeId) : null;
     const processNode = createProcessNode({ ...(sourceNode ? besideNode(sourceNode) : visibleNodePosition()), title: 'Process' });
+    placeNewNodeAt(processNode, at);
     if (processNode?.dataset?.nodeId && sourceNode) {
       writeProcessInputs(processNode, { primary: inputSource, inputs: [{ ...inputSource, alias: 'df' }] });
       updateEdges();
@@ -4537,11 +4566,12 @@ export function buildWorkflowCanvas(root, options = {}) {
    * Adds a Run. A Run picks its Prompt and input in its window; started from a Prompt or from a
    * step's output (`inputSource`), it begins with that one beside it.
    */
-  function newRunNode({ promptNode = null, inputSource = null, open = false } = {}) {
+  function newRunNode({ promptNode = null, inputSource = null, open = false, at = null } = {}) {
     const fromPrompt = promptNode?.dataset?.nodeType === 'prompt' || promptNode?.classList?.contains('workflow-node--prompt');
     const sourceNode = inputSource?.nodeId ? getNodeById(inputSource.nodeId) : null;
     const anchor = fromPrompt ? promptNode : sourceNode;
     const runNode = createRunNode({ ...(anchor ? besideNode(anchor) : visibleNodePosition()), title: 'Run' });
+    placeNewNodeAt(runNode, at);
     if (runNode?.dataset?.nodeId && sourceNode) {
       writeRunInputSource(runNode, inputSource);
       updateEdges();
@@ -4600,6 +4630,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const left = (parseFloat(runNode.style.left) || 0) + (runNode.offsetWidth || 280) + NEW_NODE_OFFSET;
     const top = parseFloat(runNode.style.top) || 0;
     const scoreNode = createScoreNode({ left, top, title: 'Score' });
+    placeNewNodeAt(scoreNode, e.detail?.at);
     if (scoreNode?.dataset?.nodeId) {
       connections.push({
         fromId: runNodeId,
@@ -4635,6 +4666,10 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (!e.detail) e.detail = {};
       e.detail.reviewNodeId = created.reviewNodeId;
       e.detail.registerPendingReview = registerPendingReview;
+      if (e.detail.at) {
+        placeNewNodeAt(getNodeById(created.reviewNodeId), e.detail.at);
+        updateEdges();
+      }
     } catch (_) {}
   });
 
