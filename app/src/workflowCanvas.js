@@ -59,8 +59,9 @@ import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
 import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
-import { edgeEndpoints, nodePorts, portTitles } from './nodePorts.js';
+import { applyPortOp, checkDisconnect, edgeEndpoints, nodePorts, portTitles } from './nodePorts.js';
 import { applyPortTitles, centerWithin, findPortDot, renderNodePorts } from './workflowNodePorts.js';
+import { attachPortDrag } from './workflowPortDrag.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
 import { dependencyColorSources, dependentNodeVisualColors } from './workflowDependencyColors.js';
@@ -1218,6 +1219,108 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
   });
 
+  /** A point in the viewport as unscaled canvas coordinates. */
+  function clientToCanvasPoint(clientX, clientY) {
+    const rect = scrollWrapper.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left + scrollWrapper.scrollLeft) / zoomLevel,
+      y: (clientY - rect.top + scrollWrapper.scrollTop) / zoomLevel,
+    };
+  }
+
+  /** The live canvas as the port rules read it (nodePorts.js): with History on, a Run's inputs stay open. */
+  function portState() {
+    return { ...liveInputState(), historyVersion: historySession?.projectId && canvasHistoryVersion === 1 ? 1 : undefined };
+  }
+
+  /** A Prompt's input names, for the mapping a Run keeps when it gets another Prompt. */
+  function promptInputNames(prompt) {
+    return extractInputFieldsFromSections(getPromptDataFromNode(getNodeById(prompt?.nodeId))?.sections || []);
+  }
+
+  /** Where each node field a connection changes is kept on the node (nodePorts.js applyPortOp). */
+  const PORT_FIELD_ATTRIBUTES = {
+    runInputToColumn: 'runInputToColumn', scoreGroundTruthId: 'scoreGroundTruthId', scoreMapping: 'scoreMapping', dfCode: 'processDfCode',
+  };
+
+  /**
+   * Carries out ops from nodePorts.js on the live canvas, as one change: one undo step, one History
+   * sync. A new ground truth also tells the Score's listeners, as the Score window does.
+   */
+  function applyPortOps(ops) {
+    const state = portState();
+    let groundTruthChanged = false;
+    for (const op of ops.filter(Boolean)) {
+      for (const { nodeId, field, value } of applyPortOp(state, op, { promptInputs: promptInputNames })) {
+        const node = getNodeById(nodeId);
+        if (node && PORT_FIELD_ATTRIBUTES[field]) node.dataset[PORT_FIELD_ATTRIBUTES[field]] = value;
+      }
+      if (op.type === 'score-ground-truth') groundTruthChanged = true;
+    }
+    if (groundTruthChanged) document.dispatchEvent(new CustomEvent('workflow:score-ground-truth-changed'));
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  }
+
+  const portDrag = attachPortDrag({
+    canvas, nodesLayer, edgesLayer, scrollWrapper,
+    getState: portState,
+    clientToCanvas: clientToCanvasPoint,
+    applyOps: applyPortOps,
+    showBranchMenu: (x, y, node, port) => showNodeContextMenu(x, y, node, { port }),
+    promptInputs: promptInputNames,
+  });
+
+  /** A line that can be disconnected offers that on right-click; one that cannot says why. */
+  edgesLayer.addEventListener('contextmenu', (e) => {
+    const group = e.target.closest?.('.workflow-edge--disconnectable');
+    if (!group) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const index = Number(group.getAttribute('data-edge-index'));
+    const edge = index >= 0
+      ? connections[index]
+      : { type: group.getAttribute('data-edge-type'), fromId: group.getAttribute('data-from-id'), toId: group.getAttribute('data-to-id') };
+    const state = portState();
+    const ends = edgeEndpoints(state, edge);
+    const result = ends && !ends.to.lineage ? checkDisconnect(state, ends.to) : null;
+    if (!result?.ok) {
+      if (result) portDrag.showTip(result.reason, e.clientX, e.clientY);
+      return;
+    }
+    showEdgeContextMenu(e.clientX, e.clientY, () => applyPortOps([result.op]));
+  });
+
+  function showEdgeContextMenu(clientX, clientY, onDisconnect) {
+    document.querySelector('.workflow-node-context-menu')?.remove();
+    const menu = document.createElement('div');
+    menu.className = 'workflow-node-context-menu';
+    menu.setAttribute('role', 'menu');
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'workflow-node-context-item';
+    item.setAttribute('role', 'menuitem');
+    item.textContent = 'Disconnect';
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menu.remove();
+      onDisconnect();
+    });
+    menu.appendChild(item);
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - rect.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - rect.height - 8))}px`;
+    const close = () => {
+      menu.remove();
+      document.removeEventListener('click', close);
+      document.removeEventListener('contextmenu', close);
+    };
+    requestAnimationFrame(() => {
+      document.addEventListener('click', close, { once: true });
+      document.addEventListener('contextmenu', close, { once: true });
+    });
+  }
+
   function highlightPipelineNodes(nodeIds = []) {
     const highlightedIds = new Set((Array.isArray(nodeIds) ? nodeIds : [])
       .map((nodeId) => String(nodeId || '').trim())
@@ -1894,6 +1997,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         return {
           nodeId, type: 'process', name: el.dataset.processName || 'Process',
           processPending: pendingProcesses.has(nodeId), processResumable: el.dataset.processResumable === '1' || undefined,
+          dfCode: el.dataset.processDfCode || '', code: el.dataset.processCode || '',
           historyRecordId: el.dataset.historyRecordId || undefined,
           get processOutputPorts() { return el.dataset.processOutputPorts; },
           get dfResults() { return el.dataset.processDfResults || el.dataset.processResults; },
@@ -1903,6 +2007,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         return {
           nodeId, type: 'run', runName: el.dataset.runName || '',
           runCompleted: el.dataset.runCompleted || undefined, runPending: pendingRuns.has(nodeId),
+          runInputToColumn: el.dataset.runInputToColumn || '',
           runResumable: el.dataset.runResumable === '1' || undefined, historyRecordId: el.dataset.historyRecordId || undefined,
           get runResults() { return el.dataset.runResults; },
           get runInputContent() { return el.dataset.runInputContent; },
@@ -1914,7 +2019,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (el.classList.contains('workflow-node--score')) {
         return {
           nodeId, type: 'score', scoreName: (el.querySelector('.workflow-node__title')?.textContent || '').trim(),
-          scoreGroundTruthId: el.dataset.scoreGroundTruthId || '',
+          scoreGroundTruthId: el.dataset.scoreGroundTruthId || '', scoreMapping: el.dataset.scoreMapping || '',
         };
       }
       if (el.classList.contains('workflow-node--sampler')) {
@@ -2526,7 +2631,19 @@ export function buildWorkflowCanvas(root, options = {}) {
     edgeGroup.setAttribute('data-edge-index', String(edgeIndex));
     edgeGroup.setAttribute('data-from-id', String(edge.fromId));
     edgeGroup.setAttribute('data-to-id', String(edge.toId));
+    if (ends && !ends.to.lineage) edgeGroup.setAttribute('data-to-port', ends.to.portId);
+    // An input that can be changed by dragging can also be disconnected from its line (step 3).
+    const disconnectable = !!ends && !ends.to.lineage && DISCONNECTABLE_EDGE_TYPES.has(edge.type);
+    if (disconnectable) edgeGroup.classList.add('workflow-edge--disconnectable');
     g.appendChild(edgeGroup);
+
+    if (disconnectable) {
+      const hitLine = createEdgeShape(geometry);
+      hitLine.setAttribute('stroke', 'transparent');
+      hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
+      hitLine.setAttribute('class', 'workflow-edge-hit');
+      edgeGroup.appendChild(hitLine);
+    }
 
     if (canCompare) {
       edgeGroup.setAttribute('role', 'button');
@@ -2589,6 +2706,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       edgeGroup.appendChild(label);
     }
   }
+
+  /** Lines into inputs that dragging can change; right-clicking one offers Disconnect when its rules allow it. */
+  const DISCONNECTABLE_EDGE_TYPES = new Set([DATA_EDGE, 'prompt-to-run', EDGE_TYPE_GROUND_TRUTH_TO_SCORE]);
 
   /**
    * Where a line meets `node`: the centre of the dot for `end` (nodePorts.js edgeEndpoints), or the
@@ -2700,9 +2820,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     // Automatic dependency lines sit behind explicit, user-managed workflow edges.
     getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1, nodeBoxes, state));
     connections.forEach((edge, i) => renderEdge(g, edge, i, nodeBoxes, state));
-    const existing = edgesLayer.querySelector('g');
-    if (existing) existing.remove();
-    edgesLayer.appendChild(g);
+    // The line being dragged (workflowPortDrag.js) has its own group and stays.
+    edgesLayer.querySelector(':scope > g:not(.workflow-port-drag)')?.remove();
+    edgesLayer.insertBefore(g, edgesLayer.querySelector(':scope > g.workflow-port-drag'));
     syncActiveEdges();
   }
 
@@ -2986,6 +3106,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     scrollWrapper,
     nodesLayer,
     getZoomLevel: () => zoomLevel,
+    clientToCanvasPoint,
     updateContentSize,
     updateEdges,
     emitCanvasChanged: () => document.dispatchEvent(new CustomEvent('workflow:canvas-changed')),

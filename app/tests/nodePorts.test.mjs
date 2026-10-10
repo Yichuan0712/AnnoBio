@@ -451,3 +451,32 @@ test('hover text says what an input reads, what an output gives, and where a nod
   assert.equal(titles('saved').lineageIn, 'Saved from Run of "Extract v1"');
   assert.equal(titles('abstracts').lineageIn, '');
 });
+
+// ---------- moving a line ----------
+
+test('a line picked up off one input and dropped on another moves there', () => {
+  const state = canvas();
+  state.nodes.push({ type: 'run', nodeId: 'second', runName: 'Run' });
+  // Checked as the drag does: on a copy where the line is already gone from where it was.
+  const lift = checkDisconnect(state, at('extract', 'input'));
+  const copy = JSON.parse(JSON.stringify(state));
+  applyPortOp(copy, lift.op);
+  const drop = checkConnect(copy, at('abstracts', 'result'), at('second', 'input'));
+  assert.equal(drop.ok, true);
+  applyPortOp(state, lift.op);
+  applyPortOp(state, drop.op);
+  assert.equal(runInputSource(state, 'extract'), null);
+  assert.deepEqual(runInputSource(state, 'second'), { nodeId: 'abstracts', port: 'result', kind: 'dataset' });
+});
+
+test('a ground truth line moves from one Score to another', () => {
+  const state = canvas();
+  state.nodes.push({ type: 'score', nodeId: 'score2', scoreName: 'Score 2' });
+  const lift = checkDisconnect(state, at('score', 'ground_truth'));
+  const drop = checkConnect(state, at('gold', 'result'), at('score2', 'ground_truth'));
+  applyPortOp(state, lift.op);
+  applyPortOp(state, drop.op);
+  assert.equal(nodeOf(state, 'score').scoreGroundTruthId, '');
+  assert.equal(nodeOf(state, 'score2').scoreGroundTruthId, 'gold');
+  assert.deepEqual(derivedEdges(state).filter((item) => item.type === 'ground-truth-to-score').map((item) => item.toId), ['score2']);
+});
