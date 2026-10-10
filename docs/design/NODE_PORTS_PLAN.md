@@ -1,6 +1,6 @@
 # 节点端口：实施计划
 
-状态：第 1–6 步完成（2026-10-10），下一步是第 7 步。接着做之前先读 §6。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
+状态：第 1–7 步全部完成（2026-10-10），第一部分可以发布。第二部分还在讨论。接着做之前先读 §6。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
 
 本文把 [NODE_PORTS_DESIGN.md](NODE_PORTS_DESIGN.md)（下称“设计”）的第一部分（端口和拖线：设计第 1–10 节、第 12 节）拆成 7 个可以独立执行的步骤。第二部分（统一的运行入口、Pipeline 里的 Prompt：设计第 11、13 节）还在讨论，不在本计划内。
 
@@ -784,17 +784,36 @@ cd app && npm start
 
 **手工验证：** 后端换成假模型，Agent 的每一轮回复由脚本代替（DATA_FLOW_PLAN 第 13 步的做法）：
 
-- [ ] 让 Agent 断开一个 Run 的输入、再接到另一个步骤的输出；卡片内容正确，Apply 后画布与拖线的结果相同，可以撤销。
-- [ ] 让 Agent 给 Process 接一个 `+` 输入：代码参数和端口都对。
+- [x] 让 Agent 断开一个 Run 的输入、再接到另一个步骤的输出；卡片内容正确，Apply 后画布与拖线的结果相同，可以撤销。
+- [x] 让 Agent 给 Process 接一个 `+` 输入：代码参数和端口都对。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
-- [ ] 设计文档的状态改为第一部分已实现。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
+- [x] 设计文档的状态改为第一部分已实现。
 
-**完成记录：** （待填）
+**完成记录：** 2026-10-10 完成，验收各项全部通过。
+
+- 实现（`changeSet.js`）：
+  - 新操作 `connect`（`node`、`input`、`source`、`branch?`）：`input` 是 `inspect_node` 的端口 ID。Run 的 `prompt` 接 Prompt，Score 的 `ground_truth` 接 Dataset，其余接 Dataset、Run 或 Process（多分支时要 `branch`，沿用 `resolveSource` 的同一提案限制）。规则由 `checkConnect` 判断，改动由 `applyPortOp` 执行，与拖线完全相同；接到 `+` 时卡片写出新参数，并附上代码的改动。改了代码的 Process 记入 `codeChanged`，同一提案里不能再读它的分支。
+  - 新操作 `disconnect`（`node`、`input`）：`checkDisconnect` 加 `applyPortOp`；断开别名时卡片写出参数被去掉并附上代码改动，断开 Run 的 Prompt 时写明映射被清空。
+  - 拒绝时的原因前面加上节点名，例如 “Merge: Already df_raw of this Process; disconnect it there first.”。
+  - `update` 里 Run 的 `prompt`、`input` 和 Score 的 `ground_truth` 改为同样经过 `checkConnect`/`applyPortOp`（Run 的映射仍按原来的校验写入）。这样 Agent 换标准答案时也会像画布上一样删掉新 Dataset 没有的列上的规则，原来 Agent 换标准答案不删规则，与界面不一致。
+- `inspect_node` 对每个节点多了 `ports`：输入（ID、接的来源、`fixed` 原因）和输出（ID、谁在读、`unavailable` 原因）。
+- 工具说明：`propose_changes` 加了 `connect` / `disconnect`，`inspect_node` 说明 `ports`。
+- Agent 的文字：
+  - `system_prompt.py`：Process 的输入是节点左边的端口，空参数端口不能运行；Run 的 Prompt 和输入接在 `prompt`、`input` 端口上，映射在窗口里；新增一句说明点、拖线和窗口只显示，并要求告诉用户时用这种说法；连接下一步的那条加上 `connect` / `disconnect`。
+  - 指南：`pipeline-building.md` 改了 Process 输入的说明并新增拖线的说明；`process-code.md` 改了“声明参数等于在窗口里勾选”的说法；`prompt-design.md` 去掉 Run 有自己模型凭据的说法（§2.9）；`evaluation.md` 写明标准答案接在 `ground_truth` 端口上。
+- 注释：`changeSet.js` 中 “as the node windows offer it”“a Run picks its Prompt and input”“as the Run window does” 改正；`stepInputs.js` 的 `processInputBindings` 注释改正。其余提到窗口的注释说的是窗口显示的等待信息、报错和映射，仍然准确，未改。
+- 已知限制：Agent 拿到的画布状态（`getCanvasState()`）里没有 Process 是否在运行，所以 Agent 改一个正在运行的 Process 的输入时不会被拒绝；Run 在运行时会被拒绝。这一点与改动前相同。
+- 手工验证（桌面应用；后端换成假模型版本，Agent 的每一轮由脚本发出工具调用，scratchpad `ports3/ports7_backend.py`、`flow7.mjs`；卡片上的 Apply 由脚本点击，与用户操作相同）：
+  - 测试项目里 Run C 读 Gold，Split 读 Reviews。给 Agent 发一条消息。
+  - 第一张卡片（`disconnect` 加 `connect`）：“input no longer reads "Gold"…”“input reads "Split · pos"”；Apply 后 Run C 改读 Split 的 `pos` 分支，与拖线的结果相同。
+  - 第二张卡片（`connect` 到 `+`）：“df_gold reads "Gold"”“df_gold is added to process()'s parameters.”，并附上代码的改动；Apply 后 Split 多了 `df_gold` 端口，代码签名是 `def process(df, df_gold)`。
+  - Agent 最后回复完成；撤销一次回到第二张卡片之前，再撤销一次回到第一张之前。
+- 测试：前端 252 → 260（新文件 `agentPorts.test.mjs` 8 项：Run 的输入和 Prompt、空参数和 `+`、标准答案和删规则、拒绝与拖线相同、断开及其拒绝、`inspect_node` 的端口）；后端 126 项不变。
 
 ## 5. 进度
 
@@ -807,16 +826,15 @@ cd app && npm start
 | 4 | 完成 | 2026-10-09 | `0caacf2` | 245 | 126 | Dataset 右键多了 “Run a prompt on it” |
 | 5 | 完成 | 2026-10-09 | `2349cf2` | 253 | 126 | |
 | 6 | 完成 | 2026-10-10 | `2d6a07a` | 252 | 126 | |
-| 7 | 未开始 | | | | | |
+| 7 | 完成 | 2026-10-10 | `6990211` | 260 | 126 | 第一部分完成，可以发布 |
 
-## 6. 接着做（2026-10-10 的状态）
+## 6. 接着做（2026-10-10，第一部分完成时的状态）
 
 ### 6.1 做到哪里
 
-- 分支 `261009-node-ports`，已推到远端。最后的功能提交是 `2d6a07a`（第 6 步），之后是它的完成记录。工作区干净。
-- 第 1–6 步完成，第 7 步未开始。下一步是**第 7 步：Agent 同步**。
-- 前端 252 项、后端 126 项测试全部通过，构建通过（于 `2d6a07a`）。
-- **现在不能发布。** 第 3–7 步要一起发布（§0 第 12 条）：用户能拖线断开输入、把来源接到指定端口，Agent 还不能；Agent 的说明文字还在说“在 Run 窗口里选 Prompt 和输入”。
+- 分支 `261009-node-ports`，已推到远端。最后的功能提交是 `6990211`（第 7 步），之后是它的完成记录。工作区干净。
+- **第一部分（端口和拖线）的 7 步全部完成**，可以发布。下一件事是讨论第二部分（见 6.5）。
+- 前端 260 项、后端 126 项测试全部通过，构建通过（于 `6990211`）。
 - 不要合并。`261007-data-flow-design`（数据流的 14 个步骤）同样没有合并，用户要求两个分支都先留着。
 
 ### 6.2 现在的行为，接着做时要知道
@@ -826,7 +844,7 @@ cd app && npm start
 - Process 还有其他输入时，`df` 不能断开，只能替换（§3.3 第 2 条的例外，用户已同意）。
 - 从输出拉出的线在空白处松开，弹出 `outputMenu.js` 的菜单，新节点放在松开处（第 4 步）。松开在节点上（包括别的节点的点上）则取消。
 - Dataset 的右键菜单多了 “Run a prompt on it”（第 4 步，菜单与拖线共用同一份菜单项）。
-- Agent 不能断开输入，也不能把来源接到指定的端口上（包括 `+` 和空的参数端口）。第 7 步加 `connect` / `disconnect`，规则直接调用 `nodePorts.js`。Agent 现在能看到空的参数端口（`inspect_node` 的 `unconnectedInputs`），写代码时有对不上的别名也不再报错。
+- Agent 用 `connect` / `disconnect` 改输入，规则直接调用 `nodePorts.js`，与拖线完全相同（第 7 步）；`inspect_node` 列出每个节点的端口。Agent 改正在运行的 Process 的输入不会被拒绝（它拿到的画布状态里没有 Process 的运行状态），这与改动前相同。
 - 两个看起来像问题、其实不是本计划造成的现象：
   - 有些线要绕一圈才进 Run 的 `prompt` 端口：示例把 Prompt 放在 Run 的右上方。把 Prompt 摆到 Run 左边即可。曾建议重新排一下直接连线版示例的布局，用户还没有回复。
   - 从 Run 右键新建的 Score 会压在旁边的节点上：新建位置是原有规则。
@@ -838,6 +856,7 @@ cd app && npm start
 - `app/src/workflowPortDrag.js`：拖线（`attachPortDrag`、`autoPanStep`）。测试 `app/tests/workflowPortDrag.test.mjs`。
 - `app/src/outputMenu.js`：从一个输出能新建什么（`outputMenuItems`），右键菜单、分支点击和在空白处松开共用。测试 `app/tests/outputMenu.test.mjs`。
 - `app/src/nodeSourceLink.js`：窗口里“读的是什么”那一行（`renderSourceLink`）。
+- Agent：`app/src/agent/operations/changeSet.js` 的 `connect`、`disconnect`、`connectPort`；`workflowNodeInspector.js` 的 `ports`；测试 `app/tests/agentPorts.test.mjs`。
 - `app/src/workflowCanvas.js` 里的接入点：`refreshNodePorts`、`portPoint`、`renderEdge`、`updateEdges`、`portState`、`applyPortOps`、`clientToCanvasPoint`、`placeNewNodeAt`、`showNodeContextMenu` 的 `port`/`at`、`describeSource`、`readProcessInputRows`、`revealNode`、线上右键的监听，以及 `liveInputState()` 里补上的字段。
 - 样式：`app/src/workflowCanvas.css` 中 “Ports” 一段；三种类型的颜色在 `app/src/index.css`（`--port-table`、`--port-prompt`、`--port-score`）。
 - `app/src/processSampleCode.js`（Process 示例代码）、`app/src/scoreMappingBundle.js` 的 `scoreMappingForGroundTruth`（换标准答案时删规则）：第 1 步从窗口里移出来的。
@@ -859,6 +878,7 @@ cd app && npm start
 - **检查线是否落在点上：** 对每条 `.workflow-edge-line` 用 `getPointAtLength(0)` 和 `getPointAtLength(总长)` 取两个端点，用 SVG 的 `getScreenCTM().inverse()` 把点的屏幕中心换算到同一坐标系，比较距离（目前都在 1 像素以内）。在缩放 50%、100%、200% 各测一次。
 - **一屏看到所有类型的点：** 用直接连线版示例的副本，在文件里加上 Score、Review 和 Apply 生成的 Prompt（`prompt-review-to-prompt`）、Prompt 版本、Sampler 和样本、Dataset 版本、带 `savedFrom` 的 Dataset，不需要调用模型。
 - **测试项目：** 几个 Dataset、Prompt、Run、Process 预先摆好、不连线（Sampler 除外），所有线都用拖线连。
+- **按脚本回复的 Agent：** 在假后端里把 `main.llm_stream_chat_with_tools` 换成按工具结果的条数决定发出哪个工具调用的生成器（scratchpad `ports3/ports7_backend.py`，它导入 `step13/fake_backend.py` 再替换 Agent）。给 Agent 发消息：找到占位文字是 “Send a message…” 的 textarea，填值、发 `input` 事件、再发 Enter 的 keydown；卡片上点 “Apply”。
 - 测完关掉自己启动的 Electron、Forge、后端（命令行含 `uvicorn main:app --port 8000`），以及启动时用的 `tail -f /dev/null`。
 
 ### 6.5 还没定的事
