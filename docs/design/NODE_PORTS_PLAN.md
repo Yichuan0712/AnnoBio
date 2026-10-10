@@ -1,6 +1,6 @@
 # 节点端口：实施计划
 
-状态：第 1、2 步完成（2026-10-09），下一步是第 3 步。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
+状态：第 1–3 步完成（2026-10-09），下一步是第 4 步。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
 
 本文把 [NODE_PORTS_DESIGN.md](NODE_PORTS_DESIGN.md)（下称“设计”）的第一部分（端口和拖线：设计第 1–10 节、第 12 节）拆成 7 个可以独立执行的步骤。第二部分（统一的运行入口、Pipeline 里的 Prompt：设计第 11、13 节）还在讨论，不在本计划内。
 
@@ -496,27 +496,52 @@ cd app && npm start
 
 **手工验证：** 新建项目，全部用拖线操作；Run 用拦截 `/api/run` 的模拟应答，Process 真实运行。
 
-- [ ] Prompt → Run 的 `prompt`，Dataset → Run 的 `input`，运行；Run 的 `result` → 新 Process 的 `df`，运行。
-- [ ] 把另一个 Dataset 拖到 Run 的 `input` 上：替换；Run 显示“没有结果”；拖回原来的 Dataset，原来的结果回来（History）。
-- [ ] 拿起 Run 的 `input` 线改接到另一个 Run 的 `input`；拿起后在空白处松开：断开。
-- [ ] 线上右键 “Disconnect”。
-- [ ] 拒绝：成环、类型不对、目标在运行、Process 分支未知、同一来源接两次，每种都显示原因。
-- [ ] Score 的 `ground_truth`：拖入、替换、断开；Score 的 `run`、Review 的 `score`、Sampler 的 `source` 拖不动，悬停显示原因。
-- [ ] 空心点按下有提示，拖不出线。
-- [ ] 把线拖到画布边缘：画布自动平移，能接到原来看不见的节点。
-- [ ] 缩放 0.5 和 2 下拖线位置准确。
-- [ ] 每次操作都能撤销、重做；保存后重新打开不变。
-- [ ] 打开 Run、Process、Score 窗口，显示的来源与拖线结果一致。
+- [x] Prompt → Run 的 `prompt`，Dataset → Run 的 `input`，运行；Run 的 `result` → 新 Process 的 `df`，运行。
+- [x] 把另一个 Dataset 拖到 Run 的 `input` 上：替换；Run 显示“没有结果”；拖回原来的 Dataset，原来的结果回来（History）。
+- [x] 拿起 Run 的 `input` 线改接到另一个 Run 的 `input`；拿起后在空白处松开：断开。
+- [x] 线上右键 “Disconnect”。
+- [x] 拒绝：成环、类型不对、目标在运行、Process 分支未知、同一来源接两次，每种都显示原因。
+- [x] Score 的 `ground_truth`：拖入、替换、断开；Score 的 `run`、Review 的 `score`、Sampler 的 `source` 拖不动，悬停显示原因。
+- [x] 空心点按下有提示，拖不出线。
+- [x] 把线拖到画布边缘：画布自动平移，能接到原来看不见的节点。
+- [x] 缩放 0.5 和 2 下拖线位置准确。
+- [x] 每次操作都能撤销、重做；保存后重新打开不变。
+- [x] 打开 Run、Process、Score 窗口，显示的来源与拖线结果一致。
 
 **Agent：** 无改动（用户现在能断开输入，Agent 还不能，第 7 步补上）。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：** （待填）
+**完成记录：** 2026-10-09 完成，验收各项全部通过。
+
+- 实现：
+  - `workflowPortDrag.js` 的 `attachPortDrag` 在节点层的捕获阶段接住点上的按下，所以不会触发节点拖动、节点窗口和画布平移；按下后紧跟的那次 click 被吞掉。
+  - 开始拖动（超过 4 像素）时，对每个可能的目标端口调用一次 `checkConnect`，结果存起来：能接的点加一圈，不能接的变淡；鼠标停在不能接的点上时，在旁边显示原因。端口行（名字那一行）也算落点，点本身的点击区域用 `::before` 放大到 21 像素。
+  - **拿起一条线：** 先用 `checkDisconnect` 判断能不能断开，不能就只显示原因。能的话，在画布状态的副本上先断开，再对副本检查每个目标，这样把线换到同一个 Process 的另一个端口之类的情况按“线已经拿起”来判断。松开时在真实画布上依次执行断开和连接，合成一次画布变化。
+  - 画布侧：`applyPortOps` 在 `portState()`（`liveInputState()` 加上 History 是否打开）上执行操作，把 `applyPortOp` 返回的字段写回 DOM（`runInputToColumn`、`scoreGroundTruthId`、`scoreMapping`、`processDfCode`），然后只发一次 `workflow:canvas-changed`；换了标准答案再发 `workflow:score-ground-truth-changed`。Prompt 的输入名由 `promptInputNames` 从 Prompt 的段落取得。
+  - `liveInputState()` 补上操作要改的字段：Run 的 `runInputToColumn`、Process 的 `dfCode` 和 `code`、Score 的 `scoreMapping`。
+  - **线上的右键：** `data`、`prompt-to-run`、标准答案线加一条透明的粗线作为点击区域（`workflow-edge--disconnectable`）。右键时才调用 `checkDisconnect`：能断开就显示只有 “Disconnect” 一项的菜单；不能断开时不显示菜单，但在鼠标旁显示原因（计划只说没有菜单，显示原因是额外的）。来历线和 Score 的 `run`、Review 的 `score`、Sampler 的 `source` 这几类线没有点击区域。
+  - 线组上加了 `data-to-port`，用来找到被拿起的线并在拖动时淡化它；`updateEdges` 重画时保留正在拖的那条临时线。
+  - 视口坐标换算成画布坐标改为画布的 `clientToCanvasPoint`，节点拖动也改用它。
+  - Esc 取消拖动。
+- 与计划不同的地方：
+  - 节点加了 `isolation: isolate`。手工验证时发现：从 Run 右键新建的 Score 正好压在旁边的 Split 上（新建位置是原有规则），Split 的点却显示在 Score 上面。改后每个节点的点都留在自己的层里。
+- 手工验证（桌面应用，全部用 CDP 的真实鼠标事件；Run 由页面里拦截 `/api/run` 的模拟应答完成，Process 真实运行，没有调用模型；scratchpad `ports3/`）：
+  - 新做的测试项目：3 个 Dataset、2 个 Prompt、3 个 Run、1 个 Process、1 个 Sampler 和它的样本，除 Sampler 外都没有连线。
+  - 拖线连上 Classify → Run A 的 `prompt`、Reviews → Run A 的 `input`，在窗口里映射并运行（4 行）；Run A 的 `result` → Split 的 `df`，真实运行，`pos`、`neg` 各 2 行；Split 的 `pos` → Run B 的 `input`；从 Run B 空的 `prompt` 反向拖到 Explain，连上；Run B 在 `pos` 的 2 行上运行成功。
+  - 把 More reviews 拖到 Run A 的 `input` 上：替换，Run A 显示没有结果；拖回 Reviews：回到原来的记录。
+  - 拿起 Run A 的输入线放到 Run C 的 `input`：改接；再拿起放到空白处：断开。撤销、撤销、重做、撤销各一次，状态都对。
+  - 右键 Run B 的 Prompt 线：菜单只有 “Disconnect”，点后断开，撤销恢复。
+  - 拒绝时的提示：成环（“This would make a loop: "Explain" already reads "Classify".”）、类型不对（“The df input takes a table, not a Prompt.”）、Sampler 的 `source`、Score 的 `run`、目标 Run 正在运行（让模拟应答一直处于运行中再拖：“"Classify" is running. Stop it before changing its inputs.”）。被拒绝后连线都没有变。
+  - Score 从 Run A 的右键菜单新建；Gold 拖到 `ground_truth`、换成 More reviews、拿起放到空白处断开；按 Score 的 `run` 端口显示原因。
+  - 按空心点显示 “Hollow dots show where a node came from …”，拖不出线；单击 Split 的 `neg` 点弹出这个分支的两项菜单；打开 Run B 窗口，显示的 Prompt 和输入与连线一致。
+  - 缩放 200%、滚到最左边时 Run B 在可见范围外：从 Reviews 拉线停在右边缘，画布自动向右滚动 960 像素，Run B 的 `input` 出现后放上去，连上，撤销恢复。缩放 50% 下连接、拿起断开都准确，线都落在点上（0.92 像素以内）。
+  - 保存后重新打开，连线与之前完全相同。
+- 测试：前端 238 → 243（`workflowPortDrag.test.mjs` 3 项：自动平移的速度；`nodePorts.test.mjs` 2 项：拿起的线改接到另一个 Run、标准答案线换到另一个 Score）；后端 126 项不变。
 
 ---
 
@@ -720,7 +745,7 @@ cd app && npm start
 | 基线 | — | 2026-10-09 | `cf83fc4` | 210 | 126 | |
 | 1 | 完成 | 2026-10-09 | `f8e7ccd` | 236 | 126 | §3.3 第 2 条有一处例外待确认 |
 | 2 | 完成 | 2026-10-09 | `e62cc57` | 238 | 126 | 用户已确认外观 |
-| 3 | 未开始 | | | | | |
+| 3 | 完成 | 2026-10-09 | `c220d53` | 243 | 126 | |
 | 4 | 未开始 | | | | | |
 | 5 | 未开始 | | | | | |
 | 6 | 未开始 | | | | | |
