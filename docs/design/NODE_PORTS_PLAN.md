@@ -1,6 +1,6 @@
 # 节点端口：实施计划
 
-状态：第 1–3 步完成（2026-10-09），下一步是第 4 步。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
+状态：第 1–3 步完成（2026-10-09），下一步是第 4 步。接着做之前先读 §6。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
 
 本文把 [NODE_PORTS_DESIGN.md](NODE_PORTS_DESIGN.md)（下称“设计”）的第一部分（端口和拖线：设计第 1–10 节、第 12 节）拆成 7 个可以独立执行的步骤。第二部分（统一的运行入口、Pipeline 里的 Prompt：设计第 11、13 节）还在讨论，不在本计划内。
 
@@ -750,3 +750,51 @@ cd app && npm start
 | 5 | 未开始 | | | | | |
 | 6 | 未开始 | | | | | |
 | 7 | 未开始 | | | | | |
+
+## 6. 接着做（2026-10-09 暂停时的状态）
+
+### 6.1 做到哪里
+
+- 分支 `261009-node-ports`，已推到远端，最后一个提交是 `2b0008e`（第 3 步的完成记录）。工作区干净。
+- 第 1–3 步完成，第 4–7 步未开始。下一步是**第 4 步：在空白处松开，弹出创建菜单**。
+- 前端 243 项、后端 126 项测试全部通过，构建通过（于 `c220d53`）。
+- **现在不能发布。** 第 3–7 步要一起发布（§0 第 12 条）：现在用户能拖线断开输入，Agent 还不能；窗口里的来源选择器也还在。
+- 不要合并。`261007-data-flow-design`（数据流的 14 个步骤）同样没有合并，用户要求两个分支都先留着。
+
+### 6.2 现在的行为，接着做时要知道
+
+- 窗口里的来源选择器（Run 的 Prompt 和输入、Process 的输入、Score 的标准答案）还在，和拖线改的是同一份数据。第 6 步去掉。
+- Process 的 `df_<别名>` 端口现在不能断开，提示 “Remove df_x from the code to stop reading this input.”。第 5 步改为断开时从代码参数中去掉它，同时加上 `+` 端口。
+- Process 还有其他输入时，`df` 不能断开，只能替换（§3.3 第 2 条的例外，用户已同意）。
+- 从输出拉出的线在空白处松开，现在只是取消。第 4 步改为弹出菜单，代码位置在 `workflowPortDrag.js` 的 `onPointerUp`。
+- Agent 不能断开输入，也不能把来源接到指定的端口上。第 7 步加 `connect` / `disconnect`，规则直接调用 `nodePorts.js`。
+- 两个看起来像问题、其实不是本计划造成的现象：
+  - 有些线要绕一圈才进 Run 的 `prompt` 端口：示例把 Prompt 放在 Run 的右上方。把 Prompt 摆到 Run 左边即可。曾建议重新排一下直接连线版示例的布局，用户还没有回复。
+  - 从 Run 右键新建的 Score 会压在旁边的节点上：新建位置是原有规则。
+
+### 6.3 代码在哪里
+
+- `app/src/nodePorts.js`：端口和连线规则，纯函数（`nodePorts`、`edgeEndpoints`、`checkConnect`、`checkDisconnect`、`applyPortOp`、`portLayout`、`portTitles`）。测试 `app/tests/nodePorts.test.mjs`。
+- `app/src/workflowNodePorts.js`：把端口画到节点上（`renderNodePorts`、`applyPortTitles`、`findPortDot`、`centerWithin`）。
+- `app/src/workflowPortDrag.js`：拖线（`attachPortDrag`、`autoPanStep`）。测试 `app/tests/workflowPortDrag.test.mjs`。
+- `app/src/workflowCanvas.js` 里的接入点：`refreshNodePorts`、`portPoint`、`renderEdge`、`updateEdges`、`portState`、`applyPortOps`、`clientToCanvasPoint`、线上右键的监听，以及 `liveInputState()` 里补上的字段。
+- 样式：`app/src/workflowCanvas.css` 中 “Ports” 一段；三种类型的颜色在 `app/src/index.css`（`--port-table`、`--port-prompt`、`--port-score`）。
+- `app/src/processSampleCode.js`（Process 示例代码）、`app/src/scoreMappingBundle.js` 的 `scoreMappingForGroundTruth`（换标准答案时删规则）：第 1 步从窗口里移出来的。
+
+### 6.4 手工验证的做法
+
+前三步的验证脚本放在会话的临时目录里（scratchpad 的 `ports2/`、`ports3/`），会话结束后不保证还在。下面是做法，照着可以重写。
+
+- **启动和打开项目：** 见 DATA_FLOW_PLAN §1：Forge 带 `--remote-debugging-port=9333` 启动，在主进程替换 `dialog.showOpenDialog`，再点 `[data-action="open-project"]`。底部面板可以点 “Collapse panel” 收起，截图时画布更大。
+- **拖线一律用 CDP 的 `Input.dispatchMouseEvent`：** `mouseMoved` → `mousePressed` → 十几次 `mouseMoved`（每次间隔约 16 毫秒）→ `mouseReleased`，坐标用 `getBoundingClientRect()` 取点的中心。在页面里 `dispatchEvent` 合成的事件不可信，不要用它验证拖拽。
+- **Run 不调用模型：** 在渲染进程替换 `window.fetch`：`POST /api/run` 返回 `{ run_id: 'fake-1' }`，`/api/run/result/fake-1` 返回 `{ status: 'done', results: [{ row_index, input_row_index, output }] }`。要测“正在运行”，就让结果一直返回 `status: 'running'`，然后在 Run 窗口里点 Stop。Process 可以真实运行（Settings 里已设好 Python）。
+- **Run 结果的列名是 `Output: <字段>` 和 `Input: <列名>`**，写测试用的 Process 代码时要用这种列名。
+- **检查线是否落在点上：** 对每条 `.workflow-edge-line` 用 `getPointAtLength(0)` 和 `getPointAtLength(总长)` 取两个端点，用 SVG 的 `getScreenCTM().inverse()` 把点的屏幕中心换算到同一坐标系，比较距离（目前都在 1 像素以内）。在缩放 50%、100%、200% 各测一次。
+- **一屏看到所有类型的点：** 用直接连线版示例的副本，在文件里加上 Score、Review 和 Apply 生成的 Prompt（`prompt-review-to-prompt`）、Prompt 版本、Sampler 和样本、Dataset 版本、带 `savedFrom` 的 Dataset，不需要调用模型。
+- **测试项目：** 几个 Dataset、Prompt、Run、Process 预先摆好、不连线（Sampler 除外），所有线都用拖线连。
+- 测完关掉自己启动的 Electron、Forge、后端（命令行含 `uvicorn main:app --port 8000`），以及启动时用的 `tail -f /dev/null`。
+
+### 6.5 还没定的事
+
+- 第二部分（统一的运行入口、Pipeline 不再按 Prompt 分组）只有草案，见设计第 11、13 节，待定项在第 11 节的 a–f。第一部分做完再讨论。
+- 直接连线版示例要不要重新排布局（见 6.2）。
