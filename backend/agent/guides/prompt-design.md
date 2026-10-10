@@ -40,7 +40,7 @@ connection, so earlier Runs and Scores stay comparable. Reviews create new versi
 
 ## Runs
 
-A Run needs: the Prompt, one input (a Dataset or another step's output), a mapping from every input
-variable to a column, and a model credential (or the default Run credential from Settings). Runs
+A Run needs: the Prompt, one input (a Dataset or another step's output), and a mapping from every
+input variable to a column. It uses the default Run model from Settings → Run defaults. Runs
 process rows concurrently and can be stopped and resumed. The next step reads a Run's results
 directly; save them to the workspace only to freeze or hand-edit them as a Dataset.

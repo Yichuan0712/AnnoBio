@@ -21,8 +21,9 @@ def process(df, df_chembl_targets):
   for one of several branches; lower-cased, accents removed, and each run of characters outside
   `a-z0-9_` replaced by `_`. For example a Dataset called "ChEMBL targets (v2)" is
   `df_chembl_targets_v2` and a branch `needs_review` is `df_needs_review`. If two names collide, later
-  ones get `_2`, `_3`, ... Declaring a parameter connects that input to the Process, just as checking
-  it under Input in the Process window adds the parameter. An input keeps its alias when it is renamed,
+  ones get `_2`, `_3`, ... Declaring a parameter named after an input's alias connects that input to
+  the Process, just as dropping that output on the node's `+` port adds the parameter; a parameter whose
+  alias names no input stays an empty port until one is connected (connect with that parameter as input). An input keeps its alias when it is renamed,
   so check the exact aliases with inspect_node on the Process (`availableInputs`).
 - A step's output can be read once that step has a complete result; until then the Process waits for it.
 - Older code reads another Dataset as a global `df_<dataset_name>` without declaring it; that still
