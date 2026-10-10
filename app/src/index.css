@@ -22,6 +22,10 @@
   --status-danger: #c0392b;
   --status-warning: #9a6700;
   --status-dataset: #7c3aed;
+  /* Port dots on canvas nodes, by what flows through them (nodePorts.js PORT_TYPES). */
+  --port-table: #2563eb;
+  --port-prompt: #b45309;
+  --port-score: #15803d;
   --control-radius: 3px;
 }
 
@@ -49,6 +53,9 @@ html.dark {
   --status-danger: #fca5a5;
   --status-warning: #fbbf24;
   --status-dataset: #c4b5fd;
+  --port-table: #93c5fd;
+  --port-prompt: #fcd34d;
+  --port-score: #86efac;
   --control-radius: 3px;
 }
 

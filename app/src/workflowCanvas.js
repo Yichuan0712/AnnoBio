@@ -58,7 +58,9 @@ import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
-import { createWorkflowNodeFactories, formatSamplerDescription, refreshProcessOutputStrip } from './workflowNodeFactories.js';
+import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
+import { edgeEndpoints, nodePorts, portTitles } from './nodePorts.js';
+import { applyPortTitles, centerWithin, findPortDot, renderNodePorts } from './workflowNodePorts.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
 import { dependencyColorSources, dependentNodeVisualColors } from './workflowDependencyColors.js';
@@ -1039,36 +1041,6 @@ export function buildWorkflowCanvas(root, options = {}) {
   edgesLayer.setAttribute('width', '100%');
   edgesLayer.setAttribute('height', '100%');
   edgesLayer.setAttribute('preserveAspectRatio', 'none');
-  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-  marker.setAttribute('id', 'workflow-arrow');
-  marker.setAttribute('markerUnits', 'userSpaceOnUse');
-  marker.setAttribute('markerWidth', '12');
-  marker.setAttribute('markerHeight', '10');
-  marker.setAttribute('refX', '11');
-  marker.setAttribute('refY', '5');
-  marker.setAttribute('orient', 'auto');
-  const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  arrowPath.setAttribute('d', 'M0,0 L12,5 L0,10 Z');
-  arrowPath.setAttribute('fill', 'currentColor');
-  marker.appendChild(arrowPath);
-  defs.appendChild(marker);
-
-  const markerHover = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-  markerHover.setAttribute('id', 'workflow-arrow-hover');
-  markerHover.setAttribute('markerUnits', 'userSpaceOnUse');
-  markerHover.setAttribute('markerWidth', '14');
-  markerHover.setAttribute('markerHeight', '11');
-  markerHover.setAttribute('refX', '13');
-  markerHover.setAttribute('refY', '5.5');
-  markerHover.setAttribute('orient', 'auto');
-  const arrowPathHover = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  arrowPathHover.setAttribute('d', 'M0,0 L14,5.5 L0,11 Z');
-  arrowPathHover.setAttribute('fill', 'currentColor');
-  markerHover.appendChild(arrowPathHover);
-  defs.appendChild(markerHover);
-
-  edgesLayer.appendChild(defs);
 
   const nodesLayer = document.createElement('div');
   nodesLayer.className = 'workflow-canvas__nodes';
@@ -1202,12 +1174,49 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** @type {Set<string>} Multi-selected node ids — Ctrl/Shift+click or marquee-select (see startMarqueeSelect). */
   let selectedNodeIds = new Set();
+  /** The ports each node was last drawn with (refreshNodePorts), so unchanged nodes are left alone. */
+  const drawnPorts = new WeakMap();
+  /** The node under the pointer; its lines are highlighted like those of selected nodes. */
+  let hoveredNodeId = '';
 
   function applySelectionVisuals() {
     nodesLayer.querySelectorAll('.workflow-node').forEach((node) => {
       node.classList.toggle('workflow-node--selected', selectedNodeIds.has(node.dataset.nodeId));
     });
+    syncActiveEdges();
   }
+
+  /** Highlights the lines of the selected nodes and of the node under the pointer. */
+  function syncActiveEdges() {
+    const active = new Set(selectedNodeIds);
+    if (hoveredNodeId) active.add(hoveredNodeId);
+    edgesLayer.querySelectorAll('.workflow-edge').forEach((group) => {
+      const touches = active.has(group.getAttribute('data-from-id')) || active.has(group.getAttribute('data-to-id'));
+      group.classList.toggle('workflow-edge--active', touches);
+    });
+  }
+
+  nodesLayer.addEventListener('pointerover', (e) => {
+    const node = e.target.closest?.('.workflow-node');
+    const id = node?.dataset.nodeId || '';
+    if (id !== hoveredNodeId) {
+      hoveredNodeId = id;
+      syncActiveEdges();
+    }
+    // A port's hover text says what it reads or gives now, so it is written when the pointer arrives.
+    if (node && e.target.closest('.workflow-node__port, .workflow-node__port-row')) {
+      const state = liveInputState();
+      const ports = nodePorts(state, id);
+      if (ports) applyPortTitles(node, portTitles(state, id, ports));
+    }
+  });
+  nodesLayer.addEventListener('pointerout', (e) => {
+    const id = e.relatedTarget?.closest?.('.workflow-node')?.dataset.nodeId || '';
+    if (id !== hoveredNodeId) {
+      hoveredNodeId = id;
+      syncActiveEdges();
+    }
+  });
 
   function highlightPipelineNodes(nodeIds = []) {
     const highlightedIds = new Set((Array.isArray(nodeIds) ? nodeIds : [])
@@ -1878,6 +1887,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         return {
           nodeId, type: 'dataset', name: el.dataset.datasetName || el.dataset.subsetName || '',
           get datasetContent() { return datasetContentByNodeId.get(nodeId); },
+          get savedFrom() { return el.dataset.savedFrom; },
         };
       }
       if (el.classList.contains('workflow-node--process')) {
@@ -1902,9 +1912,15 @@ export function buildWorkflowCanvas(root, options = {}) {
         return { nodeId, type: 'prompt', name: el.dataset.promptName || '', get outputFormat() { return parsedAttr(el.dataset.promptOutputFormat, []); } };
       }
       if (el.classList.contains('workflow-node--score')) {
-        return { nodeId, type: 'score', scoreName: (el.querySelector('.workflow-node__title')?.textContent || '').trim() };
+        return {
+          nodeId, type: 'score', scoreName: (el.querySelector('.workflow-node__title')?.textContent || '').trim(),
+          scoreGroundTruthId: el.dataset.scoreGroundTruthId || '',
+        };
       }
-      return { nodeId, type: el.dataset.nodeType || '' };
+      if (el.classList.contains('workflow-node--sampler')) {
+        return { nodeId, type: 'sampler', name: el.dataset.samplerName || '', sourceNodeId: el.dataset.sourceNodeId || '' };
+      }
+      return { nodeId, type: el.dataset.nodeType || '', name: (el.querySelector('.workflow-node__title')?.textContent || '').trim() };
     });
     return { nodes, connections };
   }
@@ -2489,35 +2505,16 @@ export function buildWorkflowCanvas(root, options = {}) {
     return shape;
   }
 
-  function renderEdge(g, edge, edgeIndex, nodeBoxes) {
+  function renderEdge(g, edge, edgeIndex, nodeBoxes, state) {
     const fromNode = getNodeById(edge.fromId);
     const toNode = getNodeById(edge.toId);
     if (!fromNode || !toNode) return;
 
-    const x1 = parseFloat(fromNode.style.left) || 0;
-    const y1 = parseFloat(fromNode.style.top) || 0;
-    const w1 = fromNode.offsetWidth || 0;
-    const h1 = fromNode.offsetHeight || 0;
-    const x2 = parseFloat(toNode.style.left) || 0;
-    const y2 = parseFloat(toNode.style.top) || 0;
-    const isRunNode = toNode.classList.contains('workflow-node--run');
-    const isScoreNode = toNode.classList.contains('workflow-node--score');
-    const isPromptReviewNode = toNode.classList.contains('workflow-node--prompt-review');
-    const isRunOrScore = isRunNode || isScoreNode || isPromptReviewNode;
-    const h2 = isRunOrScore ? (toNode.offsetHeight || RUN_NODE_FALLBACK_HEIGHT) : (toNode.offsetHeight || 0);
-
-    const startX = x1 + w1;
-    // A Process branch leaves from its label on the node (refreshProcessOutputStrip).
-    const portLabel = edge.type === DATA_EDGE && edge.fromPort && edge.fromPort !== RESULT_PORT
-      ? [...fromNode.querySelectorAll('.workflow-node__process-port[data-port]')].find((label) => label.dataset.port === edge.fromPort)
-      : null;
-    const startY = portLabel ? y1 + offsetWithin(portLabel, fromNode) + portLabel.offsetHeight / 2 : y1 + h1 / 2;
-    const endX = x2;
-    const toHeight = edge.type === EDGE_TYPE_PROMPT_TO_PROMPT
-      ? h2
-      : (isRunOrScore ? RUN_NODE_FALLBACK_HEIGHT : h2);
-    const endY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
-    const geometry = getEdgeGeometry(startX, startY, endX, endY, fromNode, toNode, nodeBoxes);
+    // A line joins the dots of the ports it connects (nodePorts.js, workflowNodePorts.js).
+    const ends = edgeEndpoints(state, edge);
+    const start = portPoint(fromNode, ends?.from, 'right');
+    const end = portPoint(toNode, ends?.to, 'left');
+    const geometry = getEdgeGeometry(start.x, start.y, end.x, end.y, fromNode, toNode, nodeBoxes);
     const isDatasetVersionEdge = edge.type === EDGE_TYPE_DATASET_TO_DATASET;
     const canCompare = !edge.derived && (
       edge.type === EDGE_TYPE_PROMPT_TO_PROMPT || edge.type === EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT || isDatasetVersionEdge
@@ -2527,6 +2524,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     edgeGroup.setAttribute('class', canCompare ? 'workflow-edge workflow-edge--compare' : 'workflow-edge');
     edgeGroup.setAttribute('data-edge-type', edge.type || '');
     edgeGroup.setAttribute('data-edge-index', String(edgeIndex));
+    edgeGroup.setAttribute('data-from-id', String(edge.fromId));
+    edgeGroup.setAttribute('data-to-id', String(edge.toId));
     g.appendChild(edgeGroup);
 
     if (canCompare) {
@@ -2549,10 +2548,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     line.setAttribute('stroke-width', '2');
     line.setAttribute('pointer-events', 'none');
     if (edge.type === EDGE_TYPE_SAVED_FROM) {
-      // Only where the Dataset came from (DATA_FLOW_DESIGN.md §5.1): no data flows along it.
-      line.setAttribute('stroke-width', '1');
-      line.setAttribute('stroke-dasharray', '3 4');
-      line.setAttribute('stroke-opacity', '0.55');
+      // Where the Dataset came from (DATA_FLOW_DESIGN.md §5.1): drawn like any line, between hollow dots.
       line.classList.add('workflow-edge--saved-from');
       line.setAttribute('aria-label', edge.label);
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
@@ -2561,7 +2557,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       edgeGroup.appendChild(line);
       return;
     }
-    line.setAttribute('marker-end', 'url(#workflow-arrow)');
     if (edge.derived) {
       line.classList.add('workflow-edge--derived');
       line.setAttribute('data-derived', 'true');
@@ -2595,11 +2590,20 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
   }
 
-  /** The distance from the top of `ancestor` to the top of `element` inside it. */
-  function offsetWithin(element, ancestor) {
-    let top = 0;
-    for (let el = element; el && el !== ancestor; el = el.offsetParent) top += el.offsetTop;
-    return top;
+  /**
+   * Where a line meets `node`: the centre of the dot for `end` (nodePorts.js edgeEndpoints), or the
+   * middle of the header's edge when the node has no such dot (a branch the Process no longer returns).
+   */
+  function portPoint(node, end, side) {
+    const left = parseFloat(node.style.left) || 0;
+    const top = parseFloat(node.style.top) || 0;
+    const dot = findPortDot(node, end, side);
+    if (dot) {
+      const center = centerWithin(dot, node);
+      return { x: left + center.x, y: top + center.y };
+    }
+    const headerHeight = node.querySelector('.workflow-node__header')?.offsetHeight || RUN_NODE_FALLBACK_HEIGHT;
+    return { x: left + (side === 'right' ? node.offsetWidth : 0), y: top + headerHeight / 2 };
   }
 
   /** Whether a data connection reads a branch its Process is known not to return. */
@@ -2667,16 +2671,39 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
+  /**
+   * Draws the ports (nodePorts.js) of every node whose ports changed: what it reads, its outputs and
+   * branches, its lineage dots. Returns whether any node was redrawn, which can change its height.
+   */
+  function refreshNodePorts() {
+    const state = liveInputState();
+    let changed = false;
+    nodesLayer.querySelectorAll('.workflow-node').forEach((node) => {
+      const ports = nodePorts(state, node.dataset.nodeId);
+      if (!ports) return;
+      const key = JSON.stringify(ports);
+      if (drawnPorts.get(node) === key) return;
+      drawnPorts.set(node, key);
+      renderNodePorts(node, ports);
+      changed = true;
+    });
+    return changed;
+  }
+
   function updateEdges() {
+    // A node added without a canvas change yet gets its ports before lines are drawn to them.
+    if (Array.from(nodesLayer.children).some((el) => el.classList.contains('workflow-node') && !drawnPorts.has(el))) refreshNodePorts();
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('pointer-events', 'none');
     const nodeBoxes = collectNodeBoxes();
+    const state = liveInputState();
     // Automatic dependency lines sit behind explicit, user-managed workflow edges.
-    getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1, nodeBoxes));
-    connections.forEach((edge, i) => renderEdge(g, edge, i, nodeBoxes));
+    getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1, nodeBoxes, state));
+    connections.forEach((edge, i) => renderEdge(g, edge, i, nodeBoxes, state));
     const existing = edgesLayer.querySelector('g');
     if (existing) existing.remove();
     edgesLayer.appendChild(g);
+    syncActiveEdges();
   }
 
   function getPromptDataFromNode(node) {
@@ -4534,10 +4561,14 @@ export function buildWorkflowCanvas(root, options = {}) {
   document.addEventListener('workflow:canvas-changed', () => {
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((sn) => syncScoreNodeProgressFromUpstreamRun(sn));
     syncNodeDependencyColors();
+    refreshNodePorts();
     updateEdges();
   });
   document.addEventListener('workflow:refresh-node-colors', syncNodeDependencyColors);
-  document.addEventListener('workflow:score-ground-truth-changed', () => updateEdges());
+  document.addEventListener('workflow:score-ground-truth-changed', () => {
+    refreshNodePorts();
+    updateEdges();
+  });
 
   document.addEventListener('workflow:save-review-result', (e) => {
     const reviewNodeId = e.detail?.reviewNodeId;
@@ -4902,7 +4933,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         if (n.dfResults || n.results) node.dataset.processDfResults = n.dfResults || n.results;
-        refreshProcessOutputStrip(node);
         if (n.historyRecordId) node.dataset.historyRecordId = n.historyRecordId;
         if (n.historySelectionSignature) node.dataset.historySelectionSignature = n.historySelectionSignature;
         if (n.processPending === true || n.processResumable === true) node.dataset.processResumable = '1';
@@ -5086,6 +5116,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       return null;
     }).filter(Boolean).filter((c) => getNodeById(c.fromId) && getNodeById(c.toId));
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => syncScoreNodeProgressFromUpstreamRun(scoreNode));
+    refreshNodePorts();
     updateContentSize();
     syncNodeDependencyColors();
     updateEdges();
@@ -5424,7 +5455,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       } else if (item.type === 'process') {
         if (item.dfResults == null) delete live.dataset.processDfResults;
         else live.dataset.processDfResults = item.dfResults;
-        refreshProcessOutputStrip(live);
         const progress = item.dfResults ? 100 : 0;
         if (item.processResumable) live.dataset.processResumable = '1';
         else delete live.dataset.processResumable;
@@ -5470,6 +5500,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (priorKeys?.has(`review:${id}`)) historyAnalysisKeys.set(`review:${id}`, priorKeys.get(`review:${id}`));
     }
     historyAnalysisKeysInitialized = true;
+    refreshNodePorts();
     updateEdges();
     document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
     return resolved;
@@ -5541,7 +5572,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           error: detected.ok ? '' : String(detected.error || 'Could not read the Process code.'),
           codeHash: hash,
         });
-        refreshProcessOutputStrip(live);
         changed = true;
       } catch (error) {
         // Backend unavailable: keep the last detection; the next canvas change tries again.
@@ -5551,7 +5581,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       }
     }));
     if (changed) {
-      updateEdges(); // the branch labels change the node's height
+      refreshNodePorts();
+      updateEdges(); // the branch ports change the node's height
       // Not a canvas change (no undo step); the Current Pipeline still redraws its branches.
       document.dispatchEvent(new CustomEvent('workflow:process-outputs-changed'));
       // A reader of a branch that came or went says so without waiting for History to resolve again.
@@ -5586,7 +5617,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       processNode.dataset.historyRecordId = record.id;
       delete processNode.dataset.processDfResults;
       delete processNode.dataset.processResults;
-      refreshProcessOutputStrip(processNode);
       await reconcileHistory();
     }
     if (session) pendingProcesses.add(nodeId);
@@ -5645,7 +5675,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     else delete liveNode.dataset.processResumable;
     pendingProcesses.delete(nodeId);
     delete liveNode.dataset.processResults;
-    refreshProcessOutputStrip(liveNode);
     setProgress(liveNode, 100);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     return { outputs, cancelled };
