@@ -28,7 +28,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     generateNodeId,
     allocateNodePosition,
     setNodeCanvasPosition,
-    scrollWrapper,
+    clientToCanvasPoint,
     nodesLayer,
     getZoomLevel,
     updateContentSize,
@@ -128,9 +128,6 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       e.preventDefault();
       lastInteractionWasDrag = false;
-      const swRect = scrollWrapper.getBoundingClientRect();
-      const sl = scrollWrapper.scrollLeft;
-      const st = scrollWrapper.scrollTop;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
 
@@ -143,18 +140,16 @@ export function createWorkflowNodeFactories(deps = {}) {
           const el = getNodeById(id);
           if (!el) return;
           const r = el.getBoundingClientRect();
-          groupDragEntries.push({
-            el,
-            left: (r.left - swRect.left + sl) / getZoomLevel(),
-            top: (r.top - swRect.top + st) / getZoomLevel(),
-          });
+          const start = clientToCanvasPoint(r.left, r.top);
+          groupDragEntries.push({ el, left: start.x, top: start.y });
           el.classList.add('workflow-node--dragging');
         });
       } else {
         groupDragEntries = null;
         const rect = node.getBoundingClientRect();
-        nodeStartLeft = (rect.left - swRect.left + sl) / getZoomLevel();
-        nodeStartTop = (rect.top - swRect.top + st) / getZoomLevel();
+        const start = clientToCanvasPoint(rect.left, rect.top);
+        nodeStartLeft = start.x;
+        nodeStartTop = start.y;
         node.classList.add('workflow-node--dragging');
       }
 

@@ -169,6 +169,11 @@
   cursor: pointer;
 }
 
+/* A line into an input can be right-clicked to disconnect it. */
+.workflow-canvas__edges .workflow-edge--disconnectable .workflow-edge-hit {
+  pointer-events: stroke;
+}
+
 .workflow-canvas__edges .workflow-edge,
 .workflow-canvas__edges .workflow-edge-line {
   pointer-events: none;
@@ -245,6 +250,8 @@
   transition: box-shadow 0.2s ease;
   /* Port dots sit half outside the node; the title and body clip their own text. */
   overflow: visible;
+  /* A node's dots stay under any node placed over it. */
+  isolation: isolate;
 }
 
 /* A node with port rows grows with them, so every dot stays on the node. */
@@ -498,6 +505,64 @@
 /* Nothing can read this output yet (its branches are not known). */
 .workflow-node__port--unavailable {
   opacity: 0.45;
+}
+
+/* Dragging a line between ports (workflowPortDrag.js). A dot is easier to hit than it looks. */
+.workflow-node__port::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+}
+
+.workflow-node__port:not(.workflow-node__port--lineage) {
+  cursor: crosshair;
+}
+
+.workflow-canvas--port-dragging,
+.workflow-canvas--port-dragging * {
+  cursor: crosshair !important;
+}
+
+.workflow-canvas--port-dragging .workflow-node__port--refused {
+  opacity: 0.3;
+}
+
+.workflow-canvas--port-dragging .workflow-node__port--target {
+  box-shadow: 0 0 0 2px var(--bg-bar), 0 0 0 3.5px var(--port-color, var(--text-muted));
+}
+
+.workflow-canvas--port-dragging .workflow-node__port--target.workflow-node__port--hover {
+  transform: scale(1.4);
+}
+
+.workflow-port-drag__line {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+/* A line picked up off an input while it is being moved. */
+.workflow-edge--lifted {
+  opacity: 0.15;
+}
+
+/* Why a dot cannot be used, shown next to the pointer. */
+.workflow-port-tip {
+  position: fixed;
+  z-index: 2100;
+  max-width: 300px;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre-line;
+  color: var(--text);
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  box-shadow: 0 4px 14px var(--shadow);
+  pointer-events: none;
 }
 
 /* Waiting for an upstream step's result (runHistoryResolver.js waitingForUpstream). */
