@@ -334,7 +334,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const openAddDatasetModalWeb = async () => {
     if (await ensureWebProjectOpen()) openAddDatasetModal(canvasAPI);
   };
-  // A new Run or Process opens its window, where it picks its Prompt / Dataset.
+  // A new Run or Process opens its window, which says how to connect its inputs on the canvas.
   const addNodeAndOpen = (eventName) => document.dispatchEvent(new CustomEvent(eventName, { detail: { open: true } }));
   const addRunNode = async () => {
     if (isElectron || await ensureWebProjectOpen()) addNodeAndOpen('workflow:add-run-node');

@@ -21,9 +21,19 @@ function wrapCommentList(prefix, continuationPrefix, items) {
   return lines.join('\n');
 }
 
+const INPUTS_COMMENT = `    # Each other input is a parameter after df, named df_<name>; connect
+    # one by dragging an output onto this node's + port on the canvas.`;
+/** How the sample described other inputs before they were connected on the canvas (NODE_PORTS_PLAN.md step 6). */
+const PICKER_INPUTS_COMMENT = `    # Each other Input dataset you check is a parameter after df, named
+    # df_<name> as shown under Input datasets.`;
+
 /** Sample code naming the primary Dataset's real columns. Comments must not spell a real df_<name>
  * alias: referencedDatasetAliases scans comments too, so that would add a canvas dependency. */
 export function buildDefaultProcessCode(headers) {
+  return sampleCode(headers, INPUTS_COMMENT);
+}
+
+function sampleCode(headers, inputsComment) {
   const columns = (Array.isArray(headers) ? headers : []).map((header) => String(header ?? '')).filter(Boolean);
   const col = JSON.stringify(columns[0] || 'column');
   const columnLines = columns.length
@@ -35,8 +45,7 @@ export function buildDefaultProcessCode(headers) {
 def process(df):
     # df is this Process's input Dataset as a pandas DataFrame.
 ${columnLines}
-    # Each other Input dataset you check is a parameter after df, named
-    # df_<name> as shown under Input datasets.
+${inputsComment}
     #
     # Return one of:
     #   1. One DataFrame -> one output Dataset
@@ -58,5 +67,6 @@ ${columnLines}
  * Saved code is trimmed (processCode.js resolveDataframeProcessCode), so the ends do not count.
  */
 export function isUntouchedSampleCode(code, headers) {
-  return withProcessParameters(String(code || ''), []).trim() === buildDefaultProcessCode(headers).trim();
+  const bare = withProcessParameters(String(code || ''), []).trim();
+  return [INPUTS_COMMENT, PICKER_INPUTS_COMMENT].some((comment) => bare === sampleCode(headers, comment).trim());
 }

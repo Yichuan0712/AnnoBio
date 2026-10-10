@@ -1,13 +1,13 @@
 /**
  * Run 节点详情弹窗
  *
- * 选数据集、列映射、模型 → Run / Resume → 右侧表格显示结果
+ * Prompt 和输入在画布上拖线连接，窗口里只显示它们；列映射 → Run / Resume → 右侧表格显示结果
  * input_row_index 统一 0-based，展示时 +1
  */
 
 import { embedInputRow, markEmptyOutputAsError } from './runResumeUtils.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
-import { bindNodePicker, nodePickerHtml } from './nodePicker.js';
+import { renderSourceLink } from './nodeSourceLink.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { displayCell } from './datasetContent.js';
@@ -15,7 +15,6 @@ import { deriveOutputFields } from './runResultsExport.js';
 import { ensureRunNodeModel } from './nodeSettings.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
 import { executionIdleLabel } from './executionResumeState.js';
-import { candidateGroups, sourceKey } from './stepInputs.js';
 
 const API_BASE = BACKEND_API_BASE;
 const MAX_CELL_CHARS = 40;
@@ -98,20 +97,18 @@ export { deriveOutputFields };
 export function openRunDetailModal({
   node,
   startRunNode,
-  getInputCandidates = () => [],
   getInputTable = () => ({ waiting: 'no-result' }),
-  getPrompts = () => [],
   getPromptId = () => '',
-  selectPrompt = () => {},
+  describePrompt = () => null,
+  describeInput = () => null,
+  revealNode = () => {},
   getPromptInputFields = () => [],
   getPromptTemplate = () => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }),
   unregisterPendingRun = () => {},
   getPendingRunId = () => null,
   isRunNameAlreadyUsedForPrompt = () => false,
   getRunMappingsFromCanvas,
-  onWorkingSetChange = () => {},
   getInputSource = () => null,
-  setInputSource = () => {},
   getInputStatus = () => ({ waiting: '', notices: [] }),
   history = null,
 }) {
@@ -123,10 +120,8 @@ export function openRunDetailModal({
     }
   });
 
-  let inputFields = getPromptInputFields();
-  // The input is a Dataset or another step's output (stepInputs.js), chosen by its key.
-  let candidates = getInputCandidates();
-  let selectedKey = sourceKey(getInputSource());
+  // The Prompt and the input are connected by dragging on the canvas; this window shows them.
+  const inputFields = getPromptInputFields();
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
   const runName = (node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent?.trim() || 'Run').trim() || 'Run';
   const nodeId = node?.dataset?.nodeId || '';
@@ -169,19 +164,12 @@ export function openRunDetailModal({
           <p class="run-detail-waiting-banner" role="status" hidden></p>
           <div class="dataset-meta-wrap run-detail-meta-wrap">
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="run-detail-prompt-picker">Input prompt</label>
-              ${nodePickerHtml({ id: 'run-detail-prompt-picker', placeholder: 'Select input prompt', ariaLabel: 'Select input prompt' })}
+              <span class="dataset-meta-label">Input prompt</span>
+              <div class="node-source" id="run-detail-prompt-source"></div>
             </div>
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="run-detail-ws-picker">Input</label>
-              <div class="run-detail-ws-picker" id="run-detail-ws-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select input">
-                <div class="run-detail-ws-trigger" tabindex="0">
-                  <span class="run-detail-ws-trigger-color" id="run-detail-ws-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="run-detail-ws-trigger-text">${escapeHtml(selectPlaceholderLabel('Select input'))}</span>
-                  <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
-                </div>
-                <div class="run-detail-ws-dropdown" id="run-detail-ws-dropdown" role="listbox" hidden></div>
-              </div>
+              <span class="dataset-meta-label">Input</span>
+              <div class="node-source" id="run-detail-input-source"></div>
             </div>
             <div class="run-detail-inputs-section dataset-meta-field" id="run-detail-inputs-section">
               <span class="dataset-meta-label run-detail-section-label">Map input columns to prompt inputs</span>
@@ -209,43 +197,29 @@ export function openRunDetailModal({
     </div>
   `;
 
-  const pickerEl = overlay.querySelector('#run-detail-ws-picker');
-  const triggerEl = pickerEl.querySelector('.run-detail-ws-trigger');
-  const triggerColorEl = overlay.querySelector('#run-detail-ws-trigger-color');
-  const triggerTextEl = overlay.querySelector('#run-detail-ws-trigger-text');
-  const dropdownEl = overlay.querySelector('#run-detail-ws-dropdown');
   const formErrorEl = overlay.querySelector('#run-detail-form-error');
   const inputsListEl = overlay.querySelector('#run-detail-inputs-list');
-  // Same picker as the Input dataset below it; it locks with the Dataset once the Run has results.
-  const promptPicker = bindNodePicker(overlay.querySelector('#run-detail-prompt-picker'), {
-    placeholder: 'Select input prompt',
-    getOptions: getPrompts,
-    getValue: getPromptId,
-    onSelect: (promptNodeId) => {
-      selectPrompt(promptNodeId);
-      inputFields = getPromptInputFields();
-      // Keep only the mapping for the new Prompt's inputs; the column memory refills matching names.
-      inputToColumn = Object.fromEntries(Object.entries(inputToColumn).filter(([name]) => inputFields.includes(name)));
-      if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}
-      renderInputMappings();
-      refreshButton();
-    },
-    isLocked: () => isRunning() || (!historyMode && (isCompleted() || getNodeResults().results.length > 0)),
-    closeWithin: overlay,
+  /** Closes this window and shows `nodeId` on the canvas, where its connections can be changed. */
+  const reveal = (sourceNodeId) => {
+    closeModal();
+    revealNode(sourceNodeId);
+  };
+  const promptSource = describePrompt();
+  renderSourceLink(overlay.querySelector('#run-detail-prompt-source'), {
+    ...promptSource, hint: "Drag a Prompt onto this Run's prompt port.", onReveal: () => reveal(promptSource.nodeId),
+  });
+  const inputSource = describeInput();
+  renderSourceLink(overlay.querySelector('#run-detail-input-source'), {
+    ...inputSource, hint: "Drag a Dataset or a step output onto this Run's input port.", onReveal: () => reveal(inputSource.nodeId),
   });
   const runBtn = overlay.querySelector('.run-detail-run-btn');
   const upstreamNoticeEl = overlay.querySelector('.run-detail-upstream-notice');
   const waitingBannerEl = overlay.querySelector('.run-detail-waiting-banner');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
 
-  /** The input chosen in this window, one of the candidates. */
-  function selectedSource() {
-    return candidates.find((candidate) => candidate.key === selectedKey) || null;
-  }
-
-  /** What the chosen input gives now (stepOutputs.js): `{ table }`, or `{ waiting, message }`, or null. */
+  /** What the Run's input gives now (stepOutputs.js): `{ table }`, or `{ waiting, message }`, or null. */
   function selectedInput() {
-    const source = selectedSource();
+    const source = getInputSource();
     return source ? getInputTable(source) : null;
   }
 
@@ -296,17 +270,11 @@ export function openRunDetailModal({
     runBtn.textContent = 'Running, click to stop';
     runBtn.classList.remove('btn-primary');
     runBtn.classList.add('btn-secondary', 'btn-danger');
-    pickerEl.classList.add('run-detail-ws-picker--locked');
-    pickerEl.setAttribute('aria-disabled', 'true');
-    promptPicker.setLocked(true);
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
     overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
   }
 
   function applyUnlock() {
-    promptPicker.setLocked(false);
-    pickerEl.classList.remove('run-detail-ws-picker--locked');
-    pickerEl.removeAttribute('aria-disabled');
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = false; });
     overlay.querySelector('.run-detail-main')?.classList.remove('run-detail-main--locked');
   }
@@ -330,9 +298,6 @@ export function openRunDetailModal({
       runBtn.classList.add('btn-secondary');
       if (historyMode) applyUnlock();
       else {
-        pickerEl.classList.add('run-detail-ws-picker--locked');
-        pickerEl.setAttribute('aria-disabled', 'true');
-        promptPicker.setLocked(true);
         inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
         overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
       }
@@ -345,9 +310,6 @@ export function openRunDetailModal({
     const { results } = getNodeResults();
     const isResumeState = results.length > 0 || node?.dataset?.runResumable === '1';
     if (isResumeState && !historyMode) {
-      pickerEl.classList.add('run-detail-ws-picker--locked');
-      pickerEl.setAttribute('aria-disabled', 'true');
-      promptPicker.setLocked(true);
       inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
       overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
     } else {
@@ -357,7 +319,7 @@ export function openRunDetailModal({
     runBtn.classList.add('btn-primary');
     runBtn.textContent = executionIdleLabel({ interrupted: node?.dataset?.runResumable === '1', hasPartial: results.length > 0 });
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
-    runBtn.disabled = !(getPromptId() && selectedKey && allMapped);
+    runBtn.disabled = !(getPromptId() && getInputSource() && allMapped);
     // The input has no complete result yet: run the upstream step first (stepOutputs.js).
     if (status.waiting) {
       runBtn.disabled = true;
@@ -684,74 +646,6 @@ export function openRunDetailModal({
     return card;
   }
 
-  function updateRunNodeBorder() {
-    const source = selectedSource();
-    if (node?.style) {
-      node.style.borderColor = source?.color || '';
-      setInputSource(source ? { nodeId: source.nodeId, port: source.port, kind: source.kind } : null);
-      const bar = node.querySelector('.workflow-node__run-progress');
-      if (bar) bar.style.background = source?.color || bar.style.background;
-      document.dispatchEvent(new CustomEvent('workflow:refresh-node-colors'));
-    }
-  }
-
-  function updateTriggerDisplay() {
-    const source = selectedSource();
-    if (source) {
-      triggerColorEl.style.background = source.color || 'transparent';
-      triggerColorEl.style.display = source.color ? '' : 'none';
-      triggerTextEl.textContent = source.label;
-    } else {
-      triggerColorEl.style.background = '';
-      triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = selectPlaceholderLabel('Select input');
-    }
-  }
-
-  function selectWorkingSet(key) {
-    const previousKey = selectedKey;
-    selectedKey = key || '';
-    updateTriggerDisplay();
-    updateRunNodeBorder();
-    dropdownEl.hidden = true;
-    pickerEl.setAttribute('aria-expanded', 'false');
-    dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.key === selectedKey ? 'true' : 'false'));
-    renderInputMappings();
-    refreshButton();
-    if (selectedKey !== previousKey) {
-      onWorkingSetChange({ runNodeId: nodeId, datasetNodeId: selectedSource()?.nodeId || '' });
-    }
-  }
-
-  /** The inputs in two groups, Datasets and Step outputs (design §5.3), refreshed each time the list opens. */
-  function populateDropdown() {
-    candidates = getInputCandidates();
-    dropdownEl.innerHTML = '';
-    const add = (candidate) => {
-      const key = candidate?.key || '';
-      const opt = document.createElement('div');
-      opt.className = 'run-detail-ws-option';
-      opt.setAttribute('role', 'option');
-      opt.setAttribute('aria-selected', key === selectedKey ? 'true' : 'false');
-      opt.dataset.key = key;
-      opt.innerHTML = candidate
-        ? `<span class="run-detail-ws-option-color" style="background:${escapeHtml(candidate.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(candidate.label)}</span>`
-        : `<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">${escapeHtml(selectPlaceholderLabel('Select input'))}</span>`;
-      if (candidate?.unavailable) opt.title = 'This output is no longer available.';
-      opt.addEventListener('click', () => selectWorkingSet(key));
-      dropdownEl.appendChild(opt);
-    };
-    add(null);
-    for (const group of candidateGroups(candidates)) {
-      const heading = document.createElement('div');
-      heading.className = 'run-detail-ws-group';
-      heading.setAttribute('role', 'presentation');
-      heading.textContent = group.label;
-      dropdownEl.appendChild(heading);
-      group.items.forEach(add);
-    }
-  }
-
   function renderInputMappings() {
     const input = selectedInput();
     const content = input?.table || null;
@@ -761,7 +655,12 @@ export function openRunDetailModal({
     const headerSet = new Set(headers);
     inputsListEl.innerHTML = '';
     if (inputFields.length === 0) {
-      inputsListEl.innerHTML = `<p class="run-detail-placeholder">${getPromptId() ? 'No prompt inputs.' : 'Choose an Input prompt first.'}</p>`;
+      inputsListEl.innerHTML = `<p class="run-detail-placeholder">${getPromptId() ? 'No prompt inputs.' : "Drag a Prompt onto this Run's prompt port first."}</p>`;
+      refreshButton();
+      return;
+    }
+    if (!input) {
+      inputsListEl.innerHTML = `<p class="run-detail-placeholder">${escapeHtml("Drag a Dataset or a step output onto this Run's input port first.")}</p>`;
       refreshButton();
       return;
     }
@@ -861,25 +760,6 @@ export function openRunDetailModal({
     isDisabled: isRunning,
   });
 
-  function isDatasetMappingLocked() {
-    return isRunning() || (!historyMode && (isCompleted() || getNodeResults().results.length > 0));
-  }
-  triggerEl.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (isDatasetMappingLocked()) return;
-    if (dropdownEl.hidden) { populateDropdown(); dropdownEl.hidden = false; pickerEl.setAttribute('aria-expanded', 'true'); }
-    else { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); }
-  });
-  triggerEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      if (isDatasetMappingLocked()) return;
-      if (dropdownEl.hidden) { populateDropdown(); dropdownEl.hidden = false; pickerEl.setAttribute('aria-expanded', 'true'); }
-      else { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); }
-    }
-  });
-  overlay.addEventListener('click', (e) => { if (!pickerEl.contains(e.target)) { dropdownEl.hidden = true; pickerEl.setAttribute('aria-expanded', 'false'); } });
-
   (async () => {
     if (!node) return;
     await ensureRunNodeModel(node);
@@ -907,7 +787,7 @@ export function openRunDetailModal({
       refreshButton();
       return;
     }
-    if (!selectedKey) return;
+    if (!getInputSource()) return;
     const emptyInput = selectedInput()?.table?.rows?.length === 0;
     if (!selectedCredentialId && !emptyInput) {
       await ensureRunNodeModel(node);
@@ -946,8 +826,6 @@ export function openRunDetailModal({
     refreshButton();
   });
 
-  updateTriggerDisplay();
-  updateRunNodeBorder();
   renderInputMappings();
   refreshButton();
   document.body.style.overflow = 'hidden';

@@ -7,6 +7,7 @@ import { EditorView, basicSetup } from 'codemirror';
 import { python } from '@codemirror/lang-python';
 import { showAlert } from './alertModal.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
+import { renderSourceLink } from './nodeSourceLink.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { executionIdleLabel } from './executionResumeState.js';
 import { showExecutionError } from './executionErrorPanel.js';
@@ -1020,7 +1021,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
   }
 }
 
-export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas, getRunInputColsCollapsed, setRunInputColsCollapsed, getScoreOutputColsCollapsed, setScoreOutputColsCollapsed, getScoreGtColsCollapsed, setScoreGtColsCollapsed }) {
+export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas, getRunInputColsCollapsed, setRunInputColsCollapsed, getScoreOutputColsCollapsed, setScoreOutputColsCollapsed, getScoreGtColsCollapsed, setScoreGtColsCollapsed }) {
   getWorkingSets = getWorkingSets || (() => []);
   getRunResultColumns = getRunResultColumns || (() => []);
   getGroundTruthHeaders = getGroundTruthHeaders || (() => []);
@@ -1479,15 +1480,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
           <p class="run-detail-main-label score-detail-main-label">Scoring setup</p>
           <div class="dataset-meta-wrap score-detail-meta-wrap">
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="score-detail-gt-picker">Ground truth dataset</label>
-              <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select ground truth dataset">
-                <div class="run-detail-ws-trigger" tabindex="0">
-                  <span class="run-detail-ws-trigger-color" id="score-detail-gt-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">${escapeHtml(selectPlaceholderLabel('Select ground truth dataset'))}</span>
-                  <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
-                </div>
-                <div class="run-detail-ws-dropdown" id="score-detail-gt-dropdown" role="listbox" hidden></div>
-              </div>
+              <span class="dataset-meta-label">Ground truth dataset</span>
+              <div class="node-source" id="score-detail-gt-source"></div>
             </div>
             <div class="dataset-meta-field score-detail-rules-section" id="score-detail-rules-section" hidden>
               <div class="review-detail-view-switch score-detail-rules-view-switch" role="tablist" aria-label="Set rules: matching rules or custom code">
@@ -1538,11 +1532,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     </div>
   `;
 
-  const pickerEl = overlay.querySelector('#score-detail-gt-picker');
-  const triggerEl = overlay.querySelector('.run-detail-ws-trigger');
-  const triggerColorEl = overlay.querySelector('#score-detail-gt-trigger-color');
-  const triggerTextEl = overlay.querySelector('#score-detail-gt-trigger-text');
-  const dropdownEl = overlay.querySelector('#score-detail-gt-dropdown');
   const rulesListEl = overlay.querySelector('#score-detail-rules-list');
   const rulesSectionEl = overlay.querySelector('#score-detail-rules-section');
   const rulesTabBar = overlay.querySelector('.score-detail-rules-view-switch');
@@ -1876,27 +1865,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
   }
 
+  /** The ground truth is connected on the canvas (the Score's ground truth port); this window shows it. */
   function updateTriggerDisplay() {
     const ws = getSelectedWorkingSet();
-    if (ws) {
-      triggerColorEl.style.background = ws.color || 'transparent';
-      triggerColorEl.style.display = ws.color ? '' : 'none';
-      triggerTextEl.textContent = ws.name || 'Dataset';
-    } else {
-      triggerColorEl.style.background = '';
-      triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = selectPlaceholderLabel('Select ground truth dataset');
-    }
-  }
-
-  function closeDropdown() {
-    dropdownEl.hidden = true;
-    pickerEl.setAttribute('aria-expanded', 'false');
-  }
-
-  function openDropdown() {
-    dropdownEl.hidden = false;
-    pickerEl.setAttribute('aria-expanded', 'true');
+    renderSourceLink(overlay.querySelector('#score-detail-gt-source'), {
+      label: ws ? ws.name || 'Dataset' : '', color: ws?.color || '',
+      hint: "Drag a Dataset onto this Score's ground truth port.",
+      onReveal: () => {
+        close();
+        revealNode(selectedNodeId);
+      },
+    });
   }
 
   /** Open Add rule / Edit rule modal. side = 'input' | 'output': the rule's current tree (or the nominal side for a fresh top-level add). editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. Top-level rules (editPath.length === 1, or parentPath is empty) may pick a column from either side — the actual tree is derived from the column chosen. */
@@ -3560,79 +3539,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (added) persistBundle(inputRoot, outputRoot);
     return added;
   }
-
-  function selectGroundTruth(id) {
-    selectedNodeId = id || '';
-    if (node) {
-      node.dataset.scoreGroundTruthId = selectedNodeId || '';
-      document.dispatchEvent(new CustomEvent('workflow:score-ground-truth-changed'));
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    }
-    updateTriggerDisplay();
-    updateScoreNodeBorder();
-    syncRulesSectionVisibility();
-    closeDropdown();
-    dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.nodeId === selectedNodeId ? 'true' : 'false'));
-    void updateReviewButtonState();
-    if (selectedNodeId) {
-      const gtSet = new Set([...(getGroundTruthHeaders(selectedNodeId) || []), SCORE_GT_ROW_INDEX_COLUMN]);
-      const { inputRoot: ir1, outputRoot: or1 } = loadBundle();
-      const inF = filterScoreRulesByGtColumns(ir1, gtSet) || emptyScoreRuleGroup();
-      const outF = filterScoreRulesByGtColumns(or1, gtSet) || emptyScoreRuleGroup();
-      if (JSON.stringify(inF) !== JSON.stringify(ir1) || JSON.stringify(outF) !== JSON.stringify(or1)) {
-        persistBundle(inF, outF);
-      }
-      applyRulesFromMemory();
-    }
-    renderRules();
-  }
-
-  function populateDropdown() {
-    dropdownEl.innerHTML = '';
-    const emptyOption = document.createElement('div');
-    emptyOption.className = 'run-detail-ws-option';
-    emptyOption.setAttribute('role', 'option');
-    emptyOption.setAttribute('aria-selected', !selectedNodeId ? 'true' : 'false');
-    emptyOption.innerHTML = `<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">${escapeHtml(selectPlaceholderLabel('Select ground truth dataset'))}</span>`;
-    emptyOption.dataset.nodeId = '';
-    emptyOption.addEventListener('click', () => selectGroundTruth(''));
-    dropdownEl.appendChild(emptyOption);
-    workingSets.forEach((ws) => {
-      const option = document.createElement('div');
-      option.className = 'run-detail-ws-option';
-      option.setAttribute('role', 'option');
-      option.setAttribute('aria-selected', ws.nodeId === selectedNodeId ? 'true' : 'false');
-      option.innerHTML = `<span class="run-detail-ws-option-color" style="background:${escapeHtml(ws.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(ws.name || 'Dataset')}</span>`;
-      option.dataset.nodeId = ws.nodeId;
-      option.addEventListener('click', () => selectGroundTruth(ws.nodeId));
-      dropdownEl.appendChild(option);
-    });
-  }
-
-  triggerEl.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (dropdownEl.hidden) {
-      populateDropdown();
-      openDropdown();
-    } else {
-      closeDropdown();
-    }
-  });
-  triggerEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      if (dropdownEl.hidden) {
-        populateDropdown();
-        openDropdown();
-      } else {
-        closeDropdown();
-      }
-    }
-  });
-  overlay.addEventListener('click', (e) => {
-    if (pickerEl.contains(e.target)) return;
-    closeDropdown();
-  });
 
   function close() {
     document.removeEventListener('workflow:history-resolved', refreshHistoryMatchResult);

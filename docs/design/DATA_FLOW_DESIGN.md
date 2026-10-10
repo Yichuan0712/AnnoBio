@@ -257,6 +257,8 @@ Run/Process 节点仍在画布状态中缓存当前记录的结果：`runResults
 
 ### 5.2 右键菜单
 
+> 其中 “Prompt 在 Run 窗口中选择” 已被 [NODE_PORTS_DESIGN.md](NODE_PORTS_DESIGN.md) 取代（2026-10-10）：Prompt 也在画布上拖线连接到 Run 的 `prompt` 端口。右键菜单的项现在也出现在从输出拉线到空白处松开时的菜单里。
+
 | 节点 | 变化 |
 |---|---|
 | Run | 新增 “Run a prompt on results”：新建 Run，输入预填为这个 Run 的输出，Prompt 在 Run 窗口中选择。新增 “Process results with code”：新建 Process，`df` 预填为这个 Run 的输出。保留 Save results to workspace |
@@ -265,6 +267,8 @@ Run/Process 节点仍在画布状态中缓存当前记录的结果：`runResults
 | Prompt、Sampler、Score、Review | 不变 |
 
 ### 5.3 输入选择器
+
+> 已被 [NODE_PORTS_DESIGN.md](NODE_PORTS_DESIGN.md) 取代（2026-10-10）：窗口里不再选择输入，输入只在画布上拖线连接，窗口只显示当前来源。
 
 Run 窗口的 Input dataset 和 Process 窗口的 Input datasets 改名为 Input，分两组列出：
 

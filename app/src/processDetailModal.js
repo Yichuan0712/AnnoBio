@@ -2,8 +2,9 @@
  * Process node editor.
  *
  * Process nodes use one explicit contract: ``process(df, df_<name>, ...) -> DataFrame | {name: DataFrame}``.
- * `df` is its primary Dataset. Each other Input dataset is the parameter named after its readable
- * alias (processSignature.js); checking one under Input datasets adds that parameter.
+ * `df` is its first input. Each other input is the parameter named after its readable alias
+ * (processSignature.js). Inputs are connected on the canvas, through the node's ports, which follow
+ * the parameters (nodePorts.js); this window lists them.
  */
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -13,8 +14,7 @@ import { attachModalPaneCycle } from './paneToggleButton.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { createRowResultsPanel } from './rowResultsTable.js';
 import { resolveDataframeProcessCode } from './processCode.js';
-import { bindProcessInputPicker, processInputPickerHtml } from './processInputPicker.js';
-import { codeDeclaringInputs } from './processDatasetBindings.js';
+import { renderSourceLink } from './nodeSourceLink.js';
 import { buildDefaultProcessCode, isUntouchedSampleCode } from './processSampleCode.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
 import { executionIdleLabel } from './executionResumeState.js';
@@ -58,15 +58,15 @@ function restoreResults(node, ...keys) {
 /**
  * @param {{ node: HTMLElement,
  *   getProcessInputs: (code: string) => { bindings: Array<{key: string, nodeId: string, kind: string, name: string, label: string, color?: string, content?: {headers: string[], rows: string[][]}, alias: string, primary: boolean, input: boolean, used: boolean}>, primaryDatasetId: string, savedAliases: Record<string, string> },
- *   syncProcessDependencies?: (code: string) => void, setPrimaryDataset?: (key: string, code: string) => void,
- *   replaceInputSource?: (fromKey: string, toKey: string, code: string) => void,
+ *   syncProcessDependencies?: (code: string) => void,
+ *   getInputRows?: (code: string) => Array<{ alias: string, nodeId: string, label: string, color: string }>,
+ *   revealNode?: (nodeId: string) => void,
  *   getInputStatus?: () => { waiting: string, notices: string[] } }} options
  *   getProcessInputs: every Dataset and step output (stepInputs.js processInputBindings), marking the
  *   ones the code reads, by source key; a step output without a result yet has no content
- *   setPrimaryDataset: the Process picks its df in this window, like a Run picks its Prompt; its other
- *   inputs are the code's process() parameters, which the picker here rewrites
+ *   getInputRows: df and each parameter of `code`, with what is connected to it (empty label: nothing)
  */
-export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, setPrimaryDataset, replaceInputSource, getInputStatus, history = null }) {
+export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, getInputRows = () => [], revealNode = () => {}, getInputStatus, history = null }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -111,12 +111,12 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
           <div class="dataset-meta-wrap process-input-wrap">
             <div class="dataset-meta-field">
               <span class="dataset-meta-label">Input</span>
-              ${processInputPickerHtml({ id: 'process-input-picker', placeholder: 'Select inputs', ariaLabel: 'Inputs' })}
+              <div class="process-input-list" id="process-input-list"></div>
             </div>
           </div>
           <div class="process-editor-mid">
             <div class="process-editor-host"></div>
-          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the first input; each other one is the parameter named as shown beside it. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
+          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the first input; each other input is the parameter named as shown beside it. Connect inputs on the canvas: drag an output onto a port of this node, or onto <code>+</code> to add one. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -150,7 +150,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       if (!update.docChanged) return;
       // A df_<name> the code now names shows up as an input.
       clearTimeout(inputsRefreshTimer);
-      inputsRefreshTimer = setTimeout(() => inputPicker.render(), 150);
+      inputsRefreshTimer = setTimeout(renderInputRows, 150);
       if (!history) return;
       node.dataset.processDfCode = update.state.doc.toString();
       scheduleHistoryRefresh();
@@ -177,34 +177,31 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     historyRefreshTimer = setTimeout(() => { void refreshHistoryState(); }, 150);
   }
 
-  // The Run window's Input picker, with a check per source.
-  const inputPicker = bindProcessInputPicker(overlay.querySelector('#process-input-picker'), {
-    placeholder: 'Select inputs',
-    getInputs: () => readDatasets(getCode()),
-    onChange: ({ primaryDatasetId, inputIds }) => {
-      const code = getCode();
-      const { bindings, savedAliases } = readDatasets(code);
-      // Untouched sample code follows the new df's columns; edited code is left alone.
-      const untouched = isUntouchedSampleCode(code, primaryHeaders(code));
-      const headers = bindings.find((binding) => binding.key === primaryDatasetId)?.content?.headers || [];
-      const nextCode = codeDeclaringInputs({
-        code: untouched ? buildDefaultProcessCode(headers) : code,
-        // Sources are told apart by key; each alias is made from its name (stepInputs.js).
-        datasets: bindings.map((binding) => ({ nodeId: binding.key, name: binding.name })),
-        primaryDatasetId, inputIds, savedAliases,
+  /** df and each parameter, with the input connected to it; a link shows that input on the canvas. */
+  function renderInputRows() {
+    const list = overlay.querySelector('#process-input-list');
+    list.replaceChildren(...getInputRows(getCode()).map((row) => {
+      const item = document.createElement('div');
+      item.className = 'process-input-row';
+      const alias = document.createElement('code');
+      alias.className = 'process-input-row__alias';
+      alias.textContent = row.alias;
+      const source = document.createElement('div');
+      source.className = 'node-source';
+      renderSourceLink(source, {
+        label: row.label, color: row.color,
+        hint: row.alias === 'df' ? 'Not connected: drag an output onto df on the canvas.' : 'Not connected: drag an output onto this port on the canvas.',
+        onReveal: () => {
+          close();
+          revealNode(row.nodeId);
+        },
       });
-      replaceCode(nextCode);
-      setPrimaryDataset?.(primaryDatasetId, nextCode);
-      if (history) scheduleHistoryRefresh();
-    },
-    onReplace: replaceInputSource ? ({ fromKey, toKey }) => {
-      replaceInputSource(fromKey, toKey, getCode());
-      refreshUpstreamState();
-      if (history) scheduleHistoryRefresh();
-    } : undefined,
-    isLocked: () => running,
-    closeWithin: overlay,
-  });
+      item.append(alias, source);
+      return item;
+    }));
+  }
+  renderInputRows();
+
   let running = false;
   let currentJobId = null;
   let currentHistoryStatus = '';
@@ -281,7 +278,6 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
 
   function setRunningUi(isRunning) {
     running = isRunning;
-    inputPicker.setLocked(isRunning);
     editorView.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!isRunning)) });
     runBtn.textContent = isRunning ? 'Running, click to stop'
       : currentHistoryStatus === 'completed'
@@ -335,8 +331,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     const { bindings, unlistedPrimary } = readDatasets(getCode());
     const primary = bindings.find((binding) => binding.primary);
     if (!primary && !unlistedPrimary) {
-      showPlaceholder('Choose an input before running.');
-      inputPicker.focus();
+      showPlaceholder("Drag a Dataset or a step output onto this Process's df port on the canvas.");
       return;
     }
     node.dataset.processDfCode = getCode();

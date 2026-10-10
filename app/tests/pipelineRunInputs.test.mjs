@@ -43,14 +43,14 @@ test('the prepare-inputs sentence matches one step or several, and one Dataset o
   const step = (inputs) => ({ inputs });
   assert.equal(
     pipelineRunIntro([step([{}])]),
-    'This step reads a Dataset from outside the Pipeline. Open it to change that Dataset.',
+    'This step reads a Dataset from outside the Pipeline. To read another, click it to find it on the canvas and drag another Dataset onto its input.',
   );
   assert.equal(
     pipelineRunIntro([step([{}, {}])]),
-    'This step reads Datasets from outside the Pipeline. Open it to change them.',
+    'This step reads Datasets from outside the Pipeline. To change them, click it to find it on the canvas and drag other Datasets onto its inputs.',
   );
   assert.equal(
     pipelineRunIntro([step([{}]), step([{}])]),
-    'These steps read Datasets from outside the Pipeline. Open a step to change what it reads.',
+    'These steps read Datasets from outside the Pipeline. To change what one reads, click it to find it on the canvas and drag another Dataset onto its input.',
   );
 });
