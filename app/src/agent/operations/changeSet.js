@@ -409,23 +409,23 @@ export function planChangeSet(state, operations, ctx) {
   }
 
   /** Like the Process window: the inputs are df (`primary`, a source) and each Dataset or step output
-   * the code declares as a process() parameter or uses, by the alias it already has. Returns the
-   * inputs other than df. */
+   * the code declares as a process() parameter or uses, by the alias it already has. A name that
+   * matches no input is left unconnected, as on the canvas, where it is an empty port. Returns the
+   * inputs other than df, and the lines that name what is still unconnected. */
   function wireProcess(processNode, code, primary) {
     if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) fail('Process code must define process(df).');
     const primaryKey = primary.kind === 'dataset' ? primary.nodeId : `${primary.nodeId}:${primary.port}`;
     const bindings = processInputBindings(next, processNode.nodeId, { code, primaryId: primaryKey });
     const unknown = [...referencedDatasetAliasNames(code)]
       .filter((alias) => !bindings.some((b) => b.alias === alias));
-    if (unknown.length) {
-      const available = bindings.filter((b) => !b.primary).map((b) => `${b.alias} ("${b.label}")`);
-      fail(`The code uses ${unknown.join(', ')}, which match no input. Available: ${available.join(', ') || '(none)'}.`);
-    }
     const inputs = bindings.filter((b) => b.input);
     processNode.dfCode = code;
     processNode.activeMode = 'df';
     setProcessInputs(next, processNode.nodeId, { primary: { nodeId: primary.nodeId, port: primary.port }, inputs });
-    return inputs.filter((b) => !b.primary);
+    const notes = unknown.length
+      ? [`Not connected yet: ${unknown.join(', ')} (no input has that name; it cannot run until one is connected). Inputs it could read: ${bindings.filter((b) => !b.primary).map((b) => `${b.alias} ("${b.label}")`).join(', ') || '(none)'}.`]
+      : [];
+    return { others: inputs.filter((b) => !b.primary), notes };
   }
 
   function sampleRows(rows, op) {
@@ -568,11 +568,11 @@ export function planChangeSet(state, operations, ctx) {
       const anchor = resolve(op.primary_input, 'primary_input', ['dataset', 'run', 'process']);
       const node = addNode({ type: 'process', nodeId: generateNodeId(), ...placeNear(anchor), name, nodeOrigin: 'agent' });
       const primary = resolveSource(op.primary_input, op.primary_branch, 'primary_input', node.nodeId);
-      const others = wireProcess(node, code, primary);
+      const { others, notes } = wireProcess(node, code, primary);
       registerRef(op, node.nodeId);
       return {
         kind: 'add', type: 'process', title: `New process "${name}"`, nodeIds: [node.nodeId],
-        lines: [`df = "${stepSourceLabel(next, primary)}"`, ...others.map((b) => `${b.alias} = "${b.label}"`),
+        lines: [`df = "${stepSourceLabel(next, primary)}"`, ...others.map((b) => `${b.alias} = "${b.label}"`), ...notes,
           'Not run yet: running it produces its output branches.'],
         diffs: [{ label: 'Code', before: '', after: code }],
       };
@@ -753,7 +753,7 @@ export function planChangeSet(state, operations, ctx) {
           codeChanged.add(node.nodeId);
         }
         if ('primary_input' in set || 'primary_branch' in set) lines.push(`df = "${stepSourceLabel(next, primary)}"`);
-        wireProcess(node, code, primary);
+        lines.push(...wireProcess(node, code, primary).notes);
         if (node.dfResults) lines.push('Its last output no longer reflects the code until it is run again.');
       }
 
