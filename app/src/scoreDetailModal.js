@@ -558,13 +558,14 @@ function parseFlexibleNonNegativeNumber(raw) {
 
 /**
  * Create Review node and start review API (job-based, like Run). Polling is handled by workflowCanvas.
- * @param {{ scoreNodeId: string, getReviewPayload: () => { prompt_sections, prompt_full_text?, run_results, output_fields, comparison_rows } | null, credentialId: string }} options
+ * @param {{ scoreNodeId: string, getReviewPayload: () => { prompt_sections, prompt_full_text?, run_results, output_fields, comparison_rows } | null, credentialId: string, at?: { x: number, y: number } }} options
+ *   at: where the new Review goes on the canvas (a line let go over empty canvas)
  * @returns {Promise<{ reviewNodeId: string } | null>} reviewNodeId after node is created; null if payload/credential invalid
  */
-export async function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId }) {
+export async function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId, at }) {
   const payload = await Promise.resolve(getReviewPayload && getReviewPayload());
   if (!credentialId || !payload || !payload.prompt_sections || !payload.prompt_sections.length) return Promise.resolve(null);
-  const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } });
+  const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId, at } });
   document.dispatchEvent(addEvent);
   const reviewNodeId = addEvent.detail?.reviewNodeId || '';
   if (!reviewNodeId) return Promise.resolve(null);

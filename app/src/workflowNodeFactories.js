@@ -643,7 +643,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
-      // A branch offers new steps on that branch (stepOutputMenu.js) instead of opening the window.
+      // A branch offers new steps on that branch (outputMenu.js) instead of opening the window.
       const branch = e.target.closest('.workflow-node__port-row[data-port-side="right"][data-port-id]:not(.workflow-node__port-row--unavailable)');
       if (branch) {
         showNodeContextMenu(e.clientX, e.clientY, node, { port: branch.dataset.portId });
