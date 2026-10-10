@@ -1,6 +1,6 @@
 # 节点端口：实施计划
 
-状态：第 1–5 步完成（2026-10-09），下一步是第 6 步。接着做之前先读 §6。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
+状态：第 1–6 步完成（2026-10-10），下一步是第 7 步。接着做之前先读 §6。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
 
 本文把 [NODE_PORTS_DESIGN.md](NODE_PORTS_DESIGN.md)（下称“设计”）的第一部分（端口和拖线：设计第 1–10 节、第 12 节）拆成 7 个可以独立执行的步骤。第二部分（统一的运行入口、Pipeline 里的 Prompt：设计第 11、13 节）还在讨论，不在本计划内。
 
@@ -711,22 +711,42 @@ cd app && npm start
 
 **手工验证：**
 
-- [ ] 从顶栏新建 Run：窗口里提示拖 Prompt 和输入；在画布上拖好以后再打开，显示来源，可以做映射并运行（模拟应答）。
-- [ ] Process 窗口的输入列表与节点的端口一致；点击来源能跳过去。
-- [ ] Score 窗口的标准答案一行；点击能跳过去。
-- [ ] Run Pipeline 对话框的卡片点击后跳到节点。
-- [ ] 旧版和直接连线版 Kinase 示例都能打开，没有报错。
-- [ ] 全面回归：直接连线的 Kinase 示例副本中，依次单独运行各步骤（Run 用模拟应答），结果正确；Current Pipeline 面板和 Run Pipeline 照常可用（Run Pipeline 用假模型后端）。
+- [x] 从顶栏新建 Run：窗口里提示拖 Prompt 和输入；在画布上拖好以后再打开，显示来源，可以做映射并运行（模拟应答）。
+- [x] Process 窗口的输入列表与节点的端口一致；点击来源能跳过去。
+- [x] Score 窗口的标准答案一行；点击能跳过去。
+- [x] Run Pipeline 对话框的卡片点击后跳到节点。
+- [x] 旧版和直接连线版 Kinase 示例都能打开，没有报错。
+- [x] 全面回归：直接连线的 Kinase 示例副本中，依次单独运行各步骤（Run 用模拟应答），结果正确；Current Pipeline 面板和 Run Pipeline 照常可用（Run Pipeline 用假模型后端）。
 
 **Agent：** 无改动（第 7 步）。
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：** （待填）
+**完成记录：** 2026-10-10 完成，验收各项全部通过。
+
+- 实现：
+  - 新模块 `nodeSourceLink.js` 的 `renderSourceLink`：窗口里“读的是什么”那一行。有来源时是一个链接（色块加名字），点击关闭窗口，在画布上选中并滚动到那个节点；没有来源时用虚线框写出怎么接。三个窗口共用。
+  - **Run 窗口：** “Input prompt”“Input” 两行改为只读链接；没有时写 “Drag a Prompt onto this Run's prompt port.” / “Drag a Dataset or a step output onto this Run's input port.”。映射区在没有 Prompt 或没有输入时也写出要先拖线。窗口不再改 Prompt 和输入，回调 `getInputCandidates`、`getPrompts`、`selectPrompt`、`setInputSource`、`onWorkingSetChange` 删除，改为 `describePrompt`、`describeInput`、`revealNode`。
+  - **Process 窗口：** 选择器换成只读的输入列表（`df` 和每个参数，各配一个链接或 “Not connected …”），随编辑器里的代码刷新（`getInputRows` → 画布的 `readProcessInputRows`，用窗口里还没保存的代码算端口）。“Use as df”“Change source…” 随选择器去掉；回调 `setPrimaryDataset`、`replaceInputSource` 删除。没有 `df` 时点 Run 提示在画布上把输出拖到 `df` 端口。下方的说明文字改为在画布上连接。
+  - **Score 窗口：** 标准答案一行改为只读链接，`selectGroundTruth` 和下拉框删除；打开窗口时按当前标准答案清理规则的逻辑保留（换标准答案时的清理在第 1 步已移到 `applyPortOp`）。
+  - **Run Pipeline 对话框：** 点击卡片关闭对话框，选中并滚动到这个节点（`showNode` → Pipeline 面板的 `revealCanvasNode` → 画布的 `revealNode`）；介绍文字改为在画布上把另一个 Dataset 拖到输入上。面板原来的 `openCanvasNode` 不再使用，换成 `revealCanvasNode`。
+  - **画布：** 新增 `describeSource`、`readProcessInputRows`、`revealNode`，删除 `readRunInputCandidates`、`replaceProcessInput`。
+  - **示例代码：** 注释改为 “Each other input is a parameter after df, named df_<name>; connect one by dragging an output onto this node's + port on the canvas.”；`isUntouchedSampleCode` 同时认新旧两种注释，所以已有项目里没改过的示例代码仍会跟着 `df` 换列。
+  - **删除：** `processInputPicker.js`、`nodePicker.js`、`stepInputs.js` 的 `candidateGroups` 及其测试、这些选择器的样式（`.process-input-picker*`、`.process-input-option*`、`.process-input-chip*`、`.run-detail-ws-picker`、`.run-detail-ws-trigger`、`.run-detail-ws-dropdown`、`.run-detail-ws-option`、`.run-detail-ws-group` 等；色块 `.run-detail-ws-trigger-color`、`.run-detail-ws-option-color` 还在用，保留）。
+  - **文档和注释：** `docs/PIPELINE_GUIDE.md` 改为在画布上拖线连接；`DATA_FLOW_DESIGN.md` §5.2、§5.3 注明已被本设计取代；`renderer.js`、`topBar.js`、`processSignature.js`、`workflowCanvas.js` 中描述“在窗口里选”的注释改正。Agent 的文字和注释在第 7 步改。
+- 与计划不同的地方：Run Pipeline 对话框的卡片计划里写的是“选中并滚动到这个节点”，最初用的是面板现成的 `focusCanvasNodes`，手工验证时发现那只是面板悬停时的临时高亮，随时会被清掉，所以改为与窗口链接相同的 `revealNode`。
+- 手工验证（桌面应用，真实鼠标事件；scratchpad `ports3/flow6.mjs`、`regress6.mjs`）：
+  - 顶栏新建 Run：窗口里两行都是怎么接的提示，没有选择器，映射区提示先拖 Prompt。拖好 Classify 和 Reviews 后再打开：两行显示 “Classify”“Reviews”，映射后运行（页面里的模拟应答）得到 4 行。点 “Reviews”：窗口关闭，画布上选中 Reviews。
+  - Process 窗口列出 `df = Reviews`、`df_gold = Gold`、`df_more_reviews = More reviews`，与节点端口一致；点 “Gold” 跳到 Gold。
+  - Score 窗口：没接标准答案时显示提示；把 Gold 拖到 `ground_truth` 后显示 “Gold”，点击跳到 Gold。
+  - Run Pipeline：对话框介绍文字为新的说法，卡片提示 “Show on the canvas”；点卡片后对话框关闭，画布上选中卡片对应的 Run。
+  - 旧版 Kinase 示例副本打开正常（25 个节点、66 个点、25 条线），Errors 为 0。
+  - 全面回归，直接连线版 Kinase 示例副本，后端换成假模型版本（scratchpad `step13/fake_backend.py`，Process 真实运行，UniProt search 真实联网查询）：9 个步骤依次单独运行，每步都得到新记录、没有报错；Run Pipeline（对话框 → Run）完成后 9 个步骤都切到这次运行的记录；Errors 为 0。回归脚本第一次在 UniProt search 之后就去打开下一步，那时 History 同步还没完成，窗口显示 “Waiting for upstream”；等同步完成后再打开就正常，属于脚本的节奏问题，窗口本身收到同步完成的事件后会刷新。
+- 测试：前端 253 → 252（删除 `candidateGroups` 的 1 项）；`pipelineRunInputs.test.mjs` 的介绍文字用例按新说法更新。后端 126 项不变。
 
 ---
 
@@ -786,22 +806,22 @@ cd app && npm start
 | 3 | 完成 | 2026-10-09 | `c220d53` | 243 | 126 | |
 | 4 | 完成 | 2026-10-09 | `0caacf2` | 245 | 126 | Dataset 右键多了 “Run a prompt on it” |
 | 5 | 完成 | 2026-10-09 | `2349cf2` | 253 | 126 | |
-| 6 | 未开始 | | | | | |
+| 6 | 完成 | 2026-10-10 | `2d6a07a` | 252 | 126 | |
 | 7 | 未开始 | | | | | |
 
-## 6. 接着做（2026-10-09 暂停时的状态）
+## 6. 接着做（2026-10-10 的状态）
 
 ### 6.1 做到哪里
 
-- 分支 `261009-node-ports`，已推到远端。最后的功能提交是 `2349cf2`（第 5 步），之后是它的完成记录。工作区干净。
-- 第 1–5 步完成，第 6、7 步未开始。下一步是**第 6 步：去掉窗口里的来源选择器**。
-- 前端 253 项、后端 126 项测试全部通过，构建通过（于 `2349cf2`）。
-- **现在不能发布。** 第 3–7 步要一起发布（§0 第 12 条）：现在用户能拖线断开输入，Agent 还不能；窗口里的来源选择器也还在。
+- 分支 `261009-node-ports`，已推到远端。最后的功能提交是 `2d6a07a`（第 6 步），之后是它的完成记录。工作区干净。
+- 第 1–6 步完成，第 7 步未开始。下一步是**第 7 步：Agent 同步**。
+- 前端 252 项、后端 126 项测试全部通过，构建通过（于 `2d6a07a`）。
+- **现在不能发布。** 第 3–7 步要一起发布（§0 第 12 条）：用户能拖线断开输入、把来源接到指定端口，Agent 还不能；Agent 的说明文字还在说“在 Run 窗口里选 Prompt 和输入”。
 - 不要合并。`261007-data-flow-design`（数据流的 14 个步骤）同样没有合并，用户要求两个分支都先留着。
 
 ### 6.2 现在的行为，接着做时要知道
 
-- 窗口里的来源选择器（Run 的 Prompt 和输入、Process 的输入、Score 的标准答案）还在，和拖线改的是同一份数据。第 6 步去掉。
+- 窗口里不再选择来源（第 6 步）：Run、Process、Score 窗口只显示当前来源，点击跳到那个节点；Run Pipeline 对话框的卡片也一样。
 - Process 的输入端口与代码参数双向同步（第 5 步）：拖到 `+` 加参数，代码里写的参数显示为端口（没接上时是空的，Process 不能运行），断开时去掉参数（代码在函数体里用到时拒绝）。
 - Process 还有其他输入时，`df` 不能断开，只能替换（§3.3 第 2 条的例外，用户已同意）。
 - 从输出拉出的线在空白处松开，弹出 `outputMenu.js` 的菜单，新节点放在松开处（第 4 步）。松开在节点上（包括别的节点的点上）则取消。
@@ -817,7 +837,8 @@ cd app && npm start
 - `app/src/workflowNodePorts.js`：把端口画到节点上（`renderNodePorts`、`applyPortTitles`、`findPortDot`、`centerWithin`）。
 - `app/src/workflowPortDrag.js`：拖线（`attachPortDrag`、`autoPanStep`）。测试 `app/tests/workflowPortDrag.test.mjs`。
 - `app/src/outputMenu.js`：从一个输出能新建什么（`outputMenuItems`），右键菜单、分支点击和在空白处松开共用。测试 `app/tests/outputMenu.test.mjs`。
-- `app/src/workflowCanvas.js` 里的接入点：`refreshNodePorts`、`portPoint`、`renderEdge`、`updateEdges`、`portState`、`applyPortOps`、`clientToCanvasPoint`、`placeNewNodeAt`、`showNodeContextMenu` 的 `port`/`at`、线上右键的监听，以及 `liveInputState()` 里补上的字段。
+- `app/src/nodeSourceLink.js`：窗口里“读的是什么”那一行（`renderSourceLink`）。
+- `app/src/workflowCanvas.js` 里的接入点：`refreshNodePorts`、`portPoint`、`renderEdge`、`updateEdges`、`portState`、`applyPortOps`、`clientToCanvasPoint`、`placeNewNodeAt`、`showNodeContextMenu` 的 `port`/`at`、`describeSource`、`readProcessInputRows`、`revealNode`、线上右键的监听，以及 `liveInputState()` 里补上的字段。
 - 样式：`app/src/workflowCanvas.css` 中 “Ports” 一段；三种类型的颜色在 `app/src/index.css`（`--port-table`、`--port-prompt`、`--port-score`）。
 - `app/src/processSampleCode.js`（Process 示例代码）、`app/src/scoreMappingBundle.js` 的 `scoreMappingForGroundTruth`（换标准答案时删规则）：第 1 步从窗口里移出来的。
 
@@ -829,6 +850,9 @@ cd app && npm start
 - **拖线一律用 CDP 的 `Input.dispatchMouseEvent`：** `mouseMoved` → `mousePressed` → 十几次 `mouseMoved`（每次间隔约 16 毫秒）→ `mouseReleased`，坐标用 `getBoundingClientRect()` 取点的中心。在页面里 `dispatchEvent` 合成的事件不可信，不要用它验证拖拽。
 - **找空白处松开：** 松开点附近 40 像素内不能有节点，也不能落在别的节点的点上（点的点击区域放大到 21 像素），否则不算空白处。测试时先用 `elementFromPoint` 扫出空位。
 - **Review 不调用模型：** 同样替换 `window.fetch`，让 `/api/review/analyze` 返回 `{ review_id }`、`/api/review/result/*` 一直返回运行中即可（只验证节点的创建和连线）。
+- **整条 Pipeline 不调用模型：** 先结束应用自己启动的后端（命令行含 `uvicorn main:app --port 8000`），再用后端的 Python 运行 scratchpad `step13/fake_backend.py`（`FAKE_LLM_DELAY=0.2`），它在 8000 端口提供同样的接口，模型调用全是假的。应用不会自动重启自己的后端。脚本见 DATA_FLOW_PLAN 第 12、13 步完成记录。
+- **底部面板：** Current Pipeline 面板可能是收起的，用 `aria-label="Toggle Panel"` 的按钮展开后才有 Run Pipeline 按钮。
+- **运行完一步再开下一步的窗口：** 等 History 同步完成（约 0.2 秒以上，或等 `workflow:history-resolved`），否则窗口会先显示 “Waiting for upstream”。
 - **Run 不调用模型：** 在渲染进程替换 `window.fetch`：`POST /api/run` 返回 `{ run_id: 'fake-1' }`，`/api/run/result/fake-1` 返回 `{ status: 'done', results: [{ row_index, input_row_index, output }] }`。要测“正在运行”，就让结果一直返回 `status: 'running'`，然后在 Run 窗口里点 Stop。Process 可以真实运行（Settings 里已设好 Python）。
 - **Run 结果的列名是 `Output: <字段>` 和 `Input: <列名>`**，写测试用的 Process 代码时要用这种列名。
 - **改 Process 代码：** 打开窗口，聚焦 `.cm-content`，`document.execCommand('selectAll')` 再 `insertText`；关窗口时窗口会同步一次输入。
