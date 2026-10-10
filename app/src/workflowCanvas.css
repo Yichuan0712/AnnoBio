@@ -164,14 +164,6 @@
   pointer-events: none;
 }
 
-/* Arrow markers: fill via CSS variables so they follow theme. currentColor on the line does not propagate to markers in SVG. */
-#workflow-arrow path {
-  fill: var(--text-muted);
-}
-#workflow-arrow-hover path {
-  fill: var(--text);
-}
-
 .workflow-canvas__edges .workflow-edge--compare .workflow-edge-hit {
   pointer-events: stroke;
   cursor: pointer;
@@ -182,12 +174,17 @@
   pointer-events: none;
 }
 
+/* The lines of the selected nodes and of the node under the pointer. */
+.workflow-edge--active .workflow-edge-line:not(.workflow-edge--missing-branch) {
+  stroke: var(--text);
+  stroke-width: 3;
+}
+
 /* Only prompt comparisons advertise an action, on both the line and its label. */
 .workflow-edge--compare:hover .workflow-edge-line,
 .workflow-edge--compare:focus-visible .workflow-edge-line {
   stroke: var(--text);
   stroke-width: 3;
-  marker-end: url(#workflow-arrow-hover);
   transition: stroke 0.15s ease, stroke-width 0.15s ease;
 }
 
@@ -246,7 +243,13 @@
   display: flex;
   flex-direction: column;
   transition: box-shadow 0.2s ease;
-  overflow: hidden;
+  /* Port dots sit half outside the node; the title and body clip their own text. */
+  overflow: visible;
+}
+
+/* A node with port rows grows with them, so every dot stays on the node. */
+.workflow-node:has(> .workflow-node__ports) {
+  max-height: none;
 }
 
 .workflow-node:hover {
@@ -304,7 +307,6 @@
   min-width: 110px;
   max-width: 160px;
   width: 160px;
-  overflow: hidden;
   border-radius: 2px;
 }
 
@@ -317,7 +319,6 @@
   min-width: 110px;
   max-width: 160px;
   width: 160px;
-  overflow: hidden;
   border-radius: 2px;
 }
 
@@ -334,7 +335,6 @@
   min-width: 110px;
   max-width: 160px;
   width: 160px;
-  overflow: hidden;
   border-radius: 2px;
 }
 
@@ -351,7 +351,6 @@
   min-width: 110px;
   max-width: 160px;
   width: 160px;
-  overflow: hidden;
   border-radius: 2px;
 }
 
@@ -366,7 +365,6 @@
   min-width: 110px;
   max-width: 160px;
   width: 160px;
-  overflow: hidden;
   border-radius: 2px;
 }
 
@@ -374,68 +372,137 @@
   border-radius: 2px 2px 0 0;
 }
 
-/* Process output branches (processOutputPorts.js): one right-aligned row per branch, above the progress bar. */
-.workflow-node__process-outputs {
+/* Ports (nodePorts.js, workflowNodePorts.js): dots on a node's edges that lines join. Solid dots are
+   what a node reads (left) and gives (right), coloured by type; hollow dots are where it came from and
+   what was made from it. Named ports get a row each under the header; a lone unnamed one sits on the
+   header. */
+.workflow-node__ports {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0 9px;
+}
+
+.workflow-node__ports-side {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
   gap: 2px;
-  padding: 4px 8px 9px;
+  min-width: 0;
 }
 
-.workflow-node__process-outputs[hidden] {
-  display: none;
+/* Inputs keep their names unless they need more than half the node; outputs take the rest. */
+.workflow-node__ports-side--left {
+  flex: 0 0 auto;
+  max-width: 100%;
 }
 
-.workflow-node__process-port {
+.workflow-node__ports-side--left:not(:only-child) {
+  max-width: 50%;
+}
+
+.workflow-node__ports-side--right {
+  flex: 0 1 auto;
+  align-items: flex-end;
+  margin-left: auto;
+}
+
+.workflow-node__port-row {
+  position: relative;
   display: flex;
   align-items: center;
   max-width: 100%;
+  min-height: 14px;
   font-size: 10px;
   line-height: 14px;
   color: var(--text-muted);
 }
 
-.workflow-node__process-port-name {
+.workflow-node__port-row[data-port-side="left"] {
+  padding-left: 10px;
+}
+
+.workflow-node__port-row[data-port-side="right"] {
+  padding-right: 10px;
+}
+
+.workflow-node__port-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workflow-node__process-port::after {
-  content: '';
-  flex-shrink: 0;
-  width: 5px;
-  height: 5px;
-  margin-left: 4px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.workflow-node__process-port[data-port] {
+/* A Process branch offers new steps on it (stepOutputMenu.js). */
+.workflow-node--process .workflow-node__port-row[data-port-side="right"][data-port-id]:not(.workflow-node__port-row--unavailable) {
   cursor: pointer;
 }
 
-.workflow-node__process-port[data-port]:hover {
+.workflow-node--process .workflow-node__port-row[data-port-side="right"][data-port-id]:not(.workflow-node__port-row--unavailable):hover {
   color: var(--text);
 }
 
-.workflow-node__process-port--dynamic {
+.workflow-node__port-row--unavailable .workflow-node__port-name {
   font-style: italic;
+}
+
+.workflow-node__port-row--mismatch {
+  color: var(--status-warning);
+}
+
+.workflow-node__header {
+  position: relative;
+}
+
+.workflow-node__port {
+  position: absolute;
+  top: calc(50% - 4.5px);
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-bar);
+  background: var(--port-color, var(--text-muted));
+  z-index: 1;
+}
+
+.workflow-node__port[data-port-side="left"] {
+  left: -5px;
+}
+
+.workflow-node__port[data-port-side="right"] {
+  right: -5px;
+}
+
+.workflow-node__port--header-bottom {
+  top: calc(100% - 4.5px);
+}
+
+.workflow-node__port[data-port-type="table"] {
+  --port-color: var(--port-table);
+}
+
+.workflow-node__port[data-port-type="prompt"] {
+  --port-color: var(--port-prompt);
+}
+
+.workflow-node__port[data-port-type="score"] {
+  --port-color: var(--port-score);
+}
+
+.workflow-node__port--lineage {
+  background: var(--bg-bar);
+  border-color: var(--text-muted);
+}
+
+/* Nothing can read this output yet (its branches are not known). */
+.workflow-node__port--unavailable {
+  opacity: 0.45;
 }
 
 /* Waiting for an upstream step's result (runHistoryResolver.js waitingForUpstream). */
 .workflow-node[data-waiting-for-upstream="1"] {
   opacity: 0.6;
-}
-
-.workflow-node__process-port--dynamic::after {
-  display: none;
-}
-
-.workflow-node__process-outputs--mismatch .workflow-node__process-port {
-  color: var(--status-warning);
 }
 
 /* Run progress: bar at bottom fills left-to-right with working set color；右侧直角，不设圆角 */

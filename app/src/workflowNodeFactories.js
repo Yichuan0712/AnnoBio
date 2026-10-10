@@ -1,37 +1,7 @@
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
-import { effectiveProcessOutputs, showsProcessOutputs } from './processOutputPorts.js';
 import { sourceKey } from './stepInputs.js';
 import { readSavedFrom } from './savedDatasets.js';
-
-const PROCESS_OUTPUT_MISMATCH = 'Branches returned by the last run differ from the code';
-
-/** Shows a Process node's output branches (processOutputPorts.js) between its header and progress bar. */
-export function refreshProcessOutputStrip(node) {
-  const strip = node?.querySelector('.workflow-node__process-outputs');
-  if (!strip) return;
-  const outputs = effectiveProcessOutputs({
-    detected: node.dataset.processOutputPorts,
-    dfResults: node.dataset.processDfResults || node.dataset.processResults,
-  });
-  const visible = showsProcessOutputs(outputs);
-  const labels = !visible ? [] : outputs.dynamic ? [''] : outputs.ports;
-  strip.replaceChildren(...labels.map((port) => {
-    const label = document.createElement('span');
-    label.className = port ? 'workflow-node__process-port' : 'workflow-node__process-port workflow-node__process-port--dynamic';
-    if (port) label.dataset.port = port;
-    const name = document.createElement('span');
-    name.className = 'workflow-node__process-port-name';
-    name.textContent = port || 'dynamic outputs';
-    label.append(name);
-    label.title = outputs.mismatch ? PROCESS_OUTPUT_MISMATCH
-      : port ? `Output branch "${port}"` : 'Its branches are known once the Process has run';
-    return label;
-  }));
-  strip.hidden = !visible;
-  strip.classList.toggle('workflow-node__process-outputs--mismatch', visible && outputs.mismatch);
-  node.classList.toggle('workflow-node--no-body', !visible);
-}
 
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
@@ -646,10 +616,8 @@ export function createWorkflowNodeFactories(deps = {}) {
         <span class="workflow-node__title">${escapeHtml(processTitle)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
-      <div class="workflow-node__process-outputs" hidden></div>
       <div class="workflow-node__process-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
-    refreshProcessOutputStrip(node);
     nodesLayer.appendChild(node);
 
     const deleteBtn = node.querySelector('.workflow-node__delete');
@@ -680,10 +648,10 @@ export function createWorkflowNodeFactories(deps = {}) {
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
-      // A branch label offers new steps on that branch (stepOutputMenu.js) instead of opening the window.
-      const portLabel = e.target.closest('.workflow-node__process-port[data-port]');
-      if (portLabel) {
-        showNodeContextMenu(e.clientX, e.clientY, node, { port: portLabel.dataset.port });
+      // A branch offers new steps on that branch (stepOutputMenu.js) instead of opening the window.
+      const branch = e.target.closest('.workflow-node__port-row[data-port-side="right"][data-port-id]:not(.workflow-node__port-row--unavailable)');
+      if (branch) {
+        showNodeContextMenu(e.clientX, e.clientY, node, { port: branch.dataset.portId });
         return;
       }
       const processNodeId = node.dataset.nodeId;

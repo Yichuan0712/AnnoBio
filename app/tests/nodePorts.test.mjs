@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   PORT_TYPES, applyPortOp, checkConnect, checkDisconnect, derivedEdges, edgeEndpoints, keepMappedColumns, keepSharedMapping, nodePorts,
+  portLayout, portTitles,
 } from '../src/nodePorts.js';
 import { buildDefaultProcessCode, isUntouchedSampleCode } from '../src/processSampleCode.js';
 import { withProcessParameters } from '../src/processSignature.js';
@@ -404,4 +405,49 @@ test('sample code counts as untouched whatever inputs follow df', () => {
   assert.equal(isUntouchedSampleCode(sample.trim(), ['pmid']), true);
   assert.equal(isUntouchedSampleCode(sample, ['text']), false);
   assert.equal(isUntouchedSampleCode(`${sample}# edited\n`, ['pmid']), false);
+});
+
+// ---------- how ports are shown ----------
+
+test('a lone unnamed port sits on the header; named ports get rows', () => {
+  const state = canvas();
+  const layout = (nodeId) => {
+    const { left, right } = portLayout(nodePorts(state, nodeId));
+    const side = ({ header, rows, lineage }) => ({ header: header?.id ?? null, rows: ids(rows), lineage });
+    return { left: side(left), right: side(right) };
+  };
+  assert.deepEqual(layout('extract'), {
+    left: { header: null, rows: ['prompt', 'input'], lineage: null },
+    right: { header: 'result', rows: [], lineage: 'header-bottom' },
+  });
+  assert.deepEqual(layout('abstracts'), { left: { header: null, rows: [], lineage: null }, right: { header: 'result', rows: [], lineage: null } });
+  assert.deepEqual(layout('v2'), { left: { header: null, rows: [], lineage: 'header' }, right: { header: 'prompt', rows: [], lineage: null } });
+  assert.deepEqual(layout('split'), { left: { header: null, rows: ['df'], lineage: null }, right: { header: null, rows: ['ready', 'rewrite'], lineage: null } });
+  assert.deepEqual(layout('merge').right, { header: 'result', rows: [], lineage: null });
+  assert.deepEqual(layout('review'), { left: { header: 'score', rows: [], lineage: null }, right: { header: null, rows: [], lineage: 'header' } });
+  assert.deepEqual(layout('sampler').right, { header: null, rows: [], lineage: 'header' });
+  const withLineageRows = portLayout({ inputs: [], outputs: [{ id: 'a', showLabel: true }, { id: 'b', showLabel: true }], lineageIn: false, lineageOut: true });
+  assert.equal(withLineageRows.right.lineage, 'row');
+});
+
+test('hover text says what an input reads, what an output gives, and where a node came from', () => {
+  const state = canvas();
+  const titles = (nodeId) => portTitles(state, nodeId, nodePorts(state, nodeId));
+  assert.deepEqual(titles('extract').inputs, { prompt: 'prompt: Reads "Extract v1"', input: 'input: Reads "Abstracts"' });
+  assert.equal(titles('extract').outputs.result, 'result · no result yet');
+  assert.equal(titles('extract').lineageOut, 'Saved as Dataset "Saved"');
+  assert.equal(titles('abstracts').outputs.result, 'result · 1 row · pmid, text');
+  assert.equal(titles('merge').inputs.df, 'df: Reads "Split · ready"');
+  assert.equal(titles('fresh').inputs.df, 'df: Not connected');
+  assert.match(titles('score').inputs.run, /^run: Reads "Extract v1"\nA Score compares/);
+  assert.equal(titles('review').inputs.score, 'score: Reads "Score"\nA Review analyzes the Score it was created from. Start a new Review from another Score.');
+  assert.match(titles('dyn').outputs.result, /once the Process has run/);
+  assert.equal(titles('v2').lineageIn, 'New version of "Extract v1"');
+  assert.equal(titles('v1').lineageOut, 'New version "Extract v2"');
+  assert.equal(titles('v3').lineageIn, 'Created by Apply in Review "Review"');
+  assert.equal(titles('review').lineageOut, 'Applied as Prompt "Extract v3"');
+  assert.equal(titles('sample').lineageIn, 'Sampled by "Sample"');
+  assert.equal(titles('sampler').lineageOut, 'Sample "Sample 20"');
+  assert.equal(titles('saved').lineageIn, 'Saved from Run of "Extract v1"');
+  assert.equal(titles('abstracts').lineageIn, '');
 });

@@ -15,7 +15,7 @@ import { resolveDataframeProcessCode } from './processCode.js';
 import { effectiveProcessOutputs, showsProcessOutputs } from './processOutputPorts.js';
 import { buildDefaultProcessCode, isUntouchedSampleCode } from './processSampleCode.js';
 import { parseProcessSignature, withProcessParameters } from './processSignature.js';
-import { readSavedFrom } from './savedDatasets.js';
+import { readSavedFrom, savedFromLabel } from './savedDatasets.js';
 import { scoreMappingForGroundTruth } from './scoreMappingBundle.js';
 import {
   RESULT_PORT, DATA_EDGE, processInputSources, processPrimarySource, readsFromStep, replaceProcessInputSource,
@@ -217,6 +217,87 @@ export function nodePorts(state, nodeId) {
     lineageIn: edges.some(({ ends }) => ends.to.lineage && ends.to.nodeId === id),
     lineageOut: edges.some(({ ends }) => ends.from.lineage && ends.from.nodeId === id),
   };
+}
+
+// ---------- how ports are shown ----------
+
+/**
+ * Where each side's dots go (NODE_PORTS_PLAN.md step 2): a side with one unnamed port puts it at the
+ * middle of the header; named ports go in rows under the header. A hollow lineage dot takes the
+ * header's middle when the side has no port, follows the rows when there are some, and otherwise
+ * sits at the bottom of the header.
+ * @returns {{ left: Side, right: Side }} Side: `{ header: port|null, rows: port[], lineage: 'header'|'row'|'header-bottom'|null }`
+ */
+export function portLayout(ports) {
+  const side = (items, hasLineage) => {
+    const header = items.length === 1 && !items[0].showLabel ? items[0] : null;
+    const rows = header ? [] : items;
+    const lineage = !hasLineage ? null : header ? 'header-bottom' : rows.length ? 'row' : 'header';
+    return { header, rows, lineage };
+  };
+  return { left: side(ports?.inputs || [], !!ports?.lineageIn), right: side(ports?.outputs || [], !!ports?.lineageOut) };
+}
+
+const LINEAGE_IN = {
+  'prompt-to-prompt': (name) => `New version of "${name}"`,
+  'prompt-review-to-prompt': (name) => `Created by Apply in Review "${name}"`,
+  'dataset-to-dataset': (name) => `New version of "${name}"`,
+  'sampler-to-dataset': (name) => `Sampled by "${name}"`,
+};
+const LINEAGE_OUT = {
+  'prompt-to-prompt': (name) => `New version "${name}"`,
+  'prompt-review-to-prompt': (name) => `Applied as Prompt "${name}"`,
+  'dataset-to-dataset': (name) => `New version "${name}"`,
+  'sampler-to-dataset': (name) => `Sample "${name}"`,
+  'saved-from': (name) => `Saved as Dataset "${name}"`,
+};
+const rowsText = (count) => `${count} row${count === 1 ? '' : 's'}`;
+
+/** How a source an input reads is named: a Prompt or Score by its name, anything else as stepInputs.js names it. */
+function sourceName(state, source) {
+  if (source?.kind === 'prompt' || source?.kind === 'score') return nodeLabel(state, source.nodeId);
+  return stepSourceLabel(state, source);
+}
+
+/**
+ * The hover text of each dot of one node (NODE_PORTS_PLAN.md step 2): an output's rows and columns
+ * or why nothing can read it, what an input reads, and where the node came from or what was made
+ * from it. `ports` is nodePorts(state, nodeId).
+ * @returns {{ inputs: Record<string, string>, outputs: Record<string, string>, lineageIn: string, lineageOut: string }}
+ */
+export function portTitles(state, nodeId, ports) {
+  const node = findNode(state, nodeId);
+  const id = nodeIdOf(node);
+  const inputs = {};
+  for (const item of ports?.inputs || []) {
+    const reads = item.source ? `Reads "${sourceName(state, item.source)}"` : 'Not connected';
+    inputs[item.id] = [`${item.label}: ${reads}`, item.fixed].filter(Boolean).join('\n');
+  }
+  const outputs = {};
+  for (const item of ports?.outputs || []) {
+    let text = item.label;
+    if (item.unavailable) text = item.unavailable;
+    else if (item.type === PORT_TYPES.TABLE) {
+      const output = stepOutputTable(state, { nodeId: id, port: item.id, kind: node?.type });
+      const headers = output.table?.headers || [];
+      text = output.table
+        ? `${item.label} · ${rowsText(output.table.rows?.length || 0)} · ${headers.length ? headers.join(', ') : 'no columns'}`
+        : `${item.label} · no result yet`;
+    }
+    outputs[item.id] = [text, item.mismatch].filter(Boolean).join('\n');
+  }
+  const lineage = allEdges(state).filter((edge) => LINEAGE_EDGE_TYPES.has(edge?.type));
+  const savedFromText = (dataset) => {
+    const savedFrom = readSavedFrom(findNode(state, dataset)?.savedFrom);
+    return savedFrom ? savedFromLabel(state, savedFrom) : '';
+  };
+  const lineageIn = lineage.filter((edge) => String(edge.toId) === id)
+    .map((edge) => (edge.type === 'saved-from' ? savedFromText(id) : LINEAGE_IN[edge.type]?.(nodeLabel(state, edge.fromId)) || ''))
+    .filter(Boolean).join('\n');
+  const lineageOut = lineage.filter((edge) => String(edge.fromId) === id)
+    .map((edge) => LINEAGE_OUT[edge.type]?.(nodeLabel(state, edge.toId)) || '')
+    .filter(Boolean).join('\n');
+  return { inputs, outputs, lineageIn, lineageOut };
 }
 
 // ---------- connecting and disconnecting ----------
