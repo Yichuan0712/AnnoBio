@@ -73,7 +73,7 @@ export const AGENT_TOOL_DEFINITIONS = [
   ),
   tool(
     'inspect_node',
-    'Full configuration of one node: prompt sections, inputs and output schema; dataset columns, a preview and where it came from (producedBy); process code, inputs (a dataset or a step output, with branch and alias), every input it could read under its df_<alias> (availableInputs), its branches and which steps read them; run input (a dataset or a step output), mapping, model and progress; what a run or process waits for (waitingFor); score rules and metrics; review suggestions with verification results; plus its connections and any configuration problems. Run and Process nodes also include saved History records with readable input/output descriptions and currentHistoryRecordId.',
+    'Full configuration of one node: prompt sections, inputs and output schema; dataset columns, a preview and where it came from (producedBy); process code, inputs (a dataset or a step output, with branch and alias), every input it could read under its df_<alias> (availableInputs), its branches and which steps read them; run input (a dataset or a step output), mapping, model and progress; what a run or process waits for (waitingFor); score rules and metrics; review suggestions with verification results; plus its connections, its ports (the dots on its edges: inputs with what each reads and why one cannot be changed, outputs with who reads them; connect and disconnect use these input ids) and any configuration problems. Run and Process nodes also include saved History records with readable input/output descriptions and currentHistoryRecordId.',
     { node_id: NODE_ID },
     ['node_id'],
   ),
@@ -146,6 +146,8 @@ Operations ("op" plus the fields listed):
 - save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a plain dataset that records the process, branch and current History record it came from. Only to freeze or hand-edit an output. Fails if the process has no History record.
 - apply_review: ref, review, suggestion_ids, name?. Creates a new prompt from the review's prompt with those suggestions applied.
 - update: node, set {field: value}. prompt: name, note, section_edits or sections, input_types, output. dataset: name, note, columns, rows (text-only ordinary datasets). process: name, code, primary_input, primary_branch. run: name, prompt, input, input_branch, input_mapping (with History enabled, changing these inputs selects a different result or a new run). score: name, ground_truth, comparison (+ pairing, combine), match_code. sampler, review: name. A prompt or dataset that has produced results is locked: only its name and note can change; make a new version (add_prompt_version) or a new dataset (add_dataset) instead. A process's code stays editable; History keeps each run.
+- connect: node, input, source, branch?. Changes what one input of an existing node reads, as dragging a line onto that input on the canvas does. input is an input id from inspect_node's ports: a run's prompt (source: a prompt) or input; a process's df, one of its df_<name> parameters, or + (adds the source as a new input under its own alias and adds that parameter to process()); a score's ground_truth (source: a dataset). Otherwise source is a dataset, run or process, with branch for a process with several branches. It replaces what the input read; the same rules as on the canvas apply (no loops, not while the step runs, a process's df first, one input per source in a process). A score's run, a review's score and a sampler's source are fixed when the node is made.
+- disconnect: node, input. Leaves that input empty, as dragging its line off on the canvas does. A process's df can be disconnected only when nothing else is connected; disconnecting a df_<name> also removes that parameter, unless the code uses it.
 - select_history: record_id. Restore that Run or Process record together with the matching upstream and downstream History lineage, including the inputs it read. Use it alone in a proposal; the user sees and approves the affected nodes.
 - delete_history: record_id. Delete a non-current Run or Process record and every dependent history record. Use it alone in a proposal; the user sees the count before approving.
 - remove: node.`,
@@ -157,7 +159,7 @@ Operations ("op" plus the fields listed):
         items: {
           type: 'object',
           properties: {
-            op: { type: 'string', enum: ['add_dataset', 'import_dataset', 'add_sampler', 'add_process', 'add_prompt', 'add_prompt_version', 'add_run', 'add_score', 'save_run_results', 'save_process_output', 'apply_review', 'update', 'select_history', 'delete_history', 'remove'] },
+            op: { type: 'string', enum: ['add_dataset', 'import_dataset', 'add_sampler', 'add_process', 'add_prompt', 'add_prompt_version', 'add_run', 'add_score', 'save_run_results', 'save_process_output', 'apply_review', 'update', 'connect', 'disconnect', 'select_history', 'delete_history', 'remove'] },
           },
           required: ['op'],
           additionalProperties: true,

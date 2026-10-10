@@ -3,8 +3,8 @@
 ## What a Score needs
 
 - An upstream Run with results.
-- A ground-truth Dataset: rows with the expected values, sharing enough information with the Run's
-  input (an id column, or the input text itself) to pair rows.
+- A ground-truth Dataset, connected to the Score's `ground_truth` port: rows with the expected values,
+  sharing enough information with the Run's input (an id column, or the input text itself) to pair rows.
 - Mapping rules: each rule pairs one Run output field with one or more ground-truth columns and says how
   values are compared. Rules can also pair Run input columns with ground-truth columns to decide which
   ground-truth row belongs to which Run row.

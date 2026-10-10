@@ -6,7 +6,7 @@
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 import { displayCell, normalizeDatasetContent } from '../../datasetContent.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
-import { unconnectedProcessInputs } from '../../nodePorts.js';
+import { nodePorts, unconnectedProcessInputs } from '../../nodePorts.js';
 import {
   processInputBindings, processInputSources, processPrimarySource, processRequiredInputs, runInputSource, stepInputWaitingMessage,
 } from '../../stepInputs.js';
@@ -529,6 +529,8 @@ export function inspectWorkflowNode(canvasState, nodeId, options = {}) {
   const ctx = { canvasState, nodeLookup, nodeId: id };
   const inspector = INSPECTORS[node.type];
   const { details, diagnostics } = inspector ? inspector(node, ctx, options) : { details: {}, diagnostics: [] };
+  // The dots on the node's edges, as the user sees and drags them (nodePorts.js); connect and disconnect use these ids.
+  const ports = nodePorts(canvasState, id);
   return {
     found: true,
     nodeId: id,
@@ -537,6 +539,14 @@ export function inspectWorkflowNode(canvasState, nodeId, options = {}) {
     createdByAgent: node.nodeOrigin === 'agent' || undefined,
     upstream: neighbors(canvasState, nodeLookup, id, 'upstream'),
     downstream: neighbors(canvasState, nodeLookup, id, 'downstream'),
+    ports: ports && {
+      inputs: ports.inputs.map((input) => ({
+        id: input.id, source: input.source ? linkedSource(nodeLookup, input.source) : null, ...(input.fixed ? { fixed: input.fixed } : {}),
+      })),
+      outputs: ports.outputs.map((output) => ({
+        id: output.id, readBy: output.readers, ...(output.unavailable ? { unavailable: output.unavailable } : {}),
+      })),
+    },
     details,
     diagnostics,
   };

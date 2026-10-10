@@ -8,7 +8,7 @@
  * "$name" ref given when adding them.
  */
 import { normalizeDatasetContent } from '../../datasetContent.js';
-import { keepSharedMapping } from '../../nodePorts.js';
+import { PORT_TYPES, applyPortOp, checkConnect, checkDisconnect, keepSharedMapping, nodePorts } from '../../nodePorts.js';
 import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
@@ -134,7 +134,7 @@ export function planChangeSet(state, operations, ctx) {
   const codeChanged = new Set();
 
   /**
-   * A step's input as the node windows offer it (stepInputs.js candidates): a Dataset, a Run's results,
+   * A step's input as a user can connect it on the canvas (stepInputs.js candidates): a Dataset, a Run's results,
    * or one branch of a Process (`branch`; a Process with one output needs none). A Process's branches
    * are offered once its code has been checked or it has run, so one added or rewritten in this same
    * proposal cannot be read yet. Reading the step itself or one that reads it would make a loop.
@@ -210,6 +210,38 @@ export function planChangeSet(state, operations, ctx) {
     if (!next.connections.some((c) => c.fromId === fromId && c.toId === toId && c.type === type)) {
       next.connections.push({ fromId, toId, type });
     }
+  }
+
+  const promptInputNames = (prompt) => promptInputs(prompt, ctx.extractInputFields).map((input) => input.name);
+  /** How a source an input reads is named on a card: a Prompt by its title, a step or Dataset as its readers name it. */
+  const sourceLabel = (source) => (source.kind === 'prompt' ? nodeTitle(byId().get(source.nodeId)) : stepSourceLabel(next, source));
+
+  /**
+   * Joins the output `from` ({ nodeId, portId }) to the input `portId` of `node` with the rules a line
+   * dragged on the canvas follows (nodePorts.js), and changes what that line changes there.
+   * @returns {object|null} the op carried out; null when the input already read `from`
+   */
+  function connectPort(from, node, portId) {
+    const result = checkConnect(next, from, { nodeId: node.nodeId, portId });
+    if (!result.ok) fail(`${nodeTitle(node)}: ${result.reason}`);
+    applyPortOp(next, result.op, { promptInputs: promptInputNames });
+    return result.op;
+  }
+
+  /** The output a connect operation names for one input port: a Prompt, a Dataset, or a step's output. */
+  function connectSource(op, node, port) {
+    if (port.type === PORT_TYPES.PROMPT) return { nodeId: resolve(op.source, 'source', ['prompt']).nodeId, portId: 'prompt' };
+    if (port.id === 'ground_truth') return { nodeId: resolve(op.source, 'source', ['dataset']).nodeId, portId: RESULT_PORT };
+    const source = resolveSource(op.source, op.branch, 'source', node.nodeId);
+    return { nodeId: source.nodeId, portId: source.port };
+  }
+
+  function inputPortOf(op, node) {
+    const portId = clean(op.input);
+    const inputs = nodePorts(next, node.nodeId)?.inputs || [];
+    const port = inputs.find((item) => item.id === portId);
+    if (!port) fail(`${node.type === 'promptReview' ? 'Review' : node.type} "${nodeTitle(node)}" has no input "${portId}". Its inputs: ${inputs.map((item) => item.id).join(', ') || '(none)'}.`);
+    return port;
   }
 
   function disconnectWhere(predicate) {
@@ -672,6 +704,57 @@ export function planChangeSet(state, operations, ctx) {
         diffs: node.scoreMatchCode ? [{ label: 'Match code', before: '', after: node.scoreMatchCode }] : [] };
     },
 
+    // Change what one input reads, as dragging a line onto that input on the canvas does.
+    connect(op) {
+      const node = resolve(op.node, 'node', ['run', 'process', 'score', 'sampler', 'promptReview']);
+      touched.add(node.nodeId);
+      const port = inputPortOf(op, node);
+      const from = connectSource(op, node, port);
+      const before = port.source ? sourceLabel(port.source) : '';
+      const codeBefore = String(node.dfCode || '');
+      const mappingBefore = String(node.runInputToColumn || '');
+      const done = connectPort(from, node, port.id);
+      const kind = byId().get(from.nodeId)?.type;
+      const label = sourceLabel({ nodeId: from.nodeId, port: from.portId, kind });
+      // An output dropped on + becomes an input under its own alias.
+      const reader = nodePorts(next, node.nodeId).inputs.find((item) => item.source?.nodeId === from.nodeId && String(item.source.port || RESULT_PORT) === from.portId);
+      const name = reader?.id || port.id;
+      const lines = [!done ? `${name} already reads "${label}"; nothing changes.` : before ? `${name} reads "${label}" instead of "${before}"` : `${name} reads "${label}"`];
+      const diffs = [];
+      if (String(node.dfCode || '') !== codeBefore) {
+        diffs.push({ label: 'Code', before: codeBefore, after: String(node.dfCode || '') });
+        codeChanged.add(node.nodeId);
+        if (port.id === '+') lines.push(`${name} is added to process()'s parameters.`);
+      }
+      if (node.type === 'run' && String(node.runInputToColumn || '') !== mappingBefore) {
+        const source = runInputSource(next, node.nodeId);
+        if (source) lines.push(mappingLine(parseJson(node.runInputToColumn, {}), source));
+      }
+      return { kind: 'update', type: node.type, title: `Connect ${node.type} "${nodeTitle(node)}"`, nodeIds: [node.nodeId], lines, diffs };
+    },
+
+    // Leave one input empty, as dragging its line off on the canvas does.
+    disconnect(op) {
+      const node = resolve(op.node, 'node', ['run', 'process', 'score', 'sampler', 'promptReview']);
+      touched.add(node.nodeId);
+      const port = inputPortOf(op, node);
+      const result = checkDisconnect(next, { nodeId: node.nodeId, portId: port.id });
+      if (!result.ok) fail(`${nodeTitle(node)}: ${result.reason}`);
+      const label = sourceLabel(port.source);
+      const codeBefore = String(node.dfCode || '');
+      const mappingBefore = String(node.runInputToColumn || '');
+      applyPortOp(next, result.op, { promptInputs: promptInputNames });
+      const lines = [`${port.id} no longer reads "${label}"; it stays empty until something is connected.`];
+      const diffs = [];
+      if (String(node.dfCode || '') !== codeBefore) {
+        diffs.push({ label: 'Code', before: codeBefore, after: String(node.dfCode || '') });
+        codeChanged.add(node.nodeId);
+        lines.push(`${port.id} is removed from process()'s parameters.`);
+      }
+      if (node.type === 'run' && String(node.runInputToColumn || '') !== mappingBefore) lines.push('Its column mapping is cleared.');
+      return { kind: 'update', type: node.type, title: `Disconnect ${node.type} "${nodeTitle(node)}"`, nodeIds: [node.nodeId], lines, diffs };
+    },
+
     update(op) {
       const node = resolve(op.node, 'node');
       const set = op.set && typeof op.set === 'object' ? op.set : fail('update needs set: {field: value}.');
@@ -760,7 +843,7 @@ export function planChangeSet(state, operations, ctx) {
       if (node.type === 'run') {
         if (node.runPending) fail(`Run "${before}" is running; stop it before changing it.`);
         if ('prompt' in set || 'input' in set || 'input_branch' in set || 'input_mapping' in set) {
-          // Like the Run window: a Run picks its Prompt and input, and both lock once it has results.
+          // As on the canvas: without History, a Run's Prompt, input and mapping lock once it has results.
           if (next.historyVersion !== 1 && (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1')) {
             fail(`Run "${before}" already has results, so its prompt, input and mapping are fixed. Add a new run (add_run) instead.`);
           }
@@ -773,18 +856,18 @@ export function planChangeSet(state, operations, ctx) {
           const source = 'input' in set || 'input_branch' in set
             ? resolveSource(set.input ?? current.nodeId, set.input_branch, 'input', node.nodeId)
             : current;
-          // A new Prompt keeps only the old mapping for inputs it shares, as the Run window does.
+          // A new Prompt keeps only the old mapping for inputs it shares, as connecting one on the canvas does.
           const oldMapping = parseJson(node.runInputToColumn, {});
           const keptMapping = prompt.nodeId === currentPromptId
             ? oldMapping
             : keepSharedMapping(oldMapping, promptInputs(prompt, ctx.extractInputFields).map((input) => input.name));
           const mapping = validateMapping(prompt, source, set.input_mapping ?? keptMapping);
+          // The connections change as dragging them on the canvas would (nodePorts.js); the mapping is the one checked above.
           if (prompt.nodeId !== currentPromptId) {
-            disconnectWhere((c) => c.type === 'prompt-to-run' && c.toId === node.nodeId);
-            connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
+            connectPort({ nodeId: prompt.nodeId, portId: 'prompt' }, node, 'prompt');
             lines.push(`Prompt "${nodeTitle(prompt)}"`);
           }
-          setRunInputSource(next, node.nodeId, source);
+          connectPort({ nodeId: source.nodeId, portId: source.port }, node, 'input');
           node.runInputToColumn = JSON.stringify(mapping);
           lines.push(`Input "${stepSourceLabel(next, source)}"`, mappingLine(mapping, source));
         }
@@ -793,7 +876,8 @@ export function planChangeSet(state, operations, ctx) {
       if (node.type === 'score') {
         if ('ground_truth' in set) {
           const gt = resolve(set.ground_truth, 'ground_truth', ['dataset']);
-          node.scoreGroundTruthId = gt.nodeId;
+          // As connecting a ground truth on the canvas: rules on columns it lacks are dropped.
+          connectPort({ nodeId: gt.nodeId, portId: RESULT_PORT }, node, 'ground_truth');
           lines.push(`Ground truth "${nodeTitle(gt)}"`);
         }
         if ('match_code' in set) {

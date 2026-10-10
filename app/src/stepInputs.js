@@ -228,7 +228,7 @@ function keyedCandidates(state, processId) {
 }
 
 /**
- * Each candidate as the Process window shows it (processDatasetBindings.js processDatasetInputs):
+ * Each candidate with the alias it has or would have in a Process (processDatasetBindings.js processDatasetInputs):
  * its alias, and whether `code` makes it an input. `primaryId` (a source key) overrides the
  * recorded `df`.
  * @returns {Array<{ key, nodeId, port, kind, name, label, alias, primary, input, used, parameter }>}

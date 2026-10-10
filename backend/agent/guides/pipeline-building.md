@@ -37,10 +37,16 @@ Score and Review sit beside it for evaluation and are not part of the exported p
 - A step's columns are known once it has a result, so map a Run that reads another step after that
   step has run (the Run window works the same way). Plan the build as stages: add a step, run it, then
   add and map the next.
-- A Process's `df` is the input picked in its window; every other input (a Dataset or a step output)
-  it references in code as `df_<name>` is connected automatically. A Process's branches are known once
-  its code has been checked (shortly after it is saved) or it has run; only then can another step read
-  one of them.
+- A Process's `df` is the input on its `df` port; every other input (a Dataset or a step output) is a
+  `df_<name>` parameter with a port of its own. A parameter named after an input's alias connects that
+  input automatically; one that names no input is an empty port until an output is connected to it
+  (connect, or dragging on the canvas), and the Process cannot run until then. A Process's branches
+  are known once its code has been checked (shortly after it is saved) or it has run; only then can
+  another step read one of them.
+- Users connect inputs by dragging lines between the dots on node edges (inputs on the left, outputs on
+  the right). Letting a line go over empty canvas offers new steps on that output; dropping it on a
+  Process's `+` port adds an input. Node windows show what a node reads but do not choose it. Use
+  connect and disconnect to change an existing step's inputs.
 - **Save results** (Run) and **Create dataset** (Process) save the current output as an ordinary
   Dataset, only to freeze or hand-edit it. The Dataset records where it came from but does not follow
   that step; a step reading it starts a new pipeline from it.
