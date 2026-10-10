@@ -97,7 +97,7 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, add
     e.stopPropagation();
     if (!createDatasetOpt.disabled) openAddDatasetModal();
   });
-  // A Run or Process picks its Prompt / Dataset in its own window, so it can start on its own.
+  // A Run or Process gets its inputs by dragging on the canvas, so it can start on its own.
   const createRunOpt = editDrop.querySelector('[data-action="new-run"]');
   const createProcessOpt = editDrop.querySelector('[data-action="new-process"]');
   createRunOpt.addEventListener('click', (e) => {

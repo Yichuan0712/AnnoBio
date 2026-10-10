@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { outputMenuItems } from '../src/outputMenu.js';
-import { candidateGroups } from '../src/stepInputs.js';
 
 const ports = (list, extra = {}) => JSON.stringify({ ports: list, dynamic: false, error: '', codeHash: 'h', ...extra });
 const results = JSON.stringify([{ row_index: 0, output: { label: 'pos' } }]);
@@ -81,15 +80,4 @@ test('nodes without outputs offer nothing', () => {
   assert.deepEqual(outputMenuItems(state, 'sampler'), []);
   assert.deepEqual(outputMenuItems(state, 'review'), []);
   assert.deepEqual(outputMenuItems(state, 'missing'), []);
-});
-
-test('input pickers list Datasets, then Step outputs, leaving out an empty group', () => {
-  const raw = { kind: 'dataset', nodeId: 'raw' };
-  const run = { kind: 'run', nodeId: 'run' };
-  const branch = { kind: 'process', nodeId: 'split' };
-  assert.deepEqual(candidateGroups([run, raw, branch]), [
-    { label: 'Datasets', items: [raw] }, { label: 'Step outputs', items: [run, branch] },
-  ]);
-  assert.deepEqual(candidateGroups([raw]), [{ label: 'Datasets', items: [raw] }]);
-  assert.deepEqual(candidateGroups([]), []);
 });

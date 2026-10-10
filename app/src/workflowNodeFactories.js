@@ -43,7 +43,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     readRunInputSource,
     writeRunInputSource,
     readRunInputTable,
-    readRunInputCandidates,
+    describeSource,
+    readProcessInputRows,
+    revealNode,
     readSourceOutput,
     readStepInputStatus,
     sourceColor,
@@ -52,7 +54,6 @@ export function createWorkflowNodeFactories(deps = {}) {
     readProcessInputBindings,
     readProcessInputAliases,
     writeProcessInputs,
-    replaceProcessInput,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode,
@@ -96,11 +97,6 @@ export function createWorkflowNodeFactories(deps = {}) {
 
   function getConnectionsList() {
     return Array.isArray(getConnections?.()) ? getConnections() : [];
-  }
-
-  function onRunWorkingSetChange() {
-    updateEdges();
-    emitCanvasChanged();
   }
 
   function attachDrag(node) {
@@ -507,8 +503,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       e.preventDefault();
       e.stopPropagation();
       const runNodeId = node.dataset.nodeId;
-      // A Run picks its Prompt in its window; the prompt-to-run connection records that choice,
-      // so the Prompt is looked up on every call rather than fixed when the window opens.
+      // The Prompt is connected on the canvas (prompt-to-run); it is looked up on every call.
       const currentPromptNode = () => {
         const edge = getConnectionsList().find((c) => c.toId === runNodeId && c.type === 'prompt-to-run');
         return edge ? getNodeById(edge.fromId) : null;
@@ -535,41 +530,31 @@ export function createWorkflowNodeFactories(deps = {}) {
         try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
         return { sections: promptSectionsOf(promptNode), inputTypes, outputSchema: { return_shape: returnShape, fields } };
       }
-      function selectPrompt(promptNodeId) {
-        const connections = getConnectionsList();
-        for (let index = connections.length - 1; index >= 0; index -= 1) {
-          if (connections[index].toId === runNodeId && connections[index].type === 'prompt-to-run') connections.splice(index, 1);
-        }
-        if (promptNodeId) connections.push({ fromId: promptNodeId, toId: runNodeId, type: 'prompt-to-run' });
-        updateEdges();
-        emitCanvasChanged();
-      }
       openRunDetailModal({
         node,
         startRunNode,
-        // Datasets and step outputs (stepInputs.js runCandidateSources), and the table each gives.
-        getInputCandidates: () => readRunInputCandidates(node),
+        // The table the input gives (stepOutputs.js); the Prompt and the input are shown, not chosen, here.
         getInputTable: (source) => readSourceOutput(source),
-        getPrompts: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'))
-          .map((n) => ({
-            nodeId: n.dataset.nodeId || '',
-            name: promptNameOf(n) || 'Prompt',
-            color: promptColorAt(normalizeDatasetColorIndex(n.dataset.promptColorIndex) ?? 0),
-          })),
         getPromptId: () => currentPromptNode()?.dataset?.nodeId || '',
-        selectPrompt,
+        describePrompt: () => {
+          const promptNode = currentPromptNode();
+          return promptNode ? {
+            nodeId: promptNode.dataset.nodeId,
+            label: promptNameOf(promptNode) || 'Prompt',
+            color: promptColorAt(normalizeDatasetColorIndex(promptNode.dataset.promptColorIndex) ?? 0),
+          } : null;
+        },
+        describeInput: () => {
+          const source = readRunInputSource(node);
+          return source ? { nodeId: source.nodeId, ...describeSource(source) } : null;
+        },
+        revealNode,
         getPromptInputFields: () => extractInputFieldsFromSections(promptSectionsOf(currentPromptNode())),
         getPromptTemplate,
         unregisterPendingRun,
         getPendingRunId: () => pendingRuns.get(node.dataset.nodeId) || null,
         isRunNameAlreadyUsedForPrompt,
-        onWorkingSetChange: onRunWorkingSetChange,
         getInputSource: () => readRunInputSource(node),
-        // Rewriting the same source would only move its connection to the end of the list.
-        setInputSource: (source) => {
-          if (sourceKey(source) === sourceKey(readRunInputSource(node))) return;
-          writeRunInputSource(node, source);
-        },
         getInputStatus: () => readStepInputStatus(node),
         getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
           try {
@@ -669,7 +654,6 @@ export function createWorkflowNodeFactories(deps = {}) {
         }));
         return { bindings, primaryDatasetId, savedAliases: readProcessInputAliases(node) };
       }
-      const bindingFor = (key, code) => readProcessInputBindings(node, code, primaryKey()).find((binding) => binding.key === key) || null;
       /** Connects exactly the sources the code declares or uses and saves the alias each has there. */
       function syncProcessDependencies(code) {
         const inputs = readProcessInputBindings(node, code, primaryKey()).filter((binding) => binding.input);
@@ -682,18 +666,9 @@ export function createWorkflowNodeFactories(deps = {}) {
         runProcessNode,
         getProcessInputs,
         syncProcessDependencies,
-        setPrimaryDataset: (key, code) => {
-          writeProcessPrimarySource(node, key ? bindingFor(key, code) : null);
-          syncProcessDependencies(code);
-        },
-        // Another source for one input, under the same alias, so the code needs no change (design §3.5).
-        replaceInputSource: (fromKey, toKey, code) => {
-          const from = bindingFor(fromKey, code);
-          const to = bindingFor(toKey, code);
-          if (!from || !to || !replaceProcessInput(node, from, to)) return;
-          updateEdges();
-          emitCanvasChanged();
-        },
+        // df and each parameter of the code, with what is connected to it on the canvas.
+        getInputRows: (code) => readProcessInputRows(node, code),
+        revealNode,
         getInputStatus: () => readStepInputStatus(node),
         history: getHistoryForNode?.(processNodeId),
       });
@@ -880,6 +855,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       openScoreDetailModal({
         node,
+        revealNode,
         getWorkingSets: () => workingSets,
         getRunResultColumns,
         getGroundTruthHeaders,

@@ -178,9 +178,9 @@ function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
 /**
  * @param {Function|Array} pipelineSource a getter for live data, or a static array for callers
  * @param {{getCanvasState?: Function, getPipelineProjectId?: Function, getAssetProjectId?: Function,
- * highlightCanvasNodes?: Function, openCanvasNode?: Function, publishPipelineRun?: Function,
+ * highlightCanvasNodes?: Function, revealCanvasNode?: Function, publishPipelineRun?: Function,
  * isPipelineRunImported?: Function}} options live canvas hooks;
- * `openCanvasNode` opens a node's window; `publishPipelineRun` adds a finished run to node History
+ * `revealCanvasNode` selects a node and scrolls the canvas to it; `publishPipelineRun` adds a finished run to node History
  * and `isPipelineRunImported` says whether it is there already
  */
 export function showPipelineOverviewModal(pipelineSource, options = {}) {
@@ -207,7 +207,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     ? options.publishPipelineRun : null;
   let isPipelineRunImported = typeof options.isPipelineRunImported === 'function'
     ? options.isPipelineRunImported : async () => false;
-  let openCanvasNode = typeof options.openCanvasNode === 'function' ? options.openCanvasNode : () => {};
+  let revealCanvasNode = typeof options.revealCanvasNode === 'function' ? options.revealCanvasNode : () => {};
   let pipelines = [];
   let pipelineSignature = '';
   let refreshFrame = 0;
@@ -555,7 +555,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (typeof nextOptions.getAssetProjectId === 'function') getAssetProjectId = nextOptions.getAssetProjectId;
     if (typeof nextOptions.publishPipelineRun === 'function') publishPipelineRun = nextOptions.publishPipelineRun;
     if (typeof nextOptions.isPipelineRunImported === 'function') isPipelineRunImported = nextOptions.isPipelineRunImported;
-    if (typeof nextOptions.openCanvasNode === 'function') openCanvasNode = nextOptions.openCanvasNode;
+    if (typeof nextOptions.revealCanvasNode === 'function') revealCanvasNode = nextOptions.revealCanvasNode;
     syncProjectContext().catch(() => {});
   };
   refresh();
@@ -630,7 +630,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
           // the step to change it, and says only what keeps the run from starting.
           const confirmed = await openPipelineRunDialog({
             getSteps: () => pipelineInputSteps(getCanvasState(), currentRoute()),
-            openNode: (nodeId) => openCanvasNode(nodeId),
+            showNode: (nodeId) => revealCanvasNode(nodeId),
             check: async () => {
               const compiled = await compileCurrentPipeline({ canvasState: getCanvasState(), route: currentRoute() });
               if (compiled.spec) return [];

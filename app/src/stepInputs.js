@@ -113,7 +113,7 @@ function downstreamOf(state, nodeId) {
 
 /**
  * Whether `nodeId` is the step `stepId` or reads its data, directly or further down: it cannot be one
- * of that step's inputs, which would make a loop (the pickers leave it out, candidateSources).
+ * of that step's inputs, which would make a loop (candidateSources leaves it out).
  */
 export function readsFromStep(state, nodeId, stepId) {
   return String(nodeId) === String(stepId) || downstreamOf(state, stepId).has(String(nodeId));
@@ -147,18 +147,6 @@ function candidateSources(state, stepId) {
     });
   });
   return [...datasets, ...steps];
-}
-
-/**
- * Candidates as the input pickers list them (§5.3): Datasets, then step outputs. A group without
- * items is left out.
- * @returns {Array<{ label: 'Datasets' | 'Step outputs', items: object[] }>}
- */
-export function candidateGroups(candidates) {
-  return [
-    { label: 'Datasets', items: candidates.filter((candidate) => candidate.kind === 'dataset') },
-    { label: 'Step outputs', items: candidates.filter((candidate) => candidate.kind !== 'dataset') },
-  ].filter((group) => group.items.length);
 }
 
 /** Every source a Run could read. */

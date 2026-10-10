@@ -59,7 +59,7 @@ import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
 import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
-import { applyPortOp, checkDisconnect, edgeEndpoints, nodePorts, portTitles, unconnectedProcessInputs } from './nodePorts.js';
+import { ADD_INPUT_PORT, applyPortOp, checkDisconnect, edgeEndpoints, nodePorts, portTitles, unconnectedProcessInputs } from './nodePorts.js';
 import { applyPortTitles, centerWithin, findPortDot, renderNodePorts } from './workflowNodePorts.js';
 import { attachPortDrag } from './workflowPortDrag.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
@@ -86,7 +86,7 @@ import { codeHashOf, effectiveProcessOutputs, parseProcessOutputPorts } from './
 import { CANVAS_VERSION } from './canvasFormat.js';
 import {
   DATA_EDGE, RESULT_PORT, processInputAliases, processInputBindings, processPrimarySource, processRequiredInputs,
-  replaceProcessInputSource, runCandidateSources, runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource,
+  runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource,
   sourceKey, stepInputEdges, stepInputErrorNotice, stepInputWaitingMessage, stepSourceLabel,
 } from './stepInputs.js';
 import { stepOutputTable } from './stepOutputs.js';
@@ -2055,9 +2055,6 @@ export function buildWorkflowCanvas(root, options = {}) {
   function writeProcessInputs(processNode, value) {
     setProcessInputs(liveInputState(), processNode.dataset.nodeId, value);
   }
-  function replaceProcessInput(processNode, from, to) {
-    return replaceProcessInputSource(liveInputState(), processNode.dataset.nodeId, from, to);
-  }
 
   /**
    * What a Run reads (stepOutputs.js): `{ source, table, errorRowCount }`, or `{ source, waiting,
@@ -2137,19 +2134,40 @@ export function buildWorkflowCanvas(root, options = {}) {
     return node.style.borderColor || '';
   }
 
+  /** How a node's window names a source it reads: its label and color (stepInputs.js stepSourceLabel). */
+  function describeSource(source) {
+    return { label: stepSourceLabel(liveInputState(), source), color: sourceColor(source) };
+  }
+
   /**
-   * Every source a Run could read (stepInputs.js runCandidateSources) with its key and color. The
-   * source it reads now stays listed even when it is not a candidate any more (a branch that is gone).
+   * A Process's inputs as its window lists them: df and each parameter of `code` (the window's code,
+   * which may not be saved yet), with the source connected to each (nodePorts.js).
    */
-  function readRunInputCandidates(runNode) {
+  function readProcessInputRows(processNode, code) {
     const state = liveInputState();
-    const candidates = runCandidateSources(state, runNode.dataset.nodeId);
-    const current = runInputSource(state, runNode.dataset.nodeId);
-    if (current && !candidates.some((candidate) => sourceKey(candidate) === sourceKey(current))) {
-      const label = stepSourceLabel(state, current);
-      candidates.push({ ...current, name: label, label, unavailable: true });
-    }
-    return candidates.map((candidate) => ({ ...candidate, key: sourceKey(candidate), color: sourceColor(candidate) }));
+    const nodeId = processNode.dataset.nodeId;
+    const live = state.nodes.find((item) => item.nodeId === nodeId);
+    if (live) live.dfCode = code;
+    return (nodePorts(state, nodeId)?.inputs || []).filter((input) => input.id !== ADD_INPUT_PORT).map((input) => ({
+      alias: input.id,
+      nodeId: input.source?.nodeId || '',
+      ...(input.source ? describeSource(input.source) : { label: '', color: '' }),
+    }));
+  }
+
+  /** Shows a node on the canvas: selects it and scrolls it into the middle (a window's link to a source). */
+  function revealNode(nodeId) {
+    const node = getNodeById(nodeId);
+    if (!node) return;
+    selectedNodeIds = new Set([nodeId]);
+    applySelectionVisuals();
+    const left = parseFloat(node.style.left) || 0;
+    const top = parseFloat(node.style.top) || 0;
+    scrollWrapper.scrollTo({
+      left: Math.max(0, (left + node.offsetWidth / 2) * zoomLevel - scrollWrapper.clientWidth / 2),
+      top: Math.max(0, (top + node.offsetHeight / 2) * zoomLevel - scrollWrapper.clientHeight / 2),
+      behavior: 'smooth',
+    });
   }
 
   /** The table `source` gives now (stepOutputs.js), or why it has none: `{ table }` or `{ waiting, message }`. */
@@ -3134,7 +3152,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     writeRunInputSource,
     readRunInput,
     readRunInputTable,
-    readRunInputCandidates,
+    describeSource,
+    readProcessInputRows,
+    revealNode,
     readSourceOutput,
     readStepInputStatus,
     sourceColor,
@@ -3143,7 +3163,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     readProcessInputBindings,
     readProcessInputAliases,
     writeProcessInputs,
-    replaceProcessInput,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode: (options) => startRunNode(options),
@@ -3225,7 +3244,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     readRunInputSource,
     readRunInput,
     readRunInputTable,
-    readRunInputCandidates,
     readSourceOutput,
     readStepInputStatus,
     sourceColor,
@@ -3793,7 +3811,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId } }));
       },
       'run-this-prompt': () => newRunNode({ promptNode: node, at }),
-      // A new Run on this output; its Prompt is chosen in the Run window, which opens.
+      // A new Run on this output; its window opens, which says to connect a Prompt on the canvas.
       'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), open: true, at }),
       'process-output': (button) => newProcessNode({ inputSource: outputSource(button), at }),
       // A duplicate is a standalone node: no connections are copied (same for Datasets and Processes).
@@ -4553,9 +4571,9 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Adds a Process. A Process picks its df in its window; started from a Dataset or a step's output
-   * (`inputSource`), it begins with that one beside it. `open` opens its window, as when it is added
-   * from the top bar.
+   * Adds a Process. Its inputs are connected on the canvas; started from a Dataset or a step's output
+   * (`inputSource`), it begins with that one as df, beside it. `open` opens its window, as when it is
+   * added from the top bar.
    */
   function newProcessNode({ inputSource = null, open = false, at = null } = {}) {
     const sourceNode = inputSource?.nodeId ? getNodeById(inputSource.nodeId) : null;
@@ -4572,8 +4590,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Adds a Run. A Run picks its Prompt and input in its window; started from a Prompt or from a
-   * step's output (`inputSource`), it begins with that one beside it.
+   * Adds a Run. Its Prompt and input are connected on the canvas; started from a Prompt or from a
+   * step's output (`inputSource`), it begins with that one connected, beside it.
    */
   function newRunNode({ promptNode = null, inputSource = null, open = false, at = null } = {}) {
     const fromPrompt = promptNode?.dataset?.nodeType === 'prompt' || promptNode?.classList?.contains('workflow-node--prompt');
@@ -5955,7 +5973,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
         host: workspacePanels.pipelineHost,
         // Opens the node's own window, where its History is, the same way a new node opens.
-        openCanvasNode: (nodeId) => getNodeById(nodeId)?.click(),
+        revealCanvasNode: revealNode,
         getCanvasState,
         getPipelineProjectId,
         getAssetProjectId: getCurrentProjectId,
