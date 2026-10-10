@@ -1,6 +1,6 @@
 # 节点端口：实施计划
 
-状态：第 1–4 步完成（2026-10-09），下一步是第 5 步。接着做之前先读 §6。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
+状态：第 1–5 步完成（2026-10-09），下一步是第 6 步。接着做之前先读 §6。基于 `261009-node-ports` / `cf83fc4`（2026-10-09）。
 
 本文把 [NODE_PORTS_DESIGN.md](NODE_PORTS_DESIGN.md)（下称“设计”）的第一部分（端口和拖线：设计第 1–10 节、第 12 节）拆成 7 个可以独立执行的步骤。第二部分（统一的运行入口、Pipeline 里的 Prompt：设计第 11、13 节）还在讨论，不在本计划内。
 
@@ -641,10 +641,10 @@ cd app && npm start
 
 **手工验证：**
 
-- [ ] 把一个 Dataset 拖到 Process 的 `+`：代码多出参数，节点多出端口；运行时 `df_<名字>` 是这个表。
-- [ ] 在代码里手写 `df_notes`：关窗口后节点出现空的 `df_notes` 端口，节点提示缺输入；把一个 Run 的结果拖上去，运行时 `df_notes` 是它。
-- [ ] 断开一个只在签名里出现的别名：参数消失；断开一个在函数体里用到的别名：被拒绝并说明原因。
-- [ ] 撤销、重做；保存后重新打开。
+- [x] 把一个 Dataset 拖到 Process 的 `+`：代码多出参数，节点多出端口；运行时 `df_<名字>` 是这个表。
+- [x] 在代码里手写 `df_notes`：关窗口后节点出现空的 `df_notes` 端口，节点提示缺输入；把一个 Run 的结果拖上去，运行时 `df_notes` 是它。
+- [x] 断开一个只在签名里出现的别名：参数消失；断开一个在函数体里用到的别名：被拒绝并说明原因。
+- [x] 撤销、重做；保存后重新打开。
 
 **Agent（最低适配）：** Agent 读取或修改的 Process 可能带有空的参数端口：
 
@@ -653,11 +653,31 @@ cd app && npm start
 
 **验收：**
 
-- [ ] 前后端测试全部通过。
-- [ ] 构建通过。
-- [ ] 手工验证全部通过。
+- [x] 前后端测试全部通过。
+- [x] 构建通过。
+- [x] 手工验证全部通过。
 
-**完成记录：** （待填）
+**完成记录：** 2026-10-09 完成，验收各项全部通过。
+
+- 实现（`nodePorts.js`）：
+  - Process 的输入端口依次是：`df`；代码签名里 `df` 之后的每个 `df_<x>` 参数（没有来源时 `source` 为 null，显示为空端口）；连线上有、签名里没有的别名（代码在函数体里用到、没有声明的）；最后是 `+`（`ADD_INPUT_PORT`）。
+  - 新导出 `unconnectedProcessInputs(state, processId, code?)`：签名里没有来源的参数。
+  - 连接：拖到 `+` 时，Process 还没有 `df` 就成为 `df`（与窗口里“第一个勾选的成为 df”相同），否则是新操作 `process-add`：按名字推出别名（`processInputBindings`，已有的别名优先、重名加后缀），代码参数里加上它，并连上；拖到空的参数端口：用这个参数名作别名连上，代码不变；`df` 空着时不能接参数端口（“This Process has no df yet. Connect df first.”），因为没有标记 `df` 时第一个输入会被当作 `df`。
+  - 断开别名：新操作 `process-alias-remove`，去掉连线，并从参数中去掉它；代码在签名以外用到它时拒绝，原因与窗口相同：“The code uses df_x. Remove that use to stop reading this input.”。第 1 步留下的临时拒绝去掉了。
+  - `df` 能否断开改为看“除 `df` 以外有没有接上的输入”：空的参数端口和 `+` 不算。
+  - 修改代码时从节点上没有去掉首尾空白的代码开始，改完的代码保留原来的结尾（`resolveDataframeProcessCode` 会去掉首尾空白，只在没有 `dfCode` 时用它取旧格式代码）。
+- 运行：画布运行 Process 的入口（`readProcessExecutionInputs`）在有空参数端口时报错，例如 “df_notes is not connected. Drag an output onto that port on the canvas, or remove the parameter from the code.”。窗口点 Run 时会先同步一次输入（代码里出现某个候选的别名就自动连上），所以检查放在同步之后，窗口把它显示为一次失败的运行。
+- Agent（最低适配）：`inspect_node` 的 Process 详情多了 `unconnectedInputs`，诊断写明哪些没接；`wireProcess` 不再报错，确认卡片上写 “Not connected yet: df_x …”，并列出可以接的输入；`run_nodes` 拒绝运行有空参数端口的 Process。`try_process` 照旧对没有来源的别名报错（试运行要拿到所有输入）。
+- 手工验证（桌面应用，真实鼠标事件，Process 真实运行，没有调用模型；scratchpad `ports3/flow5.mjs`）：
+  - 新的测试项目里，Reviews 拖到 Split 的 `df`，代码改成只返回 `df`。
+  - 把 Gold 拖到 `+`：代码变成 `def process(df, df_gold)`，节点多出 `df_gold` 端口；打开窗口，编辑器里是新代码。
+  - 在窗口里把签名改成 `def process(df, df_gold, df_notes)`、函数体 `return df_gold`，关窗口：节点出现空的 `df_notes` 端口；点 Run 被拒绝，提示 `df_notes is not connected …`。
+  - 把 More reviews 拖到 `df_notes`：连上，代码不变；运行成功，结果是 Gold 的 4 行（`text`、`label`）。
+  - 拿起 `df_notes` 放到空白处：连线和参数一起去掉；拿起 `df_gold`（函数体用到）：被拒绝，提示原因；单击 `df_gold` 也显示同样的原因。
+  - 撤销：参数和连线一起回来；重做：一起去掉。
+  - 把签名改成带 `df_more_reviews`，关窗口：按名字自动连上 More reviews（原有规则）。
+  - 保存后重新打开：端口和代码与之前相同。
+- 测试：前端 245 → 253（`nodePorts.test.mjs` 30 → 38 项：参数成为端口、未声明的别名、`+`、没有 `df` 时的 `+`、空参数端口、`df` 空着时拒绝接参数、断开别名和被拒绝、`df` 能否断开；第 1、2 步的几个用例按 `+` 端口更新）；`agentStepInputs.test.mjs` 原来“代码里有对不上来源的别名时报错”的用例改为检查卡片提示和 `inspect_node`，`run_nodes` 用例加了空参数端口被拒绝。后端 126 项不变。
 
 ---
 
@@ -765,7 +785,7 @@ cd app && npm start
 | 2 | 完成 | 2026-10-09 | `e62cc57` | 238 | 126 | 用户已确认外观 |
 | 3 | 完成 | 2026-10-09 | `c220d53` | 243 | 126 | |
 | 4 | 完成 | 2026-10-09 | `0caacf2` | 245 | 126 | Dataset 右键多了 “Run a prompt on it” |
-| 5 | 未开始 | | | | | |
+| 5 | 完成 | 2026-10-09 | `2349cf2` | 253 | 126 | |
 | 6 | 未开始 | | | | | |
 | 7 | 未开始 | | | | | |
 
@@ -773,20 +793,20 @@ cd app && npm start
 
 ### 6.1 做到哪里
 
-- 分支 `261009-node-ports`，已推到远端。最后的功能提交是 `0caacf2`（第 4 步），之后是它的完成记录。工作区干净。
-- 第 1–4 步完成，第 5–7 步未开始。下一步是**第 5 步：Process 的输入端口与代码参数双向同步**。
-- 前端 245 项、后端 126 项测试全部通过，构建通过（于 `0caacf2`）。
+- 分支 `261009-node-ports`，已推到远端。最后的功能提交是 `2349cf2`（第 5 步），之后是它的完成记录。工作区干净。
+- 第 1–5 步完成，第 6、7 步未开始。下一步是**第 6 步：去掉窗口里的来源选择器**。
+- 前端 253 项、后端 126 项测试全部通过，构建通过（于 `2349cf2`）。
 - **现在不能发布。** 第 3–7 步要一起发布（§0 第 12 条）：现在用户能拖线断开输入，Agent 还不能；窗口里的来源选择器也还在。
 - 不要合并。`261007-data-flow-design`（数据流的 14 个步骤）同样没有合并，用户要求两个分支都先留着。
 
 ### 6.2 现在的行为，接着做时要知道
 
 - 窗口里的来源选择器（Run 的 Prompt 和输入、Process 的输入、Score 的标准答案）还在，和拖线改的是同一份数据。第 6 步去掉。
-- Process 的 `df_<别名>` 端口现在不能断开，提示 “Remove df_x from the code to stop reading this input.”。第 5 步改为断开时从代码参数中去掉它，同时加上 `+` 端口。
+- Process 的输入端口与代码参数双向同步（第 5 步）：拖到 `+` 加参数，代码里写的参数显示为端口（没接上时是空的，Process 不能运行），断开时去掉参数（代码在函数体里用到时拒绝）。
 - Process 还有其他输入时，`df` 不能断开，只能替换（§3.3 第 2 条的例外，用户已同意）。
 - 从输出拉出的线在空白处松开，弹出 `outputMenu.js` 的菜单，新节点放在松开处（第 4 步）。松开在节点上（包括别的节点的点上）则取消。
 - Dataset 的右键菜单多了 “Run a prompt on it”（第 4 步，菜单与拖线共用同一份菜单项）。
-- Agent 不能断开输入，也不能把来源接到指定的端口上。第 7 步加 `connect` / `disconnect`，规则直接调用 `nodePorts.js`。
+- Agent 不能断开输入，也不能把来源接到指定的端口上（包括 `+` 和空的参数端口）。第 7 步加 `connect` / `disconnect`，规则直接调用 `nodePorts.js`。Agent 现在能看到空的参数端口（`inspect_node` 的 `unconnectedInputs`），写代码时有对不上的别名也不再报错。
 - 两个看起来像问题、其实不是本计划造成的现象：
   - 有些线要绕一圈才进 Run 的 `prompt` 端口：示例把 Prompt 放在 Run 的右上方。把 Prompt 摆到 Run 左边即可。曾建议重新排一下直接连线版示例的布局，用户还没有回复。
   - 从 Run 右键新建的 Score 会压在旁边的节点上：新建位置是原有规则。
@@ -811,6 +831,7 @@ cd app && npm start
 - **Review 不调用模型：** 同样替换 `window.fetch`，让 `/api/review/analyze` 返回 `{ review_id }`、`/api/review/result/*` 一直返回运行中即可（只验证节点的创建和连线）。
 - **Run 不调用模型：** 在渲染进程替换 `window.fetch`：`POST /api/run` 返回 `{ run_id: 'fake-1' }`，`/api/run/result/fake-1` 返回 `{ status: 'done', results: [{ row_index, input_row_index, output }] }`。要测“正在运行”，就让结果一直返回 `status: 'running'`，然后在 Run 窗口里点 Stop。Process 可以真实运行（Settings 里已设好 Python）。
 - **Run 结果的列名是 `Output: <字段>` 和 `Input: <列名>`**，写测试用的 Process 代码时要用这种列名。
+- **改 Process 代码：** 打开窗口，聚焦 `.cm-content`，`document.execCommand('selectAll')` 再 `insertText`；关窗口时窗口会同步一次输入。
 - **检查线是否落在点上：** 对每条 `.workflow-edge-line` 用 `getPointAtLength(0)` 和 `getPointAtLength(总长)` 取两个端点，用 SVG 的 `getScreenCTM().inverse()` 把点的屏幕中心换算到同一坐标系，比较距离（目前都在 1 像素以内）。在缩放 50%、100%、200% 各测一次。
 - **一屏看到所有类型的点：** 用直接连线版示例的副本，在文件里加上 Score、Review 和 Apply 生成的 Prompt（`prompt-review-to-prompt`）、Prompt 版本、Sampler 和样本、Dataset 版本、带 `savedFrom` 的 Dataset，不需要调用模型。
 - **测试项目：** 几个 Dataset、Prompt、Run、Process 预先摆好、不连线（Sampler 除外），所有线都用拖线连。
