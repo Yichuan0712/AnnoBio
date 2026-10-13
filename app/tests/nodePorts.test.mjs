@@ -112,16 +112,16 @@ test('a Process with no known branches offers an output nothing can read yet', (
   assert.equal(nodePorts(state, 'fresh').inputs[0].source, null);
 });
 
-test('port names show with two or more ports, and always for Process inputs and named branches', () => {
+test('Run and Process show all port rows, while other single ports stay unnamed', () => {
   const state = canvas();
   const shown = (nodeId, side) => nodePorts(state, nodeId)[side].map((item) => item.showLabel);
   assert.deepEqual(shown('extract', 'inputs'), [true, true]);
-  assert.deepEqual(shown('extract', 'outputs'), [false]);
+  assert.deepEqual(shown('extract', 'outputs'), [true]);
   assert.deepEqual(shown('abstracts', 'outputs'), [false]);
   assert.deepEqual(shown('v1', 'outputs'), [false]);
   assert.deepEqual(shown('split', 'inputs'), [true, true]);
   assert.deepEqual(shown('split', 'outputs'), [true, true]);
-  assert.deepEqual(shown('merge', 'outputs'), [false]);
+  assert.deepEqual(shown('merge', 'outputs'), [true]);
   assert.deepEqual(shown('dyn', 'outputs'), [true]);
   assert.deepEqual(shown('score', 'inputs'), [true, true]);
   assert.deepEqual(shown('score', 'outputs'), [false]);
@@ -134,6 +134,52 @@ test('an output lists the input ports that read it', () => {
   assert.deepEqual(nodePorts(state, 'extract').outputs[0].readers, [at('split', 'df'), at('score', 'run')]);
   assert.deepEqual(nodePorts(state, 'gold').outputs[0].readers, [at('score', 'ground_truth')]);
   assert.deepEqual(nodePorts(state, 'split').outputs.map((item) => item.readers), [[at('merge', 'df')], []]);
+});
+
+test('Run and Process show source names and icons while preserving port ids, aliases and hover details', () => {
+  const state = canvas();
+  const run = nodePorts(state, 'extract');
+  assert.deepEqual(run.inputs.map((item) => [item.id, item.displayLabel, item.icon]), [
+    ['prompt', 'Extract v1', 'prompt'], ['input', 'Abstracts', 'table'],
+  ]);
+  assert.equal(run.outputs[0].displayLabel, 'Results');
+  const merge = nodePorts(state, 'merge');
+  assert.deepEqual(merge.inputs.map((item) => [item.id, item.displayLabel, item.icon]), [
+    ['df', 'Split · ready', 'table'], ['df_abstracts', 'Abstracts', 'table'], [ADD_INPUT_PORT, 'Add input', undefined],
+  ]);
+  assert.equal(portTitles(state, 'merge', merge).inputs.df_abstracts, 'df_abstracts: Reads "Abstracts"');
+  assert.equal(checkConnect(state, at('gold', RESULT_PORT), at('merge', 'df_abstracts')).ok, true);
+  assert.deepEqual(nodePorts(state, 'split').outputs.map((item) => item.displayLabel), ['ready', 'rewrite']);
+  assert.equal(nodePorts(state, 'dyn').outputs[0].displayLabel, 'Dynamic outputs');
+  assert.equal(nodePorts(state, 'fresh').outputs[0].displayLabel, 'Outputs unknown');
+});
+
+test('disconnected inputs have readable placeholders while code parameters stay available in hover text', () => {
+  const state = canvas();
+  state.nodes.push({ type: 'run', nodeId: 'empty-run' });
+  const run = nodePorts(state, 'empty-run');
+  assert.deepEqual(run.inputs.map((item) => [item.displayLabel, item.unconnected]), [['Connect prompt', true], ['Connect data', true]]);
+  const fresh = state.nodes.find((node) => node.nodeId === 'fresh');
+  fresh.dfCode = 'def process(df, df_reference_genes):\n    return df\n';
+  const ports = nodePorts(state, 'fresh');
+  assert.deepEqual(ports.inputs.map((item) => item.displayLabel), ['Connect data', 'Connect reference genes', 'Add input']);
+  assert.equal(portTitles(state, 'fresh', ports).inputs.df_reference_genes, 'df_reference_genes: Not connected');
+  assert.deepEqual(unconnectedProcessInputs(state, 'fresh'), ['df_reference_genes']);
+});
+
+test('source labels refresh after rename and replacement without rewriting Process parameter aliases', () => {
+  const state = canvas();
+  state.nodes.find((node) => node.nodeId === 'abstracts').name = 'Renamed abstracts';
+  state.nodes.find((node) => node.nodeId === 'v1').name = 'Extract proteins';
+  assert.deepEqual(nodePorts(state, 'extract').inputs.map((item) => item.displayLabel), ['Extract proteins', 'Renamed abstracts']);
+  assert.equal(nodePorts(state, 'split').inputs[0].displayLabel, 'Extract proteins');
+  assert.equal(nodePorts(state, 'merge').inputs[1].id, 'df_abstracts');
+  assert.equal(nodePorts(state, 'merge').inputs[1].displayLabel, 'Renamed abstracts');
+  const replacement = checkConnect(state, at('gold', RESULT_PORT), at('merge', 'df_abstracts'));
+  assert.equal(replacement.ok, true);
+  applyPortOp(state, replacement.op);
+  assert.equal(nodePorts(state, 'merge').inputs[1].displayLabel, 'Gold');
+  assert.match(state.nodes.find((node) => node.nodeId === 'merge').dfCode, /df_abstracts/);
 });
 
 test('hollow dots appear where a node came from or something was made from it', () => {
@@ -409,23 +455,31 @@ test('sample code counts as untouched whatever inputs follow df', () => {
 
 // ---------- how ports are shown ----------
 
-test('a lone unnamed port sits on the header; named ports get rows', () => {
+test('all solid and hollow dots use rows below the header, including Dataset and Prompt origins', () => {
   const state = canvas();
   const layout = (nodeId) => {
     const { left, right } = portLayout(nodePorts(state, nodeId));
-    const side = ({ header, rows, lineage }) => ({ header: header?.id ?? null, rows: ids(rows), lineage });
+    const side = ({ rows, lineage }) => ({ rows: ids(rows), lineage });
     return { left: side(left), right: side(right) };
   };
   assert.deepEqual(layout('extract'), {
-    left: { header: null, rows: ['prompt', 'input'], lineage: null },
-    right: { header: 'result', rows: [], lineage: 'header-bottom' },
+    left: { rows: ['prompt', 'input'], lineage: null },
+    right: { rows: ['result'], lineage: 'row' },
   });
-  assert.deepEqual(layout('abstracts'), { left: { header: null, rows: [], lineage: null }, right: { header: 'result', rows: [], lineage: null } });
-  assert.deepEqual(layout('v2'), { left: { header: null, rows: [], lineage: 'header' }, right: { header: 'prompt', rows: [], lineage: null } });
-  assert.deepEqual(layout('split'), { left: { header: null, rows: ['df', '+'], lineage: null }, right: { header: null, rows: ['ready', 'rewrite'], lineage: null } });
-  assert.deepEqual(layout('merge').right, { header: 'result', rows: [], lineage: null });
-  assert.deepEqual(layout('review'), { left: { header: 'score', rows: [], lineage: null }, right: { header: null, rows: [], lineage: 'header' } });
-  assert.deepEqual(layout('sampler').right, { header: null, rows: [], lineage: 'header' });
+  assert.deepEqual(layout('abstracts'), { left: { rows: [], lineage: null }, right: { rows: ['result'], lineage: null } });
+  assert.deepEqual(layout('v2'), { left: { rows: [], lineage: 'row' }, right: { rows: ['prompt'], lineage: null } });
+  assert.deepEqual(layout('v3').left, { rows: [], lineage: 'row' });
+  for (const id of ['sample', 'saved']) {
+    assert.deepEqual(layout(id), { left: { rows: [], lineage: 'row' }, right: { rows: ['result'], lineage: null } });
+  }
+  state.nodes.push({ type: 'dataset', nodeId: 'abstracts-v2', name: 'Abstracts v2' });
+  state.connections.push(edge('dataset-to-dataset', 'abstracts', 'abstracts-v2'));
+  assert.deepEqual(layout('abstracts-v2').left, { rows: [], lineage: 'row' });
+  assert.deepEqual(layout('split'), { left: { rows: ['df', '+'], lineage: null }, right: { rows: ['ready', 'rewrite'], lineage: null } });
+  assert.deepEqual(layout('merge').right, { rows: ['result'], lineage: null });
+  assert.deepEqual(layout('score'), { left: { rows: ['run', 'ground_truth'], lineage: null }, right: { rows: ['score'], lineage: null } });
+  assert.deepEqual(layout('review'), { left: { rows: ['score'], lineage: null }, right: { rows: [], lineage: 'row' } });
+  assert.deepEqual(layout('sampler'), { left: { rows: ['source'], lineage: null }, right: { rows: [], lineage: 'row' } });
   const withLineageRows = portLayout({ inputs: [], outputs: [{ id: 'a', showLabel: true }, { id: 'b', showLabel: true }], lineageIn: false, lineageOut: true });
   assert.equal(withLineageRows.right.lineage, 'row');
 });

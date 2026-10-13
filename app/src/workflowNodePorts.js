@@ -4,16 +4,16 @@
  * Lines are drawn to these dots by workflowCanvas.js renderEdge, which finds them by
  * `data-port-side` and `data-port-id`.
  */
-import { portLayout } from './nodePorts.js';
+import { ADD_INPUT_PORT, portLayout } from './nodePorts.js';
+import { iconDataset, iconText } from './icons.js';
 
 const PORTS_CLASS = 'workflow-node__ports';
 const DOT_CLASS = 'workflow-node__port';
 
-function dot(side, item, title, { lineage = false, place = '' } = {}) {
+function dot(side, item, title, { lineage = false } = {}) {
   const el = document.createElement('span');
   el.className = DOT_CLASS;
   if (lineage) el.classList.add(`${DOT_CLASS}--lineage`);
-  if (place) el.classList.add(`${DOT_CLASS}--${place}`);
   if (item?.unavailable) el.classList.add(`${DOT_CLASS}--unavailable`);
   el.dataset.portSide = side;
   if (item) {
@@ -37,10 +37,20 @@ function row(side, item, title, lineageTitle) {
   el.dataset.portId = item.id;
   if (item.unavailable) el.classList.add('workflow-node__port-row--unavailable');
   if (item.mismatch) el.classList.add('workflow-node__port-row--mismatch');
-  const name = document.createElement('span');
-  name.className = 'workflow-node__port-name';
-  name.textContent = item.label;
-  el.append(dot(side, item, title), name);
+  if (item.unconnected) el.classList.add('workflow-node__port-row--unconnected');
+  if (item.id === ADD_INPUT_PORT) el.classList.add('workflow-node__port-row--add-input');
+  el.append(dot(side, item, title));
+  if (item.showLabel) {
+    if (item.icon) {
+      const icon = item.icon === 'prompt' ? iconText(12) : iconDataset(12);
+      icon.classList.add('workflow-node__port-icon');
+      el.append(icon);
+    }
+    const name = document.createElement('span');
+    name.className = 'workflow-node__port-name';
+    name.textContent = item.displayLabel ?? item.label;
+    el.append(name);
+  }
   return el;
 }
 
@@ -59,10 +69,7 @@ export function renderNodePorts(node, ports, titles) {
 
   const sides = [];
   for (const side of ['left', 'right']) {
-    const { header: headerPort, rows, lineage } = layout[side];
-    if (headerPort) header.append(dot(side, headerPort, titleOf(side, headerPort), { place: 'header' }));
-    if (lineage === 'header') header.append(dot(side, null, lineageTitle(side), { lineage: true, place: 'header' }));
-    if (lineage === 'header-bottom') header.append(dot(side, null, lineageTitle(side), { lineage: true, place: 'header-bottom' }));
+    const { rows, lineage } = layout[side];
     const items = rows.map((item) => row(side, item, titleOf(side, item)));
     if (lineage === 'row') items.push(row(side, null, lineageTitle(side), lineageTitle(side)));
     if (items.length) {

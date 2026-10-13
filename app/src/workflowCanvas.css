@@ -61,7 +61,7 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
-  cursor: grab;
+  cursor: default;
 }
 
 .workflow-canvas__scroll--panning {
@@ -164,14 +164,17 @@
   pointer-events: none;
 }
 
-.workflow-canvas__edges .workflow-edge--compare .workflow-edge-hit {
+.workflow-canvas__edges .workflow-edge-hit {
   pointer-events: stroke;
+}
+
+.workflow-canvas__edges .workflow-edge--compare .workflow-edge-hit {
   cursor: pointer;
 }
 
-/* A line into an input can be right-clicked to disconnect it. */
-.workflow-canvas__edges .workflow-edge--disconnectable .workflow-edge-hit {
-  pointer-events: stroke;
+/* The line and compare icon show keyboard focus; suppress the browser's SVG bounding-box ring. */
+.workflow-edge--compare:focus {
+  outline: none;
 }
 
 .workflow-canvas__edges .workflow-edge,
@@ -179,18 +182,18 @@
   pointer-events: none;
 }
 
-/* The lines of the selected nodes and of the node under the pointer. */
-.workflow-edge--active .workflow-edge-line:not(.workflow-edge--missing-branch) {
-  stroke: var(--text);
-  stroke-width: 3;
-}
-
-/* Only prompt comparisons advertise an action, on both the line and its label. */
-.workflow-edge--compare:hover .workflow-edge-line,
+/* All lines respond to hover and node selection; missing branches keep their warning colour. */
+.workflow-edge--active .workflow-edge-line,
+.workflow-edge:hover .workflow-edge-line,
 .workflow-edge--compare:focus-visible .workflow-edge-line {
-  stroke: var(--text);
   stroke-width: 3;
   transition: stroke 0.15s ease, stroke-width 0.15s ease;
+}
+
+.workflow-edge--active .workflow-edge-line:not(.workflow-edge--missing-branch),
+.workflow-edge:hover .workflow-edge-line:not(.workflow-edge--missing-branch),
+.workflow-edge--compare:focus-visible .workflow-edge-line:not(.workflow-edge--missing-branch) {
+  stroke: var(--text);
 }
 
 .workflow-edge-compare-label {
@@ -309,11 +312,11 @@
   pointer-events: none;
 }
 
-/* Run node: 保证标题能显示全，略短于 dataset 节点，小圆角 */
+/* Run node: leaves room for source names and the result port. */
 .workflow-node--run {
-  min-width: 110px;
-  max-width: 160px;
-  width: 160px;
+  min-width: 220px;
+  max-width: 274px;
+  width: 274px;
   border-radius: 2px;
 }
 
@@ -365,13 +368,13 @@
   border-radius: 2px 2px 0 0;
 }
 
-/* Process node: runs a user function per dataset row (no LLM) — same footprint as Run/Sampler.
+/* Process node: runs a user function over tables (no LLM) — same source-name layout as Run.
    Header radius for the no-body case is handled by the shared "Run/Sampler/Score/Review/Process"
    rule below (higher specificity needed to win over the generic .workflow-node--no-body default). */
 .workflow-node--process {
-  min-width: 110px;
-  max-width: 160px;
-  width: 160px;
+  min-width: 220px;
+  max-width: 274px;
+  width: 274px;
   border-radius: 2px;
 }
 
@@ -380,21 +383,21 @@
 }
 
 /* Ports (nodePorts.js, workflowNodePorts.js): dots on a node's edges that lines join. Solid dots are
-   what a node reads (left) and gives (right), coloured by type; hollow dots are where it came from and
-   what was made from it. Named ports get a row each under the header; a lone unnamed one sits on the
-   header. */
+   what a node reads (left) and gives (right); hollow dots are where it came from and
+   what was made from it. Every dot gets a row under the header, including unnamed ports and lineage
+   dots. Both sides start at the same height. */
 .workflow-node__ports {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 8px;
-  padding: 5px 0 9px;
+  padding: 9px 0 12px;
 }
 
 .workflow-node__ports-side {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -408,6 +411,13 @@
   max-width: 50%;
 }
 
+/* Source names in Run/Process get more room, while output names can still share the available width. */
+.workflow-node--run .workflow-node__ports-side--left:not(:only-child),
+.workflow-node--process .workflow-node__ports-side--left:not(:only-child) {
+  flex-shrink: 1;
+  max-width: 76%;
+}
+
 .workflow-node__ports-side--right {
   flex: 0 1 auto;
   align-items: flex-end;
@@ -419,9 +429,11 @@
   display: flex;
   align-items: center;
   max-width: 100%;
-  min-height: 14px;
-  font-size: 10px;
-  line-height: 14px;
+  height: 20px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  font-size: 11px;
+  line-height: 20px;
   color: var(--text-muted);
 }
 
@@ -438,6 +450,25 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workflow-node__port-icon {
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.workflow-node--run .workflow-node__port-name,
+.workflow-node--process .workflow-node__port-name {
+  color: var(--text);
+}
+
+.workflow-node__port-row--unconnected .workflow-node__port-name,
+.workflow-node__port-row--add-input .workflow-node__port-name,
+.workflow-node__port-row--unavailable .workflow-node__port-name {
+  color: var(--text-muted);
 }
 
 /* A Process branch offers new steps on it (outputMenu.js). */
@@ -457,6 +488,10 @@
   color: var(--status-warning);
 }
 
+.workflow-node__port-row--mismatch .workflow-node__port-name {
+  color: inherit;
+}
+
 .workflow-node__header {
   position: relative;
 }
@@ -469,7 +504,7 @@
   box-sizing: border-box;
   border-radius: 50%;
   border: 1.5px solid var(--bg-bar);
-  background: var(--port-color, var(--text-muted));
+  background: var(--text-muted);
   z-index: 1;
 }
 
@@ -479,22 +514,6 @@
 
 .workflow-node__port[data-port-side="right"] {
   right: -5px;
-}
-
-.workflow-node__port--header-bottom {
-  top: calc(100% - 4.5px);
-}
-
-.workflow-node__port[data-port-type="table"] {
-  --port-color: var(--port-table);
-}
-
-.workflow-node__port[data-port-type="prompt"] {
-  --port-color: var(--port-prompt);
-}
-
-.workflow-node__port[data-port-type="score"] {
-  --port-color: var(--port-score);
 }
 
 .workflow-node__port--lineage {
@@ -529,7 +548,7 @@
 }
 
 .workflow-canvas--port-dragging .workflow-node__port--target {
-  box-shadow: 0 0 0 2px var(--bg-bar), 0 0 0 3.5px var(--port-color, var(--text-muted));
+  box-shadow: 0 0 0 2px var(--bg-bar), 0 0 0 3.5px var(--text-muted);
 }
 
 .workflow-canvas--port-dragging .workflow-node__port--target.workflow-node__port--hover {

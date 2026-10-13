@@ -45,7 +45,9 @@ Score and Review sit beside it for evaluation and are not part of the exported p
   another step read one of them.
 - Users connect inputs by dragging lines between the dots on node edges (inputs on the left, outputs on
   the right). Letting a line go over empty canvas offers new steps on that output; dropping it on a
-  Process's `+` port adds an input. Node windows show what a node reads but do not choose it. Use
+  Process's **Add input** port (`+` in tool calls) adds an input. Run and Process input rows show source
+  names; their tool IDs and code aliases stay the same and appear in hover text. Node windows show
+  what a node reads but do not choose it. Use
   connect and disconnect to change an existing step's inputs.
 - **Save results** (Run) and **Create dataset** (Process) save the current output as an ordinary
   Dataset, only to freeze or hand-edit it. The Dataset records where it came from but does not follow

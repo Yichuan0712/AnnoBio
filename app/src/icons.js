@@ -3,14 +3,14 @@
  * this project has no icon font/library dependency, so icons are vendored as plain primitive
  * data here instead, in the same spirit as modalMaximize.js's iconClose/iconMaximize.
  */
-function svgIcon({ paths = [], circles = [], lines = [], rects = [], polylines = [], viewBox = '0 0 24 24', size = 16 } = {}) {
+function svgIcon({ paths = [], circles = [], lines = [], rects = [], polylines = [], viewBox = '0 0 24 24', size = 16, strokeWidth = 2 } = {}) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', viewBox);
   svg.setAttribute('width', String(size));
   svg.setAttribute('height', String(size));
   svg.setAttribute('fill', 'none');
   svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-width', String(strokeWidth));
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
   svg.setAttribute('aria-hidden', 'true');
@@ -50,6 +50,20 @@ function svgIcon({ paths = [], circles = [], lines = [], rects = [], polylines =
   });
   return svg;
 }
+
+export const iconText = (size) => svgIcon({
+  size,
+  lines: [[4, 6, 20, 6], [4, 12, 20, 12], [4, 18, 15, 18]],
+});
+
+/** The original Dataset node's grid, shared with table inputs. */
+export const iconDataset = (size = 14) => svgIcon({
+  size,
+  viewBox: '0 0 14 14',
+  strokeWidth: 1.2,
+  rects: [[1, 1, 12, 12, 0.5]],
+  lines: [[1, 4, 13, 4], [1, 7, 13, 7], [1, 10, 13, 10], [4.5, 1, 4.5, 13], [8, 1, 8, 13]],
+});
 
 /** Lucide "merge" — two lines converging into one, like a highway merge sign. */
 export const iconMerge = (size) => svgIcon({

@@ -22,7 +22,7 @@ def process(df, df_chembl_targets):
   `a-z0-9_` replaced by `_`. For example a Dataset called "ChEMBL targets (v2)" is
   `df_chembl_targets_v2` and a branch `needs_review` is `df_needs_review`. If two names collide, later
   ones get `_2`, `_3`, ... Declaring a parameter named after an input's alias connects that input to
-  the Process, just as dropping that output on the node's `+` port adds the parameter; a parameter whose
+  the Process, just as dropping that output on the node's **Add input** port (`+` in tool calls) adds the parameter; a parameter whose
   alias names no input stays an empty port until one is connected (connect with that parameter as input). An input keeps its alias when it is renamed,
   so check the exact aliases with inspect_node on the Process (`availableInputs`).
 - A step's output can be read once that step has a complete result; until then the Process waits for it.

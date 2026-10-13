@@ -12,7 +12,7 @@
  * sections (through `promptInputs`).
  */
 import { resolveDataframeProcessCode } from './processCode.js';
-import { effectiveProcessOutputs, showsProcessOutputs } from './processOutputPorts.js';
+import { effectiveProcessOutputs } from './processOutputPorts.js';
 import { buildDefaultProcessCode, isUntouchedSampleCode } from './processSampleCode.js';
 import { referencedDatasetAliasNames } from './processDatasetBindings.js';
 import { codeOutsideSignature, parseProcessSignature, withProcessParameters } from './processSignature.js';
@@ -213,19 +213,33 @@ function outputPorts(node) {
 }
 
 /**
- * Whether port names are shown on one side (NODE_PORTS_PLAN.md §3.2): with two or more ports, or
- * when the names say something themselves (a Process's df, aliases and named branches).
+ * Run/Process always show source/output labels. Other nodes show names when a side has several ports.
  */
-function labelsShown(node, side, ports) {
-  if (ports.length >= 2) return true;
-  if (node.type !== 'process' || !ports.length) return false;
-  if (side === 'left') return true;
-  return showsProcessOutputs(effectiveProcessOutputs({ detected: node.processOutputPorts, dfResults: node.dfResults }));
+function labelsShown(node, ports) {
+  return ((node.type === 'run' || node.type === 'process') && ports.length > 0) || ports.length >= 2;
+}
+
+/** Canvas labels describe Run/Process sources while ids and labels retain their code/port meaning. */
+function portPresentation(state, node, item, side) {
+  if (node.type !== 'run' && node.type !== 'process') return {};
+  if (side === 'right') return {
+    displayLabel: item.unavailable ? (item.label === 'dynamic outputs' ? 'Dynamic outputs' : 'Outputs unknown')
+      : item.id === RESULT_PORT ? 'Results' : item.label,
+  };
+  if (item.id === ADD_INPUT_PORT) return { displayLabel: 'Add input' };
+  const placeholder = item.type === PORT_TYPES.PROMPT ? 'Connect prompt'
+    : item.id === 'df' || item.id === 'input' ? 'Connect data'
+    : `Connect ${item.id.replace(/^df_/, '').replace(/_/g, ' ')}`;
+  return {
+    displayLabel: item.source ? sourceName(state, item.source) : placeholder,
+    icon: item.type,
+    unconnected: !item.source,
+  };
 }
 
 /**
  * The ports of one node, or null when it is not on the canvas.
- * - `inputs[]`: `{ id, type, label, showLabel, source, fixed? }`. `source` is what it reads
+ * - `inputs[]`: `{ id, type, label, showLabel, source, fixed?, displayLabel?, icon?, unconnected? }`. `source` is what it reads
  *   (`{ nodeId, port, kind }`) or null; `fixed` says why it cannot be replaced or disconnected.
  * - `outputs[]`: `{ id, type, label, showLabel, readers, unavailable?, mismatch? }`. `readers` are the
  *   input ports reading it; `unavailable` says why nothing can read it yet.
@@ -241,11 +255,11 @@ export function nodePorts(state, nodeId) {
     ...item,
     readers: edges.filter(({ ends }) => !ends.from.lineage && ends.from.nodeId === id && ends.from.portId === item.id).map(({ ends }) => ends.to),
   }));
-  const showIn = labelsShown(node, 'left', inputs);
-  const showOut = labelsShown(node, 'right', outputs);
+  const showIn = labelsShown(node, inputs);
+  const showOut = labelsShown(node, outputs);
   return {
-    inputs: inputs.map((item) => ({ ...item, showLabel: showIn })),
-    outputs: outputs.map((item) => ({ ...item, showLabel: showOut })),
+    inputs: inputs.map((item) => ({ ...item, showLabel: showIn, ...portPresentation(state, node, item, 'left') })),
+    outputs: outputs.map((item) => ({ ...item, showLabel: showOut, ...portPresentation(state, node, item, 'right') })),
     lineageIn: edges.some(({ ends }) => ends.to.lineage && ends.to.nodeId === id),
     lineageOut: edges.some(({ ends }) => ends.from.lineage && ends.from.nodeId === id),
   };
@@ -254,19 +268,13 @@ export function nodePorts(state, nodeId) {
 // ---------- how ports are shown ----------
 
 /**
- * Where each side's dots go (NODE_PORTS_PLAN.md step 2): a side with one unnamed port puts it at the
- * middle of the header; named ports go in rows under the header. A hollow lineage dot takes the
- * header's middle when the side has no port, follows the rows when there are some, and otherwise
- * sits at the bottom of the header.
- * @returns {{ left: Side, right: Side }} Side: `{ header: port|null, rows: port[], lineage: 'header'|'row'|'header-bottom'|null }`
+ * All dots use rows under the header, whether their names are shown or not. Each side starts at
+ * the same height. A hollow lineage dot follows that side's solid ports, or takes its first row
+ * when there are no solid ports (including the left side of a Dataset or Prompt).
+ * @returns {{ left: Side, right: Side }} Side: `{ rows: port[], lineage: 'row'|null }`
  */
 export function portLayout(ports) {
-  const side = (items, hasLineage) => {
-    const header = items.length === 1 && !items[0].showLabel ? items[0] : null;
-    const rows = header ? [] : items;
-    const lineage = !hasLineage ? null : header ? 'header-bottom' : rows.length ? 'row' : 'header';
-    return { header, rows, lineage };
-  };
+  const side = (items, hasLineage) => ({ rows: items, lineage: hasLineage ? 'row' : null });
   return { left: side(ports?.inputs || [], !!ports?.lineageIn), right: side(ports?.outputs || [], !!ports?.lineageOut) };
 }
 
