@@ -858,7 +858,12 @@ cd app && npm start
 - `app/src/nodeSourceLink.js`：窗口里“读的是什么”那一行（`renderSourceLink`）。
 - Agent：`app/src/agent/operations/changeSet.js` 的 `connect`、`disconnect`、`connectPort`；`workflowNodeInspector.js` 的 `ports`；测试 `app/tests/agentPorts.test.mjs`。
 - `app/src/workflowCanvas.js` 里的接入点：`refreshNodePorts`、`portPoint`、`renderEdge`、`updateEdges`、`portState`、`applyPortOps`、`clientToCanvasPoint`、`placeNewNodeAt`、`showNodeContextMenu` 的 `port`/`at`、`describeSource`、`readProcessInputRows`、`revealNode`、线上右键的监听，以及 `liveInputState()` 里补上的字段。
-- 样式：`app/src/workflowCanvas.css` 中 “Ports” 一段；三种类型的颜色在 `app/src/index.css`（`--port-table`、`--port-prompt`、`--port-score`）。
+- 样式：`app/src/workflowCanvas.css` 中 “Ports” 一段。2026-10-13 按用户建议，圆点统一用 `--text-muted` 灰色，去掉三种类型的颜色变量；实心和空心的区别保留。
+- 放置方式（2026-10-13 更新）：所有圆点统一在标题栏下方逐行排列，左右第一行同高。空心点接在该侧实心端口之后，没有实心端口时放第一行，包括 Dataset 和 Prompt 的左侧来源点。单个不显示名字的端口仍占一行。
+- 连线悬停（2026-10-13 更新）：`renderEdge` 给所有类型的边添加同样的透明命中区域；CSS 对所有边统一悬停高亮，缺分支的错误线保留红色并加粗。
+- Run / Process 输入区（2026-10-13 更新，用户选择方案 B）：`nodePorts` 添加展示用来源名称和图标，端口 ID、代码别名和规则用的 `label` 不变；`workflowNodePorts` 绘制来源名称、图标和 “Add input”。单一输出显示 “Results”。Run / Process 宽度 274px；所有圆点行高 20px、间距 4px。来源重命名或换线时展示同步更新。
+  - 验证：前端 263 项测试和构建通过；真实画布浏览器验证了来源名称、未连接提示、图标、分支名、拖线添加与替换输入、别名不变、长名称省略和完整悬停说明。所有节点的首行对齐和 24px 圆点间距在浅色/深色及 50%/100%/200% 缩放下通过。
+  - 图标统一：表格输入复用 Dataset 节点原有的网格图标；两处共用 `icons.js` 的 `iconDataset`，仅显示尺寸不同。
 - `app/src/processSampleCode.js`（Process 示例代码）、`app/src/scoreMappingBundle.js` 的 `scoreMappingForGroundTruth`（换标准答案时删规则）：第 1 步从窗口里移出来的。
 
 ### 6.4 手工验证的做法

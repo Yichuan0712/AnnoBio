@@ -2669,13 +2669,12 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (disconnectable) edgeGroup.classList.add('workflow-edge--disconnectable');
     g.appendChild(edgeGroup);
 
-    if (disconnectable) {
-      const hitLine = createEdgeShape(geometry);
-      hitLine.setAttribute('stroke', 'transparent');
-      hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
-      hitLine.setAttribute('class', 'workflow-edge-hit');
-      edgeGroup.appendChild(hitLine);
-    }
+    // Every line has the same generous hover target, including fixed inputs and lineage lines.
+    const hitLine = createEdgeShape(geometry);
+    hitLine.setAttribute('stroke', 'transparent');
+    hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
+    hitLine.setAttribute('class', 'workflow-edge-hit');
+    edgeGroup.appendChild(hitLine);
 
     if (canCompare) {
       edgeGroup.setAttribute('role', 'button');
@@ -2684,11 +2683,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
       title.textContent = compareLabel;
       edgeGroup.appendChild(title);
-      const hitLine = createEdgeShape(geometry);
-      hitLine.setAttribute('stroke', 'transparent');
-      hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
-      hitLine.setAttribute('class', 'workflow-edge-hit');
-      edgeGroup.appendChild(hitLine);
     }
 
     const line = createEdgeShape(geometry);

@@ -2,6 +2,7 @@ import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 import { sourceKey } from './stepInputs.js';
 import { readSavedFrom } from './savedDatasets.js';
+import { iconDataset } from './icons.js';
 
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
@@ -389,12 +390,13 @@ export function createWorkflowNodeFactories(deps = {}) {
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="12" height="12" rx="0.5"/><line x1="1" y1="4" x2="13" y2="4"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="1" y1="10" x2="13" y2="10"/><line x1="4.5" y1="1" x2="4.5" y2="13"/><line x1="8" y1="1" x2="8" y2="13"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"></span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
       <div class="workflow-node__body workflow-node__dataset-desc">${bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>'}</div>
     `;
+    node.querySelector('.workflow-node__icon--dataset').append(iconDataset(14));
     nodesLayer.appendChild(node);
 
     const deleteBtn = node.querySelector('.workflow-node__delete');
