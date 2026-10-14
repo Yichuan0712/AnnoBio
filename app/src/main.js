@@ -572,10 +572,141 @@ ipcMain.handle('window:is-maximized', (event) => {
   return !!win && !win.isDestroyed() && win.isMaximized();
 });
 
+function opaqueBitmapBounds(bitmap, width, height) {
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y++) {
+    const row = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      if (bitmap[row + x * 4 + 3] > 16) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return { x: 0, y: 0, width, height };
+  return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
+function roundRectCoverage(px, py, half, radius) {
+  const qx = Math.abs(px) - half + radius;
+  const qy = Math.abs(py) - half + radius;
+  const outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0));
+  const sd = Math.min(Math.max(qx, qy), 0) + outside - radius;
+  return Math.max(0, Math.min(1, 0.5 - sd));
+}
+
+function boxBlurAlpha(src, width, height, radius) {
+  const tmp = new Float32Array(width * height);
+  const dst = new Float32Array(width * height);
+  const win = radius * 2 + 1;
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    let sum = 0;
+    for (let x = -radius; x <= radius; x++) sum += src[row + Math.min(width - 1, Math.max(0, x))];
+    for (let x = 0; x < width; x++) {
+      tmp[row + x] = sum / win;
+      sum += src[row + Math.min(width - 1, Math.max(0, x + radius + 1))];
+      sum -= src[row + Math.min(width - 1, Math.max(0, x - radius))];
+    }
+  }
+  for (let x = 0; x < width; x++) {
+    let sum = 0;
+    for (let y = -radius; y <= radius; y++) sum += tmp[Math.min(height - 1, Math.max(0, y)) * width + x];
+    for (let y = 0; y < height; y++) {
+      dst[y * width + x] = sum / win;
+      sum += tmp[Math.min(height - 1, Math.max(0, y + radius + 1)) * width + x];
+      sum -= tmp[Math.min(height - 1, Math.max(0, y - radius)) * width + x];
+    }
+  }
+  return dst;
+}
+
+// A custom Dock image is not masked by macOS, so draw the rounded-rect plate
+// here and keep the mark inside it. Packaged builds use assets/icon.icns as-is.
+function macDockIcon(filePath) {
+  const source = nativeImage.createFromPath(filePath);
+  if (source.isEmpty()) return null;
+  const { width, height } = source.getSize();
+  const side = Math.min(width, height);
+  const bounds = opaqueBitmapBounds(source.toBitmap(), width, height);
+  const margin = Math.round(side * 0.095);
+  const shape = side - margin * 2;
+  const radius = Math.round(shape * 0.225);
+  const half = shape / 2;
+  const logoBox = Math.round(shape * 0.64);
+  const logoW = bounds.width >= bounds.height
+    ? logoBox
+    : Math.max(1, Math.round(logoBox * bounds.width / bounds.height));
+  const logoH = bounds.width >= bounds.height
+    ? Math.max(1, Math.round(logoBox * bounds.height / bounds.width))
+    : logoBox;
+  const logoImage = source.crop(bounds).resize({ width: logoW, height: logoH, quality: 'best' });
+  const logoSize = logoImage.getSize();
+  const logo = logoImage.toBitmap();
+  const originX = Math.floor((side - logoSize.width) / 2);
+  const originY = Math.floor((side - logoSize.height) / 2);
+  const mask = new Float32Array(side * side);
+  const center = side / 2;
+  for (let y = 0; y < side; y++) {
+    for (let x = 0; x < side; x++) {
+      mask[y * side + x] = roundRectCoverage(x + 0.5 - center, y + 0.5 - center, half, radius);
+    }
+  }
+  const shadow = boxBlurAlpha(mask, side, side, Math.max(1, Math.round(side * 0.021)));
+  const shadowDy = Math.round(side * 0.01);
+  const canvas = Buffer.alloc(side * side * 4);
+  for (let y = 0; y < side; y++) {
+    for (let x = 0; x < side; x++) {
+      const sy = y - shadowDy;
+      const shadowA = (sy >= 0 && sy < side ? shadow[sy * side + x] : 0) * 0.22;
+      const cover = mask[y * side + x];
+      let r = 255 * cover;
+      let g = 255 * cover;
+      let b = 255 * cover;
+      let a = cover + shadowA * (1 - cover);
+      const lx = x - originX;
+      const ly = y - originY;
+      if (lx >= 0 && ly >= 0 && lx < logoSize.width && ly < logoSize.height) {
+        const i = (ly * logoSize.width + lx) * 4;
+        const la = logo[i + 3] / 255;
+        if (la > 0) {
+          const sr = la === 1 ? logo[i + 2] : Math.min(255, logo[i + 2] / la);
+          const sg = la === 1 ? logo[i + 1] : Math.min(255, logo[i + 1] / la);
+          const sb = la === 1 ? logo[i] : Math.min(255, logo[i] / la);
+          r = sr * la + r * (1 - la);
+          g = sg * la + g * (1 - la);
+          b = sb * la + b * (1 - la);
+          a = la + a * (1 - la);
+        }
+      }
+      const ai = Math.round(a * 255);
+      const o = (y * side + x) * 4;
+      canvas[o] = Math.round(b * ai / 255);
+      canvas[o + 1] = Math.round(g * ai / 255);
+      canvas[o + 2] = Math.round(r * ai / 255);
+      canvas[o + 3] = ai;
+    }
+  }
+  return nativeImage.createFromBitmap(canvas, { width: side, height: side });
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 if (gotSingleInstanceLock) app.whenReady().then(() => {
+  // `npm start` launches the Electron binary, so the Dock would show Electron's
+  // icon. Packaged builds already get assets/icon.icns from the app bundle.
+  if (process.platform === 'darwin' && !app.isPackaged && app.dock) {
+    const dockIcon = path.join(app.getAppPath(), 'assets', 'icon.png');
+    const image = fsSync.existsSync(dockIcon) ? macDockIcon(dockIcon) : null;
+    if (image) app.dock.setIcon(image);
+  }
+
   backendLog = createBackendLog({
     dir: path.join(app.getPath('userData'), 'logs'),
     tee: !app.isPackaged,
