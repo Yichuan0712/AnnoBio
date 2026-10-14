@@ -3797,8 +3797,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId } }));
       },
       'run-this-prompt': () => newRunNode({ promptNode: node, at }),
-      // A new Run on this output; its window opens, which says to connect a Prompt on the canvas.
-      'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), open: true, at }),
+      'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), at }),
       'process-output': (button) => newProcessNode({ inputSource: outputSource(button), at }),
       // A duplicate is a standalone node: no connections are copied (same for Datasets and Processes).
       duplicate: () => {
