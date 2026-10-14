@@ -1,5 +1,10 @@
 # Process code
 
+A Process may be created without a Data input, as with the toolbar. Its code can be edited first;
+connect `df` before running it. `duplicate_process` copies its code and detected outputs into a
+standalone Process with no inputs or saved results. A Run can likewise be created before connecting
+its Prompt and Data inputs; input mapping is configured after both are connected.
+
 A Process node runs one Python function over whole tables. There is no LLM involved.
 
 ## Contract

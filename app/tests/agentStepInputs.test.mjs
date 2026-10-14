@@ -109,14 +109,16 @@ test('a Process the Agent adds reads step outputs as df and by alias, as its win
   assert.deepEqual(moved.items[0].lines, ['df = "Raw"', 'Its last output no longer reflects the code until it is run again.']);
 });
 
-test('removing a step says which readers lose that input', () => {
+test('removing a step preserves downstream readers unless they are also explicitly removed', () => {
   const state = canvas();
   state.connections.push(data('split', 'idle', undefined, 'kept'));
   state.connections.splice(state.connections.findIndex((edge) => edge.fromId === 'raw' && edge.toId === 'idle'), 1);
-  const result = plan([{ op: 'remove', node: 'split' }], state);
+  assert.throws(() => plan([{ op: 'remove', node: 'split' }], state), /connected to downstream nodes/);
+  const result = plan([{ op: 'remove', node: 'split' }, { op: 'remove', node: 'idle' }], state);
   assert.deepEqual(result.items[0].lines, ['Run "Idle" loses its input']);
-  assert.equal(runInputSource(result.state, 'idle'), null);
-  assert.deepEqual(plan([{ op: 'remove', node: 'r' }]).items[0].lines, ['Process "Split" loses its input df']);
+  assert.equal(result.state.nodes.some((node) => ['idle', 'split'].includes(node.nodeId)), false);
+  assert.throws(() => plan([{ op: 'remove', node: 'r' }]), /connected to downstream nodes/);
+  assert.deepEqual(plan([{ op: 'remove', node: 'r' }, { op: 'remove', node: 'split' }]).items[0].lines, ['Process "Split" loses its input df']);
 });
 
 test('inspect_node describes step inputs, branches, readers and what a step waits for', () => {

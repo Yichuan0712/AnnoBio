@@ -7,7 +7,9 @@
  * Nodes are referenced by their canvas id, or, for nodes added earlier in the same proposal, by the
  * "$name" ref given when adding them.
  */
-import { normalizeDatasetContent } from '../../datasetContent.js';
+import { cloneCell, isAssetCell, moveImageAsset, normalizeDatasetContent } from '../../datasetContent.js';
+import { sampleSourceIndices, sampledOutputs } from '../../samplerQuota.js';
+import { buildSamplerNodeSpec, formatSamplerModeSummary } from './sampler_node_shared.js';
 import { PORT_TYPES, applyPortOp, checkConnect, checkDisconnect, keepSharedMapping, nodePorts } from '../../nodePorts.js';
 import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
@@ -93,7 +95,7 @@ function sectionsText(sections) {
 }
 
 function outputText(output) {
-  const fields = (output?.fields || []).map((f) => `- ${f.key} (${f.type})${f.description ? `: ${f.description}` : ''}`);
+  const fields = (output?.fields || []).map((f) => `- ${f.key} (${f.type}${f.allowNone ? ', allows None' : ''})${f.description ? `: ${f.description}` : ''}${f.examples?.length ? `; examples: ${JSON.stringify(f.examples)}` : ''}`);
   return [`Return shape: ${output?.returnShape || 'single'}`, ...fields].join('\n');
 }
 
@@ -223,6 +225,7 @@ export function planChangeSet(state, operations, ctx) {
    * @returns {object|null} the op carried out; null when the input already read `from`
    */
   function connectPort(from, node, portId) {
+    if (node.type === 'score' && node.scoreMatchPending) fail(`Score "${nodeTitle(node)}" is matching; stop it before changing its inputs.`);
     const result = checkConnect(next, from, { nodeId: node.nodeId, portId });
     if (!result.ok) fail(`${nodeTitle(node)}: ${result.reason}`);
     applyPortOp(next, result.op, { promptInputs: promptInputNames });
@@ -255,7 +258,8 @@ export function planChangeSet(state, operations, ctx) {
     if (!Array.isArray(value) || value.length === 0) fail('sections must be a non-empty list of {name, content}.');
     const sections = value.map((s) => ({ name: clean(s?.name), content: String(s?.content ?? '') }));
     if (sections.some((s) => !s.name)) fail('Every section needs a name.');
-    if (!sections.some((s) => s.content.trim())) fail('The prompt has no content.');
+    if (sections.some((s) => !s.content.trim())) fail('Every section needs content.');
+    if (new Set(sections.map((s) => s.name.toLowerCase())).size !== sections.length) fail('Section names must be unique.');
     return sections;
   }
 
@@ -287,21 +291,40 @@ export function planChangeSet(state, operations, ctx) {
   function normalizeOutput(rawValue, base = null) {
     const value = Array.isArray(rawValue) ? { fields: rawValue } : rawValue;
     if (!value || typeof value !== 'object') fail('output must be {return_shape, fields}.');
-    const returnShape = clean(value.return_shape ?? value.returnShape) || base?.returnShape || 'single';
+    const returnShape = clean(value.return_shape ?? value.returnShape) || base?.returnShape || 'table';
     if (!RETURN_SHAPES.includes(returnShape)) fail(`return_shape must be ${RETURN_SHAPES.join(' or ')}.`);
-    const rawFields = Array.isArray(value.fields) && value.fields.length ? value.fields : (base?.fields || []);
-    const fields = rawFields.map((f) => ({
-      key: clean(f?.key),
-      type: clean(f?.type) || 'str',
-      description: String(f?.description ?? '').trim(),
-      examples: Array.isArray(f?.examples) ? f.examples.map((e) => String(e ?? '')).filter(Boolean) : [],
-    }));
+    const rawFields = value.fields === undefined ? (base?.fields || []) : value.fields;
+    if (!Array.isArray(rawFields)) fail('output.fields must be a list of fields.');
+    const fields = rawFields.map((f) => {
+      if ((f?.allow_none !== undefined && typeof f.allow_none !== 'boolean')
+        || (f?.allowNone !== undefined && typeof f.allowNone !== 'boolean')) fail('allow_none must be a boolean.');
+      const type = clean(f?.type) || 'str';
+      const number = (example) => {
+        if (example == null || typeof example === 'boolean' || clean(example) === '' || !Number.isFinite(Number(example))) {
+          fail(`Output field "${clean(f?.key)}" needs numeric examples.`);
+        }
+        return Number(example);
+      };
+      const examples = (Array.isArray(f?.examples) ? f.examples : []).map((example) => {
+        if (type === 'list_str' || type === 'list_float') {
+          if (!Array.isArray(example)) fail(`Output field "${clean(f?.key)}" needs each list example as an array.`);
+          return example.map((item) => type === 'list_float' ? number(item) : String(item ?? ''));
+        }
+        if (Array.isArray(example) || (example && typeof example === 'object')) fail(`Output field "${clean(f?.key)}" needs scalar examples.`);
+        return type === 'float' ? number(example) : String(example ?? '');
+      });
+      return {
+        key: clean(f?.key), type, description: String(f?.description ?? '').trim(), examples,
+        allowNone: f?.allow_none === true || f?.allowNone === true,
+      };
+    });
     if (!fields.length) fail('output.fields must list at least one field as {key, type, description}.');
+    if (value.fields !== undefined && fields.some((field) => !field.description)) fail('Every output field needs a description.');
     const keys = new Set();
     for (const f of fields) {
       if (!f.key) fail('Every output field needs a key.');
-      if (keys.has(f.key)) fail(`Output field "${f.key}" is listed twice.`);
-      keys.add(f.key);
+      if (keys.has(f.key.toLowerCase())) fail(`Output field "${f.key}" is listed twice.`);
+      keys.add(f.key.toLowerCase());
       if (!OUTPUT_TYPES.includes(f.type)) fail(`Output field "${f.key}" has type "${f.type}"; use one of ${OUTPUT_TYPES.join(', ')}.`);
     }
     return { returnShape, fields };
@@ -317,19 +340,63 @@ export function planChangeSet(state, operations, ctx) {
     return Object.fromEntries(Object.entries(types).filter(([, type]) => type !== 'text'));
   }
 
-  function normalizeTable(op) {
-    const columns = (Array.isArray(op.columns) ? op.columns : []).map((c) => clean(typeof c === 'object' ? c?.name : c));
+  function normalizeTable(op, current = null) {
+    const definitions = Array.isArray(op.columns) ? op.columns : current?.headers || [];
+    const columns = definitions.map((c) => clean(typeof c === 'object' ? c?.name : c));
     if (!columns.length || columns.some((c) => !c)) fail('columns must be a non-empty list of column names.');
     if (new Set(columns).size !== columns.length) fail('Column names must be unique.');
-    const rows = (Array.isArray(op.rows) ? op.rows : []).map((row, i) => {
-      if (Array.isArray(row)) {
-        if (row.length !== columns.length) fail(`Row ${i + 1} has ${row.length} cells but there are ${columns.length} columns.`);
-        return row.map((cell) => String(cell ?? ''));
-      }
-      if (row && typeof row === 'object') return columns.map((c) => String(row[c] ?? ''));
-      return fail(`Row ${i + 1} must be a list of cells or an object keyed by column.`);
+    const columnTypes = definitions.map((column, i) => {
+      const previous = current?.headers.indexOf(columns[i]) ?? -1;
+      const type = clean(typeof column === 'object' ? column?.type : '')
+        || current?.columnTypes[previous >= 0 ? previous : columns.length === current.headers.length ? i : -1] || 'text';
+      if (!INPUT_TYPES.includes(type)) fail(`Column "${columns[i]}" must have type text, image or pdf.`);
+      return type;
     });
-    return { headers: columns, rows };
+    const assets = new Map();
+    function collectAssets(value) {
+      if (!value || typeof value !== 'object') return;
+      if (isAssetCell(value)) {
+        value.assetIds.forEach((id, index) => assets.set(`${value.kind}:${id}`, value.names?.[index] || assets.get(`${value.kind}:${id}`) || ''));
+      } else Object.values(value).forEach(collectAssets);
+    }
+    for (const node of next.nodes) {
+      collectAssets(node.datasetContent);
+      for (const key of ['dfResults', 'runInputContent', 'runResults']) collectAssets(parseJson(node[key], null));
+    }
+    const rawRows = op.rows ?? current?.rows ?? [];
+    if (!Array.isArray(rawRows)) fail('rows must be a list of rows.');
+    const rows = rawRows.map((row, i) => {
+      let values;
+      if (Array.isArray(row)) {
+        values = op.rows == null && current ? columns.map((column, index) => {
+          const previous = current.headers.indexOf(column);
+          return row[previous >= 0 ? previous : columns.length === current.headers.length ? index : -1] ?? '';
+        }) : row;
+        if (values.length !== columns.length) fail(`Row ${i + 1} has ${values.length} cells but there are ${columns.length} columns.`);
+      } else if (row && typeof row === 'object') values = columns.map((column) => row[column] ?? '');
+      else fail(`Row ${i + 1} must be a list of cells or an object keyed by column.`);
+      return values.map((cell, column) => {
+        const type = columnTypes[column];
+        if (type === 'text') {
+          if (cell && typeof cell === 'object') fail(`Row ${i + 1}, column "${columns[column]}" is text; use a scalar value.`);
+          return String(cell ?? '');
+        }
+        if (cell == null || cell === '') return { kind: type === 'image' ? 'images' : 'pdf', assetIds: [], names: [] };
+        if (!isAssetCell(cell) || cell.kind !== (type === 'image' ? 'images' : 'pdf')) {
+          fail(`Row ${i + 1}, column "${columns[column]}" needs an existing ${type} asset cell from read_rows, or an empty cell.`);
+        }
+        for (const id of cell.assetIds) {
+          if (!assets.has(`${cell.kind}:${id}`)) fail(`Unknown ${type} asset "${id}". Reuse uploaded files from read_rows; new files must be uploaded in the Dataset view.`);
+        }
+        return { kind: cell.kind, assetIds: cell.assetIds.slice(), names: cell.assetIds.map((id) => assets.get(`${cell.kind}:${id}`)) };
+      });
+    });
+    const rowIds = op.row_ids ?? (current && rows.length === current.rows.length ? current.rowIds : undefined);
+    if (op.row_ids !== undefined && (!current || !Array.isArray(rowIds) || rowIds.length !== rows.length
+      || rowIds.some((id) => id && !current.rowIds.includes(id)) || new Set(rowIds.filter(Boolean)).size !== rowIds.filter(Boolean).length)) {
+      fail('row_ids must match rows and contain unique existing row IDs (or null for new rows).');
+    }
+    return normalizeDatasetContent({ headers: columns, rows, columnTypes, rowIds });
   }
 
   /**
@@ -447,6 +514,11 @@ export function planChangeSet(state, operations, ctx) {
    * inputs other than df, and the lines that name what is still unconnected. */
   function wireProcess(processNode, code, primary) {
     if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) fail('Process code must define process(df).');
+    if (!primary) {
+      processNode.dfCode = code;
+      processNode.activeMode = 'df';
+      return { others: [], notes: ['Connect a Data input before running this Process.'] };
+    }
     const primaryKey = primary.kind === 'dataset' ? primary.nodeId : `${primary.nodeId}:${primary.port}`;
     const bindings = processInputBindings(next, processNode.nodeId, { code, primaryId: primaryKey });
     const unknown = [...referencedDatasetAliasNames(code)]
@@ -461,57 +533,61 @@ export function planChangeSet(state, operations, ctx) {
     return { others: inputs.filter((b) => !b.primary), notes };
   }
 
-  function sampleRows(rows, op) {
-    const mode = clean(op.sampling) || 'random';
-    if (mode === 'rows') {
-      const spec = clean(op.rows);
-      if (!spec) fail('sampling "rows" needs rows, for example "1 3 5-10".');
-      const indices = [];
-      for (const part of spec.split(/[\s,]+/).filter(Boolean)) {
-        const [a, b] = part.split('-').map((x) => parseInt(x, 10));
-        if (!Number.isFinite(a) || a < 1 || (part.includes('-') && (!Number.isFinite(b) || b < 1))) fail(`"${part}" is not a row number or range.`);
-        const hi = part.includes('-') ? Math.max(a, b) : a;
-        for (let r = Math.min(a, hi); r <= Math.min(hi, rows.length); r += 1) indices.push(r - 1);
-      }
-      return { sampler: { samplingType: 'specify-rows', rowSpec: spec }, rows: indices.map((i) => rows[i]), label: `rows ${spec}` };
-    }
-    if (!['random', 'random_with_replacement'].includes(mode)) fail('sampling must be random, random_with_replacement or rows.');
-    const unit = clean(op.size_unit) || 'rows';
-    if (!['rows', 'percent'].includes(unit)) fail('size_unit must be rows or percent.');
-    const size = Math.floor(Number(op.size));
-    if (!Number.isFinite(size) || size < 1 || (unit === 'percent' && size > 100)) fail('size must be a positive number (at most 100 for percent).');
-    const count = Math.min(rows.length, unit === 'rows' ? size : Math.floor((rows.length * size) / 100));
-    const withReplacement = mode === 'random_with_replacement';
-    if (count < 1) fail('Sample size selects no rows from this Dataset.');
-    if (!withReplacement && unit === 'rows' && size > rows.length) fail('Sample size exceeds the source Dataset when sampling without replacement.');
-    let picked;
-    if (withReplacement) {
-      picked = Array.from({ length: count }, () => Math.floor(Math.random() * rows.length)).sort((a, b) => a - b);
-    } else {
-      const order = rows.map((_, i) => i);
-      for (let i = order.length - 1; i > 0; i -= 1) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [order[i], order[j]] = [order[j], order[i]];
-      }
-      picked = order.slice(0, count).sort((a, b) => a - b);
-    }
-    return {
-      sampler: {
-        samplingType: withReplacement ? 'with-replacement' : 'without-replacement',
-        sampleSizeType: unit === 'rows' ? 'rows' : 'ratio',
-        sampleSize: size,
-      },
-      rows: picked.map((i) => rows[i]),
-      indices: picked,
-      label: `${count} random rows${withReplacement ? ' (with replacement)' : ''}`,
-    };
+  function samplerSpec(op, sourceNodeId, current = {}) {
+    const modes = { random: 'without-replacement', random_with_replacement: 'with-replacement', rows: 'specify-rows' };
+    if (op.sampling != null && !modes[op.sampling]) fail('sampling must be random, random_with_replacement or rows.');
+    if (op.size_unit != null && !['rows', 'percent'].includes(op.size_unit)) fail('size_unit must be rows or percent.');
+    let spec;
+    try {
+      spec = buildSamplerNodeSpec({
+        sourceNodeId,
+        samplingType: modes[op.sampling] || current.samplingType || 'without-replacement',
+        sampleSizeType: op.size_unit ? (op.size_unit === 'rows' ? 'rows' : 'ratio') : current.sampleSizeType || (op.size == null ? 'ratio' : 'rows'),
+        sampleSize: op.size ?? current.sampleSize ?? 100,
+        rowSpec: op.rows ?? current.rowSpec,
+        name: op.name || current.name || 'Sample',
+      }, { strict: true });
+    } catch (error) { fail(error.message); }
+    delete spec.ensureUniqueName;
+    return spec;
+  }
+
+  function createSampleDataset(sampler, op) {
+    const source = resolve(sampler.sourceNodeId, 'source', ['dataset']);
+    const content = normalizeDatasetContent(source.datasetContent || { headers: [], rows: [] });
+    if (!content.headers.length) fail(`Dataset "${nodeTitle(source)}" has no columns to sample.`);
+    // Keep generated IDs stable within this plan, including a source loaded from an older project.
+    source.datasetContent = content;
+    let indices;
+    try { indices = sampleSourceIndices(content, sampledOutputs(next, sampler.nodeId), sampler); }
+    catch (error) { fail(error.message); }
+    const outputs = sampledOutputs(next, sampler.nodeId);
+    const datasetName = uniqueName(clean(op.name) || `${nodeTitle(source)} sample ${outputs.length + 1}`, takenNames('dataset'));
+    const dataset = addNode({
+      type: 'dataset', nodeId: generateNodeId(), ...placeNear(sampler), name: datasetName,
+      note: String(op.note ?? formatSamplerModeSummary(sampler)), samplerNodeId: sampler.nodeId,
+      ...(sampler.samplingType === 'without-replacement' ? { sampledSourceRowIds: indices.map((i) => content.rowIds[i]) } : {}),
+      datasetContent: normalizeDatasetContent({ headers: content.headers, columnTypes: content.columnTypes,
+        rows: indices.map((i) => content.rows[i].map(cloneCell)) }),
+      nodeOrigin: 'agent',
+    });
+    connect(sampler.nodeId, dataset.nodeId, 'sampler-to-dataset');
+    return dataset;
+  }
+
+  function assertContentEditable(node) {
+    if (!ctx.contentLocks?.get(node.nodeId)?.length && !contentLocks([], next).get(node.nodeId)?.length) return;
+    const remedy = node.type === 'prompt' ? 'Use add_prompt_version to change a new version.'
+      : 'Add a new dataset (add_dataset or duplicate_dataset) with the changed table instead.';
+    fail(`${node.type[0].toUpperCase()}${node.type.slice(1)} "${nodeTitle(node)}" has produced results, so its content is locked. ${remedy}`);
   }
 
   // ---------- operations ----------
 
   const handlers = {
     add_dataset(op) {
-      const { headers, rows } = normalizeTable(op);
+      const content = normalizeTable(op);
+      const { headers, rows } = content;
       const name = uniqueName(clean(op.name) || 'Dataset', takenNames('dataset'));
       const node = addNode({
         type: 'dataset',
@@ -519,7 +595,7 @@ export function planChangeSet(state, operations, ctx) {
         ...placeNear(null),
         name,
         note: String(op.note ?? ''),
-        datasetContent: normalizeDatasetContent({ headers, rows }),
+        datasetContent: content,
         nodeOrigin: 'agent',
       });
       registerRef(op, node.nodeId);
@@ -561,59 +637,104 @@ export function planChangeSet(state, operations, ctx) {
 
     add_sampler(op) {
       const source = resolve(op.source, 'source', ['dataset']);
-      const content = normalizeDatasetContent(source.datasetContent || { headers: [], rows: [] });
-      if (!content.rows.length) fail(`Dataset "${nodeTitle(source)}" has no rows to sample.`);
-      const sample = sampleRows(content.rows, op);
+      const spec = samplerSpec(op, source.nodeId);
       const samplerName = uniqueName(clean(op.name) || 'Sample', takenNames('sampler', (n) => n.sourceNodeId === source.nodeId));
       const sampler = addNode({
+        ...spec,
         type: 'sampler',
         nodeId: generateNodeId(),
         ...placeNear(source),
         name: samplerName,
         note: '',
         sourceNodeId: source.nodeId,
-        ...sample.sampler,
         nodeOrigin: 'agent',
       });
       connect(source.nodeId, sampler.nodeId, 'dataset-to-sampler');
-      const datasetName = uniqueName(clean(op.dataset_name) || `${nodeTitle(source)} ${samplerName}`, takenNames('dataset'));
-      const dataset = addNode({
-        type: 'dataset',
-        nodeId: generateNodeId(),
-        ...placeNear(sampler),
-        name: datasetName,
-        note: '',
-        samplerNodeId: sampler.nodeId,
-        ...(sample.sampler.samplingType === 'without-replacement'
-          ? { sampledSourceRowIds: sample.indices.map((i) => content.rowIds[i]) } : {}),
-        datasetContent: normalizeDatasetContent({
-          headers: content.headers,
-          columnTypes: content.columnTypes,
-          rows: sample.rows,
-        }),
-        nodeOrigin: 'agent',
-      });
-      connect(sampler.nodeId, dataset.nodeId, 'sampler-to-dataset');
       registerRef(op, sampler.nodeId);
+      if (op.create_dataset === false) {
+        if (op.dataset_ref) fail('dataset_ref needs create_dataset: true.');
+        return { kind: 'add', type: 'sampler', title: `New Sample "${samplerName}"`, nodeIds: [sampler.nodeId],
+          lines: [formatSamplerModeSummary(sampler), 'No sample Dataset created yet; its settings stay editable.'] };
+      }
+      const dataset = createSampleDataset(sampler, { name: op.dataset_name });
       if (clean(op.dataset_ref)) registerRef({ ref: op.dataset_ref }, dataset.nodeId);
-      return { kind: 'add', type: 'sampler', title: `New sample "${datasetName}" of "${nodeTitle(source)}"`,
-        nodeIds: [sampler.nodeId, dataset.nodeId], lines: [`${sample.label}, ${sample.rows.length} rows`] };
+      return { kind: 'add', type: 'sampler', title: `New sample "${dataset.name}" of "${nodeTitle(source)}"`,
+        nodeIds: [sampler.nodeId, dataset.nodeId], lines: [formatSamplerModeSummary(sampler), `${dataset.datasetContent.rows.length} rows`] };
+    },
+
+    sample_dataset(op) {
+      const sampler = resolve(op.sampler, 'sampler', ['sampler']);
+      const dataset = createSampleDataset(sampler, op);
+      touched.add(sampler.nodeId);
+      registerRef(op, dataset.nodeId);
+      return { kind: 'add', type: 'dataset', title: `Create sample "${dataset.name}"`, nodeIds: [sampler.nodeId, dataset.nodeId],
+        lines: [formatSamplerModeSummary(sampler), `${dataset.datasetContent.rows.length} rows`] };
+    },
+
+    duplicate_dataset(op) {
+      const source = resolve(op.dataset, 'dataset', ['dataset']);
+      const content = normalizeDatasetContent(source.datasetContent);
+      const version = op.as_version === true;
+      const name = uniqueName(clean(op.name) || `${nodeTitle(source)} ${version ? 'v2' : '(Copy 1)'}`, takenNames('dataset'));
+      const node = addNode({
+        type: 'dataset', nodeId: generateNodeId(), ...placeNear(source), name,
+        note: String(op.note ?? source.note ?? ''), nodeOrigin: 'agent',
+        ...(version && source.samplerNodeId ? { samplerNodeId: source.samplerNodeId } : {}),
+        datasetContent: normalizeDatasetContent({ ...content, rowIds: version ? content.rowIds : undefined }),
+      });
+      if (version) connect(source.nodeId, node.nodeId, 'dataset-to-dataset');
+      registerRef(op, node.nodeId);
+      return { kind: 'add', type: 'dataset', title: `${version ? 'New version' : 'Duplicate'} of Dataset "${nodeTitle(source)}": "${name}"`,
+        nodeIds: [node.nodeId], lines: [`${content.rows.length} rows, including all image and PDF cells`] };
+    },
+
+    move_image(op) {
+      const node = resolve(op.dataset, 'dataset', ['dataset']);
+      assertContentEditable(node);
+      const content = normalizeDatasetContent(node.datasetContent);
+      const fromColumn = content.headers.indexOf(clean(op.from_column));
+      const toColumn = content.headers.indexOf(clean(op.to_column));
+      const fromRow = Number(op.from_row) - 1;
+      const toRow = Number(op.to_row) - 1;
+      if (![fromColumn, toColumn].every((index) => content.columnTypes[index] === 'image')) fail('Both columns must be image columns.');
+      if (![fromRow, toRow].every((row) => Number.isInteger(row) && row >= 0 && row < content.rows.length)) fail('Image rows must be existing 1-based Dataset row numbers.');
+      if (fromRow === toRow && fromColumn === toColumn) fail('The source and target image cells are the same.');
+      const moved = moveImageAsset(content.rows[fromRow][fromColumn], content.rows[toRow][toColumn], Number(op.image ?? 1) - 1);
+      if (!moved) fail('image must name an existing image in the source cell (1-based).');
+      content.rows[fromRow][fromColumn] = moved.source;
+      content.rows[toRow][toColumn] = moved.target;
+      node.datasetContent = content;
+      touched.add(node.nodeId);
+      return { kind: 'update', type: 'dataset', title: `Move image in "${nodeTitle(node)}"`, nodeIds: [node.nodeId],
+        lines: [`Row ${fromRow + 1}, ${op.from_column} → row ${toRow + 1}, ${op.to_column}`, 'The image is removed from its source cell.'] };
     },
 
     add_process(op) {
-      const code = String(op.code ?? '').trim();
+      const code = String(op.code ?? 'def process(df):\n    return df').trim();
       const name = uniqueName(clean(op.name) || 'Process', takenNames('process'));
-      const anchor = resolve(op.primary_input, 'primary_input', ['dataset', 'run', 'process']);
+      const anchor = op.primary_input ? resolve(op.primary_input, 'primary_input', ['dataset', 'run', 'process']) : null;
       const node = addNode({ type: 'process', nodeId: generateNodeId(), ...placeNear(anchor), name, nodeOrigin: 'agent' });
-      const primary = resolveSource(op.primary_input, op.primary_branch, 'primary_input', node.nodeId);
+      const primary = anchor ? resolveSource(op.primary_input, op.primary_branch, 'primary_input', node.nodeId) : null;
       const { others, notes } = wireProcess(node, code, primary);
       registerRef(op, node.nodeId);
       return {
         kind: 'add', type: 'process', title: `New process "${name}"`, nodeIds: [node.nodeId],
-        lines: [`df = "${stepSourceLabel(next, primary)}"`, ...others.map((b) => `${b.alias} = "${b.label}"`), ...notes,
+        lines: [...(primary ? [`df = "${stepSourceLabel(next, primary)}"`] : []), ...others.map((b) => `${b.alias} = "${b.label}"`), ...notes,
           'Not run yet: running it produces its output branches.'],
         diffs: [{ label: 'Code', before: '', after: code }],
       };
+    },
+
+    duplicate_process(op) {
+      const source = resolve(op.process, 'process', ['process']);
+      const name = uniqueName(clean(op.name) || `${nodeTitle(source)} (Copy 1)`, takenNames('process'));
+      const node = addNode({ type: 'process', nodeId: generateNodeId(), ...placeNear(source), name,
+        dfCode: String(source.dfCode || ''), activeMode: 'df', nodeOrigin: 'agent',
+        ...(source.processOutputPorts ? { processOutputPorts: structuredClone(source.processOutputPorts) } : {}),
+      });
+      registerRef(op, node.nodeId);
+      return { kind: 'add', type: 'process', title: `Duplicate Process "${nodeTitle(source)}": "${name}"`, nodeIds: [node.nodeId],
+        lines: ['Copies its code and detected outputs. No inputs or results are copied.'] };
     },
 
     add_prompt(op) {
@@ -660,23 +781,24 @@ export function planChangeSet(state, operations, ctx) {
 
     add_run(op) {
       if ('input_dataset' in op) fail('add_run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
-      const prompt = resolve(op.prompt, 'prompt', ['prompt']);
+      const prompt = op.prompt ? resolve(op.prompt, 'prompt', ['prompt']) : null;
       // Like the user, the Agent has no per-Run model or settings: Runs use Settings → Run defaults.
       if (op.credential_id != null || op.settings != null) fail('A Run uses the default Run model and settings from Settings; credential_id and settings cannot be set per Run.');
-      const runsOfPrompt = new Set(next.connections.filter((c) => c.type === 'prompt-to-run' && c.fromId === prompt.nodeId).map((c) => c.toId));
+      const runsOfPrompt = new Set(next.connections.filter((c) => c.type === 'prompt-to-run' && c.fromId === prompt?.nodeId).map((c) => c.toId));
       const name = uniqueName(clean(op.name) || 'Run', takenNames('run', (n) => runsOfPrompt.has(n.nodeId)));
       const node = addNode({ type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name, nodeOrigin: 'agent' });
-      const source = resolveSource(op.input, op.input_branch, 'input', node.nodeId);
-      const mapping = validateMapping(prompt, source, op.input_mapping);
+      const source = op.input ? resolveSource(op.input, op.input_branch, 'input', node.nodeId) : null;
+      if ((!prompt || !source) && Object.keys(op.input_mapping || {}).length) fail('Connect a Prompt and Data input before setting input_mapping.');
+      const mapping = prompt && source ? validateMapping(prompt, source, op.input_mapping) : {};
       node.runInputToColumn = JSON.stringify(mapping);
-      setRunInputSource(next, node.nodeId, source);
-      connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
+      if (source) setRunInputSource(next, node.nodeId, source);
+      if (prompt) connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
       registerRef(op, node.nodeId);
       return {
         kind: 'add', type: 'run', title: `New run "${name}"`, nodeIds: [node.nodeId],
         lines: [
-          `Prompt "${nodeTitle(prompt)}" on "${stepSourceLabel(next, source)}"`,
-          mappingLine(mapping, source),
+          prompt ? `Prompt "${nodeTitle(prompt)}"${source ? ` on "${stepSourceLabel(next, source)}"` : '; Data input not connected'}` : 'Prompt input not connected',
+          ...(source ? [mappingLine(mapping, source)] : []),
           'Model and settings: Settings → Run defaults',
           'Not started: it runs when you start it.',
         ],
@@ -742,6 +864,7 @@ export function planChangeSet(state, operations, ctx) {
     // Leave one input empty, as dragging its line off on the canvas does.
     disconnect(op) {
       const node = resolve(op.node, 'node', ['run', 'process', 'score', 'sampler', 'promptReview']);
+      if (node.type === 'score' && node.scoreMatchPending) fail(`Score "${nodeTitle(node)}" is matching; stop it before changing its inputs.`);
       touched.add(node.nodeId);
       const port = inputPortOf(op, node);
       const result = checkDisconnect(next, { nodeId: node.nodeId, portId: port.id });
@@ -772,16 +895,17 @@ export function planChangeSet(state, operations, ctx) {
       const diffs = [];
       const allowed = {
         prompt: ['name', 'note', 'sections', 'section_edits', 'input_types', 'output'],
-        dataset: ['name', 'note', 'columns', 'rows'],
+        dataset: ['name', 'note', 'columns', 'rows', 'row_ids'],
         process: ['name', 'code', 'primary_input', 'primary_branch'],
         run: ['name', 'prompt', 'input', 'input_branch', 'input_mapping'],
         score: ['name', 'ground_truth', 'pairing', 'comparison', 'combine', 'match_code'],
-        sampler: ['name'],
+        sampler: ['name', 'sampling', 'size', 'size_unit', 'rows'],
         promptReview: ['name'],
       }[node.type] || [];
       if (node.type === 'run' && 'input_dataset' in set) fail('A run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
       const bad = keys.filter((k) => !allowed.includes(k));
       if (bad.length) fail(`A ${node.type} cannot set ${bad.join(', ')}. Settable: ${allowed.join(', ')}.`);
+      if (node.type === 'score' && node.scoreMatchPending && keys.some((key) => key !== 'name')) fail(`Score "${before}" is matching; stop it before changing its configuration.`);
 
       if ('name' in set) {
         const name = clean(set.name);
@@ -798,14 +922,19 @@ export function planChangeSet(state, operations, ctx) {
       }
 
       // Include samples added earlier in this proposal as well as locks from existing History.
-      const contentKeys = { prompt: ['sections', 'section_edits', 'input_types', 'output'], dataset: ['columns', 'rows'] }[node.type] || [];
-      const locked = ctx.contentLocks?.get(node.nodeId)?.length || contentLocks([], next).get(node.nodeId)?.length;
-      if (locked && contentKeys.some((k) => k in set)) {
-        const remedy = {
-          prompt: 'Use add_prompt_version to change a new version.',
-          dataset: 'Add a new dataset (add_dataset) with the changed table instead.',
-        }[node.type];
-        fail(`${node.type[0].toUpperCase()}${node.type.slice(1)} "${before}" has produced results, so its content is locked. ${remedy}`);
+      const contentKeys = { prompt: ['sections', 'section_edits', 'input_types', 'output'], dataset: ['columns', 'rows', 'row_ids'] }[node.type] || [];
+      if (contentKeys.some((k) => k in set)) assertContentEditable(node);
+
+      if (node.type === 'sampler' && ['sampling', 'size', 'size_unit', 'rows'].some((key) => key in set)) {
+        if (sampledOutputs(next, node.nodeId).length) fail(`Sample "${before}" already has output Datasets, so its settings are locked. Create a new Sample instead.`);
+        const spec = samplerSpec(set, node.sourceNodeId, node);
+        node.samplingType = spec.samplingType;
+        delete node.rowSpec;
+        delete node.sampleSize;
+        delete node.sampleSizeType;
+        if (spec.samplingType === 'specify-rows') node.rowSpec = spec.rowSpec;
+        else { node.sampleSize = spec.sampleSize; node.sampleSizeType = spec.sampleSizeType; }
+        lines.push(formatSamplerModeSummary(node));
       }
 
       if (node.type === 'prompt') {
@@ -823,19 +952,18 @@ export function planChangeSet(state, operations, ctx) {
         }
       }
 
-      if (node.type === 'dataset' && ('columns' in set || 'rows' in set)) {
-        if (datasetColumns(node).some((c) => c.type !== 'text')) fail('Datasets with image or pdf columns cannot be rewritten here; edit them in the dataset view.');
+      if (node.type === 'dataset' && ('columns' in set || 'rows' in set || 'row_ids' in set)) {
         const current = normalizeDatasetContent(node.datasetContent || { headers: [], rows: [] });
-        const { headers, rows } = normalizeTable({ columns: set.columns ?? current.headers, rows: set.rows ?? current.rows });
+        const content = normalizeTable(set, current);
+        const { headers, rows } = content;
         lines.push(`Replace the table: ${current.rows.length} → ${rows.length} rows; columns: ${headers.join(', ')}`);
-        node.datasetContent = normalizeDatasetContent({ headers, rows });
+        node.datasetContent = content;
       }
 
       if (node.type === 'process' && ('code' in set || 'primary_input' in set || 'primary_branch' in set)) {
         const current = processPrimarySource(next, node.nodeId);
-        if (!current && !('primary_input' in set)) fail(`Process "${before}" has no df input; set primary_input.`);
         const primary = 'primary_input' in set || 'primary_branch' in set
-          ? resolveSource(set.primary_input ?? current.nodeId, set.primary_branch, 'primary_input', node.nodeId)
+          ? resolveSource(set.primary_input ?? current?.nodeId, set.primary_branch, 'primary_input', node.nodeId)
           : current;
         const code = 'code' in set ? String(set.code ?? '').trim() : String(node.dfCode || '');
         if ('code' in set) {
@@ -913,6 +1041,11 @@ export function planChangeSet(state, operations, ctx) {
           const saved = parseJson(node.reviewResult, {});
           delete saved.comparison_rows;
           node.reviewResult = JSON.stringify(saved);
+        }
+        if (['ground_truth', 'match_code', 'pairing', 'comparison', 'combine'].some((key) => key in set)) {
+          delete node.scoreMatchResult;
+          delete node.scoreMatchError;
+          delete node.scoreMatchInterrupted;
         }
       }
 
@@ -1025,7 +1158,18 @@ export function planChangeSet(state, operations, ctx) {
       const node = resolve(op.node, 'node');
       if (node.type === 'run' && node.runPending) fail(`Run "${nodeTitle(node)}" is running; stop it before removing it.`);
       if (node.type === 'promptReview' && node.reviewPending) fail(`Review "${nodeTitle(node)}" is running; stop it before removing it.`);
+      if (node.type === 'score' && node.scoreMatchPending) fail(`Score "${nodeTitle(node)}" is matching; stop it before removing it.`);
       const id = node.nodeId;
+      const removingIds = new Set(operations.filter((operation) => operation?.op === 'remove')
+        .map((operation) => clean(operation.node)).map((ref) => ref.startsWith('$') ? refs[ref] : ref));
+      if (next.connections.some((edge) => edge.fromId === id && !removingIds.has(edge.toId))) {
+        fail(`"${nodeTitle(node)}" is connected to downstream nodes. Disconnect them first, or remove them in the same proposal.`);
+      }
+      if (node.type === 'dataset' && next.nodes.some((other) => !removingIds.has(other.nodeId)
+        && ((other.type === 'run' && runInputSource(next, other.nodeId)?.nodeId === id)
+          || (other.type === 'score' && other.scoreGroundTruthId === id)))) {
+        fail(`Dataset "${nodeTitle(node)}" is selected by a Run or Score. Disconnect it first, or remove the reader in the same proposal.`);
+      }
       const lines = [];
       // Every step reading this node loses that input (a Process its df or its df_<alias> input).
       for (const edge of next.connections.filter((c) => c.type === DATA_EDGE && c.fromId === id)) {

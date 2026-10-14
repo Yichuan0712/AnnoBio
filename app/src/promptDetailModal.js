@@ -362,7 +362,6 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
             <div class="prompt-detail-step">
               <div class="prompt-detail-sections-heading">
                 <p class="prompt-step-label">Prompt sections</p>
-                ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-heading-edit prompt-detail-sections-btn-edit">Edit sections</button>'}
               </div>
               <div class="prompt-detail-sections-scroll">
                 <div class="prompt-detail-sections-wrap">
@@ -372,7 +371,8 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
               <div class="prompt-form-error prompt-modal-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
               <div class="prompt-actions">
                 <div class="prompt-actions__trailing">
-                  <button type="button" class="btn btn-secondary prompt-detail-export-local" title="Export prompt as a text file">Export</button>
+                  <button type="button" class="btn btn-secondary prompt-detail-export-local" title="Save prompt as a text file">Save as file</button>
+                  ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit sections</button>'}
                   <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Create Run</button>
                 </div>
               </div>

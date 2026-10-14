@@ -5,7 +5,7 @@ import { buildWorkspaceSummary } from './agent/context/workspaceSummary.js';
 import { formatAgentText } from './agent/formatAgentText.js';
 import { diffLines } from './agent/lineDiff.js';
 import { executeRunRequest, previewRunRequest } from './agent/execution/runJobs.js';
-import { applyProposal, previewProposal } from './agent/operations/proposals.js';
+import { createProposalRuntime } from './agent/operations/proposals.js';
 import { executePipelineAction, previewPipelineAction } from './agent/pipeline/pipelineActions.js';
 import { ASK_USER_TOOL, PIPELINE_ACTION_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, USER_TOOLS } from './agent/tools/agentTools.js';
 
@@ -677,10 +677,7 @@ export function mountAgentChatSession({
       pipelineSelections: workspace.getPipelineSelections?.() || [],
     });
     const proposalWorkspace = {
-      getCanvasState: workspace.getCanvasState,
-      extractInputFields: workspace.extractInputFields,
-      applyCanvasState: workspace.applyCanvasState,
-      getContentLocks: workspace.getContentLocks,
+      ...workspace,
       credentialsById,
     };
     const runWorkspace = {
@@ -693,8 +690,7 @@ export function mountAgentChatSession({
       inspectNode,
       getScoreComparisonRows: workspace.getScoreComparisonRows,
       buildSummary,
-      previewProposal: (proposal) => previewProposal(proposal, proposalWorkspace),
-      applyProposal: (proposal, options) => applyProposal(proposal, proposalWorkspace, options),
+      ...createProposalRuntime(proposalWorkspace),
       previewRunRequest: (request) => previewRunRequest(request, runWorkspace),
       executeRunRequest: (request, options) => executeRunRequest(request, runWorkspace, options),
       getPipelineSelections: workspace.getPipelineSelections,

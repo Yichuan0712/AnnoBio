@@ -69,3 +69,45 @@ export function pickUnusedSampleIndices(availableIndices, count, random = Math.r
   }
   return shuffled.slice(0, count).sort((a, b) => a - b);
 }
+
+/** Only real Sample output edges count as pulls; Dataset versions retain provenance without consuming another pull. */
+export function sampledOutputs(canvasState, samplerId) {
+  const outputIds = new Set((canvasState?.connections || [])
+    .filter((edge) => edge.type === 'sampler-to-dataset' && edge.fromId === samplerId).map((edge) => edge.toId));
+  return (canvasState?.nodes || []).filter((node) => node.type === 'dataset'
+    && node.samplerNodeId === samplerId && outputIds.has(node.nodeId)).map((node) => ({
+    nodeId: node.nodeId,
+    rows: (node.datasetContent || node.subsetContent)?.rows || [],
+    sourceRowIds: node.sampledSourceRowIds,
+  }));
+}
+
+/** Row numbers are 1-based; range direction is normalized, while order and duplicates are preserved. */
+export function parseSampleRowSpec(text, totalRows) {
+  const indices = [];
+  for (const part of String(text || '').split(/[\s,]+/).filter(Boolean)) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(part);
+    if (!match) continue;
+    const a = Number(match[1]);
+    const b = Number(match[2] || match[1]);
+    if (a < 1 || b < 1) continue;
+    for (let row = Math.min(a, b); row <= Math.min(Math.max(a, b), totalRows); row += 1) indices.push(row - 1);
+  }
+  return indices;
+}
+
+/** The canvas and Agent draw from the same source-row pool and enforce the same finite quota. */
+export function sampleSourceIndices(source, outputs, settings, random = Math.random) {
+  const totalRows = source?.rows?.length || 0;
+  if (settings.samplingType === 'specify-rows') return parseSampleRowSpec(settings.rowSpec, totalRows);
+  const count = requestedSampleRows(totalRows, settings.sampleSizeType || 'ratio', settings.sampleSize ?? 100);
+  if (settings.samplingType === 'with-replacement') {
+    return Array.from({ length: Math.min(count, totalRows) }, () => Math.floor(random() * totalRows)).sort((a, b) => a - b);
+  }
+  if (count < 1) throw new Error('Sample size selects no rows from this Dataset.');
+  const quota = samplerQuota(source, outputs, settings.sampleSizeType || 'ratio', settings.sampleSize ?? 100);
+  if (quota.completed >= quota.total || quota.availableIndices.length < count) {
+    throw new Error('Not enough remaining data to create a new dataset when sampling without replacement.');
+  }
+  return pickUnusedSampleIndices(quota.availableIndices, count, random);
+}

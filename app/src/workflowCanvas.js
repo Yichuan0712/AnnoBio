@@ -79,10 +79,11 @@ import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight } from '.
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
-import { pickUnusedSampleIndices, samplerQuota } from './samplerQuota.js';
+import { sampleSourceIndices, samplerQuota } from './samplerQuota.js';
 import { openDatasetDiffModal } from './datasetDiffModal.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
+import { runScoreCode } from './scoreCodeRunClient.js';
 import { codeHashOf, effectiveProcessOutputs, parseProcessOutputPorts } from './processOutputPorts.js';
 import { CANVAS_VERSION } from './canvasFormat.js';
 import {
@@ -1418,6 +1419,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
   const pendingProcesses = new Set();
+  const pendingScoreMatches = new Set();
   const pendingRunHistoryRecords = new Map();
   async function persistRunHistoryProgress(nodeId, status, results, outputFields) {
     const record = pendingRunHistoryRecords.get(nodeId);
@@ -2077,6 +2079,55 @@ export function buildWorkflowCanvas(root, options = {}) {
     return readRunInput(runNode).table || null;
   }
 
+  async function runScoreNode(nodeId, { signal, onProgress } = {}) {
+    const node = getNodeById(nodeId);
+    if (!node?.classList.contains('workflow-node--score')) throw new Error('Score node was not found.');
+    if (pendingScoreMatches.has(nodeId) || node.dataset.scoreMatchUiRunning === '1') throw new Error('Score matching is already running.');
+    if (node.dataset.scoreActiveMatchMode !== 'code') throw new Error('Rule-based Scores compute automatically; this job runs custom match code.');
+    const runId = connections.find((edge) => edge.type === 'run-to-score' && edge.toId === nodeId)?.fromId;
+    const run = getNodeById(runId);
+    const runResultsRaw = run?.dataset.runResults || '[]';
+    const groundTruthId = node.dataset.scoreGroundTruthId;
+    const groundTruth = datasetContentByNodeId.get(node.dataset.scoreGroundTruthId);
+    let results = [];
+    let fields = [];
+    try { results = JSON.parse(runResultsRaw); } catch (_) {}
+    try { fields = JSON.parse(run?.dataset.runOutputFields || '[]'); } catch (_) {}
+    const code = String(node.dataset.scoreMatchCode || '');
+    if (!code.trim()) throw new Error('Score has no custom match code.');
+    pendingScoreMatches.add(nodeId);
+    node.dataset.scoreMatchAgentRunning = '1';
+    node.dataset.scoreMatchInterrupted = '1';
+    delete node.dataset.scoreMatchError;
+    try {
+      const result = await runScoreCode({ code, results, outputFields: fields, input: readRunInputTable(run), groundTruth, signal,
+        onProgress: (completed, total) => {
+          const bar = getNodeById(nodeId)?.querySelector('.workflow-node__score-progress');
+          if (bar) bar.style.width = `${total ? Math.min(100, Math.round(completed * 100 / total)) : 0}%`;
+          onProgress?.(completed, total);
+        },
+      });
+      const live = getNodeById(nodeId);
+      if (!live) throw new Error('Score was removed before matching finished.');
+      if (live.dataset.scoreActiveMatchMode !== 'code' || live.dataset.scoreMatchCode !== code || live.dataset.scoreGroundTruthId !== groundTruthId
+        || getNodeById(runId)?.dataset.runResults !== runResultsRaw) throw new Error('Score inputs changed while matching; run matching again.');
+      live.dataset.scoreMatchResult = JSON.stringify(result);
+      delete live.dataset.scoreMatchError;
+      if (!result.wasCancelled) delete live.dataset.scoreMatchInterrupted;
+      return result;
+    } catch (error) {
+      if (error.name !== 'AbortError') node.dataset.scoreMatchError = error.message || String(error);
+      throw error;
+    } finally {
+      delete node.dataset.scoreMatchAgentRunning;
+      const live = getNodeById(nodeId);
+      if (live) delete live.dataset.scoreMatchAgentRunning;
+      pendingScoreMatches.delete(nodeId);
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      document.dispatchEvent(new CustomEvent('workflow:score-results-updated', { detail: { nodeId } }));
+    }
+  }
+
   /**
    * The table each input of a Process gives it to run with (processRequiredInputs plus
    * stepOutputs.js). Throws the reason when an input has no complete result yet.
@@ -2394,56 +2445,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     return isRunNameAlreadyUsedForPromptNodeId(nameToCheck, promptEdge.fromId, excludeRunNodeId);
   }
 
-  /**
-   * Parse row spec in order; duplicates and order are preserved (e.g. "1-2 1 2" → [0,1,0,1] → row1, row2, row1, row2).
-   * @param {string} text - e.g. "1 3 5-10 15"
-   * @param {number} totalRows - max row count (1-based), indices > totalRows are skipped
-   * @returns {number[]} 0-based indices in spec order
-   */
-  function parseRowSpec(text, totalRows) {
-    const indices = [];
-    const parts = (text || '').split(/[\s,]+/).filter(Boolean);
-    for (const part of parts) {
-      const dash = part.indexOf('-');
-      if (dash === -1) {
-        const num = parseInt(part, 10);
-        if (Number.isFinite(num) && num >= 1 && num <= totalRows) indices.push(num - 1);
-      } else {
-        const a = parseInt(part.slice(0, dash), 10);
-        const b = parseInt(part.slice(dash + 1), 10);
-        if (Number.isFinite(a) && Number.isFinite(b) && a >= 1 && b >= 1) {
-          const low = Math.min(a, b);
-          const high = Math.min(Math.max(a, b), totalRows);
-          for (let r = Math.max(1, low); r <= high; r++) indices.push(r - 1);
-        }
-      }
-    }
-    return indices;
-  }
-
-  /**
-   * Sample rows from source data per sampler settings.
-   * @param {string[][]} sourceRows
-   * @param {number} sampleSize - row count or percentage (1-100)
-   * @param {string} sampleSizeType - 'rows' | 'ratio'
-   * With-replacement draws are independent and can select the same row repeatedly.
-   * @returns {string[][]}
-   */
-  function sampleRowsWithReplacement(sourceRows, sampleSize, sampleSizeType) {
-    const n = sourceRows.length;
-    if (n === 0) return [];
-    let count = sampleSizeType === 'rows' ? Math.max(0, Math.floor(sampleSize)) : Math.max(0, Math.floor((n * sampleSize) / 100));
-    count = Math.min(count, n);
-    if (count === 0) return [];
-
-    const picked = [];
-    for (let k = 0; k < count; k++) {
-      picked.push(Math.floor(Math.random() * n));
-    }
-    picked.sort((a, b) => a - b);
-    return picked.map((i) => sourceRows[i].slice());
-  }
-
   function sampledOutputsForSampler(samplerNodeId) {
     const outputs = [];
     nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
@@ -2506,33 +2507,15 @@ export function buildWorkflowCanvas(root, options = {}) {
 
     const samplingType = samplerNode.dataset.samplerSamplingType || 'without-replacement';
     const datasetHeaders = sourceContent.headers.slice();
-    let datasetRows = [];
-    let sampledSourceRowIds;
-    if (samplingType === 'specify-rows') {
-      const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
-      const totalRows = sourceContent.rows.length;
-      const indices = parseRowSpec(rowSpec, totalRows);
-      datasetRows = indices.map((i) => sourceContent.rows[i].slice());
-    } else {
-      const sampleSize = parseInt(samplerNode.dataset.samplerSampleSize, 10) || 100;
-      const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'ratio';
-      const totalRows = sourceContent.rows.length;
-      const requestedCount = sampleSizeType === 'rows'
-        ? Math.max(0, Math.floor(sampleSize))
-        : Math.max(0, Math.floor((totalRows * sampleSize) / 100));
-      if (samplingType === 'without-replacement') {
-        const quota = samplerQuota(sourceContent, sampledOutputsForSampler(normalizedSamplerNodeId), sampleSizeType, sampleSize);
-        if (requestedCount < 1) throw new Error('Sample size selects no rows from this Dataset.');
-        if (quota.completed >= quota.total || quota.availableIndices.length < requestedCount) {
-          throw new Error('Not enough remaining data to create a new dataset when sampling without replacement.');
-        }
-        const picked = pickUnusedSampleIndices(quota.availableIndices, requestedCount);
-        datasetRows = picked.map((index) => sourceContent.rows[index].map(cloneCell));
-        sampledSourceRowIds = picked.map((index) => sourceContent.rowIds[index]);
-      } else {
-        datasetRows = sampleRowsWithReplacement(sourceContent.rows, sampleSize, sampleSizeType);
-      }
-    }
+    const indices = sampleSourceIndices(sourceContent, sampledOutputsForSampler(normalizedSamplerNodeId), {
+      samplingType,
+      rowSpec: samplerNode.dataset.samplerRowSpec || '',
+      sampleSizeType: samplerNode.dataset.samplerSampleSizeType || 'ratio',
+      sampleSize: Number(samplerNode.dataset.samplerSampleSize || 100),
+    });
+    const datasetRows = indices.map((index) => sourceContent.rows[index].map(cloneCell));
+    const sampledSourceRowIds = samplingType === 'without-replacement'
+      ? indices.map((index) => sourceContent.rowIds[index]) : undefined;
 
     const position = positionFrom(samplerNode);
     return {
@@ -3382,7 +3365,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         previewHistoryDeletion: async (recordId) => {
           const session = historySession;
           if (!session?.projectId || canvasHistoryVersion !== 1) throw new Error('History is not available for this project.');
-          const plan = await session.planDelete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses] });
+          const plan = await session.planDelete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses, ...pendingScoreMatches] });
           agentHistoryDeletionPreviews.set(recordId, { projectId: session.projectId, ids: plan.ids });
           return plan;
         },
@@ -3390,7 +3373,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           const session = historySession;
           const preview = agentHistoryDeletionPreviews.get(recordId);
           if (!session?.projectId || !preview || preview.projectId !== session.projectId) throw new Error('Preview this history deletion again.');
-          const plan = await session.delete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses] }, preview.ids);
+          const plan = await session.delete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses, ...pendingScoreMatches] }, preview.ids);
           agentHistoryDeletionPreviews.delete(recordId);
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           return plan;
@@ -3399,6 +3382,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         startRunNode,
         stopRunNode,
         runProcessNode,
+        runScoreNode,
         createAndRunReviewNode,
         stopReviewNode,
         verifyReviewSuggestions,
@@ -5004,6 +4988,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (node.dataset.scoreActiveMatchMode === 'code') out.scoreActiveMatchMode = 'code';
         if ((node.dataset.scoreMatchResult || '').trim()) out.scoreMatchResult = node.dataset.scoreMatchResult;
         if ((node.dataset.scoreMatchError || '').trim()) out.scoreMatchError = node.dataset.scoreMatchError;
+        if (pendingScoreMatches.has(nodeId) || node.dataset.scoreMatchUiRunning === '1') out.scoreMatchPending = true;
         if (node.dataset.scoreMatchInterrupted === '1') out.scoreMatchInterrupted = true;
         return out;
       }
@@ -5033,7 +5018,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       } catch (_) {}
       try {
         const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
-        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [] }));
+        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
         const returnShape = node.dataset.promptOutputReturnShape || 'single';
         outputFormat = { returnShape, fields };
       } catch (_) {
@@ -5705,6 +5690,9 @@ export function buildWorkflowCanvas(root, options = {}) {
    * approved. One canvas-changed event follows the load, so the whole proposal is one undo step.
    */
   function applyAgentCanvasState(nextState, { highlightNodeIds = [] } = {}) {
+    if (pendingScoreMatches.size) {
+      throw new Error('Score code matching is running. Wait for it to finish before applying changes.');
+    }
     // A node's detail window keeps a reference to its element; rebuilding the canvas under it
     // would leave its edits writing to a detached node.
     // The Pipeline Run History window stays in the page, hidden, once the panel has opened; it holds
@@ -5917,6 +5905,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const result = inspectWorkflowNode(getCanvasState(), nodeId, {
       ...options,
       extractInputFields: extractInputFieldsFromSections,
+      contentLocks: await getContentLocksForCanvas(),
     });
     if (result?.found && (result.type === 'run' || result.type === 'process') && history && !history.stale) {
       result.history = await historySession.displayEntriesForNode(nodeId, getCanvasState(), {
