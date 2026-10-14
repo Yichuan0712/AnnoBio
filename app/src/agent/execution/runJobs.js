@@ -1,5 +1,5 @@
 /**
- * run_nodes: jobs that spend model calls or run code (Runs, Processes, Reviews, suggestion
+ * run_nodes: jobs that spend model calls or run code (Runs, Processes, custom-code Scores, Reviews, suggestion
  * verification). previewRunRequest validates the jobs and estimates their cost for the card the user
  * confirms; executeRunRequest runs them in order once confirmed, reporting progress, and returns the
  * results the Agent sees. Execution goes through the same canvas functions the node views use.
@@ -8,6 +8,7 @@ import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { displayCell } from '../../datasetContent.js';
 import { processPrimarySource, runInputSource, stepInputWaitingMessage, stepSourceLabel } from '../../stepInputs.js';
 import { stepOutputTable } from '../../stepOutputs.js';
+import { buildCodeMatchInputs } from '../../scoreCodeRunClient.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
   datasetContentOf,
@@ -165,13 +166,33 @@ function previewProcess(job, ctx) {
   };
 }
 
+function previewScore(job, ctx) {
+  const score = findNode(ctx.state, job.node, 'score', 'node');
+  if (score.scoreMatchPending) fail(`Score "${nodeTitle(score)}" is already matching.`);
+  if (score.scoreActiveMatchMode !== 'code') fail('Rule-based Scores compute automatically; a score job runs custom match code.');
+  if (!/^\s*def\s+match\s*\(/m.test(String(score.scoreMatchCode || ''))) fail('Score code must define match(input_row, output_row, gt_row).');
+  if (!String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; choose one in Settings → Python first.');
+  const run = upstream(ctx.state, score.nodeId, 'run-to-score');
+  if (!run) fail(`Score "${nodeTitle(score)}" is not connected to a Run.`);
+  const groundTruth = findNode(ctx.state, score.scoreGroundTruthId, 'dataset', 'ground truth');
+  let payload;
+  try {
+    payload = buildCodeMatchInputs({ results: runResultsOf(run), outputFields: [],
+      input: stepOutputTable(ctx.state, runInputSource(ctx.state, run.nodeId)).table || runInputContentOf(run),
+      groundTruth: datasetContentOf(groundTruth) });
+  } catch (error) { fail(error.message); }
+  return { kind: 'score', title: `Match Score "${nodeTitle(score)}" by code`, nodeIds: [score.nodeId],
+    lines: [`Runs its Python match code on ${payload.runRows.length} Run rows against ${payload.gtRows.length} ground-truth rows (no model calls).`],
+    usd: 0, calls: 0, priced: true };
+}
+
 async function previewReview(job, ctx) {
   const score = findNode(ctx.state, job.score, 'score', 'score');
   const run = upstream(ctx.state, score.nodeId, 'run-to-score');
   if (!run || !runResultsOf(run).length) fail(`Score "${nodeTitle(score)}" has no run results to review.`);
   if (!score.scoreGroundTruthId) fail(`Score "${nodeTitle(score)}" has no ground-truth dataset.`);
   if (score.scoreActiveMatchMode === 'code' && !score.scoreMatchResult) {
-    fail(`Score "${nodeTitle(score)}" matches by code and has no code-match result yet; the user runs it from the score view first.`);
+    fail(`Score "${nodeTitle(score)}" matches by code and has no code-match result yet; run a score job first.`);
   }
   const credentialId = String(score.reviewCredentialId || ctx.settings.default_review_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
@@ -242,9 +263,10 @@ export async function previewRunRequest(request, env) {
         const kind = String(job?.kind || '');
         if (kind === 'run') items.push(previewRun(job, ctx));
         else if (kind === 'process') items.push(previewProcess(job, ctx));
+        else if (kind === 'score') items.push(previewScore(job, ctx));
         else if (kind === 'review') items.push(await previewReview(job, ctx));
         else if (kind === 'verify') items.push(previewVerify(job, ctx));
-        else fail(`kind must be run, process, review or verify, not "${kind}".`);
+        else fail(`kind must be run, process, score, review or verify, not "${kind}".`);
       } catch (error) {
         if (error instanceof RunRequestError) throw new RunRequestError(`Job ${index + 1}: ${error.message}`);
         throw error;
@@ -372,6 +394,24 @@ async function executeReview(item, env, { signal, onStatus, job }) {
   };
 }
 
+async function executeScore(item, env, { signal, onStatus }) {
+  const id = item.nodeIds[0];
+  let result;
+  try {
+    result = await env.runScoreNode(id, { signal,
+      onProgress: (completed, total) => onStatus(`Matching ${item.title}: ${completed}/${total} rows...`),
+    });
+  } catch (error) {
+    if (signal?.aborted || error?.name === 'AbortError') return { status: 'stopped', lines: [`${item.title}: stopped by the user`] };
+    throw error;
+  }
+  const matched = result.outcomes.filter((outcome) => outcome.ok && typeof outcome.matched_gt_index === 'number').length;
+  const errors = result.outcomes.filter((outcome) => !outcome.ok).length;
+  return { status: result.wasCancelled ? 'stopped' : 'completed',
+    lines: [`${item.title}: ${result.wasCancelled ? 'stopped' : 'finished'}; ${matched}/${result.outcomes.length} Run rows matched${errors ? `, ${errors} with errors` : ''}`],
+  };
+}
+
 async function executeVerify(item, env, { onStatus }) {
   onStatus(`Verifying ${item.suggestionIds.length} suggestion${item.suggestionIds.length === 1 ? '' : 's'}...`);
   const result = await env.verifyReviewSuggestions({ reviewNodeId: item.nodeIds[0], suggestionIds: item.suggestionIds });
@@ -406,12 +446,14 @@ export async function executeRunRequest(request, env, { signal, onStatus = () =>
     let item;
     if (job.kind === 'run') item = previewRun(job, ctx);
     else if (job.kind === 'process') item = previewProcess(job, ctx);
+    else if (job.kind === 'score') item = previewScore(job, ctx);
     else if (job.kind === 'review') item = await previewReview(job, ctx);
     else item = previewVerify(job, ctx);
     let outcome;
     try {
       if (item.kind === 'run') outcome = await executeRun(item, env, { signal, onStatus });
       else if (item.kind === 'process') outcome = await executeProcess(item, env, { signal, onStatus });
+      else if (item.kind === 'score') outcome = await executeScore(item, env, { signal, onStatus });
       else if (item.kind === 'review') outcome = await executeReview(item, env, { signal, onStatus, job });
       else outcome = await executeVerify(item, env, { onStatus });
     } catch (error) {

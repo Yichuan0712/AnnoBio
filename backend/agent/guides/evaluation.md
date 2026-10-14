@@ -13,6 +13,12 @@ Instead of rules, a Score can use custom match code: a Python `match(input_row, 
 function that returns truthy when a Run row and a ground-truth row match. Pairing is first-fit: each Run
 row takes the first unclaimed ground-truth row that matches.
 
+Rule-based Scores compute automatically. Custom match code runs explicitly: after configuring
+`match_code`, request a `run_nodes` job with `kind: score` and `node` set to the Score. It runs the
+same Python matcher as the Score window, reports progress, stores the result and retains partial
+results on cancellation. It uses the Python interpreter in Settings and makes no model calls.
+Run this job before requesting a Review of a Score that uses code matching.
+
 ## Comparison options per rule
 
 - Text: exact by default, optionally ignoring case, symbols or whitespace, or matching when one value

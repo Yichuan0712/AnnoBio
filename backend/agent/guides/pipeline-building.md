@@ -13,6 +13,7 @@ Score and Review sit beside it for evaluation and are not part of the exported p
   classification, normalisation to a vocabulary, reading figures (image columns) or documents (pdf
   columns). See the `prompt-design` guide.
 - Use a **Sampler** to draw a small subset for iterating on a prompt before running it on everything.
+  See `dataset-editing` for repeated sampling, finite without-replacement quotas and content locks.
 
 ## Typical shapes
 
@@ -49,7 +50,8 @@ Score and Review sit beside it for evaluation and are not part of the exported p
   names; port hover text starts with **Input:** or **Output:** and names the source or output. Tool IDs and code aliases stay the same; Process parameter names appear in the code editor. Node windows show
   what a node reads but do not choose it. Use
   connect and disconnect to change an existing step's inputs.
-- **Save results** (Run) and **Create dataset** (Process) save the current output as an ordinary
+- **Save to workspace** in the Run window (**Save results to workspace** in its context menu) and
+  **Create dataset** / **Create branch datasets** in Process save the current output as an ordinary
   Dataset, only to freeze or hand-edit it. The Dataset records where it came from but does not follow
   that step; a step reading it starts a new pipeline from it.
 - New prompt versions are linked by `prompt-to-prompt` connections; each version gets its own Run.

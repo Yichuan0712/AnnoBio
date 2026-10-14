@@ -6173,8 +6173,10 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 }
 
 .working-dataset-table-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 4px 12px 6px;
 }
 
 .working-dataset-table-actions__group {
@@ -6218,6 +6220,27 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 .working-dataset-detail-body .working-dataset-pagination-toolbar {
   flex-shrink: 0;
   padding-right: 0;
+}
+
+.working-dataset-pagination-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+.working-dataset-pagination-actions .dataset-detail-pagination-btns {
+  margin-left: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
+.working-dataset-readonly .working-dataset-pagination-actions .dataset-detail-pagination-btns {
+  padding-left: 0;
+  border-left: 0;
 }
 
 /* Keep the footer divider aligned with the table content. */

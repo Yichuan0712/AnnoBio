@@ -114,16 +114,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
                   <input type="text" id="wd-preview-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" />
                 </div>
               </div>
-              <div class="dataset-detail-preview-toolbar working-dataset-table-actions" role="toolbar" aria-label="Edit table">
-                <div class="working-dataset-table-actions__group">
-                  <button type="button" class="btn btn-secondary working-dataset-add-row">Add row</button>
-                  <span class="working-dataset-delete-control"><button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button></span>
-                </div>
-                <div class="working-dataset-table-actions__group">
-                  <button type="button" class="btn btn-secondary working-dataset-add-col" aria-haspopup="menu" aria-expanded="false">Add column</button>
-                  <span class="working-dataset-delete-control"><button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button></span>
-                </div>
-              </div>
               <div class="working-dataset-table-wrap">
                 <table class="dataset-preview-table working-dataset-edit-table">
                   <thead><tr class="wd-header-row"></tr></thead>
@@ -139,14 +129,26 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
                 <label class="dataset-detail-page-label" for="wd-page-inp">Page</label>
                 <input type="number" id="wd-page-inp" class="dataset-detail-page-inp" min="1" value="1" aria-label="Page number" />
                 <span class="dataset-detail-page-of wd-page-of">/ 1</span>
-                <div class="dataset-detail-pagination-btns">
-                  <button type="button" class="btn btn-secondary wd-prev-page" aria-label="Previous page">Previous</button>
-                  <button type="button" class="btn btn-secondary wd-next-page" aria-label="Next page">Next</button>
+                <div class="working-dataset-pagination-actions">
+                  <div class="working-dataset-table-actions" role="toolbar" aria-label="Edit table">
+                    <div class="working-dataset-table-actions__group">
+                      <button type="button" class="btn btn-secondary working-dataset-add-row">Add row</button>
+                      <span class="working-dataset-delete-control"><button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button></span>
+                    </div>
+                    <div class="working-dataset-table-actions__group">
+                      <button type="button" class="btn btn-secondary working-dataset-add-col" aria-haspopup="menu" aria-expanded="false">Add column</button>
+                      <span class="working-dataset-delete-control"><button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button></span>
+                    </div>
+                  </div>
+                  <div class="dataset-detail-pagination-btns">
+                    <button type="button" class="btn btn-secondary wd-prev-page" aria-label="Previous page">Previous</button>
+                    <button type="button" class="btn btn-secondary wd-next-page" aria-label="Next page">Next</button>
+                  </div>
                 </div>
               </div>
               <div class="dataset-detail-footer working-dataset-detail-footer">
                 <div class="working-dataset-detail-footer__actions">
-                  <button type="button" class="btn btn-secondary working-dataset-export-local" title="Export dataset to a file">Export</button>
+                  <button type="button" class="btn btn-secondary working-dataset-export-local" title="Save dataset as a file">Save as file</button>
                   <button type="button" class="btn btn-secondary working-dataset-sample">Create Sample</button>
                   <button type="button" class="btn btn-secondary working-dataset-process">Create Process</button>
                 </div>
@@ -755,6 +757,11 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     document.addEventListener('pointerdown', onDocPointerDown, true);
     document.addEventListener('focusin', onDocFocusIn, true);
     document.body.appendChild(menu);
+    const menuRect = menu.getBoundingClientRect();
+    const menuTop = rect.bottom + 2 + menuRect.height <= window.innerHeight - 8
+      ? rect.bottom + 2 : rect.top - menuRect.height - 2;
+    menu.style.top = `${Math.max(8, menuTop)}px`;
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuRect.width - 8))}px`;
     activeAddColumnMenu = menu;
     addColumnMenuCleanup = () => {
       document.removeEventListener('pointerdown', onDocPointerDown, true);

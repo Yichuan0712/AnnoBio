@@ -11,6 +11,7 @@ import { renderSourceLink } from './nodeSourceLink.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { executionIdleLabel } from './executionResumeState.js';
 import { showExecutionError } from './executionErrorPanel.js';
+import { buildMatchGtRowDict, buildMatchRunRowInputDict, buildMatchRunRowOutputDict } from './scoreCodeRunClient.js';
 import { extractInputFieldsFromSections } from './promptDetailModal.js';
 import { computeGreedyRunToGtPairing, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import {
@@ -62,7 +63,7 @@ export {
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { prepareReviewBody, prepareAssets } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
-import { displayCell, cloneCell, isAssetCell } from './datasetContent.js';
+import { displayCell, isAssetCell } from './datasetContent.js';
 import { ensureScoreReviewDefaults } from './nodeSettings.js';
 
 const API_BASE = BACKEND_API_BASE;
@@ -135,38 +136,6 @@ ${sameItemLines}
     #   return set(predicted.split(";")) == set(expected.split(";"))  # same set
     return predicted != "" and predicted == expected
 `;
-}
-
-/** input_row for the "Match by code" run: this run row's input dataset columns, keyed by column name.
- * Image/PDF cells pass through as {kind, assetIds, names} (not stringified) so the backend can resolve
- * them to real file paths before the row reaches user code -- see asset_store.resolve_cell_for_code. */
-function buildMatchRunRowInputDict(runResult, runWs) {
-  const headers = runWs?.headers || [];
-  const rows = runWs?.rows || [];
-  const inputRowIdx = runResult?.input_row_index;
-  const rowValues = (typeof inputRowIdx === 'number' && rows[inputRowIdx]) ? rows[inputRowIdx] : [];
-  const dict = {};
-  headers.forEach((h, i) => { dict[String(h ?? '')] = cloneCell(rowValues[i]); });
-  return dict;
-}
-
-/** output_row for the "Match by code" run: this run row's model output fields, keyed by field name. */
-function buildMatchRunRowOutputDict(runResult) {
-  const out = runResult && runResult.output && typeof runResult.output === 'object' ? runResult.output : {};
-  const dict = {};
-  Object.keys(out).forEach((k) => { dict[k] = out[k] != null ? String(out[k]) : ''; });
-  return dict;
-}
-
-/** gt_row for the "Match by code" run: one candidate ground-truth row's columns, keyed by column name.
- * Image/PDF cells pass through structured (see buildMatchRunRowInputDict above). */
-function buildMatchGtRowDict(gtContent, rowIndex) {
-  const headers = gtContent?.headers || [];
-  const rows = gtContent?.rows || [];
-  const rowValues = rows[rowIndex] || [];
-  const dict = {};
-  headers.forEach((h, i) => { dict[String(h ?? '')] = cloneCell(rowValues[i]); });
-  return dict;
 }
 
 /**
@@ -1625,6 +1594,10 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
 
   function setCodeRunningUi(isRunning) {
     codeRunning = isRunning;
+    if (node?.dataset) {
+      if (isRunning) node.dataset.scoreMatchUiRunning = '1';
+      else delete node.dataset.scoreMatchUiRunning;
+    }
     if (!codeRunBtn) return;
     codeRunBtn.textContent = isRunning ? 'Stop matching'
       : executionIdleLabel({ task: 'matching', interrupted: node?.dataset?.scoreMatchInterrupted === '1' });
@@ -1680,6 +1653,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     void updateSaveToWorkspaceButton();
   }
   document.addEventListener('workflow:history-resolved', refreshHistoryMatchResult);
+  document.addEventListener('workflow:score-results-updated', refreshHistoryMatchResult);
 
   function persistLastCodeMatchResult() {
     if (!node?.dataset) return;
@@ -1772,6 +1746,10 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
   }
 
   async function startCodeMatchRun() {
+    if (node?.dataset?.scoreMatchAgentRunning === '1') {
+      setCodeMatchError('Score matching is already running from Agent Assistant.');
+      return;
+    }
     if (!selectedNodeId) {
       setCodeMatchError('Select a ground truth dataset first.');
       return;
@@ -3542,6 +3520,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
 
   function close() {
     document.removeEventListener('workflow:history-resolved', refreshHistoryMatchResult);
+    document.removeEventListener('workflow:score-results-updated', refreshHistoryMatchResult);
     // With no saved code the editor shows generated sample code. Writing that back untouched would change
     // the Score's History key (and wipe a running Review's result) although nothing was edited.
     const matchCode = getMatchCode();

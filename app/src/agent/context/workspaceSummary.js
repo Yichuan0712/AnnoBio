@@ -154,12 +154,18 @@ function processLine(node, inspection) {
   return `- ${ref(node)}: reads ${inputs || '(no inputs)'}${branches}; last output ${outputs || '(not run)'}${waiting}`;
 }
 
-function samplerLine(node, lookup) {
+function samplerLine(node, lookup, canvasState) {
   const source = lookup.get(node.sourceNodeId);
   const size = node.samplingType === 'specify-rows'
     ? `rows ${node.rowSpec || '(none)'}`
     : `${node.sampleSize ?? ''}${node.sampleSizeType === 'ratio' ? '%' : ' rows'}`;
-  return `- ${ref(node)}: samples ${source ? quote(nodeTitle(source)) : '(no source)'}; ${size}`;
+  const { details } = inspectWorkflowNode(canvasState, node.nodeId);
+  const mode = node.samplingType === 'specify-rows' ? 'specified rows'
+    : node.samplingType === 'with-replacement' ? 'with replacement' : 'without replacement';
+  const progress = details.progress
+    ? `; ${details.progress.completed}/${details.progress.total} samples created, ${details.progress.remaining} remaining`
+    : `; ${details.outputs.length} samples created, repeatable`;
+  return `- ${ref(node)}: samples ${source ? quote(nodeTitle(source)) : '(no source)'}; ${mode}, ${size}${progress}${details.settingsLocked ? '; settings locked' : '; settings editable'}`;
 }
 
 function scoreLine(node, inspection) {
@@ -214,7 +220,7 @@ export async function buildWorkspaceSummary(canvasState, options = {}) {
     for (const node of group) {
       if (type === 'dataset') lines.push(datasetLine(node, lookup));
       else if (type === 'prompt') lines.push(promptLine(node, lookup, versionsById, options.extractInputFields));
-      else if (type === 'sampler') lines.push(samplerLine(node, lookup));
+      else if (type === 'sampler') lines.push(samplerLine(node, lookup, canvasState));
       else {
         const inspection = await inspect(node);
         if (type === 'run') lines.push(runLine(node, inspection));

@@ -4,7 +4,9 @@
  * through a node's table (dataset rows, run results, process outputs, score comparisons).
  */
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
-import { displayCell, normalizeDatasetContent } from '../../datasetContent.js';
+import { cloneCell, displayCell, isAssetCell, normalizeDatasetContent } from '../../datasetContent.js';
+import { sampledOutputs, samplerQuota } from '../../samplerQuota.js';
+import { contentLocks } from '../../contentLocks.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
 import { nodePorts, unconnectedProcessInputs } from '../../nodePorts.js';
 import {
@@ -150,7 +152,8 @@ function rowObject(headers, row, columns = null) {
   const out = {};
   headers.forEach((header, i) => {
     if (columns && !columns.includes(header)) return;
-    out[header] = displayCell(safeArray(row)[i]);
+    const value = safeArray(row)[i];
+    out[header] = isAssetCell(value) ? cloneCell(value) : displayCell(value);
   });
   return out;
 }
@@ -212,6 +215,7 @@ function inspectPrompt(node, ctx, options) {
         returnShape: outputFormat.returnShape || 'single',
         fields: safeArray(outputFormat.fields).map((f) => ({
           key: f.key, type: f.type || 'str', description: f.description || '', examples: safeArray(f.examples),
+          allowNone: f.allowNone === true,
         })),
       },
     },
@@ -237,6 +241,13 @@ function inspectDataset(node, ctx, options) {
 
 function inspectSampler(node, ctx) {
   const source = ctx.nodeLookup.get(normalizeNodeId(node.sourceNodeId));
+  const outputs = sampledOutputs(ctx.canvasState, node.nodeId);
+  const finite = (node.samplingType || 'without-replacement') === 'without-replacement';
+  const quota = finite ? samplerQuota(datasetContentOf(source), outputs, node.sampleSizeType || 'ratio', node.sampleSize ?? 100) : null;
+  const remaining = quota ? Math.max(0, Math.min(quota.total - quota.completed, quota.count ? Math.floor(quota.availableIndices.length / quota.count) : 0)) : null;
+  const diagnostics = source ? [] : ['The Sample has no source Dataset.'];
+  if (source && quota && !quota.count) diagnostics.push('Sample size selects no rows from this Dataset.');
+  else if (source && quota && remaining === 0) diagnostics.push('Not enough remaining data to create a new dataset when sampling without replacement.');
   return {
     details: {
       note: String(node.note || ''),
@@ -245,8 +256,12 @@ function inspectSampler(node, ctx) {
       sampleSizeType: node.sampleSizeType ?? null,
       sampleSize: node.sampleSize ?? null,
       rowSpec: node.rowSpec ?? null,
+      settingsLocked: outputs.length > 0,
+      outputs: outputs.map((output) => linkedNode(ctx.nodeLookup.get(output.nodeId))),
+      progress: quota ? { completed: quota.completed, total: quota.total, remaining, rowsPerSample: quota.count, remainingRows: quota.availableIndices.length } : null,
+      canCreateSample: Boolean(source && datasetContentOf(source).headers.length && (!quota || remaining > 0)),
     },
-    diagnostics: source ? [] : ['The sampler has no source dataset.'],
+    diagnostics,
   };
 }
 
@@ -450,7 +465,8 @@ function inspectScore(node, ctx) {
       matching: usesCode ? 'custom match code' : `${ruleCount} mapping rule${ruleCount === 1 ? '' : 's'}`,
       rules: usesCode ? undefined : { pairing: rules.pairing, comparison: rules.comparison },
       matchCode: usesCode ? String(node.scoreMatchCode || '') : undefined,
-      executionStatus: usesCode && node.scoreMatchInterrupted === true ? 'interrupted; ready to resume' : undefined,
+      executionStatus: node.scoreMatchPending === true ? 'running'
+        : usesCode && node.scoreMatchInterrupted === true ? 'interrupted; ready to resume' : undefined,
       reviewMethod: node.reviewMethod || 'default',
       excludedRows: node.scoreRowExcludedFromScoring ?? undefined,
       metrics: basicScoreMetrics(comparisonRows),
@@ -531,12 +547,18 @@ export function inspectWorkflowNode(canvasState, nodeId, options = {}) {
   const { details, diagnostics } = inspector ? inspector(node, ctx, options) : { details: {}, diagnostics: [] };
   // The dots on the node's edges, as the user sees and drags them (nodePorts.js); connect and disconnect use these ids.
   const ports = nodePorts(canvasState, id);
+  const lockedBy = (options.contentLocks || contentLocks([], canvasState)).get(id) || [];
   return {
     found: true,
     nodeId: id,
     type: String(node.type || ''),
     title: nodeTitle(node),
     createdByAgent: node.nodeOrigin === 'agent' || undefined,
+    ...(['prompt', 'dataset'].includes(node.type) ? { contentLock: {
+      locked: lockedBy.length > 0,
+      usedBy: lockedBy.map((otherId) => linkedNode(nodeLookup.get(otherId))).filter(Boolean),
+      editableFields: lockedBy.length ? ['name', 'note'] : null,
+    } } : {}),
     upstream: neighbors(canvasState, nodeLookup, id, 'upstream'),
     downstream: neighbors(canvasState, nodeLookup, id, 'downstream'),
     ports: ports && {
@@ -581,6 +603,7 @@ export function readNodeRows(canvasState, nodeId, options = {}) {
     return {
       title: nodeTitle(node),
       columns: columnsOf(content).filter((c) => !pick || pick.includes(c.name)),
+      rowIds: content.rowIds.slice(w.startIndex, w.startIndex + w.items.length),
       rows: w.items.map((row, i) => ({ row: w.startIndex + i + 1, ...rowObject(content.headers, row, pick) })),
       ...w.window,
     };
@@ -612,6 +635,7 @@ export function readNodeRows(canvasState, nodeId, options = {}) {
     const outputs = processOutputsOf(node);
     const names = Object.keys(outputs);
     if (!names.length) return { title: nodeTitle(node), error: 'The process has no saved output. It has to be run from its detail view first.' };
+    if (options.branch && !outputs[options.branch]) return { title: nodeTitle(node), error: `Unknown Process output "${options.branch}". Branches: ${names.join(', ')}.` };
     const branch = options.branch && outputs[options.branch] ? options.branch : names[0];
     const content = normalizeDatasetContent(outputs[branch]);
     const w = rowWindow(content.rows, options);
