@@ -95,6 +95,7 @@ import { readSavedFrom, savedFromLabel, savedProcessOutputs, savedRunOutput, sco
 import { outputMenuItems } from './outputMenu.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
+import { contentLocks } from './contentLocks.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -2380,11 +2381,7 @@ export function buildWorkflowCanvas(root, options = {}) {
    */
   function hasSampledDatasets(samplerNodeId) {
     if (!samplerNodeId) return false;
-    const datasetNodes = nodesLayer.querySelectorAll('.workflow-node--dataset');
-    for (const n of datasetNodes) {
-      if ((n.dataset.samplerNodeId || '') === samplerNodeId) return true;
-    }
-    return false;
+    return sampledOutputsForSampler(samplerNodeId).length > 0;
   }
 
   function getNodeIndex(node) {
@@ -3375,8 +3372,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         },
         extractInputFields: extractInputFieldsFromSections,
         applyCanvasState: applyAgentCanvasState,
-        getContentLocks: () => (historySession?.projectId && canvasHistoryVersion === 1
-          ? historySession.contentLocks(getCanvasState()) : new Map()),
+        getContentLocks: getContentLocksForCanvas,
         previewHistorySelection: planHistorySelectionForCanvas,
         applyHistorySelection: async (recordId) => {
           const plan = await planHistorySelectionForCanvas(recordId);
@@ -5437,10 +5433,16 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
-  /** Whether a Prompt, Dataset or Process node's content is locked because it produced a result (contentLocks.js). */
+  /** Results in History and sampled Dataset outputs both lock their source content. */
+  async function getContentLocksForCanvas() {
+    const state = getCanvasState();
+    return historySession?.projectId && canvasHistoryVersion === 1
+      ? historySession.contentLocks(state) : contentLocks([], state);
+  }
+
   async function isContentLocked(nodeId) {
-    if (!nodeId || !historySession?.projectId || canvasHistoryVersion !== 1) return false;
-    return !!(await historySession.contentLocks(getCanvasState())).get(nodeId)?.length;
+    if (!nodeId) return false;
+    return !!(await getContentLocksForCanvas()).get(nodeId)?.length;
   }
 
   function getHistoryForNode(nodeId) {

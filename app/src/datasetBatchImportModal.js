@@ -17,7 +17,7 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
   panel.setAttribute('aria-label', `Import ${fileLabel}`);
   panel.innerHTML = `
     <div class="dataset-batch-panel__header">
-      <div><strong>Import ${fileLabel}</strong><span class="dataset-batch-panel__target">${escapeHtml(headers[targetColumn] || `Column ${targetColumn + 1}`)}</span></div>
+      <div class="dataset-batch-panel__heading"><strong>Import ${fileLabel}</strong><span class="dataset-batch-panel__target">${escapeHtml(headers[targetColumn] || `Column ${targetColumn + 1}`)}</span></div>
       <button type="button" class="dataset-batch-panel__close" aria-label="Close import panel">&times;</button>
     </div>
     <div class="dataset-batch-panel__body">

@@ -37,16 +37,13 @@ function parseRowSpecToItems(spec) {
 export function openSamplerDetailModal({ node, hasSampledDatasets }) {
   const nodeId = node?.dataset?.nodeId ?? '';
   const name = (node?.dataset?.samplerName ?? '').trim() || 'Sample';
-  const samplingType = node?.dataset?.samplerSamplingType || 'without-replacement';
   const sampleSizeType = node?.dataset?.samplerSampleSizeType || 'ratio';
   const sampleSize = node?.dataset?.samplerSampleSize != null ? parseInt(node.dataset.samplerSampleSize, 10) : 100;
   const rowSpec = (node?.dataset?.samplerRowSpec ?? '').trim();
   const rowSpecItems = parseRowSpecToItems(rowSpec);
-  // Only without-replacement needs to lock once a dataset has been created: its "remaining rows"
-  // bookkeeping breaks if the settings change afterward. With-replacement and specify-rows have no
-  // such shared state -- each pull is independent, so there's nothing to protect by locking them.
-  const readOnly = samplingType === 'without-replacement'
-    && !!(typeof hasSampledDatasets === 'function' && hasSampledDatasets(nodeId));
+  // Every output records the settings that created it, regardless of sampling method.
+  const settingsLocked = () => !!(typeof hasSampledDatasets === 'function' && hasSampledDatasets(nodeId));
+  const readOnly = settingsLocked();
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-overlay--no-maximize';
@@ -223,6 +220,8 @@ export function openSamplerDetailModal({ node, hasSampledDatasets }) {
 
   /** Validate form and apply to node. Returns true if saved, false if validation failed (error shown). */
   function performSave() {
+    // Keep Create sample available, but never rewrite settings after an output exists.
+    if (settingsLocked()) return true;
     if (samplerFormErrorEl) samplerFormErrorEl.hidden = true;
     const newName = (node?.dataset?.samplerName ?? '').trim() || 'Sample';
     const samplingTypeVal = overlay.querySelector('input[name="sampler-replacement"]:checked')?.value || 'without-replacement';
@@ -292,6 +291,8 @@ export function openSamplerDetailModal({ node, hasSampledDatasets }) {
   }
 
   populateForm();
+  if (readOnly) overlay.querySelectorAll('.sampler-meta-wrap input, .sampler-meta-wrap button')
+    .forEach((control) => { control.disabled = true; });
   const sst = sampleSizeType;
   if (samplerSizeRowsWrap) samplerSizeRowsWrap.style.display = sst === 'rows' ? '' : 'none';
   if (samplerSizeRatioWrap) samplerSizeRatioWrap.style.display = sst === 'ratio' ? '' : 'none';

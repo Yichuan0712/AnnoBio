@@ -20,6 +20,7 @@ import {
 import { stepOutputTable } from '../../stepOutputs.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
 import { nodeTitle, processOutputsOf, runResultsOf } from '../canvas/workflowNodeInspector.js';
+import { contentLocks } from '../../contentLocks.js';
 
 export class ChangeSetError extends Error {
   constructor(message, index = null) {
@@ -796,9 +797,10 @@ export function planChangeSet(state, operations, ctx) {
         lines.push('Update the note');
       }
 
-      // Content that has produced results is locked (contentLocks.js), as in the node windows.
+      // Include samples added earlier in this proposal as well as locks from existing History.
       const contentKeys = { prompt: ['sections', 'section_edits', 'input_types', 'output'], dataset: ['columns', 'rows'] }[node.type] || [];
-      if (ctx.contentLocks?.get(node.nodeId)?.length && contentKeys.some((k) => k in set)) {
+      const locked = ctx.contentLocks?.get(node.nodeId)?.length || contentLocks([], next).get(node.nodeId)?.length;
+      if (locked && contentKeys.some((k) => k in set)) {
         const remedy = {
           prompt: 'Use add_prompt_version to change a new version.',
           dataset: 'Add a new dataset (add_dataset) with the changed table instead.',
