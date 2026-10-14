@@ -19,6 +19,20 @@ export function formatSamplerDescription(samplerNode) {
   return `${name} · ${typeLabel}, ${sizeLabel}`;
 }
 
+/** Compact settings shown inside the Sample node, without repeating its title. */
+export function formatSamplerSettings(samplerNode) {
+  if (!samplerNode?.dataset) return '';
+  const type = samplerNode.dataset.samplerSamplingType || 'without-replacement';
+  if (type === 'specify-rows') {
+    const rows = (samplerNode.dataset.samplerRowSpec || '').trim();
+    return rows ? `Specify rows\n${rows}` : 'Specify rows';
+  }
+  const mode = type === 'with-replacement' ? 'With replacement' : 'Without replacement';
+  const sizeType = samplerNode.dataset.samplerSampleSizeType || 'ratio';
+  const size = samplerNode.dataset.samplerSampleSize != null ? String(samplerNode.dataset.samplerSampleSize).trim() : '100';
+  return `${mode}\n${sizeType === 'ratio' ? `${size}%` : `${size} rows`}`;
+}
+
 export function createWorkflowNodeFactories(deps = {}) {
   // Ignore the sub-pixel movement routinely emitted between pointerdown and click by mice and
   // trackpads. Without a threshold, that harmless jitter is classified as a drag and every node
@@ -300,7 +314,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Sample';
     const node = document.createElement('div');
-    node.className = 'workflow-node workflow-node--sampler workflow-node--no-body';
+    node.className = 'workflow-node workflow-node--sampler';
     node.setAttribute('role', 'article');
     node.setAttribute('aria-label', `Sample node: ${title}`);
     node.dataset.nodeId = nodeId;
@@ -327,6 +341,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
       </div>
     `;
+    node.insertAdjacentHTML('beforeend', `<div class="workflow-node__body workflow-node__sampler-settings"><span class="workflow-node__note">${escapeHtml(formatSamplerSettings(node))}</span></div><div class="workflow-node__sample-progress" role="progressbar" aria-label="Samples created" aria-valuenow="0" aria-valuemin="0" aria-valuemax="1" hidden></div>`);
     nodesLayer.appendChild(node);
 
     const deleteBtn = node.querySelector('.workflow-node__delete');
@@ -363,7 +378,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', savedFrom = null, colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sampledSourceRowIds, savedFrom = null, colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -379,6 +394,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (notes !== undefined && notes !== null) node.dataset.datasetNote = String(notes);
     node.dataset.nodeType = 'dataset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
+    if (Array.isArray(sampledSourceRowIds)) node.dataset.sampledSourceRowIds = JSON.stringify(sampledSourceRowIds);
     // Where a Dataset saved from a step came from; shown only (savedDatasets.js).
     const origin = readSavedFrom(savedFrom);
     if (origin) node.dataset.savedFrom = JSON.stringify(origin);

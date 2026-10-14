@@ -58,7 +58,7 @@ import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
-import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
+import { createWorkflowNodeFactories, formatSamplerDescription, formatSamplerSettings } from './workflowNodeFactories.js';
 import { ADD_INPUT_PORT, applyPortOp, checkDisconnect, edgeEndpoints, nodePorts, portTitles, unconnectedProcessInputs } from './nodePorts.js';
 import { applyPortTitles, centerWithin, findPortDot, renderNodePorts } from './workflowNodePorts.js';
 import { attachPortDrag } from './workflowPortDrag.js';
@@ -79,6 +79,7 @@ import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight } from '.
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
+import { pickUnusedSampleIndices, samplerQuota } from './samplerQuota.js';
 import { openDatasetDiffModal } from './datasetDiffModal.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
@@ -1273,6 +1274,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (node) showNodeContextMenu(x, y, node, { port, at: clientToCanvasPoint(x, y) });
     },
     promptInputs: promptInputNames,
+    onLayoutChange: () => { updateContentSize(); updateEdges(); },
   });
 
   /** A line that can be disconnected offers that on right-click; one that cannot says why. */
@@ -2134,9 +2136,13 @@ export function buildWorkflowCanvas(root, options = {}) {
     return node.style.borderColor || '';
   }
 
-  /** How a node's window names a source it reads: its label and color (stepInputs.js stepSourceLabel). */
+  /** How a node's window names a source it reads: Run by its own title, other sources by stepSourceLabel. */
   function describeSource(source) {
-    return { label: stepSourceLabel(liveInputState(), source), color: sourceColor(source) };
+    const runNode = source?.kind === 'run' ? getNodeById(source.nodeId) : null;
+    const label = runNode
+      ? (runNode.dataset.runName || runNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run'
+      : stepSourceLabel(liveInputState(), source);
+    return { label, color: sourceColor(source) };
   }
 
   /**
@@ -2423,26 +2429,15 @@ export function buildWorkflowCanvas(root, options = {}) {
    * @param {string[][]} sourceRows
    * @param {number} sampleSize - row count or percentage (1-100)
    * @param {string} sampleSizeType - 'rows' | 'ratio'
-   * @param {string} samplingType - 'with-replacement' | 'without-replacement'
+   * With-replacement draws are independent and can select the same row repeatedly.
    * @returns {string[][]}
    */
-  function sampleRows(sourceRows, sampleSize, sampleSizeType, samplingType) {
+  function sampleRowsWithReplacement(sourceRows, sampleSize, sampleSizeType) {
     const n = sourceRows.length;
     if (n === 0) return [];
     let count = sampleSizeType === 'rows' ? Math.max(0, Math.floor(sampleSize)) : Math.max(0, Math.floor((n * sampleSize) / 100));
     count = Math.min(count, n);
     if (count === 0) return [];
-
-    if (samplingType === 'without-replacement') {
-      if (count >= n) return sourceRows.map((r) => r.slice());
-      const indices = Array.from({ length: n }, (_, i) => i);
-      for (let i = n - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [indices[i], indices[j]] = [indices[j], indices[i]];
-      }
-      const selected = indices.slice(0, count).sort((a, b) => a - b);
-      return selected.map((i) => sourceRows[i].slice());
-    }
 
     const picked = [];
     for (let k = 0; k < count; k++) {
@@ -2452,12 +2447,42 @@ export function buildWorkflowCanvas(root, options = {}) {
     return picked.map((i) => sourceRows[i].slice());
   }
 
-  function countSampledDatasetsForSampler(samplerNodeId) {
-    let count = 0;
+  function sampledOutputsForSampler(samplerNodeId) {
+    const outputs = [];
     nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
-      if ((dsNode.dataset.samplerNodeId || '') === samplerNodeId) count += 1;
+      if ((dsNode.dataset.samplerNodeId || '') !== samplerNodeId) return;
+      // Dataset versions keep their Sampler origin for provenance, but are not new pulls.
+      if (!connections.some((edge) => edge.type === EDGE_TYPE_SAMPLER_TO_DATASET
+        && edge.fromId === samplerNodeId && edge.toId === dsNode.dataset.nodeId)) return;
+      const content = datasetContentByNodeId.get(dsNode.dataset.nodeId);
+      let sourceRowIds;
+      try {
+        if (dsNode.dataset.sampledSourceRowIds) sourceRowIds = JSON.parse(dsNode.dataset.sampledSourceRowIds);
+      } catch (_) {}
+      outputs.push({ rows: content?.rows || [], sourceRowIds });
     });
-    return count;
+    return outputs;
+  }
+
+  function updateSamplerProgress(samplerNode) {
+    const progress = samplerNode.querySelector('.workflow-node__sample-progress');
+    if (!progress) return;
+    if (samplerNode.dataset.samplerSamplingType !== 'without-replacement') {
+      progress.hidden = true;
+      return;
+    }
+    const source = datasetContentByNodeId.get(samplerNode.dataset.sourceNodeId);
+    const quota = samplerQuota(source, sampledOutputsForSampler(samplerNode.dataset.nodeId),
+      samplerNode.dataset.samplerSampleSizeType || 'ratio', Number(samplerNode.dataset.samplerSampleSize || 100));
+    const visible = !!source?.rows?.length && quota.total > 0;
+    progress.hidden = !visible;
+    if (!visible) return;
+    const completed = Math.min(quota.completed, quota.total);
+    const value = Math.round(completed * 100 / quota.total);
+    progress.style.width = `${value}%`;
+    progress.setAttribute('aria-valuenow', String(completed));
+    progress.setAttribute('aria-valuemax', String(quota.total));
+    progress.setAttribute('aria-valuetext', `${completed} of ${quota.total} samples created`);
   }
 
   function prepareSampledDatasetFromSampler({
@@ -2476,8 +2501,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       throw new Error('Sampler node was not found.');
     }
 
-    const existingCount = countSampledDatasetsForSampler(normalizedSamplerNodeId);
-
     const sourceNodeId = samplerNode.dataset.sourceNodeId;
     const sourceContent = sourceNodeId ? datasetContentByNodeId.get(sourceNodeId) : null;
     if (!sourceContent?.headers?.length || !Array.isArray(sourceContent.rows)) {
@@ -2487,6 +2510,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const samplingType = samplerNode.dataset.samplerSamplingType || 'without-replacement';
     const datasetHeaders = sourceContent.headers.slice();
     let datasetRows = [];
+    let sampledSourceRowIds;
     if (samplingType === 'specify-rows') {
       const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
       const totalRows = sourceContent.rows.length;
@@ -2499,35 +2523,32 @@ export function buildWorkflowCanvas(root, options = {}) {
       const requestedCount = sampleSizeType === 'rows'
         ? Math.max(0, Math.floor(sampleSize))
         : Math.max(0, Math.floor((totalRows * sampleSize) / 100));
-      if (samplingType === 'without-replacement' && requestedCount > 0) {
-        let alreadyUsed = 0;
-        nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
-          if ((dsNode.dataset.samplerNodeId || '') === normalizedSamplerNodeId) {
-            const content = datasetContentByNodeId.get(dsNode.dataset.nodeId);
-            if (content?.rows?.length) alreadyUsed += content.rows.length;
-          }
-        });
-        const remaining = totalRows - alreadyUsed;
-        if (remaining < requestedCount) {
+      if (samplingType === 'without-replacement') {
+        const quota = samplerQuota(sourceContent, sampledOutputsForSampler(normalizedSamplerNodeId), sampleSizeType, sampleSize);
+        if (requestedCount < 1) throw new Error('Sample size selects no rows from this Dataset.');
+        if (quota.completed >= quota.total || quota.availableIndices.length < requestedCount) {
           throw new Error('Not enough remaining data to create a new dataset when sampling without replacement.');
         }
+        const picked = pickUnusedSampleIndices(quota.availableIndices, requestedCount);
+        datasetRows = picked.map((index) => sourceContent.rows[index].map(cloneCell));
+        sampledSourceRowIds = picked.map((index) => sourceContent.rowIds[index]);
+      } else {
+        datasetRows = sampleRowsWithReplacement(sourceContent.rows, sampleSize, sampleSizeType);
       }
-      datasetRows = sampleRows(sourceContent.rows, sampleSize, sampleSizeType, samplingType);
     }
 
+    const position = positionFrom(samplerNode);
     return {
       sourceNodeId: String(sourceNodeId || '').trim(),
-      existingCount,
       datasetHeaders,
       datasetRows,
       datasetColumnTypes: sourceContent.columnTypes?.slice(),
       datasetRowIds: datasetRows.map(() => crypto.randomUUID()),
+      sampledSourceRowIds,
       datasetName: (name && name.trim()) ? name.trim() : findNextWorkingDatasetName(normalizedSamplerNodeId),
       datasetNotes: notes || formatSamplerDescription(samplerNode),
-      startLeft: typeof left === 'number'
-        ? left
-        : (parseFloat(samplerNode.style.left) || 0) + (samplerNode.offsetWidth || 280) + NEW_NODE_OFFSET,
-      startTop: typeof top === 'number' ? top : (parseFloat(samplerNode.style.top) || 0),
+      startLeft: typeof left === 'number' ? left : position.left,
+      startTop: typeof top === 'number' ? top : position.top,
     };
   }
 
@@ -2812,7 +2833,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         : '';
       const { borderColor, dataColor } = dependentNodeVisualColors(dataColors, promptColor);
       node.style.borderColor = borderColor;
-      const progressBar = node.querySelector('.workflow-node__run-progress, .workflow-node__score-progress, .workflow-node__review-progress, .workflow-node__process-progress');
+      const progressBar = node.querySelector('.workflow-node__run-progress, .workflow-node__sample-progress, .workflow-node__score-progress, .workflow-node__review-progress, .workflow-node__process-progress');
       if (progressBar) progressBar.style.background = dataColor || '';
     });
   }
@@ -4482,6 +4503,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     let datasetRows = Array.isArray(rows) ? rows.map((r) => r.slice()) : [];
     let datasetColumnTypes = Array.isArray(columnTypes) ? columnTypes.slice() : undefined;
     let datasetRowIds = Array.isArray(rowIds) ? rowIds.slice() : undefined;
+    let sampledSourceRowIds;
     let datasetName = (name && name.trim()) ? name.trim() : '';
     let datasetNotes = notes || '';
 
@@ -4496,8 +4518,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           samplerNodeId,
           name: datasetName,
           notes: datasetNotes,
-          left: startLeft,
-          top: startTop,
+          left: detailLeft,
+          top: detailTop,
         });
         startLeft = prepared.startLeft;
         startTop = prepared.startTop;
@@ -4505,6 +4527,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         datasetRows = prepared.datasetRows;
         datasetColumnTypes = prepared.datasetColumnTypes;
         datasetRowIds = prepared.datasetRowIds;
+        sampledSourceRowIds = prepared.sampledSourceRowIds;
         datasetName = prepared.datasetName;
         datasetNotes = prepared.datasetNotes;
       } catch (error) {
@@ -4530,6 +4553,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       rows: datasetRows,
       columnTypes: datasetColumnTypes,
       rowIds: datasetRowIds,
+      sampledSourceRowIds,
       ensureUniqueName: false,
     });
     if (samplerNodeId && newNode?.nodeId) {
@@ -4736,6 +4760,11 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:canvas-changed', () => {
+    nodesLayer.querySelectorAll('.workflow-node--sampler').forEach((sampler) => {
+      const summary = sampler.querySelector('.workflow-node__sampler-settings .workflow-node__note');
+      if (summary) summary.textContent = formatSamplerSettings(sampler);
+      updateSamplerProgress(sampler);
+    });
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((sn) => syncScoreNodeProgressFromUpstreamRun(sn));
     syncNodeDependencyColors();
     refreshNodePorts();
@@ -4848,6 +4877,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           name: node.dataset.datasetName || node.dataset.subsetName || '',
           note: node.dataset.datasetNote ?? node.dataset.subsetNote ?? '',
           samplerNodeId: node.dataset.samplerNodeId || '',
+          sampledSourceRowIds: node.dataset.sampledSourceRowIds ? JSON.parse(node.dataset.sampledSourceRowIds) : undefined,
           savedFrom: readSavedFrom(node.dataset.savedFrom) || undefined,
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
           datasetContent: content ? cloneDatasetContent(content) : undefined,
@@ -5072,6 +5102,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           top: n.top,
           nodeId: n.nodeId || n.id,
           samplerNodeId: n.samplerNodeId || '',
+          sampledSourceRowIds: n.sampledSourceRowIds,
           savedFrom: n.savedFrom,
           colorIndex: n.colorIndex,
           headers: content?.headers,
@@ -5293,6 +5324,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       return null;
     }).filter(Boolean).filter((c) => getNodeById(c.fromId) && getNodeById(c.toId));
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => syncScoreNodeProgressFromUpstreamRun(scoreNode));
+    nodesLayer.querySelectorAll('.workflow-node--sampler').forEach(updateSamplerProgress);
     refreshNodePorts();
     updateContentSize();
     syncNodeDependencyColors();

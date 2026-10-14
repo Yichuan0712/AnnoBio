@@ -13,9 +13,10 @@ from Datasets. It runs the selected route as a whole or exports it as a standalo
    code**, the same items as the step's context menu). A Process with several output branches has
    one dot per branch; each branch can feed a different step, and a later Process can merge them.
 3. A Run reads exactly one input. A Process reads its `df` input plus one input per `df_<name>`
-   parameter of its code: drop an output on its **Add input** dot to add one, or write the parameter
+   parameter of its code: drag an output toward the Process to reveal its **Add input** dot, then drop
+   the line on that dot to add one; or write the parameter
    in the code and connect its dot. Run and Process input rows show source names, with icons for
-   Prompts and tables; hover to see the port ID or code parameter. Node windows show what a node
+   Prompts and tables; port hover text starts with **Input:** or **Output:** and describes the source or output. Process parameter names remain in its code editor. Node windows show what a node
    reads; they no longer choose it.
 
 **Save results** (Run) and **Create dataset** (Process) are only for freezing or editing data: they

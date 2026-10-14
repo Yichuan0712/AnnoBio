@@ -383,8 +383,8 @@
 }
 
 /* Ports (nodePorts.js, workflowNodePorts.js): dots on a node's edges that lines join. Solid dots are
-   what a node reads (left) and gives (right); hollow dots are where it came from and
-   what was made from it. Every dot gets a row under the header, including unnamed ports and lineage
+   changeable data connections; hollow dots are lineage and Sample's fixed Dataset source.
+   Every dot gets a row under the header, including unnamed ports and lineage
    dots. Both sides start at the same height. */
 .workflow-node__ports {
   display: flex;
@@ -392,6 +392,47 @@
   align-items: flex-start;
   gap: 8px;
   padding: 9px 0 12px;
+}
+
+/* The unlabeled Dataset/Prompt ports share their row with the description. */
+.workflow-node--dataset,
+.workflow-node--prompt,
+.workflow-node--sampler {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: start;
+}
+
+.workflow-node--dataset > .workflow-node__header,
+.workflow-node--prompt > .workflow-node__header,
+.workflow-node--sampler > .workflow-node__header {
+  grid-row: 1;
+}
+
+.workflow-node--dataset > .workflow-node__ports,
+.workflow-node--prompt > .workflow-node__ports,
+.workflow-node--sampler > .workflow-node__ports {
+  grid-column: 1;
+  grid-row: 2;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.workflow-node--dataset > .workflow-node__ports .workflow-node__port-row,
+.workflow-node--prompt > .workflow-node__ports .workflow-node__port-row,
+.workflow-node--sampler > .workflow-node__ports .workflow-node__port-row {
+  pointer-events: auto;
+}
+
+.workflow-node--dataset > .workflow-node__body,
+.workflow-node--prompt > .workflow-node__body,
+.workflow-node--sampler > .workflow-node__body {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 20px;
+  padding: 9px 12px 12px;
+  line-height: 20px;
 }
 
 .workflow-node__ports-side {
@@ -422,6 +463,13 @@
   flex: 0 1 auto;
   align-items: flex-end;
   margin-left: auto;
+}
+
+/* A long source name must not squeeze the output icon and its short label. */
+.workflow-node--run .workflow-node__ports-side--right,
+.workflow-node--process .workflow-node__ports-side--right {
+  flex-shrink: 0;
+  max-width: 50%;
 }
 
 .workflow-node__port-row {
@@ -484,6 +532,15 @@
   font-style: italic;
 }
 
+/* Keep the Process add target available to drag logic without reserving an idle row. */
+.workflow-node--process .workflow-node__port-row--add-input {
+  display: none;
+}
+
+.workflow-canvas--port-dragging .workflow-node--process .workflow-node__port-row--add-input:has(> .workflow-node__port--target) {
+  display: flex;
+}
+
 .workflow-node__port-row--mismatch {
   color: var(--status-warning);
 }
@@ -516,7 +573,8 @@
   right: -5px;
 }
 
-.workflow-node__port--lineage {
+.workflow-node__port--lineage,
+.workflow-node__port--hollow {
   background: var(--bg-bar);
   border-color: var(--text-muted);
 }
@@ -534,7 +592,7 @@
   border-radius: 50%;
 }
 
-.workflow-node__port:not(.workflow-node__port--lineage) {
+.workflow-node__port:not(.workflow-node__port--lineage):not(.workflow-node__port--hollow) {
   cursor: crosshair;
 }
 
@@ -599,6 +657,16 @@
   border-radius: 0;
   transition: width 0.3s ease-out;
   background: var(--text-muted);
+}
+
+.workflow-node__sample-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 5px;
+  width: 0;
+  background: var(--text-muted);
+  transition: width 0.3s ease-out;
 }
 
 /* Review progress: 与 Run 一致，底部进度条，进度会保存 */

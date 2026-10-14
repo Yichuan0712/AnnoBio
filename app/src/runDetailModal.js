@@ -163,13 +163,17 @@ export function openRunDetailModal({
           <p class="run-detail-main-label">Run settings</p>
           <p class="run-detail-waiting-banner" role="status" hidden></p>
           <div class="dataset-meta-wrap run-detail-meta-wrap">
-            <div class="dataset-meta-field">
-              <span class="dataset-meta-label">Input prompt</span>
-              <div class="node-source" id="run-detail-prompt-source"></div>
-            </div>
-            <div class="dataset-meta-field">
-              <span class="dataset-meta-label">Input</span>
-              <div class="node-source" id="run-detail-input-source"></div>
+            <div class="modal-input-group">
+              <div class="modal-input-list">
+                <div class="modal-input-row">
+                  <span class="dataset-meta-label">Prompt Input</span>
+                  <div class="node-source" id="run-detail-prompt-source"></div>
+                </div>
+                <div class="modal-input-row">
+                  <span class="dataset-meta-label">Data Input</span>
+                  <div class="node-source" id="run-detail-input-source"></div>
+                </div>
+              </div>
             </div>
             <div class="run-detail-inputs-section dataset-meta-field" id="run-detail-inputs-section">
               <span class="dataset-meta-label run-detail-section-label">Map input columns to prompt inputs</span>

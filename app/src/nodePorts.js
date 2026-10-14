@@ -121,7 +121,8 @@ function processAliasOf(state, edge) {
 
 /**
  * The ports `edge` joins (NODE_PORTS_PLAN.md §3.1): `{ from: { nodeId, portId }, to: { nodeId, portId } }`,
- * with `lineage: true` on both ends instead of port IDs for a lineage connection. Null when it joins
+ * with `lineage: true` instead of a port ID on lineage ends. Dataset-to-Sampler uses a lineage
+ * output and the Sampler's fixed source input. Null when it joins
  * no ports (an unknown type, a missing node, or a Process input recorded without an alias).
  */
 export function edgeEndpoints(state, edge) {
@@ -136,7 +137,7 @@ export function edgeEndpoints(state, edge) {
     case 'run-to-score': return ends(RESULT_PORT, 'run');
     case 'ground-truth-to-score': return ends(RESULT_PORT, 'ground_truth');
     case 'score-to-prompt-review': return ends('score', 'score');
-    case 'dataset-to-sampler': return ends(RESULT_PORT, 'source');
+    case 'dataset-to-sampler': return { from: { nodeId: fromId, lineage: true }, to: { nodeId: toId, portId: 'source' } };
     case DATA_EDGE: {
       const fromPort = findNode(state, fromId).type === 'dataset' ? RESULT_PORT : String(edge.fromPort || RESULT_PORT);
       const target = findNode(state, toId);
@@ -194,7 +195,7 @@ function inputPorts(state, node) {
   }
   if (node.type === 'sampler') {
     const sourceId = fromOf(state, 'dataset-to-sampler', id) || String(node.sourceNodeId || '').trim();
-    return [port('source', PORT_TYPES.TABLE, 'source', { source: sourceId ? { nodeId: sourceId, port: RESULT_PORT, kind: 'dataset' } : null, fixed: FIXED.source })];
+    return [port('source', PORT_TYPES.TABLE, 'source', { source: sourceId ? { nodeId: sourceId, port: RESULT_PORT, kind: 'dataset' } : null, fixed: FIXED.source, hollow: true })];
   }
   return [];
 }
@@ -224,14 +225,15 @@ function portPresentation(state, node, item, side) {
   if (node.type !== 'run' && node.type !== 'process') return {};
   if (side === 'right') return {
     displayLabel: item.unavailable ? (item.label === 'dynamic outputs' ? 'Dynamic outputs' : 'Outputs unknown')
-      : item.id === RESULT_PORT ? 'Results' : item.label,
+      : item.id === RESULT_PORT ? 'Output' : item.label,
+    icon: item.unavailable ? undefined : item.type,
   };
   if (item.id === ADD_INPUT_PORT) return { displayLabel: 'Add input' };
   const placeholder = item.type === PORT_TYPES.PROMPT ? 'Connect prompt'
     : item.id === 'df' || item.id === 'input' ? 'Connect data'
     : `Connect ${item.id.replace(/^df_/, '').replace(/_/g, ' ')}`;
   return {
-    displayLabel: item.source ? sourceName(state, item.source) : placeholder,
+    displayLabel: item.source ? sourceName(state, item.source, node.type) : placeholder,
     icon: item.type,
     unconnected: !item.source,
   };
@@ -288,14 +290,16 @@ const LINEAGE_OUT = {
   'prompt-to-prompt': (name) => `New version "${name}"`,
   'prompt-review-to-prompt': (name) => `Applied as Prompt "${name}"`,
   'dataset-to-dataset': (name) => `New version "${name}"`,
+  'dataset-to-sampler': (name) => `Created Sample "${name}"`,
   'sampler-to-dataset': (name) => `Sample "${name}"`,
   'saved-from': (name) => `Saved as Dataset "${name}"`,
 };
 const rowsText = (count) => `${count} row${count === 1 ? '' : 's'}`;
 
-/** How a source an input reads is named: a Prompt or Score by its name, anything else as stepInputs.js names it. */
-function sourceName(state, source) {
+/** Canvas source names; a Process reading a Run shows that Run's own title, not its Prompt. */
+function sourceName(state, source, consumerType = '') {
   if (source?.kind === 'prompt' || source?.kind === 'score') return nodeLabel(state, source.nodeId);
+  if (consumerType === 'process' && source?.kind === 'run') return String(findNode(state, source.nodeId)?.runName || '').trim() || 'Run';
   return stepSourceLabel(state, source);
 }
 
@@ -314,23 +318,27 @@ export function portTitles(state, nodeId, ports) {
       inputs[item.id] = 'Drop an output here to add it as an input; its parameter is added to process().';
       continue;
     }
-    const reads = item.source ? `Reads "${sourceName(state, item.source)}"` : 'Not connected';
-    inputs[item.id] = [`${item.label}: ${reads}`, item.fixed].filter(Boolean).join('\n');
+    const source = item.source ? sourceName(state, item.source, node?.type) : 'Not connected';
+    inputs[item.id] = [`Input: ${source}`, item.fixed].filter(Boolean).join('\n');
   }
   const outputs = {};
   for (const item of ports?.outputs || []) {
-    let text = item.label;
-    if (item.unavailable) text = item.unavailable;
+    const name = item.displayLabel || (item.id === RESULT_PORT ? 'Output' : item.label);
+    const named = name === 'Output' ? '' : `${name} · `;
+    let text = `Output: ${name}`;
+    if (item.unavailable) text = `Output: ${item.unavailable}`;
     else if (item.type === PORT_TYPES.TABLE) {
       const output = stepOutputTable(state, { nodeId: id, port: item.id, kind: node?.type });
-      const headers = output.table?.headers || [];
+      const headers = node?.type === 'run'
+        ? (output.table?.headers || []).filter((header) => header.startsWith('Output: ') && header !== 'Output: #').map((header) => header.slice('Output: '.length))
+        : output.table?.headers || [];
       text = output.table
-        ? `${item.label} · ${rowsText(output.table.rows?.length || 0)} · ${headers.length ? headers.join(', ') : 'no columns'}`
-        : `${item.label} · no result yet`;
+        ? `Output: ${named}${rowsText(output.table.rows?.length || 0)} · ${headers.length ? headers.join(', ') : 'no output columns'}`
+        : `Output: ${named}no output yet`;
     }
     outputs[item.id] = [text, item.mismatch].filter(Boolean).join('\n');
   }
-  const lineage = allEdges(state).filter((edge) => LINEAGE_EDGE_TYPES.has(edge?.type));
+  const lineage = allEdges(state).filter((edge) => LINEAGE_EDGE_TYPES.has(edge?.type) || edge?.type === 'dataset-to-sampler');
   const savedFromText = (dataset) => {
     const savedFrom = readSavedFrom(findNode(state, dataset)?.savedFrom);
     return savedFrom ? savedFromLabel(state, savedFrom) : '';
