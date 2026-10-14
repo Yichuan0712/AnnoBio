@@ -61,7 +61,7 @@ ipcMain.handle('assets:prune-unused', async (_event, usedIds, options) => {
 });
 ipcMain.handle('assets:pick-files', async () => {
   const result = await dialog.showOpenDialog({
-    title: 'Choose images to match',
+    title: 'Choose images to import',
     properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
   });
@@ -69,7 +69,7 @@ ipcMain.handle('assets:pick-files', async () => {
 });
 ipcMain.handle('assets:pick-pdf-files', async () => {
   const result = await dialog.showOpenDialog({
-    title: 'Choose PDFs to match',
+    title: 'Choose PDFs to import',
     properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
   });

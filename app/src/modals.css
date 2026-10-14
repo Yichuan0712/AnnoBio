@@ -6510,6 +6510,124 @@ body.wd-row-resizing {
   overflow: auto;
 }
 
+.dataset-batch-panel {
+  flex: 0 0 300px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--bg-bar);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.dataset-batch-panel__header,
+.dataset-batch-panel__footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.dataset-batch-panel__header { border-bottom: 1px solid var(--border); }
+.dataset-batch-panel__header strong { font-size: 14px; font-weight: 600; }
+.dataset-batch-panel__target { display: block; margin-top: 3px; font-size: 12px; color: var(--text-muted); }
+.dataset-batch-panel__close,
+.dataset-batch-card__remove {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+}
+.dataset-batch-panel__close { font-size: 20px; line-height: 1; }
+.dataset-batch-panel__body { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
+.dataset-batch-panel__mode-switch { margin-bottom: 12px; }
+.dataset-batch-panel__source-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; color: var(--text-muted); font-size: 12px; }
+.dataset-batch-panel__source-field[hidden] { display: none; }
+.dataset-batch-panel__source-field .dataset-meta-input { width: 100%; box-sizing: border-box; }
+.dataset-batch-panel__drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--control-radius, 3px);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.dataset-batch-panel__drop--active { border-color: var(--accent, #5667e9); background: var(--hover); }
+.dataset-batch-panel__hint { margin: 10px 0; }
+.dataset-batch-panel__summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; color: var(--text-muted); font-size: 12px; }
+.dataset-batch-panel__sort { flex: 0 0 auto; border: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.dataset-batch-panel__sort:disabled { color: var(--text-muted); cursor: default; }
+.dataset-batch-panel__cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.dataset-batch-panel__empty { grid-column: 1 / -1; }
+.dataset-batch-card {
+  position: relative;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 3px);
+  background: var(--bg);
+  cursor: grab;
+}
+.dataset-batch-card:active { cursor: grabbing; }
+.dataset-batch-card--drop-target { outline: 2px solid var(--accent, #5667e9); outline-offset: -2px; }
+.dataset-batch-card__preview {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: var(--hover);
+  color: var(--text-muted);
+}
+.dataset-batch-card__preview img { width: 100%; height: 100%; object-fit: cover; }
+.dataset-batch-card__order { position: absolute; top: 4px; left: 4px; padding: 2px 5px; background: var(--bg-bar); color: var(--text); font-size: 11px; }
+.dataset-batch-card__pdf { font-size: 13px; font-weight: 600; }
+.dataset-batch-card__placeholder { font-size: 12px; }
+.dataset-batch-card__info { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
+.dataset-batch-card__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dataset-batch-card__destination { color: var(--text-muted); font-size: 11px; line-height: 1.35; }
+.dataset-batch-card__remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 3px);
+  font-size: 16px;
+  line-height: 1;
+}
+.dataset-batch-panel__footer { justify-content: flex-end; border-top: 1px solid var(--border); }
+.wd-batch-cell-preview__content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 5px 6px;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.wd-batch-cell-preview__content img { width: 26px; height: 26px; object-fit: cover; }
+.wd-pdf-cell--drop-target { outline: 2px solid var(--accent, #5667e9); outline-offset: -2px; background: var(--hover); }
+
+@media (max-width: 900px) {
+  .dataset-batch-panel { flex-basis: 240px; }
+  .dataset-batch-panel__cards { grid-template-columns: 1fr; }
+}
+
 .dataset-image-import-table th,
 .dataset-image-import-table td {
   vertical-align: top;
@@ -8627,6 +8745,8 @@ button.btn.btn-danger:hover:not(:disabled) {
 .wd-column-type { display: block; width: calc(100% - 12px); margin: 3px 6px 5px; font-size: 11px; }
 .wd-image-cell { position: relative; min-width: 150px; min-height: 66px; padding: 28px 6px 6px; }
 .wd-image-cell--empty { min-height: 0; padding: 4px 6px; }
+.wd-image-cell--drop-target { outline: 2px solid var(--accent, #5667e9); outline-offset: -2px; background: var(--hover); }
+body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
 .wd-image-strip { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .wd-image-overlay-actions { position: absolute; top: 6px; right: 6px; z-index: 1; display: flex; align-items: center; gap: 6px; }
 .wd-image-cell--empty .wd-image-overlay-actions { position: static; justify-content: flex-end; }
@@ -8640,6 +8760,7 @@ button.btn.btn-danger:hover:not(:disabled) {
 }
 .wd-image-thumb-wrap { position: relative; display: inline-flex; }
 .wd-image-thumb { width: 54px; height: 54px; padding: 0; overflow: hidden; border: 1px solid var(--border-color); background: var(--surface-secondary); color: var(--text-muted); font-size: 10px; cursor: zoom-in; }
+.wd-image-thumb[draggable="true"] { cursor: grab; }
 .wd-image-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .wd-image-thumb--error { color: #e05252; }
 .wd-image-thumb-remove {
