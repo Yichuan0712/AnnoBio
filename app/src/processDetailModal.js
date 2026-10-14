@@ -121,7 +121,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
               <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
-              <div class="run-detail-llm-actions-right"><button type="button" class="btn btn-secondary run-detail-run-btn process-run-btn">Run</button></div>
+              <div class="run-detail-llm-actions-right"><button type="button" class="btn btn-primary run-detail-run-btn process-run-btn">Run code</button></div>
             </div>
             <p class="process-editor-hint process-upstream-notice" hidden></p>
           </div>
@@ -210,6 +210,12 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   let activeBranchName = '';
   let saveBtnEl = null;
 
+  function updateActionEmphasis() {
+    const hasVisibleResults = Boolean(saveBtnEl && !lastError);
+    runBtn.classList.toggle('btn-primary', !hasVisibleResults && !running);
+    runBtn.classList.toggle('btn-secondary', hasVisibleResults || running);
+  }
+
   const resultsPanel = createRowResultsPanel({
     container: resultsContent,
     idPrefix: 'process',
@@ -227,6 +233,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   function showPlaceholder(message) {
     resultsPanel.showPlaceholder(message);
     saveBtnEl = null;
+    updateActionEmphasis();
   }
 
   function showError(error) {
@@ -234,6 +241,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     branchPicker.hidden = true;
     resultsPanel.showError(lastError, `Process "${title}" failed`);
     saveBtnEl = null;
+    updateActionEmphasis();
   }
 
   function refreshResults() {
@@ -243,7 +251,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     }
     if (!lastResults) {
       branchPicker.hidden = true;
-      showPlaceholder('No results yet. Click Run.');
+      showPlaceholder('No results yet. Click Run code.');
       return;
     }
     const entries = Object.entries(lastResults.outputs);
@@ -268,6 +276,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       `${branch.headers.length} columns, ${branch.rows.length} rows`,
     );
     if (saveBtnEl) saveBtnEl.textContent = entries.length > 1 ? 'Create branch datasets' : 'Create dataset';
+    updateActionEmphasis();
   }
 
   function createBranchDatasets() {
@@ -279,12 +288,13 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   function setRunningUi(isRunning) {
     running = isRunning;
     editorView.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!isRunning)) });
-    runBtn.textContent = isRunning ? 'Running, click to stop'
+    runBtn.textContent = isRunning ? 'Stop processing'
       : currentHistoryStatus === 'completed'
-        ? 'Run again'
-        : executionIdleLabel({ interrupted: node?.dataset?.processResumable === '1' });
+        ? 'Run code again'
+        : executionIdleLabel({ task: 'processing', interrupted: node?.dataset?.processResumable === '1' });
     runBtn.classList.toggle('btn-danger', isRunning);
     if (saveBtnEl) saveBtnEl.disabled = isRunning || !lastResults;
+    updateActionEmphasis();
   }
 
   async function refreshHistoryState() {
@@ -295,8 +305,9 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       if (!overlay.isConnected || running) return;
       currentHistoryStatus = current?.status || '';
       runBtn.disabled = current?.status === 'running';
-      runBtn.textContent = current?.status === 'running' ? 'Runningâ€¦'
-        : current?.status === 'completed' ? 'Run again' : executionIdleLabel({
+      runBtn.textContent = current?.status === 'running' ? 'Processing…'
+        : current?.status === 'completed' ? 'Run code again' : executionIdleLabel({
+        task: 'processing',
         interrupted: current?.status === 'stopped',
         failed: current?.status === 'failed',
       });
@@ -323,7 +334,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       runBtn.textContent = 'Waiting for upstream';
     } else if (runBtn.textContent === 'Waiting for upstream') {
       runBtn.disabled = false;
-      runBtn.textContent = currentHistoryStatus === 'completed' ? 'Run again' : executionIdleLabel({ interrupted: node?.dataset?.processResumable === '1' });
+      runBtn.textContent = currentHistoryStatus === 'completed' ? 'Run code again' : executionIdleLabel({ task: 'processing', interrupted: node?.dataset?.processResumable === '1' });
     }
   }
 
@@ -412,7 +423,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     isDisabled: () => running,
   });
   refreshResults();
-  if (node?.dataset?.processResumable === '1') runBtn.textContent = 'Resume';
+  if (node?.dataset?.processResumable === '1') runBtn.textContent = 'Resume processing';
   refreshUpstreamState();
   document.body.style.overflow = 'hidden';
   document.body.appendChild(overlay);

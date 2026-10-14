@@ -2,7 +2,7 @@ import { openPromptSectionEditor, renderPromptSectionCards } from './promptSecti
 import { openPromptFieldEditor, renderPromptFieldCards } from './promptSchemaUi.js';
 
 /**
- * "Add a new prompt" modal: sections, preview, Add section / Add this prompt.
+ * Three-step Prompt creator. Section and field editors open inside this window.
  */
 
 function escapeHtml(str) {
@@ -106,10 +106,39 @@ export function openAddPromptModal(workflowCanvasApi) {
   `;
 
   const panel = overlay.querySelector('.modal-panel--prompt');
+  const modalBody = panel.querySelector('.modal-body');
+  const promptMain = panel.querySelector('.prompt-main');
   const container = overlay.querySelector('.prompt-sections');
   const addBtn = overlay.querySelector('.prompt-add-section');
   const previewEl = overlay.querySelector('.prompt-preview');
   let sections = [];
+  let activeEditor = null;
+
+  function openInlineEditor(kind, openEditor) {
+    if (activeEditor) return;
+    const side = document.createElement('aside');
+    side.className = 'prompt-detail-editor-panel prompt-create-editor-panel';
+    side.setAttribute('aria-label', kind === 'section' ? 'Edit prompt section' : 'Edit output field');
+    const host = document.createElement('div');
+    host.className = 'prompt-detail-editor-panel__child-host';
+    side.appendChild(host);
+    modalBody.appendChild(side);
+    activeEditor = side;
+    panel.dataset.addPromptEditor = kind;
+    promptMain.inert = true;
+    panel.querySelectorAll('.prompt-step-2 .prompt-actions button, .prompt-step-3 .prompt-actions button').forEach((button) => {
+      button.disabled = true;
+    });
+    openEditor(host, () => {
+      side.remove();
+      activeEditor = null;
+      delete panel.dataset.addPromptEditor;
+      promptMain.inert = false;
+      panel.querySelectorAll('.prompt-step-2 .prompt-actions button, .prompt-step-3 .prompt-actions button').forEach((button) => {
+        button.disabled = false;
+      });
+    });
+  }
 
   function goToStep(step) {
     panel.setAttribute('data-add-prompt-step', String(step));
@@ -346,6 +375,17 @@ export function openAddPromptModal(workflowCanvasApi) {
         renderOutputFieldCards();
         updateSchemaPreview();
       },
+      onEdit: (fieldIndex) => openInlineEditor('field', (host, onClose) => openPromptFieldEditor({
+        fields: outputFields,
+        fieldIndex,
+        outputTypes: OUTPUT_TYPES,
+        onDone: () => {
+          renderOutputFieldCards();
+          updateSchemaPreview();
+        },
+        host,
+        onClose,
+      })),
     });
     const addWrap = document.createElement('div');
     addWrap.className = 'prompt-add-field-wrap';
@@ -354,14 +394,16 @@ export function openAddPromptModal(workflowCanvasApi) {
     addBtn.className = 'btn btn-secondary prompt-output-add-key';
     addBtn.textContent = '+ Add a field';
     addBtn.addEventListener('click', () => {
-      openPromptFieldEditor({
+      openInlineEditor('field', (host, onClose) => openPromptFieldEditor({
         fields: outputFields,
         outputTypes: OUTPUT_TYPES,
         onDone: () => {
-        renderOutputFieldCards();
-        updateSchemaPreview();
+          renderOutputFieldCards();
+          updateSchemaPreview();
         },
-      });
+        host,
+        onClose,
+      }));
     });
     addWrap.appendChild(addBtn);
     outputKeysListEl.appendChild(addWrap);
@@ -398,6 +440,13 @@ export function openAddPromptModal(workflowCanvasApi) {
       sections,
       container,
       onChange: renderSections,
+      onEdit: (sectionIndex) => openInlineEditor('section', (host, onClose) => openPromptSectionEditor({
+        sections,
+        sectionIndex,
+        onDone: renderSections,
+        host,
+        onClose,
+      })),
     });
     updatePreview();
   }
@@ -405,12 +454,12 @@ export function openAddPromptModal(workflowCanvasApi) {
   addBtn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    openPromptSectionEditor({
+    openInlineEditor('section', (host, onClose) => openPromptSectionEditor({
       sections,
-      onDone: () => {
-        renderSections();
-      },
-    });
+      onDone: renderSections,
+      host,
+      onClose,
+    }));
   });
 
   function hasDuplicateSectionNames(sectionsList) {

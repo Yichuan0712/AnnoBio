@@ -114,6 +114,16 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
                   <input type="text" id="wd-preview-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" />
                 </div>
               </div>
+              <div class="dataset-detail-preview-toolbar working-dataset-table-actions" role="toolbar" aria-label="Edit table">
+                <div class="working-dataset-table-actions__group">
+                  <button type="button" class="btn btn-secondary working-dataset-add-row">Add row</button>
+                  <span class="working-dataset-delete-control"><button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button></span>
+                </div>
+                <div class="working-dataset-table-actions__group">
+                  <button type="button" class="btn btn-secondary working-dataset-add-col" aria-haspopup="menu" aria-expanded="false">Add column</button>
+                  <span class="working-dataset-delete-control"><button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button></span>
+                </div>
+              </div>
               <div class="working-dataset-table-wrap">
                 <table class="dataset-preview-table working-dataset-edit-table">
                   <thead><tr class="wd-header-row"></tr></thead>
@@ -135,16 +145,10 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
                 </div>
               </div>
               <div class="dataset-detail-footer working-dataset-detail-footer">
-                <button type="button" class="btn btn-secondary working-dataset-export-local">Save to local</button>
                 <div class="working-dataset-detail-footer__actions">
-                  <button type="button" class="btn btn-secondary working-dataset-link-images">Add images</button>
-                  <button type="button" class="btn btn-secondary working-dataset-link-pdf">Add pdf</button>
-                  <button type="button" class="btn btn-secondary working-dataset-add-row">Add row</button>
-                  <button type="button" class="btn btn-secondary working-dataset-add-col">Add column</button>
-                  <button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button>
-                  <button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button>
-                  <button type="button" class="btn btn-primary working-dataset-sample">Sample</button>
-                  <button type="button" class="btn btn-primary working-dataset-process">Process with code</button>
+                  <button type="button" class="btn btn-secondary working-dataset-export-local" title="Export dataset to a file">Export</button>
+                  <button type="button" class="btn btn-secondary working-dataset-sample">Create Sample</button>
+                  <button type="button" class="btn btn-secondary working-dataset-process">Create Process</button>
                 </div>
               </div>
             </div>
@@ -162,8 +166,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   const prevBtn = overlay.querySelector('.wd-prev-page');
   const nextBtn = overlay.querySelector('.wd-next-page');
   const rowsPerPageSelect = overlay.querySelector('#wd-rows-per-page');
-  const linkImagesBtn = overlay.querySelector('.working-dataset-link-images');
-  const linkPdfBtn = overlay.querySelector('.working-dataset-link-pdf');
   const addRowBtn = overlay.querySelector('.working-dataset-add-row');
   const addColBtn = overlay.querySelector('.working-dataset-add-col');
   const deleteRowBtn = overlay.querySelector('.working-dataset-delete-row');
@@ -175,6 +177,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   const summaryEl = overlay.querySelector('.wd-summary');
   const tableWrap = overlay.querySelector('.working-dataset-table-wrap');
   let activeAddColumnMenu = null;
+  let addColumnMenuCleanup = null;
 
   function getTableLayoutMetrics() {
     const rowNumWidth = 40;
@@ -669,6 +672,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     if (!activeAddColumnMenu) return;
     activeAddColumnMenu.remove();
     activeAddColumnMenu = null;
+    addColumnMenuCleanup?.();
+    addColumnMenuCleanup = null;
+    addColBtn.setAttribute('aria-expanded', 'false');
   }
 
   function addTextColumn() {
@@ -706,32 +712,56 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     closeAddColumnMenu();
     const rect = anchor.getBoundingClientRect();
     const menu = document.createElement('div');
-    menu.className = 'wd-add-column-menu';
+    menu.className = 'workflow-node-context-menu wd-add-column-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'Column type');
     menu.innerHTML = `
-      <button type="button" class="wd-add-column-menu__item" data-kind="text">Text column</button>
-      <button type="button" class="wd-add-column-menu__item" data-kind="image">Image column</button>
-      <button type="button" class="wd-add-column-menu__item" data-kind="pdf">PDF column</button>
+      <button type="button" role="menuitem" class="workflow-node-context-item wd-add-column-menu__item" data-kind="text">Text</button>
+      <button type="button" role="menuitem" class="workflow-node-context-item wd-add-column-menu__item" data-kind="image">Image</button>
+      <button type="button" role="menuitem" class="workflow-node-context-item wd-add-column-menu__item" data-kind="pdf">PDF</button>
     `;
     menu.style.left = `${Math.max(8, rect.left)}px`;
-    menu.style.top = `${rect.bottom}px`;
+    menu.style.top = `${rect.bottom + 2}px`;
     const onDocPointerDown = (event) => {
-      if (!menu.contains(event.target) && event.target !== anchor) {
+      if (!menu.contains(event.target) && event.target !== anchor) closeAddColumnMenu();
+    };
+    const onDocFocusIn = (event) => {
+      if (!menu.contains(event.target) && event.target !== anchor) closeAddColumnMenu();
+    };
+    const onMenuKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
         closeAddColumnMenu();
-        document.removeEventListener('pointerdown', onDocPointerDown, true);
+        anchor.focus();
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const items = [...menu.querySelectorAll('.wd-add-column-menu__item')];
+        const index = items.indexOf(document.activeElement);
+        items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
       }
     };
     menu.addEventListener('click', (event) => {
       const item = event.target.closest('.wd-add-column-menu__item');
       if (!item) return;
-      if (item.dataset.kind === 'image') addImageColumn();
-      else if (item.dataset.kind === 'pdf') addPdfColumn();
-      else addTextColumn();
+      if (item.dataset.kind === 'image' || item.dataset.kind === 'pdf') {
+        selectedColIndex = item.dataset.kind === 'image' ? addImageColumn() : addPdfColumn();
+        selectedRowIndex = -1;
+        render();
+      } else addTextColumn();
       closeAddColumnMenu();
-      document.removeEventListener('pointerdown', onDocPointerDown, true);
+      anchor.focus();
     });
+    menu.addEventListener('keydown', onMenuKeyDown);
     document.addEventListener('pointerdown', onDocPointerDown, true);
+    document.addEventListener('focusin', onDocFocusIn, true);
     document.body.appendChild(menu);
     activeAddColumnMenu = menu;
+    addColumnMenuCleanup = () => {
+      document.removeEventListener('pointerdown', onDocPointerDown, true);
+      document.removeEventListener('focusin', onDocFocusIn, true);
+    };
+    anchor.setAttribute('aria-expanded', 'true');
+    menu.querySelector('.wd-add-column-menu__item')?.focus();
   }
 
   function render() {
@@ -803,6 +833,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
         if (Number.isFinite(idx) && idx >= 0 && idx < headers.length) {
           headers[idx] = inp.value.trim() || '';
           persistContent();
+          updateDeleteButtons();
         }
       });
       inp.addEventListener('click', (e) => e.stopPropagation());
@@ -1249,26 +1280,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   });
 
   addColBtn.addEventListener('click', () => {
-    addTextColumn();
+    if (activeAddColumnMenu) closeAddColumnMenu();
+    else openAddColumnMenu(addColBtn);
   });
-
-  if (linkImagesBtn) {
-    linkImagesBtn.addEventListener('click', () => {
-      const newIndex = addImageColumn();
-      selectedColIndex = newIndex;
-      selectedRowIndex = -1;
-      render();
-    });
-  }
-
-  if (linkPdfBtn) {
-    linkPdfBtn.addEventListener('click', () => {
-      const newIndex = addPdfColumn();
-      selectedColIndex = newIndex;
-      selectedRowIndex = -1;
-      render();
-    });
-  }
 
   deleteRowBtn.addEventListener('click', () => {
     if (rows.length === 0 || selectedRowIndex < 0 || selectedRowIndex >= rows.length) return;
@@ -1382,8 +1396,22 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   function updateDeleteButtons() {
     const hasRowSelected = selectedRowIndex >= 0 && selectedRowIndex < rows.length;
     const hasColSelected = selectedColIndex >= 0 && selectedColIndex < headers.length;
-    deleteRowBtn.disabled = rows.length === 0 || !hasRowSelected;
-    deleteColBtn.disabled = headers.length <= 1 || !hasColSelected;
+    const canDeleteColumn = headers.length > 1 && hasColSelected;
+    const rowLabel = hasRowSelected ? `Delete row ${selectedRowIndex + 1}` : 'Delete row';
+    const columnName = hasColSelected ? (String(headers[selectedColIndex] || '').trim() || `Column ${selectedColIndex + 1}`) : '';
+    const columnLabel = canDeleteColumn ? `Delete column “${columnName}”` : 'Delete column';
+    const rowHint = rows.length === 0 ? 'No rows to delete.'
+      : hasRowSelected ? rowLabel : 'Click a row number to select it.';
+    const columnHint = headers.length <= 1 ? 'The last column cannot be deleted.'
+      : canDeleteColumn ? columnLabel : 'Click a column header outside its name field to select it.';
+    deleteRowBtn.textContent = rowLabel;
+    deleteColBtn.textContent = columnLabel;
+    deleteRowBtn.disabled = !hasRowSelected;
+    deleteColBtn.disabled = !canDeleteColumn;
+    deleteRowBtn.parentElement.title = rowHint;
+    deleteColBtn.parentElement.title = columnHint;
+    deleteRowBtn.setAttribute('aria-label', hasRowSelected ? rowLabel : `Delete row. ${rowHint}`);
+    deleteColBtn.setAttribute('aria-label', canDeleteColumn ? columnLabel : `Delete column. ${columnHint}`);
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);

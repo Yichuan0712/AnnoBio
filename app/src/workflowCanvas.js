@@ -3565,51 +3565,43 @@ export function buildWorkflowCanvas(root, options = {}) {
     menu.setAttribute('role', 'menu');
     // New nodes on this node's output (outputMenu.js), offered before it has a result where they can run later.
     const outputItems = outputMenuItems(liveInputState(), node.dataset.nodeId, port !== undefined ? { port } : {});
-    const stepItemsHtml = outputItems.map((item) => `<button type="button" class="workflow-node-context-item workflow-node-context-item--${OUTPUT_ITEM_CLASSES[item.action] || 'run'}" data-action="${item.action}" data-port="${escapeHtml(item.source.port)}" role="menuitem" ${item.disabled ? 'disabled' : ''}>${escapeHtml(item.label)}</button>`).join('');
-    if (port !== undefined) {
-      if (!outputItems.length) return;
-      menu.innerHTML = stepItemsHtml;
-    } else if (isRun) {
-      menu.innerHTML = `
-        ${stepItemsHtml}
-        <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem" ${runHasResults ? '' : 'disabled'}>Save results to workspace</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-run-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isScore) {
+    const stepItemsHtml = outputItems.map((item) => `<button type="button" class="workflow-node-context-item" data-action="${item.action}" data-port="${escapeHtml(item.source.port)}" role="menuitem" ${item.disabled ? 'disabled' : ''}>${escapeHtml(item.label)}</button>`).join('');
+    if (port !== undefined && !outputItems.length) return;
+    const menuGroup = (label, items) => items.trim() ? `
+      <div class="workflow-node-context-group" role="group" aria-label="${label}">
+        <div class="workflow-node-context-group-title" aria-hidden="true">${label}</div>
+        ${items}
+      </div>` : '';
+    let nextStepItems = stepItemsHtml;
+    let manageItems = '';
+    if (port === undefined && isRun) {
+      nextStepItems += `<button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem" ${runHasResults ? '' : 'disabled'}>Save results to workspace</button>`;
+      manageItems = '<button type="button" class="workflow-node-context-item" data-action="edit-run-name" role="menuitem">Edit name</button>';
+    } else if (port === undefined && isScore) {
       const scoreHasGt = (node.dataset.scoreGroundTruthId || '').trim() !== '';
       const canSaveToWorkspace = scoreHasResults && scoreHasGt;
-      menu.innerHTML = `
-        ${stepItemsHtml}
-        <button type="button" class="workflow-node-context-item" data-action="score-save-to-workspace" role="menuitem" ${canSaveToWorkspace ? '' : 'disabled'}>Save results to workspace</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isPromptReview) {
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem" ${reviewHasResult ? '' : 'disabled'}>Apply</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isDataset) {
-      menu.innerHTML = `
-        ${stepItemsHtml}
+      nextStepItems += `<button type="button" class="workflow-node-context-item" data-action="score-save-to-workspace" role="menuitem" ${canSaveToWorkspace ? '' : 'disabled'}>Save results to workspace</button>`;
+      manageItems = '<button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>';
+    } else if (port === undefined && isPromptReview) {
+      nextStepItems += `<button type="button" class="workflow-node-context-item" data-action="review-export" role="menuitem" ${reviewHasResult ? '' : 'disabled'}>Apply</button>`;
+      manageItems = '<button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>';
+    } else if (port === undefined && isDataset) {
+      manageItems = `
         <button type="button" class="workflow-node-context-item" data-action="duplicate-working-dataset" role="menuitem">Duplicate this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="add-version-of-dataset" role="menuitem">Add new version of this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-dataset-name-description" role="menuitem">Edit name & description</button>
       `;
-    } else if (isSampler) {
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="create-working-dataset" role="menuitem">Create sample</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-sampler-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isProcess) {
-      menu.innerHTML = `
-        ${stepItemsHtml}
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create dataset</button>
+    } else if (port === undefined && isSampler) {
+      nextStepItems += '<button type="button" class="workflow-node-context-item" data-action="create-working-dataset" role="menuitem">Create sample</button>';
+      manageItems = '<button type="button" class="workflow-node-context-item" data-action="edit-sampler-name" role="menuitem">Edit name</button>';
+    } else if (port === undefined && isProcess) {
+      nextStepItems += `<button type="button" class="workflow-node-context-item" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create dataset</button>`;
+      manageItems = `
         <button type="button" class="workflow-node-context-item" data-action="duplicate-process" role="menuitem">Duplicate this process</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-process-name" role="menuitem">Edit name</button>
       `;
-    } else {
-      menu.innerHTML = `
-        ${stepItemsHtml}
+    } else if (port === undefined) {
+      manageItems = `
         <button type="button" class="workflow-node-context-item" data-action="duplicate" role="menuitem">Duplicate this prompt</button>
         <button type="button" class="workflow-node-context-item" data-action="new-version" role="menuitem">Add new version of this prompt</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-name-description" role="menuitem">Edit name & description</button>
@@ -3617,10 +3609,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
 
     if (port === undefined) {
-      menu.insertAdjacentHTML('beforeend', `
-        <button type="button" class="workflow-node-context-item" data-action="copy-name-and-id" role="menuitem">Copy name and ID</button>
-      `);
+      manageItems += '<button type="button" class="workflow-node-context-item" data-action="copy-name" role="menuitem">Copy name</button>';
     }
+    menu.innerHTML = menuGroup('Next steps', nextStepItems) + menuGroup('Manage node', manageItems);
     /** The output an output item starts from. */
     const outputSource = (button) => ({ nodeId: node.dataset.nodeId, port: button.dataset.port || RESULT_PORT, kind: isRun ? 'run' : isProcess ? 'process' : 'dataset' });
 
@@ -4067,13 +4058,11 @@ export function buildWorkflowCanvas(root, options = {}) {
         updateContentSize();
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       },
-      'copy-name-and-id': async () => {
-        const id = String(node.dataset.nodeId || '').trim();
+      'copy-name': async () => {
         const titleEl = node.querySelector('.workflow-node__title');
         const rawName = (titleEl?.textContent || '').trim();
-        const name = (rawName.replace(/\s+/g, ' ') || id || 'Node').trim();
-        const text = id ? `${name} | ${id}` : name;
-        const ok = await copyTextToClipboard(text);
+        const name = rawName.replace(/\s+/g, ' ').trim() || 'Node';
+        const ok = await copyTextToClipboard(name);
         if (!ok) {
           showAlert('Could not copy to clipboard.', { title: 'Copy' });
         }
@@ -4113,12 +4102,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     document.addEventListener('contextmenu', close, { once: true });
     document.addEventListener('keydown', onKey, true);
   }
-
-  /** The class each output item had in the node menus, for its icon. */
-  const OUTPUT_ITEM_CLASSES = {
-    'run-prompt-on-output': 'run', 'process-output': 'run', 'run-this-prompt': 'run',
-    'add-sampler': 'sample', 'save-to-workspace-and-score': 'score', 'score-add-review': 'review',
-  };
 
   function escapeHtml(str) {
     const div = document.createElement('div');
