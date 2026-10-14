@@ -436,6 +436,17 @@ const createWindow = () => {
   mainWindow.on('unmaximize', sendWindowChromeState);
   mainWindow.webContents.on('did-finish-load', sendWindowChromeState);
 
+  if (macOS) {
+    const sendFullscreenState = () => {
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('window:fullscreen-changed', mainWindow.isFullScreen());
+      }
+    };
+    mainWindow.on('enter-full-screen', sendFullscreenState);
+    mainWindow.on('leave-full-screen', sendFullscreenState);
+    mainWindow.webContents.on('did-finish-load', sendFullscreenState);
+  }
+
   // and load the index.html of the app.
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);

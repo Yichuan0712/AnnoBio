@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onWindowMaximizedChanged: (callback) => {
     ipcRenderer.on('window:maximized-changed', (_event, isMaximized) => callback(!!isMaximized));
   },
+  onWindowFullscreenChanged: (callback) => {
+    ipcRenderer.on('window:fullscreen-changed', (_event, isFullscreen) => callback(!!isFullscreen));
+  },
   showNewProjectDialog: () => ipcRenderer.invoke('project:new-dialog'),
   showOpenProjectDialog: () => ipcRenderer.invoke('project:open-dialog'),
   showSaveAsProjectDialog: (defaultPath) => ipcRenderer.invoke('project:save-as-dialog', defaultPath),

@@ -31,6 +31,11 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, add
   const macOS = window.electronAPI.platform === 'darwin';
   const bar = document.createElement('nav');
   bar.className = macOS ? 'top-bar top-bar--mac' : 'top-bar';
+  if (macOS) {
+    window.electronAPI.onWindowFullscreenChanged?.((isFullscreen) => {
+      bar.classList.toggle('top-bar--mac-fullscreen', isFullscreen);
+    });
+  }
 
   const projectTitleEl = document.createElement('div');
   projectTitleEl.className = 'top-bar-project-title';
