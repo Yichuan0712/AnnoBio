@@ -50,7 +50,7 @@ function dragPath(from, to) {
  * @param {{ canvas: HTMLElement, nodesLayer: HTMLElement, edgesLayer: SVGSVGElement, scrollWrapper: HTMLElement,
  *   getState: () => object, clientToCanvas: (x: number, y: number) => { x: number, y: number },
  *   applyOps: (ops: object[]) => void, showBranchMenu: (x: number, y: number, node: HTMLElement, port: string) => void,
- *   showOutputMenu: (x: number, y: number, nodeId: string, port: string) => void,
+ *   showOutputMenu: (x: number, y: number, nodeId: string, port: string, onClose: () => void) => (() => void) | null,
  *   promptInputs?: (prompt: object) => string[], onLayoutChange?: () => void, dragThreshold?: number }} options
  */
 export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, getState, clientToCanvas, applyOps, showBranchMenu, showOutputMenu, promptInputs, onLayoutChange, dragThreshold = 4 }) {
@@ -180,7 +180,7 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
     drag.frame = requestAnimationFrame(autoPan);
   }
 
-  function end() {
+  function end({ keepLine = false } = {}) {
     if (!drag) return;
     cancelAnimationFrame(drag.frame);
     document.removeEventListener('pointermove', onPointerMove);
@@ -191,7 +191,7 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
       'workflow-node__port--target', 'workflow-node__port--refused', 'workflow-node__port--hover', 'workflow-node__port--origin',
     ));
     drag.liftedEdge?.classList.remove('workflow-edge--lifted');
-    drag.path?.parentNode?.remove();
+    if (!keepLine) drag.path?.parentNode?.remove();
     canvas.classList.remove('workflow-canvas--port-dragging');
     if (drag.started) onLayoutChange?.();
     hideTip();
@@ -250,6 +250,23 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
     }
     const dot = dotAt(e.clientX, e.clientY);
     const result = dot ? current.checks.get(dot) : null;
+    if (!dot && current.mode === 'out' && overEmptyCanvas(e.clientX, e.clientY)) {
+      // Freeze at the release point while the menu owns the unfinished connection.
+      current.clientX = e.clientX;
+      current.clientY = e.clientY;
+      current.hover = null;
+      drawLine();
+      const line = current.path.parentNode;
+      end({ keepLine: true });
+      try {
+        const closeMenu = showOutputMenu(e.clientX, e.clientY, current.from.nodeId, current.from.portId, () => line.remove());
+        if (!closeMenu) line.remove();
+      } catch (error) {
+        line.remove();
+        throw error;
+      }
+      return;
+    }
     end();
     if (current.mode === 'lift') {
       if (dot === current.dot) return;
@@ -258,7 +275,6 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
       return;
     }
     if (result?.ok && result.op) applyOps([result.op]);
-    else if (!dot && current.mode === 'out' && overEmptyCanvas(e.clientX, e.clientY)) showOutputMenu(e.clientX, e.clientY, current.from.nodeId, current.from.portId);
   }
 
   /** Whether the pointer is over the canvas and not over a node. */
@@ -280,5 +296,5 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
   nodesLayer.addEventListener('pointerdown', onPointerDown, true);
   document.addEventListener('pointerdown', (e) => { if (!e.target.closest?.(DOT)) hideTip(); }, true);
 
-  return { showTip, isDragging: () => !!drag };
+  return { showTip, isDragging: () => !!drag, cancel: end };
 }

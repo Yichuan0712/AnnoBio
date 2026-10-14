@@ -62,6 +62,7 @@ import { createWorkflowNodeFactories, formatSamplerDescription, formatSamplerSet
 import { ADD_INPUT_PORT, applyPortOp, checkDisconnect, edgeEndpoints, nodePorts, portTitles, unconnectedProcessInputs } from './nodePorts.js';
 import { applyPortTitles, centerWithin, findPortDot, renderNodePorts } from './workflowNodePorts.js';
 import { attachPortDrag } from './workflowPortDrag.js';
+import { attachContextMenuDismissal } from './workflowContextMenu.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
 import { dependencyColorSources, dependentNodeVisualColors } from './workflowDependencyColors.js';
@@ -1264,6 +1265,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   }
 
+  let closeNodeContextMenu = null;
   const portDrag = attachPortDrag({
     canvas, nodesLayer, edgesLayer, scrollWrapper,
     getState: portState,
@@ -1271,9 +1273,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     applyOps: applyPortOps,
     showBranchMenu: (x, y, node, port) => showNodeContextMenu(x, y, node, { port }),
     // A line from an output let go over empty canvas offers new nodes on it, made where it was let go.
-    showOutputMenu: (x, y, nodeId, port) => {
+    showOutputMenu: (x, y, nodeId, port, onClose) => {
       const node = getNodeById(nodeId);
-      if (node) showNodeContextMenu(x, y, node, { port, at: clientToCanvasPoint(x, y) });
+      return node ? showNodeContextMenu(x, y, node, { port, at: clientToCanvasPoint(x, y), onClose }) : null;
     },
     promptInputs: promptInputNames,
     onLayoutChange: () => { updateContentSize(); updateEdges(); },
@@ -1300,6 +1302,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   function showEdgeContextMenu(clientX, clientY, onDisconnect) {
+    closeNodeContextMenu?.();
     document.querySelector('.workflow-node-context-menu')?.remove();
     const menu = document.createElement('div');
     menu.className = 'workflow-node-context-menu';
@@ -3493,7 +3496,8 @@ export function buildWorkflowCanvas(root, options = {}) {
    * branch's menu, or the menu shown when a line from the output is let go over empty canvas; `at`
    * is then where the new node goes (canvas coordinates).
    */
-  function showNodeContextMenu(clientX, clientY, node, { port, at } = {}) {
+  function showNodeContextMenu(clientX, clientY, node, { port, at, onClose } = {}) {
+    closeNodeContextMenu?.();
     const existing = document.querySelector('.workflow-node-context-menu');
     if (existing) existing.remove();
 
@@ -3550,7 +3554,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     // New nodes on this node's output (outputMenu.js), offered before it has a result where they can run later.
     const outputItems = outputMenuItems(liveInputState(), node.dataset.nodeId, port !== undefined ? { port } : {});
     const stepItemsHtml = outputItems.map((item) => `<button type="button" class="workflow-node-context-item" data-action="${item.action}" data-port="${escapeHtml(item.source.port)}" role="menuitem" ${item.disabled ? 'disabled' : ''}>${escapeHtml(item.label)}</button>`).join('');
-    if (port !== undefined && !outputItems.length) return;
+    if (port !== undefined && !outputItems.length) {
+      onClose?.();
+      return null;
+    }
     const menuGroup = (label, items) => items.trim() ? `
       <div class="workflow-node-context-group" role="group" aria-label="${label}">
         <div class="workflow-node-context-group-title" aria-hidden="true">${label}</div>
@@ -4052,13 +4059,25 @@ export function buildWorkflowCanvas(root, options = {}) {
       },
     };
 
+    const close = attachContextMenuDismissal(menu, { onClose: () => {
+      if (closeNodeContextMenu === close) closeNodeContextMenu = null;
+      onClose?.();
+    } });
+    closeNodeContextMenu = close;
+    let actionPending = false;
     menu.querySelectorAll('.workflow-node-context-item').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (btn.disabled) return;
+        if (btn.disabled || actionPending) return;
+        actionPending = true;
         const action = btn.getAttribute('data-action');
-        if (actions[action]) actions[action](btn);
-        menu.remove();
+        try {
+          if (actions[action]) await actions[action](btn);
+        } catch (error) {
+          showAlert(error?.message || 'Could not complete this action.', { title: 'Node action' });
+        } finally {
+          close();
+        }
       });
     });
 
@@ -4074,16 +4093,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
 
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    const close = () => {
-      menu.remove();
-      document.removeEventListener('click', close);
-      document.removeEventListener('contextmenu', close);
-      document.removeEventListener('keydown', onKey, true);
-    };
-    requestAnimationFrame(() => document.addEventListener('click', close, { once: true }));
-    document.addEventListener('contextmenu', close, { once: true });
-    document.addEventListener('keydown', onKey, true);
+    return close;
   }
 
   function escapeHtml(str) {
@@ -5046,6 +5056,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   function loadCanvasState(state) {
     const list = state?.nodes;
     if (!Array.isArray(list)) return;
+    closeNodeContextMenu?.();
+    portDrag.cancel();
     historyRevision += 1;
     canvasHistoryVersion = state.historyVersion === 1 ? 1 : null;
     pipelineOwner = state.pipelineOwner?.id ? { at: String(state.pipelineOwner.at || ''), id: String(state.pipelineOwner.id) } : null;
