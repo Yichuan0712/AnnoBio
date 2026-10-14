@@ -638,7 +638,7 @@ function macDockIcon(filePath) {
   const shape = side - margin * 2;
   const radius = Math.round(shape * 0.225);
   const half = shape / 2;
-  const logoBox = Math.round(shape * 0.64);
+  const logoBox = Math.round(shape * 0.70);
   const logoW = bounds.width >= bounds.height
     ? logoBox
     : Math.max(1, Math.round(logoBox * bounds.width / bounds.height));
