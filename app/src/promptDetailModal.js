@@ -237,7 +237,7 @@ function buildRunTemplateTextForExport(sections) {
 }
 
 /**
- * Save to local: run template + suffix matching backend/llm.py::_run_structured_fallback (approx. JSON Schema).
+ * Export format: run template + suffix matching backend/llm.py::_run_structured_fallback (approx. JSON Schema).
  */
 function buildPromptExportText(snapshot) {
   const runTemplate = buildRunTemplateTextForExport(snapshot.sections);
@@ -348,19 +348,22 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
             <div class="prompt-detail-side-scroll">
               <h3 class="prompt-preview-title">Prompt inputs</h3>
               <div class="prompt-detail-inputs-content prompt-preview">${inputsViewHtml}</div>
-              <h3 class="prompt-preview-title">Output schema</h3>
+              <div class="prompt-detail-schema-heading">
+                <h3 class="prompt-preview-title">Output schema</h3>
+                ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-heading-edit prompt-detail-schema-btn-edit">Edit schema</button>'}
+              </div>
               <div class="prompt-detail-schema-wrap">
                 <div class="prompt-detail-schema-view">${schemaViewHtml}</div>
-                <div class="prompt-detail-schema-footer">
-                  <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
-                  ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-schema-btn-edit">Edit</button>'}
-                </div>
+                <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
               </div>
             </div>
           </div>
           <div class="prompt-detail-main">
             <div class="prompt-detail-step">
-              <p class="prompt-step-label">Prompt sections</p>
+              <div class="prompt-detail-sections-heading">
+                <p class="prompt-step-label">Prompt sections</p>
+                ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-heading-edit prompt-detail-sections-btn-edit">Edit sections</button>'}
+              </div>
               <div class="prompt-detail-sections-scroll">
                 <div class="prompt-detail-sections-wrap">
                   <div class="prompt-detail-sections-view">${sectionsViewHtml}</div>
@@ -368,10 +371,9 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
               </div>
               <div class="prompt-form-error prompt-modal-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
               <div class="prompt-actions">
-                <button type="button" class="btn btn-secondary prompt-detail-export-local">Save to local</button>
                 <div class="prompt-actions__trailing">
-                  ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>'}
-                  <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Run</button>
+                  <button type="button" class="btn btn-secondary prompt-detail-export-local" title="Export prompt as a text file">Export</button>
+                  <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Create Run</button>
                 </div>
               </div>
             </div>
@@ -422,47 +424,13 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       overview.hidden = false;
     });
   }
-  const nameValueEl = overlay.querySelector('.prompt-detail-name-value');
-  const notesValueEl = overlay.querySelector('.prompt-detail-notes-value');
-  const nameInp = overlay.querySelector('#prompt-detail-name-inp');
-  const notesInp = overlay.querySelector('#prompt-detail-notes-inp');
-  const btnEdit = overlay.querySelector('.prompt-detail-btn-edit');
-  const btnCancel = overlay.querySelector('.prompt-detail-btn-cancel');
-  const btnSave = overlay.querySelector('.prompt-detail-btn-save');
-
-  function applyToNode(newName, newNote) {
-    if (!sourceNode) return;
-    sourceNode.dataset.promptName = newName;
-    sourceNode.dataset.promptNote = newNote;
-    const titleEl = sourceNode.querySelector('.workflow-node__title');
-    if (titleEl) titleEl.textContent = newName || 'Prompt';
-    const bodyEl = sourceNode.querySelector('.workflow-node__body');
-    if (newNote) {
-      sourceNode.classList.remove('workflow-node--no-body');
-      if (bodyEl) {
-        const noteEl = bodyEl.querySelector('.workflow-node__note');
-        if (noteEl) noteEl.textContent = newNote;
-        else bodyEl.innerHTML = `<span class="workflow-node__note">${escapeHtml(newNote)}</span>`;
-      } else {
-        const div = document.createElement('div');
-        div.className = 'workflow-node__body';
-        div.innerHTML = `<span class="workflow-node__note">${escapeHtml(newNote)}</span>`;
-        sourceNode.appendChild(div);
-      }
-    } else {
-      if (bodyEl) bodyEl.remove();
-      sourceNode.classList.add('workflow-node--no-body');
-    }
-  }
-
   const exportLocalBtn = overlay.querySelector('.prompt-detail-export-local');
 
   function syncPromptExportLocalEnabled() {
     if (!exportLocalBtn) return;
     const noNode = !sourceNode;
-    const nameNoteEditing = panel.getAttribute('data-prompt-detail-mode') === 'edit';
     const childBlocking = !!activeSidePanel || hasPromptExportBlockingOverlayOpen();
-    exportLocalBtn.disabled = noNode || nameNoteEditing || childBlocking;
+    exportLocalBtn.disabled = noNode || childBlocking;
   }
 
   const exportOverlayObserver = new MutationObserver(() => syncPromptExportLocalEnabled());
@@ -472,57 +440,6 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     exportOverlayObserver.disconnect();
     overlay.remove();
     document.body.style.overflow = '';
-  }
-
-  function showView() {
-    panel.setAttribute('data-prompt-detail-mode', 'view');
-    syncPromptExportLocalEnabled();
-  }
-
-  function showEdit() {
-    nameInp.value = nameValueEl.textContent.trim() || '';
-    notesInp.value = notesValueEl.querySelector('.prompt-detail-placeholder') ? '' : (notesValueEl.textContent || '').trim();
-    panel.setAttribute('data-prompt-detail-mode', 'edit');
-    syncPromptExportLocalEnabled();
-  }
-
-  const nameErrorEl = overlay.querySelector('#prompt-detail-name-error');
-
-  if (btnEdit) {
-    btnEdit.addEventListener('click', showEdit);
-    btnCancel.addEventListener('click', () => showView());
-    btnSave.addEventListener('click', () => {
-      const newNameRaw = (nameInp.value || '').trim();
-      const newName = newNameRaw || 'Prompt';
-      const newNote = (notesInp.value || '').trim();
-      if (nameErrorEl) nameErrorEl.hidden = true;
-      if (!newNameRaw) {
-        if (nameErrorEl) {
-          nameErrorEl.textContent = 'Prompt name is required.';
-          nameErrorEl.hidden = false;
-        }
-        return;
-      }
-      if (!newNote) {
-        if (nameErrorEl) {
-          nameErrorEl.textContent = 'Prompt description is required.';
-          nameErrorEl.hidden = false;
-        }
-        return;
-      }
-      if (typeof isPromptNameAlreadyUsed === 'function' && isPromptNameAlreadyUsed(newName, sourceNode?.dataset?.nodeId ?? null)) {
-        if (nameErrorEl) {
-          nameErrorEl.textContent = 'This prompt name is already used on the canvas. Please choose another.';
-          nameErrorEl.hidden = false;
-        }
-        return;
-      }
-      applyToNode(newName, newNote);
-      nameValueEl.textContent = newName;
-      notesValueEl.innerHTML = newNote ? escapeHtml(newNote) : '<span class="prompt-detail-placeholder">No description.</span>';
-      showView();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    });
   }
 
   if (exportLocalBtn) {

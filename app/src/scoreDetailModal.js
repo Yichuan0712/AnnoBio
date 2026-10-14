@@ -1502,7 +1502,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
                   <div class="run-detail-llm-actions-row">
                     <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
                     <div class="run-detail-llm-actions-right">
-                      <button type="button" class="btn btn-secondary run-detail-run-btn score-detail-code-run-btn">Run</button>
+                      <button type="button" class="btn btn-secondary run-detail-run-btn score-detail-code-run-btn">Run matching code</button>
                     </div>
                   </div>
                 </div>
@@ -1521,7 +1521,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
               <div class="score-detail-results-footer-row" id="score-detail-results-footer-row" hidden>
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
-                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create a Review node and run analysis with the selected model">Review</button>
+                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create a Review node and run analysis with the selected model">Start review</button>
                   <button type="button" class="btn btn-secondary score-detail-review-payload-preview" id="score-detail-review-payload-preview" title="Temporary: preview Review payload by input (model output vs ground-truth tables per group). Does not start a Review job.">Debug</button>
                 </div>
               </div>
@@ -1626,8 +1626,8 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
   function setCodeRunningUi(isRunning) {
     codeRunning = isRunning;
     if (!codeRunBtn) return;
-    codeRunBtn.textContent = isRunning ? 'Running, click to stop'
-      : executionIdleLabel({ interrupted: node?.dataset?.scoreMatchInterrupted === '1' });
+    codeRunBtn.textContent = isRunning ? 'Stop matching'
+      : executionIdleLabel({ task: 'matching', interrupted: node?.dataset?.scoreMatchInterrupted === '1' });
     codeRunBtn.classList.toggle('btn-danger', isRunning);
   }
   setCodeRunningUi(false);

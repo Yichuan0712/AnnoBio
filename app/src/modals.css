@@ -196,8 +196,6 @@
   line-height: 1.2;
 }
 
-.working-dataset-readonly .working-dataset-link-images,
-.working-dataset-readonly .working-dataset-link-pdf,
 .working-dataset-readonly .working-dataset-add-row,
 .working-dataset-readonly .working-dataset-add-col,
 .working-dataset-readonly .working-dataset-delete-row,
@@ -2107,6 +2105,44 @@
   margin: 0 -20px;
 }
 
+.prompt-detail-sections-heading,
+.prompt-detail-schema-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.prompt-detail-sections-heading {
+  margin: 0 -20px;
+}
+
+.prompt-detail-step .prompt-detail-sections-heading .prompt-step-label,
+.prompt-detail-schema-heading .prompt-preview-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  border-bottom: 0;
+}
+
+.prompt-detail-schema-heading {
+  border-top: 1px solid var(--border);
+}
+
+.prompt-detail-heading-edit {
+  flex-shrink: 0;
+  margin-right: 20px;
+  padding: 4px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.prompt-detail-schema-heading .prompt-detail-heading-edit {
+  margin-right: 16px;
+}
+
 .prompt-detail-sections-scroll {
   flex: 1;
   min-height: 0;
@@ -2128,12 +2164,12 @@
 .prompt-detail-step .prompt-actions .prompt-actions__trailing {
   display: flex;
   align-items: center;
+  margin-left: auto;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.modal-panel--prompt-detail .prompt-actions .btn,
-.modal-panel--prompt-detail .prompt-detail-schema-footer .btn {
+.modal-panel--prompt-detail .prompt-actions .btn {
   box-sizing: border-box;
   min-height: 36px;
   line-height: 1.2;
@@ -2240,10 +2276,6 @@
   background: transparent;
   border: none;
   padding: 0;
-}
-
-.prompt-detail-side .prompt-detail-schema-footer {
-  border-top: none;
 }
 
 .prompt-detail-card {
@@ -6140,13 +6172,55 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   padding: 12px;
 }
 
-/* 底部：分页栏 + footer（Add/Delete row/column，上划线，与其它 detail 一致） */
+.working-dataset-table-actions {
+  gap: 8px;
+  padding: 4px 12px 6px;
+}
+
+.working-dataset-table-actions__group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.working-dataset-table-actions__group + .working-dataset-table-actions__group {
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
+.working-dataset-delete-control {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.working-dataset-delete-control .btn {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.working-dataset-delete-control .btn:disabled {
+  pointer-events: none;
+}
+
+.working-dataset-add-col::after {
+  content: '▾';
+  margin-left: 6px;
+  font-size: 10px;
+}
+
+.working-dataset-readonly .working-dataset-table-actions {
+  display: none;
+}
+
+/* Pagination and footer stay below the editable table. */
 .working-dataset-detail-body .working-dataset-pagination-toolbar {
   flex-shrink: 0;
   padding-right: 0;
 }
 
-/* 底部四按钮：与 Run/Score 一致，底边距约 16px（footer 4px + scroll 12px）；横线从左对齐 12px 起画，与上下内容左缘一致 */
+/* Keep the footer divider aligned with the table content. */
 .dataset-detail-card .dataset-detail-footer.working-dataset-detail-footer,
 .working-dataset-detail-footer {
   flex-shrink: 0;
@@ -6155,7 +6229,7 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   padding-bottom: 4px;
   margin-top: 4px;
   padding-top: 8px;
-  justify-content: space-between;
+  justify-content: flex-end;
   border-top: none;
   position: relative;
 }
@@ -6291,32 +6365,14 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 }
 
 .wd-add-column-menu {
-  position: fixed;
   z-index: 16000;
   min-width: 160px;
-  display: flex;
-  flex-direction: column;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-primary, var(--bg));
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
-  transform: translateY(6px);
 }
 
-.wd-add-column-menu__item {
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  padding: 8px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  font: inherit;
-}
-
-.wd-add-column-menu__item:hover {
+.wd-add-column-menu__item:focus-visible {
   background: var(--hover);
+  outline: 1px solid var(--text-muted);
+  outline-offset: -1px;
 }
 
 .working-dataset-edit-table th .wd-header-inp:focus,
@@ -6796,18 +6852,6 @@ body.wd-row-resizing {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 0;
-}
-
-.prompt-detail-schema-footer {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-  padding-top: 12px;
-  margin-top: 12px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
 }
 
 .prompt-detail-schema-edit-btns {
@@ -8396,8 +8440,7 @@ body.wd-row-resizing {
 }
 
 .prompt-detail-footer .prompt-detail-inline-error,
-.prompt-detail-sections-footer .prompt-detail-inline-error,
-.prompt-detail-schema-footer .prompt-detail-inline-error {
+.prompt-detail-sections-footer .prompt-detail-inline-error {
   flex-basis: 100%;
 }
 
@@ -9209,8 +9252,23 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
 .prompt-detail-side-child-editor .modal-title { font-size: 14px; }
 .prompt-detail-side-child-editor .modal-panel--section-editor .modal-body { padding: 14px; }
 
+/* Keep the three-step Prompt creator in place while editing a section or field. */
+.modal-panel--prompt[data-add-prompt-editor] .prompt-preview-wrap { display: none; }
+.modal-panel--prompt[data-add-prompt-editor="section"] .prompt-main,
+.modal-panel--prompt[data-add-prompt-editor="section"] .prompt-create-editor-panel {
+  flex: 1 1 0;
+}
+.modal-panel--prompt[data-add-prompt-editor="field"] .prompt-create-editor-panel {
+  flex: 0 0 min(43%, 500px);
+}
+
 @media (max-width: 900px) {
   .prompt-detail-editor-panel { flex-basis: 48%; }
+}
+@media (max-width: 700px) {
+  .modal-panel--prompt[data-add-prompt-editor] .prompt-main,
+  .modal-panel--prompt[data-add-prompt-editor] .prompt-schema-preview-wrap { display: none; }
+  .modal-panel--prompt[data-add-prompt-editor] .prompt-create-editor-panel { flex: 1 1 0; }
 }
 @media (max-width: 700px) {
   .modal-panel--prompt-detail[data-prompt-side-kind] .prompt-detail-main,

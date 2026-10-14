@@ -185,7 +185,7 @@ export function openRunDetailModal({
             <div class="run-detail-llm-actions-row">
               <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
               <div class="run-detail-llm-actions-right">
-                <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
+                <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Generate</button>
               </div>
             </div>
             <p class="process-editor-hint run-detail-upstream-notice" hidden></p>
@@ -271,7 +271,7 @@ export function openRunDetailModal({
 
   function applyRunningLock() {
     runBtn.disabled = false;
-    runBtn.textContent = 'Running, click to stop';
+    runBtn.textContent = 'Stop generation';
     runBtn.classList.remove('btn-primary');
     runBtn.classList.add('btn-secondary', 'btn-danger');
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
@@ -297,7 +297,7 @@ export function openRunDetailModal({
     const status = refreshInputStatus();
     if (isCompleted()) {
       runBtn.disabled = !historyMode;
-      runBtn.textContent = 'Run again';
+      runBtn.textContent = 'Generate again';
       runBtn.classList.remove('btn-primary', 'btn-danger');
       runBtn.classList.add('btn-secondary');
       if (historyMode) applyUnlock();
@@ -321,7 +321,7 @@ export function openRunDetailModal({
     }
     runBtn.classList.remove('btn-secondary', 'btn-danger');
     runBtn.classList.add('btn-primary');
-    runBtn.textContent = executionIdleLabel({ interrupted: node?.dataset?.runResumable === '1', hasPartial: results.length > 0 });
+    runBtn.textContent = executionIdleLabel({ task: 'generation', interrupted: node?.dataset?.runResumable === '1', hasPartial: results.length > 0 });
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
     runBtn.disabled = !(getPromptId() && getInputSource() && allMapped);
     // The input has no complete result yet: run the upstream step first (stepOutputs.js).
@@ -635,7 +635,7 @@ export function openRunDetailModal({
     const scoreBtn = document.createElement('button');
     scoreBtn.type = 'button';
     scoreBtn.className = 'btn btn-primary run-detail-save-to-workspace-score-btn';
-    scoreBtn.textContent = 'Score';
+    scoreBtn.textContent = 'Create Score';
     scoreBtn.addEventListener('click', () => {
       document.dispatchEvent(new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node?.dataset?.nodeId || '' } }));
       closeModal();

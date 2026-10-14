@@ -23,13 +23,13 @@ function readerItems(sources, { named, dataset }) {
   return [
     ...sources.map((source) => ({
       action: 'run-prompt-on-output',
-      label: dataset ? 'Run a prompt on it' : named ? `Run a prompt on '${source.port}'` : 'Run a prompt on results',
+      label: dataset ? 'Create Run with this data' : named ? `Create Run from '${source.port}'` : 'Create Run from results',
       source,
     })),
-    ...(dataset ? [{ action: 'add-sampler', label: 'Sample', source: sources[0] }] : []),
+    ...(dataset ? [{ action: 'add-sampler', label: 'Create Sample', source: sources[0] }] : []),
     ...sources.map((source) => ({
       action: 'process-output',
-      label: dataset ? 'Process with code' : named ? `Process '${source.port}' with code` : 'Process results with code',
+      label: dataset ? 'Create Process' : named ? `Create Process from '${source.port}'` : 'Create Process from results',
       source,
     })),
   ];
@@ -56,14 +56,14 @@ export function outputMenuItems(state, nodeId, { port } = {}) {
     return single(RESULT) ? readerItems([{ nodeId: id, port: RESULT, kind: 'dataset' }], { dataset: true }) : [];
   }
   if (node.type === 'prompt') {
-    return single('prompt') ? [{ action: 'run-this-prompt', label: 'Run', source: { nodeId: id, port: 'prompt', kind: 'prompt' } }] : [];
+    return single('prompt') ? [{ action: 'run-this-prompt', label: 'Create Run', source: { nodeId: id, port: 'prompt', kind: 'prompt' } }] : [];
   }
   if (node.type === 'run') {
     if (!single(RESULT)) return [];
     const source = { nodeId: id, port: RESULT, kind: 'run' };
     return [
       ...readerItems([source], { named: false }),
-      { action: 'save-to-workspace-and-score', label: 'Score', source, disabled: !hasRunResults(node) },
+      { action: 'save-to-workspace-and-score', label: 'Create Score', source, disabled: !hasRunResults(node) },
     ];
   }
   if (node.type === 'process') {
@@ -75,7 +75,7 @@ export function outputMenuItems(state, nodeId, { port } = {}) {
     if (!single('score')) return [];
     const runId = (state?.connections || []).find((edge) => edge?.type === 'run-to-score' && String(edge.toId) === id)?.fromId;
     const ready = hasRunResults(findNode(state, runId)) && !!String(node.scoreGroundTruthId || '').trim();
-    return [{ action: 'score-add-review', label: 'Review', source: { nodeId: id, port: 'score', kind: 'score' }, disabled: !ready }];
+    return [{ action: 'score-add-review', label: 'Start review', source: { nodeId: id, port: 'score', kind: 'score' }, disabled: !ready }];
   }
   return [];
 }

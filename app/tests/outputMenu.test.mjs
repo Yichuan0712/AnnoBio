@@ -28,23 +28,23 @@ const describe = (items) => items.map((item) => [item.action, item.label, `${ite
 
 test('a Run offers a new Run and a new Process on its results, then a Score once it has results', () => {
   assert.deepEqual(describe(outputMenuItems(state, 'run')), [
-    ['run-prompt-on-output', 'Run a prompt on results', 'run:run:result'],
-    ['process-output', 'Process results with code', 'run:run:result'],
-    ['save-to-workspace-and-score', 'Score', 'run:run:result', 'disabled'],
+    ['run-prompt-on-output', 'Create Run from results', 'run:run:result'],
+    ['process-output', 'Create Process from results', 'run:run:result'],
+    ['save-to-workspace-and-score', 'Create Score', 'run:run:result', 'disabled'],
   ]);
   assert.equal(outputMenuItems(state, 'done').at(-1).disabled, false);
 });
 
 test('a Process offers them per branch, or for its one result', () => {
   assert.deepEqual(describe(outputMenuItems(state, 'split')), [
-    ['run-prompt-on-output', "Run a prompt on 'ready'", 'process:split:ready'],
-    ['run-prompt-on-output', "Run a prompt on 'needs_name_rewrite'", 'process:split:needs_name_rewrite'],
-    ['process-output', "Process 'ready' with code", 'process:split:ready'],
-    ['process-output', "Process 'needs_name_rewrite' with code", 'process:split:needs_name_rewrite'],
+    ['run-prompt-on-output', "Create Run from 'ready'", 'process:split:ready'],
+    ['run-prompt-on-output', "Create Run from 'needs_name_rewrite'", 'process:split:needs_name_rewrite'],
+    ['process-output', "Create Process from 'ready'", 'process:split:ready'],
+    ['process-output', "Create Process from 'needs_name_rewrite'", 'process:split:needs_name_rewrite'],
   ]);
   assert.deepEqual(describe(outputMenuItems(state, 'tidy')), [
-    ['run-prompt-on-output', 'Run a prompt on results', 'process:tidy:result'],
-    ['process-output', 'Process results with code', 'process:tidy:result'],
+    ['run-prompt-on-output', 'Create Run from results', 'process:tidy:result'],
+    ['process-output', 'Create Process from results', 'process:tidy:result'],
   ]);
   // Branches only known after a run: nothing to start from yet.
   assert.deepEqual(outputMenuItems(state, 'dynamic'), []);
@@ -52,22 +52,22 @@ test('a Process offers them per branch, or for its one result', () => {
 
 test('a Dataset offers a Run, a Sample and a Process; a Prompt offers a Run', () => {
   assert.deepEqual(describe(outputMenuItems(state, 'raw')), [
-    ['run-prompt-on-output', 'Run a prompt on it', 'dataset:raw:result'],
-    ['add-sampler', 'Sample', 'dataset:raw:result'],
-    ['process-output', 'Process with code', 'dataset:raw:result'],
+    ['run-prompt-on-output', 'Create Run with this data', 'dataset:raw:result'],
+    ['add-sampler', 'Create Sample', 'dataset:raw:result'],
+    ['process-output', 'Create Process', 'dataset:raw:result'],
   ]);
-  assert.deepEqual(describe(outputMenuItems(state, 'classify')), [['run-this-prompt', 'Run', 'prompt:classify:prompt']]);
+  assert.deepEqual(describe(outputMenuItems(state, 'classify')), [['run-this-prompt', 'Create Run', 'prompt:classify:prompt']]);
 });
 
 test('a Score offers a Review once its Run has results and it has a ground truth', () => {
-  assert.deepEqual(describe(outputMenuItems(state, 'score')), [['score-add-review', 'Review', 'score:score:score']]);
-  assert.deepEqual(describe(outputMenuItems(state, 'unscored')), [['score-add-review', 'Review', 'score:unscored:score', 'disabled']]);
+  assert.deepEqual(describe(outputMenuItems(state, 'score')), [['score-add-review', 'Start review', 'score:score:score']]);
+  assert.deepEqual(describe(outputMenuItems(state, 'unscored')), [['score-add-review', 'Start review', 'score:unscored:score', 'disabled']]);
 });
 
 test('with a port, only that output\'s items: a branch, or the one output of any other node', () => {
   assert.deepEqual(describe(outputMenuItems(state, 'split', { port: 'needs_name_rewrite' })), [
-    ['run-prompt-on-output', "Run a prompt on 'needs_name_rewrite'", 'process:split:needs_name_rewrite'],
-    ['process-output', "Process 'needs_name_rewrite' with code", 'process:split:needs_name_rewrite'],
+    ['run-prompt-on-output', "Create Run from 'needs_name_rewrite'", 'process:split:needs_name_rewrite'],
+    ['process-output', "Create Process from 'needs_name_rewrite'", 'process:split:needs_name_rewrite'],
   ]);
   assert.deepEqual(outputMenuItems(state, 'split', { port: 'gone' }), []);
   assert.equal(outputMenuItems(state, 'raw', { port: 'result' }).length, 3);
