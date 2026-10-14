@@ -6534,8 +6534,9 @@ body.wd-row-resizing {
 }
 
 .dataset-batch-panel__header { border-bottom: 1px solid var(--border); }
-.dataset-batch-panel__header strong { font-size: 14px; font-weight: 600; }
-.dataset-batch-panel__target { display: block; margin-top: 3px; font-size: 12px; color: var(--text-muted); }
+.dataset-batch-panel__heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.dataset-batch-panel__heading strong { flex: 0 0 auto; font-size: 14px; font-weight: 600; }
+.dataset-batch-panel__target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-muted); }
 .dataset-batch-panel__close,
 .dataset-batch-card__remove {
   border: 0;
@@ -6544,7 +6545,7 @@ body.wd-row-resizing {
   cursor: pointer;
   font: inherit;
 }
-.dataset-batch-panel__close { font-size: 20px; line-height: 1; }
+.dataset-batch-panel__close { flex: 0 0 auto; font-size: 20px; line-height: 1; }
 .dataset-batch-panel__body { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
 .dataset-batch-panel__mode-switch { margin-bottom: 12px; }
 .dataset-batch-panel__source-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; color: var(--text-muted); font-size: 12px; }
@@ -7059,18 +7060,7 @@ body.wd-row-resizing {
   color: var(--text-muted);
 }
 
-.prompt-output-return-shape-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-}
-
-.prompt-output-return-shape-option input {
-  margin: 0;
-}
+.prompt-output-row-switch { flex: 0 1 auto; }
 
 .prompt-output-format-wrap {
   flex: 1;
@@ -9134,4 +9124,96 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
 
 .settings-agent-model-status__check {
   flex-shrink: 0;
+}
+
+/* Prompt detail editors stay inside the detail window, beside the relevant preview. */
+.modal-panel--prompt-detail[data-prompt-side-kind="sections"] .prompt-detail-side.prompt-preview-wrap,
+.modal-panel--prompt-detail[data-prompt-side-kind="schema"] .prompt-detail-main {
+  display: none;
+}
+.modal-panel--prompt-detail[data-prompt-side-kind="sections"] .prompt-detail-main,
+.modal-panel--prompt-detail[data-prompt-side-kind="schema"] .prompt-detail-side.prompt-preview-wrap {
+  flex: 1 1 0;
+}
+.modal-panel--prompt-detail[data-prompt-side-kind] .modal-pane-toggle { display: none; }
+.prompt-detail-editor-panel {
+  flex: 0 0 min(43%, 500px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--bg-bar);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+.prompt-detail-editor-panel__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.prompt-detail-editor-panel__header strong { font-size: 14px; font-weight: 600; }
+.prompt-detail-editor-panel__overview,
+.prompt-detail-editor-panel__child-host {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.prompt-detail-editor-panel__overview { gap: 10px; padding: 14px; }
+.prompt-detail-editor-panel__overview[hidden],
+.prompt-detail-editor-panel__child-host[hidden] { display: none; }
+.prompt-detail-editor-panel__overview > .prompt-hint { margin: 0; }
+.prompt-detail-editor-panel__scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+.prompt-detail-editor-panel .prompt-sections--edit,
+.prompt-detail-editor-panel .prompt-output-keys-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.prompt-detail-editor-panel .prompt-output-keys-list { flex: 0 0 auto; overflow: visible; }
+.prompt-detail-editor-panel .prompt-add-section-wrap,
+.prompt-detail-editor-panel .prompt-add-field-wrap { flex: 0 0 auto; }
+.prompt-detail-side-child-editor {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.prompt-detail-side-child-editor .modal-panel--section-editor,
+.prompt-detail-side-child-editor .modal-panel--field-editor {
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.prompt-detail-side-child-editor .modal-header { padding: 12px 14px; cursor: default; }
+.prompt-detail-side-child-editor .modal-title { font-size: 14px; }
+.prompt-detail-side-child-editor .modal-panel--section-editor .modal-body { padding: 14px; }
+
+@media (max-width: 900px) {
+  .prompt-detail-editor-panel { flex-basis: 48%; }
+}
+@media (max-width: 700px) {
+  .modal-panel--prompt-detail[data-prompt-side-kind] .prompt-detail-main,
+  .modal-panel--prompt-detail[data-prompt-side-kind] .prompt-detail-side.prompt-preview-wrap { display: none; }
+  .prompt-detail-editor-panel { flex: 1 1 0; }
 }

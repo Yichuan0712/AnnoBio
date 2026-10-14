@@ -31,15 +31,15 @@ function renderFieldEditorListRow(typeVal, elements, exIdx) {
   return `<div class="field-editor-list-example-block" data-ex-index="${exIdx}"><div class="field-editor-element-rows">${rowsHtml}</div><div class="field-editor-list-example-actions"><button type="button" class="btn btn-secondary field-editor-add-element" data-ex-index="${exIdx}">+ Add element</button><button type="button" class="btn btn-secondary field-editor-del-example" aria-label="Delete list example" data-ex-index="${exIdx}">Delete list</button></div></div>`;
 }
 
-export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes, onDone }) {
+export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes, onDone, host = null, onClose }) {
   const isEdit = fieldIndex !== null && fieldIndex >= 0;
   const field = isEdit ? fields[fieldIndex] : { key: '', type: 'str', description: '', examples: [], allowNone: false };
   const type = field.type || 'str';
   const isListType = type === 'list_str' || type === 'list_float';
   const typeOptions = outputTypes.map((t) => `<option value="${t.value}" ${t.value === type ? 'selected' : ''}>${escapeHtml(t.label)}</option>`).join('');
   const editorOverlay = document.createElement('div');
-  editorOverlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--field-editor';
-  editorOverlay.setAttribute('aria-modal', 'true');
+  editorOverlay.className = host ? 'prompt-detail-side-child-editor' : 'modal-overlay modal-overlay--section-editor modal-overlay--field-editor';
+  if (!host) editorOverlay.setAttribute('aria-modal', 'true');
   editorOverlay.innerHTML = `
     <div class="modal-panel modal-panel--section-editor modal-panel--field-editor">
       <div class="modal-header">
@@ -96,6 +96,7 @@ export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes, 
 
   function close() {
     editorOverlay.remove();
+    onClose?.();
   }
 
   function showError(msg) {
@@ -329,18 +330,20 @@ export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes, 
   editorOverlay.querySelector('.modal-close')?.addEventListener('click', close);
   editorOverlay.querySelector('.section-editor-save')?.addEventListener('click', save);
 
-  document.body.appendChild(editorOverlay);
+  (host || document.body).appendChild(editorOverlay);
   keyInput?.focus();
 }
 
-export function renderPromptFieldCards({ fields, container, outputTypes, onChange }) {
+export function renderPromptFieldCards({ fields, container, outputTypes, onChange, onEdit }) {
   if (!container) return;
   container.innerHTML = '';
   fields.forEach((field, index) => {
     const card = document.createElement('div');
     card.className = 'prompt-output-field-card';
     const displayName = (field.key || '').trim() || 'Unnamed field';
-    const openEditor = () => openPromptFieldEditor({ fields, fieldIndex: index, outputTypes, onDone: onChange });
+    const openEditor = () => onEdit
+      ? onEdit(index)
+      : openPromptFieldEditor({ fields, fieldIndex: index, outputTypes, onDone: onChange });
     card.innerHTML = `
       <div class="prompt-output-field-card-inner" tabindex="0" role="button">
         <span class="prompt-output-field-card-name">${escapeHtml(displayName)}</span>

@@ -35,6 +35,37 @@ test('nothing is locked before a result exists', () => {
   assert.equal(contentLocks([], canvas()).size, 0);
 });
 
+test('a real Sample output locks its source Dataset for every sampling method', () => {
+  for (const samplingType of ['without-replacement', 'with-replacement', 'specify-rows']) {
+    const state = {
+      nodes: [
+        { type: 'dataset', nodeId: 'source' },
+        { type: 'sampler', nodeId: 'sample', sourceNodeId: 'source', samplingType },
+        { type: 'dataset', nodeId: 'output', samplerNodeId: 'sample' },
+        { type: 'dataset', nodeId: 'version', samplerNodeId: 'sample' },
+      ],
+      connections: [{ type: 'dataset-to-sampler', fromId: 'source', toId: 'sample' }],
+    };
+    assert.equal(contentLocks([], state).has('source'), false);
+    state.connections.push({ type: 'sampler-to-dataset', fromId: 'sample', toId: 'output' });
+    assert.deepEqual(contentLocks([], state).get('source'), ['sample']);
+    assert.equal(contentLocks([], state).has('output'), false);
+    state.nodes = state.nodes.filter((node) => node.nodeId !== 'output');
+    assert.equal(contentLocks([], state).has('source'), false);
+  }
+});
+
+test('the Agent cannot edit the source Dataset after adding a Sample in the same proposal', () => {
+  const state = upgradeCanvasState({
+    nodes: [{ type: 'dataset', nodeId: 'source', name: 'Source',
+      datasetContent: { headers: ['value'], columnTypes: ['text'], rows: [['a'], ['b']] } }],
+    connections: [],
+  });
+  const sample = { op: 'add_sampler', source: 'source', sampling: 'random', size_unit: 'rows', size: 1 };
+  const edit = { op: 'update', node: 'source', set: { rows: [['changed'], ['b']] } };
+  assert.throws(() => planChangeSet(state, [sample, edit], { extractInputFields: () => [] }), /content is locked/);
+});
+
 test('a ground truth is locked while its Score shows a result, or once it was saved with a Score or Review', () => {
   assert.equal(contentLocks([], canvas()).has('gt'), false);
   assert.deepEqual(contentLocks([], canvas({ runRecordId: 'r1' })).get('gt'), ['score']);
