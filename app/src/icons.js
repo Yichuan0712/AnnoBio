@@ -122,18 +122,11 @@ export const iconTrash = (size) => svgIcon({
   lines: [[10, 11, 10, 17], [14, 11, 14, 17]],
 });
 
-/** Lucide "image-plus" — shared by "batch import" and "import (one) image": an image frame with a
- * plus badge reads as "add an image" even alone, unlike a generic upload arrow (could be any file)
- * or a bare "+" (could be "add" anything — a row, a column). */
-export const iconImageAdd = (size) => svgIcon({
+/** Lucide "square-plus" — add one asset to an image or PDF cell. */
+export const iconSquarePlus = (size) => svgIcon({
   size,
-  paths: [
-    'M16 5h6',
-    'M19 2v6',
-    'M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5',
-    'm21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21',
-  ],
-  circles: [[9, 9, 2]],
+  rects: [[3, 3, 18, 18, 2]],
+  paths: ['M8 12h8', 'M12 8v8'],
 });
 
 /** Lucide "file-text" — used for a PDF chip that already has a file (mirrors the image thumbnail:
@@ -166,16 +159,12 @@ export const iconHistory = (size) => svgIcon({
   polylines: ['3 3 3 8 8 8'],
 });
 
-/** Lucide "file-plus" — shared by "batch import PDFs" and "import (one) PDF": the PDF equivalent
- * of iconImageAdd, a plus badge to read as "add" rather than just "here's a file". */
-export const iconFileAdd = (size) => svgIcon({
+/** Lucide "copy-plus" — batch import into an image or PDF column. */
+export const iconCopyPlus = (size) => svgIcon({
   size,
-  paths: [
-    'M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z',
-    'M14 2v5a1 1 0 0 0 1 1h5',
-    'M9 15h6',
-    'M12 18v-6',
-  ],
+  paths: ['M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'],
+  lines: [[15, 12, 15, 18], [12, 15, 18, 15]],
+  rects: [[8, 8, 14, 14, 2]],
 });
 
 /**
