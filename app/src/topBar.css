@@ -15,6 +15,11 @@
   -webkit-app-region: drag;
 }
 
+/* Room for the macOS traffic lights, which sit on top of this bar. */
+.top-bar--mac {
+  padding-left: 78px;
+}
+
 /* Desktop app icon left of File, like VS Code's title bar. Still part of the drag region. */
 .top-bar-app-icon {
   width: 18px;
