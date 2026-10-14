@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage, shell, Menu } from 'electron';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -8,6 +8,34 @@ import { clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_PORT } from './backendConfig.js';
 import { ProjectAssets, YC_EXTENSION, isBundledProjectFile } from './projectAssets.js';
 import { createBackendLog } from './backendLog.js';
+
+// Copy, paste, and quit stay on this menu so their shortcuts work. macOS
+// titles the menu from Electron.app until forge's preStart renames that
+// bundle to AnnoBio; a packaged app gets the name from electron-builder.
+if (process.platform === 'darwin') {
+  app.setName('AnnoBio');
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: 'AnnoBio',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+  ]));
+}
+
 const assetToken = crypto.randomBytes(32).toString('hex');
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -379,13 +407,18 @@ const createWindow = () => {
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
   const width = Math.max(640, Math.min(1920, Math.round(screenWidth * 0.85)));
   const height = Math.max(480, Math.min(1080, Math.round(screenHeight * 0.88)));
+  const macOS = process.platform === 'darwin';
   const mainWindow = new BrowserWindow({
     width,
     height,
     minWidth: 640,
     minHeight: 480,
     icon: path.join(app.getAppPath(), 'assets', 'icon.png'),
-    frame: false,
+    // Windows keeps a frameless window and draws its own caption buttons.
+    // macOS uses the system traffic lights, inset into the custom top bar.
+    ...(macOS
+      ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 12, y: 9 } }
+      : { frame: false }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },

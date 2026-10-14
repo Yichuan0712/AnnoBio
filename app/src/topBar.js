@@ -28,8 +28,9 @@ export function buildTopBar(root, options) {
 // icon left of File added, nothing else). Do not fold this into buildWebTopBar or add electronAPI branches to it.
 // ============================================================================================
 function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunNode, addProcessNode, onNewProject, onOpenProject, onSaveAsProject, onMergeProject, onUndo, onRedo, panelToggles }) {
+  const macOS = window.electronAPI.platform === 'darwin';
   const bar = document.createElement('nav');
-  bar.className = 'top-bar';
+  bar.className = macOS ? 'top-bar top-bar--mac' : 'top-bar';
 
   const projectTitleEl = document.createElement('div');
   projectTitleEl.className = 'top-bar-project-title';
@@ -162,53 +163,56 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, add
   bar.appendChild(spacer);
   if (panelToggles) bar.appendChild(panelToggles);
 
-  const windowControls = document.createElement('div');
-  windowControls.className = 'top-bar-window-controls';
+  // macOS uses the system traffic lights. Windows keeps the caption buttons.
+  if (!macOS) {
+    const windowControls = document.createElement('div');
+    windowControls.className = 'top-bar-window-controls';
 
-  const minimizeBtn = document.createElement('button');
-  minimizeBtn.className = 'top-bar-window-btn';
-  minimizeBtn.type = 'button';
-  minimizeBtn.setAttribute('aria-label', 'Minimize window');
-  minimizeBtn.title = 'Minimize';
-  minimizeBtn.appendChild(iconMinimize());
-  minimizeBtn.addEventListener('click', () => {
-    window.electronAPI?.minimizeWindow?.();
-  });
+    const minimizeBtn = document.createElement('button');
+    minimizeBtn.className = 'top-bar-window-btn';
+    minimizeBtn.type = 'button';
+    minimizeBtn.setAttribute('aria-label', 'Minimize window');
+    minimizeBtn.title = 'Minimize';
+    minimizeBtn.appendChild(iconMinimize());
+    minimizeBtn.addEventListener('click', () => {
+      window.electronAPI?.minimizeWindow?.();
+    });
 
-  const maximizeBtn = document.createElement('button');
-  maximizeBtn.className = 'top-bar-window-btn';
-  maximizeBtn.type = 'button';
+    const maximizeBtn = document.createElement('button');
+    maximizeBtn.className = 'top-bar-window-btn';
+    maximizeBtn.type = 'button';
 
-  function applyMaximizedState(isMaximized) {
-    maximizeBtn.dataset.maximized = isMaximized ? 'true' : 'false';
-    maximizeBtn.setAttribute('aria-label', isMaximized ? 'Restore window' : 'Maximize window');
-    maximizeBtn.title = isMaximized ? 'Restore' : 'Maximize';
-    maximizeBtn.innerHTML = '';
-    maximizeBtn.appendChild(isMaximized ? iconRestore() : iconMaximize());
+    function applyMaximizedState(isMaximized) {
+      maximizeBtn.dataset.maximized = isMaximized ? 'true' : 'false';
+      maximizeBtn.setAttribute('aria-label', isMaximized ? 'Restore window' : 'Maximize window');
+      maximizeBtn.title = isMaximized ? 'Restore' : 'Maximize';
+      maximizeBtn.innerHTML = '';
+      maximizeBtn.appendChild(isMaximized ? iconRestore() : iconMaximize());
+    }
+
+    applyMaximizedState(false);
+    maximizeBtn.addEventListener('click', async () => {
+      const next = await window.electronAPI?.toggleMaximizeWindow?.();
+      applyMaximizedState(!!next);
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'top-bar-window-btn top-bar-window-btn--close';
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', 'Close window');
+    closeBtn.title = 'Close';
+    closeBtn.appendChild(iconClose());
+    closeBtn.addEventListener('click', () => {
+      window.electronAPI?.closeWindow?.();
+    });
+
+    windowControls.appendChild(minimizeBtn);
+    windowControls.appendChild(maximizeBtn);
+    windowControls.appendChild(closeBtn);
+    bar.appendChild(windowControls);
+    window.electronAPI.isWindowMaximized?.().then(applyMaximizedState).catch(() => {});
+    window.electronAPI.onWindowMaximizedChanged?.(applyMaximizedState);
   }
-
-  applyMaximizedState(false);
-  maximizeBtn.addEventListener('click', async () => {
-    const next = await window.electronAPI?.toggleMaximizeWindow?.();
-    applyMaximizedState(!!next);
-  });
-
-  const closeBtn = document.createElement('button');
-  closeBtn.className = 'top-bar-window-btn top-bar-window-btn--close';
-  closeBtn.type = 'button';
-  closeBtn.setAttribute('aria-label', 'Close window');
-  closeBtn.title = 'Close';
-  closeBtn.appendChild(iconClose());
-  closeBtn.addEventListener('click', () => {
-    window.electronAPI?.closeWindow?.();
-  });
-
-  windowControls.appendChild(minimizeBtn);
-  windowControls.appendChild(maximizeBtn);
-  windowControls.appendChild(closeBtn);
-  bar.appendChild(windowControls);
-  window.electronAPI.isWindowMaximized?.().then(applyMaximizedState).catch(() => {});
-  window.electronAPI.onWindowMaximizedChanged?.(applyMaximizedState);
 
   root.insertBefore(bar, root.firstChild);
 
