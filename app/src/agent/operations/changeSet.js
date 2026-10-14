@@ -481,6 +481,8 @@ export function planChangeSet(state, operations, ctx) {
     if (!Number.isFinite(size) || size < 1 || (unit === 'percent' && size > 100)) fail('size must be a positive number (at most 100 for percent).');
     const count = Math.min(rows.length, unit === 'rows' ? size : Math.floor((rows.length * size) / 100));
     const withReplacement = mode === 'random_with_replacement';
+    if (count < 1) fail('Sample size selects no rows from this Dataset.');
+    if (!withReplacement && unit === 'rows' && size > rows.length) fail('Sample size exceeds the source Dataset when sampling without replacement.');
     let picked;
     if (withReplacement) {
       picked = Array.from({ length: count }, () => Math.floor(Math.random() * rows.length)).sort((a, b) => a - b);
@@ -499,6 +501,7 @@ export function planChangeSet(state, operations, ctx) {
         sampleSize: size,
       },
       rows: picked.map((i) => rows[i]),
+      indices: picked,
       label: `${count} random rows${withReplacement ? ' (with replacement)' : ''}`,
     };
   }
@@ -580,6 +583,8 @@ export function planChangeSet(state, operations, ctx) {
         name: datasetName,
         note: '',
         samplerNodeId: sampler.nodeId,
+        ...(sample.sampler.samplingType === 'without-replacement'
+          ? { sampledSourceRowIds: sample.indices.map((i) => content.rowIds[i]) } : {}),
         datasetContent: normalizeDatasetContent({
           headers: content.headers,
           columnTypes: content.columnTypes,

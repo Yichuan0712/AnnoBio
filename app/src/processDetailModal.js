@@ -109,14 +109,14 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
           <p class="run-detail-main-label">Code setup</p>
           <p class="run-detail-waiting-banner" role="status" hidden></p>
           <div class="dataset-meta-wrap process-input-wrap">
-            <div class="dataset-meta-field">
-              <span class="dataset-meta-label">Input</span>
-              <div class="process-input-list" id="process-input-list"></div>
+            <div class="modal-input-group">
+              <div class="process-input-list modal-input-list" id="process-input-list"></div>
             </div>
           </div>
           <div class="process-editor-mid">
+            <span class="dataset-meta-label">Python processing code</span>
             <div class="process-editor-host"></div>
-          <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the first input; each other input is the parameter named as shown beside it. Connect inputs on the canvas: drag an output onto a port of this node, or onto <code>+</code> to add one. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
+            <p class="process-editor-hint">Runs once with the Python interpreter set in Settings &rarr; Python. <code>df</code> is the first input; other inputs correspond to the parameters in the code. Connect inputs on the canvas: drag an output onto a port of this node, or onto <code>+</code> to add one. Return one DataFrame, or a dictionary of named DataFrames to create branches.</p>
           </div>
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
@@ -177,15 +177,15 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     historyRefreshTimer = setTimeout(() => { void refreshHistoryState(); }, 150);
   }
 
-  /** df and each parameter, with the input connected to it; a link shows that input on the canvas. */
+  /** Each data input, with a link to its source on the canvas. */
   function renderInputRows() {
     const list = overlay.querySelector('#process-input-list');
     list.replaceChildren(...getInputRows(getCode()).map((row) => {
       const item = document.createElement('div');
       item.className = 'process-input-row';
-      const alias = document.createElement('code');
-      alias.className = 'process-input-row__alias';
-      alias.textContent = row.alias;
+      const label = document.createElement('span');
+      label.className = 'dataset-meta-label';
+      label.textContent = 'Data Input';
       const source = document.createElement('div');
       source.className = 'node-source';
       renderSourceLink(source, {
@@ -196,7 +196,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
           revealNode(row.nodeId);
         },
       });
-      item.append(alias, source);
+      item.append(label, source);
       return item;
     }));
   }

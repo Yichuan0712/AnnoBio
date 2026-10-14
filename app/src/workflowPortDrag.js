@@ -9,7 +9,7 @@ import { applyPortOp, checkConnect, checkDisconnect, nodePorts } from './nodePor
 import { centerWithin } from './workflowNodePorts.js';
 
 const DOT = '.workflow-node__port';
-const SOLID_DOT = `${DOT}:not(${DOT}--lineage)`;
+const SOLID_DOT = `${DOT}:not(${DOT}--lineage):not(${DOT}--hollow)`;
 const LINEAGE_HINT = 'Hollow dots show where a node came from and what was made from it. They cannot be connected by dragging.';
 const TIP_MS = 3500;
 
@@ -51,9 +51,9 @@ function dragPath(from, to) {
  *   getState: () => object, clientToCanvas: (x: number, y: number) => { x: number, y: number },
  *   applyOps: (ops: object[]) => void, showBranchMenu: (x: number, y: number, node: HTMLElement, port: string) => void,
  *   showOutputMenu: (x: number, y: number, nodeId: string, port: string) => void,
- *   promptInputs?: (prompt: object) => string[], dragThreshold?: number }} options
+ *   promptInputs?: (prompt: object) => string[], onLayoutChange?: () => void, dragThreshold?: number }} options
  */
-export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, getState, clientToCanvas, applyOps, showBranchMenu, showOutputMenu, promptInputs, dragThreshold = 4 }) {
+export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, getState, clientToCanvas, applyOps, showBranchMenu, showOutputMenu, promptInputs, onLayoutChange, dragThreshold = 4 }) {
   let drag = null;
   let tip = null;
   let tipTimer = 0;
@@ -129,6 +129,8 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
       drag.checks.set(dot, result);
       dot.classList.add(result.ok ? 'workflow-node__port--target' : 'workflow-node__port--refused');
     }
+    canvas.classList.add('workflow-canvas--port-dragging');
+    onLayoutChange?.();
     if (mode === 'lift') {
       drag.checks.set(drag.dot, { ok: true, op: null });
       drag.dot.classList.remove('workflow-node__port--refused');
@@ -139,7 +141,6 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
       drag.liftedEdge?.classList.add('workflow-edge--lifted');
     }
     drag.dot.classList.add('workflow-node__port--origin');
-    canvas.classList.add('workflow-canvas--port-dragging');
   }
 
   function drawLine() {
@@ -192,6 +193,7 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
     drag.liftedEdge?.classList.remove('workflow-edge--lifted');
     drag.path?.parentNode?.remove();
     canvas.classList.remove('workflow-canvas--port-dragging');
+    if (drag.started) onLayoutChange?.();
     hideTip();
     drag = null;
   }

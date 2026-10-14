@@ -1,5 +1,5 @@
 /**
- * Draws a node's ports (nodePorts.js) on its edges: solid dots for what it reads and gives, hollow
+ * Draws a node's ports (nodePorts.js) on its edges: solid dots for changeable data connections, hollow
  * dots for where it came from and what was made from it (docs/design/NODE_PORTS_PLAN.md §3.2, step 2).
  * Lines are drawn to these dots by workflowCanvas.js renderEdge, which finds them by
  * `data-port-side` and `data-port-id`.
@@ -14,6 +14,7 @@ function dot(side, item, title, { lineage = false } = {}) {
   const el = document.createElement('span');
   el.className = DOT_CLASS;
   if (lineage) el.classList.add(`${DOT_CLASS}--lineage`);
+  if (item?.hollow) el.classList.add(`${DOT_CLASS}--hollow`);
   if (item?.unavailable) el.classList.add(`${DOT_CLASS}--unavailable`);
   el.dataset.portSide = side;
   if (item) {
