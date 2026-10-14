@@ -76,8 +76,8 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, add
     <button type="button" class="menu-option" data-action="undo" disabled>Undo</button>
     <button type="button" class="menu-option" data-action="redo" disabled>Redo</button>
     <div class="menu-separator"></div>
-    <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt...</button>
-    <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new dataset...</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new dataset</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-run" disabled>Create new run</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-process" disabled>Create new process</button>
   `;

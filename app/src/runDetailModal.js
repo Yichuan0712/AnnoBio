@@ -166,11 +166,11 @@ export function openRunDetailModal({
             <div class="modal-input-group">
               <div class="modal-input-list">
                 <div class="modal-input-row">
-                  <span class="dataset-meta-label">Prompt Input</span>
+                  <span class="dataset-meta-label">Prompt input</span>
                   <div class="node-source" id="run-detail-prompt-source"></div>
                 </div>
                 <div class="modal-input-row">
-                  <span class="dataset-meta-label">Data Input</span>
+                  <span class="dataset-meta-label">Data input</span>
                   <div class="node-source" id="run-detail-input-source"></div>
                 </div>
               </div>

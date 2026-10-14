@@ -295,7 +295,6 @@ export function createWorkflowNodeFactories(deps = {}) {
           }
           updateContentSize();
           emitCanvasChanged();
-          runNode?.click();
         },
       });
     });

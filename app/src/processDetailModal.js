@@ -185,7 +185,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       item.className = 'process-input-row';
       const label = document.createElement('span');
       label.className = 'dataset-meta-label';
-      label.textContent = 'Data Input';
+      label.textContent = 'Data input';
       const source = document.createElement('div');
       source.className = 'node-source';
       renderSourceLink(source, {
