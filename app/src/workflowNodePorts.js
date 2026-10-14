@@ -16,6 +16,7 @@ function dot(side, item, title, { lineage = false } = {}) {
   if (lineage) el.classList.add(`${DOT_CLASS}--lineage`);
   if (item?.hollow) el.classList.add(`${DOT_CLASS}--hollow`);
   if (item?.unavailable) el.classList.add(`${DOT_CLASS}--unavailable`);
+  if (item?.fixed) el.classList.add(`${DOT_CLASS}--fixed`);
   el.dataset.portSide = side;
   if (item) {
     el.dataset.portId = item.id;

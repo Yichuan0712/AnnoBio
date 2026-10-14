@@ -563,6 +563,7 @@
   border: 1.5px solid var(--bg-bar);
   background: var(--text-muted);
   z-index: 1;
+  cursor: default;
 }
 
 .workflow-node__port[data-port-side="left"] {
@@ -592,13 +593,17 @@
   border-radius: 50%;
 }
 
-.workflow-node__port:not(.workflow-node__port--lineage):not(.workflow-node__port--hollow) {
-  cursor: crosshair;
+.workflow-node__port:not(.workflow-node__port--lineage, .workflow-node__port--hollow, .workflow-node__port--unavailable, .workflow-node__port--fixed) {
+  cursor: grab;
+}
+
+.workflow-canvas:not(.workflow-canvas--port-dragging) .workflow-node__port:not(.workflow-node__port--lineage, .workflow-node__port--hollow, .workflow-node__port--unavailable, .workflow-node__port--fixed):hover {
+  transform: scale(1.2);
 }
 
 .workflow-canvas--port-dragging,
 .workflow-canvas--port-dragging * {
-  cursor: crosshair !important;
+  cursor: grabbing !important;
 }
 
 .workflow-canvas--port-dragging .workflow-node__port--refused {
