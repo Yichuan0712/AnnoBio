@@ -116,7 +116,7 @@ function previewRun(job, ctx) {
   if (!pendingRows.length) fail(`Run "${nodeTitle(run)}" has already processed all ${input.rows.length} input rows.`);
 
   const mapping = JSON.parse(run.runInputToColumn || '{}');
-  const templateChars = (prompt.sections || []).map((s) => s.content || '').join('\n\n').length;
+  const templateChars = String(prompt.text || '').trim().length;
   let inputChars = 0;
   let fileCells = 0;
   for (const { row } of pendingRows) {
@@ -389,7 +389,7 @@ async function executeReview(item, env, { signal, onStatus, job }) {
     reviewNodeId: reviewId,
     lines: [
       `${item.title}: ${outcome === 'stopped' ? 'stopped by the user' : 'finished'}; Optimize node "${inspection?.title}" [${reviewId}] has ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}`,
-      ...suggestions.slice(0, 8).map((s) => `  ${s.id}. ${s.name || s.targetSection}: ${s.reason.slice(0, 160)}`),
+      ...suggestions.slice(0, 8).map((s) => `  ${s.id}. ${s.name || 'Prompt edit'}: ${s.reason.slice(0, 160)}`),
     ],
   };
 }

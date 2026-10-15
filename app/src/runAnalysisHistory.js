@@ -64,7 +64,6 @@ export async function analysisInputKeys(state, currentRecordIds) {
       reviewMethod: String(scoreNode.reviewMethod || ''),
       reviewCredentialId: String(scoreNode.reviewCredentialId || ''),
       reviewSettings: scoreNode.reviewSettings || {},
-      gepaTargetSectionIndex: scoreNode.gepaTargetSectionIndex ?? null,
     };
     return { signature: await sha256Signature({ kind: 'review', ...inputs }), inputs };
   }

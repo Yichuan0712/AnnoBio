@@ -121,7 +121,7 @@ function datasetLine(node, lookup) {
 function promptLine(node, lookup, versionsById, extractInputFields) {
   const inputTypes = node.inputTypes && typeof node.inputTypes === 'object' ? node.inputTypes : {};
   const inputs = typeof extractInputFields === 'function'
-    ? extractInputFields(node.sections || []).map((name) => (inputTypes[name] && inputTypes[name] !== 'text' ? `${name} (${inputTypes[name]})` : name))
+    ? extractInputFields(node.text || '').map((name) => (inputTypes[name] && inputTypes[name] !== 'text' ? `${name} (${inputTypes[name]})` : name))
     : [];
   const fields = (node.outputFormat?.fields || []).map((f) => f.key).filter(Boolean);
   const shape = node.outputFormat?.returnShape === 'table' ? 'table' : 'single';

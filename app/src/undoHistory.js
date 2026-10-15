@@ -10,7 +10,7 @@
  * Run/Review/Score-match jobs stream partial results into existing nodes via repeated
  * `workflow:canvas-changed` events while they're in flight; those aren't something the user
  * authored and the backend job can't be un-run, so they shouldn't spam the undo stack. A snapshot
- * is only pushed when the fields a user actually edits (name/note/sections/mapping/position/...)
+ * is only pushed when the fields a user actually edits (name/note/text/mapping/position/...)
  * differ from the last pushed snapshot — see VOLATILE_FIELDS_BY_TYPE.
  *
  * For the same reason undo/redo never roll those fields back: snapshots store only what the user

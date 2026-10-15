@@ -37,7 +37,7 @@ export async function runInputSignature({ promptNodeId, prompt, datasetNodeId, d
   return sha256Signature({
     kind: 'run', promptNodeId, datasetNodeId, datasetSignature: dataSignature,
     prompt: {
-      sections: prompt?.sections || [],
+      text: String(prompt?.text || ''),
       outputFormat: prompt?.outputFormat || [],
       returnShape: prompt?.returnShape || 'single',
       inputTypes: prompt?.inputTypes || {},

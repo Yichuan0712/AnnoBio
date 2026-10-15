@@ -108,7 +108,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
         const dataset = record.inputs.dataset;
         if (!prompt?.nodeId || !dataset?.nodeId) throw new Error(`Run history inputs are incomplete: ${id}`);
         demand(prompt.nodeId, 'prompt', {
-          sections: prompt.sections || [], outputFormat: prompt.outputFormat || { returnShape: 'single', fields: [] },
+          text: String(prompt.text || ''), outputFormat: prompt.outputFormat || { returnShape: 'single', fields: [] },
           inputTypes: prompt.inputTypes || {},
         });
         const input = await visitInput(dataset);

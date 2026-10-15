@@ -41,7 +41,7 @@ def _canvas_state() -> dict:
                 "type": "prompt",
                 "nodeId": "prompt-original",
                 "name": "Original prompt",
-                "sections": [{"name": "Task", "content": "Original content {text}"}],
+                "text": "Original content {text}",
                 "inputTypes": {"text": "text"},
                 "outputFormat": {
                     "returnShape": "single",
@@ -52,7 +52,7 @@ def _canvas_state() -> dict:
                 "type": "prompt",
                 "nodeId": "prompt-duplicate",
                 "name": "Edited duplicate",
-                "sections": [{"name": "Task", "content": "Edited duplicate content {text}"}],
+                "text": "Edited duplicate content {text}",
                 "inputTypes": {"text": "text"},
                 "outputFormat": {
                     "returnShape": "single",
@@ -260,7 +260,7 @@ else:
         state = _canvas_state()
         route = _run_reads_raw(state)
         prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")
-        prompt["sections"] = [{"name": "Task", "content": "Answer {question}"}]
+        prompt["text"] = "Answer {question}"
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
         run["runInputToColumn"] = "{}"
         with self.assertRaisesRegex(PipelineExportError, 'Open "Run A1" and map each input'):
@@ -272,7 +272,7 @@ else:
         dataset = next(node for node in state["nodes"] if node.get("nodeId") == "dataset-raw")
         dataset["datasetContent"] = {"headers": ["Question", "question"], "columnTypes": ["text", "text"], "rows": [["first", "second"]]}
         prompt = next(node for node in state["nodes"] if node.get("nodeId") == "prompt-duplicate")
-        prompt["sections"] = [{"name": "Task", "content": "Answer {QUESTION}"}]
+        prompt["text"] = "Answer {QUESTION}"
         run = next(node for node in state["nodes"] if node.get("nodeId") == "run-duplicate")
         run["runInputToColumn"] = "{}"
         with self.assertRaisesRegex(PipelineExportError, 'Open "Run A1" and map each input'):
@@ -317,7 +317,7 @@ else:
                     engine.complete.return_value = {"answer": "ok"}
                     args = dict(
                         engine=engine, prompt_name=prompt["name"],
-                        sections=[{"content": "Answer {text}"}], input_mapping=prompt["input_mapping"],
+                        prompt="Answer {text}", input_mapping=prompt["input_mapping"],
                         input_types=prompt["input_types"], output_schema=prompt["output_schema"],
                         model_config={}, input_root=Path.cwd(), concurrency=1,
                     )
@@ -371,7 +371,7 @@ else:
                 {"type": "dataset", "nodeId": "raw", "name": "Raw", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "process", "nodeId": "split", "name": "Split", "dfCode": "def process(df):\n    return {'left': df, 'right': df}\n"},
                 {"type": "process", "nodeId": "combine", "name": "Combine", "dfCode": "def process(df):\n    return df\n"},
-                {"type": "prompt", "nodeId": "prompt", "name": "Answer", "sections": [{"name": "Task", "content": "Answer {text}"}], "inputTypes": {"text": "text"}, "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}},
+                {"type": "prompt", "nodeId": "prompt", "name": "Answer", "text": "Answer {text}", "inputTypes": {"text": "text"}, "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}},
                 {"type": "run", "nodeId": "run", "runName": "Answer run", "runInputToColumn": json.dumps({"text": "text"})},
             ],
             "connections": [

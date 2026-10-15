@@ -26,12 +26,9 @@ are both `textgrad`'s own code (`textgrad.autograd`, `textgrad.optimizer`). What
 callable is this app's own matching engine (score_match_primitives.py / score_run_gt_pairing.py), not an
 LLM's subjective judgment — matching the choice already made for GEPA/MIPROv2/BootstrapFewShot's metrics.
 
-Architecture note — same "in isolation" scope as review_miprov2.py/review_bootstrap_fewshot.py, chosen for
-consistency across every method built on that decision, not because TextGrad's API forces it (unlike
-DSPy's rigid Signature model, a bare `Variable` is just a string, so this method *could* see the whole
-assembled prompt like GEPA does): the target section's raw text becomes the optimized `Variable`, its own
-`{placeholder}` keys are rendered as a plain "key: value" block in the (non-optimized) question `Variable`
-per example, and other prompt sections are not shown to TextGrad during optimization.
+Architecture note — same prompt mapping as review_miprov2.py/review_bootstrap_fewshot.py: the prompt's
+raw text becomes the optimized `Variable`, and its `{placeholder}` keys are rendered as a plain
+"key: value" block in the (non-optimized) question `Variable` per example.
 
 Cost note: `textgrad_num_steps` (its own setting, default 6) is the cost dial. TextGrad is more expensive
 per round than the DSPy-based methods — each step does a forward pass, a real LLM-driven backward pass,
@@ -61,7 +58,7 @@ from llm import _extract_json_from_text
 from llm import chat as llm_chat
 from review_dspy_shared import build_gt_column_by_field, extract_placeholder_keys
 from review_gepa import _build_training_examples, _make_rule_matches_row, _resolve_gt_value
-from review_pipeline import PromptEditSuggestion, _sanitize_prompt_edits, _sec_name_content
+from review_pipeline import PromptEditSuggestion, _sanitize_prompt_edits
 from score_mapping_bundle import parse_score_mapping_bundle
 from score_match_primitives import build_concept_id_map, build_embedding_cosine_map_via_local_model, get_match_flags, medical_concept_source
 from score_run_gt_pairing import evaluate_score_tree, flatten_score_rules
@@ -124,17 +121,14 @@ def run_textgrad(
 ) -> None:
     """Drive TextGrad. Emits: plan, stage(prepare|optimize(iteration)|select), suggestions (at most one),
     done."""
-    sections = list(getattr(body, "prompt_sections", None) or [])
+    prompt = str(getattr(body, "prompt", "") or "")
+    seed_text = prompt.strip()
     comparison_rows = list(getattr(body, "comparison_rows", None) or [])
 
-    if not sections:
-        append_event({"type": "plan", "summary": "No prompt sections to optimize.", "diagnosis_total": 0})
+    if not seed_text:
+        append_event({"type": "plan", "summary": "The prompt is empty; nothing to optimize.", "diagnosis_total": 0})
         append_event({"type": "done"})
         return
-
-    target_idx = getattr(body, "target_section_index", None)
-    target_idx = target_idx if isinstance(target_idx, int) and 0 <= target_idx < len(sections) else 0
-    section_name, seed_text = _sec_name_content(sections[target_idx])
 
     output_schema = getattr(body, "output_schema", None) or {}
     if not output_schema.get("fields"):
@@ -182,11 +176,11 @@ def run_textgrad(
     append_event({
         "type": "plan",
         "summary": (
-            f"TextGrad: optimizing section \"{section_name}\" in isolation "
-            f"({len(input_keys)} placeholder field(s) it sees) against {len(examples)} example(s) via the "
+            f"TextGrad: optimizing the prompt "
+            f"({len(input_keys)} placeholder field(s)) against {len(examples)} example(s) via the "
             f"official textgrad package's textual gradient descent, {num_steps} step(s). Each step runs the "
             "task model, computes an LLM-generated textual gradient, then an LLM call to rewrite the "
-            "section — cost scales with steps x examples x ~3."
+            "prompt — cost scales with steps x examples x ~3."
         ),
         "diagnosis_total": 0,
     })
@@ -196,7 +190,7 @@ def run_textgrad(
     append_event({"type": "stage", "stage_id": "prepare", "kind": "start", "payload": {"num_examples": len(examples), "input_fields": input_keys}})
 
     engine = _AppTextGradEngine(provider=provider, model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens)
-    system_prompt_var = tg.Variable(seed_text, requires_grad=True, role_description=f'Instructions for the "{section_name}" part of a prompt template')
+    system_prompt_var = tg.Variable(seed_text, requires_grad=True, role_description="A prompt template; each {placeholder} names an input whose value is given separately")
     task_model = tg.BlackboxLLM(engine, system_prompt=system_prompt_var)
     optimizer = tg.TGD(parameters=[system_prompt_var], engine=engine)
 
@@ -320,14 +314,14 @@ def run_textgrad(
 
     target_labels = sorted({label for ex in examples for label in ex.score_labels}) or [1]
     edit = PromptEditSuggestion(
-        name=f"TextGrad: evolved \"{section_name}\"",
-        phase1_addresses=["TextGrad applied textual gradient descent to this section"],
+        name="TextGrad: evolved prompt",
+        phase1_addresses=["TextGrad applied textual gradient descent to the prompt"],
         old_sentence=seed_text,
         new_sentence=best_text,
         reason=f"Empirically improved from {seed_score:.0%} to {best_score:.0%} on {len(examples)} example(s).",
         target_score_row_indices=target_labels,
     )
-    batch = _sanitize_prompt_edits(sections, [edit], comparison_rows)
+    batch = _sanitize_prompt_edits(prompt, [edit], comparison_rows)
     if not batch:
         append_event({"type": "stage", "stage_id": "select", "kind": "done", "payload": {"improved": True, "dropped": "old_sentence did not resolve uniquely"}})
         append_event({"type": "done"})

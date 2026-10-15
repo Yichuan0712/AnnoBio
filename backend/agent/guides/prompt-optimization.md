@@ -6,8 +6,8 @@ Prompts are improved from evidence, not by rewriting them blind:
 
 1. Run the prompt on a Dataset that has ground truth (a sampled subset is fine while iterating).
 2. Evaluate the Run.
-3. Optimize the prompt using the evaluation results. An Optimize node analyses the unmatched rows and proposes concrete edits: a target
-   section, the old sentence, the new sentence and the reason.
+3. Optimize the prompt using the evaluation results. An Optimize node analyses the unmatched rows and proposes concrete edits: the old
+   sentence, the new sentence and the reason.
 4. Verify suggestions. Verification re-runs the prompt with the edit on the rows it targets and reports
    whether they now match, including rows the source prompt already had right.
 5. Accept the suggestions that verified, and apply them. Applying creates a new prompt version linked to

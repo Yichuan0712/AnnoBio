@@ -126,7 +126,7 @@ export async function importPipelineRunHistory({ run, definition, getArtifact, s
       const { source, snapshot: dataset } = await inputSnapshot(job.inputs.data);
       const table = await getTable(job.inputs.data);
       const promptSnapshot = {
-        nodeId: promptId, name: prompt.name || '', sections: copy(prompt.sections || []),
+        nodeId: promptId, name: prompt.name || '', text: String(prompt.text || ''),
         outputFormat: copy(prompt.outputFormat || { returnShape: 'single', fields: [] }),
         inputTypes: copy(prompt.inputTypes || {}),
       };

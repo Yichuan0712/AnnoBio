@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { contentLocks, recordInputRefs } from '../src/contentLocks.js';
 import { planChangeSet } from '../src/agent/operations/changeSet.js';
 import { upgradeCanvasState } from '../src/canvasFormat.js';
+import { extractInputFields } from '../src/promptText.js';
 
 const canvas = (extra = {}) => ({
   nodes: [
@@ -87,18 +88,18 @@ test('the Agent cannot edit locked content either, but can rename it and edit Pr
   const state = upgradeCanvasState({
     nodes: [
       { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: { headers: ['text'], columnTypes: ['text'], rows: [['a']] } },
-      { type: 'prompt', nodeId: 'p', name: 'Extract', sections: [{ name: 'Task', content: 'Read {text}' }],
+      { type: 'prompt', nodeId: 'p', name: 'Extract', text: 'Read {text}',
         outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] } },
       { type: 'process', nodeId: 'proc', name: 'Clean', dfCode: 'def process(df):\n    return df', primaryDatasetId: 'raw' },
     ],
     connections: [{ fromId: 'raw', toId: 'proc', type: 'dataset-to-process' }],
   });
   const ctx = {
-    extractInputFields: (sections) => [...String(sections[0]?.content || '').matchAll(/\{([^{}]+)\}/g)].map((m) => m[1]),
+    extractInputFields,
     contentLocks: new Map([['p', ['run']], ['raw', ['run']], ['proc', ['proc']]]),
   };
   const update = (node, set) => () => planChangeSet(state, [{ op: 'update', node, set }], ctx);
-  assert.throws(update('p', { sections: [{ name: 'Task', content: 'Summarize {text}' }] }), /locked\. Use add_prompt_version/);
+  assert.throws(update('p', { text: 'Summarize {text}' }), /locked\. Use add_prompt_version/);
   assert.throws(update('raw', { rows: [['b']] }), /locked\. Add a new dataset/);
   assert.doesNotThrow(update('proc', { code: 'def process(df):\n    return df.head()' }));
   assert.doesNotThrow(update('p', { name: 'Extract (old)' }));

@@ -5,7 +5,7 @@ import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { stepOutputSignature } from '../src/runHistorySignature.js';
 
 const RAW = { headers: ['text'], rows: [['x']], columnTypes: ['text'], rowIds: ['row-1'] };
-const prompt = (nodeId, name, field) => ({ type: 'prompt', nodeId, name, sections: [{ name: 'Task', content: '{text}' }],
+const prompt = (nodeId, name, field) => ({ type: 'prompt', nodeId, name, text: '{text}',
   outputFormat: { returnShape: 'single', fields: [{ key: field, type: 'str' }] }, inputTypes: {} });
 const data = (fromId, toId, alias) => ({ type: 'data', fromId, fromPort: 'result', toId, ...(alias ? { alias } : {}) });
 

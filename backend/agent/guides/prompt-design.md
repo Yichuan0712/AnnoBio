@@ -2,9 +2,10 @@
 
 ## Structure
 
-A Prompt node has named sections (for example Role, Task, Rules, Examples, Input). Section text can
-contain `{variable}` placeholders; every distinct placeholder becomes an input the Run must map to a
-Dataset column. Text in doubled braces, such as `{{example}}`, is not treated as a variable.
+A Prompt node holds one prompt text (headings such as Role, Task, Rules, Examples and Input are just
+part of the text). The text can contain `{variable}` placeholders; every distinct placeholder becomes an
+input the Run must map to a Dataset column. Text in doubled braces, such as `{{example}}`, is not
+treated as a variable.
 
 Each input has a type: text, image or pdf. An image or pdf input sends the files in that cell to the
 model, so the Run's model must support that modality (in the OpenRouter catalog: vision for images,
@@ -27,13 +28,16 @@ as errors on that row.
 Each field also has **Allow None** (`allow_none` in proposals). It allows a null value when evidence
 is absent, while keeping the declared field type for non-null values. Numeric examples are numbers;
 examples of list fields are arrays of strings or numbers, not comma-separated text. Preserve this
-setting and the examples when copying or revising a schema. Section and field names are unique,
-ignoring case, and every section needs both a name and content.
+setting and the examples when copying or revising a schema. Field names are unique, ignoring case.
 
-The creation window expands in three steps: name and description, Prompt sections, then Output schema.
-Section/field editors open inside that window. Existing Prompt details use **Edit sections** and
-**Edit schema** beside their headings; **Output rows** uses the **One row / Multiple rows** pills.
-**Export** is the first button in the bottom-right group, before **Create Run**.
+The creation window expands in three steps: name and description, the prompt text, then Output schema.
+Field editors open inside that window. In an existing Prompt's window, clicking the prompt text edits it
+in place and changes save as you type; a prompt that already has results is locked. **Edit schema** is
+at the bottom right of the Output schema pane; **Output rows** uses the **One row / Multiple rows**
+pills. **Save as file** comes before **Create Run** at the bottom right.
+
+To change part of a prompt, use `text_edits`: each `old` must be text that appears exactly once in the
+prompt, so include enough of the surrounding words to make it unique.
 
 ## Writing guidance
 

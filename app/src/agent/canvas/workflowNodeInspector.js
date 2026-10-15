@@ -195,21 +195,21 @@ function credentialLabel(credentialId, options) {
 }
 
 function inspectPrompt(node, ctx, options) {
-  const sections = safeArray(node.sections).map((s) => ({ name: String(s?.name || ''), content: String(s?.content || '') }));
+  const text = String(node.text || '');
   const inputTypes = parseJsonObject(node.inputTypes, {});
   const inputFields = typeof options.extractInputFields === 'function'
-    ? safeArray(options.extractInputFields(sections)).map(String)
+    ? safeArray(options.extractInputFields(text)).map(String)
     : [];
   const outputFormat = node.outputFormat && typeof node.outputFormat === 'object'
     ? node.outputFormat
     : { returnShape: 'single', fields: [] };
   const diagnostics = [];
-  if (!sections.some((s) => s.content.trim())) diagnostics.push('The prompt has no content.');
+  if (!text.trim()) diagnostics.push('The prompt has no text.');
   if (!safeArray(outputFormat.fields).length) diagnostics.push('The prompt has no output fields, so it cannot be exported.');
   return {
     details: {
       note: String(node.note || ''),
-      sections,
+      text,
       inputs: inputFields.map((name) => ({ name, type: inputTypes[name] || 'text' })),
       output: {
         returnShape: outputFormat.returnShape || 'single',
@@ -340,7 +340,7 @@ function inspectRun(node, ctx, options) {
   const mapping = parseJsonObject(node.runInputToColumn, {});
   const promptNode = prompt ? ctx.nodeLookup.get(prompt.nodeId) : null;
   const promptInputs = promptNode && typeof options.extractInputFields === 'function'
-    ? safeArray(options.extractInputFields(safeArray(promptNode.sections))).map(String)
+    ? safeArray(options.extractInputFields(String(promptNode.text || ''))).map(String)
     : [];
   const inputRowCount = safeArray(input.rows).length || safeArray(stepOutputTable(ctx.canvasState, source).table?.rows).length;
   const errorCount = results.filter((r) => r?.error).length;
@@ -482,7 +482,6 @@ function summarizeSuggestion(raw, reviewResult) {
   const out = {
     id,
     name: String(raw?.name || ''),
-    targetSection: String(raw?.target_section || ''),
     oldSentence: String(raw?.old_sentence || ''),
     newSentence: String(raw?.new_sentence || ''),
     reason: String(raw?.reason || ''),

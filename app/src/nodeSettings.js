@@ -3,10 +3,10 @@
  * are no per-node settings controls. The default model (and review method) is written onto the node
  * the first time it is needed, so a Run keeps the model it started with when it resumes.
  *
- * Node fields: model → runCredentialId / reviewCredentialId, review method → reviewMethod, GEPA-style
- * target section → gepaTargetSectionIndex, number overrides → runSettings / reviewSettings (JSON,
- * keyed by the backend settings names; sent as the request's settings_overrides). Number overrides
- * are only read: projects saved while per-node settings existed may still carry them.
+ * Node fields: model → runCredentialId / reviewCredentialId, review method → reviewMethod, number
+ * overrides → runSettings / reviewSettings (JSON, keyed by the backend settings names; sent as the
+ * request's settings_overrides). Number overrides are only read: projects saved while per-node
+ * settings existed may still carry them.
  */
 
 import { BACKEND_API_BASE } from './backendConfig.js';

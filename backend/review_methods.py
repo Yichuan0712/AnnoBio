@@ -66,7 +66,7 @@ class ReviewMethodSpec:
     run: ReviewMethodRunFn
     # The suggestion-card "Click to Optimize" segment-lattice search (Thompson sampling over
     # paraphrase candidates) is tuned for a small, localized sentence-level old_sentence->new_sentence
-    # edit — the built-in method's shape. A method whose suggestion is a whole rewritten section (e.g.
+    # edit — the built-in method's shape. A method whose suggestion is a whole rewritten prompt (e.g.
     # GEPA, which already searched that space empirically against real data) should leave this False:
     # its suggestion cards show a plain "Verification not pass" instead of an actionable optimize pill.
     supports_segment_optimization: bool = False

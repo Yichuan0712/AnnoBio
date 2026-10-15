@@ -15,9 +15,8 @@ package) — the exact same two-positional-argument shape review_dspy_shared.mak
 so no adapter was needed here (unlike what might be assumed from the constructor's type hint, which is
 looser than the actual call site).
 
-Same architecture scope as review_miprov2.py: optimizes the target section IN ISOLATION (its own
-`{placeholder}` keys become dspy.InputFields; other sections aren't shown to the optimizer). See that
-module's docstring for why.
+Same prompt-to-Signature mapping as review_miprov2.py: the prompt text becomes the instructions and its
+`{placeholder}` keys become dspy.InputFields. See that module's docstring for why.
 
 Cost note: `simba_max_steps` (its own setting, default 8) is the primary cost dial. `bsize` (mini-batch
 size) is clamped to this method's own example count rather than SIMBA's own default of 32, since this
@@ -41,10 +40,10 @@ from review_dspy_shared import (
     format_demos_block,
     make_mean_score_fn,
     make_metric,
-    SectionModule,
+    PromptModule,
 )
 from review_gepa import _build_training_examples
-from review_pipeline import PromptEditSuggestion, _sanitize_prompt_edits, _sec_name_content
+from review_pipeline import PromptEditSuggestion, _sanitize_prompt_edits
 from score_mapping_bundle import parse_score_mapping_bundle
 from score_run_gt_pairing import flatten_score_rules
 from safe_stdio import safe_print as _print
@@ -66,17 +65,14 @@ def run_simba(
     settings: dict | None = None,
 ) -> None:
     """Drive SIMBA. Emits: plan, stage(prepare|compile|select), suggestions (at most one), done."""
-    sections = list(getattr(body, "prompt_sections", None) or [])
+    prompt = str(getattr(body, "prompt", "") or "")
+    seed_text = prompt.strip()
     comparison_rows = list(getattr(body, "comparison_rows", None) or [])
 
-    if not sections:
-        append_event({"type": "plan", "summary": "No prompt sections to optimize.", "diagnosis_total": 0})
+    if not seed_text:
+        append_event({"type": "plan", "summary": "The prompt is empty; nothing to optimize.", "diagnosis_total": 0})
         append_event({"type": "done"})
         return
-
-    target_idx = getattr(body, "target_section_index", None)
-    target_idx = target_idx if isinstance(target_idx, int) and 0 <= target_idx < len(sections) else 0
-    section_name, seed_text = _sec_name_content(sections[target_idx])
 
     output_schema = getattr(body, "output_schema", None) or {}
     if not output_schema.get("fields"):
@@ -129,8 +125,8 @@ def run_simba(
     append_event({
         "type": "plan",
         "summary": (
-            f"SIMBA: jointly evolving instructions and few-shot demos for section \"{section_name}\" in "
-            f"isolation ({len(input_keys)} placeholder field(s) it sees) against {len(examples)} "
+            f"SIMBA: jointly evolving the prompt's instructions and few-shot demos "
+            f"({len(input_keys)} placeholder field(s)) against {len(examples)} "
             f"example(s) via the official dspy.SIMBA, max_steps={max_steps} bsize={bsize}. Cost scales "
             "with max_steps x bsize x candidates."
         ),
@@ -145,8 +141,8 @@ def run_simba(
     dspy_examples = build_dspy_examples(examples=examples, input_keys=input_keys, output_field_keys=output_field_keys, gt_column_by_field=gt_column_by_field)
     metric = make_metric(output_root=output_root, output_leaves=output_leaves, output_field_keys=output_field_keys)
 
-    signature = build_signature(instructions=seed_text, input_keys=input_keys, output_schema=output_schema, signature_name="SimbaSection")
-    student = SectionModule(signature)
+    signature = build_signature(instructions=seed_text, input_keys=input_keys, output_schema=output_schema, signature_name="SimbaPrompt")
+    student = PromptModule(signature)
     lm = build_dspy_lm(provider=provider, model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens)
     mean_score = make_mean_score_fn(dspy_examples=dspy_examples, input_keys=input_keys, metric=metric, lm=lm, is_cancelled=is_cancelled, log_prefix="SIMBA")
 
@@ -197,14 +193,14 @@ def run_simba(
 
     target_labels = sorted({label for ex in examples for label in ex.score_labels}) or [1]
     edit = PromptEditSuggestion(
-        name=f"SIMBA: evolved \"{section_name}\"",
-        phase1_addresses=["SIMBA jointly optimized this section's instructions and few-shot demos"],
+        name="SIMBA: evolved prompt",
+        phase1_addresses=["SIMBA jointly optimized the prompt's instructions and few-shot demos"],
         old_sentence=seed_text,
         new_sentence=best_text,
         reason=f"Empirically improved from {seed_score:.0%} to {best_score:.0%} on {len(examples)} example(s).",
         target_score_row_indices=target_labels,
     )
-    batch = _sanitize_prompt_edits(sections, [edit], comparison_rows)
+    batch = _sanitize_prompt_edits(prompt, [edit], comparison_rows)
     if not batch:
         append_event({"type": "stage", "stage_id": "select", "kind": "done", "payload": {"improved": True, "dropped": "old_sentence did not resolve uniquely"}})
         append_event({"type": "done"})

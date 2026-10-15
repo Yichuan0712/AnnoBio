@@ -502,8 +502,8 @@ copy-pasting the same instructions into a chat window hundreds of times.</p>
 <p>A <strong>project</strong> is the unit everything else lives in: its own canvas, with its own prompts,
 datasets, runs, and review history. Switching projects switches the whole canvas.</p>
 <h3>Prompt</h3>
-<p>A <strong>prompt</strong> is a reusable instruction template made of one or more named <strong>sections</strong>,
-plus an <strong>output schema</strong> describing the fields you want the model to return. You write it once and
+<p>A <strong>prompt</strong> is a reusable instruction template, written as one block of text with a
+placeholder for each input, plus an <strong>output schema</strong> describing the fields you want the model to return. You write it once and
 run it against as many dataset rows as you like.</p>
 <h3>Dataset</h3>
 <p>A <strong>dataset</strong> is a table of rows, each one an input to run the prompt against. Build one by hand,
@@ -571,18 +571,17 @@ everyday runs and a stronger one for optimization.</p>
 <p>Click the document icon in the top bar to create a new prompt. The editor walks through three steps.</p>
 <h3>1. Name & description</h3>
 <p>A name and a short note on what the prompt is for. Purely for your own reference.</p>
-<h3>2. Sections</h3>
-<p>The prompt body, split into named <strong>sections</strong>. Add as many as you need and reorder them freely.
-Write a placeholder in single curly braces, e.g. <code>{{excerpt}}</code>, anywhere you want a dataset column's
-value inserted; you'll map each placeholder to an actual column when you set up the Run node (see
-<a href="#connect-and-run">Connect nodes and run</a>).</p>
+<h3>2. Prompt</h3>
+<p>The prompt body, written as one block of text. Write a placeholder in single curly braces, e.g.
+<code>{{excerpt}}</code>, anywhere you want a dataset column's value inserted; the panel beside it lists the
+inputs it finds. You'll map each placeholder to an actual column when you set up the Run node (see
+<a href="#connect-and-run">Connect nodes and run</a>). To change a prompt later, open it and click its text.</p>
 <h3>3. Output schema</h3>
 <p>Define the fields you want back from the model, each with a name, an optional description, and example values,
 plus whether the model should return a <strong>single row</strong> or <strong>multiple rows</strong> per input.
 This is what turns a free-text model response into a structured results table instead of a wall of text you'd
-have to parse yourself. A live preview on the right shows exactly how the schema and the filled-in prompt will
-look.</p>
-{fig("add-prompt-modal", "Step 3 of the prompt editor: the output schema on the right, a live preview of the assembled prompt in the middle, showing the {excerpt} placeholder.")}
+have to parse yourself. A live preview on the right shows the schema as you build it.</p>
+{fig("add-prompt-modal", "Step 3 of the prompt editor: the fields on the left, the prompt's inputs in the middle (here {excerpt}), and a preview of the output schema on the right.")}
 """),
     ("build-a-dataset", "Build a dataset", lambda: f"""
 <p>Click the database icon in the top bar to create a new dataset. Choose one of six ways to fill it in:</p>
@@ -607,7 +606,7 @@ dataset is built, the result is the same: a table of rows and columns you can fe
 {fig("canvas-connected", "A prompt node connected to a Run node. The dataset isn't wired in with a drawn line; that happens inside the Run node itself, next.")}
 <p>Open the Run node. Under <strong>Input dataset</strong>, pick the dataset to run against, then use the
 <strong>Map input dataset columns to prompt inputs</strong> table to match each <code>{{placeholder}}</code> from
-your prompt's sections to an actual column. AnnoBio suggests a match automatically when the names line up.
+your prompt to an actual column. AnnoBio suggests a match automatically when the names line up.
 Pick a model at the bottom and click <strong>Run</strong>.</p>
 <p>AnnoBio sends the filled-in prompt to your model once per row, in parallel up to your configured
 concurrency, and streams results back into a table as they complete.</p>

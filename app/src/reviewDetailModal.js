@@ -1,6 +1,6 @@
 /**
  * Review: left = prompt in prompt-detail style; right = suggestions.
- * Hover a suggestion: left shows that section with red (removed) / green (added) minimal diff.
+ * Hover a suggestion: the prompt shows the change with red (removed) / green (added) minimal diff.
  * Result is saved on the Score node and persisted with the project.
  */
 
@@ -15,10 +15,10 @@ import { comparisonRowIsMatched } from './scoreDetailModal.js';
 import {
   rebuildWorkingFromApplied,
   getLocatableSegment,
-  findSectionIndexForOldSentence,
   effectiveNewSentenceForApply,
+  paragraphAround,
   suggestionTargetScoreRowIndices,
-} from './reviewWorkingSections.js';
+} from './reviewWorkingText.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { compileReviewInputs } from './runInputBuilder.js';
@@ -76,7 +76,7 @@ function isVerifyFullPass(result) {
  * @param {boolean} [supportsOptimization] - ReviewMethodSpec.supports_segment_optimization for the
  *   method that produced this suggestion; false shows a plain non-clickable "not pass" pill instead.
  */
-function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, _promptSections, streamComplete, verifyState, supportsOptimization = true) {
+function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, streamComplete, verifyState, supportsOptimization = true) {
   if (streamComplete !== true) return [];
   if (verifyState === 'verifying') {
     return [{ cls: 'review-suggestion-verifying-pill', text: REVIEW_SUGGESTION_VERIFYING_LABEL, ariaLabel: 'Verifying…' }];
@@ -96,8 +96,8 @@ function collectSuggestionTitlePills(_sug, _noButton, _actionsFull, _originals, 
   return [{ cls: 'review-suggestion-verify-pill review-suggestion-verify-pill--clickable', text: REVIEW_SUGGESTION_CLICK_VERIFY_LABEL, ariaLabel: 'Click to Verify this suggestion' }];
 }
 
-function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState, supportsOptimization = true) {
-  return collectSuggestionTitlePills(sug, noButton, actionsFull, originals, promptSections, streamComplete, verifyState, supportsOptimization)
+function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, streamComplete, verifyState, supportsOptimization = true) {
+  return collectSuggestionTitlePills(sug, noButton, actionsFull, streamComplete, verifyState, supportsOptimization)
     .map((spec) => {
       const aria =
         typeof spec.ariaLabel === 'string' && spec.ariaLabel.trim()
@@ -335,7 +335,7 @@ function diagnosisCardTitleLine(d) {
 }
 
 /** Short sentence-style card title for Suggested changes (mirrors diagnosis list line). */
-function suggestionCardTitleLine({ explicitName, reason, sectionFallback, defaultLabel }) {
+function suggestionCardTitleLine({ explicitName, reason, defaultLabel }) {
   const fromName = String(explicitName || '').trim();
   if (fromName) {
     const sentence = shortSentenceTitleFromSummary(fromName, 100) || fromName;
@@ -343,8 +343,6 @@ function suggestionCardTitleLine({ explicitName, reason, sectionFallback, defaul
   }
   const fromReason = shortSentenceTitleFromSummary(reason, 88);
   if (fromReason) return ensureCardTitleSentenceLead(fromReason);
-  const sec = String(sectionFallback || '').trim();
-  if (sec) return ensureCardTitleSentenceLead(truncateWithEllipsis(sec, 88));
   return ensureCardTitleSentenceLead(defaultLabel);
 }
 
@@ -598,17 +596,6 @@ function formatSuggestionCardPreviewTitle(titleLine) {
   return truncateWithEllipsis(baseRaw, SUGGESTION_CARD_PREVIEW_TITLE_CHARS);
 }
 
-function sectionsToFullText(sections) {
-  if (!Array.isArray(sections) || sections.length === 0) return '';
-  return sections
-    .map((s) => {
-      const name = (s.name || '').trim() || '(unnamed)';
-      const content = (s.content || '').trim() || '';
-      return `## ${name}\n\n${content}`;
-    })
-    .join('\n\n');
-}
-
 /** Split text into sentences (by . ! ? followed by space or newline). */
 function splitSentences(str) {
   if (str == null || typeof str !== 'string') return [];
@@ -705,8 +692,8 @@ function renderLineDiff(oldLine, newLine, revertPreview = false) {
   }).join(' ');
 }
 
-/** Render one section's content, optionally with diff or highlight. Preserves line breaks (one div per line). */
-function renderSectionContent(content, newContent, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
+/** Render the prompt's content, optionally with diff or highlight. Preserves line breaks (one div per line). */
+function renderPromptContent(content, newContent, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
   const oldC = (content || '').trim();
   const oldLines = oldC.split('\n');
   const newC = (newContent || '').trim();
@@ -806,35 +793,19 @@ function renderSectionContent(content, newContent, withDiff, removeSpan, highlig
   return lineHtmls.map((html) => `<div class="preview-field-content-line">${html}</div>`).join('');
 }
 
-/** Render sections: optionally diff or highlight one section. highlightSpan/highlightAsRemoved: Revert state; highlightAddSpan: green text to show after red (what will be restored). */
-function renderSectionsAsPromptDetail(sections, diffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
-  if (!Array.isArray(sections) || sections.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
-  return sections.map((s, i) => {
-    const name = (s.name || '').trim() || 'Unnamed';
-    const content = s.content || '';
-    const isTargetSection = diffSectionIndex === i;
-    const useHighlightOnly = isTargetSection && highlightSpan !== undefined && highlightSpan !== null;
-    const withDiff = isTargetSection && !useHighlightOnly && diffNewContent !== undefined;
-    let contentHtml;
-    if (useHighlightOnly || withDiff) {
-      contentHtml = renderSectionContent(content, withDiff ? diffNewContent : null, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, isTargetSection && withDiff ? revertPreview : false);
-    } else {
-      const lines = content.split('\n');
-      const lineEls = lines.length > 0
-        ? lines.map((line) => `<div class="preview-field-content-line">${escapeHtml(line)}</div>`).join('')
-        : '<div class="preview-field-content-line"></div>';
-      contentHtml = lineEls;
-    }
-    return `
-      <div class="preview-field-block">
-        <div class="preview-field-divider">
-          <span class="preview-field-line" aria-hidden="true"></span>
-          <span class="preview-field-name">${escapeHtml(name)}</span>
-          <span class="preview-field-line" aria-hidden="true"></span>
-        </div>
-        <div class="preview-field-content">${contentHtml}</div>
-      </div>`;
-  }).join('');
+/**
+ * Render the prompt text, plain or with one change shown: a diff against diffNewContent, or (Revert)
+ * highlightSpan/highlightAsRemoved with highlightAddSpan as the green text that will come back.
+ */
+function renderPromptAsDetail(text, showChange = false, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
+  const content = String(text || '');
+  if (!content.trim()) return '<p class="prompt-detail-placeholder">No prompt text.</p>';
+  const useHighlightOnly = showChange && highlightSpan !== undefined && highlightSpan !== null;
+  const withDiff = showChange && !useHighlightOnly && diffNewContent !== undefined;
+  const contentHtml = useHighlightOnly || withDiff
+    ? renderPromptContent(content, withDiff ? diffNewContent : null, withDiff, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, withDiff ? revertPreview : false)
+    : content.split('\n').map((line) => `<div class="preview-field-content-line">${escapeHtml(line)}</div>`).join('');
+  return `<div class="preview-field-block"><div class="preview-field-content">${contentHtml}</div></div>`;
 }
 
 /** Spans used for suggestion hover / revert preview in the prompt column. */
@@ -875,12 +846,11 @@ function scrollNestedToReveal(el, boundary) {
   }
 }
 
-/** Build the shared result UI: left = sections (working copy), right = suggestions with accept/revert; full reason shown in card when selected. */
+/** Build the shared result UI: left = the prompt (working copy), right = suggestions with accept/revert; full reason shown in card when selected. */
 function buildReviewResultUI(overlay, options) {
   const {
-    promptSections,
+    promptText,
     suggestions: initialSuggestions,
-    promptFullText,
     saved = {},
     onReviewResultChange,
     onExportNewPrompt,
@@ -905,14 +875,12 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  const originals = (promptSections || []).map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
+  const originalText = String(promptText || '');
   const savedSuggestions = Array.isArray(saved.suggestions) ? saved.suggestions : [];
-  const savedWorking = Array.isArray(saved.workingSections) && saved.workingSections.length === originals.length
-    ? saved.workingSections.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }))
-    : null;
-  const workingFromApplied = rebuildWorkingFromApplied(originals, savedSuggestions);
-  /** Working copy: always kept in sync by recomputing from originals + suggestions where .applied === true */
-  let working = savedWorking || (workingFromApplied && workingFromApplied.length === originals.length ? workingFromApplied : null) || originals.map((s) => ({ name: s.name, content: s.content }));
+  /** Working copy: always kept in sync by recomputing from the original + suggestions where .applied === true */
+  let working = typeof saved.workingText === 'string'
+    ? saved.workingText
+    : (rebuildWorkingFromApplied(originalText, savedSuggestions) ?? originalText);
   let allSuggestions =
     Array.isArray(saved.suggestions) && saved.suggestions.length > 0
       ? saved.suggestions.slice()
@@ -936,7 +904,7 @@ function buildReviewResultUI(overlay, options) {
   const reviewStillGenerating = reviewStreaming;
 
   if (promptWrap) {
-    promptWrap.innerHTML = renderSectionsAsPromptDetail(working);
+    promptWrap.innerHTML = renderPromptAsDetail(working);
   }
 
   suggestionsEl.innerHTML = '';
@@ -1042,7 +1010,7 @@ function buildReviewResultUI(overlay, options) {
       const i = parseInt(card.dataset.suggestionIndex, 10);
       if (Number.isNaN(i) || !allSuggestions[i]) return;
       const s = allSuggestions[i];
-      updateSuggestionTestOutcomeVisual(card, s, suggestionActionsFullForCard(s), originals, promptSections);
+      updateSuggestionTestOutcomeVisual(card, s, suggestionActionsFullForCard(s));
       const acceptBtn = card.querySelector('.review-detail-accept-btn');
       if (acceptBtn) {
         const applied = s.applied === true;
@@ -1068,9 +1036,8 @@ function buildReviewResultUI(overlay, options) {
       design_suggestions: [],
       data_refinement: dataRefinementToSave,
       row_diagnostics: rowDiagnostics,
-      promptSections: base.promptSections ?? saved.promptSections ?? promptSections,
-      promptFullText: base.promptFullText ?? saved.promptFullText ?? promptFullText,
-      workingSections: working.map((s) => ({ name: s.name, content: s.content })),
+      promptText: base.promptText ?? saved.promptText ?? originalText,
+      workingText: working,
     };
     onReviewResultChange(next);
     refreshAllEditSuggestionCardsVisuals();
@@ -1113,14 +1080,10 @@ function buildReviewResultUI(overlay, options) {
     onReviewResultChange({ ...live, reviewProgress: pct });
   }
 
-  /** Recompute working from originals by applying every suggestion that has .applied === true (in order). */
+  /** Recompute working from the original by applying every suggestion that has .applied === true (in order). */
   function syncWorkingFromApplied() {
-    const next = rebuildWorkingFromApplied(originals, allSuggestions);
-    if (!next || next.length !== working.length) return;
-    for (let i = 0; i < next.length; i++) {
-      working[i].name = next[i].name;
-      working[i].content = next[i].content;
-    }
+    const next = rebuildWorkingFromApplied(originalText, allSuggestions);
+    if (next != null) working = next;
   }
 
   /**
@@ -1134,7 +1097,7 @@ function buildReviewResultUI(overlay, options) {
     return true;
   }
 
-  function updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections) {
+  function updateSuggestionTitleAndPassPill(card, sug, actionsFull) {
     const plain = Object.prototype.hasOwnProperty.call(card.dataset, 'reviewTitlePlain')
       ? card.dataset.reviewTitlePlain || ''
       : '';
@@ -1156,8 +1119,6 @@ function buildReviewResultUI(overlay, options) {
         sug,
         noButton,
         actionsFull,
-        originals,
-        promptSections,
         saved.streamComplete === true,
         verifyState,
         saved.supports_segment_optimization !== false,
@@ -1177,8 +1138,8 @@ function buildReviewResultUI(overlay, options) {
     }
   }
 
-  function updateSuggestionTestOutcomeVisual(card, sug, actionsFull, originals, promptSections) {
-    updateSuggestionTitleAndPassPill(card, sug, actionsFull !== false, originals, promptSections);
+  function updateSuggestionTestOutcomeVisual(card, sug, actionsFull) {
+    updateSuggestionTitleAndPassPill(card, sug, actionsFull !== false);
   }
 
   function renderEditSuggestionCards() {
@@ -1266,52 +1227,45 @@ function buildReviewResultUI(overlay, options) {
     persistReviewProgressToNode(100);
   }
 
-  // Hovering quickly across suggestion cards fires renderLeft() + scrollRightToSection()
+  // Hovering quickly across suggestion cards fires renderLeft() + scrollRightToChange()
   // repeatedly before the previous call's deferred (double-rAF) scroll adjustment runs; without
-  // a sequence guard, a stale call can win the race and scroll to whatever section it captured,
+  // a sequence guard, a stale call can win the race and scroll to the change it captured,
   // which looks like "sometimes it scrolls to the wrong place / doesn't seem to move at all".
   let scrollRightRequestSeq = 0;
-  function scrollRightToSection(sectionIndex) {
+  function scrollRightToChange() {
     const seq = ++scrollRightRequestSeq;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         if (seq !== scrollRightRequestSeq) return; // superseded by a newer hover
-        const blocks = promptSectionsEl.querySelectorAll('.preview-field-block');
-        const block = blocks[sectionIndex];
-        if (!block) return;
-        const diffEl = block.querySelector(REVIEW_PROMPT_DIFF_MARK_SELECTOR);
-        const target = diffEl || block;
+        const target = promptWrap.querySelector(REVIEW_PROMPT_DIFF_MARK_SELECTOR);
+        if (!target) return;
         const boundary =
-          promptSectionsEl.closest('.review-detail-preview-wrap') ||
-          promptSectionsEl.closest('.modal-panel--review-detail') ||
-          promptSectionsEl.closest('.modal-panel') ||
+          promptWrap.closest('.review-detail-preview-wrap') ||
+          promptWrap.closest('.modal-panel--review-detail') ||
+          promptWrap.closest('.modal-panel') ||
           document.body;
         scrollNestedToReveal(target, boundary);
       });
     });
   }
 
-  const promptSectionsEl = promptWrap;
 
-  function renderLeft(showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
-    const sectionsToRender = working.map((s, i) => ({ name: s.name, content: s.content }));
-    if (showDiffSectionIndex >= 0 && showDiffSectionIndex < originals.length && (diffNewContent !== undefined || (highlightSpan !== undefined && highlightSpan !== null))) {
-      promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender, showDiffSectionIndex, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview);
-      scrollRightToSection(showDiffSectionIndex);
+  function renderLeft(showChange, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
+    if (showChange && (diffNewContent !== undefined || (highlightSpan !== undefined && highlightSpan !== null))) {
+      promptWrap.innerHTML = renderPromptAsDetail(working, true, diffNewContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview);
+      scrollRightToChange();
     } else {
-      promptSectionsEl.innerHTML = renderSectionsAsPromptDetail(sectionsToRender);
+      promptWrap.innerHTML = renderPromptAsDetail(working);
     }
   }
 
-  function showDiffOnRight(sectionIndex, newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
-    renderLeft(sectionIndex, newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview);
+  function showDiffOnRight(newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview = false) {
+    renderLeft(true, newContent, removeSpan, highlightSpan, highlightAsRemoved, highlightAddSpan, revertPreview);
   }
 
   function clearDiffOnRight() {
-    renderLeft(-1);
+    renderLeft(false);
   }
-
-  const sectionNames = (promptSections || []).map((s, i) => (s.name || '').trim() || `Section ${i}`);
 
   function updateAnalysisFooter() {
     if (!analysisFooterEl) return;
@@ -1504,7 +1458,6 @@ function buildReviewResultUI(overlay, options) {
     const titleLine = suggestionCardTitleLine({
       explicitName: item.name || item.card_title,
       reason: item.reason,
-      sectionFallback: '',
       defaultLabel: 'Possible ground truth issue',
     });
     const card = document.createElement('div');
@@ -1539,18 +1492,8 @@ function buildReviewResultUI(overlay, options) {
     const useSentenceEdit = sug.old_sentence != null && sug.new_sentence != null;
     const rawOldSentence = sug.old_sentence != null ? String(sug.old_sentence) : '';
     const oldSentence = rawOldSentence.trim();
-    let secIdx = 0;
-    if (useSentenceEdit && oldSentence) {
-      const found = findSectionIndexForOldSentence(originals, rawOldSentence);
-      if (found >= 0) secIdx = found;
-    }
-    const name = sectionNames[secIdx] || `Section ${secIdx}`;
-    const newSentence = (sug.new_sentence || '').trim();
-    const legacyNewContent = (sug.new_content || '').trim();
-    const currentContent = working[secIdx] ? (working[secIdx].content || '') : '';
-    const originalContent = (originals[secIdx] && originals[secIdx].content) ? originals[secIdx].content : '';
     const segmentInOriginal = useSentenceEdit
-      ? getLocatableSegment(originalContent, rawOldSentence) || getLocatableSegment(originalContent, oldSentence)
+      ? getLocatableSegment(originalText, rawOldSentence) || getLocatableSegment(originalText, oldSentence)
       : null;
     const unlocatable = useSentenceEdit && !segmentInOriginal;
     const noButton = unlocatable;
@@ -1560,7 +1503,6 @@ function buildReviewResultUI(overlay, options) {
     const titleLine = suggestionCardTitleLine({
       explicitName: sug.name,
       reason: sug.reason,
-      sectionFallback: name,
       defaultLabel: 'Prompt edit',
     });
     const previewTitle = formatSuggestionCardPreviewTitle(titleLine);
@@ -1576,8 +1518,6 @@ function buildReviewResultUI(overlay, options) {
       sug,
       noButton,
       actionsFull,
-      originals,
-      promptSections,
       saved.streamComplete === true,
       cardVerifyStates.get(sugIdx),
       saved.supports_segment_optimization !== false,
@@ -1596,7 +1536,6 @@ function buildReviewResultUI(overlay, options) {
       'review-detail-suggestion-card' +
       (noButton ? ' review-detail-suggestion-card--unlocatable' : '') +
       (!actionsFull ? ' review-detail-suggestion-card--actions-pending' : '');
-    card.dataset.sectionIndex = String(secIdx);
     card.dataset.suggestionIndex = String(sugIdx);
     if (sid !== '' && sid != null) card.dataset.suggestionId = String(sid);
     card.dataset.reviewTitlePlain = titleLine;
@@ -1631,7 +1570,7 @@ function buildReviewResultUI(overlay, options) {
         cardVerifyStates.delete(sugIdx);
         cardVerifyResults.delete(sugIdx);
         try { persistVerifyState(sugIdx, 'idle', null); } catch (_) {}
-        updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+        updateSuggestionTitleAndPassPill(card, sug, actionsFull);
         bindVerifyPillClick();
       });
     }
@@ -1712,9 +1651,8 @@ function buildReviewResultUI(overlay, options) {
         if (!outputSchema) throw new Error('No output schema configured on the Prompt node.');
         if (!scoreMapping) throw new Error('No Evaluate mapping configured.');
 
-        // 2. Build modified prompt: apply only this suggestion to originals
-        const modifiedSections = rebuildWorkingFromApplied(originals, [{ ...sug, applied: true }]) || originals;
-        const templateText = modifiedSections.map((s) => (s.content || '').trim()).filter(Boolean).join('\n\n');
+        // 2. Build modified prompt: apply only this suggestion to the original
+        const templateText = (rebuildWorkingFromApplied(originalText, [{ ...sug, applied: true }]) ?? originalText).trim();
 
         // 3. Collect target comparison rows
         const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
@@ -1796,7 +1734,7 @@ function buildReviewResultUI(overlay, options) {
         // and only show the right state after closing and reopening the modal.
         const liveCard = editContainer.querySelector(`.review-detail-suggestion-card[data-suggestion-index="${sugIdx}"]`);
         if (liveCard) {
-          updateSuggestionTitleAndPassPill(liveCard, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+          updateSuggestionTitleAndPassPill(liveCard, sug, suggestionActionsFullForCard(sug));
           applyPinnedPreviewIfAny();
         }
       }
@@ -1885,13 +1823,13 @@ function buildReviewResultUI(overlay, options) {
           oldSentence: sug.old_sentence || '',
           newSentence: sug.new_sentence || '',
           improvementRationale: sug.reason || '',
-          sectionContext: originalContent || '',
+          promptContext: paragraphAround(originalText, sug.old_sentence || ''),
           maxSegments: 5,
           candidatesPerSegment: 4,
           maxTrials: optimizationMaxTrials,
           allSuggestions,
           sugIdx,
-          originals,
+          originalText,
           inputEntries: expandedInputEntries,
           outputSchema,
           outputFields,
@@ -1935,7 +1873,7 @@ function buildReviewResultUI(overlay, options) {
           e.stopPropagation();
           if (_verifyPromises.has(verifyKey(sugIdx))) return;
           cardVerifyStates.set(sugIdx, 'verifying');
-          updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+          updateSuggestionTitleAndPassPill(card, sug, actionsFull);
           const vp = runVerification();
           _verifyPromises.set(verifyKey(sugIdx), vp);
         });
@@ -1950,7 +1888,7 @@ function buildReviewResultUI(overlay, options) {
           e.stopPropagation();
           if (_verifyPromises.has(verifyKey(sugIdx))) return;
           cardVerifyStates.set(sugIdx, 'optimizing');
-          updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+          updateSuggestionTitleAndPassPill(card, sug, actionsFull);
           const fp = (async () => {
             try {
               const result = await runOptimization();
@@ -1965,7 +1903,7 @@ function buildReviewResultUI(overlay, options) {
               _verifyPromises.delete(verifyKey(sugIdx));
               try { persistVerifyState(sugIdx, 'optimization', cardVerifyResults.get(sugIdx)); } catch (_) {}
               const liveCard = editContainer.querySelector(`.review-detail-suggestion-card[data-suggestion-index="${sugIdx}"]`);
-              if (liveCard) updateSuggestionTitleAndPassPill(liveCard, sug, actionsFull, originals, promptSections);
+              if (liveCard) updateSuggestionTitleAndPassPill(liveCard, sug, actionsFull);
             }
           })();
           _verifyPromises.set(verifyKey(sugIdx), fp);
@@ -1980,7 +1918,7 @@ function buildReviewResultUI(overlay, options) {
     card._reviewAutoVerify = () => {
       if (_verifyPromises.has(verifyKey(sugIdx))) return _verifyPromises.get(verifyKey(sugIdx));
       cardVerifyStates.set(sugIdx, 'verifying');
-      updateSuggestionTitleAndPassPill(card, sug, actionsFull, originals, promptSections);
+      updateSuggestionTitleAndPassPill(card, sug, actionsFull);
       const vp = runVerification();
       _verifyPromises.set(verifyKey(sugIdx), vp);
       return vp;
@@ -1993,7 +1931,7 @@ function buildReviewResultUI(overlay, options) {
       if (inflight) {
         inflight.finally(() => {
           if (card.isConnected) {
-            updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+            updateSuggestionTitleAndPassPill(card, sug, suggestionActionsFullForCard(sug));
             applyPinnedPreviewIfAny();
           }
         });
@@ -2004,21 +1942,21 @@ function buildReviewResultUI(overlay, options) {
       return effectiveNewSentenceForApply(sug);
     }
     function getDiffContent() {
-      const c = working[secIdx] ? (working[secIdx].content || '') : '';
-      if (!useSentenceEdit) return legacyNewContent;
+      const c = working;
+      if (!useSentenceEdit) return c;
       const ns = currentNewSentence();
       const seg = getLocatableSegment(c, rawOldSentence) || getLocatableSegment(c, oldSentence);
       return seg ? c.replace(seg, ns, 1) : c.replace(oldSentence, ns, 1);
     }
     function getRemoveSpanForDiff() {
       if (!useSentenceEdit || currentNewSentence() !== '') return undefined;
-      const c = working[secIdx] ? (working[secIdx].content || '') : '';
+      const c = working;
       return getLocatableSegment(c, rawOldSentence) || getLocatableSegment(c, oldSentence) || oldSentence;
     }
-    /** Reverted section content (current with new_sentence -> old_sentence, or original for legacy). */
+    /** Reverted prompt text (current with new_sentence -> old_sentence). */
     function getRevertedContent() {
-      const c = working[secIdx] ? (working[secIdx].content || '') : '';
-      if (!useSentenceEdit) return originalContent || '';
+      const c = working;
+      if (!useSentenceEdit) return originalText;
       const ns = currentNewSentence();
       const seg = getLocatableSegment(c, ns);
       return seg ? c.replace(seg, rawOldSentence, 1) : c.replace(ns, oldSentence, 1);
@@ -2026,10 +1964,10 @@ function buildReviewResultUI(overlay, options) {
     function showPreview() {
       if (sug.applied) {
         /* Revert hover: green strikethrough on accepted (new) text, red for restored original */
-        showDiffOnRight(secIdx, getRevertedContent(), getRemoveSpanForDiff(), undefined, undefined, undefined, true);
+        showDiffOnRight(getRevertedContent(), getRemoveSpanForDiff(), undefined, undefined, undefined, true);
       } else {
         /* Accept hover: red strikethrough on old, green for new */
-        showDiffOnRight(secIdx, getDiffContent(), getRemoveSpanForDiff(), undefined, undefined, undefined, false);
+        showDiffOnRight(getDiffContent(), getRemoveSpanForDiff(), undefined, undefined, undefined, false);
       }
     }
 
@@ -2083,13 +2021,12 @@ function buildReviewResultUI(overlay, options) {
       acceptBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (secIdx < 0 || secIdx >= working.length) return;
         const wasApplied = sug.applied === true;
         sug.applied = !wasApplied;
         syncWorkingFromApplied();
         updateAcceptButtonLabels();
-        updateSuggestionTestOutcomeVisual(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
-        renderLeft(-1);
+        updateSuggestionTestOutcomeVisual(card, sug, suggestionActionsFullForCard(sug));
+        renderLeft(false);
         persistWorking();
         if (previewSelectedSuggestionIndex === sugIdx) {
           showPreview();
@@ -2097,7 +2034,7 @@ function buildReviewResultUI(overlay, options) {
       });
     }
 
-    updateSuggestionTestOutcomeVisual(card, sug, suggestionActionsFullForCard(sug), originals, promptSections);
+    updateSuggestionTestOutcomeVisual(card, sug, suggestionActionsFullForCard(sug));
 
     editContainer.appendChild(card);
   }
@@ -2176,23 +2113,20 @@ function buildReviewResultUI(overlay, options) {
       saved.streamComplete === true || (saved.streamComplete !== false && !reviewStillGenerating);
     exportBtn.disabled = !isComplete;
     exportBtn.addEventListener('click', () => {
-      const sections = working.map((s) => ({ name: s.name || '', content: s.content || '' }));
-      if (!sections.length) return;
+      const text = working;
+      if (!text.trim()) return;
       if (typeof onExportNewPrompt === 'function') {
-        onExportNewPrompt(sections);
+        onExportNewPrompt(text);
         overlay.remove();
         document.body.style.overflow = '';
       } else {
-        const text = sectionsToFullText(working);
-        if (text) {
-          navigator.clipboard.writeText(text).then(() => {
-            exportBtn.textContent = 'Copied';
-            setTimeout(() => { exportBtn.textContent = 'Apply'; }, 1500);
-          }).catch(() => {
-            exportBtn.textContent = 'Copy failed';
-            setTimeout(() => { exportBtn.textContent = 'Apply'; }, 1500);
-          });
-        }
+        navigator.clipboard.writeText(text).then(() => {
+          exportBtn.textContent = 'Copied';
+          setTimeout(() => { exportBtn.textContent = 'Apply'; }, 1500);
+        }).catch(() => {
+          exportBtn.textContent = 'Copy failed';
+          setTimeout(() => { exportBtn.textContent = 'Apply'; }, 1500);
+        });
       }
     });
     footer.appendChild(exportBtn);
@@ -2215,25 +2149,19 @@ function buildReviewResultUI(overlay, options) {
 
 }
 
-/** Review node modal: show saved result (sections + suggestions) or empty state. */
+/** Review node modal: show saved result (prompt + suggestions) or empty state. */
 export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, onResumeReview, getIsReviewStreaming }) {
    const saved = getReviewResult ? getReviewResult() : null;
   const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Optimize';
   const title = `Optimize: ${reviewName}`;
-  const sectionsForDisplay = saved && (
-    (Array.isArray(saved.promptSections) && saved.promptSections.length > 0)
-      ? saved.promptSections
-      : (Array.isArray(saved.workingSections) && saved.workingSections.length > 0)
-        ? saved.workingSections
-        : null
-  );
-  const hasResult = saved && sectionsForDisplay && sectionsForDisplay.length > 0;
+  const promptTextForDisplay = saved && typeof saved.promptText === 'string' ? saved.promptText : '';
+  const hasResult = !!saved && !!promptTextForDisplay.trim();
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'review-detail-title');
-  const promptSectionsHtmlForNode = hasResult ? renderSectionsAsPromptDetail(sectionsForDisplay.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }))) : '';
+  const promptHtmlForNode = hasResult ? renderPromptAsDetail(promptTextForDisplay) : '';
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--review-detail">
       <div class="modal-header">
@@ -2264,10 +2192,10 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
           </div>
         </div>
         <div class="review-detail-preview-wrap">
-          <p class="prompt-step-label">Prompt sections</p>
+          <p class="prompt-step-label">Prompt</p>
           <div class="prompt-detail-sections-scroll">
             <div class="prompt-detail-sections-wrap">
-              <div class="review-detail-prompt-wrap prompt-detail-sections-view">${promptSectionsHtmlForNode}</div>
+              <div class="review-detail-prompt-wrap prompt-detail-sections-view">${promptHtmlForNode}</div>
             </div>
           </div>
           <div class="review-detail-prompt-footer" id="review-detail-prompt-footer"></div>
@@ -2282,9 +2210,8 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
 
   const reviewNodeId = node?.dataset?.nodeId || '';
   const baseOptions = {
-    promptSections: sectionsForDisplay || [],
+    promptText: promptTextForDisplay,
     suggestions: saved?.suggestions || [],
-    promptFullText: saved?.promptFullText || '',
     saved: saved || {},
     onReviewResultChange: updateReviewResult || null,
     onExportNewPrompt: onExportNewPrompt || null,
@@ -2297,7 +2224,7 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
   function refreshFromSaved(data) {
     if (!data || typeof data !== 'object') return;
     baseOptions.saved = data;
-    baseOptions.promptSections = (Array.isArray(data.promptSections) && data.promptSections.length > 0) ? data.promptSections : baseOptions.promptSections;
+    baseOptions.promptText = typeof data.promptText === 'string' && data.promptText.trim() ? data.promptText : baseOptions.promptText;
     baseOptions.suggestions = Array.isArray(data.suggestions) ? data.suggestions : baseOptions.suggestions;
     buildReviewResultUI(overlay, baseOptions);
   }

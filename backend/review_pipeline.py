@@ -50,18 +50,8 @@ def _print_review_result_banner(phase: str, body: str) -> None:
     )
 
 
-def _sec_name_content(sec: Any) -> tuple[str, str]:
-    if isinstance(sec, dict):
-        return (str(sec.get("name") or "").strip() or "(unnamed)", str(sec.get("content") or ""))
-    return (str(getattr(sec, "name", "") or "").strip() or "(unnamed)", str(getattr(sec, "content", "") or ""))
-
-
-def _format_prompt_for_review(prompt_sections: list[Any]) -> str:
-    parts: list[str] = []
-    for i, sec in enumerate(prompt_sections or []):
-        name, content = _sec_name_content(sec)
-        parts.append(f"### Section {i}: {name}\n\n{content.strip() or '(empty)'}")
-    return "\n\n".join(parts) if parts else "(No prompt sections)"
+def _format_prompt_for_review(prompt: str) -> str:
+    return (prompt or "").strip() or "(Empty prompt)"
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -223,7 +213,7 @@ def _loose_match_key_and_starts(text: str) -> tuple[str, list[int]]:
     Build a comparison key from `text` and map each key index to the start index in `text`.
 
     Strips Markdown ``**``, normalizes newlines (``\\r\\n`` / ``\\r`` → ``\\n``), curly quotes → ASCII,
-    unicode dashes → ``-``. Same rules apply to section body and to Phase 2 ``old_sentence``.
+    unicode dashes → ``-``. Same rules apply to the prompt text and to Phase 2 ``old_sentence``.
     """
     src = text or ""
     key_chars: list[str] = []
@@ -362,13 +352,13 @@ def _resolve_old_sentence_span_unique_prefix_loose(content: str, old_sentence: s
     return None
 
 
-def _resolve_old_sentence_span(section_body: str, old_sentence: str) -> str | None:
+def _resolve_old_sentence_span(prompt: str, old_sentence: str) -> str | None:
     """
-    Map Phase 2 ``old_sentence`` to the verbatim substring of ``section_body`` for Accept/Revert.
+    Map Phase 2 ``old_sentence`` to the verbatim substring of ``prompt`` for Accept/Revert.
 
     Order: cheap exactish → ``rapidfuzz`` → unique-prefix loose (markdown-tolerant).
     """
-    content = section_body or ""
+    content = prompt or ""
     o = old_sentence or ""
     if not o.strip():
         return None
@@ -387,20 +377,14 @@ def _resolve_old_sentence_span(section_body: str, old_sentence: str) -> str | No
     return _resolve_old_sentence_span_unique_prefix_loose(content, o)
 
 
-def _resolve_old_sentence_unique_across_sections(sections: list[Any], raw_old: str) -> str | None:
-    """Return the resolved verbatim span when ``raw_old`` matches **exactly one** section body; else ``None``."""
-    n = len(sections or [])
-    if n == 0 or not (raw_old or "").strip():
+def _resolve_old_sentence_unique(prompt: str, raw_old: str) -> str | None:
+    """Return the resolved verbatim span when it occurs **exactly once** in ``prompt``; else ``None``."""
+    if not (prompt or "").strip() or not (raw_old or "").strip():
         return None
-    hits: list[str] = []
-    for i in range(n):
-        _, cbody = _sec_name_content(sections[i])
-        sp = _resolve_old_sentence_span(cbody, raw_old)
-        if sp is not None:
-            hits.append(sp)
-    if len(hits) == 1:
-        return hits[0]
-    return None
+    span = _resolve_old_sentence_span(prompt, raw_old)
+    if not span or prompt.count(span) != 1:
+        return None
+    return span
 
 
 def _targets_zero_based_from_llm(values: list[Any], comparison_rows: list[Any]) -> list[int]:
@@ -534,7 +518,7 @@ class PromptEditLlm(BaseModel):
     )
     old_sentence: str = Field(
         ...,
-        description="Contiguous substring copied from the stored prompt (unique across sections when possible)",
+        description="Contiguous substring copied from the stored prompt that appears only once in it",
     )
     new_sentence: str = Field(
         default="",
@@ -1058,8 +1042,8 @@ def _build_phase2_modifications_prompt(
 The **stored prompt** block and the **cluster diagnosis** block are separate—read in order; do not treat them as columns or side-by-side panels.
 
 {scope_line}Rules:
-- `old_sentence` must be copied verbatim from **one** place in the stored prompt below. Prefer a span that appears **only once** in the full prompt so the server can resolve it unambiguously.
-- If the diagnosis lists any finding, return **exactly one** edit in `prompt_edits` (see coverage rules). Empty `prompt_edits` only when the stored prompt has no section bodies.
+- `old_sentence` must be copied verbatim from **one** place in the stored prompt below, and must appear **only once** in it (include more of the surrounding text if needed) so the server can resolve it unambiguously.
+- If the diagnosis lists any finding, return **exactly one** edit in `prompt_edits` (see coverage rules). Empty `prompt_edits` only when the stored prompt is empty.
 - Do not paste diagnosis markdown into `old_sentence`.
 - Edits must improve **task prompt** extraction: **fuller** where the model under-delivers vs expected (including **partial** gaps—fewer items than expected—not only wholly empty model output), **stricter** where it over-generates vs expected. Prefer diagnosis-driven wording in the stored prompt over blanket “emit output every row” unless the template truly omits required output spec.
 - **`name` and `reason`**: end-user plain English only; **never** Python/Pydantic/class names, `Phase1LlmOutput`, or other internal identifiers.
@@ -1109,14 +1093,13 @@ def _phase2_old_sentence_smells_diagnosis_leak(raw: str) -> bool:
 
 
 def _sanitize_prompt_edits(
-    sections: list[Any],
+    prompt: str,
     edits: list[PromptEditSuggestion],
     comparison_rows: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Keep edits whose ``old_sentence`` resolves in **exactly one** section body (verbatim span for UI apply)."""
+    """Keep edits whose ``old_sentence`` resolves to a span found **exactly once** in the prompt (verbatim, for UI apply)."""
     out: list[dict[str, Any]] = []
-    n = len(sections or [])
-    if n == 0:
+    if not (prompt or "").strip():
         return out
     cr = list(comparison_rows or [])
     for e in edits:
@@ -1129,7 +1112,7 @@ def _sanitize_prompt_edits(
                 flush=True,
             )
             continue
-        old = _resolve_old_sentence_unique_across_sections(sections, raw_old)
+        old = _resolve_old_sentence_unique(prompt, raw_old)
         if old is None:
             continue
         new = e.new_sentence if e.new_sentence is not None else ""
@@ -1257,8 +1240,8 @@ def run_review_pipeline(
     Caller handles credential errors and job status.
     """
     del settings  # This method has no tunable settings of its own yet.
-    sections = list(getattr(body, "prompt_sections", None) or [])
-    prompt_text = _format_prompt_for_review(sections)
+    prompt = str(getattr(body, "prompt", "") or "")
+    prompt_text = _format_prompt_for_review(prompt)
     comparison_rows = list(getattr(body, "comparison_rows", None) or [])
 
     all_matched_flag = getattr(body, "all_rows_matched", None)
@@ -1474,7 +1457,7 @@ def run_review_pipeline(
             deduped_for_empty_log.append((cidx, label, e))
             if edit_dict_count >= _MAX_VALIDATED_PROMPT_EDITS:
                 break
-            batch = _sanitize_prompt_edits(sections, [e], comparison_rows)
+            batch = _sanitize_prompt_edits(prompt, [e], comparison_rows)
             for d in batch:
                 d["issue_cluster_index"] = cidx
                 d["issue_cluster_label"] = label
@@ -1494,7 +1477,7 @@ def run_review_pipeline(
         cr = list(comparison_rows or [])
         for cidx, label, e in deduped_for_empty_log[:5]:
             raw_old = e.old_sentence or ""
-            resolved = _resolve_old_sentence_unique_across_sections(sections, raw_old)
+            resolved = _resolve_old_sentence_unique(prompt, raw_old)
             raw_t = getattr(e, "target_score_row_indices", None) or getattr(
                 e, "target_input_row_indices", None
             )

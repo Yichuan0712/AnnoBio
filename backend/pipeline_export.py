@@ -16,7 +16,7 @@ from typing import Any
 
 
 FORMAT_NAME = "annobio.pipeline"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 
 class PipelineExportError(ValueError):
@@ -111,7 +111,7 @@ def _prompt_module(
     metadata: ExportMetadata,
 ) -> tuple[str, dict[str, Any], str]:
     """Render the compiler's resolved Prompt configuration without interpreting canvas data."""
-    sections = compiled_config["sections"]
+    prompt = compiled_config["prompt"]
     mapping = compiled_config["input_mapping"]
     input_types = compiled_config["input_types"]
     output_schema = compiled_config["output_schema"]
@@ -126,7 +126,7 @@ def _prompt_module(
         + "# This configuration is the user's selected Prompt and Run, exported by AnnoBio.\n"
         + "# API keys are intentionally absent; set them in .env or the process environment.\n"
         + f"PROMPT_NAME = {_python_literal(name)}\n"
-        + f"SECTIONS = {_python_literal(sections)}\n"
+        + f"PROMPT = {_python_literal(prompt)}\n"
         + f"INPUT_MAPPING = {_python_literal(mapping)}\n"
         + f"INPUT_TYPES = {_python_literal(input_types)}\n"
         + f"OUTPUT_SCHEMA = {_python_literal(output_schema)}\n"
@@ -148,7 +148,7 @@ def _prompt_module(
         + "        frame,\n"
         + "        engine,\n"
         + "        prompt_name=PROMPT_NAME,\n"
-        + "        sections=SECTIONS,\n"
+        + "        prompt=PROMPT,\n"
         + "        input_mapping=INPUT_MAPPING,\n"
         + "        input_types=INPUT_TYPES,\n"
         + "        output_schema=OUTPUT_SCHEMA,\n"
@@ -158,7 +158,7 @@ def _prompt_module(
         + "    )\n"
     )
     config = {
-        "sections": sections,
+        "prompt": prompt,
         "input_mapping": mapping,
         "input_types": input_types,
         "output_schema": output_schema,
@@ -410,7 +410,7 @@ def run_prompt_step(
     engine: BaseEngine,
     *,
     prompt_name: str,
-    sections: list[dict[str, Any]],
+    prompt: str,
     input_mapping: dict[str, str],
     input_types: dict[str, str],
     output_schema: dict[str, Any],
@@ -419,7 +419,7 @@ def run_prompt_step(
     concurrency: int,
 ) -> pd.DataFrame:
     """Execute a Prompt concurrently while preserving deterministic input/output row order."""
-    template = "\n\n".join(str(section.get("content") or "").strip() for section in sections).strip()
+    template = str(prompt or "").strip()
     records = frame.where(pd.notna(frame), None).to_dict(orient="records")
     fields = list(output_schema.get("fields") or [])
     columns = ["Input: #", *[f"Input: {str(column).strip()}" for column in frame.columns], "Output: #"]

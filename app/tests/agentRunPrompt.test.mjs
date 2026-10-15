@@ -2,15 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { planChangeSet } from '../src/agent/operations/changeSet.js';
 import { upgradeCanvasState } from '../src/canvasFormat.js';
+import { extractInputFields } from '../src/promptText.js';
 
-const extractInputFields = (sections) => [...new Set(sections
-  .flatMap((section) => [...String(section.content || '').matchAll(/\{([^{}]+)\}/g)].map((match) => match[1])))];
 
 const canvas = (run = {}) => upgradeCanvasState({
   nodes: [
     { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: { headers: ['text', 'title'], columnTypes: ['text', 'text'], rows: [['a', 'A']] } },
-    { type: 'prompt', nodeId: 'p1', name: 'Extract', sections: [{ name: 'Task', content: 'Read {text}' }] },
-    { type: 'prompt', nodeId: 'p2', name: 'Classify', sections: [{ name: 'Task', content: 'Classify {title}' }] },
+    { type: 'prompt', nodeId: 'p1', name: 'Extract', text: 'Read {text}' },
+    { type: 'prompt', nodeId: 'p2', name: 'Classify', text: 'Classify {title}' },
     { type: 'run', nodeId: 'r', runName: 'Run', runWorkingSetId: 'raw', runInputToColumn: JSON.stringify({ text: 'text' }), ...run },
   ],
   connections: [{ fromId: 'p1', toId: 'r', type: 'prompt-to-run' }],

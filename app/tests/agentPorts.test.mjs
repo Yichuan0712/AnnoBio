@@ -5,9 +5,8 @@ import { inspectWorkflowNode } from '../src/agent/canvas/workflowNodeInspector.j
 import { checkConnect, checkDisconnect } from '../src/nodePorts.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../src/scoreMappingBundle.js';
 import { processInputSources, runInputSource } from '../src/stepInputs.js';
+import { extractInputFields } from '../src/promptText.js';
 
-const extractInputFields = (sections) => [...new Set((sections || [])
-  .flatMap((section) => [...String(section.content || '').matchAll(/\{([^{}]+)\}/g)].map((match) => match[1])))];
 const data = (fromId, toId, alias, fromPort = 'result') => ({ type: 'data', fromId, fromPort, toId, ...(alias ? { alias } : {}) });
 const table = (headers, rows) => ({ headers, rows, columnTypes: headers.map(() => 'text') });
 const rule = (outputKey, gtColumns) => ({ type: 'rule', outputKey, gtColumns, matchType: 'exact', matchFlags: {} });
@@ -20,9 +19,9 @@ const canvas = () => ({
     { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: table(['text'], [['a'], ['b']]) },
     { type: 'dataset', nodeId: 'gold', name: 'Gold', datasetContent: table(['text', 'label'], [['a', 'x']]) },
     { type: 'dataset', nodeId: 'other', name: 'Other', datasetContent: table(['body'], [['c']]) },
-    { type: 'prompt', nodeId: 'p', name: 'Extract', sections: [{ name: 'Task', content: 'Read {text}' }],
+    { type: 'prompt', nodeId: 'p', name: 'Extract', text: 'Read {text}',
       outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} },
-    { type: 'prompt', nodeId: 'q', name: 'Judge', sections: [{ name: 'Task', content: 'Judge {answer}' }],
+    { type: 'prompt', nodeId: 'q', name: 'Judge', text: 'Judge {answer}',
       outputFormat: { returnShape: 'single', fields: [{ key: 'verdict', type: 'str' }] }, inputTypes: {} },
     { type: 'run', nodeId: 'r', runName: 'Run', runCompleted: '1', runInputToColumn: JSON.stringify({ text: 'text' }),
       runResults: JSON.stringify([{ row_index: 0, input_row_index: 0, output: { answer: 'A' } }]) },

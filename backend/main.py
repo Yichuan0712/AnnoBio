@@ -425,7 +425,7 @@ class ReviewComparisonRow(BaseModel):
     )
     row_input: dict | None = Field(
         default=None,
-        description="Placeholder name → substituted value for this run (keys match `{name}` in prompt sections; only inputs that appear in the template)",
+        description="Placeholder name → substituted value for this run (keys match `{name}` in the prompt; only inputs that appear in the template)",
     )
     gt_only: bool = Field(
         default=False,
@@ -445,7 +445,7 @@ class ReviewRequest(BaseModel):
     project_session_id: str | None = None
     credential_id: str
     review_session_id: str | None = Field(default=None, description="Frontend session id for cancellation; pass reviewNodeId")
-    prompt_sections: list[dict] = Field(..., description="List of {name, content} for each section")
+    prompt: str = Field(..., description="The prompt text, with a {name} placeholder for each input")
     run_results: list[dict] = Field(default_factory=list, description="List of {row_index, output}")
     output_fields: list[dict] = Field(default_factory=list, description="List of {key, display}; used when output_schema not provided")
     output_schema: dict | None = Field(default=None, description="Same as run: return_shape + fields [{ key, type, description?, allow_none? }]; when set, used instead of output_return_shape + output_fields for prompts")
@@ -453,7 +453,6 @@ class ReviewRequest(BaseModel):
     comparison_rows: list[ReviewComparisonRow] = Field(default_factory=list, description="Per-row match result and context")
     all_rows_matched: bool | None = Field(default=None, description="If True, frontend reports every comparison row matched")
     review_method: str | None = Field(default=None, description="Registered review method id (backend/review_methods.py); defaults to the legacy issue-analysis + suggested-changes pipeline")
-    target_section_index: int | None = Field(default=None, description="0-based prompt_sections index a whole-section-rewrite method (e.g. gepa) should optimize; defaults to section 0 when omitted")
     score_mapping: str | None = Field(default=None, description="Serialized Score rule-tree bundle (scoreMappingBundle.js) from the upstream Score node; only methods that self-score candidates (e.g. gepa) need this")
     settings_overrides: dict | None = Field(default=None, description="Per-Score-node Review settings (REVIEW_SETTINGS_OVERRIDE_KEYS)")
 
@@ -484,7 +483,7 @@ class ReviewSuggestion(BaseModel):
         default_factory=list,
         description="Phase 1 findings this edit targets (from automated review; empty for chat-added edits)",
     )
-    old_sentence: str = Field(..., description="Exact sentence in the section to replace (one sentence only)")
+    old_sentence: str = Field(..., description="Exact sentence in the prompt to replace (one sentence only)")
     new_sentence: str = Field(..., description="Replacement for that one sentence")
     reason: str = Field(..., description="Why this change is suggested")
     target_score_row_indices: list[int] = Field(
@@ -3220,7 +3219,7 @@ class OptimizationCandidatesRequest(BaseModel):
     segment_text: str = Field(..., description="The focus segment to paraphrase")
     prefix: str = Field(default="", description="Text before the segment in new_sentence")
     suffix: str = Field(default="", description="Text after the segment in new_sentence")
-    section_context: str = Field(default="", description="Full prompt section/paragraph containing the sentence (read-only context for the LLM)")
+    prompt_context: str = Field(default="", description="The prompt paragraph containing the sentence (read-only context for the LLM)")
     num_candidates: int = Field(default=4, ge=1, le=8, description="Number of candidates (1–8)")
     segment_index: int = Field(default=0, ge=0, description="0-based index of this segment among all segments")
     total_segments: int = Field(default=1, ge=1, description="Total number of segments")
@@ -3292,7 +3291,7 @@ def optimization_candidates(body: OptimizationCandidatesRequest):
             segment_text=body.segment_text,
             prefix=body.prefix,
             suffix=body.suffix,
-            section_context=body.section_context,
+            prompt_context=body.prompt_context,
             num_candidates=body.num_candidates,
             segment_index=body.segment_index,
             total_segments=body.total_segments,

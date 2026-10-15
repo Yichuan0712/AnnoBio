@@ -9,9 +9,8 @@ import { previewProposal } from '../src/agent/operations/proposals.js';
 import { RunHistorySession } from '../src/runHistorySession.js';
 import { processInputAliases, processPrimarySource, runInputSource, validateStepInputs } from '../src/stepInputs.js';
 import { graph, recordGraph } from './historyGraphFixture.mjs';
+import { extractInputFields } from '../src/promptText.js';
 
-const extractInputFields = (sections) => [...new Set((sections || [])
-  .flatMap((section) => [...String(section.content || '').matchAll(/\{([^{}]+)\}/g)].map((match) => match[1])))];
 const data = (fromId, toId, alias, fromPort = 'result') => ({ type: 'data', fromId, fromPort, toId, ...(alias ? { alias } : {}) });
 const table = (headers, rows) => ({ headers, rows, columnTypes: headers.map(() => 'text') });
 const raw = table(['text'], [['a'], ['b']]);
@@ -21,9 +20,9 @@ const canvas = () => ({
   historyVersion: 1,
   nodes: [
     { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: raw },
-    { type: 'prompt', nodeId: 'p', name: 'Extract', sections: [{ name: 'Task', content: 'Read {text}' }],
+    { type: 'prompt', nodeId: 'p', name: 'Extract', text: 'Read {text}',
       outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} },
-    { type: 'prompt', nodeId: 'judge', name: 'Judge', sections: [{ name: 'Task', content: 'Judge {answer}' }],
+    { type: 'prompt', nodeId: 'judge', name: 'Judge', text: 'Judge {answer}',
       outputFormat: { returnShape: 'single', fields: [{ key: 'verdict', type: 'str' }] }, inputTypes: {} },
     { type: 'run', nodeId: 'r', runName: 'Run', historyRecordId: 'rec-r', runCompleted: '1', runInputToColumn: JSON.stringify({ text: 'text' }),
       runInputContent: JSON.stringify(raw),

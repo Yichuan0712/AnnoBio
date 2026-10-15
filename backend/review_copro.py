@@ -12,9 +12,8 @@ candidate #breadth), evaluates every candidate against the full example set, and
 one into the next round as the new seed to vary from. No demos are bootstrapped or selected — cheaper per
 round than MIPROv2, but also gives up MIPROv2's joint instructions+demos optimization.
 
-Same architecture scope as review_miprov2.py: optimizes the target section IN ISOLATION (its own
-`{placeholder}` keys become dspy.InputFields; other sections aren't shown to the optimizer). See that
-module's docstring for why.
+Same prompt-to-Signature mapping as review_miprov2.py: the prompt text becomes the instructions and its
+`{placeholder}` keys become dspy.InputFields. See that module's docstring for why.
 
 Cost note: `copro_breadth` and `copro_depth` (their own settings, defaults 6 and 3) are the cost dials —
 cost is roughly `breadth x depth x num_examples` task-model evaluation calls, plus `depth` instruction-
@@ -35,10 +34,10 @@ from review_dspy_shared import (
     extract_placeholder_keys,
     make_mean_score_fn,
     make_metric,
-    SectionModule,
+    PromptModule,
 )
 from review_gepa import _build_training_examples
-from review_pipeline import PromptEditSuggestion, _sanitize_prompt_edits, _sec_name_content
+from review_pipeline import PromptEditSuggestion, _sanitize_prompt_edits
 from score_mapping_bundle import parse_score_mapping_bundle
 from score_run_gt_pairing import flatten_score_rules
 from safe_stdio import safe_print as _print
@@ -61,17 +60,14 @@ def run_copro(
     settings: dict | None = None,
 ) -> None:
     """Drive COPRO. Emits: plan, stage(prepare|compile|select), suggestions (at most one), done."""
-    sections = list(getattr(body, "prompt_sections", None) or [])
+    prompt = str(getattr(body, "prompt", "") or "")
+    seed_text = prompt.strip()
     comparison_rows = list(getattr(body, "comparison_rows", None) or [])
 
-    if not sections:
-        append_event({"type": "plan", "summary": "No prompt sections to optimize.", "diagnosis_total": 0})
+    if not seed_text:
+        append_event({"type": "plan", "summary": "The prompt is empty; nothing to optimize.", "diagnosis_total": 0})
         append_event({"type": "done"})
         return
-
-    target_idx = getattr(body, "target_section_index", None)
-    target_idx = target_idx if isinstance(target_idx, int) and 0 <= target_idx < len(sections) else 0
-    section_name, seed_text = _sec_name_content(sections[target_idx])
 
     output_schema = getattr(body, "output_schema", None) or {}
     if not output_schema.get("fields"):
@@ -118,8 +114,8 @@ def run_copro(
     append_event({
         "type": "plan",
         "summary": (
-            f"COPRO: optimizing instructions for section \"{section_name}\" in isolation "
-            f"({len(input_keys)} placeholder field(s) it sees) against {len(examples)} example(s) via the "
+            f"COPRO: optimizing the prompt's instructions "
+            f"({len(input_keys)} placeholder field(s)) against {len(examples)} example(s) via the "
             f"official dspy.COPRO, breadth={breadth} depth={depth}. Instructions only — few-shot examples "
             "are not touched by this method. Cost scales with breadth x depth x examples."
         ),
@@ -134,8 +130,8 @@ def run_copro(
     dspy_examples = build_dspy_examples(examples=examples, input_keys=input_keys, output_field_keys=output_field_keys, gt_column_by_field=gt_column_by_field)
     metric = make_metric(output_root=output_root, output_leaves=output_leaves, output_field_keys=output_field_keys)
 
-    signature = build_signature(instructions=seed_text, input_keys=input_keys, output_schema=output_schema, signature_name="CoproSection")
-    student = SectionModule(signature)
+    signature = build_signature(instructions=seed_text, input_keys=input_keys, output_schema=output_schema, signature_name="CoproPrompt")
+    student = PromptModule(signature)
     lm = build_dspy_lm(provider=provider, model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens)
     mean_score = make_mean_score_fn(dspy_examples=dspy_examples, input_keys=input_keys, metric=metric, lm=lm, is_cancelled=is_cancelled, log_prefix="COPRO")
 
@@ -188,14 +184,14 @@ def run_copro(
 
     target_labels = sorted({label for ex in examples for label in ex.score_labels}) or [1]
     edit = PromptEditSuggestion(
-        name=f"COPRO: evolved \"{section_name}\"",
-        phase1_addresses=["COPRO optimized this section's instructions via coordinate ascent"],
+        name="COPRO: evolved prompt",
+        phase1_addresses=["COPRO optimized the prompt's instructions via coordinate ascent"],
         old_sentence=seed_text,
         new_sentence=best_text,
         reason=f"Empirically improved from {seed_score:.0%} to {best_score:.0%} on {len(examples)} example(s).",
         target_score_row_indices=target_labels,
     )
-    batch = _sanitize_prompt_edits(sections, [edit], comparison_rows)
+    batch = _sanitize_prompt_edits(prompt, [edit], comparison_rows)
     if not batch:
         append_event({"type": "stage", "stage_id": "select", "kind": "done", "payload": {"improved": True, "dropped": "old_sentence did not resolve uniquely"}})
         append_event({"type": "done"})

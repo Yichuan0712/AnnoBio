@@ -60,7 +60,7 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
     const source = runInputSource(canvas, targetNodeId);
     const { snapshot: dataset, table } = await snapshotSource(source);
     const promptSnapshot = {
-      nodeId: nodeId(prompt), name: prompt.name || '', sections: copy(prompt.sections || prompt.fields || []),
+      nodeId: nodeId(prompt), name: prompt.name || '', text: String(prompt.text || ''),
       outputFormat: copy(prompt.outputFormat || { returnShape: 'single', fields: [] }),
       inputTypes: copy(prompt.inputTypes || {}),
     };

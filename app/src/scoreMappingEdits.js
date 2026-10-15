@@ -2,7 +2,7 @@
  * Pure functions for applying agent-side score-mapping edits.
  *
  * Used by the `update_score_node` skill to surgically modify the rule tree of an
- * agent-created score node. Mirrors the design of `promptNodeEdits.js`:
+ * agent-created score node:
  *   - op-tagged union of small, atomic operations
  *   - strict locator (each rule located by (outputKey, gtColumns); must match exactly once)
  *   - structured errors with rich diagnostic context

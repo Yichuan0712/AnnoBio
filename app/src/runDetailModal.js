@@ -103,7 +103,7 @@ export function openRunDetailModal({
   describeInput = () => null,
   revealNode = () => {},
   getPromptInputFields = () => [],
-  getPromptTemplate = () => ({ sections: [], outputSchema: { return_shape: 'single', fields: [] } }),
+  getPromptTemplate = () => ({ outputSchema: { return_shape: 'single', fields: [] } }),
   unregisterPendingRun = () => {},
   getPendingRunId = () => null,
   isRunNameAlreadyUsedForPrompt = () => false,

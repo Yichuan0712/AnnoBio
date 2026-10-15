@@ -5,7 +5,7 @@ import { findPendingInteraction, resolvePipelineAction } from '../src/agent/agen
 
 const canvas = { nodes: [
   { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: { headers: ['text'], rows: [['one']] } },
-  { type: 'prompt', nodeId: 'p', name: 'Extract', sections: [{ content: 'Read {text}' }] },
+  { type: 'prompt', nodeId: 'p', name: 'Extract', text: 'Read {text}' },
   { type: 'run', nodeId: 'r', runWorkingSetId: 'raw', runInputToColumn: { text: 'text' } },
 ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }] };
 
