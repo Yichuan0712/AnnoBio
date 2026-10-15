@@ -330,6 +330,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
     let connectionChanged = false;
     if (refNode && newNode?.dataset?.nodeId) {
+      // A later Optimize run must not relabel the method that created this Prompt version.
+      if (refNode.dataset.reviewMethodId) newNode.dataset.optimizationMethodId = refNode.dataset.reviewMethodId;
       const refHeight = refNode.offsetHeight || 80;
       const newHeight = newNode.offsetHeight || 80;
       if (typeof setNodeCanvasPosition === 'function') {

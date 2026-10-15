@@ -64,7 +64,7 @@ export function mergeScoreMetricsWithPrf(metrics, comparisonRows) {
   return { ...metrics, ...prf };
 }
 
-/** One line for the Agent, with the precision / recall / F1 the Prompt Optimization tab shows. */
+/** One line for the Agent, with the precision / recall / F1 of an Evaluate result. */
 export function formatScoreMetrics(metrics) {
   const percent = (value) => `${Math.round(value * 10) / 10}%`;
   const matched = `${metrics.matchedRows}/${metrics.totalRows} rows matched (${percent(metrics.passRate * 100)})`;
