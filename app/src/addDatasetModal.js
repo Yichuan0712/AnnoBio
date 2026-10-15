@@ -208,9 +208,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                       <p class="dataset-sheet-hint" id="dataset-sheet-hint">This file has multiple sheets. Select which sheet to import.</p>
                       <select id="dataset-sheet-select" class="dataset-meta-input" aria-label="Select sheet"></select>
                     </div>
-                    <div class="dataset-file-info" id="dataset-file-info" aria-live="polite">
-                      <span class="dataset-file-info-placeholder">No file selected.</span>
-                    </div>
+                    <div class="dataset-file-info" id="dataset-file-info" aria-live="polite"></div>
                   </div>
                 </div>
                 <div class="dataset-source-panel" data-source-panel="image" hidden>
@@ -348,7 +346,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
         </div>
         <div class="dataset-add-preview-wrap prompt-preview-wrap">
           <h3 class="prompt-preview-title">Dataset preview</h3>
-          <div class="dataset-preview prompt-preview prompt-preview--empty" aria-live="polite">No file selected yet.</div>
+          <div class="dataset-preview prompt-preview prompt-preview--empty" aria-live="polite"></div>
         </div>
       </div>
     </div>
@@ -418,7 +416,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
   function setFileInfoPlaceholder(msg) {
     if (!fileInfoEl) return;
     fileInfoEl.className = 'dataset-file-info';
-    fileInfoEl.innerHTML = `<span class="dataset-file-info-placeholder">${escapeHtml(msg || 'No file selected.')}</span>`;
+    fileInfoEl.innerHTML = msg ? `<span class="dataset-file-info-placeholder">${escapeHtml(msg)}</span>` : '';
   }
 
   function formatDate(ms) {
@@ -621,7 +619,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
     fileImported = false;
     parsedDatasetContent = null;
     xlsxWorkbook = null;
-    previewEl.textContent = 'No file selected yet.';
+    previewEl.textContent = '';
     previewEl.classList.add('prompt-preview--empty');
     setPubmedFetchStatus('');
     setClinicaltrialsFetchStatus('');
@@ -1130,7 +1128,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       if (sheetWrap) sheetWrap.style.display = 'none';
       filenameEl.textContent = 'Please choose a .csv, .tsv or .xlsx file.';
       setFileInfoPlaceholder('Please choose a .csv, .tsv or .xlsx file.');
-      previewEl.textContent = 'No file selected yet.';
+      previewEl.textContent = '';
       previewEl.classList.add('prompt-preview--empty');
       return;
     }
@@ -1178,7 +1176,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
         xlsxWorkbook = null;
         filenameEl.textContent = 'Failed to read file.';
         setFileInfoPlaceholder('Failed to read file.');
-        previewEl.textContent = 'No file selected yet.';
+        previewEl.textContent = '';
         previewEl.classList.add('prompt-preview--empty');
       };
       reader.readAsArrayBuffer(file);
@@ -1216,7 +1214,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       parsedDatasetContent = null;
       filenameEl.textContent = 'Failed to read file.';
       setFileInfoPlaceholder('Failed to read file.');
-      previewEl.textContent = 'No file selected yet.';
+      previewEl.textContent = '';
       previewEl.classList.add('prompt-preview--empty');
     };
     reader.readAsText(file, 'UTF-8');

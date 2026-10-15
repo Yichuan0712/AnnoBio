@@ -58,12 +58,12 @@ export function openAddPromptModal(workflowCanvasApi) {
           </div>
           <div class="prompt-step prompt-step-3">
             <p class="prompt-step-label">Step 3 of 3 — LLM output schema</p>
-            <p class="prompt-hint">The LLM will return items with these fields. Add a field, then add example values for that field.</p>
+            <p class="prompt-hint">Define the fields in each output row. Choose whether each input row produces one output row or multiple output rows.</p>
             <div class="prompt-output-return-shape-wrap">
-              <span class="prompt-output-return-shape-label">Output rows</span>
+              <span class="prompt-output-return-shape-label">For each input row</span>
               <div class="review-detail-view-switch prompt-output-row-switch" role="group" aria-label="Output rows">
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="single" aria-pressed="false">One row</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active prompt-output-row-btn" data-return-shape="table" aria-pressed="true">Multiple rows</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="single" aria-pressed="false">One output row</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active prompt-output-row-btn" data-return-shape="table" aria-pressed="true">Multiple output rows</button>
               </div>
             </div>
             <div class="prompt-output-format-wrap">
@@ -83,9 +83,11 @@ export function openAddPromptModal(workflowCanvasApi) {
           <div class="prompt-preview" aria-readonly="true"></div>
         </div>
         <div class="prompt-schema-preview-wrap">
-          <h3 class="prompt-schema-preview-title">Output schema</h3>
-          <p class="prompt-schema-preview-return-shape"><span class="prompt-schema-meta-label">Output rows:</span> <span class="prompt-schema-preview-return-shape-value">Multiple rows</span></p>
+          <h3 class="prompt-schema-preview-title">
+            <span class="prompt-schema-preview-heading-text">Output schema</span>
+          </h3>
           <div class="prompt-schema-preview-table-wrap">
+            <span class="prompt-schema-preview-return-shape prompt-schema-preview-return-shape-value" title="Each input row can produce multiple output rows.">Multiple output rows per input</span>
             <table class="prompt-schema-preview-table" aria-readonly="true">
               <thead>
                 <tr>
@@ -274,7 +276,11 @@ export function openAddPromptModal(workflowCanvasApi) {
     const returnShapeEl = overlay.querySelector('.prompt-schema-preview-return-shape-value');
     if (!tbody) return;
     if (returnShapeEl) {
-      returnShapeEl.textContent = outputReturnShape === 'single' ? 'One row' : 'Multiple rows';
+      const isSingle = outputReturnShape === 'single';
+      returnShapeEl.textContent = isSingle ? 'One output row per input' : 'Multiple output rows per input';
+      returnShapeEl.title = isSingle
+        ? 'Each input row produces one output row.'
+        : 'Each input row can produce multiple output rows.';
     }
     tbody.innerHTML = outputFields.map((f) => {
       const nameRaw = (f.key || '').trim();
