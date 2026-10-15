@@ -1,8 +1,9 @@
 /**
- * The bottom panel's Log tab (desktop): the local Python backend's output, streamed from the main
+ * The bottom panel's Log tab (desktop): backend output and frontend errors, streamed from the main
  * process (backendLog.js). Follows new output while scrolled to the bottom, like a terminal.
  */
 import './backendLogPanel.css';
+import { subscribeAppErrors } from './appErrors.js';
 
 const MAX_LINES = 2000;
 const FOLLOW_SLACK_PX = 24;
@@ -22,25 +23,18 @@ export function mountBackendLogPanel(container) {
   view.innerHTML = `
     <div class="backend-log__toolbar">
       <span class="backend-log__status"></span>
-      <button type="button" class="btn btn-secondary backend-log__folder">Open log folder</button>
-      <button type="button" class="btn btn-secondary backend-log__copy">Copy all</button>
-      <button type="button" class="btn btn-secondary backend-log__clear">Clear</button>
     </div>
     <div class="backend-log__output" role="log" tabindex="0">
-      <p class="backend-log__empty">No backend output yet.</p>
+      <p class="backend-log__empty">No log output yet.</p>
     </div>
   `;
   const statusEl = view.querySelector('.backend-log__status');
   const outputEl = view.querySelector('.backend-log__output');
   const emptyEl = view.querySelector('.backend-log__empty');
-  const copyBtn = view.querySelector('.backend-log__copy');
-  const folderBtn = view.querySelector('.backend-log__folder');
-  const clearBtn = view.querySelector('.backend-log__clear');
 
   // A renderer reloaded under an older main process (npm start keeps running) has no log bridge.
   if (!api?.getBackendLog || !api?.onBackendLog) {
-    emptyEl.textContent = 'Restart AnnoBio to see the backend output here.';
-    copyBtn.disabled = folderBtn.disabled = clearBtn.disabled = true;
+    emptyEl.textContent = 'Restart AnnoBio to see logs here.';
     return;
   }
 
@@ -48,17 +42,19 @@ export function mountBackendLogPanel(container) {
   let lastId = 0;
   let follow = true;
   let visible = false;
+  let errorCount = 0;
 
   function updateState() {
     emptyEl.hidden = entries.length > 0;
-    copyBtn.disabled = clearBtn.disabled = entries.length === 0;
-    statusEl.textContent = entries.length ? `${entries.length} line${entries.length === 1 ? '' : 's'}` : '';
+    const count = entries.length ? `${entries.length} line${entries.length === 1 ? '' : 's'}` : '';
+    statusEl.textContent = [count, errorCount ? `${errorCount} frontend error${errorCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
   }
 
   function lineElement(entry) {
     const row = document.createElement('div');
     row.className = 'backend-log__line';
-    if (entry.stream === 'app') row.classList.add('backend-log__line--app');
+    if (entry.stream === 'frontend') row.classList.add('backend-log__line--error');
+    else if (entry.stream === 'app') row.classList.add('backend-log__line--app');
     else if (ERROR_LINE.test(entry.text)) row.classList.add('backend-log__line--error');
     else if (entry.highlight) row.classList.add('backend-log__line--heading');
     const time = document.createElement('span');
@@ -66,7 +62,7 @@ export function mountBackendLogPanel(container) {
     time.textContent = formatTime(entry.time);
     const text = document.createElement('span');
     text.className = 'backend-log__text';
-    text.textContent = entry.text;
+    text.textContent = `${entry.stream === 'frontend' ? '[Frontend] ' : ''}${entry.text}`;
     row.append(time, text);
     return row;
   }
@@ -111,24 +107,6 @@ export function mountBackendLogPanel(container) {
     scrollToEnd();
   }).observe(outputEl);
 
-  copyBtn.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(entries.map((entry) => `${formatTime(entry.time)} ${entry.text}`).join('\n'));
-      copyBtn.textContent = 'Copied';
-      setTimeout(() => { copyBtn.textContent = 'Copy all'; }, 1200);
-    } catch (err) {
-      console.error('Copy backend log:', err);
-    }
-  });
-  folderBtn.addEventListener('click', () => api.openBackendLogFolder?.());
-  clearBtn.addEventListener('click', () => {
-    api.clearBackendLog?.();
-    entries = [];
-    outputEl.replaceChildren(emptyEl);
-    follow = true;
-    updateState();
-  });
-
   // Subscribe before reading the tail; batches that arrive meanwhile are merged in by id after it.
   let loaded = false;
   const early = [];
@@ -141,7 +119,11 @@ export function mountBackendLogPanel(container) {
     })
     .catch((err) => {
       loaded = true;
-      console.error('Load backend log:', err);
+      console.error('Load log:', err);
     });
+  subscribeAppErrors((list) => {
+    errorCount = list.length;
+    updateState();
+  });
   updateState();
 }

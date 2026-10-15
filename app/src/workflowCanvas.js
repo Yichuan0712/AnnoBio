@@ -73,7 +73,7 @@ import { buildSelectedRoute } from './pipelineRouteSelection.js';
 import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
 import { importPipelineRunHistory, pipelineRunImported } from './pipelineHistoryImport.js';
 import { createWorkspacePanels } from './workspacePanels.js';
-import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
+import { setLogPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
 import { mountPromptOptimizationPanel } from './promptOptimizationPanel.js';
 import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight } from './icons.js';
@@ -3311,7 +3311,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   // Desktop and web share VS Code-style layout icons that show each panel's state (redrawn in
   // syncPanelButtons); the web top bar only draws them larger.
   const panelToggleIconSize = isElectron ? undefined : 18;
-  // Uncaught errors land in the bottom panel's Errors tab (desktop); this keeps them noticeable
+  // Uncaught errors land in the bottom panel's Log tab (desktop); this keeps them noticeable
   // while that panel is collapsed or showing another tab.
   const panelErrorBadge = document.createElement('span');
   panelErrorBadge.className = 'top-bar-panel-toggle__badge';
@@ -3415,7 +3415,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay')?.destroyPipelineOverview?.();
     }
     workspacePanels.setEnabled(visible);
-    if (isElectron) setErrorsPanelAvailable(visible);
+    if (isElectron) setLogPanelAvailable(visible);
   }
 
   const zoomToolbar = document.createElement('div');
@@ -5966,7 +5966,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   let optimizationVisible = false;
   let optimizationPanel = null;
   function syncPanelButtons() {
-    // Same on desktop and web; only desktop's bottom panel adds the Log and Errors tabs (and errors badge).
+    // Same on desktop and web; desktop adds the Log tab and its frontend error badge.
     for (const [button, visible, label] of [
       [currentPipelineBtn, panelVisibility.pipeline, 'Toggle Panel'],
       [agentAssistantBtn, panelVisibility.agent, 'Toggle Agent Side Bar'],
@@ -6036,7 +6036,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     bottomTabs: [
       { id: 'pipeline', label: 'Current Pipeline' },
       { id: 'optimization', label: 'Prompt Version' },
-      ...(isElectron ? [{ id: 'log', label: 'Log' }, { id: 'errors', label: 'Errors' }] : []),
+      ...(isElectron ? [{ id: 'log', label: 'Log' }] : []),
     ],
     onCollapse: () => currentPipelineBtn.focus(),
   });
@@ -6057,10 +6057,9 @@ export function buildWorkflowCanvas(root, options = {}) {
   document.addEventListener('workflow:history-resolved', () => getCanvasState());
   if (isElectron) {
     mountBackendLogPanel(workspacePanels.tabHost('log'));
-    mountErrorsPanel(workspacePanels.tabHost('errors'));
     subscribeAppErrors((list) => {
       appErrorCount = list.length;
-      workspacePanels.setTabBadge('errors', list.length);
+      workspacePanels.setTabBadge('log', list.length);
       syncPanelButtons();
     });
   }

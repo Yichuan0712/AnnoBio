@@ -359,7 +359,7 @@ html.top-bar-web {
 .top-bar-panel-toggle__icon { display: inline-flex; }
 .top-bar-panel-toggle:focus-visible { outline: 2px solid var(--primary-btn-text, #2563eb); outline-offset: -2px; }
 .top-bar-panel-toggle svg { display: block; }
-/* Count of uncaught errors in the bottom panel's Errors tab (desktop, appErrors.js). */
+/* Count of uncaught frontend errors in the Log tab (desktop, appErrors.js). */
 .top-bar-panel-toggle__badge {
   position: absolute;
   top: -3px;

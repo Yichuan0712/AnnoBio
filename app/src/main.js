@@ -585,8 +585,9 @@ ipcMain.handle('fs:write-file', async (_e, filePath, data, encoding) => {
 });
 
 ipcMain.handle('backend-log:get', () => backendLog?.lines() || []);
-ipcMain.handle('backend-log:clear', () => { backendLog?.clear(); });
-ipcMain.handle('backend-log:open-folder', () => (backendLog ? shell.openPath(backendLog.dir) : ''));
+ipcMain.handle('backend-log:renderer-error', (_event, entry) => {
+  if (entry && typeof entry === 'object') backendLog?.rendererError(entry);
+});
 
 ipcMain.handle('shell:open-external', (_e, url) => {
   if (typeof url !== 'string' || !url.startsWith('https://openrouter.ai/')) return;
@@ -786,6 +787,7 @@ app.on('window-all-closed', () => {
 // Ensure backend is stopped when quitting.
 app.on('before-quit', () => {
   stopPythonBackend();
+  void backendLog?.close();
 });
 
 ipcMain.handle('history:index', (_e, projectPath) => projectAssets.loadHistoryIndex(projectPath));

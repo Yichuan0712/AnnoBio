@@ -41,8 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('fs:write-file', filePath, data, encoding),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   getBackendLog: () => ipcRenderer.invoke('backend-log:get'),
-  clearBackendLog: () => ipcRenderer.invoke('backend-log:clear'),
-  openBackendLogFolder: () => ipcRenderer.invoke('backend-log:open-folder'),
+  reportRendererError: (entry) => ipcRenderer.invoke('backend-log:renderer-error', entry),
   /** Calls `callback(lines)` with each batch of new backend output; returns an unsubscribe function. */
   onBackendLog: (callback) => {
     const listener = (_event, lines) => callback(lines);

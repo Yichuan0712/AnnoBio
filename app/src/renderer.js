@@ -4,7 +4,7 @@
  */
 
 function showError(msg, err) {
-  // Desktop: listed in the bottom panel's Errors tab (appErrors.js) instead of a box over the page.
+  // Desktop: frontend exceptions join backend output in the Log tab.
   if (window.electronAPI) {
     reportAppError(msg, err);
     console.error(msg, err);
