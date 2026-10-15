@@ -1,10 +1,9 @@
 /**
- * Draws a node's ports (nodePorts.js) on its edges: solid dots for changeable data connections, hollow
- * dots for where it came from and what was made from it (docs/design/NODE_PORTS_PLAN.md §3.2, step 2).
+ * Draws a node's data and creation/provenance ports (nodePorts.js) with one shared dot style.
  * Lines are drawn to these dots by workflowCanvas.js renderEdge, which finds them by
  * `data-port-side` and `data-port-id`.
  */
-import { ADD_INPUT_PORT, portLayout } from './nodePorts.js';
+import { ADD_INPUT_PORT, LINEAGE_PORT, portLayout } from './nodePorts.js';
 import { iconDataset, iconEvaluate, iconPrompt, iconRun } from './icons.js';
 
 const PORTS_CLASS = 'workflow-node__ports';
@@ -14,14 +13,14 @@ function dot(side, item, title, { lineage = false } = {}) {
   const el = document.createElement('span');
   el.className = DOT_CLASS;
   if (lineage) el.classList.add(`${DOT_CLASS}--lineage`);
-  if (item?.hollow) el.classList.add(`${DOT_CLASS}--hollow`);
   if (item?.unavailable) el.classList.add(`${DOT_CLASS}--unavailable`);
   if (item?.fixed) el.classList.add(`${DOT_CLASS}--fixed`);
   el.dataset.portSide = side;
   if (item) {
     el.dataset.portId = item.id;
-    el.dataset.portType = item.type;
+    if (item.type) el.dataset.portType = item.type;
   }
+  if (lineage) el.dataset.portId = LINEAGE_PORT;
   if (title) el.title = title;
   return el;
 }

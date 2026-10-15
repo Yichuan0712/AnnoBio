@@ -90,7 +90,7 @@ test('each node type has its inputs on the left and outputs on the right', () =>
   assert.equal(nodePorts(state, 'review').lineageOutput.label, 'New prompt');
   assert.equal(nodePorts(state, 'review').lineageOutput.icon, PORT_TYPES.PROMPT);
   assert.deepEqual(nodePorts(state, 'sampler').inputs[0].source, { nodeId: 'abstracts', port: RESULT_PORT, kind: 'dataset' });
-  assert.equal(nodePorts(state, 'sampler').inputs[0].hollow, true);
+  assert.equal(nodePorts(state, 'sampler').inputs[0].hollow, undefined);
   assert.deepEqual(ids(nodePorts(state, 'sampler').outputs), []);
   assert.equal(nodePorts(state, 'missing'), null);
 });
@@ -98,12 +98,12 @@ test('each node type has its inputs on the left and outputs on the right', () =>
 test('the inputs fixed when a node is created say why', () => {
   const state = canvas();
   assert.match(nodePorts(state, 'score').inputs[0].fixed, /Run it was created from/);
-  assert.equal(nodePorts(state, 'score').inputs[0].hollow, true);
+  assert.equal(nodePorts(state, 'score').inputs[0].hollow, undefined);
   assert.equal(nodePorts(state, 'score').inputs[1].fixed, undefined);
   assert.equal(nodePorts(state, 'score').inputs[1].hollow, undefined);
   assert.equal(nodePorts(state, 'score').outputs[0].hollow, undefined);
   assert.match(nodePorts(state, 'review').inputs[0].fixed, /Evaluate node it was created from/);
-  assert.equal(nodePorts(state, 'review').inputs[0].hollow, true);
+  assert.equal(nodePorts(state, 'review').inputs[0].hollow, undefined);
   assert.match(nodePorts(state, 'sampler').inputs[0].fixed, /Dataset it was created from/);
   assert.equal(nodePorts(state, 'extract').inputs.some((item) => item.fixed), false);
 });
@@ -137,8 +137,8 @@ test('steps show all port labels, while single Dataset and Prompt ports stay unn
 
 test('an output lists the input ports that read it', () => {
   const state = canvas();
-  assert.deepEqual(nodePorts(state, 'abstracts').outputs[0].readers, [at('extract', 'input'), at('merge', 'df_abstracts')]);
-  assert.deepEqual(nodePorts(state, 'extract').outputs[0].readers, [at('split', 'df')]);
+  assert.deepEqual(nodePorts(state, 'abstracts').outputs[0].readers, [at('sampler', 'source'), at('extract', 'input'), at('merge', 'df_abstracts')]);
+  assert.deepEqual(nodePorts(state, 'extract').outputs[0].readers, [at('split', 'df'), at('score', 'run'), { nodeId: 'saved', lineage: true }]);
   assert.deepEqual(nodePorts(state, 'gold').outputs[0].readers, [at('score', 'ground_truth')]);
   assert.deepEqual(nodePorts(state, 'split').outputs.map((item) => item.readers), [[at('merge', 'df')], []]);
 });
@@ -227,25 +227,25 @@ test('Evaluate and Optimize identify their Prompt and follow renames, version ch
   assert.deepEqual(context('review'), context('score'));
 });
 
-test('hollow dots appear where a node came from or something was made from it', () => {
+test('creation outputs stay available before a child exists; fixed source relations keep their endpoints', () => {
   const state = canvas();
   const lineage = (nodeId) => {
     const ports = nodePorts(state, nodeId);
     return [ports.lineageIn, ports.lineageOut];
   };
-  assert.deepEqual(lineage('v1'), [false, true]);
+  assert.deepEqual(lineage('v1'), [false, false]);
   assert.deepEqual(lineage('v2'), [true, false]);
   assert.deepEqual(lineage('v3'), [true, false]);
   assert.deepEqual(lineage('review'), [false, true]);
-  assert.deepEqual(lineage('score'), [false, true]);
+  assert.deepEqual(lineage('score'), [false, false]);
   assert.deepEqual(lineage('sampler'), [false, true]);
   assert.deepEqual(lineage('sample'), [true, false]);
   assert.deepEqual(lineage('saved'), [true, false]);
-  assert.deepEqual(lineage('extract'), [false, true]);
-  assert.deepEqual(lineage('abstracts'), [false, true]);
-  // The Evaluate relation alone keeps a hollow Run output, independently of saved datasets.
+  assert.deepEqual(lineage('extract'), [false, false]);
+  assert.deepEqual(lineage('abstracts'), [false, false]);
+  // Creating or removing downstream nodes never adds a second output circle.
   state.nodes = state.nodes.filter((node) => node.nodeId !== 'saved');
-  assert.deepEqual(lineage('extract'), [false, true]);
+  assert.deepEqual(lineage('extract'), [false, false]);
   assert.equal(nodePorts(state, 'extract').outputs[0].hollow, undefined);
   state.connections = state.connections.filter((edge) => edge.type !== 'run-to-score');
   assert.deepEqual(lineage('extract'), [false, false]);
@@ -264,13 +264,17 @@ test('every kind of connection joins the ports of the table in the plan', () => 
   assert.deepEqual(ends(data('extract', 'split', 'df')), ['result', 'df']);
   assert.deepEqual(ends(data('split', 'merge', 'df', 'ready')), ['ready', 'df']);
   assert.deepEqual(ends(data('abstracts', 'merge', 'df_abstracts')), ['result', 'df_abstracts']);
-  assert.deepEqual(ends(edge('run-to-score', 'extract', 'score')), ['lineage', 'run']);
+  assert.deepEqual(ends(edge('run-to-score', 'extract', 'score')), ['result', 'run']);
   assert.deepEqual(ends(edge('ground-truth-to-score', 'gold', 'score')), ['result', 'ground_truth']);
-  assert.deepEqual(ends(edge('score-to-prompt-review', 'score', 'review')), ['lineage', 'score']);
-  assert.deepEqual(ends(edge('dataset-to-sampler', 'abstracts', 'sampler')), ['lineage', 'source']);
-  for (const type of ['prompt-to-prompt', 'prompt-review-to-prompt', 'dataset-to-dataset', 'sampler-to-dataset', 'saved-from']) {
-    assert.deepEqual(ends(edge(type, 'v1', 'v2')), ['lineage', 'lineage'], type);
-  }
+  assert.deepEqual(ends(edge('score-to-prompt-review', 'score', 'review')), ['score', 'score']);
+  assert.deepEqual(ends(edge('dataset-to-sampler', 'abstracts', 'sampler')), ['result', 'source']);
+  assert.deepEqual(ends(edge('prompt-to-prompt', 'v1', 'v2')), ['prompt', 'lineage']);
+  assert.deepEqual(ends(edge('prompt-review-to-prompt', 'review', 'v3')), ['lineage', 'lineage']);
+  assert.deepEqual(ends(edge('dataset-to-dataset', 'abstracts', 'gold')), ['result', 'lineage']);
+  assert.deepEqual(ends(edge('sampler-to-dataset', 'sampler', 'sample')), ['lineage', 'lineage']);
+  assert.deepEqual(ends(edge('saved-from', 'extract', 'saved')), ['result', 'lineage']);
+  state.nodes.push({ type: 'dataset', nodeId: 'saved-branch', savedFrom: { kind: 'process', nodeId: 'split', port: 'rewrite', recordId: 'record' } });
+  assert.deepEqual(ends(edge('saved-from', 'split', 'saved-branch')), ['rewrite', 'lineage']);
   assert.equal(edgeEndpoints(state, edge('prompt-to-run', 'gone', 'extract')), null);
   assert.equal(edgeEndpoints(state, edge('mystery', 'v1', 'v2')), null);
 });
@@ -507,7 +511,7 @@ test('sample code counts as untouched whatever inputs follow df', () => {
 
 // ---------- how ports are shown ----------
 
-test('all solid and hollow dots use rows below the header, including Dataset and Prompt origins', () => {
+test('data and creation ports use uniform rows below the header', () => {
   const state = canvas();
   const layout = (nodeId) => {
     const { left, right } = portLayout(nodePorts(state, nodeId));
@@ -516,9 +520,9 @@ test('all solid and hollow dots use rows below the header, including Dataset and
   };
   assert.deepEqual(layout('extract'), {
     left: { rows: ['prompt', 'input'], lineage: null },
-    right: { rows: ['result'], lineage: 'row' },
+    right: { rows: ['result'], lineage: null },
   });
-  assert.deepEqual(layout('abstracts'), { left: { rows: [], lineage: null }, right: { rows: ['result'], lineage: 'row' } });
+  assert.deepEqual(layout('abstracts'), { left: { rows: [], lineage: null }, right: { rows: ['result'], lineage: null } });
   assert.deepEqual(layout('v2'), { left: { rows: [], lineage: 'row' }, right: { rows: ['prompt'], lineage: null } });
   assert.deepEqual(layout('v3').left, { rows: [], lineage: 'row' });
   for (const id of ['sample', 'saved']) {
@@ -529,9 +533,14 @@ test('all solid and hollow dots use rows below the header, including Dataset and
   assert.deepEqual(layout('abstracts-v2').left, { rows: [], lineage: 'row' });
   assert.deepEqual(layout('split'), { left: { rows: ['df', '+'], lineage: null }, right: { rows: ['ready', 'rewrite'], lineage: null } });
   assert.deepEqual(layout('merge').right, { rows: ['result'], lineage: null });
-  assert.deepEqual(layout('score'), { left: { rows: ['run', 'ground_truth'], lineage: null }, right: { rows: ['score'], lineage: 'row' } });
+  assert.deepEqual(layout('score'), { left: { rows: ['run', 'ground_truth'], lineage: null }, right: { rows: ['score'], lineage: null } });
   assert.deepEqual(layout('review'), { left: { rows: ['score'], lineage: null }, right: { rows: [], lineage: 'row' } });
   assert.deepEqual(layout('sampler'), { left: { rows: ['source'], lineage: null }, right: { rows: [], lineage: 'row' } });
+  for (const node of state.nodes) {
+    const right = portLayout(nodePorts(state, node.nodeId)).right;
+    const count = right.rows.length + (right.lineage ? 1 : 0);
+    assert.equal(count, node.nodeId === 'split' ? 2 : 1, `${node.type} ${node.nodeId}: only real Process branches add output circles`);
+  }
   const withLineageRows = portLayout({ inputs: [], outputs: [{ id: 'a', showLabel: true }, { id: 'b', showLabel: true }], lineageIn: false, lineageOut: true });
   assert.equal(withLineageRows.right.lineage, 'row');
 });
@@ -542,7 +551,7 @@ test('hover text says what an input reads, what an output gives, and where a nod
   assert.deepEqual(titles('extract').inputs, { prompt: 'Input: Extract v1', input: 'Input: Abstracts' });
   assert.equal(titles('split').inputs.df, 'Input: Run');
   assert.equal(titles('extract').outputs.result, 'Output: no output yet');
-  assert.equal(titles('extract').lineageOut, 'Created Evaluate "Score"\nSaved as Dataset "Saved"');
+  assert.equal(titles('extract').lineageOut, 'Create an Evaluate node or save results to workspace.\nCreated Evaluate "Score"\nSaved as Dataset "Saved"');
   assert.equal(titles('abstracts').outputs.result, 'Output: 1 row · pmid, text');
   assert.equal(titles('other').outputs.out, 'Output: out · no output yet');
   assert.equal(titles('merge').inputs.df, 'Input: Split · ready');
@@ -551,13 +560,13 @@ test('hover text says what an input reads, what an output gives, and where a nod
   assert.equal(titles('review').inputs.score, 'Input: Score\nAn Optimize node analyzes the Evaluate node it was created from. Start a new Optimize node from another Evaluate node.');
   assert.match(titles('dyn').outputs.result, /once the Process has run/);
   assert.equal(titles('v2').lineageIn, 'New version of "Extract v1"');
-  assert.equal(titles('v1').lineageOut, 'New version "Extract v2"');
+  assert.equal(titles('v1').lineageOut, 'Create a new Prompt version.\nNew version "Extract v2"');
   assert.equal(titles('v3').lineageIn, 'Created by Apply in Optimize "Review"');
   assert.equal(titles('review').lineageOut, 'Output: New prompt\nApplied as Prompt "Extract v3"');
-  assert.equal(titles('score').lineageOut, 'Created Optimize "Review"');
+  assert.equal(titles('score').lineageOut, 'Create an Optimize node or save comparison results to workspace.\nCreated Optimize "Review"');
   assert.equal(titles('sample').lineageIn, 'Sampled by "Sample"');
-  assert.equal(titles('sampler').lineageOut, 'Sample "Sample 20"');
-  assert.equal(titles('abstracts').lineageOut, 'Created Sample "Sample"');
+  assert.equal(titles('sampler').lineageOut, 'Create a sample dataset.\nSample "Sample 20"');
+  assert.equal(titles('abstracts').lineageOut, 'Create a Sample or a new dataset version.\nCreated Sample "Sample"');
   assert.equal(titles('saved').lineageIn, 'Saved from Run of "Extract v1"');
   assert.equal(titles('abstracts').lineageIn, '');
 });

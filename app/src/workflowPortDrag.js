@@ -5,12 +5,12 @@
  * nodePorts.js; this module follows the pointer, shows what can be joined and why not, and hands the
  * resulting ops to the canvas.
  */
-import { applyPortOp, checkConnect, checkDisconnect, nodePorts } from './nodePorts.js';
+import { applyPortOp, checkConnect, checkDisconnect, LINEAGE_PORT, nodePorts } from './nodePorts.js';
 import { centerWithin } from './workflowNodePorts.js';
 
 const DOT = '.workflow-node__port';
-const SOLID_DOT = `${DOT}:not(${DOT}--lineage):not(${DOT}--hollow)`;
-const LINEAGE_HINT = 'Hollow dots show where a node came from and what was made from it. They cannot be connected by dragging.';
+const CONNECTABLE_DOT = `${DOT}:not(${DOT}--lineage)`;
+const FIXED_SOURCE_HINT = 'This node has a fixed source. Create a new node to use another source.';
 const TIP_MS = 3500;
 
 export const AUTO_PAN_MARGIN = 40;
@@ -51,9 +51,10 @@ function dragPath(from, to) {
  *   getState: () => object, clientToCanvas: (x: number, y: number) => { x: number, y: number },
  *   applyOps: (ops: object[]) => void, showBranchMenu: (x: number, y: number, node: HTMLElement, port: string) => void,
  *   showOutputMenu: (x: number, y: number, nodeId: string, port: string, onClose: () => void) => (() => void) | null,
+ *   showInputMenu?: (x: number, y: number, nodeId: string, port: string, onClose: () => void) => (() => void) | null,
  *   promptInputs?: (prompt: object) => string[], onLayoutChange?: () => void, dragThreshold?: number }} options
  */
-export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, getState, clientToCanvas, applyOps, showBranchMenu, showOutputMenu, promptInputs, onLayoutChange, dragThreshold = 4 }) {
+export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, getState, clientToCanvas, applyOps, showBranchMenu, showOutputMenu, showInputMenu, promptInputs, onLayoutChange, dragThreshold = 4 }) {
   let drag = null;
   let tip = null;
   let tipTimer = 0;
@@ -90,22 +91,26 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
     return { x: (parseFloat(node.style.left) || 0) + center.x, y: (parseFloat(node.style.top) || 0) + center.y };
   }
 
-  /** The solid dot under the pointer: the dot itself or the row of a named port. */
+  /** The dot under the pointer, including the row of a named port. */
   function dotAt(clientX, clientY) {
     const el = document.elementFromPoint(clientX, clientY);
     const dot = el?.closest?.(DOT) || el?.closest?.('.workflow-node__port-row')?.querySelector(DOT);
-    return dot && dot.matches(SOLID_DOT) ? dot : null;
+    return dot || null;
   }
 
   function begin(e, dot) {
     const state = getState();
     const { nodeId, portId } = portOfDot(dot);
     const side = dot.dataset.portSide;
+    if (dot.classList.contains('workflow-node__port--lineage')) {
+      return side === 'right'
+        ? { mode: 'create', state, dot, from: { nodeId, portId: LINEAGE_PORT } }
+        : { refused: FIXED_SOURCE_HINT };
+    }
     const ports = nodePorts(state, nodeId);
     const port = (side === 'left' ? ports?.inputs : ports?.outputs)?.find((item) => item.id === portId);
     if (!port) return null;
     if (side === 'right') {
-      if (port.hollow) return { refused: LINEAGE_HINT };
       if (port.unavailable) return { refused: port.unavailable };
       return { mode: 'out', state, dot, from: { nodeId, portId }, port };
     }
@@ -124,7 +129,7 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
     if (mode === 'lift') applyPortOp(checked, drag.disconnect, { promptInputs });
     drag.checks = new Map();
     const side = mode === 'in' ? 'right' : 'left';
-    for (const dot of nodesLayer.querySelectorAll(`${SOLID_DOT}[data-port-side="${side}"]`)) {
+    for (const dot of mode === 'create' ? [] : nodesLayer.querySelectorAll(`${CONNECTABLE_DOT}[data-port-side="${side}"]`)) {
       const at = portOfDot(dot);
       const result = mode === 'in' ? checkConnect(checked, at, drag.to) : checkConnect(checked, drag.from, at);
       drag.checks.set(dot, result);
@@ -200,17 +205,13 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
   }
 
   function onPointerDown(e) {
-    const dot = e.target.closest?.(DOT);
+    const dot = e.target.closest?.(DOT) || e.target.closest?.('.workflow-node__port-row--lineage')?.querySelector(DOT);
     if (!dot || e.button !== 0) return;
     // A press on a dot never drags its node, opens its window or pans the canvas.
     e.stopPropagation();
     e.preventDefault();
     hideTip();
     swallowClick();
-    if (dot.classList.contains('workflow-node__port--lineage')) {
-      showTip(LINEAGE_HINT, e.clientX, e.clientY);
-      return;
-    }
     const started = begin(e, dot);
     if (!started) return;
     if (started.refused) {
@@ -219,7 +220,7 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
     }
     drag = { ...started, startX: e.clientX, startY: e.clientY, clientX: e.clientX, clientY: e.clientY, started: false };
     if (drag.mode === 'lift') {
-      drag.sourceDot = nodesLayer.querySelector(`.workflow-node[data-node-id="${CSS.escape(drag.from.nodeId)}"] ${SOLID_DOT}[data-port-side="right"][data-port-id="${CSS.escape(drag.from.portId)}"]`);
+      drag.sourceDot = nodesLayer.querySelector(`.workflow-node[data-node-id="${CSS.escape(drag.from.nodeId)}"] ${CONNECTABLE_DOT}[data-port-side="right"][data-port-id="${CSS.escape(drag.from.portId)}"]`);
     }
     document.addEventListener('pointermove', onPointerMove);
     document.addEventListener('pointerup', onPointerUp);
@@ -244,14 +245,14 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
     const current = drag;
     if (!current.started) {
       end();
-      // A click on a Process branch offers new steps on it, as a click on its name does.
+      // Clicking any output offers the same actions as dragging it to empty canvas.
       const node = current.dot.closest('.workflow-node');
-      if (current.mode === 'out' && node?.classList.contains('workflow-node--process')) showBranchMenu(e.clientX, e.clientY, node, current.from.portId);
+      if (current.mode === 'create' || current.mode === 'out') showBranchMenu(e.clientX, e.clientY, node, current.from.portId);
       return;
     }
     const dot = dotAt(e.clientX, e.clientY);
     const result = dot ? current.checks.get(dot) : null;
-    if (!dot && current.mode === 'out' && overEmptyCanvas(e.clientX, e.clientY)) {
+    if (!dot && ['out', 'create', 'in'].includes(current.mode) && overEmptyCanvas(e.clientX, e.clientY)) {
       // Freeze at the release point while the menu owns the unfinished connection.
       current.clientX = e.clientX;
       current.clientY = e.clientY;
@@ -260,7 +261,9 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
       const line = current.path.parentNode;
       end({ keepLine: true });
       try {
-        const closeMenu = showOutputMenu(e.clientX, e.clientY, current.from.nodeId, current.from.portId, () => line.remove());
+        const closeMenu = current.mode === 'in'
+          ? showInputMenu?.(e.clientX, e.clientY, current.to.nodeId, current.to.portId, () => line.remove())
+          : showOutputMenu(e.clientX, e.clientY, current.from.nodeId, current.from.portId, () => line.remove());
         if (!closeMenu) line.remove();
       } catch (error) {
         line.remove();

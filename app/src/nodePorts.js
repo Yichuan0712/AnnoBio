@@ -1,7 +1,7 @@
 /**
  * Ports: the dots on the edges of canvas nodes (docs/design/NODE_PORTS_DESIGN.md §4–§6,
- * docs/design/NODE_PORTS_PLAN.md §3). Inputs are on a node's left and outputs on its right; hollow
- * lineage dots show where a node came from and what was made from it. This module says which ports
+ * docs/design/NODE_PORTS_PLAN.md §3). Inputs are on a node's left and outputs on its right;
+ * creation/provenance ports show where a node came from and what was made from it. This module says which ports
  * a node has, which ports a connection joins, and whether a connection may be made or removed, so
  * the canvas, dragging and the Agent follow one set of rules.
  *
@@ -28,8 +28,10 @@ export const PORT_TYPES = Object.freeze({ TABLE: 'table', PROMPT: 'prompt', SCOR
 
 /** The empty port at the end of a Process's inputs: an output dropped on it becomes a new input. */
 export const ADD_INPUT_PORT = '+';
+/** Creation/provenance output, separate from outputs read by other steps. */
+export const LINEAGE_PORT = '__lineage__';
 
-/** Connections that record where a node came from rather than what it reads (hollow dots). */
+/** Connections that record where a node came from rather than what it reads. */
 export const LINEAGE_EDGE_TYPES = new Set(['prompt-to-prompt', 'prompt-review-to-prompt', 'dataset-to-dataset', 'sampler-to-dataset', 'saved-from']);
 
 const TYPE_NOUN = { table: 'a table', prompt: 'a Prompt', score: 'an Evaluate node' };
@@ -121,8 +123,9 @@ function processAliasOf(state, edge) {
 
 /**
  * The ports `edge` joins (NODE_PORTS_PLAN.md §3.1): `{ from: { nodeId, portId }, to: { nodeId, portId } }`,
- * with `lineage: true` instead of a port ID on lineage ends. Fixed source relations (Sample,
- * Evaluate, Optimize) use a lineage output and the target's named source input. Null when it joins
+ * with `lineage: true` on fixed provenance inputs and the creation-only Sample/Optimize outputs.
+ * All other connections start at the node's actual output (the recorded branch for a Process).
+ * Null when it joins
  * no ports (an unknown type, a missing node, or a Process input recorded without an alias).
  */
 export function edgeEndpoints(state, edge) {
@@ -131,13 +134,21 @@ export function edgeEndpoints(state, edge) {
   const toId = String(edge.toId || '');
   if (!findNode(state, fromId) || !findNode(state, toId)) return null;
   const ends = (fromPort, toPort) => ({ from: { nodeId: fromId, portId: fromPort }, to: { nodeId: toId, portId: toPort } });
-  if (LINEAGE_EDGE_TYPES.has(edge.type)) return { from: { nodeId: fromId, lineage: true }, to: { nodeId: toId, lineage: true } };
+  const sourceNode = findNode(state, fromId);
+  const sourceEnd = () => {
+    if (sourceNode.type === 'sampler' || sourceNode.type === 'promptReview') return { nodeId: fromId, lineage: true };
+    const outputs = outputPorts(sourceNode);
+    const recordedPort = readSavedFrom(findNode(state, toId)?.savedFrom)?.port || edge.fromPort;
+    return { nodeId: fromId, portId: sourceNode.type === 'process'
+      ? (recordedPort || (outputs.length === 1 ? outputs[0].id : RESULT_PORT)) : outputs[0]?.id || RESULT_PORT };
+  };
+  if (LINEAGE_EDGE_TYPES.has(edge.type)) return { from: sourceEnd(), to: { nodeId: toId, lineage: true } };
   switch (edge.type) {
     case 'prompt-to-run': return ends('prompt', 'prompt');
-    case 'run-to-score': return { from: { nodeId: fromId, lineage: true }, to: { nodeId: toId, portId: 'run' } };
+    case 'run-to-score': return ends(RESULT_PORT, 'run');
     case 'ground-truth-to-score': return ends(RESULT_PORT, 'ground_truth');
-    case 'score-to-prompt-review': return { from: { nodeId: fromId, lineage: true }, to: { nodeId: toId, portId: 'score' } };
-    case 'dataset-to-sampler': return { from: { nodeId: fromId, lineage: true }, to: { nodeId: toId, portId: 'source' } };
+    case 'score-to-prompt-review': return ends('score', 'score');
+    case 'dataset-to-sampler': return ends(RESULT_PORT, 'source');
     case DATA_EDGE: {
       const fromPort = findNode(state, fromId).type === 'dataset' ? RESULT_PORT : String(edge.fromPort || RESULT_PORT);
       const target = findNode(state, toId);
@@ -183,7 +194,7 @@ function inputPorts(state, node) {
     const runId = fromOf(state, 'run-to-score', id);
     const groundTruthId = String(node.scoreGroundTruthId || '').trim();
     return [
-      port('run', PORT_TYPES.TABLE, 'run', { source: runId ? { nodeId: runId, port: RESULT_PORT, kind: 'run' } : null, fixed: FIXED.run, hollow: true }),
+      port('run', PORT_TYPES.TABLE, 'run', { source: runId ? { nodeId: runId, port: RESULT_PORT, kind: 'run' } : null, fixed: FIXED.run }),
       port('ground_truth', PORT_TYPES.TABLE, 'ground truth', {
         source: groundTruthId && findNode(state, groundTruthId) ? { nodeId: groundTruthId, port: RESULT_PORT, kind: 'dataset' } : null,
       }),
@@ -191,11 +202,11 @@ function inputPorts(state, node) {
   }
   if (node.type === 'promptReview') {
     const scoreId = fromOf(state, 'score-to-prompt-review', id);
-    return [port('score', PORT_TYPES.SCORE, 'score', { source: scoreId ? { nodeId: scoreId, port: 'score', kind: 'score' } : null, fixed: FIXED.score, hollow: true })];
+    return [port('score', PORT_TYPES.SCORE, 'score', { source: scoreId ? { nodeId: scoreId, port: 'score', kind: 'score' } : null, fixed: FIXED.score })];
   }
   if (node.type === 'sampler') {
     const sourceId = fromOf(state, 'dataset-to-sampler', id) || String(node.sourceNodeId || '').trim();
-    return [port('source', PORT_TYPES.TABLE, 'source', { source: sourceId ? { nodeId: sourceId, port: RESULT_PORT, kind: 'dataset' } : null, fixed: FIXED.source, hollow: true })];
+    return [port('source', PORT_TYPES.TABLE, 'source', { source: sourceId ? { nodeId: sourceId, port: RESULT_PORT, kind: 'dataset' } : null, fixed: FIXED.source })];
   }
   return [];
 }
@@ -262,7 +273,8 @@ function promptContextOf(state, node) {
  *   (`{ nodeId, port, kind }`) or null; `fixed` says why it cannot be replaced or disconnected.
  * - `outputs[]`: `{ id, type, label, showLabel, readers, unavailable?, mismatch? }`. `readers` are the
  *   input ports reading it; `unavailable` says why nothing can read it yet.
- * - `lineageIn` / `lineageOut`: whether the node has a hollow dot on that side.
+ * - `lineageIn` / `lineageOut`: whether the node has a provenance/creation port on that side.
+ * - `lineageOutput`: optional label and icon for its creation port.
  * - `promptContext`: the upstream Prompt shown above Evaluate/Optimize ports, when applicable.
  */
 export function nodePorts(state, nodeId) {
@@ -277,17 +289,18 @@ export function nodePorts(state, nodeId) {
   }));
   const showIn = labelsShown(node, inputs);
   const showOut = labelsShown(node, outputs);
-  const promptOutputs = node.type === 'promptReview'
-    ? edges.filter(({ edge }) => edge.type === 'prompt-review-to-prompt' && edge.fromId === id).map(({ ends }) => ends.to)
-    : null;
+  const creationLabels = { sampler: 'New sample', promptReview: 'New prompt' };
+  const created = edges.filter(({ ends }) => ends.from.lineage && ends.from.nodeId === id).map(({ ends }) => ends.to);
   return {
     inputs: inputs.map((item) => ({ ...item, showLabel: showIn, ...portPresentation(state, node, item, 'left') })),
     outputs: outputs.map((item) => ({ ...item, showLabel: showOut, ...portPresentation(state, node, item, 'right') })),
     lineageIn: edges.some(({ ends }) => ends.to.lineage && ends.to.nodeId === id),
-    lineageOut: node.type === 'promptReview' || edges.some(({ ends }) => ends.from.lineage && ends.from.nodeId === id),
-    ...(promptOutputs ? { lineageOutput: {
-      id: 'new_prompt', type: PORT_TYPES.PROMPT, label: 'New prompt', icon: PORT_TYPES.PROMPT,
-      showLabel: true, hollow: true, readers: promptOutputs, unconnected: !promptOutputs.length,
+    lineageOut: node.type === 'sampler' || node.type === 'promptReview',
+    ...(creationLabels[node.type] ? { lineageOutput: {
+      id: LINEAGE_PORT, label: creationLabels[node.type],
+      ...(node.type === 'promptReview' ? { type: PORT_TYPES.PROMPT, icon: PORT_TYPES.PROMPT } : {}),
+      ...(node.type === 'sampler' ? { type: PORT_TYPES.TABLE, icon: PORT_TYPES.TABLE } : {}),
+      showLabel: true, readers: created, unconnected: !created.length,
     } } : {}),
     ...(['score', 'promptReview'].includes(node.type) ? { promptContext: promptContextOf(state, node) } : {}),
   };
@@ -297,8 +310,8 @@ export function nodePorts(state, nodeId) {
 
 /**
  * All dots use rows under the header, whether their names are shown or not. Each side starts at
- * the same height. A hollow lineage dot follows that side's solid ports, or takes its first row
- * when there are no solid ports (including the left side of a Dataset or Prompt).
+ * the same height. A creation/provenance port follows that side's data ports, or takes its first row
+ * when there are no data ports (including the left side of a Dataset or Prompt).
  * @returns {{ left: Side, right: Side }} Side: `{ rows: port[], lineage: 'row'|null }`
  */
 export function portLayout(ports) {
@@ -378,8 +391,11 @@ export function portTitles(state, nodeId, ports) {
   const lineageOut = lineage.filter((edge) => String(edge.fromId) === id)
     .map((edge) => LINEAGE_OUT[edge.type]?.(nodeLabel(state, edge.toId)) || '')
     .filter(Boolean).join('\n');
-  return { inputs, outputs, lineageIn, lineageOut: node?.type === 'promptReview'
-    ? ['Output: New prompt', lineageOut].filter(Boolean).join('\n') : lineageOut };
+  const creationHints = { dataset: 'Create a Sample or a new dataset version.', prompt: 'Create a new Prompt version.',
+    run: 'Create an Evaluate node or save results to workspace.', process: 'Save all output branches to workspace.',
+    score: 'Create an Optimize node or save comparison results to workspace.', sampler: 'Create a sample dataset.',
+    promptReview: 'Output: New prompt' };
+  return { inputs, outputs, lineageIn, lineageOut: [creationHints[node?.type], lineageOut].filter(Boolean).join('\n') };
 }
 
 // ---------- connecting and disconnecting ----------
