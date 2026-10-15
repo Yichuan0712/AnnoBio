@@ -109,7 +109,7 @@ function buildSuggestionTitlePillsHtml(sug, noButton, actionsFull, originals, pr
 }
 
 /** Shown when persisted review has streamComplete:false but no live job (e.g. app closed mid-review). Mirrors Run: “Last run did not complete.” */
-const REVIEW_INCOMPLETE_USER_MSG = 'Last review did not complete. Please run Review again.';
+const REVIEW_INCOMPLETE_USER_MSG = 'Last optimization did not complete. Please try again.';
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -364,17 +364,17 @@ function openRowDiagnosisDetailOverlay(diagnostic, comparisonRows, displayNumber
   const compIdxs = diagnosticComparisonRowIndices(diagnostic);
   const multiIdx = compIdxs.length > 1 ? compIdxs : null;
   const sourceLine = multiIdx
-    ? `Score table ${formatScoreTableTargetLabels(rows, multiIdx)}`
+    ? `Evaluate table ${formatScoreTableTargetLabels(rows, multiIdx)}`
     : (() => {
       const anchor = compIdxs[0];
       if (anchor === undefined) {
         const inp = diagnosisInputOneBased(diagnostic);
-        return !Number.isNaN(inp) && inp >= 1 ? `Worksheet input #${inp}` : 'Score comparison (unknown row)';
+        return !Number.isNaN(inp) && inp >= 1 ? `Worksheet input #${inp}` : 'Evaluate comparison (unknown row)';
       }
       const t = scoreTableRowNumberForComparisonIndex(rows, anchor);
       return t != null
-        ? `Score table #${t}`
-        : `Score comparison (row_index ${anchor})`;
+        ? `Evaluate table #${t}`
+        : `Evaluate comparison (row_index ${anchor})`;
     })();
 
   const mainHeading = ensureCardTitleSentenceLead(cardTitle || `Analysis #${num}`);
@@ -421,7 +421,7 @@ function openPromptEditSuggestionDetailOverlay(sug, meta) {
   const inputIdx = suggestionTargetScoreRowIndices(sug);
   const compRows = Array.isArray(meta?.comparisonRows) ? meta.comparisonRows : [];
   const scoreLbl = formatScoreTableTargetLabels(compRows, inputIdx);
-  const scorePhrase = scoreLbl !== '' ? `Score table ${scoreLbl}` : '';
+  const scorePhrase = scoreLbl !== '' ? `Evaluate table ${scoreLbl}` : '';
   const p1 = Array.isArray(sug.phase1_addresses)
     ? sug.phase1_addresses.map((x) => String(x || '').trim()).filter(Boolean)
     : [];
@@ -516,7 +516,7 @@ function openSuggestionDebugOverlay(sug, debugData, verifyResult = null) {
         <tbody>
           <tr><th scope="row">Input</th><td>${escapeHtml(debugData.inputNums)}</td></tr>
           <tr><th scope="row">Ground truth</th><td>${escapeHtml(debugData.gtNums)}</td></tr>
-          <tr><th scope="row">Score table</th><td>${escapeHtml(debugData.scoreNums)}</td></tr>
+          <tr><th scope="row">Evaluate table</th><td>${escapeHtml(debugData.scoreNums)}</td></tr>
           ${optimizationInputCell ? `<tr><th scope="row">Optimization inputs</th><td>${optimizationInputCell}</td></tr>` : ''}
           ${debugData.optimizationGtNums ? `<tr><th scope="row">Optimization GT</th><td>${escapeHtml(debugData.optimizationGtNums)}</td></tr>` : ''}
         </tbody>
@@ -1710,7 +1710,7 @@ function buildReviewResultUI(overlay, options) {
           : { headers: [], rows: [] };
         if (!credentialId) throw new Error('No run credential configured on the Run node.');
         if (!outputSchema) throw new Error('No output schema configured on the Prompt node.');
-        if (!scoreMapping) throw new Error('No Score mapping configured.');
+        if (!scoreMapping) throw new Error('No Evaluate mapping configured.');
 
         // 2. Build modified prompt: apply only this suggestion to originals
         const modifiedSections = rebuildWorkingFromApplied(originals, [{ ...sug, applied: true }]) || originals;
@@ -1820,7 +1820,7 @@ function buildReviewResultUI(overlay, options) {
           : { headers: [], rows: [] };
         if (!credentialId) throw new Error('No run credential configured.');
         if (!outputSchema) throw new Error('No output schema configured.');
-        if (!scoreMapping) throw new Error('No Score mapping configured.');
+        if (!scoreMapping) throw new Error('No Evaluate mapping configured.');
 
         // Build inputEntries (same as runVerification)
         const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
@@ -2218,8 +2218,8 @@ function buildReviewResultUI(overlay, options) {
 /** Review node modal: show saved result (sections + suggestions) or empty state. */
 export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, onResumeReview, getIsReviewStreaming }) {
    const saved = getReviewResult ? getReviewResult() : null;
-  const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Review';
-  const title = `Review: ${reviewName}`;
+  const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Optimize';
+  const title = `Optimize: ${reviewName}`;
   const sectionsForDisplay = saved && (
     (Array.isArray(saved.promptSections) && saved.promptSections.length > 0)
       ? saved.promptSections

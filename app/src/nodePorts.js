@@ -32,10 +32,10 @@ export const ADD_INPUT_PORT = '+';
 /** Connections that record where a node came from rather than what it reads (hollow dots). */
 export const LINEAGE_EDGE_TYPES = new Set(['prompt-to-prompt', 'prompt-review-to-prompt', 'dataset-to-dataset', 'sampler-to-dataset', 'saved-from']);
 
-const TYPE_NOUN = { table: 'a table', prompt: 'a Prompt', score: 'a Score' };
+const TYPE_NOUN = { table: 'a table', prompt: 'a Prompt', score: 'an Evaluate node' };
 const FIXED = {
-  run: 'A Score compares the results of the Run it was created from. Add a new Score to score another Run.',
-  score: 'A Review analyzes the Score it was created from. Start a new Review from another Score.',
+  run: 'An Evaluate node compares the results of the Run it was created from. Add a new Evaluate node to evaluate another Run.',
+  score: 'An Optimize node analyzes the Evaluate node it was created from. Start a new Optimize node from another Evaluate node.',
   source: 'A Sampler samples the Dataset it was created from. Add a Sampler to another Dataset.',
 };
 const PROCESS_OUTPUTS_DYNAMIC = 'Its branches are known once the Process has run.';
@@ -80,7 +80,7 @@ function nodeLabel(state, nodeId) {
   const node = findNode(state, nodeId);
   if (!node) return String(nodeId || '');
   if (node.type === 'run' || node.type === 'process' || node.type === 'dataset') return stepSourceLabel(state, { nodeId: nodeIdOf(node), port: RESULT_PORT });
-  return String(node.name || node.scoreName || '').trim() || { prompt: 'Prompt', score: 'Score', promptReview: 'Review', sampler: 'Sample' }[node.type] || 'Node';
+  return String(node.name || node.scoreName || node.promptReviewName || '').trim() || { prompt: 'Prompt', score: 'Evaluate', promptReview: 'Optimize', sampler: 'Sample' }[node.type] || 'Node';
 }
 
 const hasRunResults = (node) => {
@@ -121,8 +121,8 @@ function processAliasOf(state, edge) {
 
 /**
  * The ports `edge` joins (NODE_PORTS_PLAN.md §3.1): `{ from: { nodeId, portId }, to: { nodeId, portId } }`,
- * with `lineage: true` instead of a port ID on lineage ends. Dataset-to-Sampler uses a lineage
- * output and the Sampler's fixed source input. Null when it joins
+ * with `lineage: true` instead of a port ID on lineage ends. Fixed source relations (Sample,
+ * Evaluate, Optimize) use a lineage output and the target's named source input. Null when it joins
  * no ports (an unknown type, a missing node, or a Process input recorded without an alias).
  */
 export function edgeEndpoints(state, edge) {
@@ -134,9 +134,9 @@ export function edgeEndpoints(state, edge) {
   if (LINEAGE_EDGE_TYPES.has(edge.type)) return { from: { nodeId: fromId, lineage: true }, to: { nodeId: toId, lineage: true } };
   switch (edge.type) {
     case 'prompt-to-run': return ends('prompt', 'prompt');
-    case 'run-to-score': return ends(RESULT_PORT, 'run');
+    case 'run-to-score': return { from: { nodeId: fromId, lineage: true }, to: { nodeId: toId, portId: 'run' } };
     case 'ground-truth-to-score': return ends(RESULT_PORT, 'ground_truth');
-    case 'score-to-prompt-review': return ends('score', 'score');
+    case 'score-to-prompt-review': return { from: { nodeId: fromId, lineage: true }, to: { nodeId: toId, portId: 'score' } };
     case 'dataset-to-sampler': return { from: { nodeId: fromId, lineage: true }, to: { nodeId: toId, portId: 'source' } };
     case DATA_EDGE: {
       const fromPort = findNode(state, fromId).type === 'dataset' ? RESULT_PORT : String(edge.fromPort || RESULT_PORT);
@@ -183,7 +183,7 @@ function inputPorts(state, node) {
     const runId = fromOf(state, 'run-to-score', id);
     const groundTruthId = String(node.scoreGroundTruthId || '').trim();
     return [
-      port('run', PORT_TYPES.TABLE, 'run', { source: runId ? { nodeId: runId, port: RESULT_PORT, kind: 'run' } : null, fixed: FIXED.run }),
+      port('run', PORT_TYPES.TABLE, 'run', { source: runId ? { nodeId: runId, port: RESULT_PORT, kind: 'run' } : null, fixed: FIXED.run, hollow: true }),
       port('ground_truth', PORT_TYPES.TABLE, 'ground truth', {
         source: groundTruthId && findNode(state, groundTruthId) ? { nodeId: groundTruthId, port: RESULT_PORT, kind: 'dataset' } : null,
       }),
@@ -191,7 +191,7 @@ function inputPorts(state, node) {
   }
   if (node.type === 'promptReview') {
     const scoreId = fromOf(state, 'score-to-prompt-review', id);
-    return [port('score', PORT_TYPES.SCORE, 'score', { source: scoreId ? { nodeId: scoreId, port: 'score', kind: 'score' } : null, fixed: FIXED.score })];
+    return [port('score', PORT_TYPES.SCORE, 'score', { source: scoreId ? { nodeId: scoreId, port: 'score', kind: 'score' } : null, fixed: FIXED.score, hollow: true })];
   }
   if (node.type === 'sampler') {
     const sourceId = fromOf(state, 'dataset-to-sampler', id) || String(node.sourceNodeId || '').trim();
@@ -213,30 +213,47 @@ function outputPorts(node) {
   })];
 }
 
-/**
- * Run/Process always show source/output labels. Other nodes show names when a side has several ports.
- */
+const LABELED_STEP_TYPES = new Set(['run', 'process', 'score', 'promptReview']);
+
+/** Steps show their input sources and outputs; other nodes label sides with several ports. */
 function labelsShown(node, ports) {
-  return ((node.type === 'run' || node.type === 'process') && ports.length > 0) || ports.length >= 2;
+  return (LABELED_STEP_TYPES.has(node.type) && ports.length > 0) || ports.length >= 2;
 }
 
-/** Canvas labels describe Run/Process sources while ids and labels retain their code/port meaning. */
+/** Canvas labels name sources and outputs; port ids and types retain their connection meaning. */
 function portPresentation(state, node, item, side) {
-  if (node.type !== 'run' && node.type !== 'process') return {};
+  if (!LABELED_STEP_TYPES.has(node.type)) return {};
+  const icon = node.type === 'score' && side === 'left' && item.id === 'run' ? 'run'
+    : node.type === 'promptReview' && side === 'left' && item.id === 'score' ? 'evaluate'
+    : item.type === PORT_TYPES.SCORE ? PORT_TYPES.TABLE : item.type;
   if (side === 'right') return {
     displayLabel: item.unavailable ? (item.label === 'dynamic outputs' ? 'Dynamic outputs' : 'Outputs unknown')
-      : item.id === RESULT_PORT ? 'Output' : item.label,
-    icon: item.unavailable ? undefined : item.type,
+      : item.id === RESULT_PORT || item.type === PORT_TYPES.SCORE ? 'Output' : item.label,
+    icon: item.unavailable ? undefined : icon,
   };
   if (item.id === ADD_INPUT_PORT) return { displayLabel: 'Add input' };
   const placeholder = item.type === PORT_TYPES.PROMPT ? 'Connect prompt'
+    : item.type === PORT_TYPES.SCORE ? 'Connect Evaluate'
+    : node.type === 'score' && item.id === 'run' ? 'Connect Run'
+    : item.id === 'ground_truth' ? 'Connect ground truth'
     : item.id === 'df' || item.id === 'input' ? 'Connect data'
     : `Connect ${item.id.replace(/^df_/, '').replace(/_/g, ' ')}`;
   return {
     displayLabel: item.source ? sourceName(state, item.source, node.type) : placeholder,
-    icon: item.type,
+    icon,
     unconnected: !item.source,
   };
+}
+
+/** The Prompt evaluated by this step, following its fixed Evaluate/Run inputs. */
+function promptContextOf(state, node) {
+  const evaluate = node.type === 'promptReview'
+    ? findNode(state, fromOf(state, 'score-to-prompt-review', nodeIdOf(node))) : node;
+  const run = evaluate?.type === 'score' ? findNode(state, fromOf(state, 'run-to-score', nodeIdOf(evaluate))) : null;
+  const prompt = run?.type === 'run' ? findNode(state, fromOf(state, 'prompt-to-run', nodeIdOf(run))) : null;
+  return prompt?.type === 'prompt'
+    ? { nodeId: nodeIdOf(prompt), name: String(prompt.name || '').trim() || 'Prompt' }
+    : { nodeId: '', name: 'Not connected' };
 }
 
 /**
@@ -246,6 +263,7 @@ function portPresentation(state, node, item, side) {
  * - `outputs[]`: `{ id, type, label, showLabel, readers, unavailable?, mismatch? }`. `readers` are the
  *   input ports reading it; `unavailable` says why nothing can read it yet.
  * - `lineageIn` / `lineageOut`: whether the node has a hollow dot on that side.
+ * - `promptContext`: the upstream Prompt shown above Evaluate/Optimize ports, when applicable.
  */
 export function nodePorts(state, nodeId) {
   const node = findNode(state, nodeId);
@@ -259,11 +277,19 @@ export function nodePorts(state, nodeId) {
   }));
   const showIn = labelsShown(node, inputs);
   const showOut = labelsShown(node, outputs);
+  const promptOutputs = node.type === 'promptReview'
+    ? edges.filter(({ edge }) => edge.type === 'prompt-review-to-prompt' && edge.fromId === id).map(({ ends }) => ends.to)
+    : null;
   return {
     inputs: inputs.map((item) => ({ ...item, showLabel: showIn, ...portPresentation(state, node, item, 'left') })),
     outputs: outputs.map((item) => ({ ...item, showLabel: showOut, ...portPresentation(state, node, item, 'right') })),
     lineageIn: edges.some(({ ends }) => ends.to.lineage && ends.to.nodeId === id),
-    lineageOut: edges.some(({ ends }) => ends.from.lineage && ends.from.nodeId === id),
+    lineageOut: node.type === 'promptReview' || edges.some(({ ends }) => ends.from.lineage && ends.from.nodeId === id),
+    ...(promptOutputs ? { lineageOutput: {
+      id: 'new_prompt', type: PORT_TYPES.PROMPT, label: 'New prompt', icon: PORT_TYPES.PROMPT,
+      showLabel: true, hollow: true, readers: promptOutputs, unconnected: !promptOutputs.length,
+    } } : {}),
+    ...(['score', 'promptReview'].includes(node.type) ? { promptContext: promptContextOf(state, node) } : {}),
   };
 }
 
@@ -282,7 +308,7 @@ export function portLayout(ports) {
 
 const LINEAGE_IN = {
   'prompt-to-prompt': (name) => `New version of "${name}"`,
-  'prompt-review-to-prompt': (name) => `Created by Apply in Review "${name}"`,
+  'prompt-review-to-prompt': (name) => `Created by Apply in Optimize "${name}"`,
   'dataset-to-dataset': (name) => `New version of "${name}"`,
   'sampler-to-dataset': (name) => `Sampled by "${name}"`,
 };
@@ -291,6 +317,8 @@ const LINEAGE_OUT = {
   'prompt-review-to-prompt': (name) => `Applied as Prompt "${name}"`,
   'dataset-to-dataset': (name) => `New version "${name}"`,
   'dataset-to-sampler': (name) => `Created Sample "${name}"`,
+  'run-to-score': (name) => `Created Evaluate "${name}"`,
+  'score-to-prompt-review': (name) => `Created Optimize "${name}"`,
   'sampler-to-dataset': (name) => `Sample "${name}"`,
   'saved-from': (name) => `Saved as Dataset "${name}"`,
 };
@@ -299,7 +327,7 @@ const rowsText = (count) => `${count} row${count === 1 ? '' : 's'}`;
 /** Canvas source names; a Process reading a Run shows that Run's own title, not its Prompt. */
 function sourceName(state, source, consumerType = '') {
   if (source?.kind === 'prompt' || source?.kind === 'score') return nodeLabel(state, source.nodeId);
-  if (consumerType === 'process' && source?.kind === 'run') return String(findNode(state, source.nodeId)?.runName || '').trim() || 'Run';
+  if ((consumerType === 'process' || consumerType === 'score') && source?.kind === 'run') return String(findNode(state, source.nodeId)?.runName || '').trim() || 'Run';
   return stepSourceLabel(state, source);
 }
 
@@ -325,7 +353,7 @@ export function portTitles(state, nodeId, ports) {
   for (const item of ports?.outputs || []) {
     const name = item.displayLabel || (item.id === RESULT_PORT ? 'Output' : item.label);
     const named = name === 'Output' ? '' : `${name} · `;
-    let text = `Output: ${name}`;
+    let text = item.type === PORT_TYPES.SCORE ? 'Output: Evaluation results' : `Output: ${name}`;
     if (item.unavailable) text = `Output: ${item.unavailable}`;
     else if (item.type === PORT_TYPES.TABLE) {
       const output = stepOutputTable(state, { nodeId: id, port: item.id, kind: node?.type });
@@ -338,7 +366,8 @@ export function portTitles(state, nodeId, ports) {
     }
     outputs[item.id] = [text, item.mismatch].filter(Boolean).join('\n');
   }
-  const lineage = allEdges(state).filter((edge) => LINEAGE_EDGE_TYPES.has(edge?.type) || edge?.type === 'dataset-to-sampler');
+  const lineage = allEdges(state).filter((edge) => LINEAGE_EDGE_TYPES.has(edge?.type)
+    || ['dataset-to-sampler', 'run-to-score', 'score-to-prompt-review'].includes(edge?.type));
   const savedFromText = (dataset) => {
     const savedFrom = readSavedFrom(findNode(state, dataset)?.savedFrom);
     return savedFrom ? savedFromLabel(state, savedFrom) : '';
@@ -349,7 +378,8 @@ export function portTitles(state, nodeId, ports) {
   const lineageOut = lineage.filter((edge) => String(edge.fromId) === id)
     .map((edge) => LINEAGE_OUT[edge.type]?.(nodeLabel(state, edge.toId)) || '')
     .filter(Boolean).join('\n');
-  return { inputs, outputs, lineageIn, lineageOut };
+  return { inputs, outputs, lineageIn, lineageOut: node?.type === 'promptReview'
+    ? ['Output: New prompt', lineageOut].filter(Boolean).join('\n') : lineageOut };
 }
 
 // ---------- connecting and disconnecting ----------

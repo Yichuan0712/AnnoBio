@@ -49,8 +49,8 @@ export function nodeTitle(node) {
     case 'sampler': return String(node.name || 'Sample');
     case 'process': return String(node.name || 'Process');
     case 'run': return String(node.runName || 'Run');
-    case 'score': return String(node.scoreName || 'Score');
-    case 'promptReview': return String(node.promptReviewName || 'Review');
+    case 'score': return String(node.scoreName || 'Evaluate');
+    case 'promptReview': return String(node.promptReviewName || 'Optimize');
     default: return String(node.name || node.nodeId || 'Node');
   }
 }
@@ -162,7 +162,7 @@ function columnsOf(content) {
   return content.headers.map((name, i) => ({ name, type: content.columnTypes?.[i] || 'text' }));
 }
 
-const SAVED_FROM_KINDS = { run: 'saved run results', process: 'saved process output', score: 'saved score comparison', pipeline: 'pipeline run result' };
+const SAVED_FROM_KINDS = { run: 'saved run results', process: 'saved process output', score: 'saved evaluation comparison', pipeline: 'pipeline run result' };
 
 /** Where a Dataset came from: a saved Dataset's `savedFrom` (savedDatasets.js), or its Sampler. */
 function datasetProducer(node, canvasState, nodeLookup) {
@@ -455,9 +455,9 @@ function inspectScore(node, ctx) {
   const ruleCount = rules.count;
   const usesCode = node.scoreActiveMatchMode === 'code';
   const diagnostics = [];
-  if (!run) diagnostics.push('The score is not connected to a run.');
-  if (!groundTruth) diagnostics.push('The score has no ground-truth dataset.');
-  if (!usesCode && ruleCount === 0) diagnostics.push('The score has no mapping rules.');
+  if (!run) diagnostics.push('The Evaluate node is not connected to a Run.');
+  if (!groundTruth) diagnostics.push('The Evaluate node has no ground-truth dataset.');
+  if (!usesCode && ruleCount === 0) diagnostics.push('The Evaluate node has no mapping rules.');
   return {
     details: {
       run,
@@ -504,7 +504,7 @@ function inspectReview(node, ctx) {
   const score = upstreamOfType(ctx.canvasState, ctx.nodeLookup, ctx.nodeId, 'score');
   const suggestions = safeArray(reviewResult.suggestions);
   const diagnostics = [];
-  if (!score) diagnostics.push('The review is not connected to a score.');
+  if (!score) diagnostics.push('The Optimize is not connected to an Evaluate node.');
   if (!suggestions.length && !reviewResult.summary && node.reviewPending !== true) diagnostics.push('The review has no result yet.');
   return {
     details: {

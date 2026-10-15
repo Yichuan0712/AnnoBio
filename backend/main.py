@@ -472,7 +472,7 @@ class ReviewRequest(BaseModel):
             for value in (row.row_input or {}).values()
         )
         if has_assets and not self.project_session_id:
-            raise ValueError("Review image/PDF inputs require a project session.")
+            raise ValueError("Optimize image/PDF inputs require a project session.")
         return self
 
 
@@ -1849,7 +1849,7 @@ def get_review_result(review_id: str):
     with _review_jobs_lock:
         job = _review_jobs.get(review_id)
         if not job:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(status_code=404, detail="Optimize job not found")
         status = job.get("status")
         events = (job.get("events") or [])[:]
         error = job.get("error")
@@ -1872,7 +1872,7 @@ def get_review_result_by_node(review_node_id: str):
             raise HTTPException(status_code=404, detail="No review found for this node")
         job = _review_jobs.get(review_id)
         if not job:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(status_code=404, detail="Optimize job not found")
         status = job.get("status")
         events = (job.get("events") or [])[:]
         error = job.get("error")
@@ -1891,7 +1891,7 @@ def cancel_review(review_id: str):
     """Mark review as cancelled; worker stops after current step."""
     with _review_jobs_lock:
         if review_id not in _review_jobs:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(status_code=404, detail="Optimize job not found")
         job = _review_jobs[review_id]
         if job.get("status") != "running":
             return {"ok": True, "status": job.get("status")}

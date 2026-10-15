@@ -33,11 +33,11 @@ function normalizeResults(value) {
   if (value.outputs && typeof value.outputs === 'object') {
     Object.entries(value.outputs).forEach(([name, result]) => {
       if (!name || !result || !Array.isArray(result.headers) || !Array.isArray(result.rows)) return;
-      outputs[name] = { headers: result.headers, rows: result.rows };
+      outputs[name] = { ...result, headers: result.headers, rows: result.rows };
     });
   } else if (Array.isArray(value.headers) && Array.isArray(value.rows)) {
     // Saved single-output results from earlier versions become the implicit result branch.
-    outputs.result = { headers: value.headers, rows: value.rows };
+    outputs.result = { ...value, headers: value.headers, rows: value.rows };
   }
   return Object.keys(outputs).length ? { outputs, statusText: String(value.statusText || '') } : null;
 }
@@ -206,6 +206,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   let currentJobId = null;
   let currentHistoryStatus = '';
   let lastResults = restoreResults(node, 'processDfResults', 'processResults');
+  let lastResultsRecordId = node?.dataset?.historyRecordId || '';
   let lastError = '';
   let activeBranchName = '';
   let saveBtnEl = null;
@@ -223,9 +224,10 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       saveBtnEl = document.createElement('button');
       saveBtnEl.type = 'button';
       saveBtnEl.className = 'btn btn-primary run-detail-save-to-workspace-btn process-save-btn';
-      saveBtnEl.textContent = 'Create dataset';
+      saveBtnEl.textContent = 'Save to workspace';
+      saveBtnEl.title = 'Save this output branch as a dataset in workspace';
       saveBtnEl.disabled = running || !lastResults;
-      saveBtnEl.addEventListener('click', createBranchDatasets);
+      saveBtnEl.addEventListener('click', saveOpenedBranch);
       actions.appendChild(saveBtnEl);
     },
   });
@@ -275,14 +277,15 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       branch.rows,
       `${branch.headers.length} columns, ${branch.rows.length} rows`,
     );
-    if (saveBtnEl) saveBtnEl.textContent = entries.length > 1 ? 'Create branch datasets' : 'Create dataset';
     updateActionEmphasis();
   }
 
-  function createBranchDatasets() {
-    if (!lastResults) return;
-    // The same Datasets as the context menu's Create dataset (savedDatasets.js).
-    document.dispatchEvent(new CustomEvent('workflow:save-process-output', { detail: { processNodeId: node?.dataset?.nodeId || '' } }));
+  function saveOpenedBranch() {
+    if (running || !lastResults?.outputs[activeBranchName]) return;
+    document.dispatchEvent(new CustomEvent('workflow:save-process-output', { detail: {
+      processNodeId: nodeId, branch: activeBranchName,
+      snapshot: { results: lastResults, recordId: lastResultsRecordId },
+    } }));
   }
 
   function setRunningUi(isRunning) {
@@ -312,6 +315,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
         failed: current?.status === 'failed',
       });
       lastResults = restoreResults(node, 'processDfResults', 'processResults');
+      lastResultsRecordId = node?.dataset?.historyRecordId || '';
       lastError = current?.status === 'failed' ? String(current.error || 'Process failed.') : '';
       refreshResults();
       refreshUpstreamState();
@@ -361,6 +365,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
         },
       });
       lastResults = restoreResults(node, 'processDfResults', 'processResults');
+      lastResultsRecordId = node?.dataset?.historyRecordId || '';
       currentHistoryStatus = 'completed';
       if (overlay.isConnected) {
         if (lastResults) refreshResults();

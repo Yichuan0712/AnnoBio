@@ -93,7 +93,7 @@ test('connect refuses what dragging refuses, with the same reason', () => {
   const sameSource = checkConnect(state, { nodeId: 'raw', portId: 'result' }, { nodeId: 'merge', portId: 'df_notes' }).reason;
   assert.equal(sameSource, 'Already df_raw of this Process; disconnect it there first.');
   assert.throws(() => plan([{ op: 'connect', node: 'merge', input: 'df_notes', source: 'raw' }]), new RegExp(`Merge: ${sameSource.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-  assert.throws(() => plan([{ op: 'connect', node: 's', input: 'run', source: 'idle' }]), /A Score compares the results of the Run it was created from/);
+  assert.throws(() => plan([{ op: 'connect', node: 's', input: 'run', source: 'idle' }]), /An Evaluate node compares the results of the Run it was created from/);
   assert.throws(() => plan([{ op: 'connect', node: 'r', input: 'input', source: 'split', branch: 'kept' }]), /would make a loop/);
   assert.throws(() => plan([{ op: 'connect', node: 'idle', input: 'prompt', source: 'raw' }]), /is a dataset, not a prompt/);
   assert.throws(() => plan([{ op: 'connect', node: 'idle', input: 'nothing', source: 'raw' }]), /has no input "nothing"\. Its inputs: prompt, input/);
@@ -122,7 +122,7 @@ test('disconnect refuses what dragging refuses', () => {
   assert.throws(() => plan([{ op: 'disconnect', node: 'merge', input: 'df_raw' }], state),
     new RegExp(checkDisconnect(state, { nodeId: 'merge', portId: 'df_raw' }).reason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.throws(() => plan([{ op: 'disconnect', node: 'merge', input: 'df' }]), /df cannot be empty while this Process has other inputs/);
-  assert.throws(() => plan([{ op: 'disconnect', node: 's', input: 'run' }]), /A Score compares the results of the Run it was created from/);
+  assert.throws(() => plan([{ op: 'disconnect', node: 's', input: 'run' }]), /An Evaluate node compares the results of the Run it was created from/);
   assert.throws(() => plan([{ op: 'disconnect', node: 'merge', input: 'df_notes' }]), /This input is not connected/);
 });
 

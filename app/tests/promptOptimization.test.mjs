@@ -61,9 +61,9 @@ test('Excel rows keep the tree in the Version text and metrics as fractions', ()
   const [family] = buildPromptFamilies(canvas());
   const metrics = new Map([['s1', { precision: 50, recall: 100, f1: 75 }], ['s2', null]]);
   assert.deepEqual(familySheetRows(family, metrics), [
-    ['Version', 'From', 'Run', 'Score', 'Ground truth', 'Precision', 'Recall', 'F1'],
+    ['Version', 'From', 'Run', 'Evaluate', 'Ground truth', 'Precision', 'Recall', 'F1'],
     ['Classify', '', 'Run 1', 'Score 1', 'Labels', 0.5, 1, 0.75],
-    ['└─ Classify v2', 'Review "Review 1" of Classify', 'Run 2', 'Score 2', 'Labels', '', '', ''],
+    ['└─ Classify v2', 'Optimize "Review 1" of Classify', 'Run 2', 'Score 2', 'Labels', '', '', ''],
     ['   │', '', 'Run 2', 'Score 2b', 'Other labels', '', '', ''],
     ['   └─ Classify v3', 'New version of Classify v2', 'Not run', '', '', '', '', ''],
   ]);

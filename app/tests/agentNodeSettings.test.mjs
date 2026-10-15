@@ -105,7 +105,7 @@ test('the summary names a version made by applying a Review', async () => {
   state.connections.push({ fromId: 's', toId: 'rev', type: 'score-to-prompt-review' },
     { fromId: 'rev', toId: 'p2', type: 'prompt-review-to-prompt' });
   const summary = await buildWorkspaceSummary(state, { extractInputFields });
-  assert.match(summary, /"Extract v2" \[p2\]: .*; made by applying Review "Review 1" of "Extract"/);
+  assert.match(summary, /"Extract v2" \[p2\]: .*; made by applying Optimize "Review 1" of "Extract"/);
 });
 
 test('Agent names where a saved Dataset came from, also once that node is gone', async () => {

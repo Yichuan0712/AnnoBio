@@ -87,7 +87,7 @@ export const AGENT_TOOL_DEFINITIONS = [
       max_rows: MAX_ROWS,
       columns: { type: 'array', items: { type: 'string' }, description: 'Only these columns (datasets, process outputs, run inputs).' },
       branch: { type: 'string', description: 'Process output branch name. Default: the first branch.' },
-      only_unmatched: { type: 'boolean', description: 'Score only: return just the rows that did not match.' },
+      only_unmatched: { type: 'boolean', description: 'Evaluate only: return just the rows that did not match.' },
     },
     ['node_id'],
   ),
@@ -191,8 +191,8 @@ Operations ("op" plus the fields listed):
 Jobs ("kind" plus):
 - run: node (a Run). Runs the rows it has not processed yet.
 - process: node (a Process). Runs its saved code and stores its output branches on the node.
-- score: node (a Score using custom match code). Runs its Python matcher against the Run results and ground truth, stores its result and reports progress. Rule-based Scores compute automatically and need no job.
-- review: score, name?. Adds a Review node to that score and runs it.
+- score: node (an Evaluate node using custom match code). Runs its Python matcher against the Run results and ground truth, stores its result and reports progress. Rule-based Evaluate nodes compute automatically and need no job.
+- review: score, name?. Adds an Optimize node to that score and runs it.
 - verify: review, suggestion_ids? (default: all not yet verified). Re-runs the prompt with each suggestion on the rows it targets.`,
     {
       summary: { type: 'string', description: 'One sentence for the user: what will run and why.' },

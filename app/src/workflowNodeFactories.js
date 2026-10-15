@@ -2,7 +2,7 @@ import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 import { sourceKey } from './stepInputs.js';
 import { readSavedFrom } from './savedDatasets.js';
-import { iconDataset } from './icons.js';
+import { iconDataset, iconEvaluate, iconPrompt, iconRun, iconTrash } from './icons.js';
 
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
@@ -235,9 +235,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (!hasNote) node.classList.add('workflow-node--no-body');
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--prompt" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="4" x2="12" y2="4"/><line x1="2" y1="7" x2="12" y2="7"/><line x1="2" y1="10" x2="8" y2="10"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--prompt" aria-hidden="true">${iconPrompt(14).outerHTML}</span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       ${hasNote ? `<div class="workflow-node__body"><span class="workflow-node__note">${escapeHtml(noteTrimmed)}</span></div>` : ''}
     `;
@@ -337,7 +337,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--sampler" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 2h10l-2 5H4L2 2z"/><line x1="4" y1="7" x2="10" y2="7"/><line x1="5" y1="11" x2="9" y2="11"/><line x1="6" y1="13" x2="8" y2="13"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
     `;
     node.insertAdjacentHTML('beforeend', `<div class="workflow-node__body workflow-node__sampler-settings"><span class="workflow-node__note">${escapeHtml(formatSamplerSettings(node))}</span></div><div class="workflow-node__sample-progress" role="progressbar" aria-label="Samples created" aria-valuenow="0" aria-valuemin="0" aria-valuemax="1" hidden></div>`);
@@ -407,7 +407,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"></span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__body workflow-node__dataset-desc">${bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>'}</div>
     `;
@@ -474,9 +474,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--run" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M3 2v10l8-5-8-5z"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--run" aria-hidden="true">${iconRun(14).outerHTML}</span>
         <span class="workflow-node__title">${escapeHtml(runTitle)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__run-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
@@ -611,7 +611,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--process" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3L1 7l3 4M10 3l3 4-3 4"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(processTitle)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__process-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
@@ -699,17 +699,17 @@ export function createWorkflowNodeFactories(deps = {}) {
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--score workflow-node--no-body';
     node.setAttribute('role', 'article');
-    node.setAttribute('aria-label', 'Score node');
+    node.setAttribute('aria-label', 'Evaluate node');
     node.dataset.nodeId = nodeId;
     node.dataset.nodeType = 'score';
-    const scoreTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Score';
+    const scoreTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Evaluate';
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--score" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8v4M6 5v7M9 3v9M12 6v6"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--score" aria-hidden="true">${iconEvaluate(14).outerHTML}</span>
         <span class="workflow-node__title">${escapeHtml(scoreTitle)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__score-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
@@ -909,18 +909,18 @@ export function createWorkflowNodeFactories(deps = {}) {
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--prompt-review workflow-node--no-body';
     node.setAttribute('role', 'article');
-    node.setAttribute('aria-label', 'Review node');
+    node.setAttribute('aria-label', 'Optimize node');
     node.dataset.nodeId = nodeId;
     node.dataset.nodeType = 'promptReview';
-    const promptReviewTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Review';
-    node.dataset.promptReviewName = String(promptReviewTitle || '').trim() || 'Review';
+    const promptReviewTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Optimize';
+    node.dataset.promptReviewName = String(promptReviewTitle || '').trim() || 'Optimize';
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--prompt-review" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="10" height="10" rx="1"/><path d="M4 7l2.5 2.5L10 4"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(promptReviewTitle)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__review-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
@@ -1050,13 +1050,13 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       async function onResumeReview() {
         try {
-          if (!scoreNode) throw new Error('This Review is no longer connected to a Score node.');
+          if (!scoreNode) throw new Error('This Optimize is no longer connected to an Evaluate node.');
           const payload = await getPayload();
           if (!payload?.prompt_sections?.length) {
-            throw new Error('Could not rebuild the Review input. Check the upstream Prompt, Run, Score, and ground truth.');
+            throw new Error('Could not rebuild the Optimize input. Check the upstream Prompt, Run, Evaluate, and ground truth.');
           }
           const credentialId = await resolveReviewCredentialId(scoreNode);
-          if (!credentialId) throw new Error('No Review model: set a default Review model in Settings.');
+          if (!credentialId) throw new Error('No Optimize model: set a default Optimize model in Settings.');
           scoreNode.dataset.reviewCredentialId = credentialId;
           await runReviewStart({
             reviewNodeId: node.dataset.nodeId,
@@ -1066,7 +1066,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           });
           return pendingReviews.has(node.dataset.nodeId) || pendingReviewNodeIds.has(node.dataset.nodeId);
         } catch (error) {
-          showAlert(String(error?.message || error), { title: 'Review' });
+          showAlert(String(error?.message || error), { title: 'Optimize' });
           return false;
         }
       }

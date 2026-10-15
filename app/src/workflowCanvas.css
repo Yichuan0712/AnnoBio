@@ -312,8 +312,12 @@
   pointer-events: none;
 }
 
-/* Run node: leaves room for source names and the result port. */
-.workflow-node--run {
+/* Step nodes share a width, leaving room for titles, source icons and output ports. */
+.workflow-node--run,
+.workflow-node--process,
+.workflow-node--score,
+.workflow-node--sampler,
+.workflow-node--prompt-review {
   min-width: 220px;
   max-width: 274px;
   width: 274px;
@@ -324,27 +328,11 @@
   border-radius: 2px 2px 0 0;
 }
 
-/* Score node: 与 Run 外观类似，略短于 dataset 节点 */
-.workflow-node--score {
-  min-width: 110px;
-  max-width: 160px;
-  width: 160px;
-  border-radius: 2px;
-}
-
 .workflow-node--score .workflow-node__header {
   border-radius: 2px 2px 0 0;
 }
 
 .workflow-node--score.workflow-node--no-body .workflow-node__header {
-  border-radius: 2px;
-}
-
-/* Review node: 接在 Score 后，略短于 dataset 节点 */
-.workflow-node--prompt-review {
-  min-width: 110px;
-  max-width: 160px;
-  width: 160px;
   border-radius: 2px;
 }
 
@@ -356,14 +344,6 @@
   border-radius: 2px;
 }
 
-/* Sample node: 与 Run 一样，略短于 dataset 节点，小圆角 */
-.workflow-node--sampler {
-  min-width: 110px;
-  max-width: 160px;
-  width: 160px;
-  border-radius: 2px;
-}
-
 .workflow-node--sampler .workflow-node__header {
   border-radius: 2px 2px 0 0;
 }
@@ -371,13 +351,6 @@
 /* Process node: runs a user function over tables (no LLM) — same source-name layout as Run.
    Header radius for the no-body case is handled by the shared "Run/Sampler/Score/Review/Process"
    rule below (higher specificity needed to win over the generic .workflow-node--no-body default). */
-.workflow-node--process {
-  min-width: 220px;
-  max-width: 274px;
-  width: 274px;
-  border-radius: 2px;
-}
-
 .workflow-node--process .workflow-node__header {
   border-radius: 2px 2px 0 0;
 }
@@ -452,9 +425,11 @@
   max-width: 50%;
 }
 
-/* Source names in Run/Process get more room, while output names can still share the available width. */
+/* Source names get more room, while output names can still share the available width. */
 .workflow-node--run .workflow-node__ports-side--left:not(:only-child),
-.workflow-node--process .workflow-node__ports-side--left:not(:only-child) {
+.workflow-node--process .workflow-node__ports-side--left:not(:only-child),
+.workflow-node--score .workflow-node__ports-side--left:not(:only-child),
+.workflow-node--prompt-review .workflow-node__ports-side--left:not(:only-child) {
   flex-shrink: 1;
   max-width: 76%;
 }
@@ -467,7 +442,9 @@
 
 /* A long source name must not squeeze the output icon and its short label. */
 .workflow-node--run .workflow-node__ports-side--right,
-.workflow-node--process .workflow-node__ports-side--right {
+.workflow-node--process .workflow-node__ports-side--right,
+.workflow-node--score .workflow-node__ports-side--right,
+.workflow-node--prompt-review .workflow-node__ports-side--right {
   flex-shrink: 0;
   max-width: 50%;
 }
@@ -498,6 +475,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 400;
+}
+
+.workflow-node__port-row--connected .workflow-node__port-name {
+  font-weight: 600;
 }
 
 .workflow-node__port-icon {
@@ -508,8 +490,46 @@
   color: var(--text-muted);
 }
 
+.workflow-node__port-icon:last-child {
+  margin-right: 0;
+}
+
+.workflow-node__prompt-context {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 12px 0;
+  font-size: 11px;
+  line-height: 20px;
+  color: var(--text);
+}
+
+.workflow-node__prompt-context-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.workflow-node__prompt-context-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.workflow-node__prompt-context--unconnected .workflow-node__prompt-context-name {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
 .workflow-node--run .workflow-node__port-name,
-.workflow-node--process .workflow-node__port-name {
+.workflow-node--process .workflow-node__port-name,
+.workflow-node--score .workflow-node__port-name,
+.workflow-node--prompt-review .workflow-node__port-name {
   color: var(--text);
 }
 
@@ -775,6 +795,14 @@
   border: none;
   border-radius: 0;
   cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.workflow-node:hover .workflow-node__delete,
+.workflow-node:focus-within .workflow-node__delete {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .workflow-node__delete:hover {

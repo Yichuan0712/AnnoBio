@@ -87,6 +87,8 @@ test('each node type has its inputs on the left and outputs on the right', () =>
   assert.deepEqual(score.outputs.map((item) => [item.id, item.type]), [['score', PORT_TYPES.SCORE]]);
   assert.deepEqual(nodePorts(state, 'review').inputs.map((item) => [item.id, item.type]), [['score', PORT_TYPES.SCORE]]);
   assert.deepEqual(ids(nodePorts(state, 'review').outputs), []);
+  assert.equal(nodePorts(state, 'review').lineageOutput.label, 'New prompt');
+  assert.equal(nodePorts(state, 'review').lineageOutput.icon, PORT_TYPES.PROMPT);
   assert.deepEqual(nodePorts(state, 'sampler').inputs[0].source, { nodeId: 'abstracts', port: RESULT_PORT, kind: 'dataset' });
   assert.equal(nodePorts(state, 'sampler').inputs[0].hollow, true);
   assert.deepEqual(ids(nodePorts(state, 'sampler').outputs), []);
@@ -96,8 +98,12 @@ test('each node type has its inputs on the left and outputs on the right', () =>
 test('the inputs fixed when a node is created say why', () => {
   const state = canvas();
   assert.match(nodePorts(state, 'score').inputs[0].fixed, /Run it was created from/);
+  assert.equal(nodePorts(state, 'score').inputs[0].hollow, true);
   assert.equal(nodePorts(state, 'score').inputs[1].fixed, undefined);
-  assert.match(nodePorts(state, 'review').inputs[0].fixed, /Score it was created from/);
+  assert.equal(nodePorts(state, 'score').inputs[1].hollow, undefined);
+  assert.equal(nodePorts(state, 'score').outputs[0].hollow, undefined);
+  assert.match(nodePorts(state, 'review').inputs[0].fixed, /Evaluate node it was created from/);
+  assert.equal(nodePorts(state, 'review').inputs[0].hollow, true);
   assert.match(nodePorts(state, 'sampler').inputs[0].fixed, /Dataset it was created from/);
   assert.equal(nodePorts(state, 'extract').inputs.some((item) => item.fixed), false);
 });
@@ -113,7 +119,7 @@ test('a Process with no known branches offers an output nothing can read yet', (
   assert.equal(nodePorts(state, 'fresh').inputs[0].source, null);
 });
 
-test('Run and Process show all port rows, while other single ports stay unnamed', () => {
+test('steps show all port labels, while single Dataset and Prompt ports stay unnamed', () => {
   const state = canvas();
   const shown = (nodeId, side) => nodePorts(state, nodeId)[side].map((item) => item.showLabel);
   assert.deepEqual(shown('extract', 'inputs'), [true, true]);
@@ -125,19 +131,19 @@ test('Run and Process show all port rows, while other single ports stay unnamed'
   assert.deepEqual(shown('merge', 'outputs'), [true]);
   assert.deepEqual(shown('dyn', 'outputs'), [true]);
   assert.deepEqual(shown('score', 'inputs'), [true, true]);
-  assert.deepEqual(shown('score', 'outputs'), [false]);
-  assert.deepEqual(shown('review', 'inputs'), [false]);
+  assert.deepEqual(shown('score', 'outputs'), [true]);
+  assert.deepEqual(shown('review', 'inputs'), [true]);
 });
 
 test('an output lists the input ports that read it', () => {
   const state = canvas();
   assert.deepEqual(nodePorts(state, 'abstracts').outputs[0].readers, [at('extract', 'input'), at('merge', 'df_abstracts')]);
-  assert.deepEqual(nodePorts(state, 'extract').outputs[0].readers, [at('split', 'df'), at('score', 'run')]);
+  assert.deepEqual(nodePorts(state, 'extract').outputs[0].readers, [at('split', 'df')]);
   assert.deepEqual(nodePorts(state, 'gold').outputs[0].readers, [at('score', 'ground_truth')]);
   assert.deepEqual(nodePorts(state, 'split').outputs.map((item) => item.readers), [[at('merge', 'df')], []]);
 });
 
-test('Run and Process show source names and icons while preserving port ids, aliases and hover details', () => {
+test('steps show source names and icons while preserving port ids, aliases and hover details', () => {
   const state = canvas();
   const run = nodePorts(state, 'extract');
   assert.deepEqual(run.inputs.map((item) => [item.id, item.displayLabel, item.icon]), [
@@ -157,6 +163,15 @@ test('Run and Process show source names and icons while preserving port ids, ali
   assert.equal(nodePorts(state, 'merge').outputs[0].displayLabel, 'Output');
   assert.equal(nodePorts(state, 'dyn').outputs[0].displayLabel, 'Dynamic outputs');
   assert.equal(nodePorts(state, 'fresh').outputs[0].displayLabel, 'Outputs unknown');
+  const evaluate = nodePorts(state, 'score');
+  assert.deepEqual(evaluate.inputs.map((item) => [item.id, item.displayLabel, item.icon]), [
+    ['run', 'Run', 'run'], ['ground_truth', 'Gold', 'table'],
+  ]);
+  assert.equal(evaluate.outputs[0].displayLabel, 'Output');
+  assert.equal(evaluate.outputs[0].icon, PORT_TYPES.TABLE);
+  assert.equal(portTitles(state, 'score', evaluate).outputs.score, 'Output: Evaluation results');
+  const optimize = nodePorts(state, 'review');
+  assert.deepEqual(optimize.inputs.map((item) => [item.id, item.displayLabel, item.icon]), [['score', 'Score', 'evaluate']]);
 });
 
 test('disconnected inputs have readable placeholders and type-based hover text while code parameter ids remain', () => {
@@ -182,6 +197,9 @@ test('source labels refresh after rename and replacement without rewriting Proce
   assert.equal(nodePorts(state, 'split').inputs[0].displayLabel, 'Run');
   state.nodes.find((node) => node.nodeId === 'extract').runName = 'Kinase extraction';
   assert.equal(nodePorts(state, 'split').inputs[0].displayLabel, 'Kinase extraction');
+  assert.equal(nodePorts(state, 'score').inputs[0].displayLabel, 'Kinase extraction');
+  state.nodes.find((node) => node.nodeId === 'score').scoreName = 'Accuracy check';
+  assert.equal(nodePorts(state, 'review').inputs[0].displayLabel, 'Accuracy check');
   assert.equal(nodePorts(state, 'merge').inputs[1].id, 'df_abstracts');
   assert.equal(nodePorts(state, 'merge').inputs[1].displayLabel, 'Renamed abstracts');
   const replacement = checkConnect(state, at('gold', RESULT_PORT), at('merge', 'df_abstracts'));
@@ -189,6 +207,24 @@ test('source labels refresh after rename and replacement without rewriting Proce
   applyPortOp(state, replacement.op);
   assert.equal(nodePorts(state, 'merge').inputs[1].displayLabel, 'Gold');
   assert.match(state.nodes.find((node) => node.nodeId === 'merge').dfCode, /df_abstracts/);
+});
+
+test('Evaluate and Optimize identify their Prompt and follow renames, version changes and missing inputs', () => {
+  const state = canvas();
+  const context = (nodeId) => nodePorts(state, nodeId).promptContext;
+  const expected = { nodeId: 'v1', name: 'Extract v1' };
+  assert.deepEqual(context('score'), expected);
+  assert.deepEqual(context('review'), expected);
+  assert.equal(context('extract'), undefined);
+  state.nodes.find((node) => node.nodeId === 'v1').name = 'Extract kinase pairs';
+  assert.equal(context('score').name, 'Extract kinase pairs');
+  assert.equal(context('review').name, 'Extract kinase pairs');
+  state.connections.find((edge) => edge.type === 'prompt-to-run').fromId = 'v2';
+  assert.deepEqual(context('score'), { nodeId: 'v2', name: 'Extract v2' });
+  assert.deepEqual(context('review'), context('score'));
+  state.connections = state.connections.filter((edge) => edge.type !== 'prompt-to-run');
+  assert.deepEqual(context('score'), { nodeId: '', name: 'Not connected' });
+  assert.deepEqual(context('review'), context('score'));
 });
 
 test('hollow dots appear where a node came from or something was made from it', () => {
@@ -201,11 +237,18 @@ test('hollow dots appear where a node came from or something was made from it', 
   assert.deepEqual(lineage('v2'), [true, false]);
   assert.deepEqual(lineage('v3'), [true, false]);
   assert.deepEqual(lineage('review'), [false, true]);
+  assert.deepEqual(lineage('score'), [false, true]);
   assert.deepEqual(lineage('sampler'), [false, true]);
   assert.deepEqual(lineage('sample'), [true, false]);
   assert.deepEqual(lineage('saved'), [true, false]);
   assert.deepEqual(lineage('extract'), [false, true]);
   assert.deepEqual(lineage('abstracts'), [false, true]);
+  // The Evaluate relation alone keeps a hollow Run output, independently of saved datasets.
+  state.nodes = state.nodes.filter((node) => node.nodeId !== 'saved');
+  assert.deepEqual(lineage('extract'), [false, true]);
+  assert.equal(nodePorts(state, 'extract').outputs[0].hollow, undefined);
+  state.connections = state.connections.filter((edge) => edge.type !== 'run-to-score');
+  assert.deepEqual(lineage('extract'), [false, false]);
 });
 
 // ---------- edges ----------
@@ -221,9 +264,9 @@ test('every kind of connection joins the ports of the table in the plan', () => 
   assert.deepEqual(ends(data('extract', 'split', 'df')), ['result', 'df']);
   assert.deepEqual(ends(data('split', 'merge', 'df', 'ready')), ['ready', 'df']);
   assert.deepEqual(ends(data('abstracts', 'merge', 'df_abstracts')), ['result', 'df_abstracts']);
-  assert.deepEqual(ends(edge('run-to-score', 'extract', 'score')), ['result', 'run']);
+  assert.deepEqual(ends(edge('run-to-score', 'extract', 'score')), ['lineage', 'run']);
   assert.deepEqual(ends(edge('ground-truth-to-score', 'gold', 'score')), ['result', 'ground_truth']);
-  assert.deepEqual(ends(edge('score-to-prompt-review', 'score', 'review')), ['score', 'score']);
+  assert.deepEqual(ends(edge('score-to-prompt-review', 'score', 'review')), ['lineage', 'score']);
   assert.deepEqual(ends(edge('dataset-to-sampler', 'abstracts', 'sampler')), ['lineage', 'source']);
   for (const type of ['prompt-to-prompt', 'prompt-review-to-prompt', 'dataset-to-dataset', 'sampler-to-dataset', 'saved-from']) {
     assert.deepEqual(ends(edge(type, 'v1', 'v2')), ['lineage', 'lineage'], type);
@@ -279,9 +322,9 @@ test('each refused connection says why', () => {
   assert.equal(reason(at('abstracts', 'result'), at('extract', 'nothing')), 'There is no such input.');
   assert.equal(reason(at('v1', 'prompt'), at('split', 'df')), 'The df input takes a table, not a Prompt.');
   assert.equal(reason(at('abstracts', 'result'), at('extract', 'prompt')), 'The prompt input takes a Prompt, not a table.');
-  assert.equal(reason(at('score', 'score'), at('extract', 'input')), 'The input input takes a table, not a Score.');
+  assert.equal(reason(at('score', 'score'), at('extract', 'input')), 'The input input takes a table, not an Evaluate node.');
   assert.match(reason(at('gold', 'result'), at('score', 'run')), /Run it was created from/);
-  assert.match(reason(at('v1', 'prompt'), at('review', 'score')), /takes a Score, not a Prompt/);
+  assert.match(reason(at('v1', 'prompt'), at('review', 'score')), /takes an Evaluate node, not a Prompt/);
   assert.equal(reason(at('extract', 'result'), at('score', 'ground_truth')), 'The ground truth must be a Dataset.');
   assert.match(reason(at('dyn', 'result'), at('extract', 'input')), /once the Process has run/);
   assert.equal(reason(at('split', 'rewrite'), at('split', 'df')), 'A step cannot read its own output.');
@@ -320,7 +363,7 @@ test('an input can be left empty, except where the plan keeps it', () => {
   assert.deepEqual(checkDisconnect(state, at('score', 'ground_truth')), { ok: true, op: { type: 'score-ground-truth', scoreId: 'score', datasetId: '' } });
   assert.deepEqual(checkDisconnect(state, at('split', 'df')), { ok: true, op: { type: 'process-df', processId: 'split', source: null } });
   assert.match(checkDisconnect(state, at('score', 'run')).reason, /Run it was created from/);
-  assert.match(checkDisconnect(state, at('review', 'score')).reason, /Score it was created from/);
+  assert.match(checkDisconnect(state, at('review', 'score')).reason, /Evaluate node it was created from/);
   assert.match(checkDisconnect(state, at('sampler', 'source')).reason, /Dataset it was created from/);
   assert.deepEqual(checkDisconnect(state, at('merge', 'df_abstracts')).op, { type: 'process-alias-remove', processId: 'merge', alias: 'df_abstracts' });
   assert.match(checkDisconnect(state, at('merge', 'df')).reason, /df cannot be empty while this Process has other inputs/);
@@ -486,7 +529,7 @@ test('all solid and hollow dots use rows below the header, including Dataset and
   assert.deepEqual(layout('abstracts-v2').left, { rows: [], lineage: 'row' });
   assert.deepEqual(layout('split'), { left: { rows: ['df', '+'], lineage: null }, right: { rows: ['ready', 'rewrite'], lineage: null } });
   assert.deepEqual(layout('merge').right, { rows: ['result'], lineage: null });
-  assert.deepEqual(layout('score'), { left: { rows: ['run', 'ground_truth'], lineage: null }, right: { rows: ['score'], lineage: null } });
+  assert.deepEqual(layout('score'), { left: { rows: ['run', 'ground_truth'], lineage: null }, right: { rows: ['score'], lineage: 'row' } });
   assert.deepEqual(layout('review'), { left: { rows: ['score'], lineage: null }, right: { rows: [], lineage: 'row' } });
   assert.deepEqual(layout('sampler'), { left: { rows: ['source'], lineage: null }, right: { rows: [], lineage: 'row' } });
   const withLineageRows = portLayout({ inputs: [], outputs: [{ id: 'a', showLabel: true }, { id: 'b', showLabel: true }], lineageIn: false, lineageOut: true });
@@ -499,18 +542,19 @@ test('hover text says what an input reads, what an output gives, and where a nod
   assert.deepEqual(titles('extract').inputs, { prompt: 'Input: Extract v1', input: 'Input: Abstracts' });
   assert.equal(titles('split').inputs.df, 'Input: Run');
   assert.equal(titles('extract').outputs.result, 'Output: no output yet');
-  assert.equal(titles('extract').lineageOut, 'Saved as Dataset "Saved"');
+  assert.equal(titles('extract').lineageOut, 'Created Evaluate "Score"\nSaved as Dataset "Saved"');
   assert.equal(titles('abstracts').outputs.result, 'Output: 1 row · pmid, text');
   assert.equal(titles('other').outputs.out, 'Output: out · no output yet');
   assert.equal(titles('merge').inputs.df, 'Input: Split · ready');
   assert.equal(titles('fresh').inputs.df, 'Input: Not connected');
-  assert.match(titles('score').inputs.run, /^Input: Extract v1\nA Score compares/);
-  assert.equal(titles('review').inputs.score, 'Input: Score\nA Review analyzes the Score it was created from. Start a new Review from another Score.');
+  assert.match(titles('score').inputs.run, /^Input: Run\nAn Evaluate node compares/);
+  assert.equal(titles('review').inputs.score, 'Input: Score\nAn Optimize node analyzes the Evaluate node it was created from. Start a new Optimize node from another Evaluate node.');
   assert.match(titles('dyn').outputs.result, /once the Process has run/);
   assert.equal(titles('v2').lineageIn, 'New version of "Extract v1"');
   assert.equal(titles('v1').lineageOut, 'New version "Extract v2"');
-  assert.equal(titles('v3').lineageIn, 'Created by Apply in Review "Review"');
-  assert.equal(titles('review').lineageOut, 'Applied as Prompt "Extract v3"');
+  assert.equal(titles('v3').lineageIn, 'Created by Apply in Optimize "Review"');
+  assert.equal(titles('review').lineageOut, 'Output: New prompt\nApplied as Prompt "Extract v3"');
+  assert.equal(titles('score').lineageOut, 'Created Optimize "Review"');
   assert.equal(titles('sample').lineageIn, 'Sampled by "Sample"');
   assert.equal(titles('sampler').lineageOut, 'Sample "Sample 20"');
   assert.equal(titles('abstracts').lineageOut, 'Created Sample "Sample"');

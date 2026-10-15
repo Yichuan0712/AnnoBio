@@ -635,7 +635,7 @@ export function openRunDetailModal({
     const scoreBtn = document.createElement('button');
     scoreBtn.type = 'button';
     scoreBtn.className = 'btn btn-primary run-detail-save-to-workspace-score-btn';
-    scoreBtn.textContent = 'Create Score';
+    scoreBtn.textContent = 'Create Evaluate';
     scoreBtn.addEventListener('click', () => {
       document.dispatchEvent(new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node?.dataset?.nodeId || '' } }));
       closeModal();

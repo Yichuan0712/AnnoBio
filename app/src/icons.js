@@ -56,6 +56,28 @@ export const iconText = (size) => svgIcon({
   lines: [[4, 6, 20, 6], [4, 12, 20, 12], [4, 18, 15, 18]],
 });
 
+/** The Prompt node's three lines, shared with its inputs and Optimize's new Prompt output. */
+export const iconPrompt = (size = 14) => svgIcon({
+  size, viewBox: '0 0 14 14', strokeWidth: 1.5,
+  lines: [[2, 4, 12, 4], [2, 7, 12, 7], [2, 10, 8, 10]],
+});
+
+/** The Run node's filled play triangle, shared with inputs that read a Run. */
+export const iconRun = (size = 14) => {
+  const svg = svgIcon({ size, viewBox: '0 0 14 14', paths: ['M3 2v10l8-5-8-5z'] });
+  svg.setAttribute('fill', 'currentColor');
+  svg.setAttribute('stroke', 'none');
+  return svg;
+};
+
+/** The Evaluate node's chart, shared with Optimize's source input. */
+export const iconEvaluate = (size = 14) => svgIcon({
+  size,
+  viewBox: '0 0 14 14',
+  strokeWidth: 1.2,
+  paths: ['M3 8v4M6 5v7M9 3v9M12 6v6'],
+});
+
 /** The original Dataset node's grid, shared with table inputs. */
 export const iconDataset = (size = 14) => svgIcon({
   size,

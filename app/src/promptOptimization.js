@@ -39,7 +39,7 @@ export function buildPromptFamilies(canvasState) {
     const promptId = fromOf('prompt-to-run', runId);
     if (!isType(promptId, 'prompt') || promptId === edge.toId) continue;
     const review = byId.get(edge.fromId);
-    parentOf.set(edge.toId, { parentId: promptId, via: 'review', reviewName: String(review?.promptReviewName || review?.name || 'Review') });
+    parentOf.set(edge.toId, { parentId: promptId, via: 'review', reviewName: String(review?.promptReviewName || review?.name || 'Optimize') });
   }
 
   const children = new Map();
@@ -69,7 +69,7 @@ export function buildPromptFamilies(canvasState) {
       const groundTruthId = String(score?.scoreGroundTruthId || '');
       return {
         scoreId,
-        name: String(score?.scoreName || 'Score'),
+        name: String(score?.scoreName || 'Evaluate'),
         groundTruthId,
         groundTruthName: String(byId.get(groundTruthId)?.name || ''),
       };
@@ -116,7 +116,7 @@ export function familyRows(family, metrics = new Map()) {
   const byPrompt = new Map(family.versions.map((version) => [version.promptId, version]));
   return family.versions.flatMap((version) => {
     const parentName = byPrompt.get(version.parentId)?.name || '';
-    const from = version.via === 'review' ? `Review "${version.reviewName}" of ${parentName}`
+    const from = version.via === 'review' ? `Optimize "${version.reviewName}" of ${parentName}`
       : version.via === 'version' ? `New version of ${parentName}` : '';
     const lines = version.runs.length
       ? version.runs.flatMap((run) => (run.scores.length ? run.scores.map((score) => ({ run, score })) : [{ run, score: null }]))
@@ -142,7 +142,7 @@ export function familyRows(family, metrics = new Map()) {
   });
 }
 
-export const FAMILY_SHEET_HEADERS = ['Version', 'From', 'Run', 'Score', 'Ground truth', 'Precision', 'Recall', 'F1'];
+export const FAMILY_SHEET_HEADERS = ['Version', 'From', 'Run', 'Evaluate', 'Ground truth', 'Precision', 'Recall', 'F1'];
 
 /** The table as spreadsheet rows: the tree guide is written into the Version text; metrics are fractions (0-1). */
 export function familySheetRows(family, metrics) {

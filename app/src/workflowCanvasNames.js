@@ -141,14 +141,14 @@ export function createWorkflowCanvasNames(deps = {}) {
         reviewNode?.dataset?.promptReviewName
         ?? reviewNode?.querySelector?.('.workflow-node__title')?.textContent
         ?? ''
-      ).trim() || 'Review';
+      ).trim() || 'Optimize';
       if (existing.toLowerCase() === normalized) return true;
     }
     return false;
   }
 
   function findUniqueReviewName(baseName, scoreNodeId) {
-    const base = (baseName || '').trim() || 'Review';
+    const base = (baseName || '').trim() || 'Optimize';
     if (!isReviewNameAlreadyUsedForScoreNodeId(base, scoreNodeId)) return base;
     let n = 2;
     let candidate = '';

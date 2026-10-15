@@ -60,20 +60,26 @@ export function savedRunOutput(state, runId) {
 
 /**
  * Each branch of a Process's current result as a new Dataset, in the order the Process returns them.
+ * `branch` selects just the opened branch; `snapshot` keeps a detail view's displayed History result.
  * @returns {Array<{ port: string, name: string, notes: string, table: { headers, rows, columnTypes }, savedFrom: object }>}
  */
-export function savedProcessOutputs(state, processId) {
-  const processNode = findNode(state, processId);
+export function savedProcessOutputs(state, processId, { branch, snapshot } = {}) {
+  let processNode = findNode(state, processId);
   if (!processNode || processNode.type !== 'process') throw new Error('Process node was not found.');
+  if (snapshot) {
+    processNode = { ...processNode, dfResults: snapshot.results, historyRecordId: snapshot.recordId, processPending: false, processResumable: false };
+    state = { ...state, nodes: state.nodes.map((node) => nodeIdOf(node) === nodeIdOf(processNode) ? processNode : node) };
+  }
   const result = parsed(processNode.dfResults, null);
   const outputs = result?.outputs && typeof result.outputs === 'object'
     ? result.outputs : (Array.isArray(result?.headers) && Array.isArray(result?.rows) ? { result } : {});
   const ports = Object.keys(outputs);
   if (!ports.length) throw new Error('This Process has no output yet. Run it first.');
+  if (branch !== undefined && !ports.includes(branch)) throw new Error(`This Process has no "${branch}" output.`);
   const recordId = String(processNode.historyRecordId || '').trim();
   if (!recordId) throw new Error('This Process has no History record yet. Run it again before saving its output.');
   const title = String(processNode.name || '').trim() || 'Process';
-  return ports.map((port) => {
+  return (branch === undefined ? ports : [branch]).map((port) => {
     const output = stepOutputTable(state, { nodeId: nodeIdOf(processNode), port, kind: 'process' });
     if (!output.table) throw new Error(output.waiting === 'running' ? 'This Process is still running.' : `This Process has no "${port}" output.`);
     return {
@@ -101,7 +107,7 @@ export function savedFromLabel(state, savedFrom) {
   else if (node?.type === 'process') {
     const name = `Process "${String(node.name || '').trim() || 'Process'}"`;
     step = from.port === RESULT ? name : `branch "${from.port}" of ${name}`;
-  } else if (node?.type === 'score') step = `Score "${String(node.scoreName || node.name || '').trim() || 'Score'}"`;
+  } else if (node?.type === 'score') step = `Evaluate "${String(node.scoreName || node.name || '').trim() || 'Evaluate'}"`;
   if (from.kind === 'pipeline') return `Saved from a Pipeline run${step ? ` (${step})` : ''}`;
   return step ? `Saved from ${step}` : '';
 }
