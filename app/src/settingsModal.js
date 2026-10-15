@@ -492,13 +492,28 @@ const OPENROUTER_POLL_MS = 1500;
 const OPENROUTER_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
 function wireOpenRouterConnect(addFormRoot, tableHost) {
-  const connectBtn = addFormRoot.querySelector('#credentials-openrouter-connect-btn');
   const statusEl = addFormRoot.querySelector('#credentials-openrouter-status');
   const modelField = addFormRoot.querySelector('#credentials-openrouter-model-field');
   const modelInput = addFormRoot.querySelector('#credentials-openrouter-model');
-  if (!connectBtn) return;
+  if (!statusEl) return;
   let pollTimer = null;
   let connectedCredentialId = null;
+
+  /** The account line: a message, then optionally an action written as a link (Connect, Reconnect, Cancel…). */
+  function showStatus(message, action = null) {
+    const parts = [document.createTextNode(message)];
+    if (action) {
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'credentials-openrouter-link';
+      link.textContent = action.label;
+      link.addEventListener('click', action.onClick);
+      parts.push(document.createTextNode(' '), link);
+    }
+    statusEl.replaceChildren(...parts);
+  }
+
+  const connectAction = (label) => ({ label, onClick: onConnectClick });
 
   // Reconnecting isn't required just to add another model: if an OpenRouter credential
   // already exists and its key still actually works, reveal the Model ID field for it right
@@ -514,37 +529,35 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
     try {
       list = await fetchCredentialsStrict();
     } catch (e) {
-      statusEl.textContent = '';
+      showStatus('Not connected.', connectAction('Connect to OpenRouter'));
       return;
     }
     const openRouterCreds = list.filter((c) => c.provider === 'openrouter');
     if (openRouterCreds.length === 0) {
-      statusEl.textContent = '';
+      showStatus('Not connected.', connectAction('Connect to OpenRouter'));
       return;
     }
-    statusEl.textContent = 'Checking OpenRouter connection…';
+    showStatus('Checking connection…');
     for (const cred of openRouterCreds.slice().reverse()) { // most recently added first
       const ok = await runCredentialCheck(tableHost, cred.id);
       if (ok) {
         connectedCredentialId = cred.id;
         if (modelField) modelField.hidden = false;
-        statusEl.textContent = 'Connected to OpenRouter.';
+        showStatus('Connected to OpenRouter.', connectAction('Reconnect'));
         return;
       }
     }
-    statusEl.textContent = 'No working OpenRouter connection found — click Connect.';
+    showStatus('Your saved OpenRouter key no longer works.', connectAction('Connect again'));
   }
   checkExistingConnection();
 
   function stopPolling() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
-    connectBtn.disabled = false;
   }
 
   async function onConnectClick() {
-    statusEl.textContent = '';
-    connectBtn.disabled = true;
+    showStatus('Opening OpenRouter…');
     if (modelField) modelField.hidden = true;
     connectedCredentialId = null;
     let started;
@@ -553,26 +566,32 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
       started = await res.json().catch(() => ({}));
       if (!res.ok || !started.auth_url || !started.state) throw new Error('Could not start OpenRouter login.');
     } catch (e) {
-      statusEl.textContent = (e && e.message) || 'Could not start OpenRouter login.';
-      connectBtn.disabled = false;
+      showStatus((e && e.message) || 'Could not start OpenRouter login.', connectAction('Try again'));
       return;
     }
     if (window.electronAPI?.openExternal) window.electronAPI.openExternal(started.auth_url);
     else window.open(started.auth_url, '_blank', 'noopener');
-    statusEl.textContent = 'Waiting for approval in your browser…';
+    showStatus('Waiting for approval in your browser…', {
+      label: 'Cancel',
+      onClick: () => {
+        stopPolling();
+        checkExistingConnection();
+      },
+    });
     const deadline = Date.now() + OPENROUTER_POLL_TIMEOUT_MS;
     pollTimer = setInterval(async () => {
       if (Date.now() > deadline) {
         stopPolling();
-        statusEl.textContent = 'Timed out waiting for OpenRouter. Please try again.';
+        showStatus('Timed out waiting for OpenRouter.', connectAction('Try again'));
         return;
       }
       try {
         const res = await fetch(`${API_BASE}/api/credentials/openrouter/status/${started.state}`);
         const data = await res.json().catch(() => ({}));
+        if (!pollTimer) return; // cancelled while this request was in flight
         if (data.status === 'done') {
           stopPolling();
-          statusEl.textContent = 'Connected.';
+          showStatus('Connected to OpenRouter.', connectAction('Reconnect'));
           connectedCredentialId = data.credential_id || null;
           if (modelField) modelField.hidden = !connectedCredentialId;
           await loadAndRenderCredentials(tableHost);
@@ -580,7 +599,7 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
           if (data.credential_id) runCredentialCheck(tableHost, data.credential_id);
         } else if (data.status === 'error' || data.status === 'not_found') {
           stopPolling();
-          statusEl.textContent = data.error || 'Could not complete the OpenRouter connection.';
+          showStatus(data.error || 'Could not complete the OpenRouter connection.', connectAction('Try again'));
         }
       } catch (e) {
         // Transient network hiccup while polling; keep trying until the timeout.
@@ -626,8 +645,6 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
       showAlert((e && e.message) || 'Could not add that model.', { title: 'Add credential failed' });
     }
   }
-
-  connectBtn.addEventListener('click', onConnectClick);
 
   return { checkExistingConnection, submit: submitOpenRouterModel };
 }
@@ -698,11 +715,8 @@ export function openSettingsModal() {
                             <div class="credentials-add-tab-panel" id="credentials-add-panel-openrouter" data-panel="openrouter">
                               <div class="credentials-add-row">
                                 <div class="credentials-add-field credentials-add-field--full-row">
-                                  <label class="dataset-meta-label" for="credentials-openrouter-connect-btn">OpenRouter account</label>
-                                  <div class="credentials-openrouter-connect-row">
-                                    <button type="button" class="btn btn-secondary" id="credentials-openrouter-connect-btn">Connect</button>
-                                    <p class="credentials-add-openrouter-status" id="credentials-openrouter-status" aria-live="polite"></p>
-                                  </div>
+                                  <span class="dataset-meta-label" id="credentials-openrouter-account-label">OpenRouter account</span>
+                                  <p class="credentials-add-openrouter-status" id="credentials-openrouter-status" aria-labelledby="credentials-openrouter-account-label" aria-live="polite"></p>
                                 </div>
                                 <div class="credentials-add-field credentials-add-field--full-row" id="credentials-openrouter-model-field" hidden>
                                   <label class="dataset-meta-label" for="credentials-openrouter-model">Model ID</label>

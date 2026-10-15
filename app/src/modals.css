@@ -1450,21 +1450,30 @@
   display: block;
 }
 
-.credentials-openrouter-connect-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.credentials-openrouter-connect-row .btn {
-  flex-shrink: 0;
-}
-
 .credentials-add-openrouter-status {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary, #888);
   min-height: 1.2em;
+}
+
+/* The account line's action (Connect to OpenRouter, Reconnect, Cancel…), written as a link. */
+.credentials-openrouter-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent, #2563eb);
+  cursor: pointer;
+}
+
+.credentials-openrouter-link:hover,
+.credentials-openrouter-link:focus-visible {
+  text-decoration: underline;
+}
+
+.credentials-openrouter-link:focus-visible {
+  outline: none;
 }
 
 /* Model ID field with suggestions (modelIdAutocomplete.js): the closest models drop down under it as
