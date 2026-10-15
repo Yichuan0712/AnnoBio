@@ -2,7 +2,7 @@ import { openPromptSectionEditor, renderPromptSectionCards } from './promptSecti
 import { openPromptFieldEditor, renderPromptFieldCards } from './promptSchemaUi.js';
 
 /**
- * "Add a new prompt" modal: sections, preview, Add section / Add this prompt.
+ * Three-step Prompt creator. Section and field editors open inside this window.
  */
 
 function escapeHtml(str) {
@@ -63,10 +63,12 @@ export function openAddPromptModal(workflowCanvasApi) {
             <p class="prompt-step-label">Step 3 of 3 — LLM output schema</p>
             <p class="prompt-hint">The LLM will return items with these fields. Add a field, then add example values for that field.</p>
             <div class="prompt-output-return-shape-wrap">
-              <span class="prompt-output-return-shape-label">Return shape:</span>
-              <label class="prompt-output-return-shape-option"><input type="radio" name="prompt-output-return-shape" value="single" /> Single row</label>
-              <label class="prompt-output-return-shape-option"><input type="radio" name="prompt-output-return-shape" value="table" checked /> Multiple rows</label>
+              <span class="prompt-output-return-shape-label">Output rows</span>
+              <div class="review-detail-view-switch prompt-output-row-switch" role="group" aria-label="Output rows">
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="single" aria-pressed="false">One row</button>
+                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active prompt-output-row-btn" data-return-shape="table" aria-pressed="true">Multiple rows</button>
               </div>
+            </div>
             <div class="prompt-output-format-wrap">
               <div class="prompt-step-scroll prompt-step-3-format-scroll">
                 <div class="prompt-output-keys-list"></div>
@@ -85,7 +87,7 @@ export function openAddPromptModal(workflowCanvasApi) {
         </div>
         <div class="prompt-schema-preview-wrap">
           <h3 class="prompt-schema-preview-title">Output schema</h3>
-          <p class="prompt-schema-preview-return-shape"><span class="prompt-schema-meta-label">Return shape:</span> <span class="prompt-schema-preview-return-shape-value">Multiple rows</span></p>
+          <p class="prompt-schema-preview-return-shape"><span class="prompt-schema-meta-label">Output rows:</span> <span class="prompt-schema-preview-return-shape-value">Multiple rows</span></p>
           <div class="prompt-schema-preview-table-wrap">
             <table class="prompt-schema-preview-table" aria-readonly="true">
               <thead>
@@ -104,10 +106,39 @@ export function openAddPromptModal(workflowCanvasApi) {
   `;
 
   const panel = overlay.querySelector('.modal-panel--prompt');
+  const modalBody = panel.querySelector('.modal-body');
+  const promptMain = panel.querySelector('.prompt-main');
   const container = overlay.querySelector('.prompt-sections');
   const addBtn = overlay.querySelector('.prompt-add-section');
   const previewEl = overlay.querySelector('.prompt-preview');
   let sections = [];
+  let activeEditor = null;
+
+  function openInlineEditor(kind, openEditor) {
+    if (activeEditor) return;
+    const side = document.createElement('aside');
+    side.className = 'prompt-detail-editor-panel prompt-create-editor-panel';
+    side.setAttribute('aria-label', kind === 'section' ? 'Edit prompt section' : 'Edit output field');
+    const host = document.createElement('div');
+    host.className = 'prompt-detail-editor-panel__child-host';
+    side.appendChild(host);
+    modalBody.appendChild(side);
+    activeEditor = side;
+    panel.dataset.addPromptEditor = kind;
+    promptMain.inert = true;
+    panel.querySelectorAll('.prompt-step-2 .prompt-actions button, .prompt-step-3 .prompt-actions button').forEach((button) => {
+      button.disabled = true;
+    });
+    openEditor(host, () => {
+      side.remove();
+      activeEditor = null;
+      delete panel.dataset.addPromptEditor;
+      promptMain.inert = false;
+      panel.querySelectorAll('.prompt-step-2 .prompt-actions button, .prompt-step-3 .prompt-actions button').forEach((button) => {
+        button.disabled = false;
+      });
+    });
+  }
 
   function goToStep(step) {
     panel.setAttribute('data-add-prompt-step', String(step));
@@ -196,10 +227,15 @@ export function openAddPromptModal(workflowCanvasApi) {
   let outputFields = [];
   let outputReturnShape = 'table'; // 'single' | 'table'
   const outputKeysListEl = overlay.querySelector('.prompt-output-keys-list');
-  const returnShapeRadios = overlay.querySelectorAll('input[name="prompt-output-return-shape"]');
-  returnShapeRadios.forEach((r) => {
-    r.addEventListener('change', () => {
-      outputReturnShape = overlay.querySelector('input[name="prompt-output-return-shape"]:checked')?.value || 'table';
+  const returnShapeButtons = overlay.querySelectorAll('.prompt-output-row-btn');
+  returnShapeButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      outputReturnShape = button.dataset.returnShape;
+      returnShapeButtons.forEach((item) => {
+        const active = item === button;
+        item.classList.toggle('review-detail-tab--active', active);
+        item.setAttribute('aria-pressed', String(active));
+      });
       updateSchemaPreview();
     });
   });
@@ -252,7 +288,7 @@ export function openAddPromptModal(workflowCanvasApi) {
     const returnShapeEl = overlay.querySelector('.prompt-schema-preview-return-shape-value');
     if (!tbody) return;
     if (returnShapeEl) {
-      returnShapeEl.textContent = outputReturnShape === 'single' ? 'Single row' : 'Multiple rows';
+      returnShapeEl.textContent = outputReturnShape === 'single' ? 'One row' : 'Multiple rows';
     }
     tbody.innerHTML = outputFields.map((f) => {
       const nameRaw = (f.key || '').trim();
@@ -339,6 +375,17 @@ export function openAddPromptModal(workflowCanvasApi) {
         renderOutputFieldCards();
         updateSchemaPreview();
       },
+      onEdit: (fieldIndex) => openInlineEditor('field', (host, onClose) => openPromptFieldEditor({
+        fields: outputFields,
+        fieldIndex,
+        outputTypes: OUTPUT_TYPES,
+        onDone: () => {
+          renderOutputFieldCards();
+          updateSchemaPreview();
+        },
+        host,
+        onClose,
+      })),
     });
     const addWrap = document.createElement('div');
     addWrap.className = 'prompt-add-field-wrap';
@@ -347,14 +394,16 @@ export function openAddPromptModal(workflowCanvasApi) {
     addBtn.className = 'btn btn-secondary prompt-output-add-key';
     addBtn.textContent = '+ Add a field';
     addBtn.addEventListener('click', () => {
-      openPromptFieldEditor({
+      openInlineEditor('field', (host, onClose) => openPromptFieldEditor({
         fields: outputFields,
         outputTypes: OUTPUT_TYPES,
         onDone: () => {
-        renderOutputFieldCards();
-        updateSchemaPreview();
+          renderOutputFieldCards();
+          updateSchemaPreview();
         },
-      });
+        host,
+        onClose,
+      }));
     });
     addWrap.appendChild(addBtn);
     outputKeysListEl.appendChild(addWrap);
@@ -391,6 +440,13 @@ export function openAddPromptModal(workflowCanvasApi) {
       sections,
       container,
       onChange: renderSections,
+      onEdit: (sectionIndex) => openInlineEditor('section', (host, onClose) => openPromptSectionEditor({
+        sections,
+        sectionIndex,
+        onDone: renderSections,
+        host,
+        onClose,
+      })),
     });
     updatePreview();
   }
@@ -398,12 +454,12 @@ export function openAddPromptModal(workflowCanvasApi) {
   addBtn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    openPromptSectionEditor({
+    openInlineEditor('section', (host, onClose) => openPromptSectionEditor({
       sections,
-      onDone: () => {
-        renderSections();
-      },
-    });
+      onDone: renderSections,
+      host,
+      onClose,
+    }));
   });
 
   function hasDuplicateSectionNames(sectionsList) {
@@ -438,7 +494,7 @@ export function openAddPromptModal(workflowCanvasApi) {
       return;
     }
     const outputFormat = {
-      returnShape: overlay.querySelector('input[name="prompt-output-return-shape"]:checked')?.value || 'table',
+      returnShape: outputReturnShape,
       fields: outputFields.map((o) => ({
         key: o.key || '',
         type: o.type || 'str',
@@ -489,7 +545,6 @@ export function openAddPromptModal(workflowCanvasApi) {
   });
 
   renderSections();
-  outputReturnShape = overlay.querySelector('input[name="prompt-output-return-shape"]:checked')?.value || 'table';
   renderOutputFieldCards();
 
   const close = () => {

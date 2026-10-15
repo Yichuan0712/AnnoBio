@@ -1,11 +1,14 @@
 /**
- * run_nodes: jobs that spend model calls or run code (Runs, Processes, Reviews, suggestion
+ * run_nodes: jobs that spend model calls or run code (Runs, Processes, custom-code Scores, Reviews, suggestion
  * verification). previewRunRequest validates the jobs and estimates their cost for the card the user
  * confirms; executeRunRequest runs them in order once confirmed, reporting progress, and returns the
  * results the Agent sees. Execution goes through the same canvas functions the node views use.
  */
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { displayCell } from '../../datasetContent.js';
+import { processPrimarySource, runInputSource, stepInputWaitingMessage, stepSourceLabel } from '../../stepInputs.js';
+import { stepOutputTable } from '../../stepOutputs.js';
+import { buildCodeMatchInputs } from '../../scoreCodeRunClient.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
   datasetContentOf,
@@ -81,7 +84,14 @@ function upstream(state, nodeId, edgeType) {
 function runInputTable(state, run) {
   const saved = runInputContentOf(run);
   if (runResultsOf(run).length && Array.isArray(saved.rows) && saved.rows.length) return saved;
-  const dataset = state.nodes.find((n) => n.nodeId === run.runWorkingSetId);
+  const source = runInputSource(state, run.nodeId);
+  if (source && source.kind !== 'dataset') {
+    // Another step's output: like the Run window, wait until that step has a complete result.
+    const output = stepOutputTable(state, source);
+    if (output.waiting) fail(stepInputWaitingMessage(state, source, output.waiting));
+    return output.table;
+  }
+  const dataset = state.nodes.find((n) => n.nodeId === source?.nodeId);
   return dataset ? datasetContentOf(dataset) : { headers: [], rows: [] };
 }
 
@@ -94,7 +104,7 @@ function previewRun(job, ctx) {
   if (!prompt) fail(`Run "${nodeTitle(run)}" is not connected to a prompt.`);
   if (!(prompt.outputFormat?.fields || []).length) fail(`Prompt "${nodeTitle(prompt)}" has no output fields.`);
   const inspection = inspectWorkflowNode(ctx.state, run.nodeId, { extractInputFields: ctx.extractInputFields });
-  const problem = inspection.diagnostics.find((d) => /no input dataset|without a column|not connected/.test(d));
+  const problem = inspection.diagnostics.find((d) => /has no input|without a column|not connected/.test(d));
   if (problem) fail(`Run "${nodeTitle(run)}": ${problem}`);
   const credentialId = String(run.runCredentialId || ctx.settings.default_run_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
@@ -124,7 +134,7 @@ function previewRun(job, ctx) {
   const usd = price ? inputTokens * price.input + outputTokens * price.output : null;
 
   const lines = [
-    `${pendingRows.length} row${pendingRows.length === 1 ? '' : 's'} of "${nodeTitle(ctx.state.nodes.find((n) => n.nodeId === run.runWorkingSetId))}"${done.size ? ` (continuing after ${done.size} done)` : ''}`,
+    `${pendingRows.length} row${pendingRows.length === 1 ? '' : 's'} of "${stepSourceLabel(ctx.state, runInputSource(ctx.state, run.nodeId))}"${done.size ? ` (continuing after ${done.size} done)` : ''}`,
     `Model: ${credentialLabel(credential)}${run.runCredentialId ? '' : ' (default Run model)'}`,
     `≈ ${Math.round(inputTokens).toLocaleString('en-US')} input and ${Math.round(outputTokens).toLocaleString('en-US')} output tokens`
       + (usd != null ? `, about ${formatUsd(usd)}` : ''),
@@ -138,66 +148,92 @@ function previewProcess(job, ctx) {
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(String(processNode.dfCode || ''))) fail(`Process "${nodeTitle(processNode)}" does not define process(df).`);
   if (!String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; the user has to choose one in Settings → Python first.');
   const inspection = inspectWorkflowNode(ctx.state, processNode.nodeId, {});
-  if (!inspection.details.primaryInput) fail(`Process "${nodeTitle(processNode)}" has no input dataset.`);
+  if (!inspection.details.primaryInput) fail(`Process "${nodeTitle(processNode)}" has no df input.`);
+  if (inspection.details.unconnectedInputs?.length) {
+    fail(`Process "${nodeTitle(processNode)}": ${inspection.details.unconnectedInputs.join(', ')} not connected; connect an input to each first.`);
+  }
+  // Like the Process window: every input a step gives must have a complete result.
+  if (inspection.details.waitingFor) fail(`Process "${nodeTitle(processNode)}": ${inspection.details.waitingFor}`);
+  const df = stepSourceLabel(ctx.state, processPrimarySource(ctx.state, processNode.nodeId));
   return {
     kind: 'process',
     title: `Process "${nodeTitle(processNode)}"`,
     nodeIds: [processNode.nodeId],
-    lines: [`Runs its Python code on "${inspection.details.primaryInput.title}" (no model calls).`],
+    lines: [`Runs its Python code on "${df}" (no model calls).`],
     usd: 0,
     calls: 0,
     priced: true,
   };
 }
 
+function previewScore(job, ctx) {
+  const score = findNode(ctx.state, job.node, 'score', 'node');
+  if (score.scoreMatchPending) fail(`Evaluate "${nodeTitle(score)}" is already matching.`);
+  if (score.scoreActiveMatchMode !== 'code') fail('Rule-based Evaluate nodes compute automatically; a score job runs custom match code.');
+  if (!/^\s*def\s+match\s*\(/m.test(String(score.scoreMatchCode || ''))) fail('Evaluate code must define match(input_row, output_row, gt_row).');
+  if (!String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; choose one in Settings → Python first.');
+  const run = upstream(ctx.state, score.nodeId, 'run-to-score');
+  if (!run) fail(`Evaluate "${nodeTitle(score)}" is not connected to a Run.`);
+  const groundTruth = findNode(ctx.state, score.scoreGroundTruthId, 'dataset', 'ground truth');
+  let payload;
+  try {
+    payload = buildCodeMatchInputs({ results: runResultsOf(run), outputFields: [],
+      input: stepOutputTable(ctx.state, runInputSource(ctx.state, run.nodeId)).table || runInputContentOf(run),
+      groundTruth: datasetContentOf(groundTruth) });
+  } catch (error) { fail(error.message); }
+  return { kind: 'score', title: `Evaluate "${nodeTitle(score)}" using code`, nodeIds: [score.nodeId],
+    lines: [`Runs its Python match code on ${payload.runRows.length} Run rows against ${payload.gtRows.length} ground-truth rows (no model calls).`],
+    usd: 0, calls: 0, priced: true };
+}
+
 async function previewReview(job, ctx) {
   const score = findNode(ctx.state, job.score, 'score', 'score');
   const run = upstream(ctx.state, score.nodeId, 'run-to-score');
-  if (!run || !runResultsOf(run).length) fail(`Score "${nodeTitle(score)}" has no run results to review.`);
-  if (!score.scoreGroundTruthId) fail(`Score "${nodeTitle(score)}" has no ground-truth dataset.`);
+  if (!run || !runResultsOf(run).length) fail(`Evaluate "${nodeTitle(score)}" has no run results to review.`);
+  if (!score.scoreGroundTruthId) fail(`Evaluate "${nodeTitle(score)}" has no ground-truth dataset.`);
   if (score.scoreActiveMatchMode === 'code' && !score.scoreMatchResult) {
-    fail(`Score "${nodeTitle(score)}" matches by code and has no code-match result yet; the user runs it from the score view first.`);
+    fail(`Evaluate "${nodeTitle(score)}" matches by code and has no code-match result yet; run a score job first.`);
   }
   const credentialId = String(score.reviewCredentialId || ctx.settings.default_review_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
-  if (!credential) fail('No usable Review model: the user has to set a default Review model in Settings (or on the score).');
+  if (!credential) fail('No usable Optimize model: the user has to set a default Optimize model in Settings (or on the score).');
   const rows = await ctx.getScoreComparisonRows(score.nodeId);
   const failingInputs = new Set(rows.filter((r) => r?.matched !== true).map((r) => r?.input_row_index ?? r?.row_index)).size;
   const cap = Number(ctx.settings.review_max_failed_rows) || 30;
   const analysed = Math.min(failingInputs, cap);
   const lines = [
-    `Adds a Review node to score "${nodeTitle(score)}" and runs it (method: ${score.reviewMethod || ctx.settings.default_review_method || 'default'})`,
+    `Adds an Optimize node to Evaluate "${nodeTitle(score)}" and runs it (method: ${score.reviewMethod || ctx.settings.default_review_method || 'default'})`,
     `Model: ${credentialLabel(credential)}`,
     !rows.length
-      ? 'The score has no comparison rows yet (its run or ground truth may be incomplete), so the review may find nothing to fix.'
+      ? 'The Evaluate node has no comparison rows yet (its Run or ground truth may be incomplete), so the Optimize may find nothing to fix.'
       : failingInputs
       ? `Analyses ${analysed} failing input${analysed === 1 ? '' : 's'}${failingInputs > cap ? ` (of ${failingInputs}, capped in Settings)` : ''}: about one model call each plus a few to group issues and draft edits; the exact number depends on the method.`
       : 'Every row currently matches, so the review has little to work with.',
   ];
-  return { kind: 'review', title: `Review score "${nodeTitle(score)}"`, nodeIds: [score.nodeId], lines, usd: null, calls: analysed, priced: false };
+  return { kind: 'review', title: `Optimize prompt using "${nodeTitle(score)}"`, nodeIds: [score.nodeId], lines, usd: null, calls: analysed, priced: false };
 }
 
 function previewVerify(job, ctx) {
   const review = findNode(ctx.state, job.review, 'promptReview', 'review');
-  if (review.reviewPending) fail(`Review "${nodeTitle(review)}" is still running.`);
+  if (review.reviewPending) fail(`Optimize "${nodeTitle(review)}" is still running.`);
   const result = JSON.parse(review.reviewResult || '{}');
   const suggestions = (result.suggestions || []).filter((s) => String(s?.source || '').toLowerCase() !== 'assistant');
   const wanted = (Array.isArray(job.suggestion_ids) ? job.suggestion_ids : []).map(String);
   const chosen = wanted.length ? suggestions.filter((s) => wanted.includes(String(s.suggestion_id))) : suggestions;
   if (wanted.length && chosen.length !== wanted.length) {
-    fail(`Review "${nodeTitle(review)}" has no suggestion ${wanted.filter((id) => !chosen.some((s) => String(s.suggestion_id) === id)).join(', ')}.`);
+    fail(`Optimize "${nodeTitle(review)}" has no suggestion ${wanted.filter((id) => !chosen.some((s) => String(s.suggestion_id) === id)).join(', ')}.`);
   }
   // Same rule as verifyReviewSuggestions: a suggestion with a finished verification is not re-run.
   const toVerify = chosen.filter((s) => {
     const state = String(result.verify_states?.[s.suggestion_id] || 'idle');
     return state === 'idle' || state === 'verifying' || !result.verify_results?.[s.suggestion_id];
   });
-  if (!toVerify.length) fail(`The chosen suggestions of review "${nodeTitle(review)}" already have verification results; read them with inspect_node.`);
+  if (!toVerify.length) fail(`The chosen suggestions of Optimize "${nodeTitle(review)}" already have verification results; read them with inspect_node.`);
   const run = upstream(ctx.state, upstream(ctx.state, review.nodeId, 'score-to-prompt-review')?.nodeId, 'run-to-score');
   const credential = ctx.credentialsById.get(String(run?.runCredentialId || ctx.settings.default_run_credential_id || '').trim());
   return {
     kind: 'verify',
-    title: `Verify ${toVerify.length} suggestion${toVerify.length === 1 ? '' : 's'} of review "${nodeTitle(review)}"`,
+    title: `Verify ${toVerify.length} suggestion${toVerify.length === 1 ? '' : 's'} of Optimize "${nodeTitle(review)}"`,
     nodeIds: [review.nodeId],
     lines: [
       `Re-runs the prompt with each suggestion on the rows it targets and checks them against the ground truth: ${toVerify.map((s) => s.suggestion_id).join(', ')}`,
@@ -227,9 +263,10 @@ export async function previewRunRequest(request, env) {
         const kind = String(job?.kind || '');
         if (kind === 'run') items.push(previewRun(job, ctx));
         else if (kind === 'process') items.push(previewProcess(job, ctx));
+        else if (kind === 'score') items.push(previewScore(job, ctx));
         else if (kind === 'review') items.push(await previewReview(job, ctx));
         else if (kind === 'verify') items.push(previewVerify(job, ctx));
-        else fail(`kind must be run, process, review or verify, not "${kind}".`);
+        else fail(`kind must be run, process, score, review or verify, not "${kind}".`);
       } catch (error) {
         if (error instanceof RunRequestError) throw new RunRequestError(`Job ${index + 1}: ${error.message}`);
         throw error;
@@ -278,7 +315,7 @@ async function scoreSummaries(env, runNodeId) {
   for (const id of scores) {
     const inspection = await env.inspectNode(id);
     const m = inspection?.details?.metrics;
-    if (m) out.push(`Score "${inspection.title}": ${formatScoreMetrics(m)}`);
+    if (m) out.push(`Evaluate "${inspection.title}": ${formatScoreMetrics(m)}`);
   }
   return out;
 }
@@ -334,14 +371,14 @@ async function executeProcess(item, env, { signal, onStatus }) {
 }
 
 async function executeReview(item, env, { signal, onStatus, job }) {
-  onStatus(`Starting the review of ${item.title.replace(/^Review /, '')}...`);
+  onStatus('Starting prompt optimization...');
   const created = await env.createAndRunReviewNode({ scoreNodeId: item.nodeIds[0], name: job.name || '' });
   const reviewId = created.reviewNodeId;
   const outcome = await waitWhile(() => currentNode(env, reviewId)?.reviewPending === true, {
     signal,
-    onTick: () => onStatus(`Reviewing: ${Number(currentNode(env, reviewId)?.reviewProgress) || 0}%...`),
+    onTick: () => onStatus(`Optimizing: ${Number(currentNode(env, reviewId)?.reviewProgress) || 0}%...`),
     onStop: () => {
-      onStatus('Stopping the review...');
+      onStatus('Stopping optimization...');
       return env.stopReviewNode(reviewId);
     },
   });
@@ -351,9 +388,27 @@ async function executeReview(item, env, { signal, onStatus, job }) {
     status: outcome === 'stopped' ? 'stopped' : 'completed',
     reviewNodeId: reviewId,
     lines: [
-      `${item.title}: ${outcome === 'stopped' ? 'stopped by the user' : 'finished'}; review node "${inspection?.title}" [${reviewId}] has ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}`,
+      `${item.title}: ${outcome === 'stopped' ? 'stopped by the user' : 'finished'}; Optimize node "${inspection?.title}" [${reviewId}] has ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}`,
       ...suggestions.slice(0, 8).map((s) => `  ${s.id}. ${s.name || s.targetSection}: ${s.reason.slice(0, 160)}`),
     ],
+  };
+}
+
+async function executeScore(item, env, { signal, onStatus }) {
+  const id = item.nodeIds[0];
+  let result;
+  try {
+    result = await env.runScoreNode(id, { signal,
+      onProgress: (completed, total) => onStatus(`Matching ${item.title}: ${completed}/${total} rows...`),
+    });
+  } catch (error) {
+    if (signal?.aborted || error?.name === 'AbortError') return { status: 'stopped', lines: [`${item.title}: stopped by the user`] };
+    throw error;
+  }
+  const matched = result.outcomes.filter((outcome) => outcome.ok && typeof outcome.matched_gt_index === 'number').length;
+  const errors = result.outcomes.filter((outcome) => !outcome.ok).length;
+  return { status: result.wasCancelled ? 'stopped' : 'completed',
+    lines: [`${item.title}: ${result.wasCancelled ? 'stopped' : 'finished'}; ${matched}/${result.outcomes.length} Run rows matched${errors ? `, ${errors} with errors` : ''}`],
   };
 }
 
@@ -391,12 +446,14 @@ export async function executeRunRequest(request, env, { signal, onStatus = () =>
     let item;
     if (job.kind === 'run') item = previewRun(job, ctx);
     else if (job.kind === 'process') item = previewProcess(job, ctx);
+    else if (job.kind === 'score') item = previewScore(job, ctx);
     else if (job.kind === 'review') item = await previewReview(job, ctx);
     else item = previewVerify(job, ctx);
     let outcome;
     try {
       if (item.kind === 'run') outcome = await executeRun(item, env, { signal, onStatus });
       else if (item.kind === 'process') outcome = await executeProcess(item, env, { signal, onStatus });
+      else if (item.kind === 'score') outcome = await executeScore(item, env, { signal, onStatus });
       else if (item.kind === 'review') outcome = await executeReview(item, env, { signal, onStatus, job });
       else outcome = await executeVerify(item, env, { onStatus });
     } catch (error) {

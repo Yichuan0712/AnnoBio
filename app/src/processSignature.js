@@ -1,8 +1,8 @@
 /**
- * The parameter list of a Process's `def process(df, df_<name>, ...)`. `df` is its primary Input
- * dataset and every other Input dataset is the parameter named after its alias, so the Input datasets
- * picker and the code declare the same thing. Only `df_` parameters are managed; anything else the
- * code declares (`limit=10`, `**inputs`) is kept as written.
+ * The parameter list of a Process's `def process(df, df_<name>, ...)`. `df` is its first input and
+ * every other input is the parameter named after its alias, so the node's input ports (nodePorts.js)
+ * and the code declare the same thing. Only `df_` parameters are managed; anything else the code
+ * declares (`limit=10`, `**inputs`) is kept as written.
  */
 
 /** Signatures longer than this go one parameter per line. */

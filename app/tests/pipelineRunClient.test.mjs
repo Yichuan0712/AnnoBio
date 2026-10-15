@@ -13,8 +13,8 @@ import {
 const state = { nodes: [
   { type: 'dataset', nodeId: 'raw', datasetContent: { headers: ['text'], rows: [['one']] } },
   { type: 'prompt', nodeId: 'p', sections: [{ content: 'Read {text}' }] },
-  { type: 'run', nodeId: 'r', runWorkingSetId: 'raw', runInputToColumn: { text: 'text' } },
-], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }] };
+  { type: 'run', nodeId: 'r', runInputToColumn: { text: 'text' } },
+], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, { type: 'data', fromId: 'raw', fromPort: 'result', toId: 'r' }] };
 const route = [{ type: 'dataset', dataset_node_id: 'raw' }, { type: 'prompt', prompt_node_id: 'p', run_node_id: 'r' }];
 
 test('pipeline client uses compile/start/status/cancel/resume/results contracts', async () => {

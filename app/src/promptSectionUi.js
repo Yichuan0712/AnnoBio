@@ -4,12 +4,12 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-export function openPromptSectionEditor({ sections, sectionIndex = null, onDone }) {
+export function openPromptSectionEditor({ sections, sectionIndex = null, onDone, host = null, onClose }) {
   const isEdit = sectionIndex !== null && sectionIndex >= 0;
   const section = isEdit ? sections[sectionIndex] : { name: '', content: '' };
   const editorOverlay = document.createElement('div');
-  editorOverlay.className = 'modal-overlay modal-overlay--section-editor';
-  editorOverlay.setAttribute('aria-modal', 'true');
+  editorOverlay.className = host ? 'prompt-detail-side-child-editor' : 'modal-overlay modal-overlay--section-editor';
+  if (!host) editorOverlay.setAttribute('aria-modal', 'true');
   editorOverlay.innerHTML = `
     <div class="modal-panel modal-panel--section-editor">
       <div class="modal-header">
@@ -41,6 +41,7 @@ export function openPromptSectionEditor({ sections, sectionIndex = null, onDone 
 
   function close() {
     editorOverlay.remove();
+    onClose?.();
   }
 
   function getDraft() {
@@ -94,18 +95,20 @@ export function openPromptSectionEditor({ sections, sectionIndex = null, onDone 
   nameInput?.addEventListener('input', clearError);
   contentInput?.addEventListener('input', clearError);
 
-  document.body.appendChild(editorOverlay);
+  (host || document.body).appendChild(editorOverlay);
   nameInput?.focus();
 }
 
-export function renderPromptSectionCards({ sections, container, onChange }) {
+export function renderPromptSectionCards({ sections, container, onChange, onEdit }) {
   if (!container) return;
   container.innerHTML = '';
   sections.forEach((section, index) => {
     const card = document.createElement('div');
     card.className = 'prompt-section-card';
     const displayName = (section.name || '').trim() || 'Unnamed section';
-    const openEditor = () => openPromptSectionEditor({ sections, sectionIndex: index, onDone: onChange });
+    const openEditor = () => onEdit
+      ? onEdit(index)
+      : openPromptSectionEditor({ sections, sectionIndex: index, onDone: onChange });
     card.innerHTML = `
       <div class="prompt-section-card-inner" tabindex="0" role="button">
         <span class="prompt-section-card-name">${escapeHtml(displayName)}</span>

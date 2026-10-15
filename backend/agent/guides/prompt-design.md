@@ -18,8 +18,22 @@ list of strings or list of numbers), a description and optional examples. The re
 - table: a list of objects per input row, for when one input yields several annotations (for example
   every binding site mentioned in an abstract).
 
+New Prompts default to Multiple rows (`table`), matching the creation window. A schema edit that
+only changes fields keeps the existing return shape.
+
 The Run parses the model's structured output against this schema; rows that fail to parse are recorded
 as errors on that row.
+
+Each field also has **Allow None** (`allow_none` in proposals). It allows a null value when evidence
+is absent, while keeping the declared field type for non-null values. Numeric examples are numbers;
+examples of list fields are arrays of strings or numbers, not comma-separated text. Preserve this
+setting and the examples when copying or revising a schema. Section and field names are unique,
+ignoring case, and every section needs both a name and content.
+
+The creation window expands in three steps: name and description, Prompt sections, then Output schema.
+Section/field editors open inside that window. Existing Prompt details use **Edit sections** and
+**Edit schema** beside their headings; **Output rows** uses the **One row / Multiple rows** pills.
+**Export** is the first button in the bottom-right group, before **Create Run**.
 
 ## Writing guidance
 
@@ -36,10 +50,11 @@ as errors on that row.
 ## Versions
 
 Editing a prompt that already has results is best done as a new version, linked by a `prompt-to-prompt`
-connection, so earlier Runs and Scores stay comparable. Reviews create new versions this way.
+connection, so earlier Runs and Evaluate nodes stay comparable. Optimize nodes create new versions this way.
 
 ## Runs
 
-A Run needs: the Prompt, one input Dataset, a mapping from every input variable to a column, and a
-model credential (or the default Run credential from Settings). Runs process rows concurrently and can
-be stopped and resumed. Save the results to the workspace to use them as a Dataset downstream.
+A Run needs: the Prompt, one input (a Dataset or another step's output), and a mapping from every
+input variable to a column. It uses the default Run model from Settings → Run defaults. Runs
+process rows concurrently and can be stopped and resumed. The next step reads a Run's results
+directly; save them to the workspace only to freeze or hand-edit them as a Dataset.

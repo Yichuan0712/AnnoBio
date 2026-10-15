@@ -5,27 +5,25 @@
  * getCanvasState()'s output) and offline (fed a saved project's state) without any canvas
  * instance at all.
  *
- * A "pipeline" here is a graph of Prompt (+ the Run that executes it), Process and Dataset steps.
- * Most pipelines read as a linear sequence, but a Process may also receive several Dataset inputs
- * and form an explicit merge point. A pipeline needs at least one Prompt Run or Process; a graph of
- * Datasets alone is not one. Where one Dataset feeds both Prompt Runs and Processes, each kind starts
- * its own pipeline (see splitByConsumerKind).
+ * A "pipeline" here is a graph of Prompt (+ the Run that executes it) and Process steps, joined by
+ * the `data` connections that make one step read another's output (docs/design/DATA_FLOW_DESIGN.md
+ * §6.1). Most pipelines read as a linear sequence, but a Process may also read several inputs and
+ * form an explicit merge point. A pipeline needs at least one Prompt Run or Process. Where one input
+ * feeds both Prompt Runs and Processes, each kind starts its own pipeline (see splitByConsumerKind).
  * Score/PromptReview stay out: they're evaluation/tuning scaffolding, not part of "the thing that
  * produces output" this is meant to describe. See the AnnoBio canvas→code-export planning
  * discussion this was built for.
  *
- * How a Dataset attaches to the steps around it:
- *  - Produced by: either `dataset.sourceRunNodeId` (a Dataset materialized from a Run's results via
- *    "Save to workspace" — see workflowCanvasRuntime.js's saveRunResultsToWorkspace), or a
- *    `process-to-dataset` connection. Legacy snapshot edges also preserve the visible path,
- *    although their saved tables are independent inputs when the pipeline runs.
- *  - Consumed by: either a Run's own `runWorkingSetId` field, or a `dataset-to-process` connection.
- *
- * Only datasets that actually take part get a step; ones sitting unattached on the canvas don't.
- *
- * A Dataset with conflicting producers is left without an inferred producer; the panel reports it.
+ * Between the steps sit "slot" steps (kind 'dataset'), where data passes from one step to the next:
+ *  - an input slot (`dataset:before:<readers>`) lists the Datasets a first step reads. A Dataset is
+ *    only ever an input: one saved from a step's results starts a new pipeline, it does not chain.
+ *  - an output slot (`dataset:after:<producer step>`, or `...:branch:<port>` for a Process's named
+ *    branches) holds the outputs of one producer step: one per Run of a Prompt that other steps read,
+ *    or one branch of a Process. Every branch a Process returns has a slot, read or not, as every
+ *    branch is an output of the pipeline (pipeline_compile.py).
  */
-import { datasetProducerConflicts } from './pipelineProducerConflicts.js';
+import { effectiveProcessOutputs, showsProcessOutputs } from './processOutputPorts.js';
+import { processInputSources, runInputSource } from './stepInputs.js';
 
 const STEP_KIND = { PROMPT: 'prompt', PROCESS: 'process', DATASET: 'dataset' };
 
@@ -123,8 +121,8 @@ function topoSort(ids, localEdges) {
  *      defaultVersionIndex: number, defaultRunNodeId: string}
  *   | {id: string, kind: 'process', processNodeId: string, processName: string}
  *   | {id: string, kind: 'dataset', producerStepId: string|null, consumerStepIds: string[],
- *      datasets: Array<{datasetNodeId: string, datasetName: string, producerRunNodeId: string|null,
- *        consumerStepIds: string[], consumerRunNodeIds: string[]}>}
+ *      datasets?: Array<{datasetNodeId: string, datasetName: string, consumerStepIds: string[], consumerRunNodeIds: string[]}>,
+ *      outputs?: Array<{producerNodeId: string, port: string, consumerStepIds: string[], consumerRunNodeIds: string[]}>}
  * >, edges: Array<{from: string, to: string}>}>}
  */
 export function detectPipelines(canvasState) {
@@ -159,11 +157,15 @@ export function detectPipelines(canvasState) {
         return {
           promptNodeId: versionId,
           promptName: nodeById.get(versionId)?.name || 'Prompt',
-          runs: runNodeIds.map((runNodeId) => ({
-            runNodeId,
-            runName: nodeById.get(runNodeId)?.runName || 'Run',
-            inputDatasetNodeId: nodeById.get(runNodeId)?.runWorkingSetId || '',
-          })),
+          runs: runNodeIds.map((runNodeId) => {
+            const input = runInputSource(canvasState, runNodeId);
+            return {
+              runNodeId,
+              runName: nodeById.get(runNodeId)?.runName || 'Run',
+              // The Dataset it reads, when it starts from one rather than from another step's output.
+              inputDatasetNodeId: input?.kind === 'dataset' ? input.nodeId : '',
+            };
+          }),
           // Kept for callers that only need membership in the selected Prompt version.
           runNodeIds,
         };
@@ -188,14 +190,11 @@ export function detectPipelines(canvasState) {
       kind: STEP_KIND.PROCESS,
       processNodeId: p.nodeId,
       processName: p.name || 'Process',
-      // Process nodes accept one dataframe. With multiple incoming Dataset edges the canvas
-      // combines those datasets by row before calling process(df); retain the inputs here so the
-      // Current Pipeline can describe that convergence rather than silently showing one branch.
-      inputDatasets: edges.to('dataset-to-process', p.nodeId)
-        .filter((datasetNodeId) => nodeById.get(datasetNodeId)?.type === 'dataset')
-        .map((datasetNodeId) => ({
-          datasetNodeId,
-          datasetName: nodeById.get(datasetNodeId)?.name || 'Dataset',
+      // The Datasets it starts from; the steps whose outputs it reads come in through slots.
+      inputDatasets: processInputSources(canvasState, p.nodeId).filter((source) => source.kind === 'dataset')
+        .map((source) => ({
+          datasetNodeId: source.nodeId,
+          datasetName: nodeById.get(source.nodeId)?.name || 'Dataset',
         })),
     };
     steps.push(step);
@@ -204,82 +203,84 @@ export function detectPipelines(canvasState) {
 
   if (steps.length === 0) return [];
 
-  // A step is a whole version chain, so the Run ids are kept alongside the step ids: they're what
-  // lets a slot narrow its datasets down to the Prompt version actually selected (see the modal).
-  const datasetProducerStepId = new Map(); // dataset nodeId -> id of the step that produced it
-  const datasetProducerRunId = new Map(); // dataset nodeId -> Run that produced it, if any
-  const conflictingDatasetIds = new Set(datasetProducerConflicts(canvasState).map((item) => item.datasetId));
-  for (const ds of datasetNodes) {
-    if (conflictingDatasetIds.has(ds.nodeId)) continue;
-    const producer = ds.sourceRunNodeId ? runNodeToStep.get(ds.sourceRunNodeId) : null;
-    if (!producer) continue;
-    datasetProducerStepId.set(ds.nodeId, producer.id);
-    datasetProducerRunId.set(ds.nodeId, ds.sourceRunNodeId);
-  }
-  for (const c of connections) {
-    if (c.type !== 'run-to-dataset-snapshot') continue;
-    if (conflictingDatasetIds.has(c.toId)) continue;
-    const producer = runNodeToStep.get(c.fromId);
-    if (!producer) continue;
-    datasetProducerStepId.set(c.toId, producer.id);
-    datasetProducerRunId.set(c.toId, c.fromId);
-  }
-  for (const c of connections) {
-    if (c.type !== 'process-to-dataset' && c.type !== 'process-to-dataset-snapshot') continue;
-    if (conflictingDatasetIds.has(c.toId)) continue;
-    const producer = processNodeToStep.get(c.fromId);
-    // A Process has no versions, so nothing to narrow by — it gets a step id but no Run id.
-    if (producer) datasetProducerStepId.set(c.toId, producer.id);
-  }
-
-  const datasetConsumerStepIds = new Map(); // dataset nodeId -> Set of step ids reading it
-  const datasetConsumerRunIds = new Map(); // dataset nodeId -> Set of Runs reading it
-  function addConsumer(datasetNodeId, stepId, runNodeId) {
-    const id = String(datasetNodeId || '').trim();
-    if (!id || !stepId) return;
-    if (!datasetConsumerStepIds.has(id)) datasetConsumerStepIds.set(id, new Set());
-    datasetConsumerStepIds.get(id).add(stepId);
-    if (!runNodeId) return;
-    if (!datasetConsumerRunIds.has(id)) datasetConsumerRunIds.set(id, new Set());
-    datasetConsumerRunIds.get(id).add(runNodeId);
-  }
+  // Every input of every step: a Dataset it starts from, or another step's output it reads.
+  const reads = []; // { source, consumerStepId, runNodeId }
   for (const run of runNodes) {
     const consumer = runNodeToStep.get(run.nodeId);
-    if (consumer && run.runWorkingSetId) addConsumer(run.runWorkingSetId, consumer.id, run.nodeId);
+    const source = runInputSource(canvasState, run.nodeId);
+    if (consumer && source) reads.push({ source, consumerStepId: consumer.id, runNodeId: run.nodeId });
   }
-  for (const c of connections) {
-    if (c.type !== 'dataset-to-process') continue;
-    const consumer = processNodeToStep.get(c.toId);
-    if (consumer) addConsumer(c.fromId, consumer.id, null);
+  for (const p of processNodes) {
+    for (const source of processInputSources(canvasState, p.nodeId)) {
+      reads.push({ source, consumerStepId: processNodeToStep.get(p.nodeId).id, runNodeId: null });
+    }
+  }
+  const addReader = (item, read) => {
+    if (!item.consumerStepIds.includes(read.consumerStepId)) item.consumerStepIds.push(read.consumerStepId);
+    if (read.runNodeId && !item.consumerRunNodeIds.includes(read.runNodeId)) item.consumerRunNodeIds.push(read.runNodeId);
+  };
+
+  // Input slots: the Datasets the steps start from, grouped by the steps that read them, so the
+  // Datasets one step can start from are alternatives in one slot. A Dataset nothing reads has none.
+  const datasetReaders = new Map(); // dataset nodeId -> { consumerStepIds, consumerRunNodeIds }
+  for (const read of reads.filter((item) => item.source.kind === 'dataset')) {
+    if (nodeById.get(read.source.nodeId)?.type !== 'dataset') continue;
+    if (!datasetReaders.has(read.source.nodeId)) datasetReaders.set(read.source.nodeId, { consumerStepIds: [], consumerRunNodeIds: [] });
+    addReader(datasetReaders.get(read.source.nodeId), read);
+  }
+  const slots = new Map(); // slot key -> { producerStepId, consumerStepIds: Set, datasets?: [], outputs?: [] }
+  for (const ds of datasetNodes) {
+    const readers = datasetReaders.get(ds.nodeId);
+    if (!readers) continue;
+    const key = `before:${[...readers.consumerStepIds].sort().join(',')}`;
+    if (!slots.has(key)) slots.set(key, { producerStepId: null, consumerStepIds: new Set(), datasets: [] });
+    const slot = slots.get(key);
+    slot.datasets.push({ datasetNodeId: ds.nodeId, datasetName: ds.name || 'Dataset', ...readers });
+    readers.consumerStepIds.forEach((id) => slot.consumerStepIds.add(id));
   }
 
-  // Datasets are grouped by the slot they sit in rather than one step each: a Run whose results
-  // were saved to the workspace twice, or one Prompt whose Runs read different inputs, are
-  // alternatives for the same slot, so they collapse into a single switchable step the way Prompt
-  // versions do. A dataset nothing attaches to never gets a slot at all.
-  const slots = new Map(); // slot key -> {producerStepId, consumerStepIds: Set, datasetNodeIds: []}
-  for (const ds of datasetNodes) {
-    const producerStepId = datasetProducerStepId.get(ds.nodeId) || null;
-    const consumerStepIds = datasetConsumerStepIds.get(ds.nodeId) || new Set();
-    if (!producerStepId && consumerStepIds.size === 0) continue;
-    // Every output materialized from one producer occupies the same selectable slot. Its own
-    // consumerStepIds below retain where that particular dataset continues, so the panel can show
-    // one route and change the downstream chain when the user selects another output.
-    const consumerKey = [...consumerStepIds].sort().join(',') || 'end';
-    // Named Process outputs are branches, rather than interchangeable materializations of one
-    // Dataset slot. Keep each name as a distinct step so the Current Pipeline can draw the fork
-    // and later convergence. Ordinary repeated exports still share one selectable slot.
-    const outputName = String(ds.processOutputName || '').trim();
-    const namedProcessOutput = producerStepId?.startsWith('process:') && outputName;
-    const key = producerStepId
-      ? (namedProcessOutput
-        ? `after:${producerStepId}:branch:${outputName}`
-        : `after:${producerStepId}`)
-      : `before:${consumerKey}`;
-    if (!slots.has(key)) slots.set(key, { producerStepId, consumerStepIds: new Set(), datasetNodeIds: [] });
-    const slot = slots.get(key);
-    slot.datasetNodeIds.push(ds.nodeId);
-    for (const id of consumerStepIds) slot.consumerStepIds.add(id);
+  // Output slots. The Runs of one Prompt are alternatives in one slot, so the slot follows whichever
+  // Run the route selects. A Process's named branches are separate slots, in the order it returns
+  // them, so the Current Pipeline can draw the fork, an empty lane for a branch nothing reads, and
+  // the later merge.
+  const outputSlot = (key, producerStepId) => {
+    if (!slots.has(key)) slots.set(key, { producerStepId, consumerStepIds: new Set(), outputs: [] });
+    return slots.get(key);
+  };
+  const outputIn = (slot, producerNodeId, port) => {
+    let output = slot.outputs.find((item) => item.producerNodeId === producerNodeId && item.port === port);
+    if (!output) {
+      output = { producerNodeId, port, consumerStepIds: [], consumerRunNodeIds: [] };
+      slot.outputs.push(output);
+    }
+    return output;
+  };
+  const processSlotKeys = new Map(); // `${process nodeId}\u0000${port}` -> slot key
+  for (const p of processNodes) {
+    const step = processNodeToStep.get(p.nodeId);
+    const outputs = effectiveProcessOutputs({ detected: p.processOutputPorts, dfResults: p.dfResults });
+    const readPorts = [...new Set(reads.filter((read) => read.source.kind === 'process' && read.source.nodeId === p.nodeId)
+      .map((read) => read.source.port))];
+    const branched = showsProcessOutputs(outputs) || readPorts.some((port) => port !== 'result');
+    const ports = branched ? [...outputs.ports, ...readPorts.filter((port) => !outputs.ports.includes(port))] : readPorts;
+    for (const port of ports) {
+      const key = branched ? `after:${step.id}:branch:${port}` : `after:${step.id}`;
+      outputIn(outputSlot(key, step.id), p.nodeId, port);
+      processSlotKeys.set(`${p.nodeId}\u0000${port}`, key);
+    }
+  }
+  for (const read of reads) {
+    const { source } = read;
+    let slot = null;
+    if (source.kind === 'run' && runNodeToStep.has(source.nodeId)) {
+      const producer = runNodeToStep.get(source.nodeId);
+      slot = outputSlot(`after:${producer.id}`, producer.id);
+    } else if (source.kind === 'process') {
+      slot = slots.get(processSlotKeys.get(`${source.nodeId}\u0000${source.port}`)) || null;
+    }
+    if (!slot) continue;
+    addReader(outputIn(slot, source.nodeId, source.port), read);
+    slot.consumerStepIds.add(read.consumerStepId);
   }
 
   const stepEdges = [];
@@ -289,19 +290,13 @@ export function detectPipelines(canvasState) {
       kind: STEP_KIND.DATASET,
       producerStepId: slot.producerStepId,
       consumerStepIds: [...slot.consumerStepIds],
-      datasets: slot.datasetNodeIds.map((id) => ({
-        datasetNodeId: id,
-        datasetName: nodeById.get(id)?.name || 'Dataset',
-        producerRunNodeId: datasetProducerRunId.get(id) || null,
-        consumerStepIds: [...(datasetConsumerStepIds.get(id) || [])],
-        consumerRunNodeIds: [...(datasetConsumerRunIds.get(id) || [])],
-      })),
+      ...(slot.datasets ? { datasets: slot.datasets } : { outputs: slot.outputs }),
     };
     steps.push(step);
     if (slot.producerStepId) stepEdges.push({ from: slot.producerStepId, to: step.id });
     for (const consumerStepId of slot.consumerStepIds) {
-      // A dataset feeding back into the step that produced it would close a cycle — skip that edge
-      // rather than hand topoSort a loop.
+      // A step reading its own output would close a cycle — skip that edge rather than hand
+      // topoSort a loop.
       if (consumerStepId === slot.producerStepId) continue;
       stepEdges.push({ from: step.id, to: consumerStepId });
     }
@@ -406,14 +401,15 @@ function pruneVariant({ steps, edges }, datasetStepId, cutConsumerIds, keptKind)
       if (step.kind !== STEP_KIND.DATASET) return step;
       const atCut = step.id === datasetStepId;
       const keepHere = (id) => (atCut ? keep(id) : !dropped.has(id));
+      const narrow = (item) => ({
+        ...item,
+        consumerStepIds: item.consumerStepIds.filter(keepHere),
+        consumerRunNodeIds: atCut && keptKind === STEP_KIND.PROCESS ? [] : item.consumerRunNodeIds,
+      });
       return {
         ...step,
         consumerStepIds: step.consumerStepIds.filter(keepHere),
-        datasets: step.datasets.map((dataset) => ({
-          ...dataset,
-          consumerStepIds: dataset.consumerStepIds.filter(keepHere),
-          consumerRunNodeIds: atCut && keptKind === STEP_KIND.PROCESS ? [] : dataset.consumerRunNodeIds,
-        })),
+        ...(step.datasets ? { datasets: step.datasets.map(narrow) } : { outputs: step.outputs.map(narrow) }),
       };
     }),
     edges: edges.filter((e) => !isCut(e) && !dropped.has(e.from) && !dropped.has(e.to)),

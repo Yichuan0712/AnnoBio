@@ -3,6 +3,9 @@
 The route is the flat exportRoutePayload from pipelineRouteSelection.js. It selects
 membership, not execution order. Diagnostics are returned together; an invalid graph
 never exposes a partially executable spec. See docs/design/PIPELINE_SPEC_V1.md.
+
+Steps read each other through `data` connections (docs/design/DATA_FLOW_DESIGN.md §6.2):
+a Dataset is only ever an input, `dataset:<id>`; a step's output is `output:<job>:<port>`.
 """
 from __future__ import annotations
 
@@ -11,6 +14,11 @@ from copy import deepcopy
 import json
 import re
 from typing import Any
+
+if __package__:
+    from .process_outputs import detect_process_outputs
+else:
+    from process_outputs import detect_process_outputs
 
 
 RUN_SETTINGS = {"run_max_tokens": (256, 131072), "run_max_retries": (0, 5), "run_concurrency": (1, 10)}
@@ -88,6 +96,8 @@ class _Compiler:
         self.jobs: dict[str, dict] = {}
         self.artifacts: dict[str, dict] = {}
         self.source_map: dict[str, dict] = {}
+        # Producer job ID -> port -> consumer node IDs: the step outputs selected jobs read.
+        self.uses: dict[str, dict[str, list[str]]] = {}
 
     def report(self, code, node_id, field, message, severity="error"):
         node = self.nodes.get(node_id, {})
@@ -169,8 +179,6 @@ class _Compiler:
         for nid in self.boundaries:
             if self.selected.get(nid, {}).get("type") != "dataset":
                 self.report("INVALID_INPUT", nid, "input_dataset_ids", "An input boundary must be a selected Dataset.")
-            elif self.selected[nid].get("resultMissing"):
-                self.report("MISSING_RESULT", nid, "resultMissing", "An input Dataset has no current result.")
         if not isinstance(self.defaults, dict):
             self.report("INVALID_DEFAULTS", "", "run_defaults", "Run defaults must be an object.")
             self.defaults = {}
@@ -183,7 +191,7 @@ class _Compiler:
                 self.add_process(nid, node)
         for rid, pid in sorted(self.pairs.items()):
             self.add_llm(rid, pid)
-        self.link_producers()
+        self.link_outputs()
         order = self.order_jobs()
         for jid in order:
             job = self.jobs[jid]
@@ -215,8 +223,7 @@ class _Compiler:
 
     def add_dataset(self, nid, node):
         aid = f"dataset:{nid}"
-        self.artifacts[aid] = {"id": aid, "name": node.get("name") or nid, "producer": None,
-                               "schema": self.schema(nid, node)}
+        self.artifacts[aid] = {"id": aid, "name": node.get("name") or nid, "producer": None, "schema": self.schema(nid, node)}
         self.source(aid, nid)
 
     def inputs_to(self, nid, edge_type):
@@ -229,24 +236,55 @@ class _Compiler:
             self.report("MISSING_DEPENDENCY", owner, field, f"Required Dataset {nid or '(none)'} is not selected.")
         return aid
 
+    # Where a Run or Process reads its data (docs/design/DATA_FLOW_DESIGN.md §3.3): the `data`
+    # connections into it. Only these methods know how the canvas stores it. A source is
+    # (node ID, port): a Dataset, a Run's results, or one output branch of a Process.
+    def data_inputs(self, nid):
+        """[((source node id, port), alias as recorded)] for the `data` connections into a node, sorted."""
+        found = {((_text(e.get("fromId")), _text(e.get("fromPort")) or "result"), _text(e.get("alias")))
+                 for e in self.edges if e.get("type") == "data" and _text(e.get("toId")) == nid}
+        return sorted(found)
+
+    def run_input(self, rid):
+        """The source a Run reads, or ('', 'result') when it has none."""
+        sources = self.data_inputs(rid)
+        if len(sources) > 1:
+            self.report("MULTIPLE_RUN_INPUTS", rid, "inputs", "A Run reads exactly one input.")
+        return sources[0][0] if sources else ("", "result")
+
+    def process_inputs(self, nid, node):
+        """(primary, [(source, alias as recorded)]) for a Process, sources in a stable order.
+        The primary is the input recorded as df, or the only input."""
+        sources = self.data_inputs(nid)
+        primaries = [source for source, alias in sources if alias == "df"]
+        if not primaries and len(sources) == 1:
+            primaries = [sources[0][0]]
+        primary = primaries[0] if len(primaries) == 1 else ""
+        if not primary:
+            self.report("INVALID_PRIMARY_INPUT", nid, "inputs", "Process needs exactly one df input.")
+        return primary, [(source, "df" if source == primary else alias) for source, alias in sources]
+
+    def input_artifact(self, consumer, source):
+        """The artifact a step reads from `source`: a selected input Dataset, or another step's output."""
+        nid, port = source
+        kind = self.nodes.get(nid, {}).get("type")
+        if kind not in ("run", "process"):
+            return self.require_dataset(nid, consumer, "inputs")
+        jid = f"{'llm' if kind == 'run' else 'process'}:{nid}"
+        self.uses.setdefault(jid, {}).setdefault(port, []).append(consumer)
+        return f"output:{jid}:{port}"
+
     def add_process(self, nid, node):
         jid = f"process:{nid}"
-        incoming = self.inputs_to(nid, "dataset-to-process")
-        primary = _text(node.get("primaryDatasetId"))
-        if not primary and len(incoming) == 1:
-            primary = incoming[0]
-        if not incoming or primary not in incoming:
-            self.report("INVALID_PRIMARY_INPUT", nid, "primaryDatasetId", "Process needs an explicit primary input among its dependencies.")
-        aliases = self.obj(node.get("datasetAliases"), nid, "datasetAliases")
+        primary, sources = self.process_inputs(nid, node)
         inputs = {}
-        for source in incoming:
-            aid = self.require_dataset(source, nid, "inputs")
-            alias = "df" if source == primary else _text(aliases.get(source))
+        for source, alias in sources:
+            aid = self.input_artifact(nid, source)
             if not alias or not alias.isidentifier() or (source != primary and not alias.startswith("df_")):
-                self.report("INVALID_ALIAS", nid, "datasetAliases", f"Dataset {source} needs a valid df_<name> alias.")
+                self.report("INVALID_ALIAS", nid, "inputs", f"Input {source[0]} needs a valid df_<name> alias.")
                 continue
             if alias in inputs:
-                self.report("DUPLICATE_ALIAS", nid, "datasetAliases", f"Multiple inputs use alias {alias}.")
+                self.report("DUPLICATE_ALIAS", nid, "inputs", f"Multiple inputs use alias {alias}.")
             inputs[alias] = aid
         code = normalize_process_code(node.get("dfCode"), node.get("code"))
         tree = None
@@ -267,7 +305,7 @@ class _Compiler:
                 arg for arg, default in zip(function.args.kwonlyargs, function.args.kw_defaults) if default is None]
             for arg in required:
                 if arg.arg not in inputs:
-                    self.report("UNBOUND_DATASET_ALIAS", nid, "datasetAliases", f"Process parameter {arg.arg} matches no Input dataset.")
+                    self.report("UNBOUND_DATASET_ALIAS", nid, "inputs", f"Process parameter {arg.arg} matches no Input dataset.")
         # Detect referenced aliases without executing arbitrary code. Canvas normally builds
         # these edges already; a stale selection must not silently omit one.
         if tree:
@@ -276,7 +314,7 @@ class _Compiler:
             bound.update(n.asname or n.name.split('.')[0] for n in ast.walk(tree) if isinstance(n, ast.alias))
             for alias in sorted({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)
                                  and isinstance(n.ctx, ast.Load) and n.id.startswith("df_")} - bound - set(inputs)):
-                self.report("UNBOUND_DATASET_ALIAS", nid, "datasetAliases", f"Referenced Dataset alias {alias} has no selected input binding.")
+                self.report("UNBOUND_DATASET_ALIAS", nid, "inputs", f"Referenced Dataset alias {alias} has no selected input binding.")
         self.jobs[jid] = {"id": jid, "type": "process", "inputs": inputs, "outputs": {}, "depends_on": [],
                           "config": {"code": code if isinstance(code, str) else "", "entrypoint": "process",
                                      "output_contract": "dataframe_or_named_dataframes"}}
@@ -287,7 +325,7 @@ class _Compiler:
         jid = f"llm:{rid}"
         if self.inputs_to(rid, "prompt-to-run") != [pid]:
             self.report("PROMPT_RUN_MISMATCH", rid, "prompt_node_id", "Run must have exactly the selected Prompt as its upstream Prompt.")
-        aid = self.require_dataset(_text(run.get("runWorkingSetId")), rid, "runWorkingSetId")
+        aid = self.input_artifact(rid, self.run_input(rid))
         sections = prompt.get("sections", [])
         if not isinstance(sections, list) or any(not isinstance(s, dict) for s in sections):
             self.report("INVALID_SECTIONS", pid, "sections", "Prompt sections must be objects.")
@@ -359,67 +397,61 @@ class _Compiler:
                                      "unresolved_settings": unresolved}}
         self.source(jid, pid, rid)
 
-    def link_producers(self):
-        for aid, artifact in list(self.artifacts.items()):
-            nid = self.source_map[aid]["node_ids"][0]
-            node = self.nodes[nid]
-            producers = [(f"process:{p}", _text(node.get("processOutputName")))
-                         for p in self.inputs_to(nid, "process-to-dataset")]
-            if _text(node.get("sourceRunNodeId")):
-                producers.append((f"llm:{node['sourceRunNodeId']}", "result"))
-            # Snapshot edges describe frozen copies. Outside the selection they stay frozen tables,
-            # but conflicting provenance must not be silently discarded.
-            snapshot_sources = {f"{'llm' if edge.get('type') == 'run-to-dataset-snapshot' else 'process'}:{_text(edge.get('fromId'))}"
-                                for edge in self.edges if _text(edge.get("toId")) == nid
-                                and edge.get("type") in {"run-to-dataset-snapshot", "process-to-dataset-snapshot"}}
-            if len(snapshot_sources | {jid for jid, _ in producers}) > 1:
-                self.report("MULTIPLE_PRODUCERS", nid, "producer", "Dataset has multiple producers; choose one explicit origin.")
+    def link_outputs(self):
+        """The outputs of each job (docs/design/DATA_FLOW_DESIGN.md §6.2). A Run has its results; a
+        Process has the branches its code returns, found without running it (process_outputs.py),
+        and every branch a selected step reads. A branch nobody reads is still an output of the
+        pipeline. Each output is the artifact output:<job>:<port>."""
+        for jid, ports in sorted(self.uses.items()):
+            if jid in self.jobs:
                 continue
-            if nid in self.boundaries:
-                if any(jid in self.jobs for jid, _ in producers):
-                    self.report("INPUT_PRODUCER_CONFLICT", nid, "input_dataset_ids", "Input boundary is also produced by a selected job.")
-                producers = []
-            elif not producers and len(snapshot_sources) == 1 and next(iter(snapshot_sources)) in self.jobs:
-                # A frozen copy of a selected step's output is that step's output: running the
-                # Pipeline recomputes it. A declared input boundary stays the frozen table.
-                jid = next(iter(snapshot_sources))
-                producers = [(jid, (_text(node.get("processOutputName")) or "result") if jid.startswith("process:") else "result")]
-            if len(producers) > 1:
-                self.report("MULTIPLE_PRODUCERS", nid, "producer", "Dataset has multiple producers; choose one explicit origin.")
-                continue
-            if producers:
-                jid, port = producers[0]
-                if jid not in self.jobs:
-                    self.report("UNSELECTED_PRODUCER", nid, "producer", "Dataset producer is outside the selection. Select it or explicitly mark this Dataset as an input boundary.")
-                    continue
-                if not port:
-                    all_outputs = {_text(e.get("toId")) for e in self.edges if e.get("fromId") == jid.removeprefix("process:") and e.get("type") == "process-to-dataset"}
-                    if len(all_outputs) == 1:
-                        port = "result"
-                    else:
-                        self.report("MISSING_BRANCH_NAME", nid, "processOutputName", "A multi-output Process requires named Dataset branches.")
-                        continue
-                job = self.jobs[jid]
-                job["outputs"].setdefault(port, []).append(aid)
-                artifact["producer"] = {"job_id": jid, "port": port}
-                # Saved tables are observations, not a guaranteed future Process schema.
-                artifact["observed_schema"] = artifact["schema"]
-                artifact["schema"] = {"status": "runtime", "columns": []}
-                if job["type"] == "process":
-                    self.report("RUNTIME_PROCESS_CONTRACT", nid, "schema", f"Validate returned branch {port} and its columns after Process execution.", "warning")
-            elif not artifact["schema"]["columns"]:
-                self.report("EMPTY_INPUT_SCHEMA", nid, "datasetContent.headers", "An input Dataset must define at least one column.")
+            upstream = jid.split(":", 1)[1]
+            name = self.nodes.get(upstream, {}).get("name") or self.nodes.get(upstream, {}).get("runName") or upstream
+            for consumer in sorted({c for consumers in ports.values() for c in consumers}):
+                self.report("UNSELECTED_UPSTREAM", consumer, "inputs",
+                            f'Reads the output of "{name}", which is not in this Pipeline. Select it, or start from a saved Dataset.')
         for jid, job in self.jobs.items():
-            if not job["outputs"]:
-                if job["type"] == "process":
-                    nid = self.source_map[jid]["node_ids"][0]
-                    self.report("RUNTIME_PROCESS_CONTRACT", nid, "outputs",
-                                "No output Dataset is saved; the Process must return one DataFrame, validated after execution.", "warning")
-                aid = f"output:{jid}:result"
-                job["outputs"] = {"result": [aid]}
-                self.artifacts[aid] = {"id": aid, "name": "Result", "producer": {"job_id": jid, "port": "result"},
+            used = self.uses.get(jid, {})
+            if job["type"] == "llm":
+                pid, rid = self.source_map[jid]["node_ids"]
+                for port, consumers in sorted(used.items()):
+                    if port != "result":
+                        for consumer in sorted(set(consumers)):
+                            self.report("UNKNOWN_OUTPUT_PORT", consumer, "inputs", f'A Run has one output, "result"; "{port}" does not exist.')
+                ports = ["result"]
+                names = {"result": self.nodes[pid].get("name") or "Result"}
+            else:
+                ports = self.process_ports(jid, job, used)
+                process_name = self.nodes[self.source_map[jid]["node_ids"][0]].get("name") or "Result"
+                names = {port: process_name if ports == ["result"] else port for port in ports}
+            for port in ports:
+                aid = f"output:{jid}:{port}"
+                job["outputs"][port] = [aid]
+                self.artifacts[aid] = {"id": aid, "name": names[port], "producer": {"job_id": jid, "port": port},
                                        "schema": {"status": "runtime", "columns": []}}
                 self.source_map[aid] = deepcopy(self.source_map[jid])
+
+    def process_ports(self, jid, job, used):
+        """The branches a Process job writes: those its code returns, plus those read downstream."""
+        nid = self.source_map[jid]["node_ids"][0]
+        detected = detect_process_outputs(job["config"]["code"]) if job["config"]["code"] else {"ok": False}
+        known = detected.get("ports") if detected.get("ok") and not detected.get("dynamic") else None
+        # A single output can still be a dict built elsewhere (`return out`): then its branches
+        # are only known once it runs, as for dynamic outputs.
+        if known == ["result"] and any(port != "result" for port in used):
+            known = None
+        if known is None:
+            self.report("RUNTIME_PROCESS_CONTRACT", nid, "outputs",
+                        "Its branches are only known when it runs; the branches read downstream are checked then.", "warning")
+            return sorted(used) or ["result"]
+        for port, consumers in sorted(used.items()):
+            if port not in known:
+                for consumer in sorted(set(consumers)):
+                    self.report("UNKNOWN_OUTPUT_PORT", consumer, "inputs",
+                                f'Process "{self.nodes[nid].get("name") or nid}" does not return branch "{port}".')
+        self.report("RUNTIME_PROCESS_CONTRACT", nid, "outputs",
+                    "Validate the returned branches and their columns after Process execution.", "warning")
+        return list(known)
 
     def order_jobs(self):
         for job in self.jobs.values():
@@ -447,28 +479,20 @@ class _Compiler:
         schema = artifact["schema"]
         columns = {c["name"]: c["type"] for c in schema["columns"]}
         runtime = schema["status"] == "runtime"
-        infer_columns = columns
-        defer_missing = False
-        if runtime and self.mapping_policy == "legacy_export":
-            infer_columns = {c["name"]: c["type"] for c in artifact.get("observed_schema", {}).get("columns", [])}
-            dataset_id = self.source_map[artifact["id"]]["node_ids"][0]
-            content = self.obj(self.nodes.get(dataset_id, {}).get("datasetContent"), dataset_id, "datasetContent")
-            # Rows are never retained in the spec. Browser sends a count, not values.
-            count = content.get("row_count", len(content.get("rows") or []))
-            defer_missing = not count
         for name, column in config["input_mapping"].items():
             if column is not None and not isinstance(column, str):
                 self.report("INVALID_INPUT_MAPPING", rid, f"runInputToColumn.{name}", "A mapped column must be a string.")
                 continue
-            if not _text(column) and (not runtime or self.mapping_policy == "legacy_export"):
+            if not _text(column) and not runtime:
                 # Match existing legacy export inference, but only against known columns.
-                matches = [c for c in infer_columns if c == name] or [c for c in infer_columns if c.casefold() == name.casefold()]
+                matches = [c for c in columns if c == name] or [c for c in columns if c.casefold() == name.casefold()]
                 if len(matches) == 1:
                     column = config["input_mapping"][name] = matches[0]
             if not _text(column):
-                if defer_missing:
+                if runtime and self.mapping_policy == "legacy_export":
+                    # An exported project resolves it by column name when data arrives, or says to set it.
                     config["input_mapping"][name] = None
-                    self.report("RUNTIME_INPUT_MAPPING", rid, f"runInputToColumn.{name}", f"Resolve {{{name}}} by unique column name when the branch has data.", "warning")
+                    self.report("RUNTIME_INPUT_MAPPING", rid, f"runInputToColumn.{name}", f"Resolve {{{name}}} by unique column name when the data arrives.", "warning")
                 else:
                     title = self.nodes[rid].get("runName") or "Run"
                     self.report("UNMAPPED_INPUT", rid, f"runInputToColumn.{name}", f'Open "{title}" and map each input; missing {{{name}}}.')
@@ -506,6 +530,10 @@ class _Compiler:
         for aid in [aid for aid in self.artifacts if aid not in touched]:
             self.artifacts.pop(aid, None)
             self.source_map.pop(aid, None)
+        for aid, artifact in self.artifacts.items():
+            if artifact["producer"] is None and not artifact["schema"]["columns"]:
+                nid = self.source_map[aid]["node_ids"][0]
+                self.report("EMPTY_INPUT_SCHEMA", nid, "datasetContent.headers", "An input Dataset must define at least one column.")
 
     def finish(self, order=None):
         diagnostics = sorted(self.diagnostics, key=lambda d: (d["node_id"], d["field"], d["code"], d["message"]))

@@ -117,7 +117,7 @@ export async function verifyReviewSuggestion({
 
     if (!credentialId) throw new Error('No run credential configured on the upstream Run node.');
     if (!outputSchema) throw new Error('No output schema configured on the upstream Prompt node.');
-    if (!scoreMapping) throw new Error('No Score mapping configured on the upstream Score node.');
+    if (!scoreMapping) throw new Error('No Evaluate mapping configured on the upstream Evaluate node.');
 
     const normalizedOriginals = normalizeSections(originals);
     if (!suggestionWouldChangePrompt(normalizedOriginals, suggestion)) {

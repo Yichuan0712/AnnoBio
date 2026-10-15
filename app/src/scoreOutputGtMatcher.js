@@ -228,7 +228,7 @@ export async function evaluateScoreOutputGt({
   const { outputRoot } = parseScoreMappingBundle(scoreMapping || '{}');
   const outputLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
   if (outputLeaves.length === 0) {
-    throw new Error('No Score output->gt rules configured.');
+    throw new Error('No Evaluate output->gt rules configured.');
   }
 
   const gtSubset = buildGtSubset(gtContent, inputEntries);

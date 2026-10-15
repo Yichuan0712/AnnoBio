@@ -730,14 +730,14 @@ export function openSettingsModal() {
                     <div class="review-detail-view-switch model-settings-view-switch" role="tablist" aria-label="Settings options">
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="settings-panel-credentials" id="settings-tab-credentials" data-tab="credentials">New credential</button>
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Run defaults</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Review defaults</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Optimize defaults</button>
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-agent" id="settings-tab-agent" data-tab="agent">Agent defaults</button>
                     </div>
                   </div>
                   <div class="review-detail-tab-panels model-settings-tab-panels">
                     <div class="review-detail-tab-panel review-detail-tab-panel--active" id="settings-panel-credentials" role="tabpanel" aria-labelledby="settings-tab-credentials" data-panel="credentials">
                       <div class="defaults-page-scroll settings-credentials-tab-body">
-                        <p class="settings-tab-intro">A credential is a model AnnoBio can call: its model ID and the API key that pays for it. Add one through LiteLLM, which reaches most providers directly (OpenAI, Anthropic, Google, DeepSeek and more, or your own OpenAI compatible server through Base URL), or connect an OpenRouter account to use any model it offers with a single key. Added credentials appear in the list on the left, where Test checks that they work, and can then be chosen for Runs, Reviews and the Agent.</p>
+                        <p class="settings-tab-intro">A credential is a model AnnoBio can call: its model ID and the API key that pays for it. Add one through LiteLLM, which reaches most providers directly (OpenAI, Anthropic, Google, DeepSeek and more, or your own OpenAI compatible server through Base URL), or connect an OpenRouter account to use any model it offers with a single key. Added credentials appear in the list on the left, where Test checks that they work, and can then be chosen for Runs, Optimize nodes and the Agent.</p>
                         <div id="model-settings-credentials-add" class="model-settings-credentials-add">
                           <div class="credentials-add-method-row">
                             <label class="dataset-meta-label" for="credentials-add-method-select">Add credential</label>
@@ -816,11 +816,11 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-review" role="tabpanel" aria-labelledby="settings-tab-review" data-panel="review">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">A Review studies the rows a Score marked as wrong, suggests edits to the prompt, and can check each edit on those rows. Here you choose the model that writes and checks the suggestions when a Score has none of its own, the optimisation method used unless a Score picks another, and how much work each Review does: the reply length, how many failed inputs it looks at, and the trials or iterations of the method. Larger numbers can find better edits but make more model calls. Debug mode adds Reset and Debug buttons to suggestion cards.</p>
+                          <p class="settings-tab-intro">An Optimize node studies the rows an Evaluate node marked as wrong, suggests edits to the prompt, and can check each edit on those rows. Here you choose the model that writes and checks the suggestions when an Evaluate node has none of its own, the optimisation method used unless an Evaluate node picks another, and how much work each Optimize does: the reply length, how many failed inputs it looks at, and the trials or iterations of the method. Larger numbers can find better edits but make more model calls. Debug mode adds Reset and Debug buttons to suggestion cards.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-review-credential">Default model</label>
-                              <select id="settings-default-review-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Review">
+                              <select id="settings-default-review-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Optimize">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
                             </div>
@@ -858,11 +858,11 @@ export function openSettingsModal() {
                             </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-review-max-tokens">Max tokens (256–131072)</label>
-                              <input type="number" id="settings-review-max-tokens" class="dataset-meta-input" min="256" max="131072" value="32768" aria-label="Review max tokens" />
+                              <input type="number" id="settings-review-max-tokens" class="dataset-meta-input" min="256" max="131072" value="32768" aria-label="Optimize max tokens" />
                             </div>
                             <div class="defaults-field">
-                              <label class="dataset-meta-label" for="settings-review-max-failed-rows">Max failed inputs per Review (1–200)</label>
-                              <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max inputs with failures analyzed per Review" />
+                              <label class="dataset-meta-label" for="settings-review-max-failed-rows">Max failed inputs per Optimize (1–200)</label>
+                              <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max inputs with failures analyzed per Optimize" />
                             </div>
                             <div class="defaults-field settings-review-method-specific" data-method-settings="issue_analysis_suggestions" hidden>
                               <label class="dataset-meta-label" for="settings-optimization-max-trials">Max trials per optimization run (4–200)</label>
@@ -879,7 +879,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-agent" role="tabpanel" aria-labelledby="settings-tab-agent" data-panel="agent">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">The Agent Assistant is the chat in the right panel. It reads your canvas, proposes changes for you to apply and starts jobs once you confirm them. It needs a model that supports tool calling, so choosing one runs a quick check; without a default it uses the Review model, and its replies follow Max tokens in Review defaults, up to 8,192. Context window sets how much of a long conversation is sent to the model each time; Auto reads the model's published limit.</p>
+                          <p class="settings-tab-intro">The Agent Assistant is the chat in the right panel. It reads your canvas, proposes changes for you to apply and starts jobs once you confirm them. It needs a model that supports tool calling, so choosing one runs a quick check; without a default it uses the Optimize model, and its replies follow Max tokens in Optimize defaults, up to 8,192. Context window sets how much of a long conversation is sent to the model each time; Auto reads the model's published limit.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-agent-credential">Default model</label>
@@ -1083,7 +1083,7 @@ export function openSettingsModal() {
     let text;
     let state = 'neutral';
     if (!c) {
-      text = 'Without a default, the Agent uses the default Review model.';
+      text = 'Without a default, the Agent uses the default Optimize model.';
     } else if (agentChecksInFlight.has(c.id)) {
       text = 'Checking whether this model can call tools...';
     } else if (checkError) {

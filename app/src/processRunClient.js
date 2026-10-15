@@ -15,9 +15,12 @@ function rowsHaveAssetCells(rows) {
   return (rows || []).some((row) => (row || []).some((cell) => isAssetCell(cell)));
 }
 
-/** The backend returns each branch as a list of row objects; the canvas stores {headers, rows}. */
-export function rowsFromDicts(rowDicts) {
-  const keys = [];
+/**
+ * The backend returns each branch as a list of row objects, and its columns; the canvas stores
+ * {headers, rows}. The columns keep a branch without rows from losing them (older jobs lack them).
+ */
+export function rowsFromDicts(rowDicts, columns = []) {
+  const keys = Array.isArray(columns) ? columns.map(String) : [];
   (rowDicts || []).forEach((row) => {
     if (!row || typeof row !== 'object') return;
     Object.keys(row).forEach((key) => { if (!keys.includes(key)) keys.push(key); });
@@ -68,6 +71,20 @@ export async function runProcessCode({ code, bindings, signal, onStarted, timeou
   return waitForProcessJob(jobId, { signal, timeoutMs });
 }
 
+/**
+ * The output branches Process code returns, found by the backend parsing it; the code is not run.
+ * @returns {Promise<{ok: true, ports: string[], dynamic: boolean} | {ok: false, error: string}>}
+ */
+export async function detectProcessOutputs(code) {
+  const res = await fetch(`${BACKEND_API_BASE}/api/process/outputs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: String(code || '') }),
+  });
+  if (!res.ok) throw new Error(`Could not read the Process outputs (HTTP ${res.status}).`);
+  return res.json();
+}
+
 /** Resume polling a Process job after reopening a project. */
 export async function waitForProcessJob(jobId, { signal, timeoutMs = MAX_WAIT_MS } = {}) {
   const cancel = () => fetch(`${BACKEND_API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
@@ -94,7 +111,7 @@ export async function waitForProcessJob(jobId, { signal, timeoutMs = MAX_WAIT_MS
       if (data.error) throw new Error(String(data.error));
       const outputs = Object.fromEntries(Object.entries(data.outputs || {})
         .map(([branch, rowDicts]) => {
-          const { headers, rows } = rowsFromDicts(rowDicts);
+          const { headers, rows } = rowsFromDicts(rowDicts, data.output_columns?.[branch]);
           return [branch, { headers, rows }];
         }));
       return { outputs, cancelled: data.status === 'cancelled' };

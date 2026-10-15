@@ -3,14 +3,14 @@
  * this project has no icon font/library dependency, so icons are vendored as plain primitive
  * data here instead, in the same spirit as modalMaximize.js's iconClose/iconMaximize.
  */
-function svgIcon({ paths = [], circles = [], lines = [], rects = [], polylines = [], viewBox = '0 0 24 24', size = 16 } = {}) {
+function svgIcon({ paths = [], circles = [], lines = [], rects = [], polylines = [], viewBox = '0 0 24 24', size = 16, strokeWidth = 2 } = {}) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', viewBox);
   svg.setAttribute('width', String(size));
   svg.setAttribute('height', String(size));
   svg.setAttribute('fill', 'none');
   svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-width', String(strokeWidth));
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
   svg.setAttribute('aria-hidden', 'true');
@@ -50,6 +50,42 @@ function svgIcon({ paths = [], circles = [], lines = [], rects = [], polylines =
   });
   return svg;
 }
+
+export const iconText = (size) => svgIcon({
+  size,
+  lines: [[4, 6, 20, 6], [4, 12, 20, 12], [4, 18, 15, 18]],
+});
+
+/** The Prompt node's three lines, shared with its inputs and Optimize's new Prompt output. */
+export const iconPrompt = (size = 14) => svgIcon({
+  size, viewBox: '0 0 14 14', strokeWidth: 1.5,
+  lines: [[2, 4, 12, 4], [2, 7, 12, 7], [2, 10, 8, 10]],
+});
+
+/** The Run node's filled play triangle, shared with inputs that read a Run. */
+export const iconRun = (size = 14) => {
+  const svg = svgIcon({ size, viewBox: '0 0 14 14', paths: ['M3 2v10l8-5-8-5z'] });
+  svg.setAttribute('fill', 'currentColor');
+  svg.setAttribute('stroke', 'none');
+  return svg;
+};
+
+/** The Evaluate node's chart, shared with Optimize's source input. */
+export const iconEvaluate = (size = 14) => svgIcon({
+  size,
+  viewBox: '0 0 14 14',
+  strokeWidth: 1.2,
+  paths: ['M3 8v4M6 5v7M9 3v9M12 6v6'],
+});
+
+/** The original Dataset node's grid, shared with table inputs. */
+export const iconDataset = (size = 14) => svgIcon({
+  size,
+  viewBox: '0 0 14 14',
+  strokeWidth: 1.2,
+  rects: [[1, 1, 12, 12, 0.5]],
+  lines: [[1, 4, 13, 4], [1, 7, 13, 7], [1, 10, 13, 10], [4.5, 1, 4.5, 13], [8, 1, 8, 13]],
+});
 
 /** Lucide "merge" — two lines converging into one, like a highway merge sign. */
 export const iconMerge = (size) => svgIcon({
@@ -108,18 +144,11 @@ export const iconTrash = (size) => svgIcon({
   lines: [[10, 11, 10, 17], [14, 11, 14, 17]],
 });
 
-/** Lucide "image-plus" — shared by "batch import" and "import (one) image": an image frame with a
- * plus badge reads as "add an image" even alone, unlike a generic upload arrow (could be any file)
- * or a bare "+" (could be "add" anything — a row, a column). */
-export const iconImageAdd = (size) => svgIcon({
+/** Lucide "square-plus" — add one asset to an image or PDF cell. */
+export const iconSquarePlus = (size) => svgIcon({
   size,
-  paths: [
-    'M16 5h6',
-    'M19 2v6',
-    'M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5',
-    'm21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21',
-  ],
-  circles: [[9, 9, 2]],
+  rects: [[3, 3, 18, 18, 2]],
+  paths: ['M8 12h8', 'M12 8v8'],
 });
 
 /** Lucide "file-text" — used for a PDF chip that already has a file (mirrors the image thumbnail:
@@ -152,16 +181,12 @@ export const iconHistory = (size) => svgIcon({
   polylines: ['3 3 3 8 8 8'],
 });
 
-/** Lucide "file-plus" — shared by "batch import PDFs" and "import (one) PDF": the PDF equivalent
- * of iconImageAdd, a plus badge to read as "add" rather than just "here's a file". */
-export const iconFileAdd = (size) => svgIcon({
+/** Lucide "copy-plus" — batch import into an image or PDF column. */
+export const iconCopyPlus = (size) => svgIcon({
   size,
-  paths: [
-    'M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z',
-    'M14 2v5a1 1 0 0 0 1 1h5',
-    'M9 15h6',
-    'M12 18v-6',
-  ],
+  paths: ['M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'],
+  lines: [[15, 12, 15, 18], [12, 15, 18, 15]],
+  rects: [[8, 8, 14, 14, 2]],
 });
 
 /**

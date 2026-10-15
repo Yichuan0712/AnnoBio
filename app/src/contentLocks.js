@@ -1,18 +1,23 @@
 /**
- * A Prompt or Dataset that has produced a result is locked: editing it would leave History results that
- * no longer match the inputs they were made from. Edit a Duplicate or a new version instead. A Process's
- * own code stays editable; History records each run with the code it used.
+ * A Prompt or Dataset used to produce a result is locked: editing it would leave results that
+ * no longer match the inputs they were made from. History records and sampled Dataset outputs
+ * both count. Edit a Duplicate or a new version instead. A Process's own code stays editable;
+ * History records each run with the code it used.
  */
 
-/** The nodes one History record used. Record inputs never change, so callers may cache this per record ID. */
+/**
+ * The nodes one History record used. Record inputs never change, so callers may cache this per record ID.
+ * A step's output it read locks nothing: that output is the upstream record, which cannot change.
+ */
 export function recordInputRefs(record) {
   const inputs = record?.inputs || {};
   const ref = { kind: record?.kind || '', nodeId: String(record?.nodeId || ''), promptId: '', datasetIds: [], scoreNodeId: '' };
+  const datasetIds = (items) => items.filter((item) => item?.nodeId && item.kind !== 'step').map((item) => String(item.nodeId));
   if (ref.kind === 'run') {
     ref.promptId = String(inputs.prompt?.nodeId || '');
-    ref.datasetIds = [inputs.dataset?.nodeId].filter(Boolean).map(String);
+    ref.datasetIds = datasetIds([inputs.dataset]);
   } else if (ref.kind === 'process') {
-    ref.datasetIds = (Array.isArray(inputs.bindings) ? inputs.bindings : []).map((item) => item?.nodeId).filter(Boolean).map(String);
+    ref.datasetIds = datasetIds(Array.isArray(inputs.bindings) ? inputs.bindings : []);
   } else if (ref.kind === 'score') {
     ref.datasetIds = [inputs.groundTruthId].filter(Boolean).map(String);
   } else if (ref.kind === 'review') {
@@ -43,6 +48,16 @@ export function contentLocks(refs, canvasState) {
     if (ref.kind === 'run') lock(ref.promptId, ref.nodeId);
     if (['run', 'process', 'score'].includes(ref.kind)) ref.datasetIds.forEach((id) => lock(id, ref.nodeId));
     if (ref.kind === 'review') reviewedScoreIds.add(ref.scoreNodeId);
+  }
+  // A Sample output is a saved snapshot of its source Dataset. Only a real output edge counts;
+  // Dataset versions may retain samplerNodeId for provenance without being another sample.
+  for (const edge of connections) {
+    if (edge.type !== 'sampler-to-dataset') continue;
+    const sampler = onCanvas.get(String(edge.fromId || ''));
+    const output = onCanvas.get(String(edge.toId || ''));
+    if (sampler?.type !== 'sampler' || output?.type !== 'dataset'
+      || String(output.samplerNodeId || '') !== String(sampler.nodeId || '')) continue;
+    lock(String(sampler.sourceNodeId || ''), String(sampler.nodeId || ''));
   }
   // Score metrics are computed live rather than saved, so a ground truth is in use while its Score shows
   // a result (the upstream Run has a current result) or has been reviewed.

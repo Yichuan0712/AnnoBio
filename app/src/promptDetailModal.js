@@ -237,7 +237,7 @@ function buildRunTemplateTextForExport(sections) {
 }
 
 /**
- * Save to local: run template + suffix matching backend/llm.py::_run_structured_fallback (approx. JSON Schema).
+ * Export format: run template + suffix matching backend/llm.py::_run_structured_fallback (approx. JSON Schema).
  */
 function buildPromptExportText(snapshot) {
   const runTemplate = buildRunTemplateTextForExport(snapshot.sections);
@@ -348,19 +348,21 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
             <div class="prompt-detail-side-scroll">
               <h3 class="prompt-preview-title">Prompt inputs</h3>
               <div class="prompt-detail-inputs-content prompt-preview">${inputsViewHtml}</div>
-              <h3 class="prompt-preview-title">Output schema</h3>
+              <div class="prompt-detail-schema-heading">
+                <h3 class="prompt-preview-title">Output schema</h3>
+                ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-heading-edit prompt-detail-schema-btn-edit">Edit schema</button>'}
+              </div>
               <div class="prompt-detail-schema-wrap">
                 <div class="prompt-detail-schema-view">${schemaViewHtml}</div>
-                <div class="prompt-detail-schema-footer">
-                  <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
-                  ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-schema-btn-edit">Edit</button>'}
-                </div>
+                <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
               </div>
             </div>
           </div>
           <div class="prompt-detail-main">
             <div class="prompt-detail-step">
-              <p class="prompt-step-label">Prompt sections</p>
+              <div class="prompt-detail-sections-heading">
+                <p class="prompt-step-label">Prompt sections</p>
+              </div>
               <div class="prompt-detail-sections-scroll">
                 <div class="prompt-detail-sections-wrap">
                   <div class="prompt-detail-sections-view">${sectionsViewHtml}</div>
@@ -368,10 +370,10 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
               </div>
               <div class="prompt-form-error prompt-modal-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
               <div class="prompt-actions">
-                <button type="button" class="btn btn-secondary prompt-detail-export-local">Save to local</button>
                 <div class="prompt-actions__trailing">
-                  ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit</button>'}
-                  <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Run</button>
+                  <button type="button" class="btn btn-secondary prompt-detail-export-local" title="Save prompt as a text file">Save as file</button>
+                  ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit sections</button>'}
+                  <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Create Run</button>
                 </div>
               </div>
             </div>
@@ -381,47 +383,54 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     `;
 
   const panel = overlay.querySelector('.modal-panel--prompt-detail');
-  const nameValueEl = overlay.querySelector('.prompt-detail-name-value');
-  const notesValueEl = overlay.querySelector('.prompt-detail-notes-value');
-  const nameInp = overlay.querySelector('#prompt-detail-name-inp');
-  const notesInp = overlay.querySelector('#prompt-detail-notes-inp');
-  const btnEdit = overlay.querySelector('.prompt-detail-btn-edit');
-  const btnCancel = overlay.querySelector('.prompt-detail-btn-cancel');
-  const btnSave = overlay.querySelector('.prompt-detail-btn-save');
+  const detailBody = overlay.querySelector('.prompt-detail-body');
+  let activeSidePanel = null;
 
-  function applyToNode(newName, newNote) {
-    if (!sourceNode) return;
-    sourceNode.dataset.promptName = newName;
-    sourceNode.dataset.promptNote = newNote;
-    const titleEl = sourceNode.querySelector('.workflow-node__title');
-    if (titleEl) titleEl.textContent = newName || 'Prompt';
-    const bodyEl = sourceNode.querySelector('.workflow-node__body');
-    if (newNote) {
-      sourceNode.classList.remove('workflow-node--no-body');
-      if (bodyEl) {
-        const noteEl = bodyEl.querySelector('.workflow-node__note');
-        if (noteEl) noteEl.textContent = newNote;
-        else bodyEl.innerHTML = `<span class="workflow-node__note">${escapeHtml(newNote)}</span>`;
-      } else {
-        const div = document.createElement('div');
-        div.className = 'workflow-node__body';
-        div.innerHTML = `<span class="workflow-node__note">${escapeHtml(newNote)}</span>`;
-        sourceNode.appendChild(div);
-      }
-    } else {
-      if (bodyEl) bodyEl.remove();
-      sourceNode.classList.add('workflow-node--no-body');
-    }
+  function openSidePanel(kind, title, bodyHtml) {
+    if (activeSidePanel?.kind === kind) return null;
+    activeSidePanel?.close();
+    const hadLeftCollapsed = overlay.classList.contains('modal-overlay--left-pane-collapsed');
+    const hadRightCollapsed = overlay.classList.contains('modal-overlay--right-pane-collapsed');
+    overlay.classList.remove('modal-overlay--left-pane-collapsed', 'modal-overlay--right-pane-collapsed');
+    const side = document.createElement('aside');
+    side.className = 'prompt-detail-editor-panel';
+    side.setAttribute('aria-label', title);
+    side.innerHTML = `<div class="prompt-detail-editor-panel__header"><strong>${title}</strong><button type="button" class="modal-close prompt-detail-editor-panel__close" aria-label="Close editor">&times;</button></div>
+      <div class="prompt-detail-editor-panel__overview">${bodyHtml}</div>
+      <div class="prompt-detail-editor-panel__child-host" hidden></div>`;
+    detailBody.appendChild(side);
+    panel.dataset.promptSideKind = kind;
+    const close = () => {
+      side.remove();
+      delete panel.dataset.promptSideKind;
+      if (hadLeftCollapsed) overlay.classList.add('modal-overlay--left-pane-collapsed');
+      if (hadRightCollapsed) overlay.classList.add('modal-overlay--right-pane-collapsed');
+      activeSidePanel = null;
+      syncPromptExportLocalEnabled();
+    };
+    side.querySelector('.prompt-detail-editor-panel__close').addEventListener('click', close);
+    activeSidePanel = { kind, side, close };
+    syncPromptExportLocalEnabled();
+    return side;
   }
 
+  function showSideChild(side, openEditor) {
+    const overview = side.querySelector('.prompt-detail-editor-panel__overview');
+    const host = side.querySelector('.prompt-detail-editor-panel__child-host');
+    overview.hidden = true;
+    host.hidden = false;
+    openEditor(host, () => {
+      host.hidden = true;
+      overview.hidden = false;
+    });
+  }
   const exportLocalBtn = overlay.querySelector('.prompt-detail-export-local');
 
   function syncPromptExportLocalEnabled() {
     if (!exportLocalBtn) return;
     const noNode = !sourceNode;
-    const nameNoteEditing = panel.getAttribute('data-prompt-detail-mode') === 'edit';
-    const childBlocking = hasPromptExportBlockingOverlayOpen();
-    exportLocalBtn.disabled = noNode || nameNoteEditing || childBlocking;
+    const childBlocking = !!activeSidePanel || hasPromptExportBlockingOverlayOpen();
+    exportLocalBtn.disabled = noNode || childBlocking;
   }
 
   const exportOverlayObserver = new MutationObserver(() => syncPromptExportLocalEnabled());
@@ -431,57 +440,6 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     exportOverlayObserver.disconnect();
     overlay.remove();
     document.body.style.overflow = '';
-  }
-
-  function showView() {
-    panel.setAttribute('data-prompt-detail-mode', 'view');
-    syncPromptExportLocalEnabled();
-  }
-
-  function showEdit() {
-    nameInp.value = nameValueEl.textContent.trim() || '';
-    notesInp.value = notesValueEl.querySelector('.prompt-detail-placeholder') ? '' : (notesValueEl.textContent || '').trim();
-    panel.setAttribute('data-prompt-detail-mode', 'edit');
-    syncPromptExportLocalEnabled();
-  }
-
-  const nameErrorEl = overlay.querySelector('#prompt-detail-name-error');
-
-  if (btnEdit) {
-    btnEdit.addEventListener('click', showEdit);
-    btnCancel.addEventListener('click', () => showView());
-    btnSave.addEventListener('click', () => {
-      const newNameRaw = (nameInp.value || '').trim();
-      const newName = newNameRaw || 'Prompt';
-      const newNote = (notesInp.value || '').trim();
-      if (nameErrorEl) nameErrorEl.hidden = true;
-      if (!newNameRaw) {
-        if (nameErrorEl) {
-          nameErrorEl.textContent = 'Prompt name is required.';
-          nameErrorEl.hidden = false;
-        }
-        return;
-      }
-      if (!newNote) {
-        if (nameErrorEl) {
-          nameErrorEl.textContent = 'Prompt description is required.';
-          nameErrorEl.hidden = false;
-        }
-        return;
-      }
-      if (typeof isPromptNameAlreadyUsed === 'function' && isPromptNameAlreadyUsed(newName, sourceNode?.dataset?.nodeId ?? null)) {
-        if (nameErrorEl) {
-          nameErrorEl.textContent = 'This prompt name is already used on the canvas. Please choose another.';
-          nameErrorEl.hidden = false;
-        }
-        return;
-      }
-      applyToNode(newName, newNote);
-      nameValueEl.textContent = newName;
-      notesValueEl.innerHTML = newNote ? escapeHtml(newNote) : '<span class="prompt-detail-placeholder">No description.</span>';
-      showView();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    });
   }
 
   if (exportLocalBtn) {
@@ -526,36 +484,19 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     return names.length !== new Set(names).size;
   }
 
-  function openEditSectionsOverlay() {
+  function openEditSectionsSidePanel() {
     const editSections = currentSections.map((s) => ({ name: s.name || '', content: s.content || '' }));
-    const editOverlay = document.createElement('div');
-    editOverlay.className = 'modal-overlay modal-overlay--edit-sections';
-    editOverlay.setAttribute('aria-modal', 'true');
-    editOverlay.innerHTML = `
-      <div class="modal-panel modal-panel--edit-sections">
-        <div class="modal-header">
-          <h2 class="modal-title">Edit prompt sections</h2>
-          <button type="button" class="modal-close modal-close--edit-sections" aria-label="Close">×</button>
-        </div>
-        <div class="modal-body">
-          <div class="prompt-main prompt-main--edit-sections">
-            <div class="prompt-step prompt-step-2" style="display: flex;">
-              <p class="prompt-hint">Click a section to edit it, or use × to remove it.</p>
-              <div class="prompt-step-scroll prompt-step-2-scroll">
-                <div class="prompt-sections prompt-sections--edit"></div>
-                <div class="prompt-add-section-wrap">
-                  <button type="button" class="btn btn-secondary prompt-add-section">+ Add a section</button>
-                </div>
-              </div>
-              <div class="prompt-form-error prompt-modal-error edit-sections-error" role="alert" aria-live="polite" hidden></div>
-            </div>
-          </div>
-        </div>
+    const side = openSidePanel('sections', 'Edit prompt sections', `
+      <p class="prompt-hint">Click a section to edit it, or use × to remove it.</p>
+      <div class="prompt-detail-editor-panel__scroll">
+        <div class="prompt-sections prompt-sections--edit"></div>
+        <div class="prompt-add-section-wrap"><button type="button" class="btn btn-secondary prompt-add-section">+ Add a section</button></div>
       </div>
-    `;
-    const container = editOverlay.querySelector('.prompt-sections--edit');
-    const addBtn = editOverlay.querySelector('.prompt-add-section');
-    const errorEl = editOverlay.querySelector('.edit-sections-error');
+      <div class="prompt-form-error prompt-modal-error edit-sections-error" role="alert" aria-live="polite" hidden></div>`);
+    if (!side) return;
+    const container = side.querySelector('.prompt-sections--edit');
+    const addBtn = side.querySelector('.prompt-add-section');
+    const errorEl = side.querySelector('.edit-sections-error');
 
     function onSectionChange() {
       renderSectionsList();
@@ -567,12 +508,10 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
         sections: editSections,
         container,
         onChange: onSectionChange,
+        onEdit: (sectionIndex) => showSideChild(side, (host, onClose) => openPromptSectionEditor({
+          sections: editSections, sectionIndex, onDone: onSectionChange, host, onClose,
+        })),
       });
-    }
-
-    function close() {
-      editOverlay.remove();
-      syncPromptExportLocalEnabled();
     }
 
     function showError(msg) {
@@ -622,22 +561,17 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       return true;
     }
 
-    editOverlay.querySelector('.modal-close--edit-sections').addEventListener('click', close);
-
     addBtn.addEventListener('click', () => {
-      openPromptSectionEditor({
-        sections: editSections,
-        onDone: onSectionChange,
-      });
+      showSideChild(side, (host, onClose) => openPromptSectionEditor({
+        sections: editSections, onDone: onSectionChange, host, onClose,
+      }));
     });
 
     renderSectionsList();
-    document.body.appendChild(editOverlay);
-    syncPromptExportLocalEnabled();
   }
 
   if (sectionsBtnEdit) {
-    sectionsBtnEdit.addEventListener('click', () => openEditSectionsOverlay());
+    sectionsBtnEdit.addEventListener('click', () => openEditSectionsSidePanel());
   }
 
   const sectionsBtnRun = overlay.querySelector('.prompt-detail-sections-btn-run');
@@ -769,7 +703,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     return keys.length !== new Set(keys).size;
   }
 
-  function openEditSchemaOverlay() {
+  function openEditSchemaSidePanel() {
     const editSchemaFields = currentSchemaFields.map((o) => ({
       key: o.key || '',
       type: o.type || 'str',
@@ -777,51 +711,34 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
       allowNone: o.allowNone === true,
     }));
-    let editSchemaReturnShape = currentSchemaReturnShape;
-    const schemaOverlay = document.createElement('div');
-    schemaOverlay.className = 'modal-overlay modal-overlay--edit-schema';
-    schemaOverlay.setAttribute('aria-modal', 'true');
-    schemaOverlay.innerHTML = `
-      <div class="modal-panel modal-panel--edit-schema">
-        <div class="modal-header">
-          <h2 class="modal-title">Edit output schema</h2>
-          <button type="button" class="modal-close modal-close--edit-schema" aria-label="Close">×</button>
-        </div>
-        <div class="modal-body">
-          <div class="prompt-main prompt-main--edit-schema">
-            <div class="prompt-step prompt-step-3" style="display: flex;">
-              <p class="prompt-hint">Click a field to edit it, use × to remove it, and close the field editor to save.</p>
-              <div class="edit-schema-form">
-                <div class="prompt-output-return-shape-wrap">
-                  <span class="prompt-output-return-shape-label">Return shape:</span>
-                  <label class="prompt-output-return-shape-option"><input type="radio" name="prompt-detail-schema-return-shape" value="single" /> Single row</label>
-                  <label class="prompt-output-return-shape-option"><input type="radio" name="prompt-detail-schema-return-shape" value="table" /> Multiple rows</label>
-                </div>
-                <div class="prompt-output-format-wrap">
-                  <div class="prompt-step-3-format-scroll">
-                    <div class="prompt-output-keys-list"></div>
-                  </div>
-                  <div class="prompt-add-field-wrap">
-                    <button type="button" class="btn btn-secondary prompt-output-add-key">+ Add a field</button>
-                  </div>
-                </div>
-              </div>
-              <div class="prompt-form-error prompt-modal-error edit-schema-error" role="alert" aria-live="polite" hidden></div>
-            </div>
+    const side = openSidePanel('schema', 'Edit output schema', `
+      <div class="edit-schema-form prompt-detail-editor-panel__scroll">
+        <div class="prompt-output-return-shape-wrap">
+          <span class="prompt-output-return-shape-label">Output rows</span>
+          <div class="review-detail-view-switch prompt-output-row-switch" role="group" aria-label="Output rows">
+            <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="single" aria-pressed="false">One row</button>
+            <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="table" aria-pressed="false">Multiple rows</button>
           </div>
         </div>
+        <div class="prompt-output-keys-list"></div>
+        <div class="prompt-add-field-wrap"><button type="button" class="btn btn-secondary prompt-output-add-key">+ Add a field</button></div>
       </div>
-    `;
-    const formContainer = schemaOverlay.querySelector('.edit-schema-form');
+      <div class="prompt-form-error prompt-modal-error edit-schema-error" role="alert" aria-live="polite" hidden></div>`);
+    if (!side) return;
+    const formContainer = side.querySelector('.edit-schema-form');
     const keysListEl = formContainer.querySelector('.prompt-output-keys-list');
-    const returnShapeSingle = formContainer.querySelector('input[name="prompt-detail-schema-return-shape"][value="single"]');
-    const returnShapeTable = formContainer.querySelector('input[name="prompt-detail-schema-return-shape"][value="table"]');
-    if (editSchemaReturnShape === 'single') {
-      if (returnShapeSingle) returnShapeSingle.checked = true;
-    } else {
-      if (returnShapeTable) returnShapeTable.checked = true;
+    const returnShapeButtons = formContainer.querySelectorAll('.prompt-output-row-btn');
+    let selectedReturnShape = currentSchemaReturnShape === 'single' ? 'single' : 'table';
+    function selectReturnShape(shape) {
+      selectedReturnShape = shape;
+      returnShapeButtons.forEach((button) => {
+        const active = button.dataset.returnShape === shape;
+        button.classList.toggle('review-detail-tab--active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
     }
-    const errorEl = schemaOverlay.querySelector('.edit-schema-error');
+    selectReturnShape(selectedReturnShape);
+    const errorEl = side.querySelector('.edit-schema-error');
 
     function renderSchemaCards() {
       renderPromptFieldCards({
@@ -832,30 +749,27 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
           renderSchemaCards();
           persistToNode();
         },
+        onEdit: (fieldIndex) => showSideChild(side, (host, onClose) => openPromptFieldEditor({
+          fields: editSchemaFields, fieldIndex, outputTypes: OUTPUT_TYPES,
+          onDone: () => { renderSchemaCards(); persistToNode(); }, host, onClose,
+        })),
       });
     }
 
     const addFieldBtn = formContainer.querySelector('.prompt-output-add-key');
     if (addFieldBtn) {
       addFieldBtn.addEventListener('click', () => {
-        openPromptFieldEditor({
-          fields: editSchemaFields,
-          outputTypes: OUTPUT_TYPES,
-          onDone: () => {
-            renderSchemaCards();
-            persistToNode();
-          },
-        });
+        showSideChild(side, (host, onClose) => openPromptFieldEditor({
+          fields: editSchemaFields, outputTypes: OUTPUT_TYPES,
+          onDone: () => { renderSchemaCards(); persistToNode(); }, host, onClose,
+        }));
       });
     }
 
-    if (returnShapeSingle) returnShapeSingle.addEventListener('change', () => persistToNode());
-    if (returnShapeTable) returnShapeTable.addEventListener('change', () => persistToNode());
-
-    function close() {
-      schemaOverlay.remove();
-      syncPromptExportLocalEnabled();
-    }
+    returnShapeButtons.forEach((button) => button.addEventListener('click', () => {
+      selectReturnShape(button.dataset.returnShape);
+      persistToNode();
+    }));
 
     function showError(msg) {
       if (errorEl) {
@@ -872,8 +786,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     }
 
     function persistToNode() {
-      const returnShapeEl = formContainer.querySelector('input[name="prompt-detail-schema-return-shape"]:checked');
-      const returnShape = (returnShapeEl?.value || 'table') === 'single' ? 'single' : 'table';
+      const returnShape = selectedReturnShape;
       const fieldsToSave = editSchemaFields.length
         ? editSchemaFields.map((o) => ({
             key: o.key || '',
@@ -913,15 +826,11 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       return true;
     }
 
-    schemaOverlay.querySelector('.modal-close--edit-schema').addEventListener('click', close);
-
     renderSchemaCards();
-    document.body.appendChild(schemaOverlay);
-    syncPromptExportLocalEnabled();
   }
 
   if (schemaBtnEdit) {
-    schemaBtnEdit.addEventListener('click', () => openEditSchemaOverlay());
+    schemaBtnEdit.addEventListener('click', () => openEditSchemaSidePanel());
   }
 
   attachModalPaneCycle({

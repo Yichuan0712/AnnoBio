@@ -29,6 +29,18 @@ function copyBackend(src, dest) {
   }
 }
 
+// macOS titles the menu from Electron.app's Info.plist during `npm start`.
+// The label in main.js cannot override that. Packaged builds get the name
+// from electron-builder instead, so this only touches the local dev binary.
+function useAnnoBioNameForDevElectron() {
+  if (process.platform !== 'darwin') return;
+  const plistPath = path.join(__dirname, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'Info.plist');
+  if (!fs.existsSync(plistPath)) return;
+  for (const key of ['CFBundleName', 'CFBundleDisplayName']) {
+    execFileSync('plutil', ['-replace', key, '-string', 'AnnoBio', plistPath]);
+  }
+}
+
 module.exports = {
   packagerConfig: {
     asar: true,
@@ -43,6 +55,9 @@ module.exports = {
   },
   rebuildConfig: {},
   hooks: {
+    preStart: async () => {
+      useAnnoBioNameForDevElectron();
+    },
     postPackage: async (_config, context) => {
       const backendSrc = path.join(__dirname, '..', 'backend');
       const paths = context.outputPaths || [];

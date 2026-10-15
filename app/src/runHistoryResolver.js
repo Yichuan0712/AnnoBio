@@ -1,28 +1,13 @@
-import { datasetSignature, processInputSignature, runInputSignature } from './runHistorySignature.js';
-import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
-import { buildRunResultsTable } from './runResultsExport.js';
-import { cloneCell } from './datasetContent.js';
-import { datasetHistorySource } from './datasetHistorySource.js';
+import { datasetSignature, processInputSignature, runInputSignature, stepOutputSignature } from './runHistorySignature.js';
+import { processRequiredInputs, runInputSource, sourceKey } from './stepInputs.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
-const emptyTable = () => ({ headers: [], rows: [], columnTypes: [], rowIds: [] });
 
 function parsed(value, fallback) {
   if (value == null || value === '') return fallback;
   if (typeof value !== 'string') return value;
   try { return JSON.parse(value); } catch (_) { return fallback; }
-}
-
-function runTable(record) {
-  const results = parsed(record?.results?.runResults, []);
-  if (!Array.isArray(results) || (!results.length && record?.status !== 'completed')) return null;
-  const format = record.inputs?.prompt?.outputFormat;
-  return buildRunResultsTable({
-    results,
-    runContent: parsed(record.results?.runInputContent, null),
-    schemaFields: Array.isArray(format) ? format : format?.fields || [],
-  });
 }
 
 function processTable(record, branch) {
@@ -64,7 +49,8 @@ function applyResult(node, record) {
 
 /**
  * Resolve the visible canvas from current inputs and the history index. Nothing is persisted here.
- * Missing current results clear node output caches and all dependent derived Dataset content.
+ * A Run or Process without a matching record has its output cache cleared; one with an input that
+ * has no result yet also gets `waitingForUpstream`.
  */
 export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   const next = copy(state || {});
@@ -81,7 +67,6 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
     byId.set(entry.id, entry);
   }
   const currentRecordIds = {};
-  const missingDatasetIds = [];
   const missingResultNodeIds = [];
   const recordCache = new Map();
   const resolvedNodes = new Map();
@@ -107,31 +92,27 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   async function resolveDataset(id) {
     const dataset = nodes.get(id);
     if (!dataset || dataset.type !== 'dataset') return null;
-    const link = datasetHistorySource(dataset, next.connections);
-    if (link) {
-      const { sourceId, branch } = link;
-      const source = await resolveNode(sourceId);
-      const table = source && (link.kind === 'run' ? runTable(source) : processTable(source, branch));
-      if (!table) {
-        dataset.datasetContent = emptyTable();
-        dataset.resultMissing = true;
-        if (!missingDatasetIds.includes(id)) missingDatasetIds.push(id);
-        return null;
-      }
-      delete dataset.resultMissing;
-      dataset.datasetContent = {
-        headers: copy(table.headers), rows: table.rows.map((row) => row.map(cloneCell)),
-        columnTypes: copy(table.columnTypes || []),
-        rowIds: table.rows.map((_, index) => table.rowIds?.[index] || `${source.id}:${branch}:${index}`),
-      };
-      return {
-        signature: await datasetSignature({ nodeId: id, sourceRecordId: source.id, branch }),
-        sourceRecordId: source.id,
-      };
-    }
-    delete dataset.resultMissing;
     const content = dataset.datasetContent || dataset.subsetContent;
     return content ? { signature: await datasetSignature({ nodeId: id, content }) } : null;
+  }
+
+  /**
+   * What one input signs, or null while it has no result: a Dataset's content, or the current
+   * completed record of the step whose output it reads (§3.8).
+   */
+  async function resolveSource(source) {
+    if (!source?.nodeId) return null;
+    if (source.kind !== 'run' && source.kind !== 'process') {
+      const dataset = await resolveDataset(source.nodeId);
+      return dataset && { key: sourceKey(source), signature: dataset.signature };
+    }
+    const upstream = await resolveNode(source.nodeId);
+    if (upstream?.status !== 'completed') return null;
+    if (source.kind === 'run' ? source.port !== 'result' : !processTable(upstream, source.port)) return null;
+    return {
+      key: sourceKey(source),
+      signature: await stepOutputSignature({ nodeId: source.nodeId, recordId: upstream.id, port: source.port }),
+    };
   }
 
   async function resolveNode(id) {
@@ -142,41 +123,36 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
     visiting.add(id);
     try {
       let signature = null;
+      let waiting = false;
       if (node.type === 'run') {
         const promptEdge = next.connections.find((edge) => edge.type === 'prompt-to-run' && edge.toId === id);
         const prompt = nodes.get(promptEdge?.fromId);
-        const datasetId = String(node.runWorkingSetId || '');
-        const dataset = await resolveDataset(datasetId);
-        if (prompt?.type === 'prompt' && dataset) {
+        const source = runInputSource(next, id);
+        const input = await resolveSource(source);
+        waiting = !!source && !input;
+        if (prompt?.type === 'prompt' && input) {
           signature = await runInputSignature({
-            promptNodeId: nodeId(prompt), prompt, datasetNodeId: datasetId,
-            datasetSignature: dataset.signature, mapping: parsed(node.runInputToColumn, {}),
+            promptNodeId: nodeId(prompt), prompt, datasetNodeId: input.key,
+            datasetSignature: input.signature, mapping: parsed(node.runInputToColumn, {}),
           });
         }
       } else {
-        const incoming = next.connections.filter((edge) => edge.type === 'dataset-to-process' && edge.toId === id);
-        const primaryDatasetId = String(node.primaryDatasetId || incoming[0]?.fromId || '');
+        const code = String(node.dfCode || node.code || '');
+        const { primaryId: primaryDatasetId, bindings: required } = processRequiredInputs(next, id, { code });
         if (primaryDatasetId) {
-          const datasets = next.nodes.filter((item) => item.type === 'dataset').map((item) => ({ nodeId: nodeId(item), name: item.name || '' }));
-          const allBindings = buildProcessDatasetBindings(datasets, primaryDatasetId);
-          const code = String(node.dfCode || node.code || '');
-          const savedAliases = parsed(node.datasetAliases, {});
-          const aliasedBindings = allBindings.map((binding) => ({
-            ...binding, alias: savedAliases?.[binding.nodeId] || binding.alias,
-          }));
-          const required = new Set([primaryDatasetId, ...incoming.map((edge) => edge.fromId), ...referencedDatasetAliases(code, aliasedBindings, savedAliases)]);
           const bindings = [];
-          let complete = true;
-          for (const binding of aliasedBindings.filter((item) => required.has(item.nodeId))) {
-            const dataset = await resolveDataset(binding.nodeId);
-            if (!dataset) { complete = false; break; }
-            bindings.push({ nodeId: binding.nodeId, alias: binding.alias, signature: dataset.signature });
+          for (const binding of required) {
+            const input = await resolveSource(binding);
+            if (!input) { waiting = true; break; }
+            bindings.push({ key: input.key, alias: binding.alias, signature: input.signature });
           }
-          if (complete && bindings.some((item) => item.nodeId === primaryDatasetId)) {
+          if (!waiting && bindings.some((item) => item.key === primaryDatasetId)) {
             signature = await processInputSignature({ code, primaryDatasetId, bindings });
           }
         }
       }
+      if (waiting) node.waitingForUpstream = true;
+      else delete node.waitingForUpstream;
       const record = signature ? await recordFor(node, signature) : null;
       if (record) {
         applyResult(node, record);
@@ -199,8 +175,5 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   for (const node of next.nodes) {
     if (node.type === 'run' || node.type === 'process') await resolveNode(nodeId(node));
   }
-  for (const node of next.nodes) {
-    if (node.type === 'dataset') await resolveDataset(nodeId(node));
-  }
-  return { state: next, currentRecordIds, missingDatasetIds, missingResultNodeIds };
+  return { state: next, currentRecordIds, missingResultNodeIds };
 }

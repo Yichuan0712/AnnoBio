@@ -6,10 +6,11 @@
  */
 
 import * as XLSX from 'xlsx';
-import { displayCell, imageCell, isImageCell, pdfCell, isPdfCell, cloneCell, normalizeDatasetContent } from './datasetContent.js';
+import { displayCell, imageCell, isImageCell, pdfCell, isPdfCell, cloneCell, normalizeDatasetContent, moveImageAsset } from './datasetContent.js';
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
-import { iconImageAdd, iconFileText, iconFileAdd } from './icons.js';
+import { openDatasetBatchImport } from './datasetBatchImportModal.js';
+import { iconSquarePlus, iconCopyPlus, iconFileText } from './icons.js';
 
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 /** 行高下限：至少一行字高度（约 12px 字号 + 行高 + 内边距） */
@@ -41,32 +42,7 @@ function sanitizeFilename(name) {
   return s || 'dataset';
 }
 
-function basename(filePath) {
-  const parts = String(filePath ?? '').split(/[\\/]/);
-  return parts[parts.length - 1] || '';
-}
-
-function filenameStem(fileName) {
-  const name = String(fileName ?? '').trim();
-  return name.replace(/\.[^.]+$/, '');
-}
-
-function normalizeMatchKey(value) {
-  return String(value ?? '').trim().toLowerCase();
-}
-
-function candidateMatchKeys(value) {
-  const raw = String(value ?? '').trim();
-  if (!raw) return [];
-  const keys = new Set();
-  keys.add(normalizeMatchKey(raw));
-  const leaf = basename(raw);
-  if (leaf && leaf !== raw) keys.add(normalizeMatchKey(leaf));
-  if (/\.(png|jpe?g|webp)$/i.test(leaf)) keys.add(normalizeMatchKey(filenameStem(leaf)));
-  return Array.from(keys).filter(Boolean);
-}
-
-export function openDatasetDetailModal({ node, getContent, saveContent, readOnly = false, missingResult = false }) {
+export function openDatasetDetailModal({ node, getContent, saveContent, readOnly = false }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-working-dataset-node-id="${CSS.escape(nodeId)}"]`)
@@ -102,6 +78,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   let searchQuery = '';
   let selectedRowIndex = -1;
   let selectedColIndex = -1;
+  let draggingImage = null;
+  let activeBatchImport = null;
+  let activeBatchTarget = null;
   // Image columns need more room than text to comfortably show the image thumbnail strip (see
   // .wd-image-cell in modals.css) — matches the 180px new
   // image columns already get when added via the in-modal "+" menu (addImageColumn below), just
@@ -115,7 +94,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.classList.toggle('working-dataset-readonly', readOnly);
-  overlay.classList.toggle('working-dataset-missing', missingResult);
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'working-dataset-detail-title');
   if (nodeId) overlay.dataset.workingDatasetNodeId = nodeId;
@@ -151,22 +129,28 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
                 <label class="dataset-detail-page-label" for="wd-page-inp">Page</label>
                 <input type="number" id="wd-page-inp" class="dataset-detail-page-inp" min="1" value="1" aria-label="Page number" />
                 <span class="dataset-detail-page-of wd-page-of">/ 1</span>
-                <div class="dataset-detail-pagination-btns">
-                  <button type="button" class="btn btn-secondary wd-prev-page" aria-label="Previous page">Previous</button>
-                  <button type="button" class="btn btn-secondary wd-next-page" aria-label="Next page">Next</button>
+                <div class="working-dataset-pagination-actions">
+                  <div class="working-dataset-table-actions" role="toolbar" aria-label="Edit table">
+                    <div class="working-dataset-table-actions__group">
+                      <button type="button" class="btn btn-secondary working-dataset-add-row">Add row</button>
+                      <span class="working-dataset-delete-control"><button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button></span>
+                    </div>
+                    <div class="working-dataset-table-actions__group">
+                      <button type="button" class="btn btn-secondary working-dataset-add-col" aria-haspopup="menu" aria-expanded="false">Add column</button>
+                      <span class="working-dataset-delete-control"><button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button></span>
+                    </div>
+                  </div>
+                  <div class="dataset-detail-pagination-btns">
+                    <button type="button" class="btn btn-secondary wd-prev-page" aria-label="Previous page">Previous</button>
+                    <button type="button" class="btn btn-secondary wd-next-page" aria-label="Next page">Next</button>
+                  </div>
                 </div>
               </div>
               <div class="dataset-detail-footer working-dataset-detail-footer">
-                <button type="button" class="btn btn-secondary working-dataset-export-local">Save to local</button>
                 <div class="working-dataset-detail-footer__actions">
-                  <button type="button" class="btn btn-secondary working-dataset-link-images">Add images</button>
-                  <button type="button" class="btn btn-secondary working-dataset-link-pdf">Add pdf</button>
-                  <button type="button" class="btn btn-secondary working-dataset-add-row">Add row</button>
-                  <button type="button" class="btn btn-secondary working-dataset-add-col">Add column</button>
-                  <button type="button" class="btn btn-secondary working-dataset-delete-row">Delete row</button>
-                  <button type="button" class="btn btn-secondary working-dataset-delete-col">Delete column</button>
-                  <button type="button" class="btn btn-primary working-dataset-sample">Sample</button>
-                  <button type="button" class="btn btn-primary working-dataset-process">Process with code</button>
+                  <button type="button" class="btn btn-secondary working-dataset-export-local" title="Save dataset as a file">Save as file</button>
+                  <button type="button" class="btn btn-secondary working-dataset-sample">Create Sample</button>
+                  <button type="button" class="btn btn-secondary working-dataset-process">Create Process</button>
                 </div>
               </div>
             </div>
@@ -184,8 +168,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   const prevBtn = overlay.querySelector('.wd-prev-page');
   const nextBtn = overlay.querySelector('.wd-next-page');
   const rowsPerPageSelect = overlay.querySelector('#wd-rows-per-page');
-  const linkImagesBtn = overlay.querySelector('.working-dataset-link-images');
-  const linkPdfBtn = overlay.querySelector('.working-dataset-link-pdf');
   const addRowBtn = overlay.querySelector('.working-dataset-add-row');
   const addColBtn = overlay.querySelector('.working-dataset-add-col');
   const deleteRowBtn = overlay.querySelector('.working-dataset-delete-row');
@@ -197,6 +179,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   const summaryEl = overlay.querySelector('.wd-summary');
   const tableWrap = overlay.querySelector('.working-dataset-table-wrap');
   let activeAddColumnMenu = null;
+  let addColumnMenuCleanup = null;
 
   function getTableLayoutMetrics() {
     const rowNumWidth = 40;
@@ -361,218 +344,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     return Math.max(1, Math.ceil(filtered.length / rowsPerPage));
   }
 
-  function buildFileInfos(filePaths) {
-    return (Array.isArray(filePaths) ? filePaths : []).map((entry) => {
-      // Desktop: entry is an absolute path string. Web: entry is a File object (no real path
-      // available in a browser), matched and later uploaded by its .name instead.
-      const isFileObject = entry && typeof entry === 'object' && typeof entry.name === 'string';
-      const name = isFileObject ? entry.name : basename(entry);
-      const stem = filenameStem(name);
-      const key = normalizeMatchKey(stem);
-      return { path: entry, name, stem, key };
-    });
-  }
-
-  function buildLinkImagesPlan(targetColIndex, sourceColIndex, filePaths = [], cellTest = isImageCell) {
-    const sourceRows = rows.map((row, rowIndex) => {
-      const rawValue = displayCell(row?.[sourceColIndex] ?? '').trim();
-      const key = normalizeMatchKey(basename(rawValue));
-      return { rowIndex, rawValue, key };
-    });
-    const sourceKeyToRows = new Map();
-    sourceRows.forEach((row) => {
-      if (!row.key) return;
-      const bucket = sourceKeyToRows.get(row.key) || [];
-      bucket.push(row.rowIndex);
-      sourceKeyToRows.set(row.key, bucket);
-    });
-    const duplicateSourceKeys = [];
-    sourceKeyToRows.forEach((rowIndices, key) => {
-      if (rowIndices.length > 1) {
-        duplicateSourceKeys.push({
-          key,
-          rowIndices,
-          sample: sourceRows[rowIndices[0]]?.rawValue || key,
-        });
-      }
-    });
-
-    const uploadedNameCounts = new Map();
-    const rowPlans = new Map();
-    const unmatchedFiles = [];
-    const ambiguousFiles = [];
-    const fileInfos = buildFileInfos(filePaths).map((info) => ({ ...info, matchKey: normalizeMatchKey(info.name) }));
-    fileInfos.forEach((info) => {
-      if (info.matchKey) uploadedNameCounts.set(info.matchKey, (uploadedNameCounts.get(info.matchKey) || 0) + 1);
-      const targetRows = sourceKeyToRows.get(info.matchKey) || [];
-      if (targetRows.length === 0) {
-        unmatchedFiles.push(info);
-        return;
-      }
-      if (targetRows.length > 1) {
-        ambiguousFiles.push({ ...info, rowIndices: targetRows.slice() });
-        return;
-      }
-      const rowIndex = targetRows[0];
-      const existing = rowPlans.get(rowIndex) || { rowIndex, files: [] };
-      existing.files.push(info);
-      rowPlans.set(rowIndex, existing);
-    });
-
-    const duplicateUploadedNames = Array.from(uploadedNameCounts.entries())
-      .filter(([, count]) => count > 1)
-      .map(([name, count]) => ({ name, count }));
-    const missingRows = sourceRows.filter((row) => row.key && !fileInfos.some((file) => file.matchKey === row.key));
-    const matchedEntries = Array.from(rowPlans.values()).sort((a, b) => a.rowIndex - b.rowIndex);
-    const matchedFileEntries = matchedEntries.flatMap((entry) => entry.files.map((file) => ({ ...file, rowIndex: entry.rowIndex })));
-    const overwriteRows = matchedEntries.filter(({ rowIndex }) => {
-      const current = Number.isInteger(targetColIndex) ? rows[rowIndex]?.[targetColIndex] : null;
-      return cellTest(current) && current.assetIds.length > 0;
-    });
-    const previewRows = matchedEntries.slice(0, 12).map(({ rowIndex, files }) => ({
-      rowIndex,
-      sourceValue: sourceRows[rowIndex]?.rawValue || '',
-      fileNames: files.map((file) => file.name),
-      existingCount: Number.isInteger(targetColIndex) && cellTest(rows[rowIndex]?.[targetColIndex])
-        ? rows[rowIndex][targetColIndex].assetIds.length
-        : 0,
-    }));
-    return {
-      matchedEntries,
-      matchedFileEntries,
-      unmatchedFiles,
-      ambiguousFiles,
-      duplicateSourceKeys,
-      duplicateUploadedNames,
-      missingRows,
-      overwriteRows,
-      previewRows,
-      fileCount: fileInfos.length,
-    };
-  }
-
-  function buildImageImportPlanByKey(targetColIndex, matchColIndex) {
-    const duplicateDatasetKeys = [];
-    const datasetKeyToRows = new Map();
-    const datasetRows = rows.map((row, rowIndex) => {
-      const keyRaw = displayCell(row?.[matchColIndex] ?? '');
-      const keys = candidateMatchKeys(keyRaw);
-      keys.forEach((key) => {
-        const list = datasetKeyToRows.get(key) || [];
-        list.push(rowIndex);
-        datasetKeyToRows.set(key, list);
-      });
-      return { rowIndex, keyRaw, keys };
-    });
-    datasetKeyToRows.forEach((rowIndices, key) => {
-      if (rowIndices.length > 1) {
-        duplicateDatasetKeys.push({
-          key,
-          rowIndices,
-          sample: displayCell(rows[rowIndices[0]]?.[matchColIndex] ?? ''),
-        });
-      }
-    });
-
-    const rowPlans = new Map();
-    const unmatchedFiles = [];
-    const ambiguousFiles = [];
-    const filesByKey = new Map();
-    const fileInfos = buildFileInfos(selectedImagePaths);
-
-    fileInfos.forEach((info) => {
-      if (!info.key) {
-        unmatchedFiles.push(info);
-        return;
-      }
-      const bucket = filesByKey.get(info.key) || [];
-      bucket.push(info);
-      filesByKey.set(info.key, bucket);
-      const targetRows = datasetKeyToRows.get(info.key) || [];
-      if (targetRows.length === 0) {
-        unmatchedFiles.push(info);
-        return;
-      }
-      if (targetRows.length > 1) {
-        ambiguousFiles.push({ ...info, rowIndices: targetRows.slice() });
-        return;
-      }
-      const rowIndex = targetRows[0];
-      const existing = rowPlans.get(rowIndex) || { rowIndex, files: [] };
-      existing.files.push(info);
-      rowPlans.set(rowIndex, existing);
-    });
-
-    const missingRows = datasetRows.filter((row) => row.keys.length > 0 && !row.keys.some((key) => filesByKey.has(key)));
-    const matchedEntries = Array.from(rowPlans.values()).sort((a, b) => a.rowIndex - b.rowIndex);
-    const matchedFileEntries = matchedEntries.flatMap((entry) => entry.files.map((file) => ({ ...file, rowIndex: entry.rowIndex })));
-    const overwriteRows = matchedEntries.filter(({ rowIndex }) => {
-      const current = rows[rowIndex]?.[targetColIndex];
-      return isImageCell(current) && current.assetIds.length > 0;
-    });
-
-    const previewRows = matchedEntries.slice(0, 12).map(({ rowIndex, files }) => ({
-      rowIndex,
-      matchValue: displayCell(rows[rowIndex]?.[matchColIndex] ?? ''),
-      fileNames: files.map((file) => file.name),
-      existingCount: isImageCell(rows[rowIndex]?.[targetColIndex]) ? rows[rowIndex][targetColIndex].assetIds.length : 0,
-    }));
-
-    return {
-      strategy: 'key',
-      matchedEntries,
-      matchedFileEntries,
-      unmatchedFiles,
-      ambiguousFiles,
-      duplicateDatasetKeys,
-      missingRows,
-      overwriteRows,
-      previewRows,
-      fileCount: fileInfos.length,
-    };
-  }
-
-  function buildImageImportPlanByRowOrder(targetColIndex) {
-    const fileInfos = buildFileInfos(selectedImagePaths);
-    const matchedEntries = [];
-    const unmatchedFiles = [];
-    for (let i = 0; i < fileInfos.length; i++) {
-      if (i >= rows.length) {
-        unmatchedFiles.push(fileInfos[i]);
-        continue;
-      }
-      matchedEntries.push({ rowIndex: i, files: [fileInfos[i]] });
-    }
-    const matchedFileEntries = matchedEntries.flatMap((entry) => entry.files.map((file) => ({ ...file, rowIndex: entry.rowIndex })));
-    const missingRows = rows.slice(fileInfos.length).map((row, rowIndex) => ({
-      rowIndex: rowIndex + fileInfos.length,
-      keyRaw: `Row ${rowIndex + fileInfos.length + 1}`,
-      keys: [],
-    }));
-    const overwriteRows = matchedEntries.filter(({ rowIndex }) => {
-      const current = rows[rowIndex]?.[targetColIndex];
-      return isImageCell(current) && current.assetIds.length > 0;
-    });
-    const previewRows = matchedEntries.slice(0, 12).map(({ rowIndex, files }) => ({
-      rowIndex,
-      matchValue: `Row ${rowIndex + 1}`,
-      fileNames: files.map((file) => file.name),
-      existingCount: isImageCell(rows[rowIndex]?.[targetColIndex]) ? rows[rowIndex][targetColIndex].assetIds.length : 0,
-    }));
-    return {
-      strategy: 'row-order',
-      matchedEntries,
-      matchedFileEntries,
-      unmatchedFiles,
-      ambiguousFiles: [],
-      duplicateDatasetKeys: [],
-      missingRows,
-      overwriteRows,
-      previewRows,
-      fileCount: fileInfos.length,
-    };
-  }
-
   function buildImageImportPlanFromResolvedRows(targetColIndex, pathColIndex, resolvedRows = []) {
     const matchedEntries = [];
     const missingRows = [];
@@ -630,333 +401,58 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     };
   }
 
-  function buildImageImportPlan(targetColIndex, matchColIndex, strategy = 'key') {
-    return strategy === 'row-order'
-      ? buildImageImportPlanByRowOrder(targetColIndex)
-      : buildImageImportPlanByKey(targetColIndex, matchColIndex);
-  }
-
-  let selectedImagePaths = [];
-
-  async function openImageImportModal(targetColIndex) {
-    if (!Number.isInteger(targetColIndex) || columnTypes[targetColIndex] !== 'image') {
-      alert('Please open batch import from an image column.');
-      return;
-    }
-    const textColumns = headers
-      .map((header, index) => ({ index, header: String(header ?? '').trim() || `Column ${index + 1}` }))
-      .filter(({ index }) => columnTypes[index] !== 'image');
-    if (textColumns.length === 0) {
-      alert('Add a filename text column first. Each row should contain a filename like xxx.png.');
-      return;
-    }
+  function openAssetBatchImport(targetColIndex, kind) {
+    if (!Number.isInteger(targetColIndex) || columnTypes[targetColIndex] !== kind) return;
     if (!hasElectron && !getCurrentProjectId()) {
       alert('Open a project first.');
       return;
     }
-
-    const imageColName = headers[targetColIndex] || `Image ${targetColIndex + 1}`;
-    let sourceColIndex = textColumns[0].index;
-    let selectedFiles = [];
-    let plan = buildLinkImagesPlan(targetColIndex, sourceColIndex, selectedFiles);
-
-    const modal = document.createElement('div');
-    modal.className = 'modal-overlay';
-    modal.innerHTML = `
-      <div class="modal-panel modal-panel--dataset-image-import">
-        <div class="modal-header">
-          <h2 class="modal-title">Batch import images<span class="dataset-image-import-target-note">into "${escapeHtml(imageColName)}"</span></h2>
-          <button type="button" class="modal-close" aria-label="Close">×</button>
-        </div>
-        <div class="modal-body dataset-image-import-body">
-          <div class="dataset-image-import-form">
-            <div class="agent-form-field">
-              <label class="dataset-meta-label" for="wd-image-source-column">Filename Column</label>
-              <select id="wd-image-source-column" class="dataset-meta-input">
-                ${textColumns.map(({ index, header }) => `<option value="${index}" ${index === sourceColIndex ? 'selected' : ''}>${escapeHtml(header)}</option>`).join('')}
-              </select>
-              <p class="dataset-sheet-hint">Values in this column are matched to uploaded image filenames.</p>
-            </div>
-            <div class="agent-form-field">
-              <label class="dataset-meta-label">Image Files</label>
-              <div class="dataset-import-actions">
-                <button type="button" class="btn btn-secondary dataset-image-import-pick-files">Choose images</button>
-                <span class="dataset-filename dataset-image-import-source-status">No image files selected.</span>
-              </div>
-            </div>
-          </div>
-          <div class="prompt-form-error prompt-modal-error dataset-image-import-error" hidden></div>
-          <div class="dataset-image-import-summary"></div>
-          <div class="dataset-image-import-preview"></div>
-        </div>
-        <div class="prompt-actions">
-          <button type="button" class="btn btn-secondary dataset-image-import-cancel">Cancel</button>
-          <button type="button" class="btn btn-primary dataset-image-import-apply">Import</button>
-        </div>
-      </div>
-    `;
-
-    const closeModal = () => modal.remove();
-    const closeBtn = modal.querySelector('.modal-close');
-    const cancelBtn = modal.querySelector('.dataset-image-import-cancel');
-    const applyBtn = modal.querySelector('.dataset-image-import-apply');
-    const pickFilesBtn = modal.querySelector('.dataset-image-import-pick-files');
-    const sourceColumnSelect = modal.querySelector('#wd-image-source-column');
-    const sourceStatusEl = modal.querySelector('.dataset-image-import-source-status');
-    const errorEl = modal.querySelector('.dataset-image-import-error');
-    const summaryEl = modal.querySelector('.dataset-image-import-summary');
-    const previewEl = modal.querySelector('.dataset-image-import-preview');
-
-    function setError(message = '') {
-      errorEl.textContent = message;
-      errorEl.hidden = !message;
+    const nextTarget = `${kind}:${targetColIndex}`;
+    if (activeBatchImport) {
+      if (activeBatchImport.isBusy()) return;
+      const isSameTarget = activeBatchTarget === nextTarget;
+      activeBatchImport.close();
+      if (isSameTarget) return;
     }
-
-    function renderPlan() {
-      sourceColIndex = parseInt(sourceColumnSelect.value, 10);
-      plan = buildLinkImagesPlan(targetColIndex, sourceColIndex, selectedFiles);
-      sourceStatusEl.textContent = selectedFiles.length
-        ? `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} selected.`
-        : 'No image files selected.';
-      summaryEl.innerHTML = `
-        ${selectedFiles.length === 0
-          ? '<p class="dataset-image-import-note">Choose image files to preview matches.</p>'
-          : `
-            <p class="dataset-image-import-summary-line">
-              ${plan.matchedFileEntries.length} matched file${plan.matchedFileEntries.length === 1 ? '' : 's'} across ${plan.matchedEntries.length} row${plan.matchedEntries.length === 1 ? '' : 's'}.
-            </p>
-            <p class="dataset-image-import-note">
-              Missing rows: ${plan.missingRows.length} · Unused files: ${plan.unmatchedFiles.length} · Existing images: ${plan.overwriteRows.length}
-            </p>
-          `}
-      `;
-      const missingPreview = plan.missingRows.slice(0, 8).map((item) => item.rawValue).join(', ');
-      const unmatchedPreview = plan.unmatchedFiles.slice(0, 8).map((item) => item.name).join(', ');
-      const duplicatePreview = plan.duplicateSourceKeys.slice(0, 5).map((item) => item.sample).join(', ');
-      previewEl.innerHTML = `
-        ${missingPreview ? `<p class="dataset-image-import-note">Missing filenames: ${escapeHtml(missingPreview)}${plan.missingRows.length > 8 ? ' ...' : ''}</p>` : ''}
-        ${unmatchedPreview ? `<p class="dataset-image-import-note">Unused uploaded files: ${escapeHtml(unmatchedPreview)}${plan.unmatchedFiles.length > 8 ? ' ...' : ''}</p>` : ''}
-        ${duplicatePreview ? `<p class="dataset-image-import-note">Duplicate source filenames: ${escapeHtml(duplicatePreview)}${plan.duplicateSourceKeys.length > 5 ? ' ...' : ''}</p>` : ''}
-      `;
-      const warnings = [];
-      if (plan.duplicateSourceKeys.length > 0) {
-        warnings.push('The filename column contains duplicate values. Each filename should map to one row.');
-      }
-      if (selectedFiles.length > 0 && plan.matchedFileEntries.length === 0) {
-        warnings.push('No uploaded filenames matched the selected filename column.');
-      }
-      setError(warnings.join(' '));
-      applyBtn.disabled = selectedFiles.length === 0 || plan.matchedFileEntries.length === 0 || plan.duplicateSourceKeys.length > 0;
-    }
-
-    closeBtn.addEventListener('click', closeModal);
-    cancelBtn.addEventListener('click', closeModal);
-    modal.addEventListener('click', (event) => {
-      if (event.target === modal) closeModal();
-    });
-    sourceColumnSelect.addEventListener('change', renderPlan);
-    pickFilesBtn.addEventListener('click', async () => {
-      selectedFiles = await (hasElectron ? window.electronAPI.pickImageFiles() : webImageApi.pickImageFiles());
-      renderPlan();
-    });
-    applyBtn.addEventListener('click', async () => {
-      renderPlan();
-      if (applyBtn.disabled) return;
-      try {
-        applyBtn.disabled = true;
-        const paths = plan.matchedFileEntries.map((entry) => entry.path);
-        const imported = hasElectron
-          ? await window.electronAPI.importImages(paths)
-          : await webImageApi.importImages(getCurrentProjectId(), paths);
-        const grouped = new Map();
-        imported.forEach((asset, index) => {
-          const rowIndex = plan.matchedFileEntries[index]?.rowIndex;
-          if (!Number.isInteger(rowIndex)) return;
-          const list = grouped.get(rowIndex) || [];
-          list.push(asset);
-          grouped.set(rowIndex, list);
-        });
-        grouped.forEach((assets, rowIndex) => {
-          const nextAssets = [];
-          const nextNames = [];
-          assets.forEach((asset) => {
-            nextAssets.push(asset.id);
-            nextNames.push(asset.name);
-          });
-          rows[rowIndex][targetColIndex] = imageCell(nextAssets, nextNames);
-        });
-        persistContent();
+    const isPdf = kind === 'pdf';
+    activeBatchTarget = nextTarget;
+    activeBatchImport = openDatasetBatchImport({
+      host: overlay.querySelector('.working-dataset-detail-body'),
+      kind,
+      targetColumn: targetColIndex,
+      headers,
+      columnTypes,
+      rows,
+      startAtRow: selectedRowIndex >= 0 ? selectedRowIndex : 0,
+      importFiles: (entries) => {
+        const paths = hasElectron
+          ? entries.map((entry) => typeof entry === 'string' ? entry : window.electronAPI.getPathForFile(entry))
+          : entries;
+        if (hasElectron && paths.some((path) => !path)) throw new Error('Could not read a dropped file path. Please choose the files instead.');
+        return hasElectron
+          ? (isPdf ? window.electronAPI.importPdfs(paths) : window.electronAPI.importImages(paths))
+          : (isPdf ? webImageApi.importPdfs(getCurrentProjectId(), paths) : webImageApi.importImages(getCurrentProjectId(), paths));
+      },
+      ensureRows: (count) => {
+        while (rows.length < count) {
+          rows.push(columnTypes.map((type) => type === 'image' ? imageCell() : type === 'pdf' ? pdfCell() : ''));
+          rowIds.push(crypto.randomUUID());
+          rowHeights.push(undefined);
+        }
+      },
+      persistContent,
+      onPlanChange: () => render(),
+      onClose: () => {
+        activeBatchImport = null;
+        activeBatchTarget = null;
         render();
-        closeModal();
-      } catch (error) {
-        setError(error?.message || String(error));
-        applyBtn.disabled = false;
-      }
+      },
     });
-
-    document.body.appendChild(modal);
-    renderPlan();
+    render();
   }
 
-  async function openPdfImportModal(targetColIndex) {
-    if (!Number.isInteger(targetColIndex) || columnTypes[targetColIndex] !== 'pdf') {
-      alert('Please open batch import from a PDF column.');
-      return;
-    }
-    const textColumns = headers
-      .map((header, index) => ({ index, header: String(header ?? '').trim() || `Column ${index + 1}` }))
-      .filter(({ index }) => columnTypes[index] !== 'pdf');
-    if (textColumns.length === 0) {
-      alert('Add a filename text column first. Each row should contain a filename like xxx.pdf.');
-      return;
-    }
-    if (!hasElectron && !getCurrentProjectId()) {
-      alert('Open a project first.');
-      return;
-    }
-
-    const pdfColName = headers[targetColIndex] || `PDF ${targetColIndex + 1}`;
-    let sourceColIndex = textColumns[0].index;
-    let selectedFiles = [];
-    let plan = buildLinkImagesPlan(targetColIndex, sourceColIndex, selectedFiles, isPdfCell);
-
-    const modal = document.createElement('div');
-    modal.className = 'modal-overlay';
-    modal.innerHTML = `
-      <div class="modal-panel modal-panel--dataset-image-import">
-        <div class="modal-header">
-          <h2 class="modal-title">Batch import PDFs<span class="dataset-image-import-target-note">into "${escapeHtml(pdfColName)}"</span></h2>
-          <button type="button" class="modal-close" aria-label="Close">×</button>
-        </div>
-        <div class="modal-body dataset-image-import-body">
-          <div class="dataset-image-import-form">
-            <div class="agent-form-field">
-              <label class="dataset-meta-label" for="wd-pdf-source-column">Filename Column</label>
-              <select id="wd-pdf-source-column" class="dataset-meta-input">
-                ${textColumns.map(({ index, header }) => `<option value="${index}" ${index === sourceColIndex ? 'selected' : ''}>${escapeHtml(header)}</option>`).join('')}
-              </select>
-              <p class="dataset-sheet-hint">Values in this column are matched to uploaded PDF filenames.</p>
-            </div>
-            <div class="agent-form-field">
-              <label class="dataset-meta-label">PDF Files</label>
-              <div class="dataset-import-actions">
-                <button type="button" class="btn btn-secondary dataset-image-import-pick-files">Choose PDFs</button>
-                <span class="dataset-filename dataset-image-import-source-status">No PDF files selected.</span>
-              </div>
-            </div>
-          </div>
-          <div class="prompt-form-error prompt-modal-error dataset-image-import-error" hidden></div>
-          <div class="dataset-image-import-summary"></div>
-          <div class="dataset-image-import-preview"></div>
-        </div>
-        <div class="prompt-actions">
-          <button type="button" class="btn btn-secondary dataset-image-import-cancel">Cancel</button>
-          <button type="button" class="btn btn-primary dataset-image-import-apply">Import</button>
-        </div>
-      </div>
-    `;
-
-    const closeModal = () => modal.remove();
-    const closeBtn = modal.querySelector('.modal-close');
-    const cancelBtn = modal.querySelector('.dataset-image-import-cancel');
-    const applyBtn = modal.querySelector('.dataset-image-import-apply');
-    const pickFilesBtn = modal.querySelector('.dataset-image-import-pick-files');
-    const sourceColumnSelect = modal.querySelector('#wd-pdf-source-column');
-    const sourceStatusEl = modal.querySelector('.dataset-image-import-source-status');
-    const errorEl = modal.querySelector('.dataset-image-import-error');
-    const summaryEl = modal.querySelector('.dataset-image-import-summary');
-    const previewEl = modal.querySelector('.dataset-image-import-preview');
-
-    function setError(message = '') {
-      errorEl.textContent = message;
-      errorEl.hidden = !message;
-    }
-
-    function renderPlan() {
-      sourceColIndex = parseInt(sourceColumnSelect.value, 10);
-      plan = buildLinkImagesPlan(targetColIndex, sourceColIndex, selectedFiles, isPdfCell);
-      sourceStatusEl.textContent = selectedFiles.length
-        ? `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} selected.`
-        : 'No PDF files selected.';
-      summaryEl.innerHTML = `
-        ${selectedFiles.length === 0
-          ? '<p class="dataset-image-import-note">Choose PDF files to preview matches.</p>'
-          : `
-            <p class="dataset-image-import-summary-line">
-              ${plan.matchedFileEntries.length} matched file${plan.matchedFileEntries.length === 1 ? '' : 's'} across ${plan.matchedEntries.length} row${plan.matchedEntries.length === 1 ? '' : 's'}.
-            </p>
-            <p class="dataset-image-import-note">
-              Missing rows: ${plan.missingRows.length} · Unused files: ${plan.unmatchedFiles.length} · Existing PDFs: ${plan.overwriteRows.length}
-            </p>
-          `}
-      `;
-      const missingPreview = plan.missingRows.slice(0, 8).map((item) => item.rawValue).join(', ');
-      const unmatchedPreview = plan.unmatchedFiles.slice(0, 8).map((item) => item.name).join(', ');
-      const duplicatePreview = plan.duplicateSourceKeys.slice(0, 5).map((item) => item.sample).join(', ');
-      previewEl.innerHTML = `
-        ${missingPreview ? `<p class="dataset-image-import-note">Missing filenames: ${escapeHtml(missingPreview)}${plan.missingRows.length > 8 ? ' ...' : ''}</p>` : ''}
-        ${unmatchedPreview ? `<p class="dataset-image-import-note">Unused uploaded files: ${escapeHtml(unmatchedPreview)}${plan.unmatchedFiles.length > 8 ? ' ...' : ''}</p>` : ''}
-        ${duplicatePreview ? `<p class="dataset-image-import-note">Duplicate source filenames: ${escapeHtml(duplicatePreview)}${plan.duplicateSourceKeys.length > 5 ? ' ...' : ''}</p>` : ''}
-      `;
-      const warnings = [];
-      if (plan.duplicateSourceKeys.length > 0) {
-        warnings.push('The filename column contains duplicate values. Each filename should map to one row.');
-      }
-      if (selectedFiles.length > 0 && plan.matchedFileEntries.length === 0) {
-        warnings.push('No uploaded filenames matched the selected filename column.');
-      }
-      setError(warnings.join(' '));
-      applyBtn.disabled = selectedFiles.length === 0 || plan.matchedFileEntries.length === 0 || plan.duplicateSourceKeys.length > 0;
-    }
-
-    closeBtn.addEventListener('click', closeModal);
-    cancelBtn.addEventListener('click', closeModal);
-    modal.addEventListener('click', (event) => {
-      if (event.target === modal) closeModal();
-    });
-    sourceColumnSelect.addEventListener('change', renderPlan);
-    pickFilesBtn.addEventListener('click', async () => {
-      selectedFiles = await (hasElectron ? window.electronAPI.pickPdfFiles() : webImageApi.pickPdfFiles());
-      renderPlan();
-    });
-    applyBtn.addEventListener('click', async () => {
-      renderPlan();
-      if (applyBtn.disabled) return;
-      try {
-        applyBtn.disabled = true;
-        const paths = plan.matchedFileEntries.map((entry) => entry.path);
-        const imported = hasElectron
-          ? await window.electronAPI.importPdfs(paths)
-          : await webImageApi.importPdfs(getCurrentProjectId(), paths);
-        const grouped = new Map();
-        imported.forEach((asset, index) => {
-          const rowIndex = plan.matchedFileEntries[index]?.rowIndex;
-          if (!Number.isInteger(rowIndex)) return;
-          const list = grouped.get(rowIndex) || [];
-          list.push(asset);
-          grouped.set(rowIndex, list);
-        });
-        grouped.forEach((assets, rowIndex) => {
-          const nextAssets = [];
-          const nextNames = [];
-          assets.forEach((asset) => {
-            nextAssets.push(asset.id);
-            nextNames.push(asset.name);
-          });
-          rows[rowIndex][targetColIndex] = pdfCell(nextAssets, nextNames);
-        });
-        persistContent();
-        render();
-        closeModal();
-      } catch (error) {
-        setError(error?.message || String(error));
-        applyBtn.disabled = false;
-      }
-    });
-
-    document.body.appendChild(modal);
-    renderPlan();
-  }
+  function openImageImportModal(targetColIndex) { openAssetBatchImport(targetColIndex, 'image'); }
+  function openPdfImportModal(targetColIndex) { openAssetBatchImport(targetColIndex, 'pdf'); }
 
   async function openImagePathImportModal(targetColIndex, options = {}) {
     const imageColName = headers[targetColIndex] || `Image ${targetColIndex + 1}`;
@@ -1178,6 +674,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     if (!activeAddColumnMenu) return;
     activeAddColumnMenu.remove();
     activeAddColumnMenu = null;
+    addColumnMenuCleanup?.();
+    addColumnMenuCleanup = null;
+    addColBtn.setAttribute('aria-expanded', 'false');
   }
 
   function addTextColumn() {
@@ -1215,32 +714,61 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     closeAddColumnMenu();
     const rect = anchor.getBoundingClientRect();
     const menu = document.createElement('div');
-    menu.className = 'wd-add-column-menu';
+    menu.className = 'workflow-node-context-menu wd-add-column-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'Column type');
     menu.innerHTML = `
-      <button type="button" class="wd-add-column-menu__item" data-kind="text">Text column</button>
-      <button type="button" class="wd-add-column-menu__item" data-kind="image">Image column</button>
-      <button type="button" class="wd-add-column-menu__item" data-kind="pdf">PDF column</button>
+      <button type="button" role="menuitem" class="workflow-node-context-item wd-add-column-menu__item" data-kind="text">Text</button>
+      <button type="button" role="menuitem" class="workflow-node-context-item wd-add-column-menu__item" data-kind="image">Image</button>
+      <button type="button" role="menuitem" class="workflow-node-context-item wd-add-column-menu__item" data-kind="pdf">PDF</button>
     `;
     menu.style.left = `${Math.max(8, rect.left)}px`;
-    menu.style.top = `${rect.bottom}px`;
+    menu.style.top = `${rect.bottom + 2}px`;
     const onDocPointerDown = (event) => {
-      if (!menu.contains(event.target) && event.target !== anchor) {
+      if (!menu.contains(event.target) && event.target !== anchor) closeAddColumnMenu();
+    };
+    const onDocFocusIn = (event) => {
+      if (!menu.contains(event.target) && event.target !== anchor) closeAddColumnMenu();
+    };
+    const onMenuKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
         closeAddColumnMenu();
-        document.removeEventListener('pointerdown', onDocPointerDown, true);
+        anchor.focus();
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const items = [...menu.querySelectorAll('.wd-add-column-menu__item')];
+        const index = items.indexOf(document.activeElement);
+        items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
       }
     };
     menu.addEventListener('click', (event) => {
       const item = event.target.closest('.wd-add-column-menu__item');
       if (!item) return;
-      if (item.dataset.kind === 'image') addImageColumn();
-      else if (item.dataset.kind === 'pdf') addPdfColumn();
-      else addTextColumn();
+      if (item.dataset.kind === 'image' || item.dataset.kind === 'pdf') {
+        selectedColIndex = item.dataset.kind === 'image' ? addImageColumn() : addPdfColumn();
+        selectedRowIndex = -1;
+        render();
+      } else addTextColumn();
       closeAddColumnMenu();
-      document.removeEventListener('pointerdown', onDocPointerDown, true);
+      anchor.focus();
     });
+    menu.addEventListener('keydown', onMenuKeyDown);
     document.addEventListener('pointerdown', onDocPointerDown, true);
+    document.addEventListener('focusin', onDocFocusIn, true);
     document.body.appendChild(menu);
+    const menuRect = menu.getBoundingClientRect();
+    const menuTop = rect.bottom + 2 + menuRect.height <= window.innerHeight - 8
+      ? rect.bottom + 2 : rect.top - menuRect.height - 2;
+    menu.style.top = `${Math.max(8, menuTop)}px`;
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuRect.width - 8))}px`;
     activeAddColumnMenu = menu;
+    addColumnMenuCleanup = () => {
+      document.removeEventListener('pointerdown', onDocPointerDown, true);
+      document.removeEventListener('focusin', onDocFocusIn, true);
+    };
+    anchor.setAttribute('aria-expanded', 'true');
+    menu.querySelector('.wd-add-column-menu__item')?.focus();
   }
 
   function render() {
@@ -1251,6 +779,33 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     const end = Math.min(start + rowsPerPage, filteredIndices.length);
     const pageIndices = filteredIndices.slice(start, end);
     const pageRows = pageIndices.map((i) => rows[i]);
+    if (activeBatchImport && !activeBatchImport.isDragging()) activeBatchImport.refresh();
+    const stagedByCell = new Map();
+    activeBatchImport?.getPlan().importable.forEach((entry) => {
+      const key = `${entry.rowIndex}:${entry.columnIndex}`;
+      const pending = stagedByCell.get(key) || [];
+      pending.push(entry);
+      stagedByCell.set(key, pending);
+    });
+
+    const addStagedPreview = (box, rowIndex, colIndex, kind) => {
+      const pending = stagedByCell.get(`${rowIndex}:${colIndex}`) || [];
+      if (!pending.length) return;
+      box.classList.add('wd-batch-cell-preview');
+      const preview = document.createElement('div');
+      preview.className = 'wd-batch-cell-preview__content';
+      const firstUrl = kind === 'image' ? pending[0].file.previewUrl : null;
+      if (firstUrl) {
+        const img = document.createElement('img');
+        img.src = firstUrl;
+        img.alt = '';
+        preview.appendChild(img);
+      }
+      const label = document.createElement('span');
+      label.textContent = `${pending.length} ${kind === 'pdf' ? (pending.length === 1 ? 'PDF' : 'PDFs') : (pending.length === 1 ? 'image' : 'images')} to import`;
+      preview.appendChild(label);
+      box.appendChild(preview);
+    };
 
     const table = overlay.querySelector('.working-dataset-edit-table');
     if (table && columnWidths.length !== headers.length) {
@@ -1285,6 +840,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
         if (Number.isFinite(idx) && idx >= 0 && idx < headers.length) {
           headers[idx] = inp.value.trim() || '';
           persistContent();
+          updateDeleteButtons();
         }
       });
       inp.addEventListener('click', (e) => e.stopPropagation());
@@ -1298,7 +854,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
         batchBtn.className = 'btn btn-secondary wd-header-batch-btn';
         batchBtn.title = isPdfCol ? 'Batch import PDFs' : 'Batch import images';
         batchBtn.setAttribute('aria-label', isPdfCol ? 'Batch import PDFs' : 'Batch import images');
-        batchBtn.appendChild(isPdfCol ? iconFileAdd(14) : iconImageAdd(14));
+        batchBtn.appendChild(iconCopyPlus(16));
         batchBtn.addEventListener('click', async (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1395,6 +951,47 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
           const imageBox = document.createElement('div');
           imageBox.className = 'wd-image-cell';
           if (!cell.assetIds.length) imageBox.classList.add('wd-image-cell--empty');
+          if (!readOnly) {
+            td.addEventListener('dragover', (event) => {
+              if (activeBatchImport?.isDragging() && activeBatchImport.canDropOnColumn(colIdx)) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                imageBox.classList.add('wd-image-cell--drop-target');
+                return;
+              }
+              if (!draggingImage || (draggingImage.rowIndex === originalRowIdx && draggingImage.colIndex === colIdx)) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              imageBox.classList.add('wd-image-cell--drop-target');
+            });
+            td.addEventListener('dragleave', (event) => {
+              if (!td.contains(event.relatedTarget)) imageBox.classList.remove('wd-image-cell--drop-target');
+            });
+            td.addEventListener('drop', (event) => {
+              if (activeBatchImport?.isDragging() && activeBatchImport.canDropOnColumn(colIdx)) {
+                event.preventDefault();
+                imageBox.classList.remove('wd-image-cell--drop-target');
+                activeBatchImport.dropOnCell(originalRowIdx, colIdx);
+                return;
+              }
+              if (!draggingImage) return;
+              event.preventDefault();
+              imageBox.classList.remove('wd-image-cell--drop-target');
+              const { rowIndex, colIndex, imageIndex, assetId } = draggingImage;
+              draggingImage = null;
+              document.body.classList.remove('wd-image-dragging');
+              if (rowIndex === originalRowIdx && colIndex === colIdx) return;
+              const source = rows[rowIndex]?.[colIndex];
+              const target = rows[originalRowIdx]?.[colIdx];
+              if (!isImageCell(source) || source.assetIds[imageIndex] !== assetId) return;
+              const moved = moveImageAsset(source, target, imageIndex);
+              if (!moved) return;
+              rows[rowIndex][colIndex] = moved.source;
+              rows[originalRowIdx][colIdx] = moved.target;
+              persistContent();
+              render();
+            });
+          }
           const overlayActions = document.createElement('div');
           overlayActions.className = 'wd-image-overlay-actions';
           const add = document.createElement('button');
@@ -1402,7 +999,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
           add.className = 'btn btn-secondary wd-image-import-btn';
           add.title = 'Import image';
           add.setAttribute('aria-label', 'Import image');
-          add.appendChild(iconImageAdd(14));
+          add.appendChild(iconSquarePlus(16));
           add.addEventListener('click', async () => {
             try {
               let assets;
@@ -1431,8 +1028,22 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
             const tile = document.createElement('button');
             tile.type = 'button';
             tile.className = 'wd-image-thumb';
-            tile.title = cell.names?.[imageIndex] || 'View image';
+            tile.title = `${cell.names?.[imageIndex] || 'Image'}${readOnly ? '' : ' · Drag to move'}`;
             tile.textContent = 'Loading…';
+            if (!readOnly) {
+              tile.draggable = true;
+              tile.addEventListener('dragstart', (event) => {
+                draggingImage = { rowIndex: originalRowIdx, colIndex: colIdx, imageIndex, assetId };
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('application/x-annobio-image-asset', assetId);
+                document.body.classList.add('wd-image-dragging');
+              });
+              tile.addEventListener('dragend', () => {
+                draggingImage = null;
+                document.body.classList.remove('wd-image-dragging');
+                overlay.querySelectorAll('.wd-image-cell--drop-target').forEach((target) => target.classList.remove('wd-image-cell--drop-target'));
+              });
+            }
             tile.addEventListener('click', async () => {
               try {
                 const full = hasElectron
@@ -1472,10 +1083,12 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
               const img = document.createElement('img');
               img.src = preview.url;
               img.alt = preview.name || 'Image';
+              img.draggable = false;
               tile.appendChild(img);
             }).catch(() => { tile.textContent = 'Missing'; tile.classList.add('wd-image-thumb--error'); });
           });
           imageBox.append(strip);
+          addStagedPreview(imageBox, originalRowIdx, colIdx, 'image');
           td.appendChild(imageBox);
           tr.appendChild(td);
           return;
@@ -1485,6 +1098,23 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
           const pdfBox = document.createElement('div');
           pdfBox.className = 'wd-pdf-cell';
           if (!cell.assetIds.length) pdfBox.classList.add('wd-pdf-cell--empty');
+          if (!readOnly) {
+            td.addEventListener('dragover', (event) => {
+              if (!activeBatchImport?.isDragging() || !activeBatchImport.canDropOnColumn(colIdx)) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              pdfBox.classList.add('wd-pdf-cell--drop-target');
+            });
+            td.addEventListener('dragleave', (event) => {
+              if (!td.contains(event.relatedTarget)) pdfBox.classList.remove('wd-pdf-cell--drop-target');
+            });
+            td.addEventListener('drop', (event) => {
+              if (!activeBatchImport?.isDragging() || !activeBatchImport.canDropOnColumn(colIdx)) return;
+              event.preventDefault();
+              pdfBox.classList.remove('wd-pdf-cell--drop-target');
+              activeBatchImport.dropOnCell(originalRowIdx, colIdx);
+            });
+          }
           const overlayActions = document.createElement('div');
           overlayActions.className = 'wd-image-overlay-actions';
           const add = document.createElement('button');
@@ -1492,7 +1122,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
           add.className = 'btn btn-secondary wd-image-import-btn';
           add.title = 'Upload PDF';
           add.setAttribute('aria-label', 'Upload PDF');
-          add.appendChild(iconFileAdd(14));
+          add.appendChild(iconSquarePlus(16));
           add.addEventListener('click', async () => {
             try {
               let assets;
@@ -1559,6 +1189,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
             strip.appendChild(wrap);
           });
           pdfBox.append(strip);
+          addStagedPreview(pdfBox, originalRowIdx, colIdx, 'pdf');
           td.appendChild(pdfBox);
           tr.appendChild(td);
           return;
@@ -1656,26 +1287,9 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   });
 
   addColBtn.addEventListener('click', () => {
-    addTextColumn();
+    if (activeAddColumnMenu) closeAddColumnMenu();
+    else openAddColumnMenu(addColBtn);
   });
-
-  if (linkImagesBtn) {
-    linkImagesBtn.addEventListener('click', () => {
-      const newIndex = addImageColumn();
-      selectedColIndex = newIndex;
-      selectedRowIndex = -1;
-      render();
-    });
-  }
-
-  if (linkPdfBtn) {
-    linkPdfBtn.addEventListener('click', () => {
-      const newIndex = addPdfColumn();
-      selectedColIndex = newIndex;
-      selectedRowIndex = -1;
-      render();
-    });
-  }
 
   deleteRowBtn.addEventListener('click', () => {
     if (rows.length === 0 || selectedRowIndex < 0 || selectedRowIndex >= rows.length) return;
@@ -1724,7 +1338,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
 
   if (exportLocalBtn) {
     exportLocalBtn.addEventListener('click', async () => {
-      if (missingResult) return;
       const defaultBase = sanitizeFilename(name);
       const api = window.electronAPI;
       const filters = [
@@ -1790,8 +1403,22 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   function updateDeleteButtons() {
     const hasRowSelected = selectedRowIndex >= 0 && selectedRowIndex < rows.length;
     const hasColSelected = selectedColIndex >= 0 && selectedColIndex < headers.length;
-    deleteRowBtn.disabled = rows.length === 0 || !hasRowSelected;
-    deleteColBtn.disabled = headers.length <= 1 || !hasColSelected;
+    const canDeleteColumn = headers.length > 1 && hasColSelected;
+    const rowLabel = hasRowSelected ? `Delete row ${selectedRowIndex + 1}` : 'Delete row';
+    const columnName = hasColSelected ? (String(headers[selectedColIndex] || '').trim() || `Column ${selectedColIndex + 1}`) : '';
+    const columnLabel = canDeleteColumn ? `Delete column “${columnName}”` : 'Delete column';
+    const rowHint = rows.length === 0 ? 'No rows to delete.'
+      : hasRowSelected ? rowLabel : 'Click a row number to select it.';
+    const columnHint = headers.length <= 1 ? 'The last column cannot be deleted.'
+      : canDeleteColumn ? columnLabel : 'Click a column header outside its name field to select it.';
+    deleteRowBtn.textContent = rowLabel;
+    deleteColBtn.textContent = columnLabel;
+    deleteRowBtn.disabled = !hasRowSelected;
+    deleteColBtn.disabled = !canDeleteColumn;
+    deleteRowBtn.parentElement.title = rowHint;
+    deleteColBtn.parentElement.title = columnHint;
+    deleteRowBtn.setAttribute('aria-label', hasRowSelected ? rowLabel : `Delete row. ${rowHint}`);
+    deleteColBtn.setAttribute('aria-label', canDeleteColumn ? columnLabel : `Delete column. ${columnHint}`);
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', close);
@@ -1843,6 +1470,8 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
   }
 
   function close() {
+    if (activeBatchImport?.isBusy()) return;
+    activeBatchImport?.close();
     persistContent();
     closeAddColumnMenu();
     resizeObserver?.disconnect();
