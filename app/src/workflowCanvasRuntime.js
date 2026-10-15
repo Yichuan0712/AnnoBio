@@ -299,12 +299,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
           .map((section) => ({ name: section?.name || '', content: section?.content || '' }));
     }
     if (resolvedSections.length === 0) {
-      throw new Error('Review has no prompt sections to apply.');
+      throw new Error('Optimize has no prompt sections to apply.');
     }
 
     const requestedName = String(name || '').trim()
       || String(sourcePromptData?.name || '').trim()
-      || 'Prompt (from Review)';
+      || 'Prompt (from Optimize)';
     const finalName = ensureUniqueName
       ? findUniquePromptName(requestedName, true)
       : requestedName;
@@ -317,7 +317,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
     const created = addPromptNode({
       name: finalName,
-      note: 'Exported from Review.',
+      note: 'Exported from Optimize.',
       sections: resolvedSections,
       outputFormat: sourcePromptData?.outputFormat || undefined,
       inputTypes: sourcePromptData?.inputTypes || {},
@@ -700,13 +700,13 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const hasRules = rules.some((rule) => (rule.outputKey || '').trim() && Array.isArray(rule.gtColumns) && rule.gtColumns.some((column) => String(column || '').trim()));
     const normalizedMatchCode = matchCode != null ? String(matchCode).trim() : '';
     if (!hasRules && !normalizedMatchCode) {
-      throw new Error('Score mapping must include at least one rule, or provide match code for a Match by code score node.');
+      throw new Error('Evaluate mapping must include at least one rule, or provide match code for an Evaluate node using Match by code.');
     }
     const resolvedActiveMatchMode = (activeMatchMode === 'rules' || activeMatchMode === 'code')
       ? activeMatchMode
       : (normalizedMatchCode ? 'code' : 'rules');
 
-    const requestedName = (name || '').trim() || 'Score';
+    const requestedName = (name || '').trim() || 'Evaluate';
     const resolvedLeft = typeof left === 'number'
       ? left
       : (parseFloat(runNode.style.left) || 0) + (runNode.offsetWidth || 280) + NEW_NODE_OFFSET;
@@ -813,7 +813,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       )];
       if (unknown.length > 0) {
         throw buildEditError(
-          `Score mapping references ground-truth columns not in the upstream dataset: ${unknown.join(', ')}.`,
+          `Evaluate mapping references ground-truth columns not in the upstream dataset: ${unknown.join(', ')}.`,
           {
             reason: 'unknown_gt_columns',
             unknown_gt_columns: unknown,
@@ -858,15 +858,15 @@ export function createWorkflowCanvasRuntime(deps = {}) {
   } = {}) {
     const normalizedScoreNodeId = String(scoreNodeId || '').trim();
     if (!normalizedScoreNodeId) {
-      throw new Error('Score node id is required.');
+      throw new Error('Evaluate node id is required.');
     }
     const scoreNode = getNodeById(normalizedScoreNodeId);
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
-      throw new Error('Score node was not found.');
+      throw new Error('Evaluate node was not found.');
     }
     if (scoreNode.dataset.nodeOrigin !== 'agent') {
       throw buildEditError(
-        `update_score_node refused: score node ${normalizedScoreNodeId} was not created by the agent. The agent can only update its own score nodes; tell the user to edit this one manually in the score detail UI.`,
+        `update_score_node refused: Evaluate node ${normalizedScoreNodeId} was not created by the agent. The agent can only update its own Evaluate nodes; tell the user to edit this one manually in the Evaluate detail UI.`,
         { reason: 'not_agent_created', score_node_id: normalizedScoreNodeId },
       );
     }
@@ -1022,15 +1022,15 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     } = options || {};
     const idArg = String(scoreNodeId || '').trim();
     if (!idArg) {
-      throw new Error('Score node id is required.');
+      throw new Error('Evaluate node id is required.');
     }
     const scoreNode = getNodeById(idArg);
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
-      throw new Error('Score node was not found.');
+      throw new Error('Evaluate node was not found.');
     }
     if (scoreNode.dataset.nodeOrigin !== 'agent') {
       throw buildEditError(
-        `update_score_row_selection refused: score node ${idArg} was not created by the agent. Ask the user to change row selection in the Score detail UI.`,
+        `update_score_row_selection refused: Evaluate node ${idArg} was not created by the agent. Ask the user to change row selection in the Evaluate detail UI.`,
         { reason: 'not_agent_created', score_node_id: idArg },
       );
     }
@@ -1120,19 +1120,19 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       invalid_row_keys: [...new Set(invalidKeys)],
       hint: invalidKeys.length > 0
         ? 'Some keys were skipped as invalid; valid keys were applied. Confirm with the user if needed. Then inspect_node for refreshed metrics.'
-        : 'Call inspect_node on this score for refreshed metrics; Review uses only included rows.',
+        : 'Call inspect_node on this score for refreshed metrics; Optimize uses only included rows.',
     };
   }
 
   async function buildReviewPayloadForScoreNode(scoreNode) {
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
-      throw new Error('Score node was not found.');
+      throw new Error('Evaluate node was not found.');
     }
     const connections = getConnectionsList();
     const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === 'run-to-score');
     const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
     if (!runNode || !runNode.classList.contains('workflow-node--run')) {
-      throw new Error('Score node is not connected to an upstream run.');
+      throw new Error('Evaluate node is not connected to an upstream run.');
     }
     const promptEdge = connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === 'prompt-to-run');
     const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
@@ -1158,7 +1158,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       if (!Array.isArray(runResults)) runResults = [];
     } catch (_) {}
     if (runResults.length === 0) {
-      throw new Error('Upstream run must have results before starting review.');
+      throw new Error('Upstream run must have results before starting optimization.');
     }
 
     let schemaFields = [];
@@ -1194,20 +1194,20 @@ export function createWorkflowCanvasRuntime(deps = {}) {
         hasMatchCodeResult = Boolean(parsed && Array.isArray(parsed.outcomes) && parsed.outcomes.length > 0);
       } catch (_) {}
       if (!hasMatchCodeResult) {
-        throw new Error('Score node uses Match by code but has no completed code-match run yet; run it from the score detail UI first.');
+        throw new Error('Evaluate node uses Match by code but has no completed code-match run yet; run it from the Evaluate detail UI first.');
       }
     } else {
       const scoreMappingRaw = String(scoreNode.dataset.scoreMapping || '').trim();
       const { inputRoot, outputRoot } = parseScoreMappingBundle(scoreMappingRaw || '{}');
       const ruleCount = [...flattenScoreRules(inputRoot), ...flattenScoreRules(outputRoot)].length;
       if (ruleCount <= 0) {
-        throw new Error('Score node must include at least one scoring rule.');
+        throw new Error('Evaluate node must include at least one scoring rule.');
       }
     }
 
     const groundTruthNodeId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
     if (!groundTruthNodeId) {
-      throw new Error('Score node must select a ground-truth dataset before review.');
+      throw new Error('Evaluate node must select a ground-truth dataset before optimization.');
     }
 
     const comparisonRows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections, readRunInputTable(runNode));
@@ -1241,13 +1241,13 @@ export function createWorkflowCanvasRuntime(deps = {}) {
   } = {}) {
     const normalizedScoreNodeId = String(scoreNodeId || '').trim();
     if (!normalizedScoreNodeId) {
-      throw new Error('Score node id is required.');
+      throw new Error('Evaluate node id is required.');
     }
     const scoreNode = getNodeById(normalizedScoreNodeId);
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
-      throw new Error('Score node was not found.');
+      throw new Error('Evaluate node was not found.');
     }
-    const requestedName = (name || '').trim() || 'Review';
+    const requestedName = (name || '').trim() || 'Optimize';
     const finalName = ensureUniqueName
       ? findUniqueReviewName(requestedName, normalizedScoreNodeId)
       : requestedName;
@@ -1296,17 +1296,17 @@ export function createWorkflowCanvasRuntime(deps = {}) {
   } = {}) {
     const normalizedScoreNodeId = String(scoreNodeId || '').trim();
     if (!normalizedScoreNodeId) {
-      throw new Error('Score node id is required.');
+      throw new Error('Evaluate node id is required.');
     }
     const scoreNode = getNodeById(normalizedScoreNodeId);
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
-      throw new Error('Score node was not found.');
+      throw new Error('Evaluate node was not found.');
     }
 
     const { payload } = await buildReviewPayloadForScoreNode(scoreNode);
     const resolvedReviewCredentialId = await resolveReviewCredentialId(scoreNode, reviewCredentialId);
     if (!resolvedReviewCredentialId) {
-      throw new Error('Review credential id is required before starting review.');
+      throw new Error('Optimize credential id is required before starting optimization.');
     }
     scoreNode.dataset.reviewCredentialId = resolvedReviewCredentialId;
 
@@ -1323,7 +1323,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       markNodeAsAgentCreated(createdReviewEl);
     }
     if (!reviewNodeId) {
-      throw new Error('Review node could not be created.');
+      throw new Error('Optimize node could not be created.');
     }
 
     await runReviewStart({
@@ -1336,7 +1336,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const reviewNode = getNodeById(reviewNodeId);
     const pending = pendingReviewNodeIds.has(reviewNodeId) || pendingReviews.has(reviewNodeId);
     if (!pending) {
-      throw new Error('Review request did not start successfully.');
+      throw new Error('Optimize request did not start successfully.');
     }
 
     return {
@@ -1353,11 +1353,11 @@ export function createWorkflowCanvasRuntime(deps = {}) {
   function getReviewNodeById(reviewNodeId) {
     const normalizedReviewNodeId = String(reviewNodeId || '').trim();
     if (!normalizedReviewNodeId) {
-      throw new Error('Review node id is required.');
+      throw new Error('Optimize node id is required.');
     }
     const reviewNode = getNodeById(normalizedReviewNodeId);
     if (!reviewNode || !reviewNode.classList.contains('workflow-node--prompt-review')) {
-      throw new Error('Review node was not found.');
+      throw new Error('Optimize node was not found.');
     }
     return reviewNode;
   }
@@ -1368,12 +1368,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const scoreEdge = connections.find((connection) => connection.toId === reviewNode.dataset.nodeId && connection.type === 'score-to-prompt-review');
     const scoreNode = scoreEdge ? getNodeById(scoreEdge.fromId) : null;
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
-      throw new Error('Review node is not connected to an upstream score node.');
+      throw new Error('Optimize node is not connected to an upstream Evaluate node.');
     }
     const runEdge = connections.find((connection) => connection.toId === scoreNode.dataset.nodeId && connection.type === 'run-to-score');
     const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
     if (!runNode || !runNode.classList.contains('workflow-node--run')) {
-      throw new Error('Score node is not connected to an upstream run.');
+      throw new Error('Evaluate node is not connected to an upstream run.');
     }
     const promptEdge = connections.find((connection) => connection.toId === runNode.dataset.nodeId && connection.type === 'prompt-to-run');
     const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
@@ -1519,7 +1519,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const limitToIds = normalizedSuggestionIds.length > 0 ? new Set(normalizedSuggestionIds) : null;
     const suggestions = Array.isArray(reviewResult.suggestions) ? reviewResult.suggestions : [];
     if (suggestions.length === 0) {
-      throw new Error('Review node has no suggestions to verify.');
+      throw new Error('Optimize node has no suggestions to verify.');
     }
 
     const verifiedSuggestions = [];
@@ -1602,7 +1602,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const limitToIds = normalizedSuggestionIds.length > 0 ? new Set(normalizedSuggestionIds) : null;
     const suggestions = Array.isArray(reviewResult.suggestions) ? reviewResult.suggestions : [];
     if (suggestions.length === 0) {
-      throw new Error('Review node has no suggestions to accept.');
+      throw new Error('Optimize node has no suggestions to accept.');
     }
 
     const decisions = [];

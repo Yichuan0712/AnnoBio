@@ -23,7 +23,7 @@ input mapping, output schema and model), `engine/` (LLM access through LiteLLM o
 - No data is included: no Dataset rows, images or pdfs.
 
 Only the chosen route is exported. Alternatives visible on the canvas but not chosen (other prompt
-versions, other Runs, other Processes) are left out, as are Score and Review nodes. Datasets saved
+versions, other Runs, other Processes) are left out, as are Evaluate and Optimize nodes. Datasets saved
 from a step are not part of the route: the export follows the steps' direct connections.
 
 A route exports only if:
@@ -39,7 +39,7 @@ If export fails, the panel shows the reason. Fix the named node and export again
 ## Export the Prompt Version table
 
 The Prompt Version tab has an **Export Excel** button for each prompt. The workbook has the same
-columns as the table (Version, From, Run, Score, Ground truth, Precision, Recall, F1); the version tree
+columns as the table (Version, From, Run, Evaluate, Ground truth, Precision, Recall, F1); the version tree
 is written into the Version text, and the metrics are percentages. Only the user can press it.
 
 ## Gallery (web)

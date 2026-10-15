@@ -78,7 +78,7 @@ export function mountPromptOptimizationPanel(container, { getCanvasState, getSco
           <td class="prompt-optimization__version"><span class="prompt-optimization__tree">${escapeHtml(row.tree)}</span>${escapeHtml(row.name)}</td>
           <td class="prompt-optimization__muted">${escapeHtml(row.from)}</td>
           <td>${row.runId ? escapeHtml(row.run) : '<span class="prompt-optimization__muted">Not run</span>'}</td>
-          <td>${row.scoreId ? escapeHtml(row.score) : (row.runId ? '<span class="prompt-optimization__muted">Not scored</span>' : '')}</td>
+          <td>${row.scoreId ? escapeHtml(row.score) : (row.runId ? '<span class="prompt-optimization__muted">Not evaluated</span>' : '')}</td>
           <td class="prompt-optimization__muted">${row.scoreId ? escapeHtml(row.groundTruth || '—') : ''}</td>
           <td class="prompt-optimization__num">${row.scoreId ? metric('precision') : ''}</td>
           <td class="prompt-optimization__num">${row.scoreId ? metric('recall') : ''}</td>
@@ -88,11 +88,11 @@ export function mountPromptOptimizationPanel(container, { getCanvasState, getSco
     return `<section class="prompt-optimization__family">
       <div class="prompt-optimization__header">
         <h3 class="prompt-optimization__title">${escapeHtml(family.versions[0]?.name || 'Prompt')}</h3>
-        <button type="button" class="btn btn-secondary prompt-optimization__export" data-family-index="${familyIndex}"${pending ? ' disabled title="Waiting for Score results…"' : ''}>Export Excel</button>
+        <button type="button" class="btn btn-secondary prompt-optimization__export" data-family-index="${familyIndex}"${pending ? ' disabled title="Waiting for Evaluate results…"' : ''}>Export Excel</button>
       </div>
       <table class="prompt-optimization__table">
         <thead><tr>
-          <th>Version</th><th>From</th><th>Run</th><th>Score</th><th>Ground truth</th>
+          <th>Version</th><th>From</th><th>Run</th><th>Evaluate</th><th>Ground truth</th>
           <th class="prompt-optimization__num">Precision</th><th class="prompt-optimization__num">Recall</th>
           <th class="prompt-optimization__num">F1</th>
         </tr></thead>
@@ -105,7 +105,7 @@ export function mountPromptOptimizationPanel(container, { getCanvasState, getSco
     lastRender = { families, metrics, pending };
     view.innerHTML = families.length
       ? families.map((family, index) => familyHtml(family, index, metrics, pending)).join('')
-      : '<p class="prompt-optimization__empty">No prompt versions to compare yet. Run a prompt and score it, then add a new version or apply a Review.</p>';
+      : '<p class="prompt-optimization__empty">No prompt versions to compare yet. Run a prompt and evaluate it, then add a new version or apply an Optimize node.</p>';
   }
 
   async function refresh() {

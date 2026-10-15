@@ -225,7 +225,7 @@ export function planChangeSet(state, operations, ctx) {
    * @returns {object|null} the op carried out; null when the input already read `from`
    */
   function connectPort(from, node, portId) {
-    if (node.type === 'score' && node.scoreMatchPending) fail(`Score "${nodeTitle(node)}" is matching; stop it before changing its inputs.`);
+    if (node.type === 'score' && node.scoreMatchPending) fail(`Evaluate "${nodeTitle(node)}" is matching; stop it before changing its inputs.`);
     const result = checkConnect(next, from, { nodeId: node.nodeId, portId });
     if (!result.ok) fail(`${nodeTitle(node)}: ${result.reason}`);
     applyPortOp(next, result.op, { promptInputs: promptInputNames });
@@ -244,7 +244,7 @@ export function planChangeSet(state, operations, ctx) {
     const portId = clean(op.input);
     const inputs = nodePorts(next, node.nodeId)?.inputs || [];
     const port = inputs.find((item) => item.id === portId);
-    if (!port) fail(`${node.type === 'promptReview' ? 'Review' : node.type} "${nodeTitle(node)}" has no input "${portId}". Its inputs: ${inputs.map((item) => item.id).join(', ') || '(none)'}.`);
+    if (!port) fail(`${node.type === 'promptReview' ? 'Optimize' : node.type} "${nodeTitle(node)}" has no input "${portId}". Its inputs: ${inputs.map((item) => item.id).join(', ') || '(none)'}.`);
     return port;
   }
 
@@ -489,7 +489,7 @@ export function planChangeSet(state, operations, ctx) {
         matchFlags: matchFlags(rule?.match),
       };
     });
-    if (!comparison.length) fail('A score needs at least one comparison rule.');
+    if (!comparison.length) fail('An Evaluate node needs at least one comparison rule.');
     const combine = clean(op.combine) || 'all';
     if (!['all', 'any'].includes(combine)) fail('combine must be "all" or "any".');
     const op2 = combine === 'all' ? 'AND' : 'OR';
@@ -808,7 +808,7 @@ export function planChangeSet(state, operations, ctx) {
     add_score(op) {
       const run = resolve(op.run, 'run', ['run']);
       const groundTruth = resolve(op.ground_truth, 'ground_truth', ['dataset']);
-      const name = uniqueName(clean(op.name) || 'Score', takenNames('score'));
+      const name = uniqueName(clean(op.name) || 'Evaluate', takenNames('score'));
       const node = addNode({
         type: 'score', nodeId: generateNodeId(), ...placeNear(run), scoreName: name,
         scoreGroundTruthId: groundTruth.nodeId, nodeOrigin: 'agent',
@@ -824,10 +824,10 @@ export function planChangeSet(state, operations, ctx) {
         node.scoreMapping = bundle.mapping;
         lines = bundle.lines;
       }
-      if (op.review_method != null) fail('A Review uses the review method from Settings → Review defaults; review_method cannot be set per Score.');
+      if (op.review_method != null) fail('An Optimize node uses the review method from Settings → Optimize defaults; review_method cannot be set per Evaluate.');
       connect(run.nodeId, node.nodeId, 'run-to-score');
       registerRef(op, node.nodeId);
-      return { kind: 'add', type: 'score', title: `New score "${name}"`, nodeIds: [node.nodeId],
+      return { kind: 'add', type: 'score', title: `New Evaluate "${name}"`, nodeIds: [node.nodeId],
         lines: [`Run "${nodeTitle(run)}" vs ground truth "${nodeTitle(groundTruth)}"`, ...lines],
         diffs: node.scoreMatchCode ? [{ label: 'Match code', before: '', after: node.scoreMatchCode }] : [] };
     },
@@ -864,7 +864,7 @@ export function planChangeSet(state, operations, ctx) {
     // Leave one input empty, as dragging its line off on the canvas does.
     disconnect(op) {
       const node = resolve(op.node, 'node', ['run', 'process', 'score', 'sampler', 'promptReview']);
-      if (node.type === 'score' && node.scoreMatchPending) fail(`Score "${nodeTitle(node)}" is matching; stop it before changing its inputs.`);
+      if (node.type === 'score' && node.scoreMatchPending) fail(`Evaluate "${nodeTitle(node)}" is matching; stop it before changing its inputs.`);
       touched.add(node.nodeId);
       const port = inputPortOf(op, node);
       const result = checkDisconnect(next, { nodeId: node.nodeId, portId: port.id });
@@ -905,7 +905,7 @@ export function planChangeSet(state, operations, ctx) {
       if (node.type === 'run' && 'input_dataset' in set) fail('A run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
       const bad = keys.filter((k) => !allowed.includes(k));
       if (bad.length) fail(`A ${node.type} cannot set ${bad.join(', ')}. Settable: ${allowed.join(', ')}.`);
-      if (node.type === 'score' && node.scoreMatchPending && keys.some((key) => key !== 'name')) fail(`Score "${before}" is matching; stop it before changing its configuration.`);
+      if (node.type === 'score' && node.scoreMatchPending && keys.some((key) => key !== 'name')) fail(`Evaluate "${before}" is matching; stop it before changing its configuration.`);
 
       if ('name' in set) {
         const name = clean(set.name);
@@ -1049,7 +1049,7 @@ export function planChangeSet(state, operations, ctx) {
         }
       }
 
-      return { kind: 'update', type: node.type, title: `Change ${node.type === 'promptReview' ? 'review' : node.type} "${before}"`, nodeIds: [node.nodeId], lines, diffs };
+      return { kind: 'update', type: node.type, title: `Change ${node.type === 'promptReview' ? 'Optimize' : node.type === 'score' ? 'Evaluate' : node.type} "${before}"`, nodeIds: [node.nodeId], lines, diffs };
     },
 
     save_run_results(op) {
@@ -1089,8 +1089,8 @@ export function planChangeSet(state, operations, ctx) {
       if (!outputs[branch]) fail(`Process "${nodeTitle(processNode)}" has no branch "${branch}". Branches: ${branches.join(', ')}.`);
       if (!clean(processNode.historyRecordId)) fail(`Process "${nodeTitle(processNode)}" has no History record. Run it again before saving its output.`);
       const title = nodeTitle(processNode);
-      // The same Dataset as Create dataset in the UI (savedDatasets.js).
-      const saved = savedProcessOutputs(next, processNode.nodeId).find((item) => item.port === branch);
+      // The same Dataset as Save to workspace for this branch in the UI (savedDatasets.js).
+      const [saved] = savedProcessOutputs(next, processNode.nodeId, { branch });
       const name = uniqueName(clean(op.name) || saved.name, takenNames('dataset'));
       const content = normalizeDatasetContent(saved.table);
       const node = addNode({
@@ -1112,26 +1112,26 @@ export function planChangeSet(state, operations, ctx) {
 
     apply_review(op) {
       const review = resolve(op.review, 'review', ['promptReview']);
-      if (review.reviewPending) fail(`Review "${nodeTitle(review)}" is still running.`);
+      if (review.reviewPending) fail(`Optimize "${nodeTitle(review)}" is still running.`);
       const reviewResult = parseJson(review.reviewResult, {});
       const suggestions = Array.isArray(reviewResult.suggestions) ? reviewResult.suggestions : [];
-      if (!suggestions.length) fail(`Review "${nodeTitle(review)}" has no suggestions.`);
+      if (!suggestions.length) fail(`Optimize "${nodeTitle(review)}" has no suggestions.`);
       const ids = (Array.isArray(op.suggestion_ids) ? op.suggestion_ids : []).map(clean).filter(Boolean);
       if (!ids.length) fail('suggestion_ids must list the suggestions to apply.');
       const known = new Set(suggestions.map((s) => clean(s?.suggestion_id)));
       const unknown = ids.filter((id) => !known.has(id));
-      if (unknown.length) fail(`Review "${nodeTitle(review)}" has no suggestion ${unknown.join(', ')}. Ids: ${[...known].join(', ')}.`);
+      if (unknown.length) fail(`Optimize "${nodeTitle(review)}" has no suggestion ${unknown.join(', ')}. Ids: ${[...known].join(', ')}.`);
       const score = byId().get(next.connections.find((c) => c.type === 'score-to-prompt-review' && c.toId === review.nodeId)?.fromId);
       const run = score ? byId().get(next.connections.find((c) => c.type === 'run-to-score' && c.toId === score.nodeId)?.fromId) : null;
       const source = run ? byId().get(next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === run.nodeId)?.fromId) : null;
-      if (!source) fail(`Review "${nodeTitle(review)}" is not connected through a score and run to a prompt.`);
+      if (!source) fail(`Optimize "${nodeTitle(review)}" is not connected through a score and run to a prompt.`);
       const originals = (Array.isArray(reviewResult.promptSections) && reviewResult.promptSections.length ? reviewResult.promptSections : source.sections)
         .map((s) => ({ name: String(s?.name ?? ''), content: String(s?.content ?? '') }));
       const chosen = new Set(ids);
       const marked = suggestions.map((s) => ({ ...s, applied: chosen.has(clean(s?.suggestion_id)) }));
       const sections = rebuildWorkingFromApplied(originals, marked);
       if (!sections || sectionsText(sections) === sectionsText(originals)) {
-        fail('None of the chosen suggestions could be applied: their text no longer matches the prompt the review saw.');
+        fail('None of the chosen suggestions could be applied: their text no longer matches the prompt the Optimize node analyzed.');
       }
       const unverified = ids.filter((id) => (reviewResult.verify_states?.[id] || '') !== 'verified');
       if (unverified.length) warnings.push(`Not verified yet: suggestion ${unverified.join(', ')}. Its effect on the failing rows is unknown until the new version is run.`);
@@ -1139,7 +1139,7 @@ export function planChangeSet(state, operations, ctx) {
       const name = uniqueName(clean(op.name) || nodeTitle(source), takenNames('prompt'));
       const node = addNode({
         type: 'prompt', nodeId: generateNodeId(), ...placeNear(review), name,
-        note: String(op.note ?? `Created from review "${nodeTitle(review)}" (suggestions ${ids.join(', ')}).`),
+        note: String(op.note ?? `Created from Optimize "${nodeTitle(review)}" (suggestions ${ids.join(', ')}).`),
         sections: normalizeSections(sections),
         outputFormat: JSON.parse(JSON.stringify(source.outputFormat || { returnShape: 'single', fields: [] })),
         inputTypes: { ...(source.inputTypes || {}) },
@@ -1148,7 +1148,7 @@ export function planChangeSet(state, operations, ctx) {
       connect(review.nodeId, node.nodeId, 'prompt-review-to-prompt');
       registerRef(op, node.nodeId);
       return {
-        kind: 'add', type: 'prompt', title: `New prompt "${name}" from review "${nodeTitle(review)}"`, nodeIds: [node.nodeId],
+        kind: 'add', type: 'prompt', title: `New prompt "${name}" from Optimize "${nodeTitle(review)}"`, nodeIds: [node.nodeId],
         lines: [`Applies suggestion${ids.length === 1 ? '' : 's'} ${ids.join(', ')} to "${nodeTitle(source)}"`],
         diffs: [{ label: 'Sections', before: sectionsText(originals), after: sectionsText(sections) }],
       };
@@ -1157,8 +1157,8 @@ export function planChangeSet(state, operations, ctx) {
     remove(op) {
       const node = resolve(op.node, 'node');
       if (node.type === 'run' && node.runPending) fail(`Run "${nodeTitle(node)}" is running; stop it before removing it.`);
-      if (node.type === 'promptReview' && node.reviewPending) fail(`Review "${nodeTitle(node)}" is running; stop it before removing it.`);
-      if (node.type === 'score' && node.scoreMatchPending) fail(`Score "${nodeTitle(node)}" is matching; stop it before removing it.`);
+      if (node.type === 'promptReview' && node.reviewPending) fail(`Optimize "${nodeTitle(node)}" is running; stop it before removing it.`);
+      if (node.type === 'score' && node.scoreMatchPending) fail(`Evaluate "${nodeTitle(node)}" is matching; stop it before removing it.`);
       const id = node.nodeId;
       const removingIds = new Set(operations.filter((operation) => operation?.op === 'remove')
         .map((operation) => clean(operation.node)).map((ref) => ref.startsWith('$') ? refs[ref] : ref));
@@ -1168,7 +1168,7 @@ export function planChangeSet(state, operations, ctx) {
       if (node.type === 'dataset' && next.nodes.some((other) => !removingIds.has(other.nodeId)
         && ((other.type === 'run' && runInputSource(next, other.nodeId)?.nodeId === id)
           || (other.type === 'score' && other.scoreGroundTruthId === id)))) {
-        fail(`Dataset "${nodeTitle(node)}" is selected by a Run or Score. Disconnect it first, or remove the reader in the same proposal.`);
+        fail(`Dataset "${nodeTitle(node)}" is selected by a Run or Evaluate. Disconnect it first, or remove the reader in the same proposal.`);
       }
       const lines = [];
       // Every step reading this node loses that input (a Process its df or its df_<alias> input).
@@ -1181,7 +1181,7 @@ export function planChangeSet(state, operations, ctx) {
       for (const other of next.nodes) {
         if (other.type === 'score' && other.scoreGroundTruthId === id) {
           delete other.scoreGroundTruthId;
-          lines.push(`Score "${nodeTitle(other)}" loses its ground truth`);
+          lines.push(`Evaluate "${nodeTitle(other)}" loses its ground truth`);
         }
         if (other.type === 'dataset' && other.samplerNodeId === id) delete other.samplerNodeId;
       }
@@ -1189,12 +1189,12 @@ export function planChangeSet(state, operations, ctx) {
         if (c.fromId !== id && c.toId !== id) continue;
         const other = byId().get(c.fromId === id ? c.toId : c.fromId);
         if (other && ['prompt-to-run', 'run-to-score', 'score-to-prompt-review'].includes(c.type) && c.fromId === id) {
-          lines.push(`${other.type === 'promptReview' ? 'Review' : other.type[0].toUpperCase() + other.type.slice(1)} "${nodeTitle(other)}" is disconnected`);
+          lines.push(`${other.type === 'promptReview' ? 'Optimize' : other.type === 'score' ? 'Evaluate' : other.type[0].toUpperCase() + other.type.slice(1)} "${nodeTitle(other)}" is disconnected`);
         }
       }
       disconnectWhere((c) => c.fromId === id || c.toId === id);
       next.nodes = next.nodes.filter((n) => n.nodeId !== id);
-      return { kind: 'remove', type: node.type, title: `Remove ${node.type === 'promptReview' ? 'review' : node.type} "${nodeTitle(node)}"`, nodeIds: [id], lines };
+      return { kind: 'remove', type: node.type, title: `Remove ${node.type === 'promptReview' ? 'Optimize' : node.type === 'score' ? 'Evaluate' : node.type} "${nodeTitle(node)}"`, nodeIds: [id], lines };
     },
   };
 

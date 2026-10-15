@@ -240,7 +240,7 @@ def run_textgrad(
         scores = []
         for ex in examples:
             if is_cancelled():
-                raise RuntimeError("Review cancelled")
+                raise RuntimeError("Optimization cancelled")
             question_text = _format_question({k: str(ex.row_input.get(k, "")) for k in input_keys}, response_format_hint)
             question_var = tg.Variable(question_text, requires_grad=False, role_description="input to the task")
             try:

@@ -42,7 +42,7 @@ const DEFAULT_MATCH_FLAGS = Object.freeze({
 });
 
 function buildEditError(detail) {
-  const message = String(detail?.message || 'Score mapping edit failed.');
+  const message = String(detail?.message || 'Evaluate mapping edit failed.');
   const error = new Error(message);
   error.name = 'ScoreMappingEditError';
   for (const [key, value] of Object.entries(detail || {})) {

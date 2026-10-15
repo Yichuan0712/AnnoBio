@@ -63,7 +63,7 @@ export function outputMenuItems(state, nodeId, { port } = {}) {
     const source = { nodeId: id, port: RESULT, kind: 'run' };
     return [
       ...readerItems([source], { named: false }),
-      { action: 'save-to-workspace-and-score', label: 'Create Score', source, disabled: !hasRunResults(node) },
+      { action: 'save-to-workspace-and-score', label: 'Create Evaluate', source, disabled: !hasRunResults(node) },
     ];
   }
   if (node.type === 'process') {
@@ -75,7 +75,7 @@ export function outputMenuItems(state, nodeId, { port } = {}) {
     if (!single('score')) return [];
     const runId = (state?.connections || []).find((edge) => edge?.type === 'run-to-score' && String(edge.toId) === id)?.fromId;
     const ready = hasRunResults(findNode(state, runId)) && !!String(node.scoreGroundTruthId || '').trim();
-    return [{ action: 'score-add-review', label: 'Start review', source: { nodeId: id, port: 'score', kind: 'score' }, disabled: !ready }];
+    return [{ action: 'score-add-review', label: 'Optimize prompt', source: { nodeId: id, port: 'score', kind: 'score' }, disabled: !ready }];
   }
   return [];
 }

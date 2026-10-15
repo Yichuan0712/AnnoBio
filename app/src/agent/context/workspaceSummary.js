@@ -112,7 +112,7 @@ function datasetLine(node, lookup) {
   else if (savedFrom && from) {
     source = savedFrom.kind === 'run' ? `; saved results of run ${quote(nodeTitle(from))}`
       : savedFrom.kind === 'process' ? `; saved output ${quote(savedFrom.port)} of process ${quote(nodeTitle(from))}`
-        : `; saved comparison of score ${quote(nodeTitle(from))}`;
+        : `; saved comparison of Evaluate ${quote(nodeTitle(from))}`;
   } else if (savedFrom) source = `; saved from a ${savedFrom.kind} no longer on the canvas`;
   else if (sampler) source = `; sampled by ${quote(nodeTitle(sampler))}`;
   return `- ${ref(node)}: ${content.rows.length} rows; columns: ${columns || '(none)'}${source}`;
@@ -128,7 +128,7 @@ function promptLine(node, lookup, versionsById, extractInputFields) {
   const link = versionsById.get(node.nodeId);
   const parent = link?.parentId ? lookup.get(link.parentId) : null;
   let version = '';
-  if (parent && link.via === 'review') version = `; made by applying Review ${quote(link.reviewName)} of ${quote(nodeTitle(parent))}`;
+  if (parent && link.via === 'review') version = `; made by applying Optimize ${quote(link.reviewName)} of ${quote(nodeTitle(parent))}`;
   else if (parent) version = `; new version of ${quote(nodeTitle(parent))}`;
   return `- ${ref(node)}: inputs ${inputs.join(', ') || '(none)'}; outputs (${shape}) ${fields.join(', ') || '(none)'}${version}`;
 }
@@ -178,7 +178,7 @@ function reviewLine(node, inspection) {
   const d = inspection.details;
   const verified = d.suggestions.filter((s) => s.verifyState === 'verified').length;
   const counts = d.suggestions.length ? `; ${d.suggestions.length} suggestions (${verified} verified)` : '';
-  return `- ${ref(node)}: reviews score ${linkRef(d.score, '(none)')}; ${d.status}${counts}`;
+  return `- ${ref(node)}: reviews Evaluate ${linkRef(d.score, '(none)')}; ${d.status}${counts}`;
 }
 
 const SECTION_ORDER = [
@@ -187,8 +187,8 @@ const SECTION_ORDER = [
   ['process', 'Processes'],
   ['prompt', 'Prompts'],
   ['run', 'Runs'],
-  ['score', 'Scores'],
-  ['promptReview', 'Reviews'],
+  ['score', 'Evaluate nodes'],
+  ['promptReview', 'Optimize nodes'],
 ];
 
 /**

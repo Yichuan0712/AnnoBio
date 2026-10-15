@@ -5,7 +5,7 @@
  * `data-port-side` and `data-port-id`.
  */
 import { ADD_INPUT_PORT, portLayout } from './nodePorts.js';
-import { iconDataset, iconText } from './icons.js';
+import { iconDataset, iconEvaluate, iconPrompt, iconRun } from './icons.js';
 
 const PORTS_CLASS = 'workflow-node__ports';
 const DOT_CLASS = 'workflow-node__port';
@@ -26,28 +26,32 @@ function dot(side, item, title, { lineage = false } = {}) {
   return el;
 }
 
-function row(side, item, title, lineageTitle) {
+function row(side, item, title, lineageTitle, { lineage = false } = {}) {
   const el = document.createElement('div');
   el.className = 'workflow-node__port-row';
   el.dataset.portSide = side;
   if (title) el.title = title;
+  if (lineage) el.classList.add('workflow-node__port-row--lineage');
   if (!item) {
     el.classList.add('workflow-node__port-row--lineage');
     el.append(dot(side, null, lineageTitle, { lineage: true }));
     return el;
   }
   el.dataset.portId = item.id;
+  const connected = side === 'left' ? !!item.source : !!item.readers?.length;
+  if (connected) el.classList.add('workflow-node__port-row--connected');
   if (item.unavailable) el.classList.add('workflow-node__port-row--unavailable');
   if (item.mismatch) el.classList.add('workflow-node__port-row--mismatch');
   if (item.unconnected) el.classList.add('workflow-node__port-row--unconnected');
   if (item.id === ADD_INPUT_PORT) el.classList.add('workflow-node__port-row--add-input');
-  el.append(dot(side, item, title));
+  el.append(dot(side, item, title, { lineage }));
+  if (item.icon) {
+    const icon = item.icon === 'prompt' ? iconPrompt(12) : item.icon === 'run' ? iconRun(12)
+      : item.icon === 'evaluate' ? iconEvaluate(12) : iconDataset(12);
+    icon.classList.add('workflow-node__port-icon');
+    el.append(icon);
+  }
   if (item.showLabel) {
-    if (item.icon) {
-      const icon = item.icon === 'prompt' ? iconText(12) : iconDataset(12);
-      icon.classList.add('workflow-node__port-icon');
-      el.append(icon);
-    }
     const name = document.createElement('span');
     name.className = 'workflow-node__port-name';
     name.textContent = item.displayLabel ?? item.label;
@@ -65,6 +69,7 @@ export function renderNodePorts(node, ports, titles) {
   if (!header) return;
   header.querySelectorAll(`:scope > .${DOT_CLASS}`).forEach((el) => el.remove());
   node.querySelector(`:scope > .${PORTS_CLASS}`)?.remove();
+  node.querySelector(':scope > .workflow-node__prompt-context')?.remove();
   const layout = portLayout(ports);
   const titleOf = (side, item) => (side === 'left' ? titles?.inputs : titles?.outputs)?.[item.id] || '';
   const lineageTitle = (side) => (side === 'left' ? titles?.lineageIn : titles?.lineageOut) || '';
@@ -73,7 +78,8 @@ export function renderNodePorts(node, ports, titles) {
   for (const side of ['left', 'right']) {
     const { rows, lineage } = layout[side];
     const items = rows.map((item) => row(side, item, titleOf(side, item)));
-    if (lineage === 'row') items.push(row(side, null, lineageTitle(side), lineageTitle(side)));
+    if (lineage === 'row') items.push(row(side, side === 'right' ? ports?.lineageOutput : null,
+      lineageTitle(side), lineageTitle(side), { lineage: true }));
     if (items.length) {
       const column = document.createElement('div');
       column.className = `workflow-node__ports-side workflow-node__ports-side--${side}`;
@@ -86,6 +92,19 @@ export function renderNodePorts(node, ports, titles) {
     container.className = PORTS_CLASS;
     container.append(...sides);
     header.after(container);
+  }
+  if (ports?.promptContext) {
+    const context = document.createElement('div');
+    context.className = 'workflow-node__prompt-context';
+    context.classList.toggle('workflow-node__prompt-context--unconnected', !ports.promptContext.nodeId);
+    context.title = `Prompt: ${ports.promptContext.name}`;
+    const icon = iconPrompt(12);
+    icon.classList.add('workflow-node__prompt-context-icon');
+    const name = document.createElement('span');
+    name.className = 'workflow-node__prompt-context-name';
+    name.textContent = ports.promptContext.name;
+    context.append(icon, name);
+    header.after(context);
   }
   if (!node.querySelector(':scope > .workflow-node__body')) node.classList.toggle('workflow-node--no-body', !sides.length);
 }

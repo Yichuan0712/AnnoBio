@@ -1769,7 +1769,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (res.status !== 200) continue;
         processReviewEvents(reviewNodeId, events);
         if (data.error) {
-          alert(data.error || 'Review failed.');
+          alert(data.error || 'Optimize failed.');
         }
         if (data.status === 'done' || data.status === 'cancelled') {
           pendingReviews.delete(reviewNodeId);
@@ -1816,7 +1816,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         pendingReviews.delete(reviewNodeId);
         pendingReviewNodeIds.delete(reviewNodeId);
         document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
-        alert(ev.detail || 'Review failed.');
+        alert(ev.detail || 'Optimize failed.');
         return;
       }
       if (ev.type === 'plan') {
@@ -2084,9 +2084,9 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   async function runScoreNode(nodeId, { signal, onProgress } = {}) {
     const node = getNodeById(nodeId);
-    if (!node?.classList.contains('workflow-node--score')) throw new Error('Score node was not found.');
-    if (pendingScoreMatches.has(nodeId) || node.dataset.scoreMatchUiRunning === '1') throw new Error('Score matching is already running.');
-    if (node.dataset.scoreActiveMatchMode !== 'code') throw new Error('Rule-based Scores compute automatically; this job runs custom match code.');
+    if (!node?.classList.contains('workflow-node--score')) throw new Error('Evaluate node was not found.');
+    if (pendingScoreMatches.has(nodeId) || node.dataset.scoreMatchUiRunning === '1') throw new Error('Evaluate matching is already running.');
+    if (node.dataset.scoreActiveMatchMode !== 'code') throw new Error('Rule-based Evaluate nodes compute automatically; this job runs custom match code.');
     const runId = connections.find((edge) => edge.type === 'run-to-score' && edge.toId === nodeId)?.fromId;
     const run = getNodeById(runId);
     const runResultsRaw = run?.dataset.runResults || '[]';
@@ -2097,7 +2097,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     try { results = JSON.parse(runResultsRaw); } catch (_) {}
     try { fields = JSON.parse(run?.dataset.runOutputFields || '[]'); } catch (_) {}
     const code = String(node.dataset.scoreMatchCode || '');
-    if (!code.trim()) throw new Error('Score has no custom match code.');
+    if (!code.trim()) throw new Error('Evaluate has no custom match code.');
     pendingScoreMatches.add(nodeId);
     node.dataset.scoreMatchAgentRunning = '1';
     node.dataset.scoreMatchInterrupted = '1';
@@ -2111,9 +2111,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         },
       });
       const live = getNodeById(nodeId);
-      if (!live) throw new Error('Score was removed before matching finished.');
+      if (!live) throw new Error('Evaluate was removed before matching finished.');
       if (live.dataset.scoreActiveMatchMode !== 'code' || live.dataset.scoreMatchCode !== code || live.dataset.scoreGroundTruthId !== groundTruthId
-        || getNodeById(runId)?.dataset.runResults !== runResultsRaw) throw new Error('Score inputs changed while matching; run matching again.');
+        || getNodeById(runId)?.dataset.runResults !== runResultsRaw) throw new Error('Evaluate inputs changed while matching; run matching again.');
       live.dataset.scoreMatchResult = JSON.stringify(result);
       delete live.dataset.scoreMatchError;
       if (!result.wasCancelled) delete live.dataset.scoreMatchInterrupted;
@@ -2280,7 +2280,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         );
       } else {
         showAlert(
-          'This dataset is selected by one or more Run or Score nodes. Clear the selection in those nodes before deleting.',
+          'This dataset is selected by one or more Run or Evaluate nodes. Clear the selection in those nodes before deleting.',
           { title: 'Cannot delete dataset' },
         );
       }
@@ -3586,7 +3586,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       nextStepItems += '<button type="button" class="workflow-node-context-item" data-action="create-working-dataset" role="menuitem">Create sample</button>';
       manageItems = '<button type="button" class="workflow-node-context-item" data-action="edit-sampler-name" role="menuitem">Edit name</button>';
     } else if (port === undefined && isProcess) {
-      nextStepItems += `<button type="button" class="workflow-node-context-item" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create dataset</button>`;
+      nextStepItems += `<button type="button" class="workflow-node-context-item" data-action="process-save-to-workspace" role="menuitem" title="Save all output branches of the selected History record, including empty branches" ${processHasResults ? '' : 'disabled'}>Save to workspace</button>`;
       manageItems = `
         <button type="button" class="workflow-node-context-item" data-action="duplicate-process" role="menuitem">Duplicate this process</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-process-name" role="menuitem">Edit name</button>
@@ -3759,7 +3759,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         }
         const credentialId = await resolveReviewCredentialId(scoreNode);
         if (!credentialId) {
-          showAlert('No Review model: set a default Review model in Settings.', { title: 'Review' });
+          showAlert('No Optimize model: set a default Optimize model in Settings.', { title: 'Optimize' });
           return;
         }
         const started = await runReviewFromScore({
@@ -3769,7 +3769,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           at,
         });
         if (!started) {
-          showAlert('Could not start Review. Open Score detail and ensure the prompt has sections, Run has results, and ground truth is selected.', { title: 'Review' });
+          showAlert('Could not start Optimize. Open Evaluate detail and ensure the prompt has sections, Run has results, and ground truth is selected.', { title: 'Optimize' });
         }
       },
       'add-sampler': () => {
@@ -3847,8 +3847,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         openEditNodeNameModal(node, {
           modalTitle: 'Edit Scorecard name',
           fieldLabel: 'Scorecard name',
-          placeholder: 'Score',
-          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Score',
+          placeholder: 'Evaluate',
+          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Evaluate',
           onSave: (name) => {
             const titleEl = node.querySelector('.workflow-node__title');
             if (titleEl) titleEl.textContent = name;
@@ -3933,10 +3933,10 @@ export function buildWorkflowCanvas(root, options = {}) {
       'edit-review-name': () => {
         if (node.dataset.nodeType !== 'promptReview') return;
         openEditNodeNameModal(node, {
-          modalTitle: 'Edit Review name',
-          fieldLabel: 'Review name',
-          placeholder: 'Review',
-          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Review',
+          modalTitle: 'Edit Optimize name',
+          fieldLabel: 'Optimize name',
+          placeholder: 'Optimize',
+          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Optimize',
           onSave: (name) => {
             node.dataset.promptReviewName = name;
             const titleEl = node.querySelector('.workflow-node__title');
@@ -4410,9 +4410,9 @@ export function buildWorkflowCanvas(root, options = {}) {
   document.addEventListener('workflow:score-export-to-workspace', (e) => {
     const { scoreNodeId = '', scoreName = '', headers, rows } = e.detail || {};
     if (!Array.isArray(headers) || !Array.isArray(rows)) return;
-    const baseName = (scoreName && scoreName.trim()) ? scoreName.trim() + ' comparison' : 'Score comparison';
+    const baseName = (scoreName && scoreName.trim()) ? scoreName.trim() + ' comparison' : 'Evaluate comparison';
     const datasetName = findUniqueDatasetExportName(baseName);
-    const notes = `Exported from Score "${(scoreName && scoreName.trim()) ? scoreName.trim() : 'Score'}". Run vs ground truth comparison.`;
+    const notes = `Exported from Evaluate "${(scoreName && scoreName.trim()) ? scoreName.trim() : 'Evaluate'}". Run vs ground truth comparison.`;
     document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
       detail: { name: datasetName, notes, headers, rows, savedFrom: scoreSavedFrom(scoreNodeId, currentScoreRecordId(scoreNodeId)) },
     }));
@@ -4441,12 +4441,12 @@ export function buildWorkflowCanvas(root, options = {}) {
     return saved;
   }
 
-  /** Create dataset(s) of a Process: one per branch of its current result, stacked beside it. */
-  function saveProcessOutputAsDatasets(processNodeId) {
+  /** Save a Process result beside it: the opened branch in its detail view, all branches from its menu. */
+  function saveProcessOutputAsDatasets(processNodeId, options = {}) {
     const processNode = getNodeById(processNodeId);
     let saved;
     try {
-      saved = savedProcessOutputs(getCanvasState(), processNodeId);
+      saved = savedProcessOutputs(getCanvasState(), processNodeId, options);
     } catch (error) {
       showAppAlert(error?.message || 'Could not save the output.', 'Cannot create dataset');
       return;
@@ -4463,7 +4463,9 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   // The Run and Process windows save through the same functions as the context menu.
   document.addEventListener('workflow:save-run-output', (e) => saveRunOutputAsDataset(e.detail?.runNodeId || ''));
-  document.addEventListener('workflow:save-process-output', (e) => saveProcessOutputAsDatasets(e.detail?.processNodeId || ''));
+  document.addEventListener('workflow:save-process-output', (e) => saveProcessOutputAsDatasets(e.detail?.processNodeId || '', {
+    branch: e.detail?.branch, snapshot: e.detail?.snapshot,
+  }));
 
   document.addEventListener('workflow:add-dataset-node', (e) => {
     // savedFrom: the step a saved Dataset comes from (savedDatasets.js); it is placed beside that step.
@@ -4646,7 +4648,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!runNode || !runNode.classList.contains('workflow-node--run')) return;
     const left = (parseFloat(runNode.style.left) || 0) + (runNode.offsetWidth || 280) + NEW_NODE_OFFSET;
     const top = parseFloat(runNode.style.top) || 0;
-    const scoreNode = createScoreNode({ left, top, title: 'Score' });
+    const scoreNode = createScoreNode({ left, top, title: 'Evaluate' });
     placeNewNodeAt(scoreNode, e.detail?.at);
     if (scoreNode?.dataset?.nodeId) {
       connections.push({
@@ -4954,7 +4956,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         return out;
       }
       if (node.classList.contains('workflow-node--score')) {
-        const scoreName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Score';
+        const scoreName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Evaluate';
         const scoreGroundTruthId = (node.dataset.scoreGroundTruthId || '').trim() || undefined;
         let scoreMapping;
         try {
@@ -5002,7 +5004,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         return out;
       }
       if (node.classList.contains('workflow-node--prompt-review')) {
-        const promptReviewName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Review';
+        const promptReviewName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Optimize';
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const bar = node.querySelector('.workflow-node__review-progress');
         const pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : (node.dataset.reviewProgress != null ? parseInt(node.dataset.reviewProgress, 10) : 0);
@@ -5177,7 +5179,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           left: n.left,
           top: n.top,
           nodeId: n.nodeId || n.id,
-          title: n.scoreName || 'Score',
+          title: n.scoreName || 'Evaluate',
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(scoreNode);
         if (n.scoreGroundTruthId) scoreNode.dataset.scoreGroundTruthId = n.scoreGroundTruthId;
@@ -5228,7 +5230,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           left: n.left,
           top: n.top,
           nodeId: n.nodeId || n.id,
-          title: n.promptReviewName || 'Review',
+          title: n.promptReviewName || 'Optimize',
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(promptReviewNode);
         if (n.reviewResult && typeof n.reviewResult === 'string') {
@@ -5450,7 +5452,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (otherDetails.length > 1) throw new Error('Close other Run or Process windows before switching History.');
         const staleDetails = [...document.querySelectorAll('.modal-overlay')].some((el) =>
           el.dataset.workingDatasetNodeId || el.querySelector('.modal-panel--score-detail'));
-        if (staleDetails) throw new Error('Close open Dataset and Score windows before switching History.');
+        if (staleDetails) throw new Error('Close open Dataset and Evaluate windows before switching History.');
         const plan = await planHistorySelectionForCanvas(recordId);
         const changed = plan.changedNodeIds.map((id) => {
           const node = getNodeById(id);
@@ -5702,7 +5704,7 @@ export function buildWorkflowCanvas(root, options = {}) {
    */
   function applyAgentCanvasState(nextState, { highlightNodeIds = [] } = {}) {
     if (pendingScoreMatches.size) {
-      throw new Error('Score code matching is running. Wait for it to finish before applying changes.');
+      throw new Error('Evaluate code matching is running. Wait for it to finish before applying changes.');
     }
     // A node's detail window keeps a reference to its element; rebuilding the canvas under it
     // would leave its edits writing to a detached node.

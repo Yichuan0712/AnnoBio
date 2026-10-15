@@ -64,6 +64,41 @@ test('each branch of a Process is saved under its own name and port', () => {
     /no History record yet/);
 });
 
+test('saving the opened Process branch keeps empty outputs and rejects missing branches', () => {
+  const state = processState({ outputs: {
+    kept: { headers: ['id'], rows: [['1']], columnTypes: ['text'] },
+    empty: { headers: [], rows: [] },
+    emptyImages: { headers: ['image'], rows: [], columnTypes: ['image'] },
+  } });
+  const original = structuredClone(state);
+  const [empty] = savedProcessOutputs(state, 'split', { branch: 'empty' });
+  assert.equal(empty.name, 'Split — empty');
+  assert.deepEqual(empty.table, { headers: [], rows: [], columnTypes: [] });
+  assert.equal(empty.savedFrom.recordId, 'rec-s');
+  const [images] = savedProcessOutputs(state, 'split', { branch: 'emptyImages' });
+  assert.deepEqual(images.table, { headers: ['image'], rows: [], columnTypes: ['image'] });
+  assert.deepEqual(savedProcessOutputs(state, 'split').map((item) => item.port), ['kept', 'empty', 'emptyImages']);
+  assert.throws(() => savedProcessOutputs(state, 'split', { branch: 'missing' }), /no "missing" output/);
+  assert.deepEqual(state, original);
+});
+
+test('a detail view saves its displayed History result when the live selection has changed', () => {
+  const state = processState({ outputs: { result: { headers: ['new'], rows: [['new']] } } }, {
+    historyRecordId: 'new-record', processPending: true,
+  });
+  const original = structuredClone(state);
+  const snapshot = { recordId: 'opened-record', results: { outputs: {
+    old: { headers: ['id'], rows: [['old']], columnTypes: ['text'] },
+    empty: { headers: ['id'], rows: [], columnTypes: ['text'] },
+  } } };
+  const saved = savedProcessOutputs(state, 'split', { branch: 'old', snapshot });
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].table.rows, [['old']]);
+  assert.deepEqual(saved[0].savedFrom, { kind: 'process', nodeId: 'split', port: 'old', recordId: 'opened-record' });
+  assert.deepEqual(savedProcessOutputs(state, 'split', { branch: 'empty', snapshot })[0].table.rows, []);
+  assert.deepEqual(state, original);
+});
+
 test('a Score records its current record when it has one', () => {
   assert.deepEqual(scoreSavedFrom('score', 'rec-score'), { kind: 'score', nodeId: 'score', port: 'result', recordId: 'rec-score' });
   assert.deepEqual(scoreSavedFrom('score'), { kind: 'score', nodeId: 'score', port: 'result', recordId: '' });
@@ -79,7 +114,7 @@ test('savedFrom is read from the DOM string and named as the canvas names its so
   assert.equal(savedFromLabel(state, { kind: 'run', nodeId: 'r', port: 'result' }), 'Saved from Run of "Extract"');
   assert.equal(savedFromLabel(state, { kind: 'process', nodeId: 'split', port: 'kept' }), 'Saved from branch "kept" of Process "Split"');
   assert.equal(savedFromLabel(state, { kind: 'process', nodeId: 'split', port: 'result' }), 'Saved from Process "Split"');
-  assert.equal(savedFromLabel(state, { kind: 'score', nodeId: 'score' }), 'Saved from Score "Accuracy"');
+  assert.equal(savedFromLabel(state, { kind: 'score', nodeId: 'score' }), 'Saved from Evaluate "Accuracy"');
   assert.equal(savedFromLabel(state, { kind: 'pipeline', nodeId: 'r', pipelineRunId: 'p' }), 'Saved from a Pipeline run (Run of "Extract")');
   assert.equal(savedFromLabel(state, { kind: 'run', nodeId: 'deleted' }), '');
 });

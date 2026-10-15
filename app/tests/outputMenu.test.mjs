@@ -30,7 +30,7 @@ test('a Run offers a new Run and a new Process on its results, then a Score once
   assert.deepEqual(describe(outputMenuItems(state, 'run')), [
     ['run-prompt-on-output', 'Create Run from results', 'run:run:result'],
     ['process-output', 'Create Process from results', 'run:run:result'],
-    ['save-to-workspace-and-score', 'Create Score', 'run:run:result', 'disabled'],
+    ['save-to-workspace-and-score', 'Create Evaluate', 'run:run:result', 'disabled'],
   ]);
   assert.equal(outputMenuItems(state, 'done').at(-1).disabled, false);
 });
@@ -60,8 +60,8 @@ test('a Dataset offers a Run, a Sample and a Process; a Prompt offers a Run', ()
 });
 
 test('a Score offers a Review once its Run has results and it has a ground truth', () => {
-  assert.deepEqual(describe(outputMenuItems(state, 'score')), [['score-add-review', 'Start review', 'score:score:score']]);
-  assert.deepEqual(describe(outputMenuItems(state, 'unscored')), [['score-add-review', 'Start review', 'score:unscored:score', 'disabled']]);
+  assert.deepEqual(describe(outputMenuItems(state, 'score')), [['score-add-review', 'Optimize prompt', 'score:score:score']]);
+  assert.deepEqual(describe(outputMenuItems(state, 'unscored')), [['score-add-review', 'Optimize prompt', 'score:unscored:score', 'disabled']]);
 });
 
 test('with a port, only that output\'s items: a branch, or the one output of any other node', () => {

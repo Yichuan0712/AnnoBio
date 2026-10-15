@@ -2,7 +2,7 @@
 
 A pipeline turns input tables into annotated output. It starts from Datasets and is a chain of Prompt
 Runs and Processes that read each other's output directly, with at least one Prompt Run or Process.
-Score and Review sit beside it for evaluation and are not part of the exported pipeline.
+Evaluate and Optimize sit beside it for evaluation and are not part of the exported pipeline.
 
 ## Choosing the step type
 
@@ -86,4 +86,4 @@ Use `run_nodes` for a single Run or Process when testing or iterating on one sta
 
 Start from the user's goal and their data: what is one row, which columns carry the evidence, what
 should the final table look like. Propose the smallest route that produces it, put deterministic work in
-Process steps, and plan an evaluation (a ground-truth Dataset and a Score) before optimising prompts.
+Process steps, and plan an evaluation (a ground-truth Dataset and an Evaluate node) before optimising prompts.

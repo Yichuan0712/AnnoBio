@@ -15,7 +15,7 @@ function relationSummary(record, canvasState, currentIds) {
   const node = (canvasState?.nodes || []).find((item) => String(item?.nodeId || item?.id || '') === String(record.nodeId));
   const nodeName = node?.runName || node?.name || node?.scoreName || node?.promptReviewName || '';
   const promptName = record.kind === 'run' ? String(record.inputs?.prompt?.name || record.summary?.promptName || '') : '';
-  const fallback = record.kind ? `${record.kind[0].toUpperCase()}${record.kind.slice(1)}` : 'Record';
+  const fallback = record.kind === 'score' ? 'Evaluate' : record.kind === 'review' ? 'Optimize' : record.kind ? `${record.kind[0].toUpperCase()}${record.kind.slice(1)}` : 'Record';
   return {
     id: record.id,
     nodeId: record.nodeId,

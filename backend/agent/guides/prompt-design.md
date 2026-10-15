@@ -50,7 +50,7 @@ Section/field editors open inside that window. Existing Prompt details use **Edi
 ## Versions
 
 Editing a prompt that already has results is best done as a new version, linked by a `prompt-to-prompt`
-connection, so earlier Runs and Scores stay comparable. Reviews create new versions this way.
+connection, so earlier Runs and Evaluate nodes stay comparable. Optimize nodes create new versions this way.
 
 ## Runs
 

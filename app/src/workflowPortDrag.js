@@ -105,6 +105,7 @@ export function attachPortDrag({ canvas, nodesLayer, edgesLayer, scrollWrapper, 
     const port = (side === 'left' ? ports?.inputs : ports?.outputs)?.find((item) => item.id === portId);
     if (!port) return null;
     if (side === 'right') {
+      if (port.hollow) return { refused: LINEAGE_HINT };
       if (port.unavailable) return { refused: port.unavailable };
       return { mode: 'out', state, dot, from: { nodeId, portId }, port };
     }

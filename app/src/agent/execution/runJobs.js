@@ -168,12 +168,12 @@ function previewProcess(job, ctx) {
 
 function previewScore(job, ctx) {
   const score = findNode(ctx.state, job.node, 'score', 'node');
-  if (score.scoreMatchPending) fail(`Score "${nodeTitle(score)}" is already matching.`);
-  if (score.scoreActiveMatchMode !== 'code') fail('Rule-based Scores compute automatically; a score job runs custom match code.');
-  if (!/^\s*def\s+match\s*\(/m.test(String(score.scoreMatchCode || ''))) fail('Score code must define match(input_row, output_row, gt_row).');
+  if (score.scoreMatchPending) fail(`Evaluate "${nodeTitle(score)}" is already matching.`);
+  if (score.scoreActiveMatchMode !== 'code') fail('Rule-based Evaluate nodes compute automatically; a score job runs custom match code.');
+  if (!/^\s*def\s+match\s*\(/m.test(String(score.scoreMatchCode || ''))) fail('Evaluate code must define match(input_row, output_row, gt_row).');
   if (!String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; choose one in Settings → Python first.');
   const run = upstream(ctx.state, score.nodeId, 'run-to-score');
-  if (!run) fail(`Score "${nodeTitle(score)}" is not connected to a Run.`);
+  if (!run) fail(`Evaluate "${nodeTitle(score)}" is not connected to a Run.`);
   const groundTruth = findNode(ctx.state, score.scoreGroundTruthId, 'dataset', 'ground truth');
   let payload;
   try {
@@ -181,7 +181,7 @@ function previewScore(job, ctx) {
       input: stepOutputTable(ctx.state, runInputSource(ctx.state, run.nodeId)).table || runInputContentOf(run),
       groundTruth: datasetContentOf(groundTruth) });
   } catch (error) { fail(error.message); }
-  return { kind: 'score', title: `Match Score "${nodeTitle(score)}" by code`, nodeIds: [score.nodeId],
+  return { kind: 'score', title: `Evaluate "${nodeTitle(score)}" using code`, nodeIds: [score.nodeId],
     lines: [`Runs its Python match code on ${payload.runRows.length} Run rows against ${payload.gtRows.length} ground-truth rows (no model calls).`],
     usd: 0, calls: 0, priced: true };
 }
@@ -189,51 +189,51 @@ function previewScore(job, ctx) {
 async function previewReview(job, ctx) {
   const score = findNode(ctx.state, job.score, 'score', 'score');
   const run = upstream(ctx.state, score.nodeId, 'run-to-score');
-  if (!run || !runResultsOf(run).length) fail(`Score "${nodeTitle(score)}" has no run results to review.`);
-  if (!score.scoreGroundTruthId) fail(`Score "${nodeTitle(score)}" has no ground-truth dataset.`);
+  if (!run || !runResultsOf(run).length) fail(`Evaluate "${nodeTitle(score)}" has no run results to review.`);
+  if (!score.scoreGroundTruthId) fail(`Evaluate "${nodeTitle(score)}" has no ground-truth dataset.`);
   if (score.scoreActiveMatchMode === 'code' && !score.scoreMatchResult) {
-    fail(`Score "${nodeTitle(score)}" matches by code and has no code-match result yet; run a score job first.`);
+    fail(`Evaluate "${nodeTitle(score)}" matches by code and has no code-match result yet; run a score job first.`);
   }
   const credentialId = String(score.reviewCredentialId || ctx.settings.default_review_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
-  if (!credential) fail('No usable Review model: the user has to set a default Review model in Settings (or on the score).');
+  if (!credential) fail('No usable Optimize model: the user has to set a default Optimize model in Settings (or on the score).');
   const rows = await ctx.getScoreComparisonRows(score.nodeId);
   const failingInputs = new Set(rows.filter((r) => r?.matched !== true).map((r) => r?.input_row_index ?? r?.row_index)).size;
   const cap = Number(ctx.settings.review_max_failed_rows) || 30;
   const analysed = Math.min(failingInputs, cap);
   const lines = [
-    `Adds a Review node to score "${nodeTitle(score)}" and runs it (method: ${score.reviewMethod || ctx.settings.default_review_method || 'default'})`,
+    `Adds an Optimize node to Evaluate "${nodeTitle(score)}" and runs it (method: ${score.reviewMethod || ctx.settings.default_review_method || 'default'})`,
     `Model: ${credentialLabel(credential)}`,
     !rows.length
-      ? 'The score has no comparison rows yet (its run or ground truth may be incomplete), so the review may find nothing to fix.'
+      ? 'The Evaluate node has no comparison rows yet (its Run or ground truth may be incomplete), so the Optimize may find nothing to fix.'
       : failingInputs
       ? `Analyses ${analysed} failing input${analysed === 1 ? '' : 's'}${failingInputs > cap ? ` (of ${failingInputs}, capped in Settings)` : ''}: about one model call each plus a few to group issues and draft edits; the exact number depends on the method.`
       : 'Every row currently matches, so the review has little to work with.',
   ];
-  return { kind: 'review', title: `Review score "${nodeTitle(score)}"`, nodeIds: [score.nodeId], lines, usd: null, calls: analysed, priced: false };
+  return { kind: 'review', title: `Optimize prompt using "${nodeTitle(score)}"`, nodeIds: [score.nodeId], lines, usd: null, calls: analysed, priced: false };
 }
 
 function previewVerify(job, ctx) {
   const review = findNode(ctx.state, job.review, 'promptReview', 'review');
-  if (review.reviewPending) fail(`Review "${nodeTitle(review)}" is still running.`);
+  if (review.reviewPending) fail(`Optimize "${nodeTitle(review)}" is still running.`);
   const result = JSON.parse(review.reviewResult || '{}');
   const suggestions = (result.suggestions || []).filter((s) => String(s?.source || '').toLowerCase() !== 'assistant');
   const wanted = (Array.isArray(job.suggestion_ids) ? job.suggestion_ids : []).map(String);
   const chosen = wanted.length ? suggestions.filter((s) => wanted.includes(String(s.suggestion_id))) : suggestions;
   if (wanted.length && chosen.length !== wanted.length) {
-    fail(`Review "${nodeTitle(review)}" has no suggestion ${wanted.filter((id) => !chosen.some((s) => String(s.suggestion_id) === id)).join(', ')}.`);
+    fail(`Optimize "${nodeTitle(review)}" has no suggestion ${wanted.filter((id) => !chosen.some((s) => String(s.suggestion_id) === id)).join(', ')}.`);
   }
   // Same rule as verifyReviewSuggestions: a suggestion with a finished verification is not re-run.
   const toVerify = chosen.filter((s) => {
     const state = String(result.verify_states?.[s.suggestion_id] || 'idle');
     return state === 'idle' || state === 'verifying' || !result.verify_results?.[s.suggestion_id];
   });
-  if (!toVerify.length) fail(`The chosen suggestions of review "${nodeTitle(review)}" already have verification results; read them with inspect_node.`);
+  if (!toVerify.length) fail(`The chosen suggestions of Optimize "${nodeTitle(review)}" already have verification results; read them with inspect_node.`);
   const run = upstream(ctx.state, upstream(ctx.state, review.nodeId, 'score-to-prompt-review')?.nodeId, 'run-to-score');
   const credential = ctx.credentialsById.get(String(run?.runCredentialId || ctx.settings.default_run_credential_id || '').trim());
   return {
     kind: 'verify',
-    title: `Verify ${toVerify.length} suggestion${toVerify.length === 1 ? '' : 's'} of review "${nodeTitle(review)}"`,
+    title: `Verify ${toVerify.length} suggestion${toVerify.length === 1 ? '' : 's'} of Optimize "${nodeTitle(review)}"`,
     nodeIds: [review.nodeId],
     lines: [
       `Re-runs the prompt with each suggestion on the rows it targets and checks them against the ground truth: ${toVerify.map((s) => s.suggestion_id).join(', ')}`,
@@ -315,7 +315,7 @@ async function scoreSummaries(env, runNodeId) {
   for (const id of scores) {
     const inspection = await env.inspectNode(id);
     const m = inspection?.details?.metrics;
-    if (m) out.push(`Score "${inspection.title}": ${formatScoreMetrics(m)}`);
+    if (m) out.push(`Evaluate "${inspection.title}": ${formatScoreMetrics(m)}`);
   }
   return out;
 }
@@ -371,14 +371,14 @@ async function executeProcess(item, env, { signal, onStatus }) {
 }
 
 async function executeReview(item, env, { signal, onStatus, job }) {
-  onStatus(`Starting the review of ${item.title.replace(/^Review /, '')}...`);
+  onStatus('Starting prompt optimization...');
   const created = await env.createAndRunReviewNode({ scoreNodeId: item.nodeIds[0], name: job.name || '' });
   const reviewId = created.reviewNodeId;
   const outcome = await waitWhile(() => currentNode(env, reviewId)?.reviewPending === true, {
     signal,
-    onTick: () => onStatus(`Reviewing: ${Number(currentNode(env, reviewId)?.reviewProgress) || 0}%...`),
+    onTick: () => onStatus(`Optimizing: ${Number(currentNode(env, reviewId)?.reviewProgress) || 0}%...`),
     onStop: () => {
-      onStatus('Stopping the review...');
+      onStatus('Stopping optimization...');
       return env.stopReviewNode(reviewId);
     },
   });
@@ -388,7 +388,7 @@ async function executeReview(item, env, { signal, onStatus, job }) {
     status: outcome === 'stopped' ? 'stopped' : 'completed',
     reviewNodeId: reviewId,
     lines: [
-      `${item.title}: ${outcome === 'stopped' ? 'stopped by the user' : 'finished'}; review node "${inspection?.title}" [${reviewId}] has ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}`,
+      `${item.title}: ${outcome === 'stopped' ? 'stopped by the user' : 'finished'}; Optimize node "${inspection?.title}" [${reviewId}] has ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}`,
       ...suggestions.slice(0, 8).map((s) => `  ${s.id}. ${s.name || s.targetSection}: ${s.reason.slice(0, 160)}`),
     ],
   };

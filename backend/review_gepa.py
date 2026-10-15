@@ -307,7 +307,7 @@ class _AppGepaAdapter:
         errors: list[str | None] = []
         for ex in batch:
             if self.is_cancelled():
-                raise RuntimeError("Review cancelled")
+                raise RuntimeError("Optimization cancelled")
             prompt_text, compile_err = compile_input_text(template, ex.row_input)
             if compile_err:
                 outputs.append(None)
