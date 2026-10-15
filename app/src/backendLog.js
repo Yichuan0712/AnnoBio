@@ -1,5 +1,5 @@
 /**
- * Main process: keeps the local Python backend's stdout/stderr for the desktop Log tab — a bounded
+ * Main process: keeps backend output and frontend exceptions for the desktop Log tab — a bounded
  * in-memory tail the renderer reads and subscribes to, plus one file per day under `dir` (the last
  * KEEP_DAYS are kept). The backend prints full prompts and model outputs, so these files stay
  * local. When `tee` is set (running from `npm start`), output is still echoed to the terminal.
@@ -32,6 +32,7 @@ export function createBackendLog({ dir, tee = false, onLines = () => {} }) {
   let pending = [];
   let flushTimer = null;
   let file = { day: '', stream: null };
+  let closed = false;
 
   function fileStream(now) {
     const day = now.toISOString().slice(0, 10);
@@ -50,8 +51,9 @@ export function createBackendLog({ dir, tee = false, onLines = () => {} }) {
     if (batch.length) onLines(batch);
   }
 
-  /** `stream` is 'out' / 'err' for the backend's own output, 'app' for notes from AnnoBio itself. */
+  /** `stream` is 'out' / 'err', 'app' for app notes, or 'frontend' for renderer exceptions. */
   function push(stream, rawText) {
+    if (closed) return;
     const now = new Date();
     const text = rawText.replace(ANSI_PATTERN, '').replace(/\r/g, '');
     const entry = { id: nextId++, time: now.getTime(), stream, text, highlight: text !== rawText.replace(/\r/g, '') };
@@ -89,7 +91,16 @@ export function createBackendLog({ dir, tee = false, onLines = () => {} }) {
       capture(child.stderr, 'err', process.stderr);
     },
     note(text) { push('app', text); },
+    rendererError({ context, details }) {
+      if (typeof context !== 'string' || typeof details !== 'string') return;
+      `${context}\n${details}`.split(/\r?\n/).forEach((line) => push('frontend', line));
+    },
     lines: () => lines.slice(),
-    clear() { lines = []; },
+    close() {
+      closed = true;
+      clearTimeout(flushTimer);
+      pending = [];
+      return new Promise((resolve) => file.stream && !file.stream.writableFinished ? file.stream.end(resolve) : resolve());
+    },
   };
 }
