@@ -21,11 +21,11 @@ not attributable to the prompt.
 
 ## Comparing versions
 
-The Prompt Version tab of the bottom panel shows each prompt's versions as a tree. A version
-made by applying an Optimize node, or added as a new version, sits under the version it came from; the From
-column says which ("Optimize ... of ...", "New version of ..."). Each row is one Evaluate node for one Run, with
-the ground truth it used and its precision, recall and F1. Clicking a row finds that Prompt, Run and
-Evaluate on the canvas. **Export Excel** saves the table, tree included.
+The Prompt Version tab shows each prompt family as a left-to-right tree, including prompts that
+have not been run. Branch labels identify Manual edit, Agent edit, or Optimize and its method when
+recorded. Click a node to locate and highlight its Prompt on the canvas; click a branch or its label to compare the parent and child.
+Independent duplicates start their own families. Inspect the Run and Evaluate nodes to compare results;
+this panel displays version ancestry rather than evaluation metrics.
 
 The workspace summary gives the same version links, and each Evaluate line gives the same precision,
 recall and F1 as the table. Compare versions from those numbers rather than estimating.

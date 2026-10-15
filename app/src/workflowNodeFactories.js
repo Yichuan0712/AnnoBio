@@ -202,7 +202,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     };
   }
 
-  function createPromptNode({ name = '', note = '', sections = [], outputFormat, inputTypes, left, top, nodeId: givenNodeId, colorIndex: givenColorIndex }) {
+  function createPromptNode({ name = '', note = '', sections = [], outputFormat, inputTypes, optimizationMethodId = '', left, top, nodeId: givenNodeId, colorIndex: givenColorIndex }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Prompt';
     const node = document.createElement('div');
@@ -213,6 +213,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     node.dataset.promptSections = JSON.stringify(sections);
     node.dataset.promptName = name;
     node.dataset.promptNote = note;
+    if (optimizationMethodId) node.dataset.optimizationMethodId = optimizationMethodId;
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
     node.dataset.promptColorIndex = String(colorIndex);
     node.style.borderColor = promptColorAt(colorIndex);
@@ -264,39 +265,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
-      let sectionsData = [];
-      try {
-        sectionsData = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
-      } catch (_) {}
-      const locked = !!(await isContentLocked?.(node.dataset.nodeId));
-      openPromptDetailModal({
-        name: node.dataset.promptName || '',
-        note: node.dataset.promptNote || '',
-        sections: sectionsData,
-        node,
-        isPromptNameAlreadyUsed,
-        locked,
-        onRunPrompt: () => {
-          const currentLeft = parseFloat(node.style.left) || 0;
-          const currentTop = parseFloat(node.style.top) || 0;
-          const width = node.offsetWidth || 280;
-          const runNode = createRunNode({
-            left: currentLeft + width + NEW_NODE_OFFSET,
-            top: currentTop,
-            title: 'Run',
-          });
-          if (runNode?.dataset?.nodeId) {
-            getConnectionsList().push({
-              fromId: node.dataset.nodeId,
-              toId: runNode.dataset.nodeId,
-              type: 'prompt-to-run',
-            });
-            updateEdges();
-          }
-          updateContentSize();
-          emitCanvasChanged();
-        },
-      });
+      await openPromptNode(nodeId);
     });
 
     node.addEventListener('contextmenu', (e) => {
@@ -307,6 +276,33 @@ export function createWorkflowNodeFactories(deps = {}) {
     });
 
     return node;
+  }
+
+  /** Open a Prompt from its canvas card, respecting content locks. */
+  async function openPromptNode(nodeId) {
+    const node = getNodeById(nodeId);
+    if (!node?.classList.contains('workflow-node--prompt')) return;
+    let sectionsData = [];
+    try {
+      sectionsData = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
+    } catch (_) {}
+    const locked = !!(await isContentLocked?.(node.dataset.nodeId));
+    openPromptDetailModal({
+      name: node.dataset.promptName || '', note: node.dataset.promptNote || '',
+      sections: sectionsData, node, isPromptNameAlreadyUsed, locked,
+      onRunPrompt: () => {
+        const runNode = createRunNode({
+          left: (parseFloat(node.style.left) || 0) + (node.offsetWidth || 280) + NEW_NODE_OFFSET,
+          top: parseFloat(node.style.top) || 0, title: 'Run',
+        });
+        if (runNode?.dataset?.nodeId) {
+          getConnectionsList().push({ fromId: node.dataset.nodeId, toId: runNode.dataset.nodeId, type: 'prompt-to-run' });
+          updateEdges();
+        }
+        updateContentSize();
+        emitCanvasChanged();
+      },
+    });
   }
 
   function createSamplerNode({ name = '', notes = '', left, top, nodeId: givenNodeId, sourceNodeId = '', colorIndex: givenColorIndex, samplingType = 'without-replacement', sampleSizeType = 'ratio', sampleSize = 100, rowSpec = '' }) {

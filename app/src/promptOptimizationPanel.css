@@ -1,52 +1,15 @@
-/* Prompt Optimization tab of the bottom panel (promptOptimizationPanel.js). */
-.prompt-optimization {
-  height: 100%;
-  overflow: auto;
-  padding: 14px 18px;
-  box-sizing: border-box;
-  font-size: 12px;
-  color: var(--text);
-}
-.prompt-optimization__empty { margin: 4px 0; color: var(--text-muted); }
-/* Titles and spacing match the docked Current Pipeline cards ("Pipeline 1"), whose header row is as
-   tall as its Export button. */
-.prompt-optimization__family { margin-bottom: 18px; }
-.prompt-optimization__family:last-child { margin-bottom: 0; }
-.prompt-optimization__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 27.6px; margin-bottom: 10px; }
-.prompt-optimization__export { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
-.prompt-optimization__title { margin: 0; font-size: 12px; font-weight: 700; color: var(--text-muted); }
-.prompt-optimization__table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  border-top: 1px solid var(--border);
-  border-left: 1px solid var(--border);
-}
-.prompt-optimization__table th,
-.prompt-optimization__table td {
-  padding: 4px 8px;
-  text-align: left;
-  white-space: nowrap;
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-.prompt-optimization__table th {
-  position: sticky;
-  top: 0;
-  font-weight: 600;
-  color: var(--text-muted);
-  background: var(--hover);
-}
-.prompt-optimization__row { cursor: pointer; }
-.prompt-optimization__row:hover td { background: var(--hover); }
-.prompt-optimization__row:focus-visible { outline: 2px solid var(--primary-btn-text); outline-offset: -2px; }
-.prompt-optimization__version { font-weight: 600; }
-.prompt-optimization__tree {
-  white-space: pre;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-weight: 400;
-  color: var(--text-muted);
-}
-.prompt-optimization__muted { color: var(--text-muted); }
-.prompt-optimization__num { text-align: right !important; font-variant-numeric: tabular-nums; }
-.prompt-optimization__f1 { font-weight: 600; }
+/* Cards, borders and hover rings come from the Current Pipeline classes in modals.css. */
+.prompt-optimization { height: 100%; overflow: auto; padding: 14px 18px; box-sizing: border-box; color: var(--text); }
+.prompt-optimization__empty { margin: 0; color: var(--text-muted); font-size: 13.5px; }
+.prompt-version__graph { width: max-content; min-width: 100%; padding-top: 8px; }
+.prompt-version__subtree, .prompt-version__lane { display: flex; align-items: center; gap: 6px; }
+.prompt-version__fork.pipeline-overview-branch { flex: none; max-width: none; }
+.prompt-version__node.pipeline-overview-step { flex: none; max-width: 280px; font-family: inherit; text-align: left; cursor: pointer; }
+.prompt-version__node.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.prompt-version__node.is-related { border-color: var(--accent); }
+.prompt-version__change { flex: none; display: grid; place-items: center; height: 28px; min-width: 82px; max-width: 210px; padding: 2px 6px; border: none; border-radius: var(--control-radius, 3px); background: transparent; color: var(--text-muted); font-family: inherit; cursor: pointer; }
+.prompt-version__change-label { grid-area: 1 / 1; transform: translateY(-17px); min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 14px; text-align: center; }
+.prompt-version__change .pipeline-overview-arrow { grid-area: 1 / 1; width: 100%; line-height: 1; text-align: center; }
+.prompt-version__change:hover, .prompt-version__change.is-active { color: var(--accent); background: var(--hover); }
+.prompt-version__change:hover .pipeline-overview-arrow, .prompt-version__change.is-active .pipeline-overview-arrow { color: var(--accent); }
+.prompt-version__node:focus-visible, .prompt-version__change:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

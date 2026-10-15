@@ -36,11 +36,11 @@ A route exports only if:
 
 If export fails, the panel shows the reason. Fix the named node and export again.
 
-## Export the Prompt Version table
+## Prompt Version
 
-The Prompt Version tab has an **Export Excel** button for each prompt. The workbook has the same
-columns as the table (Version, From, Run, Evaluate, Ground truth, Precision, Recall, F1); the version tree
-is written into the Version text, and the metrics are percentages. Only the user can press it.
+The Prompt Version tab displays a left-to-right family tree with the origin of each version on its
+branch. Click a Prompt to locate and highlight it on the canvas, or a branch to compare versions. Export Prompt content from its
+node window; the family tree has no evaluation table or Excel export.
 
 ## Gallery (web)
 

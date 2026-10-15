@@ -4808,6 +4808,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     } catch (_) {
       reviewNode.dataset.reviewStages = '[]';
     }
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   });
 
   document.addEventListener('workflow:add-prompt-from-review', (e) => {
@@ -5017,6 +5018,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           top,
           promptReviewName,
           reviewResult: reviewResult || undefined,
+          reviewMethodId: node.dataset.reviewMethodId || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (pct > 0) out.reviewProgress = pct;
@@ -5047,6 +5049,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         colorIndex: normalizeDatasetColorIndex(node.dataset.promptColorIndex) ?? undefined,
         sections: Array.isArray(sections) ? sections : [],
         outputFormat,
+        optimizationMethodId: node.dataset.optimizationMethodId || undefined,
         inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
         nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
       };
@@ -5235,6 +5238,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           title: n.promptReviewName || 'Optimize',
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(promptReviewNode);
+        if (n.reviewMethodId) promptReviewNode.dataset.reviewMethodId = n.reviewMethodId;
         if (n.reviewResult && typeof n.reviewResult === 'string') {
           promptReviewNode.dataset.reviewResult = n.reviewResult;
         }
@@ -5249,6 +5253,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           note: n.note || '',
           colorIndex: n.colorIndex,
           sections: n.sections || n.fields || [],
+          optimizationMethodId: n.optimizationMethodId || '',
           outputFormat: n.outputFormat,
           inputTypes: n.inputTypes,
           left: n.left,
@@ -6032,6 +6037,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!pipeline || tab !== 'pipeline') highlightPipelineNodes([]);
     optimizationVisible = pipeline && tab === 'optimization';
     if (optimizationVisible) void optimizationPanel?.refresh();
+    else optimizationPanel?.clearHighlight();
   }, {
     bottomTabs: [
       { id: 'pipeline', label: 'Current Pipeline' },
@@ -6042,10 +6048,11 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
   optimizationPanel = mountPromptOptimizationPanel(workspacePanels.tabHost('optimization'), {
     getCanvasState,
-    getScoreComparisonRows,
-    focusNodes: focusPipelineNodes,
+    focusCanvasNodes: focusPipelineNodes,
+    comparePrompts: (fromId, toId) => openEdgeDetailModal({ fromId, toId }),
+    highlightCanvasNodes: highlightPipelineNodes,
   });
-  // Recomputed only while the tab is showing; Score metrics follow Run results and History.
+  // Rebuild visible ancestry when names, version connections or Optimize methods change.
   let optimizationRefreshTimer = null;
   const scheduleOptimizationRefresh = () => {
     if (!optimizationVisible) return;

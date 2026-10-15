@@ -1,78 +1,107 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPromptFamilies, familySheetRows } from '../src/promptOptimization.js';
+import { buildPromptFamilies } from '../src/promptOptimization.js';
+import { renderPromptFamily } from '../src/promptVersionTree.js';
 
-// v1 → Run 1 → Score 1 → Review → v2 (applied), v2 → v3 (new version), and an unrelated duplicate.
 const canvas = () => ({
   nodes: [
     { type: 'prompt', nodeId: 'v1', name: 'Classify' },
     { type: 'prompt', nodeId: 'v2', name: 'Classify v2' },
     { type: 'prompt', nodeId: 'v3', name: 'Classify v3' },
     { type: 'prompt', nodeId: 'copy', name: 'Classify (Copy 1)' },
-    { type: 'dataset', nodeId: 'gt', name: 'Labels' },
-    { type: 'dataset', nodeId: 'gt-other', name: 'Other labels' },
-    { type: 'run', nodeId: 'r1', runName: 'Run 1' },
-    { type: 'run', nodeId: 'r2', runName: 'Run 2' },
-    { type: 'score', nodeId: 's1', scoreName: 'Score 1', scoreGroundTruthId: 'gt' },
-    { type: 'score', nodeId: 's2', scoreName: 'Score 2', scoreGroundTruthId: 'gt' },
-    { type: 'score', nodeId: 's2-other', scoreName: 'Score 2b', scoreGroundTruthId: 'gt-other' },
-    { type: 'promptReview', nodeId: 'rev', promptReviewName: 'Review 1' },
+    { type: 'run', nodeId: 'r1' },
+    { type: 'score', nodeId: 's1' },
+    { type: 'promptReview', nodeId: 'rev', promptReviewName: 'Improve extraction', reviewMethodId: 'gepa' },
   ],
   connections: [
     { type: 'prompt-to-run', fromId: 'v1', toId: 'r1' },
     { type: 'run-to-score', fromId: 'r1', toId: 's1' },
     { type: 'score-to-prompt-review', fromId: 's1', toId: 'rev' },
     { type: 'prompt-review-to-prompt', fromId: 'rev', toId: 'v2' },
-    { type: 'prompt-to-run', fromId: 'v2', toId: 'r2' },
-    { type: 'run-to-score', fromId: 'r2', toId: 's2' },
-    { type: 'run-to-score', fromId: 'r2', toId: 's2-other' },
     { type: 'prompt-to-prompt', fromId: 'v2', toId: 'v3' },
   ],
 });
 
-test('versions made by Review apply and by Add new version form one family, parents first', () => {
+test('Optimize and manual versions retain ancestry; independent copies appear without needing runs', () => {
   const families = buildPromptFamilies(canvas());
-  assert.equal(families.length, 1);
-  const [family] = families;
-  assert.deepEqual(family.versions.map((v) => [v.promptId, v.depth, v.parentId, v.via]), [
-    ['v1', 0, '', ''], ['v2', 1, 'v1', 'review'], ['v3', 2, 'v2', 'version'],
+  assert.deepEqual(families.map((family) => family.rootId), ['v1', 'copy']);
+  assert.deepEqual(families[0].versions.map((version) => [version.promptId, version.parentId, version.via, version.changeLabel]), [
+    ['v1', '', '', ''], ['v2', 'v1', 'review', 'Optimize · GEPA'], ['v3', 'v2', 'version', 'Manual edit'],
   ]);
-  assert.equal(family.versions[1].reviewName, 'Review 1');
-  assert.deepEqual(family.versions[1].runs[0].scores.map((s) => [s.scoreId, s.groundTruthName]), [['s2', 'Labels'], ['s2-other', 'Other labels']]);
-  // The duplicate has no versions and no Run, so it has nothing to show.
-  assert.equal(families.some((f) => f.rootId === 'copy'), false);
+  assert.equal(families[0].versions[1].reviewName, 'Improve extraction');
+  assert.equal(buildPromptFamilies({ nodes: [{ type: 'prompt', nodeId: 'new' }], connections: [] }).length, 1);
 });
 
-test('tree prefixes draw the version hierarchy in characters', () => {
+test('missing Optimize method information is not replaced with a guessed default', () => {
   const state = canvas();
-  state.nodes.push({ type: 'prompt', nodeId: 'v2b', name: 'Classify v2b' }, { type: 'prompt', nodeId: 'v1b', name: 'Classify v1b' });
-  state.connections.push({ type: 'prompt-to-prompt', fromId: 'v2', toId: 'v2b' }, { type: 'prompt-to-prompt', fromId: 'v1', toId: 'v1b' });
+  delete state.nodes.find((node) => node.nodeId === 'rev').reviewMethodId;
+  assert.equal(buildPromptFamilies(state)[0].versions[1].changeLabel, 'Optimize');
+  state.nodes.find((node) => node.nodeId === 'rev').reviewMethodId = 'custom_search';
+  assert.equal(buildPromptFamilies(state)[0].versions[1].changeLabel, 'Optimize · custom_search');
+});
+
+test('agent-created manual versions identify the editing source', () => {
+  const state = canvas();
+  state.nodes.find((node) => node.nodeId === 'v3').nodeOrigin = 'agent';
+  assert.equal(buildPromptFamilies(state)[0].versions[2].changeLabel, 'Agent edit');
+});
+
+test('a created version keeps its recorded Optimize method after the Optimize node is rerun', () => {
+  const state = canvas();
+  state.nodes.find((node) => node.nodeId === 'v2').optimizationMethodId = 'gepa';
+  state.nodes.find((node) => node.nodeId === 'rev').reviewMethodId = 'textgrad';
+  const reopened = JSON.parse(JSON.stringify(state));
+  assert.equal(buildPromptFamilies(reopened)[0].versions[1].changeLabel, 'Optimize · GEPA');
+});
+
+test('missing ancestry endpoints leave a standalone Prompt instead of inventing a parent', () => {
+  const state = canvas();
+  state.nodes = state.nodes.filter((node) => node.nodeId !== 's1');
+  assert.deepEqual(buildPromptFamilies(state).map((family) => family.rootId), ['v1', 'v2', 'copy']);
+});
+
+test('malformed imported cycles are displayed once with a stable root', () => {
+  const state = { nodes: ['a', 'b', 'c'].map((nodeId) => ({ type: 'prompt', nodeId })),
+    connections: [
+      { type: 'prompt-to-prompt', fromId: 'a', toId: 'b' },
+      { type: 'prompt-to-prompt', fromId: 'b', toId: 'a' },
+      { type: 'prompt-to-prompt', fromId: 'b', toId: 'c' },
+    ] };
   const [family] = buildPromptFamilies(state);
-  assert.deepEqual(family.versions.map((v) => [v.promptId, v.treePrefix, v.treeContinuation]), [
-    ['v1', '', '│'],
-    ['v1b', '├─ ', '│'],
-    ['v2', '└─ ', '   │'],
-    ['v3', '   ├─ ', '   │'],
-    ['v2b', '   └─ ', ''],
-  ]);
+  assert.equal(family.rootId, 'a');
+  assert.deepEqual(family.versions.map((version) => version.promptId), ['a', 'b', 'c']);
+  assert.equal((renderPromptFamily(family).match(/data-action="compare"/g) || []).length, 2);
 });
 
-test('Excel rows keep the tree in the Version text and metrics as fractions', () => {
-  const [family] = buildPromptFamilies(canvas());
-  const metrics = new Map([['s1', { precision: 50, recall: 100, f1: 75 }], ['s2', null]]);
-  assert.deepEqual(familySheetRows(family, metrics), [
-    ['Version', 'From', 'Run', 'Evaluate', 'Ground truth', 'Precision', 'Recall', 'F1'],
-    ['Classify', '', 'Run 1', 'Score 1', 'Labels', 0.5, 1, 0.75],
-    ['└─ Classify v2', 'Optimize "Review 1" of Classify', 'Run 2', 'Score 2', 'Labels', '', '', ''],
-    ['   │', '', 'Run 2', 'Score 2b', 'Other labels', '', '', ''],
-    ['   └─ Classify v3', 'New version of Classify v2', 'Not run', '', '', '', '', ''],
-  ]);
-});
-
-test('a single Prompt with a Run is shown as its own family', () => {
+test('a branched tree uses Current Pipeline cards and nested branch groups without duplicating versions', () => {
   const state = canvas();
-  state.connections.push({ type: 'prompt-to-run', fromId: 'copy', toId: 'r-copy' });
-  state.nodes.push({ type: 'run', nodeId: 'r-copy', runName: 'Run copy' });
-  const families = buildPromptFamilies(state);
-  assert.deepEqual(families.map((f) => f.rootId), ['v1', 'copy']);
+  state.nodes.push({ type: 'prompt', nodeId: 'v2b', name: 'Alternative' }, { type: 'prompt', nodeId: 'v4', name: 'Long branch' });
+  state.connections.push({ type: 'prompt-to-prompt', fromId: 'v1', toId: 'v2b' }, { type: 'prompt-to-prompt', fromId: 'v3', toId: 'v4' });
+  const html = renderPromptFamily(buildPromptFamilies(state)[0]);
+  assert.equal((html.match(/data-action="locate"/g) || []).length, 5);
+  assert.equal((html.match(/data-action="compare"/g) || []).length, 4);
+  assert.match(html, /pipeline-overview-step prompt-version__node/);
+  assert.match(html, /pipeline-overview-branch prompt-version__fork/);
+  assert.doesNotMatch(html, /pipeline-step-kind|>Prompt<\/span>/);
+  assert.doesNotMatch(html, /<svg|position:absolute|marker-end/);
+});
+
+test('family rendering exposes node and comparison actions and safely escapes user content', () => {
+  const state = canvas();
+  state.nodes[0].name = '<img src=x onerror="alert(1)">';
+  const html = renderPromptFamily(buildPromptFamilies(state)[0]);
+  assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+  assert.doesNotMatch(html, /<img|<table|Export Excel|Ground truth|Precision/);
+  assert.match(html, /data-action="locate" data-prompt-id="v2"/);
+  assert.match(html, /title="Locate [^"]+ on canvas" aria-label="Locate [^"]+ on canvas"/);
+  assert.match(html, /data-action="compare" data-from-id="v1" data-to-id="v2"/);
+  assert.match(html, /Optimize · GEPA/);
+  assert.match(html, /<button type="button"/);
+  assert.match(html, /class="pipeline-overview-arrow"/);
+});
+
+test('an empty canvas contains no families and a singleton requires no connectors', () => {
+  assert.deepEqual(buildPromptFamilies({}), []);
+  const [family] = buildPromptFamilies({ nodes: [{ type: 'prompt', nodeId: 'only' }] });
+  assert.doesNotMatch(renderPromptFamily(family), /data-action="compare"/);
 });

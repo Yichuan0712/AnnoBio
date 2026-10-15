@@ -20,7 +20,8 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 | 整条 Pipeline | `pipeline_action` 请求运行、停止、恢复、Python 项目导出；`get_pipeline_runs` 查询整条 Pipeline 历史 |
 
 以下仍由用户在界面操作：选择并上传本地新文件、配置凭据与 Python、选择 Current Pipeline 路线、
-点击节点文件导出或 Prompt Version Excel 导出、发布 Gallery。Agent 的指南会说明实际入口，
+点击节点文件导出、发布 Gallery。Prompt Version 以横向家族树展示来源，点击节点定位并高亮画布上的 Prompt、点击连线比较版本。
+Agent 的指南会说明实际入口，
 不会伪造已上传文件、凭据或这些操作的完成状态。已有上传文件可以直接通过 Agent 复用或重排。
 
 回归入口：`agentCapabilityParity.test.mjs`、`agentScoreCode.test.mjs`、`agentHistoryProposal.test.mjs`，
