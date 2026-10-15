@@ -600,6 +600,11 @@
   overflow: hidden;
 }
 
+/* The Model ID suggestions list must be able to leave its field. */
+.modal-panel--model-settings-combined .model-settings-credentials-add .credentials-add-field:has(> .model-id-autocomplete) {
+  overflow: visible;
+}
+
 .modal-panel--model-settings-combined .model-settings-credentials-add .credentials-select,
 .modal-panel--model-settings-combined .model-settings-credentials-add .dataset-meta-input {
   height: 40px;
@@ -1462,70 +1467,52 @@
   min-height: 1.2em;
 }
 
-.modal-panel--openrouter-models {
-  min-width: min(480px, 92vw);
-  max-width: min(560px, 92vw);
-  height: min(560px, 80vh);
-  display: flex;
-  flex-direction: column;
-}
-
-.openrouter-model-picker-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 0;
-  flex: 1;
-}
-
-.openrouter-model-picker-filter {
-  flex-shrink: 0;
-}
-
-.openrouter-model-picker-list {
-  flex: 1;
-  min-height: 0;
+/* Model ID field with suggestions (modelIdAutocomplete.js): the closest models drop down under it as
+   the user types, styled like the pill select's list. */
+.model-id-autocomplete { position: relative; }
+.model-id-autocomplete__list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 10;
+  margin-top: 2px;
+  max-height: 260px;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.openrouter-model-picker-row {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid transparent;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: var(--control-radius, 3px);
-  background: transparent;
+  box-shadow: 0 4px 12px var(--shadow);
+}
+.model-id-autocomplete__list[hidden] { display: none; }
+.model-id-autocomplete__list--up { top: auto; bottom: 100%; margin: 0 0 2px; }
+.model-id-autocomplete__option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 12px;
   cursor: pointer;
-  text-align: left;
 }
-
-.openrouter-model-picker-row:hover {
-  background: var(--hover);
-  border-color: var(--border);
-}
-
-.openrouter-model-picker-row-name {
+.model-id-autocomplete__option:hover,
+.model-id-autocomplete__option.is-active { background: var(--hover); }
+.model-id-autocomplete__id {
   font-size: 13px;
-  font-weight: 500;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-
-.openrouter-model-picker-row-meta {
+.model-id-autocomplete__id mark {
+  background: none;
+  color: inherit;
+  font-weight: 600;
+}
+.model-id-autocomplete__detail {
   font-size: 11px;
   color: var(--text-secondary, #888);
-}
-
-.openrouter-model-picker-empty {
-  margin: 20px 0;
-  text-align: center;
-  color: var(--text-secondary, #888);
-  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .credential-source-badge {
@@ -2131,16 +2118,12 @@
   border-top: 1px solid var(--border);
 }
 
-.prompt-detail-heading-edit {
+/* Edit schema: bottom right of the schema block, level with the main column's buttons (both sit
+   20px above the window's bottom edge: .prompt-detail-main's and the schema block's bottom padding). */
+.prompt-detail-schema-wrap .prompt-detail-schema-actions {
+  margin-top: auto;
   flex-shrink: 0;
-  margin-right: 20px;
-  padding: 4px 8px;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.prompt-detail-schema-heading .prompt-detail-heading-edit {
-  margin-right: 16px;
+  justify-content: flex-end;
 }
 
 .prompt-detail-sections-scroll {
@@ -3511,11 +3494,11 @@
   padding: 4px 10px;
 }
 
-/* Rule card (like prompt-section-card in Add section) */
+/* Rule card (like prompt-section-card in Add section): a summary row; open, the rule's form (or a
+   group's rules) sits under it, edited in place. */
 .score-rule-card {
   display: flex;
-  align-items: center;
-  gap: 0;
+  flex-direction: column;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -3523,9 +3506,27 @@
   overflow: hidden;
 }
 
-.score-rule-card:hover {
+.score-rule-card:hover,
+.score-rule-card--open {
   border-color: var(--text-muted);
+}
+
+.score-rule-card:hover {
   box-shadow: 0 1px 3px var(--shadow);
+}
+
+.score-rule-card-head {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+}
+
+.score-rule-card--open > .score-rule-card-head {
+  border-bottom: 1px solid var(--border);
+}
+
+.score-rule-card-body {
+  padding: 12px;
 }
 
 .score-rule-card-inner {
@@ -4795,24 +4796,6 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   cursor: not-allowed;
 }
 
-.modal-body--group-editor {
-  min-height: 200px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.score-group-editor-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 40vh;
-  overflow-y: auto;
-}
-
-.score-group-editor-actions .score-tree-add-rule-box {
-  width: 100%;
-}
 
 .rule-editor-options-list {
   display: flex;
@@ -7901,13 +7884,6 @@ body.wd-row-resizing {
   max-height: 90vh;
   display: flex;
   flex-direction: column;
-}
-
-/* Score rule / group editor: cap width (section-editor otherwise grows with long hint text) */
-.modal-panel--rule-editor.modal-panel--section-editor {
-  width: min(480px, 92vw);
-  max-width: min(480px, 92vw);
-  min-width: min(360px, 92vw);
 }
 
 /* Edit prompt name & description (from node click or context menu): same as Add prompt step 1 */

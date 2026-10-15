@@ -1517,6 +1517,14 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
   const resultsFooterRowEl = overlay.querySelector('#score-detail-results-footer-row');
   const resultsFooterRightEl = overlay.querySelector('.score-detail-results-footer-right');
 
+  /**
+   * Rules are edited in place in the list: the open rule shows its form under its summary (one at a
+   * time) and an open group lists its rules. Keys come from {@link scoreRuleKey}; the "+ Add rule"
+   * form of the top level or of a group is `add:` plus that group's key ('' for the top level).
+   */
+  let openRuleKey = null;
+  let openGroupKey = null;
+
   const scoreDetailPagination = {
     rowsPerPage: 25,
     currentPage: 1,
@@ -1856,8 +1864,8 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     });
   }
 
-  /** Open Add rule / Edit rule modal. side = 'input' | 'output': the rule's current tree (or the nominal side for a fresh top-level add). editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. Top-level rules (editPath.length === 1, or parentPath is empty) may pick a column from either side — the actual tree is derived from the column chosen. */
-   function openRuleEditor(side, editPath, parentPath, indexInParent, onDone) {
+  /** Render the Add rule / Edit rule form into `host` (an open card in the rules list). side = 'input' | 'output': the rule's current tree (or the nominal side for a fresh top-level add). editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. Top-level rules (editPath.length === 1, or parentPath is empty) may pick a column from either side — the actual tree is derived from the column chosen. An edit saves on every change and calls onDone({ side, editPath }) with where the rule now is; Add rule removes the form, calls onClose, then onDone(). */
+  function openRuleEditor(side, editPath, parentPath, indexInParent, { host, onDone, onClose }) {
     const isEdit = Array.isArray(editPath) && editPath.length > 0;
     const isTopLevel = isEdit ? editPath.length === 1 : (!parentPath || parentPath.length === 0);
     const root = getRootForSide(side);
@@ -1930,6 +1938,13 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     } else if (side === 'input' && resultColumnKeyForSelect === '[#]') {
       resultColumnKeyForSelect = '#';
     }
+    // The rule's column may be missing from the choices (its Run has no results yet, or the input
+    // dataset no longer has the column). Keep it selectable: otherwise the select shows the first
+    // column, and editing any other field would save that column in place of the rule's own.
+    if (isEdit && resultColumnKeyForSelect && !runColumns.some((c) => c.key === resultColumnKeyForSelect)) {
+      runColumns.push({ key: resultColumnKeyForSelect, label: formatScoreRuleRunSideLabel(side, ruleData), side });
+      columnSideByKey.set(resultColumnKeyForSelect, side);
+    }
     const resultSelectOpts = runColumns.map((c) => {
       const label = (c.label || '').trim() || c.key || '—';
       const key = c.key || '';
@@ -1973,16 +1988,9 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
         ? '|run side value − ground truth| ≤ ε'
         : '|output − ground truth| ≤ ε');
 
-    const editorOverlay = document.createElement('div');
-    editorOverlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
-    editorOverlay.setAttribute('aria-modal', 'true');
-    editorOverlay.innerHTML = `
-      <div class="modal-panel modal-panel--section-editor modal-panel--rule-editor">
-        <div class="modal-header">
-          <h3 class="modal-title">${isEdit ? 'Edit rule' : 'Add rule'}</h3>
-          <button type="button" class="modal-close" aria-label="Close">×</button>
-        </div>
-        <div class="modal-body">
+    const editorEl = document.createElement('div');
+    editorEl.className = 'score-rule-form';
+    editorEl.innerHTML = `
           <div class="dataset-meta-wrap">
             <div class="dataset-meta-field">
               <label class="dataset-meta-label" for="rule-editor-result-column">${escapeHtml(runFieldLabel)}</label>
@@ -2033,17 +2041,16 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
             <button type="button" class="btn btn-secondary section-editor-save rule-editor-save">Add rule</button>
           </div>
           ` : ''}
-        </div>
-      </div>
     `;
 
-    const resultSelectEl = editorOverlay.querySelector('#rule-editor-result-column');
-    const matchSelectEl = editorOverlay.querySelector('#rule-editor-match-type');
-    const gtSelectEl = editorOverlay.querySelector('#rule-editor-gt-column');
-    const errorEl = editorOverlay.querySelector('.rule-editor-error');
+    const resultSelectEl = editorEl.querySelector('#rule-editor-result-column');
+    const matchSelectEl = editorEl.querySelector('#rule-editor-match-type');
+    const gtSelectEl = editorEl.querySelector('#rule-editor-gt-column');
+    const errorEl = editorEl.querySelector('.rule-editor-error');
 
     function closeEditor() {
-      editorOverlay.remove();
+      editorEl.remove();
+      onClose();
     }
 
     function showError(msg) {
@@ -2060,13 +2067,13 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
       }
     }
 
-    const numericModeEl = editorOverlay.querySelector('#rule-editor-numeric-mode');
-    const numericAbsWrap = editorOverlay.querySelector('#rule-editor-numeric-abs-wrap');
-    const numericRelWrap = editorOverlay.querySelector('#rule-editor-numeric-rel-wrap');
-    const numericDecWrap = editorOverlay.querySelector('#rule-editor-numeric-dec-wrap');
-    const numericAbsEl = editorOverlay.querySelector('#rule-editor-numeric-abs');
-    const numericRelEl = editorOverlay.querySelector('#rule-editor-numeric-rel');
-    const numericDecEl = editorOverlay.querySelector('#rule-editor-numeric-dec');
+    const numericModeEl = editorEl.querySelector('#rule-editor-numeric-mode');
+    const numericAbsWrap = editorEl.querySelector('#rule-editor-numeric-abs-wrap');
+    const numericRelWrap = editorEl.querySelector('#rule-editor-numeric-rel-wrap');
+    const numericDecWrap = editorEl.querySelector('#rule-editor-numeric-dec-wrap');
+    const numericAbsEl = editorEl.querySelector('#rule-editor-numeric-abs');
+    const numericRelEl = editorEl.querySelector('#rule-editor-numeric-rel');
+    const numericDecEl = editorEl.querySelector('#rule-editor-numeric-dec');
 
     function updateNumericParamVisibility() {
       const mode = (numericModeEl?.value ?? 'exact').trim();
@@ -2078,22 +2085,22 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     /** Only disable string options when comparison type is numeric; mutual exclusivity is by unchecking, not by disabling. */
     function syncStringModeFlagInputsDisabled() {
       const showStr = ((matchSelectEl?.value ?? '').trim() || 'exact') === 'exact';
-      const fuzzyCb = editorOverlay.querySelector('#rule-editor-fuzzy-bigram-cb');
-      const embedCb = editorOverlay.querySelector('#rule-editor-embedding-similarity-cb');
-      const rxnormCb = editorOverlay.querySelector('#rule-editor-rxnorm-cb');
-      const meshCb = editorOverlay.querySelector('#rule-editor-mesh-cb');
+      const fuzzyCb = editorEl.querySelector('#rule-editor-fuzzy-bigram-cb');
+      const embedCb = editorEl.querySelector('#rule-editor-embedding-similarity-cb');
+      const rxnormCb = editorEl.querySelector('#rule-editor-rxnorm-cb');
+      const meshCb = editorEl.querySelector('#rule-editor-mesh-cb');
       if (fuzzyCb) fuzzyCb.disabled = !showStr;
       if (embedCb) embedCb.disabled = !showStr;
       if (rxnormCb) rxnormCb.disabled = !showStr;
       if (meshCb) meshCb.disabled = !showStr;
-      editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
+      editorEl.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
         cb.disabled = !showStr;
       });
     }
     function updateComparisonTypePanels() {
       const v = (matchSelectEl?.value ?? '').trim() || 'exact';
-      const flagsWrap = editorOverlay.querySelector('#rule-editor-flags-wrap');
-      const numWrap = editorOverlay.querySelector('#rule-editor-numeric-wrap');
+      const flagsWrap = editorEl.querySelector('#rule-editor-flags-wrap');
+      const numWrap = editorEl.querySelector('#rule-editor-numeric-wrap');
       const showStr = v === 'exact';
       const showNum = v === 'numeric';
       if (flagsWrap) flagsWrap.style.display = showStr ? '' : 'none';
@@ -2114,23 +2121,23 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     updateComparisonTypePanels();
     requestAnimationFrame(() => updateComparisonTypePanels());
 
-    const fuzzyBigramCbEl = editorOverlay.querySelector('#rule-editor-fuzzy-bigram-cb');
-    const embeddingSimilarityCbEl = editorOverlay.querySelector('#rule-editor-embedding-similarity-cb');
-    const rxnormCbEl = editorOverlay.querySelector('#rule-editor-rxnorm-cb');
-    const meshCbEl = editorOverlay.querySelector('#rule-editor-mesh-cb');
+    const fuzzyBigramCbEl = editorEl.querySelector('#rule-editor-fuzzy-bigram-cb');
+    const embeddingSimilarityCbEl = editorEl.querySelector('#rule-editor-embedding-similarity-cb');
+    const rxnormCbEl = editorEl.querySelector('#rule-editor-rxnorm-cb');
+    const meshCbEl = editorEl.querySelector('#rule-editor-mesh-cb');
     /** "Smart match" modes are mutually exclusive with each other and with the plain flag checkboxes. */
     const smartModeCbEls = [fuzzyBigramCbEl, embeddingSimilarityCbEl, rxnormCbEl, meshCbEl].filter(Boolean);
     smartModeCbEls.forEach((cbEl) => {
       cbEl.addEventListener('change', () => {
         if (cbEl.checked) {
           smartModeCbEls.forEach((other) => { if (other !== cbEl) other.checked = false; });
-          editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
+          editorEl.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
         }
         clearError();
         if (isEdit) persistEdit();
       });
     });
-    editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
+    editorEl.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
       cb.addEventListener('change', () => {
         if (cb.checked) {
           smartModeCbEls.forEach((other) => { other.checked = false; });
@@ -2154,12 +2161,12 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
         return null;
       }
       const matchType = (matchSelectEl?.value ?? '').trim() || 'exact';
-      const flagCbs = editorOverlay.querySelectorAll('.rule-editor-flag-cb[data-flag]');
+      const flagCbs = editorEl.querySelectorAll('.rule-editor-flag-cb[data-flag]');
       const matchFlags = { ...DEFAULT_MATCH_FLAGS };
-      const fuzzyCb = editorOverlay.querySelector('#rule-editor-fuzzy-bigram-cb');
-      const embedCb = editorOverlay.querySelector('#rule-editor-embedding-similarity-cb');
-      const rxnormCb = editorOverlay.querySelector('#rule-editor-rxnorm-cb');
-      const meshCb = editorOverlay.querySelector('#rule-editor-mesh-cb');
+      const fuzzyCb = editorEl.querySelector('#rule-editor-fuzzy-bigram-cb');
+      const embedCb = editorEl.querySelector('#rule-editor-embedding-similarity-cb');
+      const rxnormCb = editorEl.querySelector('#rule-editor-rxnorm-cb');
+      const meshCb = editorEl.querySelector('#rule-editor-mesh-cb');
       matchFlags.semanticAlign = matchType === 'exact' && !!(fuzzyCb && fuzzyCb.checked);
       matchFlags.embeddingSimilarity = matchType === 'exact' && !!(embedCb && embedCb.checked);
       matchFlags.rxnormMatch = matchType === 'exact' && !!(rxnormCb && rxnormCb.checked);
@@ -2218,7 +2225,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
         side = actualSide;
         editPath = [(getRootForSide(actualSide).children || []).length - 1];
       }
-      onDone();
+      onDone({ side, editPath });
     }
 
     function persistAdd() {
@@ -2260,10 +2267,9 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     numericRelEl?.addEventListener('blur', () => { if (isEdit) persistEdit(); });
     numericDecEl?.addEventListener('blur', () => { if (isEdit) persistEdit(); });
 
-    editorOverlay.querySelector('.modal-close').addEventListener('click', closeEditor);
-    const ruleEditorSaveBtn = editorOverlay.querySelector('.rule-editor-save');
+    const ruleEditorSaveBtn = editorEl.querySelector('.rule-editor-save');
     if (ruleEditorSaveBtn) ruleEditorSaveBtn.addEventListener('click', persistAdd);
-    document.body.appendChild(editorOverlay);
+    host.appendChild(editorEl);
     resultSelectEl?.focus();
   }
 
@@ -2284,8 +2290,8 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     return (col && col.label) ? String(col.label).trim() || key : (formatResultOutputColumnLabel(key) || key);
   }
 
-  /** Rule card: optional static "AND" connector on left (opValue/opIndex), then click to edit, × to delete. */
-  function createRuleCard(side, rule, path, opts = {}) {
+  /** One-line summary of a rule: its columns, comparison type and options. */
+  function formatScoreRuleSummary(side, rule) {
     const runLabel = formatScoreRuleRunSideLabel(side, rule);
     const gtLabel = (rule.gtColumns || []).length === 0 ? '—' : (rule.gtColumns || []).map((c) => formatScoreGroundTruthColumnLabel(c)).join(', ');
     const mt = migrateLegacyMatchType(rule.matchType);
@@ -2307,204 +2313,192 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
       else if (flags.numericMode === 'rel') flagPart += ` · rel≤${flags.numericRelEpsilon}`;
       else if (flags.numericMode === 'decimals') flagPart += ` · ${flags.numericDecimalPlaces} decimals`;
     }
-    const summary = `${runLabel} → ${gtLabel} ( ${typeLabel}${flagPart} )`;
-    const card = document.createElement('div');
-    card.className = 'score-rule-card';
-    const onRuleSaved = opts.onRuleSaved || (() => renderRules());
-    const openEditor = () => openRuleEditor(side, path, [], 0, onRuleSaved);
-    card.innerHTML = `
-      <div class="score-rule-card-inner" tabindex="0" role="button" title="${escapeAttr(summary)}">
-        <span class="score-rule-card-summary" title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
-      </div>
-      <button type="button" class="score-rule-card-remove" aria-label="Remove rule">×</button>
-    `;
-    const inner = card.querySelector('.score-rule-card-inner');
-    const removeBtn = card.querySelector('.score-rule-card-remove');
-    inner.addEventListener('click', openEditor);
-    inner.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openEditor();
-      }
-    });
-    removeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      setRootForSide(side, removeNodeAtPath(getRootForSide(side), path));
-      renderRules();
-      if (opts.onAfterChange) opts.onAfterChange();
-    });
-    return card;
+    return `${runLabel} → ${gtLabel} ( ${typeLabel}${flagPart} )`;
   }
 
-  /** Group card: label uses stable persisted {@link groupId} (order-independent). */
-  function createGroupCard(side, path, groupNode, opts = {}) {
+  /** Group label, from its stable persisted {@link groupId} (order-independent). */
+  function formatScoreRuleGroupLabel(groupNode) {
     const gid = typeof groupNode.groupId === 'number' && Number.isInteger(groupNode.groupId) && groupNode.groupId > 0
       ? groupNode.groupId
       : '?';
-    const label = `Rule group ${gid}`;
+    return `Rule group ${gid}`;
+  }
+
+  /** List key of a rule or group: its tree and path. */
+  function scoreRuleKey(side, path) {
+    return `${side}:${path.join('.')}`;
+  }
+
+  /** A card in the rules list: a summary row (click to open or close it) with ×, and, open, a body under it. */
+  function createScoreRuleCardShell({ className = '', text, removeLabel, isOpen, onToggle, onRemove }) {
     const card = document.createElement('div');
-    card.className = 'score-rule-card score-rule-card--group';
-    const openGroupEditor = () => openGroupEditorModal(side, path, () => renderRules());
+    card.className = ['score-rule-card', className, isOpen ? 'score-rule-card--open' : ''].filter(Boolean).join(' ');
     card.innerHTML = `
-      <div class="score-rule-card-inner" tabindex="0" role="button">
-        <span class="score-rule-card-summary">${escapeHtml(label)}</span>
+      <div class="score-rule-card-head">
+        <div class="score-rule-card-inner" tabindex="0" role="button" aria-expanded="${isOpen ? 'true' : 'false'}" title="${escapeAttr(text)}">
+          <span class="score-rule-card-summary">${escapeHtml(text)}</span>
+        </div>
+        <button type="button" class="score-rule-card-remove" aria-label="${escapeAttr(removeLabel)}">×</button>
       </div>
-      <button type="button" class="score-rule-card-remove" aria-label="Remove group">×</button>
+      ${isOpen ? '<div class="score-rule-card-body"></div>' : ''}
     `;
     const inner = card.querySelector('.score-rule-card-inner');
-    const removeBtn = card.querySelector('.score-rule-card-remove');
-    inner.addEventListener('click', openGroupEditor);
+    inner.addEventListener('click', onToggle);
     inner.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        openGroupEditor();
+        onToggle();
       }
     });
-    removeBtn.addEventListener('click', (e) => {
+    card.querySelector('.score-rule-card-remove').addEventListener('click', (e) => {
       e.stopPropagation();
-      setRootForSide(side, removeNodeAtPath(getRootForSide(side), path));
-      renderRules();
+      onRemove();
     });
     return card;
   }
 
-  /** Modal to edit a group's rules (same UI as score rules list). */
-  function openGroupEditorModal(side, groupPath, onDone) {
-    const root = getRootForSide(side);
-    const group = getNodeAtPath(root, groupPath);
-    if (!group || group.type !== 'group') return;
-    const gid = typeof group.groupId === 'number' && Number.isInteger(group.groupId) && group.groupId > 0
-      ? group.groupId
-      : '?';
-    const title = `Edit Rule group ${gid}`;
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--rule-editor';
-    overlay.setAttribute('aria-modal', 'true');
-    overlay.innerHTML = `
-      <div class="modal-panel modal-panel--section-editor modal-panel--rule-editor modal-panel--group-editor">
-        <div class="modal-header">
-          <h3 class="modal-title">${escapeHtml(title)}</h3>
-          <button type="button" class="modal-close" aria-label="Close">×</button>
-        </div>
-        <div class="modal-body modal-body--group-editor">
-          <div class="score-group-editor-list" id="score-group-editor-list"></div>
-          <div class="score-group-editor-actions">
-            <button type="button" class="score-tree-add-rule-box" id="score-group-editor-add-rule">+ Add rule</button>
-          </div>
-        </div>
-      </div>
-    `;
-    const listEl = overlay.querySelector('#score-group-editor-list');
-    const addBtn = overlay.querySelector('#score-group-editor-add-rule');
+  function removeScoreRuleNode(side, path) {
+    setRootForSide(side, removeNodeAtPath(getRootForSide(side), path));
+    // The paths after it shift, so no form stays open on a stale path; removing inside a group only
+    // shifts that group's rules, so the group itself stays open.
+    openRuleKey = null;
+    if (path.length === 1) openGroupKey = null;
+    renderRules();
+  }
 
-    function getGroup() {
-      return getNodeAtPath(getRootForSide(side), groupPath) || { type: 'group', ops: [], children: [] };
-    }
-
-    function setGroup(newGroup) {
-      setRootForSide(side, setNodeAtPath(getRootForSide(side), groupPath, newGroup));
-      renderGroupEditorList();
-    }
-
-    function renderGroupEditorList() {
-      listEl.innerHTML = '';
-      const g = getGroup();
-      const children = (g.children || []).slice();
-      children.forEach((node, i) => {
-        if (node.type === 'rule') {
-          const row = document.createElement('div');
-          row.className = 'score-tree-row score-tree-row--flat';
-          const cardWrap = document.createElement('div');
-          cardWrap.className = 'score-tree-row-card';
-          const pathI = groupPath.concat(i);
-          const cardOpts = {
-            onAfterChange: () => {
-              renderGroupEditorList();
-              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-            },
-            onRuleSaved: () => {
-              renderGroupEditorList();
-              renderRules();
-              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-            },
-          };
-          cardWrap.appendChild(createRuleCard(side, node, pathI, cardOpts));
-          row.appendChild(cardWrap);
-          listEl.appendChild(row);
-        }
-      });
-    }
-
-    addBtn.addEventListener('click', () => {
-      openRuleEditor(side, null, groupPath, (getGroup().children || []).length, () => {
-        renderGroupEditorList();
+  /** A rule in the list; open, its form sits under the summary and saves each change as it's made. */
+  function createRuleCard(side, rule, path) {
+    const key = scoreRuleKey(side, path);
+    const isOpen = openRuleKey === key;
+    const card = createScoreRuleCardShell({
+      text: formatScoreRuleSummary(side, rule),
+      removeLabel: 'Remove rule',
+      isOpen,
+      onToggle: () => {
+        openRuleKey = isOpen ? null : key;
         renderRules();
-        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      });
+      },
+      onRemove: () => removeScoreRuleNode(side, path),
     });
+    if (!isOpen) return card;
+    const inner = card.querySelector('.score-rule-card-inner');
+    const summaryEl = card.querySelector('.score-rule-card-summary');
+    openRuleEditor(side, path, [], 0, {
+      host: card.querySelector('.score-rule-card-body'),
+      onDone: (saved) => {
+        const savedKey = scoreRuleKey(saved.side, saved.editPath);
+        if (savedKey !== key) {
+          // Its column moved it to the other tree (top-level rules only): rebuild the list around it.
+          openRuleKey = savedKey;
+          renderRules();
+          return;
+        }
+        // Rebuilding the list would rebuild this form mid-edit too, so refresh only its summary and Results.
+        const text = formatScoreRuleSummary(saved.side, getNodeAtPath(getRootForSide(saved.side), saved.editPath));
+        summaryEl.textContent = text;
+        inner.title = text;
+        syncScoreResultsFooterVisibility();
+        void renderResults();
+      },
+      onClose: () => {},
+    });
+    return card;
+  }
 
-    overlay.querySelector('.modal-close').addEventListener('click', () => {
-      overlay.remove();
-      onDone();
+  /** A rule group in the list; open, it lists its rules (each opens like any rule) and its own "+ Add rule". */
+  function createGroupCard(side, path, groupNode) {
+    const key = scoreRuleKey(side, path);
+    const isOpen = openGroupKey === key;
+    const card = createScoreRuleCardShell({
+      className: 'score-rule-card--group',
+      text: formatScoreRuleGroupLabel(groupNode),
+      removeLabel: 'Remove group',
+      isOpen,
+      onToggle: () => {
+        openGroupKey = isOpen ? null : key;
+        // A form open inside the group closes with it.
+        if (isOpen && openRuleKey && (openRuleKey.startsWith(`${key}.`) || openRuleKey === `add:${key}`)) openRuleKey = null;
+        renderRules();
+      },
+      onRemove: () => removeScoreRuleNode(side, path),
     });
-    renderGroupEditorList();
-    document.body.appendChild(overlay);
+    if (!isOpen) return card;
+    const rules = (groupNode.children || []).flatMap((child, i) => (child.type === 'rule' ? [createRuleCard(side, child, path.concat(i))] : []));
+    card.querySelector('.score-rule-card-body').appendChild(buildRulesTree(rules, createAddRuleItem(side, path)));
+    return card;
+  }
+
+  /** "+ Add rule" closing a list (the top level, or the group at `groupPath`); open, an empty form takes its place. */
+  function createAddRuleItem(side, groupPath) {
+    const key = `add:${groupPath.length ? scoreRuleKey(side, groupPath) : ''}`;
+    if (openRuleKey !== key) {
+      const addBox = document.createElement('button');
+      addBox.type = 'button';
+      addBox.className = 'score-tree-add-rule-box';
+      addBox.textContent = '+ Add rule';
+      addBox.addEventListener('click', () => {
+        openRuleKey = key;
+        renderRules();
+      });
+      return addBox;
+    }
+    const cancel = () => {
+      openRuleKey = null;
+      renderRules();
+    };
+    const card = createScoreRuleCardShell({ className: 'score-rule-card--new', text: 'New rule', removeLabel: 'Cancel new rule', isOpen: true, onToggle: cancel, onRemove: cancel });
+    const root = getRootForSide(side);
+    const parent = groupPath.length ? getNodeAtPath(root, groupPath) : root;
+    openRuleEditor(side, null, groupPath, (parent?.children || []).length, {
+      host: card.querySelector('.score-rule-card-body'),
+      onDone: () => renderRules(),
+      onClose: () => { openRuleKey = null; },
+    });
+    return card;
+  }
+
+  /** Lays rule and group cards, then the "+ Add rule" item, out in the rows the rules list uses. */
+  function buildRulesTree(cards, addItem) {
+    const treeWrap = document.createElement('div');
+    treeWrap.className = 'score-rules-tree score-rules-tree--flat';
+    [...cards, addItem].forEach((content) => {
+      const row = document.createElement('div');
+      row.className = content === addItem ? 'score-tree-add-row score-tree-row--flat' : 'score-tree-row score-tree-row--flat';
+      const cardWrap = document.createElement('div');
+      cardWrap.className = 'score-tree-row-card';
+      cardWrap.appendChild(content);
+      row.appendChild(cardWrap);
+      treeWrap.appendChild(row);
+    });
+    return treeWrap;
+  }
+
+  /** Top-level rules and groups of both trees, in list order (Input → GT ones first). */
+  function topLevelScoreRuleNodes() {
+    return ['input', 'output'].flatMap((side) => {
+      const root = getRootForSide(side);
+      const children = (root.type === 'group' && Array.isArray(root.children)) ? root.children : [];
+      return children.map((node, i) => ({ side, node, path: [i] }));
+    });
+  }
+
+  /** Rules can be set once a ground truth is connected and both sides have columns to compare. */
+  function canSetScoreRules() {
+    return !!selectedNodeId && getRunResultColumns().length > 0 && getGroundTruthHeaders(selectedNodeId).length > 0;
   }
 
   function renderRules() {
     syncRulesTabUi();
     syncScoreResultsFooterVisibility();
-    rulesListEl.innerHTML = '';
-
-    if (!selectedNodeId) {
+    if (!canSetScoreRules()) {
+      rulesListEl.replaceChildren();
       void renderResults();
       return;
     }
-    const runColumns = getRunResultColumns();
-    const gtHeaders = getGroundTruthHeaders(selectedNodeId);
-    if (runColumns.length === 0 || gtHeaders.length === 0) {
-      void renderResults();
-      return;
-    }
-
-    const treeWrap = document.createElement('div');
-    treeWrap.className = 'score-rules-tree score-rules-tree--flat';
-
-    ['input', 'output'].forEach((side) => {
-      const root = getRootForSide(side);
-      const children = (root.type === 'group' && Array.isArray(root.children)) ? root.children : [];
-      children.forEach((childNode, i) => {
-        const row = document.createElement('div');
-        row.className = 'score-tree-row score-tree-row--flat';
-        const cardWrap = document.createElement('div');
-        cardWrap.className = 'score-tree-row-card';
-        const card = childNode.type === 'group'
-          ? createGroupCard(side, [i], childNode)
-          : createRuleCard(side, childNode, [i]);
-        cardWrap.appendChild(card);
-        row.appendChild(cardWrap);
-        treeWrap.appendChild(row);
-      });
-    });
-
-    const addRow = document.createElement('div');
-    addRow.className = 'score-tree-add-row score-tree-row--flat';
-    const addBox = document.createElement('button');
-    addBox.type = 'button';
-    addBox.className = 'score-tree-add-rule-box';
-    addBox.setAttribute('aria-label', 'Add rule');
-    addBox.textContent = '+ Add rule';
-    addBox.addEventListener('click', () => {
-      const r = getRootForSide('input');
-      openRuleEditor('input', null, [], (r.children || []).length, () => renderRules());
-    });
-    const addCardWrap = document.createElement('div');
-    addCardWrap.className = 'score-tree-row-card';
-    addCardWrap.appendChild(addBox);
-    addRow.appendChild(addCardWrap);
-    treeWrap.appendChild(addRow);
-
-    rulesListEl.appendChild(treeWrap);
+    const cards = topLevelScoreRuleNodes().map(({ side, node, path }) => (node.type === 'group'
+      ? createGroupCard(side, path, node)
+      : createRuleCard(side, node, path)));
+    rulesListEl.replaceChildren(buildRulesTree(cards, createAddRuleItem('input', [])));
     void renderResults();
   }
 

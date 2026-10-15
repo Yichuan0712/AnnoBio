@@ -38,7 +38,8 @@ export function initModalDrag() {
   document.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     const panel = e.target.closest('.modal-panel');
-    if (!panel) return;
+    // An editor shown inside another window's side panel is laid out there, not a movable window.
+    if (!panel || panel.closest('.prompt-detail-side-child-editor')) return;
     const overlay = panel.closest('.modal-overlay');
     if (!overlay) return;
     if (overlay.classList.contains('modal-overlay--maximized')) return;

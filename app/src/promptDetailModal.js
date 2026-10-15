@@ -306,12 +306,7 @@ function buildPromptExportText(snapshot) {
 
 function hasPromptExportBlockingOverlayOpen() {
   if (document.querySelector('.modal-overlay--edit-sections, .modal-overlay--edit-schema')) return true;
-  if (document.querySelector('.modal-overlay--field-editor')) return true;
-  for (const el of document.querySelectorAll('.modal-overlay--section-editor')) {
-    if (el.classList.contains('modal-overlay--rule-editor')) continue;
-    return true;
-  }
-  return false;
+  return !!document.querySelector('.modal-overlay--field-editor, .modal-overlay--section-editor');
 }
 
 /** @param {{ locked?: boolean }} options locked: content produced a result (contentLocks.js); hides both Edit buttons. */
@@ -350,11 +345,11 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
               <div class="prompt-detail-inputs-content prompt-preview">${inputsViewHtml}</div>
               <div class="prompt-detail-schema-heading">
                 <h3 class="prompt-preview-title">Output schema</h3>
-                ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-heading-edit prompt-detail-schema-btn-edit">Edit schema</button>'}
               </div>
               <div class="prompt-detail-schema-wrap">
                 <div class="prompt-detail-schema-view">${schemaViewHtml}</div>
                 <div class="prompt-detail-inline-error" id="prompt-detail-schema-error" role="alert" aria-live="polite" hidden></div>
+                ${locked ? '' : '<div class="prompt-actions prompt-detail-schema-actions"><button type="button" class="btn btn-secondary prompt-detail-schema-btn-edit">Edit schema</button></div>'}
               </div>
             </div>
           </div>

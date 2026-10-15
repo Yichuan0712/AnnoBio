@@ -5,6 +5,29 @@
  * and listens to: picking an option here sets select.value and fires 'change' on it. After
  * setting select.value in code, call refresh().
  */
+/**
+ * Fits an open dropdown `list` (absolutely placed under `anchor`) into the nearest scrolling ancestor,
+ * where it would be clipped: below the anchor, or above it (adding `upClass`) when there is more room
+ * above. Shared by the pill select and the Model ID autocomplete (modelIdAutocomplete.js).
+ */
+export function placeDropdown(list, anchor, upClass) {
+  let clip = { top: 0, bottom: window.innerHeight };
+  for (let el = anchor.parentElement; el; el = el.parentElement) {
+    if (/(auto|scroll|hidden)/.test(getComputedStyle(el).overflowY)) {
+      const box = el.getBoundingClientRect();
+      clip = { top: Math.max(clip.top, box.top), bottom: Math.min(clip.bottom, box.bottom) };
+      break;
+    }
+  }
+  const box = anchor.getBoundingClientRect();
+  const below = clip.bottom - box.bottom - 8;
+  const above = box.top - clip.top - 8;
+  const natural = Math.min(260, list.scrollHeight);
+  const up = natural > below && above > below;
+  list.classList.toggle(upClass, up);
+  list.style.maxHeight = `${Math.max(120, Math.min(260, up ? above : below))}px`;
+}
+
 export function mountPillSelect(select) {
   const picker = document.createElement('div');
   picker.className = 'pill-select';
@@ -86,31 +109,11 @@ export function mountPillSelect(select) {
     if (!picker.contains(event.target)) close();
   }
 
-  /** Fits the list into the nearest scrolling ancestor (it would be clipped there): below the
-   * trigger, or above it when there is more room above. */
-  function place() {
-    let clip = { top: 0, bottom: window.innerHeight };
-    for (let el = picker.parentElement; el; el = el.parentElement) {
-      if (/(auto|scroll|hidden)/.test(getComputedStyle(el).overflowY)) {
-        const box = el.getBoundingClientRect();
-        clip = { top: Math.max(clip.top, box.top), bottom: Math.min(clip.bottom, box.bottom) };
-        break;
-      }
-    }
-    const box = trigger.getBoundingClientRect();
-    const below = clip.bottom - box.bottom - 8;
-    const above = box.top - clip.top - 8;
-    const natural = Math.min(260, list.scrollHeight);
-    const up = natural > below && above > below;
-    list.classList.toggle('pill-select__list--up', up);
-    list.style.maxHeight = `${Math.max(120, Math.min(260, up ? above : below))}px`;
-  }
-
   function open() {
     if (!list.hidden) return;
     refresh();
     list.hidden = false;
-    place();
+    placeDropdown(list, trigger, 'pill-select__list--up');
     trigger.setAttribute('aria-expanded', 'true');
     setActive(select.selectedIndex);
     document.addEventListener('pointerdown', onOutside, true);
